@@ -14,6 +14,7 @@ import java.util.concurrent.Flow;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.compiler.FetchResponseShape;
+import am.ik.rontolisp.runtime.RontoFetch;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -100,10 +101,10 @@ final class HttpSupport {
 		}
 		return client.sendAsync(request, HttpResponse.BodyHandlers.ofPublisher()).thenApply(response -> {
 			List<Header> responseHeaders = new ArrayList<>();
-			for (Map.Entry<String, List<String>> entry : response.headers().map().entrySet()) {
-				for (String value : entry.getValue()) {
-					responseHeaders.add(new Header(entry.getKey(), value));
-				}
+			// The field list every JDK-backed transport answers: one entry per value,
+			// sorted by name, no HTTP/2 pseudo-fields (the JVM backend's own runtime).
+			for (Map.Entry<String, String> field : RontoFetch.responseFields(response.headers())) {
+				responseHeaders.add(new Header(field.getKey(), field.getValue()));
 			}
 			LispStream stream = LispStream.open();
 			response.body().subscribe(new BodyPump(stream));

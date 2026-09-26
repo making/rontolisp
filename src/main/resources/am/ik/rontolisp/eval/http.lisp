@@ -55,6 +55,20 @@
   (mapcar (lambda (entry) (cons (car entry) (car (cdr entry))))
           (%http:fields-copy-all fields)))
 
+(defun %http-field-insert (pair sorted)
+  ;; Stable: a field goes AFTER those of its own name already placed, so the values of
+  ;; one field keep their wire order.
+  (if (and sorted (not (string< (car pair) (car (car sorted)))))
+      (cons (car sorted) (%http-field-insert pair (cdr sorted)))
+      (cons pair sorted)))
+
+(defun %http-sorted-fields (alist)
+  ;; A fetched reply's :headers in ascending name order, what the interpreter, the JVM
+  ;; and a --native runner answer; the host hands the fields over in wire order.
+  (let ((sorted nil))
+    (dolist (pair alist sorted)
+      (setq sorted (%http-field-insert pair sorted)))))
+
 ;;; --- body reading (shared): consume-body -> a first-class stream value ---
 
 (defun %http-body-value (consume thing)
@@ -177,7 +191,7 @@
   ;; guarantees previously acquired headers stay valid).
   (let* ((status (%http:response-get-status-code response))
          (rheaders (%http:response-get-headers response))
-         (headers (%http-header-alist rheaders))
+         (headers (%http-sorted-fields (%http-header-alist rheaders)))
          (body
           (%http-body-value (function %http:response-consume-body) response)))
     (%http:fields-drop rheaders)

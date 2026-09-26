@@ -61,7 +61,9 @@ which throws synchronously on invalid arguments).
 
 `fetch` itself returns the future. Awaiting it yields the property list
 `(:status <integer> :headers <alist> :body <stream>)`, where `:headers` is an
-alist of `(name . value)` response-header pairs and `:body` is an
+alist of `(name . value)` response-header pairs — names lowercased, one pair
+per value (a repeated field such as `set-cookie` keeps each), in ascending name
+order — and `:body` is an
 **asynchronous stream** of the body's octet chunks (`(unsigned-byte 8)`
 vectors, the bytes as they arrive) — drain it to one decoded string with
 [`rontolisp:read-all`](rontolisp-read-all.md), take the chunks one at a
@@ -77,7 +79,8 @@ stream itself as a served response body to relay the reply byte-exact:
 ```
 
 `:body` is that stream on every backend; on the JVM (whose client takes the
-whole reply at once) it holds one chunk.
+whole reply at once) it holds one chunk. Awaiting the same future again answers
+the same list, whose body stream a first drain has already consumed.
 
 A JSON response body parses into Lisp values with
 [`rontolisp:json-parse`](rontolisp-json-parse.md), and

@@ -143,6 +143,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsHttpRuntime;
 
 	/**
+	 * Whether the last {@link #compile} fetches, i.e. whether the emitted class needs the
+	 * fetch transport ({@code RontoFetch}) beside it.
+	 */
+	private boolean needsFetchRuntime;
+
+	/**
 	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
 	 * needs {@code RontoHashTable} beside it: the key fold for an {@code equalp} table,
 	 * and the tombstone machinery (tombstone/liveCount/liveValues/maybeCompact) every
@@ -641,7 +647,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
 				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty()) {
 			return Map.of();
@@ -666,6 +672,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsComplexRuntime) {
 			files.putAll(JvmComplexRuntimeBuilder.runtimeClassFiles());
+		}
+		if (this.needsFetchRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHttpRuntime) {
 			files.putAll(JvmHttpHandlerRuntimeBuilder.runtimeClassFiles());
@@ -1027,8 +1036,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// operations and the futurep/streamp predicates all live in one builder, emitted
 		// when the program touches any of them (http-handler included: its handle()
 		// awaits the handler's future and drains a stream response body). _fetch is
-		// separate (JvmFetchRuntimeBuilder) and additionally gates _await's HttpResponse
-		// branch so fetch-free programs never load java.net.http classes.
+		// separate (JvmFetchRuntimeBuilder): its transport settles the future to the
+		// response plist itself, so _await knows nothing of HTTP.
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		String awaitQualified = LispNames.AWAIT_QUALIFIED;
 		boolean usesHttpHandler = programUsesSymbol(program,
@@ -1880,6 +1889,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A served program calls the embedded server and the Clack glue, so those class
 		// files travel with the output and it runs on a bare `java -cp .`.
 		this.needsHttpRuntime = usesHttpHandler;
+		// A fetching program calls the transport class, which travels the same way.
+		this.needsFetchRuntime = usesFetch;
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
 		// class travels with any hash-using output -- and with nothing else, since no
@@ -3273,7 +3284,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			MethodrefConstant progInitForAsync = cp.addMethodref(thisClass,
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
-					mainCtx.conditionChannel, progInitForAsync, usesFetch, longValueOf, stringLength, stringSubstring,
+					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null);
 			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
 		}

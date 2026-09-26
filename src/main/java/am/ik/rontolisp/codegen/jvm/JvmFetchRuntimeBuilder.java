@@ -12,27 +12,27 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.compiler.FetchResponseShape;
+import am.ik.rontolisp.runtime.RontoFetch;
 
 /**
  * Builds the JVM bytecode for the {@code rontolisp:fetch} built-in, emitted as a
  * {@code private static} method into the generated standalone {@code .class}.
- * {@code _fetch(Object url, Object options)} <em>starts</em> an outgoing HTTP request
- * (JavaScript {@code fetch}-style) via {@link java.net.http.HttpClient#sendAsync} and
- * returns the future itself -- a first-class rontolisp future the generic {@code _await}
- * resolver ({@code JvmAsyncRuntimeBuilder}) converts into the response property list when
- * awaited. A failed request propagates from {@code join()} as a
- * {@code CompletionException} -- the JavaScript await-rejection timing.
+ * {@code _fetch(Object url, Object options)} reads the options and hands the request to
+ * {@link RontoFetch#start}, which <em>starts</em> it (JavaScript {@code fetch}-style) and
+ * answers a future settling ONCE to the response plist -- so every await answers the same
+ * plist -- or failing when the request cannot be built or sent: every failure but the
+ * method surfaces at the await.
  *
  * <p>
  * The optional {@code options} argument is a property list; {@code :method} (default
  * {@code "GET"}; one of GET/HEAD/POST/PUT/DELETE/OPTIONS/PATCH, matched
- * case-insensitively and sent in canonical upper case), {@code :headers} (a
- * request-header alist) and {@code :body} (a request body string) are recognized. A
- * request whose headers name no user-agent gets
- * {@link FetchResponseShape#defaultUserAgent()} baked in at codegen time -- set
- * explicitly, so the JDK does not write its own {@code Java-http-client/<jdk>} and the
- * request matches the other backends. The methods are only emitted when the program
- * actually uses {@code rontolisp:fetch} or {@code rontolisp:await}.
+ * case-insensitively and sent in canonical upper case -- anything else throws AT THE
+ * CALL), {@code :headers} (a request-header alist) and {@code :body} (a request body
+ * string) are recognized. Each value is rendered to its text here, through the program's
+ * own {@code _strv} (a mutable character vector is this class's representation, not the
+ * transport's). {@link FetchResponseShape#defaultUserAgent()} is baked in at codegen time
+ * and set by the transport when the caller's fields name no user-agent. The transport
+ * class travels with the compiled output ({@link #RUNTIME_CLASS_FILES}).
  */
 final class JvmFetchRuntimeBuilder {
 
@@ -41,6 +41,16 @@ final class JvmFetchRuntimeBuilder {
 
 	/** The {@code _fetch} method descriptor. */
 	static final String METHOD_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** The transport class {@code _fetch} calls, in internal form. */
+	static final String TRANSPORT_CLASS = "am/ik/rontolisp/runtime/RontoFetch";
+
+	/** {@link RontoFetch#start}'s descriptor. */
+	static final String TRANSPORT_START_DESC = "(Ljava/lang/String;Ljava/lang/String;Ljava/util/List;"
+			+ "Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
+
+	/** The runtime class files a program that fetches carries beside it. */
+	static final List<String> RUNTIME_CLASS_FILES = List.of(TRANSPORT_CLASS + ".class");
 
 	private JvmFetchRuntimeBuilder() {
 	}
@@ -63,53 +73,32 @@ final class JvmFetchRuntimeBuilder {
 	 * @param stringClass {@code java/lang/String}
 	 * @param stringLength {@code String.length()}
 	 * @param stringSubstring {@code String.substring(II)}
+	 * @param strvRef the program's {@code _strv}, or null without the array runtime
 	 * @return the method body
 	 */
 	static FetchRuntime build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
 			MethodrefConstant stringLength, MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
-		// --- Interface / class references for the JDK HTTP client ---
-		ClassConstant uriClass = cp.addClass(cp.addUtf8("java/net/URI"));
-		MethodrefConstant uriCreate = cp.addMethodref(uriClass,
-				cp.addNameAndType(cp.addUtf8("create"), cp.addUtf8("(Ljava/lang/String;)Ljava/net/URI;")));
+		// The transport builds the response plist in its own key order; the shape every
+		// backend derives from the http-plist WIT record must still be that order, or the
+		// compile fails here rather than a key going missing at run time.
+		List<String> keywords = FetchResponseShape.responseFields()
+			.stream()
+			.map(FetchResponseShape.Field::keyword)
+			.toList();
+		if (!keywords.equals(RontoFetch.RESPONSE_KEYWORDS)) {
+			throw new IllegalStateException("The JVM fetch transport builds the response plist "
+					+ RontoFetch.RESPONSE_KEYWORDS + ", but the response shape is " + keywords);
+		}
+		// --- the transport (runtime/RontoFetch, which travels with the class) ---
+		ClassConstant fetchClass = cp.addClass(cp.addUtf8(TRANSPORT_CLASS));
+		MethodrefConstant fetchStart = cp.addMethodref(fetchClass,
+				cp.addNameAndType(cp.addUtf8("start"), cp.addUtf8(TRANSPORT_START_DESC)));
+		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+		MethodrefConstant arrayListInit = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		MethodrefConstant arrayListAdd = cp.addMethodref(arrayListClass,
+				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 
-		ClassConstant httpClientClass = cp.addClass(cp.addUtf8("java/net/http/HttpClient"));
-		MethodrefConstant newHttpClient = cp.addMethodref(httpClientClass,
-				cp.addNameAndType(cp.addUtf8("newHttpClient"), cp.addUtf8("()Ljava/net/http/HttpClient;")));
-		MethodrefConstant clientSendAsync = cp
-			.addMethodref(httpClientClass, cp.addNameAndType(cp.addUtf8("sendAsync"), cp.addUtf8(
-					"(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;")));
-
-		ClassConstant httpRequestClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest"));
-		MethodrefConstant newBuilder = cp.addMethodref(httpRequestClass, cp.addNameAndType(cp.addUtf8("newBuilder"),
-				cp.addUtf8("(Ljava/net/URI;)Ljava/net/http/HttpRequest$Builder;")));
-
-		ClassConstant builderClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest$Builder"));
-		MethodrefConstant builderHeader = cp.addInterfaceMethodref(builderClass, cp.addNameAndType(cp.addUtf8("header"),
-				cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/net/http/HttpRequest$Builder;")));
-		MethodrefConstant builderBuild = cp.addInterfaceMethodref(builderClass,
-				cp.addNameAndType(cp.addUtf8("build"), cp.addUtf8("()Ljava/net/http/HttpRequest;")));
-
-		ClassConstant bodyHandlersClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse$BodyHandlers"));
-		// The reply body is taken as BYTES: the fetch :body is an octet stream on every
-		// backend (one settled chunk here), so a relayed reply crosses byte-exact and
-		// read-all decodes it -- ofString would have decoded a binary body to text.
-		MethodrefConstant ofByteArray = cp.addMethodref(bodyHandlersClass,
-				cp.addNameAndType(cp.addUtf8("ofByteArray"), cp.addUtf8("()Ljava/net/http/HttpResponse$BodyHandler;")));
-
-		// Request body publishers and the Builder.method(name, publisher) accessor, used
-		// to
-		// set the request method and (optional) body.
-		MethodrefConstant builderMethod = cp
-			.addInterfaceMethodref(builderClass, cp.addNameAndType(cp.addUtf8("method"), cp.addUtf8(
-					"(Ljava/lang/String;Ljava/net/http/HttpRequest$BodyPublisher;)Ljava/net/http/HttpRequest$Builder;")));
-		ClassConstant bodyPublishersClass = cp.addClass(cp.addUtf8("java/net/http/HttpRequest$BodyPublishers"));
-		MethodrefConstant publisherOfString = cp.addMethodref(bodyPublishersClass, cp.addNameAndType(
-				cp.addUtf8("ofString"), cp.addUtf8("(Ljava/lang/String;)Ljava/net/http/HttpRequest$BodyPublisher;")));
-		MethodrefConstant publisherNoBody = cp.addMethodref(bodyPublishersClass,
-				cp.addNameAndType(cp.addUtf8("noBody"), cp.addUtf8("()Ljava/net/http/HttpRequest$BodyPublisher;")));
-
-		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		MethodrefConstant stringEqualsIgnoreCase = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("equalsIgnoreCase"), cp.addUtf8("(Ljava/lang/String;)Z")));
 
@@ -117,7 +106,6 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
-		ConstantPool.StringConstant userAgentName = cp.addString(FetchResponseShape.USER_AGENT_HEADER);
 		ConstantPool.StringConstant userAgentValue = cp.addString(FetchResponseShape.defaultUserAgent());
 
 		ConstantPool.StringConstant methodKey = cp.addString(":method");
@@ -132,10 +120,10 @@ final class JvmFetchRuntimeBuilder {
 			methodConsts[i] = cp.addString(methods[i]);
 		}
 
-		// Local slots: 0 url, 1 options, 2 builder, 3 cursor, 9 request headers,
-		// 10 method value, 11 plist cursor, 15 request-body value,
-		// 16 canonical method (String), 17 method scratch (unquoted String),
-		// 18 body publisher, 19 user-agent seen (null = the caller set none).
+		// Local slots: 0 url, 1 options, 3 cursor, 9 request headers, 10 method value,
+		// 11 plist cursor, 15 request-body value, 16 canonical method (String),
+		// 17 method scratch (unquoted String), 18 body text (null = none),
+		// 19 flattened request fields (ArrayList), 20 the current field pair.
 		Asm a = new Asm();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
@@ -181,71 +169,25 @@ final class JvmFetchRuntimeBuilder {
 		a.op(Opcode.ATHROW);
 		a.bind(methodDone);
 
-		// --- resolve the request-body publisher into slot 18: nil -> noBody(), otherwise
-		// ofString(stripQuotes(body)). ---
+		// --- the request body into slot 18: nil stays null (no body), otherwise its
+		// text.
 		int bodyDone = a.label();
-		a.aload(15);
-		int bodyGiven = a.label();
-		a.branch(Opcode.IFNONNULL, bodyGiven);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(publisherNoBody.index()); // [publisher]
+		a.aconstNull();
 		a.astore(18);
-		a.branch(Opcode.GOTO, bodyDone);
-		a.bind(bodyGiven);
+		a.aload(15);
+		a.branch(Opcode.IFNULL, bodyDone);
 		a.aload(15);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [bodyStr]
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(publisherOfString.index()); // [publisher]
 		a.astore(18);
 		a.bind(bodyDone);
 
-		// builder = HttpRequest.newBuilder(URI.create(stripQuotes(url)))
-		stripQuotes(a, 0, stringClass, stringLength, stringSubstring, strvRef); // [name]
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(uriCreate.index()); // [uri]
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(newBuilder.index()); // [builder]
-		a.astore(2);
-
-		// Scan the request-header alist (slot 9) for a caller-supplied user-agent, in any
-		// spelling (HTTP field names are case-insensitive), into slot 19. A separate pass
-		// because the setting loop below cannot answer the question until it has seen the
-		// LAST pair, and the default has to be decided before any header is set.
-		a.aconstNull();
+		// --- the request-header alist (slot 9) flattened into name, value, ... (slot 19)
+		a.op(Opcode.NEW);
+		a.u2(arrayListClass.index());
+		a.op(Opcode.DUP);
+		a.op(Opcode.INVOKESPECIAL);
+		a.u2(arrayListInit.index());
 		a.astore(19);
-		a.aload(9);
-		a.astore(3); // cursor = request headers
-		int uaLoop = a.label();
-		int uaEnd = a.label();
-		a.bind(uaLoop);
-		a.aload(3);
-		a.branch(Opcode.IFNULL, uaEnd);
-		a.aload(3);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload(); // [pair]
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload(); // [name]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [name']
-		a.ldc(userAgentName.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringEqualsIgnoreCase.index()); // [bool]
-		int uaNext = a.label();
-		a.branch(Opcode.IFEQ, uaNext);
-		a.ldc(userAgentName.index());
-		a.astore(19); // seen (any non-null marks it)
-		a.branch(Opcode.GOTO, uaEnd);
-		a.bind(uaNext);
-		a.aload(3);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.astore(3);
-		a.branch(Opcode.GOTO, uaLoop);
-		a.bind(uaEnd);
-
-		// Iterate the request-header alist (slot 9) and set each header.
 		a.aload(9);
 		a.astore(3); // cursor = request headers
 		int hLoop = a.label();
@@ -257,26 +199,20 @@ final class JvmFetchRuntimeBuilder {
 		a.aload(3);
 		a.checkcast(objectArrayClass);
 		a.iconst(0);
-		a.aaload(); // [pair]
-		a.checkcast(objectArrayClass); // [pair[]]
-		a.op(Opcode.DUP); // [pair, pair]
-		a.iconst(0);
-		a.aaload(); // [pair, name]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [pair,
-																					// name']
-		a.op(Opcode.SWAP); // [name', pair]
-		a.iconst(1);
-		a.aaload(); // [name', value]
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [name',
-		// value']
-		a.aload(2); // [name', value', builder]
-		a.op(Opcode.DUP_X2); // [builder, name', value', builder]
-		a.op(Opcode.POP); // [builder, name', value']
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(builderHeader.index());
-		a.op(3); // count: this + 2 args
-		a.op(0);
-		a.op(Opcode.POP); // discard returned builder
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.astore(20);
+		for (int part = 0; part < 2; part++) {
+			a.aload(19);
+			a.aload(20);
+			a.iconst(part);
+			a.aaload();
+			stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [list,
+																						// text]
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(arrayListAdd.index());
+			a.op(Opcode.POP);
+		}
 		// cursor = ((Object[]) cursor)[1]
 		a.aload(3);
 		a.checkcast(objectArrayClass);
@@ -286,52 +222,21 @@ final class JvmFetchRuntimeBuilder {
 		a.branch(Opcode.GOTO, hLoop);
 		a.bind(hEnd);
 
-		// A caller-silent request carries rontolisp's own user-agent rather than the
-		// JDK's Java-http-client/<jdk>: the same request on every backend.
-		int uaDone = a.label();
+		// return RontoFetch.start(url, method, headers, body, defaultUserAgent): the
+		// request starts NOW, and what comes back is the future of the response plist.
+		stripQuotes(a, 0, stringClass, stringLength, stringSubstring, strvRef); // [url]
+		a.aload(16);
 		a.aload(19);
-		a.branch(Opcode.IFNONNULL, uaDone);
-		a.aload(2); // [builder]
-		a.ldc(userAgentName.index()); // [builder, name]
-		a.ldc(userAgentValue.index()); // [builder, name, value]
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(builderHeader.index());
-		a.op(3); // count: this + 2 args
-		a.op(0);
-		a.op(Opcode.POP); // discard returned builder
-		a.bind(uaDone);
-
-		// builder.method(canonicalMethod, publisher)
-		a.aload(2); // [builder]
-		a.aload(16); // [builder, method]
-		a.aload(18); // [builder, method, publisher]
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(builderMethod.index());
-		a.op(3); // count: this + 2 args
-		a.op(0);
-		a.op(Opcode.POP); // discard returned builder
-
-		// future = HttpClient.newHttpClient().sendAsync(builder.build(),
-		// BodyHandlers.ofByteArray()) -- the request starts NOW and runs on the client's
-		// executor threads while the compiled program continues. The future itself is
-		// the returned value.
+		a.aload(18);
+		a.ldc(userAgentValue.index());
 		a.op(Opcode.INVOKESTATIC);
-		a.u2(newHttpClient.index()); // [client]
-		a.aload(2); // [client, builder]
-		a.op(Opcode.INVOKEINTERFACE);
-		a.u2(builderBuild.index());
-		a.op(1);
-		a.op(0); // [client, request]
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(ofByteArray.index()); // [client, request, handler]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(clientSendAsync.index()); // [future]
+		a.u2(fetchStart.index());
 		a.areturn();
 
 		List<Integer> code = a.finish();
 		Utf8Constant nameUtf8 = cp.addUtf8(METHOD_NAME);
 		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
-		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, 12, 20, code);
+		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, 12, 21, code);
 
 		return new FetchRuntime(fetch);
 	}

@@ -10,7 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
-import am.ik.rontolisp.compiler.FetchResponseShape;
+import am.ik.rontolisp.runtime.RontoFetch;
 
 import org.jspecify.annotations.Nullable;
 
@@ -46,16 +46,18 @@ import org.jspecify.annotations.Nullable;
  * on the awaiting thread before rethrowing -- {@code handler-case} around the await then
  * dispatches by type exactly like a same-thread signal.</li>
  * </ul>
- * When the program uses {@code rontolisp:fetch}, {@code _await} converts a settled
- * {@code HttpResponse} into the result property list
- * {@code (:status <int> :headers <alist> :body <stream>)} whose body is a one-chunk
- * closed stream (the JVM fetch stays buffered). Futures are flattened in a loop, like
- * JavaScript await.
+ * A fetch's future settles to its response plist inside the transport
+ * ({@code runtime/RontoFetch}, which builds the body as a stream of this shape), so
+ * {@code _await} knows nothing of HTTP. Futures are flattened in a loop, like JavaScript
+ * await.
  */
 final class JvmAsyncRuntimeBuilder {
 
-	/** Marker heading a stream's {@code Object[3]}; doubles as the EOF poison pill. */
-	static final String SMARKER = "%stream\n";
+	/**
+	 * Marker heading a stream's {@code Object[3]}; doubles as the EOF poison pill.
+	 * Declared by the fetch transport, which builds a reply's body stream in Java.
+	 */
+	static final String SMARKER = RontoFetch.STREAM_MARKER;
 
 	/** Marker heading a stream-read token's {@code Object[3]}. */
 	static final String RMARKER = "%stream-read\n";
@@ -159,8 +161,6 @@ final class JvmAsyncRuntimeBuilder {
 	 * payload rides it across the await)
 	 * @param instanceInitRef the generated class's no-arg constructor ref (present
 	 * whenever this runtime is emitted; {@code _async_run} instantiates the class)
-	 * @param usesFetch whether the HttpResponse branch of {@code _await} is emitted
-	 * (gated so fetch-free programs never load {@code java.net.http} classes)
 	 * @param longValueOf {@code Long.valueOf(J)}
 	 * @param stringLength {@code String.length()}
 	 * @param stringSubstring {@code String.substring(II)}
@@ -173,8 +173,8 @@ final class JvmAsyncRuntimeBuilder {
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
-			MethodrefConstant instanceInitRef, boolean usesFetch, MethodrefConstant longValueOf,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
+			MethodrefConstant instanceInitRef, MethodrefConstant longValueOf, MethodrefConstant stringLength,
+			MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
 			@Nullable MethodrefConstant launcherRun) {
 		// --- shared class/method references ---
 		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
@@ -535,11 +535,6 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(throwableClass);
 			a.op(Opcode.ATHROW);
 			a.bind(plain);
-			if (usesFetch) {
-				emitHttpResponseBranch(a, cp, objectClass, objectArrayClass, stringClass, queueClass, queueCtor,
-						queueOffer, atomicIntClass, atomicIntCtor, sMarker, quote, longValueOf, stringLength,
-						stringSubstring, stringConcat, byteArrayClass, ivOfBytesSelf, loop);
-			}
 			// flatten: v = r; loop (a plain value exits at the type checks above)
 			a.aload(4);
 			a.astore(0);
@@ -1100,240 +1095,6 @@ final class JvmAsyncRuntimeBuilder {
 	}
 
 	/**
-	 * Emits the {@code _await} branch converting a settled {@code HttpResponse} into
-	 * {@code (:status <int> :headers <alist> :body <one-chunk stream>)}. Slot layout
-	 * continues the {@code _await} method's (r in slot 4); slots 6..15 are scratch.
-	 */
-	private static void emitHttpResponseBranch(Asm b, ConstantPool cp, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, ClassConstant queueClass,
-			MethodrefConstant queueCtor, MethodrefConstant queueOffer, ClassConstant atomicIntClass,
-			MethodrefConstant atomicIntCtor, ConstantPool.StringConstant sMarker, ConstantPool.StringConstant quote,
-			MethodrefConstant longValueOf, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat, ClassConstant byteArrayClass, MethodrefConstant ivOfBytes, int loopLabel) {
-		ClassConstant httpResponseClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse"));
-		MethodrefConstant statusCode = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("statusCode"), cp.addUtf8("()I")));
-		MethodrefConstant responseBody = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("body"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant responseHeaders = cp.addInterfaceMethodref(httpResponseClass,
-				cp.addNameAndType(cp.addUtf8("headers"), cp.addUtf8("()Ljava/net/http/HttpHeaders;")));
-		ClassConstant httpHeadersClass = cp.addClass(cp.addUtf8("java/net/http/HttpHeaders"));
-		MethodrefConstant headersMap = cp.addMethodref(httpHeadersClass,
-				cp.addNameAndType(cp.addUtf8("map"), cp.addUtf8("()Ljava/util/Map;")));
-		ClassConstant mapClass = cp.addClass(cp.addUtf8("java/util/Map"));
-		MethodrefConstant mapEntrySet = cp.addInterfaceMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("entrySet"), cp.addUtf8("()Ljava/util/Set;")));
-		ClassConstant setClass = cp.addClass(cp.addUtf8("java/util/Set"));
-		MethodrefConstant setIterator = cp.addInterfaceMethodref(setClass,
-				cp.addNameAndType(cp.addUtf8("iterator"), cp.addUtf8("()Ljava/util/Iterator;")));
-		ClassConstant iteratorClass = cp.addClass(cp.addUtf8("java/util/Iterator"));
-		MethodrefConstant iteratorHasNext = cp.addInterfaceMethodref(iteratorClass,
-				cp.addNameAndType(cp.addUtf8("hasNext"), cp.addUtf8("()Z")));
-		MethodrefConstant iteratorNext = cp.addInterfaceMethodref(iteratorClass,
-				cp.addNameAndType(cp.addUtf8("next"), cp.addUtf8("()Ljava/lang/Object;")));
-		ClassConstant entryClass = cp.addClass(cp.addUtf8("java/util/Map$Entry"));
-		MethodrefConstant entryGetKey = cp.addInterfaceMethodref(entryClass,
-				cp.addNameAndType(cp.addUtf8("getKey"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant entryGetValue = cp.addInterfaceMethodref(entryClass,
-				cp.addNameAndType(cp.addUtf8("getValue"), cp.addUtf8("()Ljava/lang/Object;")));
-		ClassConstant iterableClass = cp.addClass(cp.addUtf8("java/lang/Iterable"));
-		MethodrefConstant stringJoin = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("join"),
-				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;")));
-		ConstantPool.StringConstant comma = cp.addString(", ");
-
-		int notHttp = b.label();
-		b.aload(4);
-		b.op(Opcode.INSTANCEOF);
-		b.u2(httpResponseClass.index());
-		b.branch(Opcode.IFEQ, notHttp);
-		b.aload(4);
-		b.checkcast(httpResponseClass);
-		b.astore(6); // response
-
-		// status (slot 7) = Long.valueOf(statusCode())
-		b.aload(6);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(statusCode.index());
-		b.op(1);
-		b.op(0);
-		b.op(Opcode.I2L);
-		b.op(Opcode.INVOKESTATIC);
-		b.u2(longValueOf.index());
-		b.astore(7);
-
-		// body stream (slot 8) = {SMARKER, q(octets, pill), state(1)} -- the whole reply
-		// as ONE octet chunk (the fetch took it as byte[]), the shape every HTTP body
-		// stream has: relayed as a response body it goes out byte-exact, and read-all
-		// decodes it.
-		b.op(Opcode.NEW);
-		b.u2(queueClass.index());
-		b.op(Opcode.DUP);
-		b.op(Opcode.INVOKESPECIAL);
-		b.u2(queueCtor.index());
-		b.astore(9); // q
-		b.aload(9);
-		b.aload(6);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(responseBody.index());
-		b.op(1);
-		b.op(0);
-		b.checkcast(byteArrayClass);
-		b.op(Opcode.INVOKESTATIC);
-		b.u2(ivOfBytes.index()); // [q, octets]
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(queueOffer.index());
-		b.op(Opcode.POP);
-		b.aload(9);
-		b.ldc(sMarker.index());
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(queueOffer.index());
-		b.op(Opcode.POP);
-		b.iconst(3);
-		b.anewarray(objectClass);
-		b.op(Opcode.DUP);
-		b.iconst(0);
-		b.ldc(sMarker.index());
-		b.aastore();
-		b.op(Opcode.DUP);
-		b.iconst(1);
-		b.aload(9);
-		b.aastore();
-		b.op(Opcode.DUP);
-		b.iconst(2);
-		b.op(Opcode.NEW);
-		b.u2(atomicIntClass.index());
-		b.op(Opcode.DUP);
-		b.iconst(1);
-		b.op(Opcode.INVOKESPECIAL);
-		b.u2(atomicIntCtor.index());
-		b.aastore();
-		b.astore(8);
-
-		// header alist (slot 10)
-		b.aconstNull();
-		b.astore(10);
-		b.aload(6);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(responseHeaders.index());
-		b.op(1);
-		b.op(0);
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(headersMap.index());
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(mapEntrySet.index());
-		b.op(1);
-		b.op(0);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(setIterator.index());
-		b.op(1);
-		b.op(0);
-		b.astore(11);
-		int eLoop = b.label();
-		int eEnd = b.label();
-		b.bind(eLoop);
-		b.aload(11);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(iteratorHasNext.index());
-		b.op(1);
-		b.op(0);
-		b.branch(Opcode.IFEQ, eEnd);
-		b.aload(11);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(iteratorNext.index());
-		b.op(1);
-		b.op(0);
-		b.checkcast(entryClass);
-		b.astore(12);
-		b.iconst(2);
-		b.anewarray(objectClass);
-		b.astore(13);
-		b.aload(13);
-		b.iconst(0);
-		b.ldc(quote.index());
-		b.aload(12);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(entryGetKey.index());
-		b.op(1);
-		b.op(0);
-		b.checkcast(stringClass);
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index());
-		b.ldc(quote.index());
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index());
-		b.aastore();
-		b.aload(13);
-		b.iconst(1);
-		b.ldc(quote.index());
-		b.ldc(comma.index());
-		b.aload(12);
-		b.op(Opcode.INVOKEINTERFACE);
-		b.u2(entryGetValue.index());
-		b.op(1);
-		b.op(0);
-		b.checkcast(iterableClass);
-		b.op(Opcode.INVOKESTATIC);
-		b.u2(stringJoin.index());
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index());
-		b.ldc(quote.index());
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index());
-		b.aastore();
-		// alist = cons(pair, alist)
-		b.iconst(2);
-		b.anewarray(objectClass);
-		b.op(Opcode.DUP);
-		b.iconst(0);
-		b.aload(13);
-		b.aastore();
-		b.op(Opcode.DUP);
-		b.iconst(1);
-		b.aload(10);
-		b.aastore();
-		b.astore(10);
-		b.branch(Opcode.GOTO, eLoop);
-		b.bind(eEnd);
-
-		// The fetch result plist, built tail-first in slot 14. The shape (keys, order)
-		// is derived from the http-plist WIT response record; only the per-field value
-		// slot is this backend's, so an unmapped record field fails the compile loudly.
-		Map<String, Integer> responseValueSlot = Map.of("status", 7, "headers", 10, "body", 8);
-		b.aconstNull();
-		b.astore(14);
-		List<FetchResponseShape.Field> responseFields = FetchResponseShape.responseFields();
-		for (int i = responseFields.size() - 1; i >= 0; i--) {
-			FetchResponseShape.Field field = responseFields.get(i);
-			Integer valueSlot = responseValueSlot.get(field.name());
-			if (valueSlot == null) {
-				throw new IllegalStateException(
-						"The fetch JVM runtime has no value slot for response field " + field.name());
-			}
-			consSlot(b, objectClass, valueSlot, 14);
-			b.astore(14);
-			consLdc(b, objectClass, cp.addString(field.keyword()), 14);
-			b.astore(14);
-		}
-		b.aload(14);
-		b.areturn();
-		b.bind(notHttp);
-	}
-
-	/** Pushes {@code new Object[]{ aload(carSlot), aload(cdrSlot) }}. */
-	private static void consSlot(Asm a, ClassConstant objectClass, int carSlot, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.aload(carSlot);
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
-	}
-
-	/**
 	 * Builds {@code _utf8Strict} ({@link #OCTETS_STRICT_METHOD}), the native STRICT half
 	 * of {@code rontolisp::%octets-to-string}: the packed octet vector's bytes decoded by
 	 * the JDK's UTF-8 decoder, framed in the storage quotes a compiled string carries, or
@@ -1454,20 +1215,6 @@ final class JvmAsyncRuntimeBuilder {
 		a.areturn();
 		return new AsyncMethod(cp.addUtf8(OCTETS_STRICT_METHOD), cp.addUtf8(UNARY_DESC), 5, 5, a.finish(),
 				List.of(new int[] { tryStart, tryEnd, handlerPos, codingExceptionClass.index() }));
-	}
-
-	/** Pushes {@code new Object[]{ <interned keyword>, aload(cdrSlot) }}. */
-	private static void consLdc(Asm a, ClassConstant objectClass, ConstantPool.StringConstant sym, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.ldc(sym.index());
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
 	}
 
 	/**

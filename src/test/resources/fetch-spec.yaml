@@ -104,10 +104,14 @@ cases:
         (print (eq (rontolisp:await f) (rontolisp:await f))))
     expected: |
       T
-    skip:
-      jvm: >-
-        every await converts the settled HttpResponse into a NEW plist, with a new
-        body stream over the whole body
+  - name: a-body-drained-once-stays-drained-across-awaits
+    source: |
+      (let ((f (rontolisp:fetch (url "/hello"))))
+        (print (rontolisp:await (body-text (rontolisp:await f))))
+        (print (rontolisp:await (rontolisp:stream-read (getf (rontolisp:await f) :body)))))
+    expected: |
+      "hello-from-fetch"
+      NIL
   - name: the-default-user-agent-and-the-callers-own
     source: |
       (let ((agent (rontolisp:await (body-text (rontolisp:await (rontolisp:fetch (url "/agent")))))))
@@ -192,9 +196,16 @@ cases:
                      #'string<)))
     expected: |
       ("a=1" "b=2")
-    skip:
-      jvm: >-
-        the JVM joins a repeated field's values into one, "a=1, b=2"
+  - name: fields-come-sorted-by-name-a-fields-values-in-wire-order
+    source: |
+      (let* ((r (rontolisp:await (rontolisp:fetch (url "/cookies"))))
+             (names (mapcar #'car (getf r :headers))))
+        (print (equal names (sort (copy-list names) #'string<)))
+        (print (mapcar #'cdr
+                       (remove-if-not (lambda (h) (string= (car h) "set-cookie")) (getf r :headers)))))
+    expected: |
+      T
+      ("a=1" "b=2")
   - name: an-unsupported-method-signals-at-the-call
     source: |
       (print (handler-case (progn (rontolisp:fetch (url "/hello") (list :method (string-upcase "bogus")))
@@ -230,8 +241,5 @@ cases:
       T
       :SIGNALLED-AT-AWAIT
     skip:
-      jvm: >-
-        the JVM builds the request at the call, so a URL java.net.URI refuses
-        signals there, uncaught by the handler around the await
       component: >-
         a fetch the component cannot start answers NIL instead of a future

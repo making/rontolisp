@@ -15,7 +15,16 @@ asyncMode = the first-class `TYPE_FUTURE` struct; Preview 1 = the degenerate `TY
 module inside a `--native` output fetches through its runner, "--native" below) and on `--no-wasi`
 WITHOUT `--host-fetch` (the message names the flag). Interpreter (`eval/HttpSupport.requestAsync` --
 request-building failures fail the future; the per-request client is deliberately never closed) and
-JVM (`JvmFetchRuntimeBuilder`) use the JDK `java.net.http.HttpClient`.
+JVM use the JDK `java.net.http.HttpClient`. The JVM's transport is Java, not emitted bytecode:
+`_fetch` (`JvmFetchRuntimeBuilder`) only reads the options, refuses an unsupported method at the
+call and renders each value through the program's `_strv`, then hands off to `runtime/RontoFetch`,
+which TRAVELS with the output (`.kb/jvm-export.md`). `RontoFetch.start` answers
+`sendAsync(...).thenApply(plist)`: the future settles ONCE to the plist, so every await answers the
+same (`eq`) plist and body stream, and a request that cannot be built (a URL `java.net.URI`
+refuses) fails the future instead of throwing -- the interpreter's `requestAsync` shape.
+`_await` knows nothing of HTTP. The plist's key order is `RontoFetch.RESPONSE_KEYWORDS`, checked
+against `FetchResponseShape.responseFields()` at compile time (a mismatch fails the compile);
+`SMARKER` is `RontoFetch.STREAM_MARKER`, the body stream being built in Java.
 
 **Error timing** is JS-like: options validated at `fetch` time; request/transport failures surface at
 `await` on EVERY backend (on WASM the send result's error arm becomes a `rontolisp:wit-error`
@@ -149,29 +158,37 @@ has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
 
 A case a leg skips names the divergence; each is a real difference, measured 2026-09-25:
 
-- **JVM**: every await converts the settled `HttpResponse` into a NEW plist, with a new body stream
-  over the whole body (the others answer the same plist); a repeated field's values are joined
-  into one (`"a=1, b=2"`) where the others keep one pair per value; a URL `java.net.URI` refuses
-  signals at the `fetch` call, uncaught by a handler around the await (the interpreter fails the
-  future). Its `:headers` also come in REVERSE name order (the corpus looks fields up by name).
 - **Component**: the body stream ends at the first read that finds nothing there yet, so a reply
   that pauses mid-body arrives cut short and a large one reads as empty (the opt-in
   `componentPendingBodyReadOverlapsTimer` fails the same way); a rejected future awaited a second
   time answers NIL; a fetch that cannot start (a runtime-built unsupported method, a URL the
   request cannot carry) answers NIL instead of signalling at the call or failing the future. Its
-  `:headers` come in wire order, without `transfer-encoding`.
+  `:headers` lack `transfer-encoding` (the host strips it).
 - **The JDK backends over HTTPS** negotiate HTTP/2 where the origin offers it, and their `:headers`
-  then carry HTTP/2's `:status` pseudo-field and no hop-by-hop fields; the runner speaks HTTP/1.1
-  and reports `connection` / `transfer-encoding` as sent (seen on the interpreter against
-  `https://example.com`; the JVM uses the same client).
+  then carry no hop-by-hop fields; the runner speaks HTTP/1.1 and reports `connection` /
+  `transfer-encoding` as sent (seen on the interpreter against `https://example.com`).
+
+The JVM ran three cases skipped until 2026-09-26 (a NEW plist per await, a repeated field joined
+into one `"a=1, b=2"` pair, a bad URL signalling at the call); `RontoFetch` removed all three.
 
 ## The response plist
 
 **`(:status <int> :headers <alist> :body <stream>)` on every backend.** `:body` is drained with
 `(rontolisp:await (rontolisp:read-all ...))`. The shape is written once in
 `compiler/FetchResponseShape`, so keys and order are derived in each backend's fetch runtime
-(`Environment`'s fetch result, `JvmAsyncRuntimeBuilder`, the `%http-response-plist` helpers
+(`Environment`'s fetch result, `RontoFetch`, the `%http-response-plist` helpers
 `HttpLibrary` splices). The SERVER side no longer shares it (`.kb/http-server.md`).
+
+**`:headers` ORDER is part of the contract (decided 2026-09-26)**: names lowercased, ONE pair per
+value, ascending name order, one field's values in wire order. It is what the JDK's `HttpHeaders`
+(a `TreeMap`), the runner (`wire.rs`) and a JavaScript `Headers` iteration already answered, so
+only the component moved: `%http-sorted-fields` (http.lisp, a stable insertion sort) on the fetch
+reply only -- a served request's headers go into a hash table, where order means nothing.
+**HTTP/2 pseudo-fields (`:status`) are NOT fields** (RFC 9113 8.3) and the status is the plist's own
+`:status`, so they are dropped. Both JDK backends list fields through ONE declaration,
+`RontoFetch.responseFields` (the interpreter's `HttpSupport` calls it too), unit-pinned by
+`RontoFetchTest` (the corpus origin speaks HTTP/1.1 and cannot send a pseudo-field); the order by
+the corpus case `fields-come-sorted-by-name-a-fields-values-in-wire-order`.
 
 **`:body` is a stream of OCTET chunks on every backend.** Every chunk a fetched reply's `:body`
 answers -- and every chunk a served request's default `:raw-body` answers -- is an
@@ -182,8 +199,8 @@ content-dependent corruption. The bivalent-stream alternative was rejected: it n
 primitive on four stream runtimes and a carry inside each.
 
 Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (interpreter);
-`_fetch` takes the reply with `BodyHandlers.ofByteArray()`, `_await` queues ONE `long[]{8, ...}` from
-`_iv_of_bytes`, `_drain_body` refuses a mixed stream, and `usesIntArray` is forced on by
+`RontoFetch` takes the reply with `BodyHandlers.ofByteArray()` and queues ONE `long[]{8, ...}`,
+`_drain_body` refuses a mixed stream, and `usesIntArray` is forced on by
 `usesFetch || usesHttpHandler` (JVM); the `stream<u8>` READ lift answers a packed vector
 (`_bytes_from_mem`, `.kb/wit.md`) so `%http-body-value` needs no change (`--component`);
 `%http-reactor-body-stream` is `%stream-new` over `%http-reactor-octet-source` (`--no-wasi`).

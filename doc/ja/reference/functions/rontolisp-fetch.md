@@ -60,7 +60,9 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 
 `fetch` 自体は future を返します。それを await するとプロパティリスト
 `(:status <integer> :headers <alist> :body <stream>)` が得られます。`:headers`
-はレスポンスヘッダの `(name . value)` ペアの連想リストで、`:body` はボディの
+はレスポンスヘッダの `(name . value)` ペアの連想リスト (名前は小文字、値 1 つに
+つき 1 ペアで `set-cookie` のように繰り返すフィールドはそれぞれ残り、名前の昇順)
+で、`:body` はボディの
 オクテットチャンク (`(unsigned-byte 8)` ベクタ、届いたままのバイト) の
 **非同期ストリーム**です —
 [`rontolisp:read-all`](rontolisp-read-all.md) でデコード済みの 1 つの文字列に
@@ -77,7 +79,8 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 ```
 
 `:body` はどのバックエンドでもこのストリームです。JVM (クライアントが応答全体を
-一度に受け取る) では 1 チャンクを持ちます。
+一度に受け取る) では 1 チャンクを持ちます。同じ future をもう一度 await すると
+同じリストが返り、そのボディストリームは最初の読み切りで消費済みです。
 
 JSON のレスポンスボディは
 [`rontolisp:json-parse`](rontolisp-json-parse.md) で Lisp の値にパースでき、

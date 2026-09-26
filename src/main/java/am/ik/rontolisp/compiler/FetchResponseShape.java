@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.Version;
+import am.ik.rontolisp.runtime.RontoFetch;
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitParser;
@@ -190,7 +191,7 @@ public final class FetchResponseShape {
 	 * client writes its own), so a suppression option would be one more thing that means
 	 * something different per backend.
 	 */
-	public static final String USER_AGENT_HEADER = "User-Agent";
+	public static final String USER_AGENT_HEADER = RontoFetch.USER_AGENT_HEADER;
 
 	private static final List<Field> RESPONSE_FIELDS;
 

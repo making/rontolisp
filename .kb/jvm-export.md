@@ -67,14 +67,15 @@ BY NAME instead of failing later in a component lift.
 
 ## What travels
 
-`am.ik.rontolisp.runtime` is THE package that ships inside someone else's artifact; five
-hand-kept lists:
+`am.ik.rontolisp.runtime` is THE package that ships inside someone else's artifact; hand-kept
+lists (`JvmRuntimeClassFilesTest` names them all):
 
 | list | travels when | what it is |
 | --- | --- | --- |
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector`/`:float-matrix` export | `RontoFloatArray` + `RontoBoundary` |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / `%http-server-start` | `RontoHttpServer`, `RontoHttpClack`, `RontoClackEnv`, `RontoHashTable` |
 | `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` or `<servlet>true</servlet>`, IN ADDITION to the served list | `RontoHttpServlet` + `RontoHttpServletInitializer` |
+| `JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:fetch` | `RontoFetch` -- the whole transport (`.kb/fetch-http.md`) |
 | `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | any hash-table use (`equalpKey` for an `equalp` table, the tombstone machinery for every table -- `.kb/hash-tables.md`) | `RontoHashTable` again |
 | `JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES` | an `open` that can ask for `:direction :io` / `:if-exists :overwrite` (`LispMacroExpander.opensBidirectionally`, `.kb/read-load-streams.md`) | `RontoIoFileStream` -- the interpreter runs the same class |
 
