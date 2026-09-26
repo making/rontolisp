@@ -331,8 +331,8 @@ the one `princ` writes, and nothing below changes it.
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
 through and the innermost NAMED function (or macro expander) holding it -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
-program, only macro-built forms) prints none. **The interpreter prints them; the compiled backends
-do not yet** (open items for the JVM backend, wasm-GC and interpreted Scheme source).
+program, only macro-built forms) prints none. **The interpreter prints them, for Scheme source
+too; the compiled backends do not yet** (open items for the JVM backend and wasm-GC).
 - **Recorded on the throw path only** (`eval/ConditionTrace`, on `LispEvalException.trace()`):
   `evalCons` keeps the innermost `LocatedCons` it stepped onto and the lambda it was in then (a
   type test and two stores per loop step; [source-positions.md](source-positions.md) Phase 4) and
@@ -347,9 +347,9 @@ do not yet** (open items for the JVM backend, wasm-GC and interpreted Scheme sou
 - **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
   and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases, where the file path is
-  the test's own. `scheme-spec.yaml` and the Scheme cases in `RontoLispCliStreamsTest` compare the
-  whole of stderr and stay valid because Scheme source is not located yet -- when it is, they
-  compare the report line. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
+  the test's own. `scheme-spec.yaml` compares the interpreter's MESSAGE (contained), so it needs no
+  change; the Scheme cases in `RontoLispCliStreamsTest` pin the location lines where the case is
+  about the report and the report line alone where it is about the message. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
   `WasmLispCompilerIntegrationTest`) pin the report line and stay exact until those backends print
   locations.
 

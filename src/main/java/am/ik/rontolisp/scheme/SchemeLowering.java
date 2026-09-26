@@ -905,10 +905,7 @@ final class SchemeLowering {
 
 		@Override
 		public <T extends LispVal> T inherit(LispCons original, T rewritten) {
-			if (rewritten instanceof LispCons cons) {
-				SchemeLowering.this.reader.inherit(original, cons);
-			}
-			return SchemeLowering.inherit(original, rewritten);
+			return positioned(original, rewritten);
 		}
 
 		@Override
@@ -1326,9 +1323,7 @@ final class SchemeLowering {
 
 	// (cond-expand clause...) as the (begin datums...) of the clause it takes.
 	private LispCons condExpanded(LispCons form) {
-		LispCons begin = new LispCons(CORE_BEGIN, listOf(condExpandBody(form)));
-		this.reader.inherit(form, begin);
-		return inherit(form, begin);
+		return positioned(form, new LispCons(CORE_BEGIN, listOf(condExpandBody(form))));
 	}
 
 	private final SchemeFeatures.Host featureHost = new SchemeFeatures.Host() {
@@ -1721,9 +1716,7 @@ final class SchemeLowering {
 				}
 				reading.pop();
 			}
-			LispCons begin = new LispCons(CORE_BEGIN, listOf(spliced));
-			this.reader.inherit(form, begin);
-			return inherit(form, begin);
+			return positioned(form, new LispCons(CORE_BEGIN, listOf(spliced)));
 		}
 		List<LispVal> elements = new ArrayList<>();
 		boolean changed = false;
@@ -1741,9 +1734,7 @@ final class SchemeLowering {
 		for (int i = elements.size() - 1; i >= 0; i--) {
 			rebuilt = new LispCons(elements.get(i), rebuilt);
 		}
-		LispCons head = (LispCons) rebuilt;
-		this.reader.inherit(form, head);
-		return inherit(form, head);
+		return positioned(form, (LispCons) rebuilt);
 	}
 
 	// ------------------------------------------------------------------ top level
@@ -4376,6 +4367,17 @@ final class SchemeLowering {
 
 	private LispReadException error(String message, LispCons form) {
 		return new LispReadException(message, this.reader.locate(form));
+	}
+
+	// A datum rewrite standing where `original` stands, positioned in both tables: the
+	// reader's (syntax errors) and SourceProvenance's -- whose answer, a located copy on
+	// the interpreter, is the cell the reader must know.
+	private <T extends LispVal> T positioned(LispCons original, T rewritten) {
+		T answer = inherit(original, rewritten);
+		if (answer instanceof LispCons cons) {
+			this.reader.inherit(original, cons);
+		}
+		return answer;
 	}
 
 	private static <T extends LispVal> T inherit(LispCons original, T lowered) {

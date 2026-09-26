@@ -91,7 +91,12 @@ lines of [error-handling.md](error-handling.md)); no message ever gets a prefix,
   result (a datum read elsewhere, or `#n=`'s identity-patched placeholder) and a `#n=`
   datum is located by its own inner read.
 - **Not located**: `-e`/stdin programs (no file), library source spliced from the jar,
-  macro-built forms (the macro CALL is), and Scheme (`SchemeReader` builds plain conses).
+  macro-built forms (the macro CALL is).
+- **Scheme**: `SchemeReader.recorded` builds each list's head as a `LocatedCons` under the
+  same condition (named file, no scope open; the reader has no datum labels). The lowering's
+  rewrites reach `SourceProvenance.inherit`, so they stay located; `SchemeLowering.positioned`
+  records its ANSWER (the located copy) in the reader's own offset map too, which syntax
+  errors are positioned from. A `syntax-rules` expansion is positioned at its USE.
 ## Tests
 `LispReaderTest` (opening-delimiter cases, `currentFileAndCurrentLineReadAsTheirOwnPosition`),
 `LoadInlinerTest#readerErrorIn*`,
@@ -103,4 +108,4 @@ lines of [error-handling.md](error-handling.md)); no message ever gets a prefix,
 `theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile`), ci-spec
 `source-position-literals`; Phase 4: `LispReaderTest#aNamedFilesDatumsAreLocatedAndAStringsAreNot`,
 `#locatingADatumKeepsEveryLabelReferenceToIt`, `LispConsTest#aRebuildOfALocatedConsStaysLocated`,
-`RontoLispCliStreamsTest`'s `anUncaught*` cases.
+`RontoLispCliStreamsTest`'s `anUncaught*` cases, `SchemeReaderTest#aNamedFilesListHeadsAreLocatedAndABuffersAreNot`.

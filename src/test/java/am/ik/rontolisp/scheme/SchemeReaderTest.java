@@ -3,10 +3,12 @@ package am.ik.rontolisp.scheme;
 import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +23,19 @@ class SchemeReaderTest {
 
 	private static String printed(String source) {
 		return read(source).stream().map(LispVal::print).toList().toString();
+	}
+
+	@Test
+	void aNamedFilesListHeadsAreLocatedAndABuffersAreNot() {
+		List<LispVal> datums = read("(a\n  (b c))\n'(d)\n");
+		LocatedCons outer = (LocatedCons) datums.get(0);
+		assertThat(outer.file()).isEqualTo("test.scm");
+		assertThat(outer.line()).isEqualTo(1);
+		LispVal second = ((LispCons) outer.cdr()).car();
+		assertThat(((LocatedCons) second).line()).isEqualTo(2);
+		assertThat(((LispCons) outer.cdr())).isNotInstanceOf(LocatedCons.class);
+		assertThat(((LocatedCons) datums.get(1)).line()).isEqualTo(3);
+		assertThat(new SchemeReader("(a b)", null).readAll().get(0)).isNotInstanceOf(LocatedCons.class);
 	}
 
 	@Test

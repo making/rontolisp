@@ -180,6 +180,37 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void anUncaughtConditionInASchemeFileNamesTheInnermostFormAndTheProcedureHoldingIt() throws Exception {
+		// The .scm twin: the lowering rebuilds every datum into core forms, and each
+		// rewrite keeps the position of the datum it stands for -- through a `when`
+		// desugaring, an anonymous lambda and a syntax-rules expansion.
+		Path program = this.tempDir.resolve("app.scm");
+		Files.writeString(program, """
+				(import (scheme base) (scheme write))
+
+				(define-syntax must
+				  (syntax-rules ()
+				    ((_ x) (or x (error "not a number")))))
+
+				(define (parse s)
+				  (must (string->number s)))
+
+				(define (run)
+				  (for-each (lambda (s)
+				              (when s
+				                (display (parse s))))
+				            '("1" "x")))
+
+				(run)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: not a number",
+				"  at " + program + ":8 in parse");
+	}
+
+	@Test
 	void anUncaughtConditionInALoadedFileNamesThatFile() throws Exception {
 		// A macro that signals while expanding at evaluation time: the form in the
 		// LOADED file, inside the macro -- not F, whose body holds the call site. The
@@ -356,7 +387,8 @@ class RontoLispCliStreamsTest {
 		String[] file = runReporting(program.toString());
 		assertThat(file[0]).isEqualTo("1");
 		assertThat(file[1]).isEqualTo("before");
-		assertThat(file[2]).isEqualTo("Unhandled condition: The object is not applicable: 3\n");
+		assertThat(file[2].lines()).containsExactly("Unhandled condition: The object is not applicable: 3",
+				"  at " + program + ":3");
 	}
 
 	@Test
@@ -529,7 +561,8 @@ class RontoLispCliStreamsTest {
 		String[] result = runReporting(program.toString());
 		assertThat(result[0]).isEqualTo("1");
 		assertThat(result[1]).isEmpty();
-		assertThat(result[2].trim()).isEqualTo("Unhandled condition: bad thing: sym \"str\" 42 (1 #f)");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: bad thing: sym \"str\" 42 (1 #f)",
+				"  at " + program + ":1 in f");
 	}
 
 	@Test
@@ -569,7 +602,7 @@ class RontoLispCliStreamsTest {
 			String[] result = runReporting(file.toString());
 			assertThat(result[0]).as(program[0]).isEqualTo("1");
 			assertThat(result[1]).as(program[0]).isEmpty();
-			assertThat(result[2].trim()).as(program[0]).isEqualTo("Unhandled condition: " + program[1]);
+			assertThat(result[2].lines().findFirst()).as(program[0]).contains("Unhandled condition: " + program[1]);
 		}
 	}
 
