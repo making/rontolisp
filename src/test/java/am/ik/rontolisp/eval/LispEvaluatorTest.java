@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
@@ -10215,6 +10216,19 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched() {
+		// (byte-size x) expanded into (car x), and (floor x) in a tail or under a
+		// consumer into floor's quotient and remainder, before the global binding --
+		// the user's dispatcher -- was read. Pinned on all three backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(MethodedBuiltinFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(MethodedBuiltinFixture.EXPECTED);
 	}
 
 	@Test

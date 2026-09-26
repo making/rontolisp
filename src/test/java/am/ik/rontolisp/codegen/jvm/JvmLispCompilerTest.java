@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -12523,6 +12524,16 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.withSystemPath(CharacterFilePositionFixture.program(file), List.of(), false, false)
 			.forms())).isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched,
+		// through the CLI's front end.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(MethodedBuiltinFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(MethodedBuiltinFixture.EXPECTED);
 	}
 
 	@Test

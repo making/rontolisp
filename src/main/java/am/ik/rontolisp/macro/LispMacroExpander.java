@@ -37021,9 +37021,30 @@ public final class LispMacroExpander {
 		return isMvProducerForm(form);
 	}
 
+	/**
+	 * True when {@code op} names an operator the multiple-value lowerings treat as a
+	 * syntactic producer (in the arities {@link #isMvProducerForm} lists). This list
+	 * GATES {@link #isMvProducerForm}, so a producer missing here is never lowered.
+	 * @param op the operator name
+	 * @return {@code true} for a syntactic producer's name
+	 */
+	public static boolean isSyntacticMultipleValueProducerName(String op) {
+		return switch (op) {
+			case LispNames.VALUES, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE,
+					LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE, LispNames.GETHASH,
+					LispNames.ARRAY_DISPLACEMENT, LispNames.SUBTYPEP, LispNames.FIND_SYMBOL, LispNames.INTERN,
+					LispNames.READ_FROM_STRING ->
+				true;
+			default -> false;
+		};
+	}
+
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
 	private static boolean isMvProducerForm(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		if (!isSyntacticMultipleValueProducerName(op.name())) {
 			return false;
 		}
 		int size = cons.toList().size();
