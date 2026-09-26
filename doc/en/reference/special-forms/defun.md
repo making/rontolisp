@@ -66,6 +66,13 @@ A built-in operator's function value names the operator in place of `Function`.
 ; => "CONS expects 2 arguments, got 1"
 ```
 
+A direct call of a built-in operator with an argument count its lambda list rules out is not a compile error: it evaluates its arguments and then signals the same `program-error` when it runs, on every backend. The JVM/WASM compilers print a warning for it.
+
+```lisp
+(handler-case (car '(1 2) 2) (program-error (c) (princ-to-string c)))
+; => "CAR expects 1 argument, got 2"
+```
+
 A function whose lambda list ends in `&optional` parameters (no `&rest` or `&key`) takes
 at most its required plus optional count: a surplus argument signals the same catchable
 `program-error` at run time, on every backend, before any default form is evaluated.

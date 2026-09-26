@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -374,6 +375,17 @@ final class WasmExprCompiler {
 			}
 		}
 		if (head instanceof LispSymbol sym) {
+			// A wrapped built-in called with a count its lambda list rules out never
+			// reaches a lowering, which would drop the surplus or index past the form: it
+			// evaluates its arguments and signals the interpreter's program-error
+			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
+			// its own call path.
+			LispVal wrongCount = ctx.userDefunNames.contains(sym.name()) ? null
+					: BuiltinCallArity.wrongCountSignal(cons);
+			if (wrongCount != null) {
+				compileExpr(wrongCount, ctx);
+				return;
+			}
 			// --simd: the vectorizable vec: kernels are routed to the emitted v128
 			// runtime
 			// helpers instead of the scalar vec.lisp defun of the same name.

@@ -12865,6 +12865,39 @@ class WasmLispCompilerIntegrationTest {
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
 	}
 
+	// A DIRECT call of a wrapped built-in with a count its call shape rules out is the
+	// interpreter's program-error at run time, after its arguments are evaluated: the
+	// call-position lowerings dropped a surplus ((car x 2) answered the car) and indexed
+	// past a short form ((nth x) failed the compile). The shape is the operator's
+	// standard lambda list, so (< 1 2 3) and (gethash k h default) stay legal
+	// (compiler/BuiltinCallArity).
+	@Test
+	void aDirectBuiltinCallWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun wc-car (x) (car x 2))
+				(defun wc-nth (x) (nth x))
+				(print (handler-case (wc-car '(1 2)) (program-error (c) (princ-to-string c))))
+				(print (handler-case (wc-nth 1) (program-error (c) (princ-to-string c))))
+				(print (let ((n 0)) (handler-case (cons (incf n)) (program-error (c) (list n (princ-to-string c))))))
+				(print (handler-case (minusp 1 2) (program-error (c) (princ-to-string c))))
+				(print (handler-case (1+) (program-error (c) (princ-to-string c))))
+				(print (handler-case (floor 1 2 3) (program-error (c) (princ-to-string c))))
+				(print (handler-case (gethash 1) (program-error (c) (princ-to-string c))))
+				(print (handler-case (error) (program-error (c) (princ-to-string c))))
+				(print (list (< 1 2 3) (gethash 1 (make-hash-table) 3) (logand 1 3 7) (char= #\\a #\\a #\\a)
+				             (flet ((car (a b) (list a b))) (car 1 2))))
+				""")).isEqualTo("""
+				"CAR expects 1 argument, got 2"
+				"NTH expects 2 arguments, got 1"
+				(1 "CONS expects 2 arguments, got 1")
+				"MINUSP expects 1 argument, got 2"
+				"1+ expects 1 argument, got 0"
+				"FLOOR expects at most 2 arguments, got 3"
+				"GETHASH expects at least 2 arguments, got 1"
+				"ERROR expects at least 1 argument, got 0"
+				(T 3 1 T (1 2))""");
+	}
+
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
 	// registered function gets EVERY argument form evaluated and the spread dispatcher
 	// judges the count (evaluating exactly the registered arity answered (car 1 2) with
