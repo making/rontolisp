@@ -308,14 +308,14 @@
               (error c)))))
     (%fetch-read-response response (cdr sent))))
 
-(defun rontolisp:fetch (url &rest options)
+(defun rontolisp:fetch (url &optional opts)
   ;; Returns a future at once, the request already in flight; await it for the
   ;; (:status :headers :body) plist. The options are validated HERE, so an
   ;; unsupported method signals at the call (a literal one is a compile error);
   ;; everything after that fails the future and signals at the await, as on every
-  ;; other backend.
-  (let ((opts (if options (car options) nil)))
-    (%fetch-run url opts (%fetch-method-variant (getf opts :METHOD)))))
+  ;; other backend. The lambda list is the built-in's own (1 or 2 arguments), so a
+  ;; direct call with a wrong count reports as FETCH does everywhere.
+  (%fetch-run url opts (%fetch-method-variant (getf opts :METHOD))))
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
 

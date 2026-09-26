@@ -383,9 +383,11 @@ final class WasmExprCompiler {
 			// reaches a lowering, which would drop the surplus or index past the form: it
 			// evaluates its arguments and signals the interpreter's program-error
 			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
-			// its own call path.
-			LispVal wrongCount = ctx.userDefunNames.contains(sym.name()) ? null
-					: BuiltinCallArity.wrongCountSignal(cons);
+			// its own call path -- unless it is a native built-in's and its lambda list
+			// takes the built-in's own counts (a library's implementation of it), which
+			// reports as the built-in.
+			LispVal wrongCount = ctx.userDefunNames.contains(sym.name())
+					&& !ctx.builtinShapedDefuns.contains(sym.name()) ? null : BuiltinCallArity.wrongCountSignal(cons);
 			if (wrongCount != null) {
 				compileExpr(wrongCount, ctx);
 				return;

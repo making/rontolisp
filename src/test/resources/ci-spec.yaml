@@ -18852,6 +18852,35 @@ cases:
       "CONJUGATE expects 1 argument, got 2"
       ((1 2) (1 (2 3)) 42 #C(1 -2))
 
+  # A DIRECT call of a native built-in OUTSIDE the wrapper catalog with a wrong count
+  # is the same run-time program-error, judged by its shape in
+  # compiler/NativeCallShapes: the compiled lowerings failed the compile ((boundp),
+  # (get-universal-time 1)), answered ((make-random-state nil 2) was NIL), or -- for a
+  # prelude defun (char-name, find-class) -- said Function, the surplus past an
+  # &optional tail from inside the callee.
+  - name: direct-native-builtin-call-wrong-count-signals-program-error
+    source: |
+      (defun ci-nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-nb-report (lambda () (boundp))))
+      (print (ci-nb-report (lambda () (get-universal-time 1))))
+      (print (ci-nb-report (lambda () (row-major-aref #(1)))))
+      (print (ci-nb-report (lambda () (make-random-state nil 2))))
+      (print (ci-nb-report (lambda () (rationalp))))
+      (print (ci-nb-report (lambda () (char-name))))
+      (print (ci-nb-report (lambda () (find-class 'ci-nb-x nil nil 4))))
+      (print (ci-nb-report (lambda () (rontolisp:version 1))))
+      (print (list (boundp 'ci-nb-unbound) (row-major-aref #(7) 0) (rationalp 1/2) (char-name #\Space)))
+    expected: |
+      "BOUNDP expects 1 argument, got 0"
+      "GET-UNIVERSAL-TIME expects 0 arguments, got 1"
+      "ROW-MAJOR-AREF expects 2 arguments, got 1"
+      "MAKE-RANDOM-STATE expects at most 1 argument, got 2"
+      "RATIONALP expects 1 argument, got 0"
+      "CHAR-NAME expects 1 argument, got 0"
+      "FIND-CLASS expects at most 3 arguments, got 4"
+      "VERSION expects 0 arguments, got 1"
+      (NIL 7 T "Space")
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function

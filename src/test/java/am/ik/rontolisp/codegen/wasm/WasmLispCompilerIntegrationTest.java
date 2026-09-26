@@ -12943,6 +12943,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	// The JVM twin: JvmLispCompilerTest
+	// .compileAndRunADirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime -- a native
+	// built-in outside the wrapper catalog (compiler/NativeCallShapes) reports a wrong
+	// direct count the same way, a prelude defun of one (char-name, find-class) as the
+	// built-in.
+	@Test
+	void aDirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRunPrelude("""
+				(defun nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (nb-report (lambda () (boundp))))
+				(print (nb-report (lambda () (export 'nb-x *package* 3))))
+				(print (nb-report (lambda () (get-universal-time 1))))
+				(print (nb-report (lambda () (row-major-aref #(1)))))
+				(print (nb-report (lambda () (char-name))))
+				(print (nb-report (lambda () (find-class 'nb-x nil nil 4))))
+				(print (nb-report (lambda () (rontolisp:version 1))))
+				(print (list (boundp 'nb-unbound) (row-major-aref #(7) 0) (char-name #\\Space)))
+				""")).isEqualTo("""
+				"BOUNDP expects 1 argument, got 0"
+				"EXPORT expects at most 2 arguments, got 3"
+				"GET-UNIVERSAL-TIME expects 0 arguments, got 1"
+				"ROW-MAJOR-AREF expects 2 arguments, got 1"
+				"CHAR-NAME expects 1 argument, got 0"
+				"FIND-CLASS expects at most 3 arguments, got 4"
+				"VERSION expects 0 arguments, got 1"
+				(NIL 7 "Space")""");
+	}
+
+	// The JVM twin: JvmLispCompilerTest
 	// .compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime.
 	@Test
 	void aDirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime() throws Exception {

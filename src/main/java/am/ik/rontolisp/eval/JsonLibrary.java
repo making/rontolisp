@@ -51,12 +51,6 @@ public final class JsonLibrary {
 	public static final String HELPER_STRINGIFY = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 			"%" + LispNames.JSON_STRINGIFY);
 
-	private static final String QUALIFIED_PARSE = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
-			LispNames.JSON_PARSE);
-
-	private static final String QUALIFIED_STRINGIFY = PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
-			LispNames.JSON_STRINGIFY);
-
 	// First-class wrappers so #'rontolisp:json-parse / #'rontolisp:json-stringify
 	// work in compiled code (call sites are rewritten away, so these are only
 	// reached through (function ...) / symbol-function / funcall). Single arity,
@@ -207,24 +201,24 @@ public final class JsonLibrary {
 			if (cons.car() instanceof LispSymbol op) {
 				if (matches(op.name(), LispNames.JSON_PARSE)) {
 					this.found = true;
-					return rewriteCall(cons, QUALIFIED_PARSE, HELPER_PARSE, 1, 1, false);
+					return rewriteCall(cons, HELPER_PARSE, 1, 1, false);
 				}
 				if (matches(op.name(), LispNames.JSON_STRINGIFY)) {
 					this.found = true;
-					return rewriteCall(cons, QUALIFIED_STRINGIFY, HELPER_STRINGIFY, 1, 1, false);
+					return rewriteCall(cons, HELPER_STRINGIFY, 1, 1, false);
 				}
 			}
 			return null;
 		}
 
-		private LispVal rewriteCall(LispCons cons, String publicName, String helperName, int minArgs, int maxArgs,
+		private @Nullable LispVal rewriteCall(LispCons cons, String helperName, int minArgs, int maxArgs,
 				boolean padNil) {
 			List<LispVal> parts = cons.toList();
 			int argCount = parts.size() - 1;
 			if (argCount < minArgs || argCount > maxArgs) {
-				throw new LispEvalException(publicName + " expects "
-						+ (minArgs == maxArgs ? String.valueOf(minArgs) : minArgs + " or " + maxArgs)
-						+ " arguments, got " + argCount);
+				// A wrong count stays the public call, which each backend compiles to the
+				// interpreter's run-time program-error (compiler/BuiltinCallArity).
+				return null;
 			}
 			List<LispVal> out = new ArrayList<>(maxArgs + 1);
 			out.add(new LispSymbol(helperName));

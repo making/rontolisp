@@ -16597,7 +16597,7 @@ class LispEvaluatorTest {
 				             (delete-package "H") (delete-package "G")))
 				""").print()).isEqualTo("(T NIL T T)");
 		assertThatThrownBy(() -> evalMulti("(unuse-package)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("UNUSE-PACKAGE expects 1 or 2 arguments");
+			.hasMessageContaining("UNUSE-PACKAGE expects at least 1 argument, got 0");
 	}
 
 	@Test
@@ -19413,6 +19413,34 @@ class LispEvaluatorTest {
 				String call = "(" + spelled + " nil".repeat(count) + ")";
 				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
 					.isEqualTo("\"" + shape.message(name, count) + "\"");
+			}
+		}
+	}
+
+	// The built-ins outside the wrapper catalog the interpreter implements natively
+	// (compiler/NativeCallShapes) report a wrong direct count by their shape, under the
+	// interpreter's name for them, and that shape is never narrower than the
+	// implementation: every count it rejects, the implementation's own check rejects too
+	// (reached through a function value, which the shape does not judge).
+	@Test
+	void everyNativeBuiltinReportsAWrongDirectCountWithItsCallShape() {
+		for (String name : new java.util.TreeSet<>(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames())) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min()
+					: shape.max() + 1;
+			for (int count = 0; count <= last; count++) {
+				if (shape.accepts(count)) {
+					continue;
+				}
+				String call = "(" + spelled + " nil".repeat(count) + ")";
+				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
+					.isEqualTo("\"" + am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(name, count) + "\"");
+				String value = "(funcall '" + spelled + " nil".repeat(count) + ")";
+				assertThat(eval("(handler-case " + value
+						+ " (undefined-function () \"no function value expects\") (error (c) (princ-to-string c)))")
+					.print()).as(value).contains("expects");
 			}
 		}
 	}

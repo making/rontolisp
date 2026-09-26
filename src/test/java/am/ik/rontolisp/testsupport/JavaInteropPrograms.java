@@ -151,6 +151,99 @@ public final class JavaInteropPrograms {
 			  (print (vector l m v h)))
 			""";
 
+	/**
+	 * A host {@code ArrayList} holding {@code 1} and a host {@code LinkedHashMap} holding
+	 * {@code "k"} through every array and hash-table accessor, directly and as a function
+	 * value: each is refused with the interpreter's text (a {@code simple-error}, and
+	 * {@code LENGTH}'s {@code SEQUENCE} type-error for {@code length}), an argument after
+	 * the table is evaluated first, and the host map is left untouched. A Lisp table and
+	 * vector beside them still answer. Prints {@link #HOST_ACCESSOR_OUTPUT}.
+	 */
+	public static final String HOST_ACCESSOR_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk))
+			    (type-error (e) (princ (list 'type-error (type-error-datum e) (type-error-expected-type e))))
+			    (error (e) (princ e)))
+			  (terpri))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (make-array 2 :fill-pointer 1 :adjustable t :initial-element 7))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash "k" h) 1)
+			  (row (lambda () (gethash "k" m)))
+			  (row (lambda () (gethash "k" m (progn (princ "default ") 0))))
+			  (row (lambda () (setf (gethash "z" m) (progn (princ "value ") 2))))
+			  (row (lambda () (remhash "k" m)))
+			  (row (lambda () (clrhash m)))
+			  (row (lambda () (hash-table-count m)))
+			  (row (lambda () (hash-table-size m)))
+			  (row (lambda () (hash-table-test m)))
+			  (row (lambda () (hash-table-rehash-size m)))
+			  (row (lambda () (hash-table-rehash-threshold m)))
+			  (row (lambda () (maphash (lambda (k x) (print (list k x))) m)))
+			  (row (lambda () (loop for k being the hash-keys of m collect k)))
+			  (row (lambda () (funcall #'gethash "k" m)))
+			  (row (lambda () (java:call m "toString")))
+			  (row (lambda () (length l)))
+			  (row (lambda () (funcall #'length l)))
+			  (row (lambda () (coerce l 'list)))
+			  (row (lambda () (elt l 0)))
+			  (row (lambda () (aref l 0)))
+			  (row (lambda () (svref l 0)))
+			  (row (lambda () (setf (aref l 0) 2)))
+			  (row (lambda () (row-major-aref l 0)))
+			  (row (lambda () (array-dimensions l)))
+			  (row (lambda () (array-rank l)))
+			  (row (lambda () (array-element-type l)))
+			  (row (lambda () (adjustable-array-p l)))
+			  (row (lambda () (array-has-fill-pointer-p l)))
+			  (row (lambda () (fill-pointer l)))
+			  (row (lambda () (vector-push 2 l)))
+			  (row (lambda () (vector-push-extend 2 l)))
+			  (row (lambda () (vector-pop l)))
+			  (row (lambda () (java:call l "toString")))
+			  (row (lambda () (list (gethash "k" h) (hash-table-count h) (hash-table-test h) (length v) (aref v 0)
+			                        (vector-push-extend 8 v) (fill-pointer v) (array-element-type v)))))
+			""";
+
+	/** What {@link #HOST_ACCESSOR_PROGRAM} prints. */
+	public static final String HOST_ACCESSOR_OUTPUT = """
+			GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			default GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			value %PUTHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			REMHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			CLRHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			HASH-TABLE-COUNT expects a hash table, got #<java java.util.LinkedHashMap>
+			HASH-TABLE-SIZE expects a hash table, got #<java java.util.LinkedHashMap>
+			HASH-TABLE-TEST expects a hash table, got #<java java.util.LinkedHashMap>
+			HASH-TABLE-REHASH-SIZE expects a hash table, got #<java java.util.LinkedHashMap>
+			HASH-TABLE-REHASH-THRESHOLD expects a hash table, got #<java java.util.LinkedHashMap>
+			MAPHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			MAPHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			"{k=1}"
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
+			AREF expects an array, got #<java java.util.ArrayList>
+			AREF expects an array, got #<java java.util.ArrayList>
+			AREF expects an array, got #<java java.util.ArrayList>
+			%ASET expects an array, got #<java java.util.ArrayList>
+			ROW-MAJOR-AREF expects an array, got #<java java.util.ArrayList>
+			ARRAY-DIMENSIONS expects an array, got #<java java.util.ArrayList>
+			ARRAY-DIMENSIONS expects an array, got #<java java.util.ArrayList>
+			ARRAY-ELEMENT-TYPE expects an array, got #<java java.util.ArrayList>
+			ADJUSTABLE-ARRAY-P expects an array, got #<java java.util.ArrayList>
+			ARRAY-HAS-FILL-POINTER-P expects an array, got #<java java.util.ArrayList>
+			FILL-POINTER expects an array, got #<java java.util.ArrayList>
+			VECTOR-PUSH expects an array, got #<java java.util.ArrayList>
+			VECTOR-PUSH-EXTEND expects an array, got #<java java.util.ArrayList>
+			VECTOR-POP expects an array, got #<java java.util.ArrayList>
+			"[1]"
+			(1 1 EQUAL 1 7 1 2 T)""";
+
 	/** What {@link #HOST_COLLECTION_PROGRAM} prints. */
 	public static final String HOST_COLLECTION_OUTPUT = """
 			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
