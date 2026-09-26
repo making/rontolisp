@@ -113,6 +113,16 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
   kind 1 = stream read with a free-list-recycled staged buffer) settled by `_sched_loop`'s
   EVENT_STREAM_READ. A SECOND read before the first settles is a host trap; interpreter/JVM queue.
   Guest `make-stream`/`stream-write` stay compile errors.
+- **A DROPPED read completion is LATCHED per readable handle.** The result is `(n << 4) | code`
+  and DROPPED beats COMPLETED, so one read can deliver its last items AND the end (`Dropped(n)`,
+  n > 0); the host then traps any further `stream.read` ("cannot read after being notified that
+  the writable end dropped"). Every completion path -- the blocking wrapper, the immediate
+  asyncMode arm, `_sched_dispatch`'s kind 1/2 -- pushes the handle onto one global cons list when
+  the code is DROPPED (n = 0 too), and the read wrapper answers a listed handle nil without
+  touching it. The stream's `drop-readable` unlinks it (handle numbers are reused). The global
+  exists only when a stream read is bound, after the render pair. wasmtime 49 produces
+  `Dropped(n)` intra-component: an undelivered `Completed(n)` read event merges with the writer's
+  drop (`update_event`). Pinned by `WasmLispCompilerIntegrationTest.componentStreamRead*`.
 
 ## `wait-for` and the combinators
 Interpreter `AsyncRuntime.timer` and JVM `_wait_for` are `completeOnTimeout(nil, ms, MILLISECONDS)`

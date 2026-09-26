@@ -831,16 +831,19 @@ final class WasmComponentImportCompiler {
 	 * with it, a {@code stream.read} the host reports BLOCKED returns a pending
 	 * {@code TYPE_FUTURE} registered with the scheduler instead of parking the whole task
 	 * on a blocking wait
+	 * @param streamEndedGlobal the global index of the ended-stream latch (a cons list of
+	 * the i31 readable-end handles whose read completed DROPPED), or -1 when the module
+	 * reads no stream
 	 * @return the code entry bytes
 	 */
 	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal,
 			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
-			WasmFutureRuntimeBuilder.@Nullable Sched sched) {
+			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal) {
 		int numParams = lispArity(async);
 		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				bytesFromMemFuncIndex, sched, MAX_SCRATCH, MAX_SCRATCH);
+				bytesFromMemFuncIndex, sched, streamEndedGlobal, MAX_SCRATCH, MAX_SCRATCH);
 		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				bytesFromMemFuncIndex, sched, probe.i32Pool(), probe.i64Pool());
+				bytesFromMemFuncIndex, sched, streamEndedGlobal, probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
 
@@ -855,6 +858,13 @@ final class WasmComponentImportCompiler {
 
 	/** The completion event of an async {@code stream.read} (spike-pinned ordering). */
 	static final int EVENT_STREAM_READ = 2;
+
+	/**
+	 * The DROPPED status in the low 4 bits of a stream/future copy result
+	 * ({@code (count << 4) | status}): the other end is gone. It takes precedence over
+	 * COMPLETED, so a stream read can report items AND the end together.
+	 */
+	static final int COPY_RESULT_DROPPED = 1;
 
 	static final int SUBTASK_STATE_RETURNED = 2;
 
@@ -963,7 +973,7 @@ final class WasmComponentImportCompiler {
 
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
 			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
-			WasmFutureRuntimeBuilder.@Nullable Sched sched, int i32Pool, int i64Pool) {
+			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
@@ -972,6 +982,7 @@ final class WasmComponentImportCompiler {
 		gen.waitOrdinals = waitOrdinals;
 		gen.sched = sched;
 		gen.bytesFromMemFuncIndex = bytesFromMemFuncIndex;
+		gen.streamEndedGlobal = streamEndedGlobal;
 		gen.emitAsyncBody(async);
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -1050,6 +1061,11 @@ final class WasmComponentImportCompiler {
 		// _bytes_from_mem, the lift of a byte-stream read's chunk (a packed
 		// (unsigned-byte 8) vector); set for the async built-in wrappers, -1 elsewhere.
 		private int bytesFromMemFuncIndex = -1;
+
+		// The ended-stream latch global (a cons list of i31 readable-end handles whose
+		// read completed DROPPED); set for the async built-in wrappers of a module that
+		// reads a stream, -1 elsewhere.
+		private int streamEndedGlobal = -1;
 
 		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
 				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
@@ -1262,7 +1278,8 @@ final class WasmComponentImportCompiler {
 		void emitAsyncBody(Async async) {
 			switch (async.op()) {
 				case NEW -> emitAsyncNew();
-				case DROP_READABLE, DROP_WRITABLE -> emitAsyncDrop();
+				case DROP_READABLE, DROP_WRITABLE ->
+					emitAsyncDrop(async.op() == AsyncOp.DROP_READABLE && async.stream());
 				case READ -> {
 					if (async.stream()) {
 						emitStreamRead(async.handleElement());
@@ -1300,8 +1317,13 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.END);
 		}
 
-		// drop-readable / drop-writable: unbox the end's handle, hand it back, nil.
-		private void emitAsyncDrop() {
+		// drop-readable / drop-writable: unbox the end's handle, hand it back, nil. A
+		// stream's drop-readable first takes the handle off the ended-stream latch: the
+		// latch dies with the handle, because the host reuses handle numbers.
+		private void emitAsyncDrop(boolean streamReadable) {
+			if (streamReadable && this.streamEndedGlobal >= 0) {
+				emitUnlatchEnded();
+			}
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
 			callImport();
@@ -1325,7 +1347,15 @@ final class WasmComponentImportCompiler {
 		// 4-byte element instead of a byte chunk, lifts it as an opaque integer handle
 		// (count 0 = EOF -> nil), and registers as kind 2 so the scheduler lifts it the
 		// same way.
+		// A completion whose status is DROPPED ends the stream even when it carries
+		// elements (Dropped(n), n > 0: the last chunk and the writer's drop together),
+		// and another stream.read of the handle traps -- so every completion path
+		// latches the handle (streamEndedGlobal), and a read of a latched handle
+		// answers nil without touching it.
 		private void emitStreamRead(boolean handleElem) {
+			if (this.streamEndedGlobal >= 0) {
+				emitEndedReadReturnsNil();
+			}
 			WasmFutureRuntimeBuilder.Sched wiring = this.sched;
 			if (wiring == null) {
 				emitStagingPrologue();
@@ -1340,6 +1370,12 @@ final class WasmComponentImportCompiler {
 				i32Const(handleElem ? 1 : ASYNC_READ_CHUNK);
 				callImport();
 				emitBlockedWait(handle);
+				if (this.streamEndedGlobal >= 0) {
+					int ret = allocI32();
+					setLocal(ret);
+					emitLatchIfDropped(ret, handle);
+					getLocal(ret);
+				}
 				i32Const(4);
 				this.w.write(Instruction.I32_SHR_U);
 				this.w.write(Instruction.TEE_LOCAL);
@@ -1428,6 +1464,9 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.ELSE);
 			// Completed immediately: lift the element (count 0 = EOF -> nil) and
 			// recycle the buffer.
+			if (this.streamEndedGlobal >= 0) {
+				emitLatchIfDropped(ret, handle);
+			}
 			getLocal(ret);
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
@@ -1446,6 +1485,123 @@ final class WasmComponentImportCompiler {
 			globalSet(wiring.readFreeGlobal());
 			this.w.write(Instruction.END);
 			this.w.write(Instruction.END);
+		}
+
+		// --- the ended-stream latch (streamEndedGlobal: a cons list of i31 handles) ---
+
+		// Returns nil from the wrapper, before anything is staged, when the readable
+		// end in parameter 1 is latched.
+		private void emitEndedReadReturnsNil() {
+			int handle = allocI32();
+			int found = allocI32();
+			int cur = this.ctx.allocTemp();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			i32Const(0);
+			setLocal(found);
+			globalGet(this.streamEndedGlobal);
+			setLocal(cur);
+			this.w.write(Instruction.BLOCK, 0x40); // $done
+			this.w.write(Instruction.LOOP, 0x40); // $walk
+			getLocal(cur);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(handle);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF, 0x40);
+			i32Const(1);
+			setLocal(found);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(2);
+			this.w.write(Instruction.END);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END); // loop $walk
+			this.w.write(Instruction.END); // block $done
+			getLocal(found);
+			this.w.write(Instruction.IF, 0x40);
+			refNullEq();
+			this.w.write(Instruction.RETURN);
+			this.w.write(Instruction.END);
+		}
+
+		// Latches the handle when the packed copy result in ret reports DROPPED.
+		private void emitLatchIfDropped(int ret, int handle) {
+			getLocal(ret);
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			i32Const(COPY_RESULT_DROPPED);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(handle);
+			boxI31();
+			globalGet(this.streamEndedGlobal);
+			newCons();
+			globalSet(this.streamEndedGlobal);
+			this.w.write(Instruction.END);
+		}
+
+		// Unlinks the readable end in parameter 1 from the latch (a no-op when it is
+		// not there).
+		private void emitUnlatchEnded() {
+			int handle = allocI32();
+			int prev = this.ctx.allocTemp();
+			int cur = this.ctx.allocTemp();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			refNullEq();
+			setLocal(prev);
+			globalGet(this.streamEndedGlobal);
+			setLocal(cur);
+			this.w.write(Instruction.BLOCK, 0x40); // $done
+			this.w.write(Instruction.LOOP, 0x40); // $walk
+			getLocal(cur);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			getLocal(handle);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(prev);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			globalSet(this.streamEndedGlobal);
+			this.w.write(Instruction.ELSE);
+			getLocal(prev);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			this.w.writeUnsignedLeb128(1);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(2);
+			this.w.write(Instruction.END);
+			getLocal(cur);
+			setLocal(prev);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END); // loop $walk
+			this.w.write(Instruction.END); // block $done
 		}
 
 		// The completed-read lift: a byte chunk becomes a packed (unsigned-byte 8)

@@ -184,9 +184,13 @@ final class WasmFutureRuntimeBuilder {
 	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem} (lifts a
 	 * completed byte-stream read's chunk as a packed {@code (unsigned-byte 8)} vector --
 	 * the raw octets, no decode), or -1 when the module reads no byte stream
+	 * @param streamEndedGlobal the global index of the ended-stream latch (a cons list of
+	 * i31 readable-end handles whose read completed DROPPED; the read wrappers answer nil
+	 * for them without touching the handle), or -1 when the module reads no stream
 	 */
 	record Sched(WasmComponentImportCompiler.WaitOrdinals ordinals, int registryGlobal, int setGlobal,
-			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
+			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
+			int streamEndedGlobal) {
 	}
 
 	/**
@@ -1070,6 +1074,26 @@ final class WasmFutureRuntimeBuilder {
 		refNullEq(w);
 		w.write(Instruction.END);
 		setLocal(w, VAL);
+		// A DROPPED completion ends the stream even when it carries items (DROPPED takes
+		// precedence over COMPLETED: Dropped(n) delivers the last chunk and the writer's
+		// drop together), and another stream.read of the handle traps -- so latch it,
+		// and the read wrappers answer the next read nil without touching it. (No
+		// latch exists when the module reads no stream, and then no kind 1/2 entry can
+		// be registered either.)
+		if (sched.streamEndedGlobal() >= 0) {
+			getLocal(w, CODE);
+			i32(w, 0xF);
+			w.write(Instruction.I32_AND);
+			i32(w, WasmComponentImportCompiler.COPY_RESULT_DROPPED);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			getLocal(w, WAITABLE);
+			w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			globalGet(w, sched.streamEndedGlobal());
+			newCons(w, identityHash);
+			globalSet(w, sched.streamEndedGlobal());
+			w.write(Instruction.END);
+		}
 		// readFree = (buf . readFree)
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);

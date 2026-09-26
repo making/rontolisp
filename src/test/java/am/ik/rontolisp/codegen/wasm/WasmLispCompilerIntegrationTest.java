@@ -25537,6 +25537,72 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("200\n\"echo hello from a lisp POST\"");
 	}
 
+	@Test
+	void componentStreamReadLatchesTheEndADroppedCompletionDeliversWithItsItems() throws Exception {
+		// DROPPED takes precedence over COMPLETED: one read can deliver its last items
+		// and the writer's drop together, Dropped(n) with n > 0, and the end is then
+		// DONE -- another stream.read traps. An intra-component stream<u8> produces that
+		// shape: the write rendezvouses with the pending read (Completed(5) is queued,
+		// not yet delivered) and the drop merges into it. The chunk is answered, the
+		// end latched, so the next read answers nil without touching the handle; after
+		// drop-readable a fresh stream -- which may reuse the handle number -- reads
+		// normally, and its Dropped(0), answered at once, latches the same way.
+		byte[] bytes = compileWitImportComponent(vendoredWasiHttpWit(), """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
+
+				(rontolisp:async-defun probe ()
+				  (let* ((ends (http:body-stream-new))
+				         (pending (http:body-stream-read (car ends))))
+				    (http:body-stream-write (cdr ends) "hello")
+				    (http:body-stream-drop-writable (cdr ends))
+				    (let ((chunk (rontolisp:await pending)))
+				      (print (map 'string #'code-char chunk))
+				      (print (rontolisp:await (http:body-stream-read (car ends))))
+				      (print (rontolisp:await (http:body-stream-read (car ends))))
+				      (http:body-stream-drop-readable (car ends)))
+				    (let* ((again (http:body-stream-new))
+				           (next (http:body-stream-read (car again))))
+				      (http:body-stream-write (cdr again) "world")
+				      (print (map 'string #'code-char (rontolisp:await next)))
+				      (http:body-stream-drop-writable (cdr again))
+				      (print (rontolisp:await (http:body-stream-read (car again))))
+				      (print (rontolisp:await (http:body-stream-read (car again))))
+				      (http:body-stream-drop-readable (car again)))))
+
+				;; the interface is bound only when the program calls one of its functions
+				(http:fields-new)
+				(rontolisp:await (probe))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(bytes), path("stream-dropped-n.component.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime run -W gc=y -W exceptions=y -S http=y " + path("stream-dropped-n.component.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\nNIL\nNIL\n\"world\"\nNIL\nNIL");
+	}
+
+	@Test
+	void componentStreamReadOutsideAsyncModeLatchesTheEnd() throws Exception {
+		// The same latch on the blocking read of a module with no async-defun: the
+		// writer's drop is reported once, and a read after it answers nil instead of
+		// trapping.
+		byte[] bytes = compileWitImportComponent(vendoredWasiHttpWit(), """
+				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
+
+				;; the interface is bound only when the program calls one of its functions
+				(http:fields-new)
+				(let ((ends (http:body-stream-new)))
+				  (http:body-stream-drop-writable (cdr ends))
+				  (print (http:body-stream-read (car ends)))
+				  (print (http:body-stream-read (car ends)))
+				  (http:body-stream-drop-readable (car ends)))
+				""");
+		wasmtime.copyFileToContainer(Transferable.of(bytes), path("stream-dropped-sync.component.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime run -W gc=y -W exceptions=y -S http=y " + path("stream-dropped-sync.component.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("NIL\nNIL");
+	}
+
 	// --- the intra-instance multi-task probe: two tasks in ONE component instance ---
 	//
 	// Real hosts never exercise the callback driver's cross-task half today (wasmtime
