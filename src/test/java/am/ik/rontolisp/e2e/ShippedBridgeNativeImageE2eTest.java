@@ -32,11 +32,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * GraalVM native image: the bridge travels as an ordinary class file inside the jar, so
  * nothing is defined at run time (a native image refuses {@code Lookup.defineClass} with
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
- * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
- * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd}, {@code --gpu} and {@code objc:} programs need no configuration at all
- * (the last two ship their native-image registration inside the jar), and neither does a
- * {@code java:} program compiled with {@code --java-static}, whose calls are all direct
+ * the {@code ffi:} program's downcalls are covered by the configuration the tracing agent
+ * records from one {@code java -jar} run; the {@code geom:}, {@code --simd},
+ * {@code --blas}, {@code --gpu} and {@code objc:} programs need no configuration at all
+ * (the last three ship their native-image registration inside the jar), and neither does
+ * a {@code java:} program compiled with {@code --java-static}, whose calls are all direct
  * (.kb/java-interop.md, "Direct calls"). The {@code objc:} program runs on macOS only,
  * where the image's {@code main} is thread 0 and has to hand it to AppKit (.kb/objc.md).
  * <p>
@@ -159,22 +159,21 @@ class ShippedBridgeNativeImageE2eTest {
 	}
 
 	@Test
-	void aBlasJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
+	void aBlasJarRunsAsANativeImageWithNoConfiguration() throws Exception {
 		assumeTrue(LinalgBlas.available(), LinalgBlas::description);
 		// An 8x8 product is above the size the bridge declines, so the image makes the
-		// downcall the agent recorded; the verbose line proves the library bound.
+		// downcall; the verbose line proves the library bound. The jar carries the
+		// bridge's downcall registration: an image without it refuses every shape
+		// (MissingForeignRegistrationError), and the bridge then declines as though
+		// the machine had no library -- the same numbers, no acceleration.
 		Path jar = compileJar("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
 				(print (linalg:to-list (linalg:dot *a* (linalg:eye 8))))
 				""", "--blas");
-		Path config = this.tempDir.resolve("config");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
-		List<String> onTheJvm = lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"), java,
-				"-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString()));
+		List<String> onTheJvm = lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"), java, "-jar", jar.toString()));
 		assertThat(onTheJvm.getFirst()).startsWith("rontolisp: --blas bound ");
-		assertThat(lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"),
-				buildImage(jar, "-H:ConfigurationFileDirectories=" + config))))
-			.isEqualTo(onTheJvm);
+		assertThat(lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"), buildImage(jar)))).isEqualTo(onTheJvm);
 	}
 
 	@Test

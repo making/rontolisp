@@ -1,0 +1,50 @@
+{
+  "comment": [
+    "The --blas CBLAS downcalls (.kb/linalg-blas.md), in a file of their own: rontolisp's binary",
+    "reads it beside the main one, and the JVM backend copies it verbatim into a compiled --blas",
+    "program (JvmBlasRuntimeBuilder), whose image reads only the program's own META-INF. It",
+    "therefore stands alone. Seven shapes, the same for eval/LinalgBlasKernels and the shipped",
+    "JvmBlasTemplate: gemm (14 parameters) at both widths, critical and plain -- a product above",
+    "the critical flop ceiling is issued through the plain handle -- gemv (12) at both widths,",
+    "critical, and jint(), the optional thread-count query (openblas_get_num_threads,",
+    "mkl_get_max_threads). One missing entry sends the whole binding down its catch and the",
+    "library declines as though the machine had none. LinalgBlasDeclineTest and",
+    "JvmBlasTemplateNativeImageTest pin this file against what each binding asks for."
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
+        "options": { "critical": { "allowHeapAccess": true } }
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": []
+      }
+    ]
+  }
+}

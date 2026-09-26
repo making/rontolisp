@@ -757,9 +757,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies). Some entries are not classes: the {@code $Gpu*} and {@code $Objc*}
-	 * copies bring their native-image registration under {@code META-INF/native-image/}
-	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
+	 * library copies). Some entries are not classes: {@code $BlasBridge} and the
+	 * {@code $Gpu*} and {@code $Objc*} copies bring their native-image registration under
+	 * {@code META-INF/native-image/}
+	 * ({@link JvmBlasRuntimeBuilder#nativeImageMetadataPath},
+	 * {@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
 	 * {@link JvmObjcRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>

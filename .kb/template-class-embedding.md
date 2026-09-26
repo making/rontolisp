@@ -26,9 +26,10 @@ native image refuses that with `UnsupportedFeatureError` -- an `Error`, NOT a `L
 degrade catches it; every such `-o prog.jar` crashed under native-image (measured for java: and geom,
 GraalVM 25.0.4; the other five emitted the same sequence). `ShippedBridgeNativeImageE2eTest` (opt-in)
 now builds java:, geom:, `--simd` (with and without `--add-modules jdk.incubator.vector`), `--blas`,
-`--gpu` and `ffi:` jars into images: java:/`--blas`/`ffi:` with the config the tracing agent records
-from one `java -jar` run (it records FFM downcalls under `foreign`), the rest with none -- `--gpu`
-because it ships its own downcall registration: `am/ik/gpu/reachability-metadata.json` travels in
+`--gpu` and `ffi:` jars into images: java:/`ffi:` with the config the tracing agent records
+from one `java -jar` run (it records FFM downcalls under `foreign`), the rest with none -- `--blas`
+since 2026-09-27 because it carries the `rontolisp-blas` registration ([[linalg-blas]], "Native
+image"), `--gpu` because it ships its own downcall registration: `am/ik/gpu/reachability-metadata.json` travels in
 `runtimeClassFiles()` to `META-INF/native-image/rontolisp-gpu/<program>/`, where native-image reads
 it from the jar or class directory. Without it (until 2026-09-27) the image built and printed the
 right answers while refusing the CUDA binding, so every member ran on the CPU -- visible only on a

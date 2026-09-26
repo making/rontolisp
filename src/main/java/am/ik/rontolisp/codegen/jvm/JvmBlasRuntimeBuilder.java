@@ -20,7 +20,8 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
  * GraalVM native image refuses ({@code .kb/template-class-embedding.md}). The bridge
  * holds no per-program state and needs no probe of its own (it binds the library at its
  * first call), so the program emits no init method: a call site's method reference
- * resolves the file from the program's class loader like any other class.
+ * resolves the file from the program's class loader like any other class. The bridge's
+ * native-image downcall registration travels with it ({@link #nativeImageMetadataPath}).
  *
  * <p>
  * It is a SECOND bridge rather than more methods on the {@code --simd} one because the
@@ -33,6 +34,12 @@ final class JvmBlasRuntimeBuilder {
 
 	/** The template's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmBlasTemplate";
+
+	/**
+	 * rontolisp's own CBLAS downcall registration, which its binary reads and a compiled
+	 * program carries verbatim: the seven shapes {@link JvmBlasTemplate} binds.
+	 */
+	private static final String NATIVE_IMAGE_METADATA = "META-INF/native-image/am.ik.rontolisp/rontolisp-blas/reachability-metadata.json";
 
 	/** The {@code ops} key of the {@code linalg:dot} kernel. */
 	static final String DOT = "dot";
@@ -57,9 +64,26 @@ final class JvmBlasRuntimeBuilder {
 	}
 
 	/**
+	 * Where a program's copy of the downcall registration travels: under
+	 * {@code META-INF/native-image/}, which native-image reads from every class path
+	 * entry (a jar, {@code target/classes}, the directory beside {@code -o X.class}), in
+	 * a directory named after the program so two programs in one tree keep two files. An
+	 * image is built from the user's output, which holds none of rontolisp's own
+	 * {@code META-INF} ({@code JvmGpuRuntimeBuilder.nativeImageMetadataPath} is the same
+	 * rule for {@code --gpu}).
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the path within an output tree
+	 */
+	static String nativeImageMetadataPath(String programInternalName) {
+		return "META-INF/native-image/rontolisp-blas/" + programInternalName.replace('/', '.')
+				+ "/reachability-metadata.json";
+	}
+
+	/**
 	 * The constant-pool references the accelerated call sites need ({@code ops} keys:
 	 * {@value #DOT}, {@value #MATVEC} and {@value #MATVEC_INTO}), and the bridge class
-	 * file that travels beside the program, keyed by its path within an output tree.
+	 * file that travels beside the program with its native-image downcall registration,
+	 * keyed by their paths within an output tree.
 	 */
 	record BlasRuntime(Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
 	}
@@ -73,7 +97,8 @@ final class JvmBlasRuntimeBuilder {
 	 */
 	static BlasRuntime build(ConstantPool cp, String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
-		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
+		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadResource(TEMPLATE_INTERNAL_NAME + ".class"),
+				TEMPLATE_INTERNAL_NAME, bridgeName);
 
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
@@ -83,14 +108,21 @@ final class JvmBlasRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put(MATVEC_INTO, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasMatvecInto"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		return new BlasRuntime(ops, Map.of(bridgeName + ".class", bridgeBytes));
+		// The shapes the bridge binds, where native-image reads them from a class path
+		// entry: without them an image built from the output refuses every downcall and
+		// the bridge declines as though the machine had no library.
+		return new BlasRuntime(ops, Map.of(bridgeName + ".class", bridgeBytes,
+				nativeImageMetadataPath(programInternalName), loadResource(NATIVE_IMAGE_METADATA)));
 	}
 
-	/** Reads the compiled {@link JvmBlasTemplate} bytecode from the classpath. */
-	private static byte[] loadTemplateBytes() {
-		try (InputStream in = JvmBlasRuntimeBuilder.class.getResourceAsStream("JvmBlasTemplate.class")) {
+	/**
+	 * Reads a resource -- the template's bytecode, the registration -- from the
+	 * classpath.
+	 */
+	private static byte[] loadResource(String path) {
+		try (InputStream in = JvmBlasRuntimeBuilder.class.getClassLoader().getResourceAsStream(path)) {
 			if (in == null) {
-				throw new IllegalStateException("JvmBlasTemplate.class not found on the classpath");
+				throw new IllegalStateException(path + " not found on the classpath");
 			}
 			return in.readAllBytes();
 		}
