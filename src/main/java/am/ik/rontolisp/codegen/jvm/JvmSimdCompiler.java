@@ -16,12 +16,12 @@ import am.ik.jvm.Opcode;
 
 /**
  * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
- * {@code scale}/{@code dot}/{@code sum}/{@code matvec}) to calls into the embedded
+ * {@code scale}/{@code dot}/{@code sum}/{@code matvec}) to calls into the shipped
  * {@link JvmSimdVectorTemplate bridge}, replacing the scalar {@code vec.lisp} reference
  * at those call sites. Only wired in when the {@code --simd} flag emitted the runtime
  * (i.e. {@link JvmLispCompiler.Ctx#simdOps} is non-null); otherwise the qualified call
  * falls through to the ordinary spliced {@code vec:} defun. Each call site first invokes
- * the emitted {@code _simdInit} helper (which lazily defines the bridge, see
+ * the emitted {@code _simdInit} helper (which initializes the bridge, see
  * {@link JvmSimdRuntimeBuilder}), then evaluates the arguments and calls the matching
  * bridge entry point. {@code mean}/{@code norm} are not intercepted directly -- they are
  * accelerated transitively because their spliced bodies call {@code sum}/{@code dot}.
@@ -173,7 +173,7 @@ final class JvmSimdCompiler {
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
-		// Make sure the bridge class is defined -- or, on a runtime without
+		// Make sure the bridge class is initialized -- or, on a runtime without
 		// jdk.incubator.vector, that _simdReady() below reads false -- before anything
 		// decides which path to take.
 		ctx.emit(Opcode.INVOKESTATIC);
@@ -307,12 +307,10 @@ final class JvmSimdCompiler {
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
-		// The bridge classes, before their method references resolve.
+		// The bridges that need setting up before their first call (the CBLAS bridge
+		// needs none: it binds its library itself).
 		if (gpu != null) {
 			emitInit(ctx, gpu);
-		}
-		if (blasKey != null) {
-			emitInit(ctx, Objects.requireNonNull(blas));
 		}
 		if (simd != null) {
 			emitInit(ctx, simd);
@@ -325,7 +323,7 @@ final class JvmSimdCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slots[i]);
 		}
-		// r = RontoLispGpuBridge.gpuMatvec(w, x); if (r != null) goto end;
+		// r = <Program>$GpuBridge.gpuMatvec(w, x); if (r != null) goto end;
 		List<Integer> deviceBranches = new ArrayList<>();
 		if (gpu != null) {
 			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceBranches);
@@ -630,7 +628,7 @@ final class JvmSimdCompiler {
 		}
 	}
 
-	/** Defines a bridge class before any of its method references resolve. */
+	/** Sets a bridge up before its first call. */
 	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());

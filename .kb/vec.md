@@ -242,9 +242,10 @@ the machine it will run on.
 
 **Layer 1, JVM `--simd`**: `JvmSimdCompiler` (from `JvmExprCompiler`, gated
 `usesSimd = simdAccel && programUsesAnyAcceleratedSimdOp` -> `Ctx.simdOps`) rewrites the call sites
-to an embedded `RontoLispSimdBridge` (`JvmSimdRuntimeBuilder` renames `JvmSimdVectorTemplate.class`
-into the program's package and emits `_simdInit`, like the `java:` bridge). Because `mean`/`norm`
-always call `sum`/`dot`, ANY `--simd` program using the package embeds the bridge. Running it needs
+to a `<Program>$SimdBridge` shipped beside the class (`JvmSimdRuntimeBuilder` renames
+`JvmSimdVectorTemplate.class` after the program and emits `_simdInit`, like the `java:` bridge).
+Because `mean`/`norm` always call `sum`/`dot`, ANY `--simd` program using the package ships the
+bridge. Running it needs
 `java --add-modules jdk.incubator.vector`; the default build is byte-identical. **Module-absence
 degrade**: `_simdInit` CATCHES the `LinkageError`, warns once on stderr, leaves `_simdAvailable`
 false, and every call site checks `_simdReady()` before falling back to the defun -- the same

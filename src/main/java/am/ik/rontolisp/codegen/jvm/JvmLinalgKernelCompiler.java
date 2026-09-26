@@ -16,8 +16,8 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the accelerated {@code linalg:} kernels to calls into the embedded bridges,
- * the {@code linalg:} sibling of {@link JvmSimdCompiler}. It is the ONE {@code linalg:}
+ * Compiles the accelerated {@code linalg:} kernels to calls into the shipped bridges, the
+ * {@code linalg:} sibling of {@link JvmSimdCompiler}. It is the ONE {@code linalg:}
  * call-site compiler, and it emits a CHAIN of up to three attempts over one set of temps:
  * the device ({@code --gpu}, {@link JvmGpuTemplate}: the rank-2 product and the stacked
  * one), then a tuned CBLAS ({@code --blas}, {@link JvmBlasTemplate}), then the lane
@@ -297,15 +297,10 @@ final class JvmLinalgKernelCompiler {
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
-		// The bridge classes must be defined before their method references resolve, and
-		// ahead of the temps: with only the --simd attempt this is byte for byte the
-		// sequence emitted before --blas existed.
+		// The bridges that need setting up before their first call, ahead of the temps
+		// (the CBLAS bridge needs none: it binds its library itself).
 		if (gpuKey != null && gpu != null) {
 			emitInit(ctx, gpu);
-		}
-		Map<String, MethodrefConstant> blasAttempt = extendedCall ? null : blas;
-		if (blasAttempt != null) {
-			emitInit(ctx, blasAttempt);
 		}
 		if (simd != null) {
 			emitInit(ctx, simd);
@@ -387,7 +382,7 @@ final class JvmLinalgKernelCompiler {
 			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, hostBranches);
 		}
 		if (simd != null) {
-			// A runtime without jdk.incubator.vector never defined the bridge
+			// A runtime without jdk.incubator.vector cannot link the bridge
 			// (JvmSimdRuntimeBuilder's _simdInit caught the LinkageError and left
 			// _simdReady() false): skip this rung entirely rather than resolve a
 			// method reference into it, landing exactly where a declined kernel would

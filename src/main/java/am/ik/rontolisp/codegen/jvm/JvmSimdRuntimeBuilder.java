@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,44 +18,40 @@ import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispNames;
 
 /**
- * Builds the {@code vec:} acceleration runtime for the generated standalone
- * {@code .class} when the {@code --simd} flag is on. Like {@link JvmJavaRuntimeBuilder}
- * it does not hand-assemble the kernel logic: the Vector API kernels live in
- * {@link JvmSimdVectorTemplate} (plain Java, compiled by the project build), whose
- * bytecode is read from the classpath at compile time, renamed into the generated
- * program's own package (a {@code Lookup.defineClass(byte[])} requirement) as
- * {@value #BRIDGE_NAME}, base64-encoded, and embedded as string constants. The emitted
- * {@code private static void _simdInit()} decodes and defines the class on first use
- * (guarded by the {@code _simdInited} int field); unlike the {@code java:} bridge there
- * is no {@code bind} callback -- the kernels are self-contained. Every accelerated
- * {@code vec:} call site is preceded by a {@code _simdInit} call so the bridge method
- * references resolve lazily (at their first execution), by which time the class is
- * defined in the program's own class loader.
+ * Builds the {@code vec:} acceleration runtime for the generated {@code .class} when the
+ * {@code --simd} flag is on. Like {@link JvmJavaRuntimeBuilder} it does not hand-assemble
+ * the kernel logic: the Vector API kernels live in {@link JvmSimdVectorTemplate} (plain
+ * Java, compiled by the project build), whose bytecode is read from the classpath at
+ * compile time, renamed after the generated program ({@code <Program>$SimdBridge}, in its
+ * package) and shipped BESIDE it as an ordinary class file
+ * ({@link SimdRuntime#classFiles()}, joined into
+ * {@link JvmLispCompiler#runtimeClassFiles()}) -- never defined at run time, which a
+ * GraalVM native image refuses ({@code .kb/template-class-embedding.md}). The emitted
+ * {@code private static void _simdInit()} (guarded by the {@code _simdInited} int field)
+ * only initializes it; unlike the {@code java:} bridge there is no {@code bind} callback
+ * -- the kernels are self-contained. Every accelerated {@code vec:} call site is preceded
+ * by a {@code _simdInit} call.
  *
  * <p>
  * {@code jdk.incubator.vector} is an OPTIONAL JDK module: on a runtime started without
- * {@code --add-modules jdk.incubator.vector}, {@code Lookup.defineClass} itself fails to
- * link the embedded bridge with a {@link LinkageError} ({@code NoClassDefFoundError} in
- * practice) -- the template's verifier-visible types resolve at THAT call, before any
- * bridge method runs. {@code _simdInit} catches it, leaves {@value #AVAILABLE_FIELD}
- * false and prints the same one-line warning the interpreter prints
- * ({@code RontoLispCli.enableSimd}), instead of letting the class-define failure surface
- * at the caller as a raw {@code NoClassDefFoundError}. {@code _simdReady()} exposes that
- * flag as one more {@code ops} entry ({@value #AVAILABLE}) so every accelerated call site
- * -- {@link JvmSimdCompiler} and {@link JvmLinalgKernelCompiler}'s {@code --simd} rung --
- * can check it BEFORE resolving a method reference into the (possibly never-defined)
- * bridge class, and fall back to the scalar defun instead, exactly the interpreter's
- * degrade (unlike {@code --blas}/{@code --gpu}, whose bridges never fail to define: their
- * "is it there" probe runs a method call inside an already-linked bridge, not the
- * {@code defineClass} itself).
+ * {@code --add-modules jdk.incubator.vector}, linking the bridge fails with a
+ * {@link LinkageError} ({@code NoClassDefFoundError} in practice) -- the verifier
+ * resolves the template's incubator types, and its static initializer reads a species.
+ * Loading a class file does not link it (a class constant resolves lazily and verifies at
+ * its first use), so {@code _simdInit} forces the whole of it, loading, linking and
+ * initializing, with {@code MethodHandles.lookup().ensureInitialized(<bridge>.class)}
+ * inside the protected region: without that the failure would move to the first kernel
+ * call. It catches the error, leaves {@value #AVAILABLE_FIELD} false and prints the same
+ * one-line warning the interpreter prints ({@code RontoLispCli.enableSimd}).
+ * {@code _simdReady()} exposes that flag as one more {@code ops} entry
+ * ({@value #AVAILABLE}) so every accelerated call site -- {@link JvmSimdCompiler} and
+ * {@link JvmLinalgKernelCompiler}'s {@code --simd} rung -- can check it BEFORE resolving
+ * a method reference into the (possibly unusable) bridge class, and fall back to the
+ * scalar defun instead, exactly the interpreter's degrade (unlike
+ * {@code --blas}/{@code --gpu}, whose bridges always link: their "is it there" probe runs
+ * a method call inside the bridge).
  */
 final class JvmSimdRuntimeBuilder {
-
-	/**
-	 * The name the embedded bridge class is defined under at runtime, relative to the
-	 * generated program's own package (see {@link #build}).
-	 */
-	static final String BRIDGE_NAME = "RontoLispSimdBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmSimdVectorTemplate";
@@ -73,15 +68,22 @@ final class JvmSimdRuntimeBuilder {
 	/** The {@code ops} key of the availability accessor ({@link #READY_METHOD}). */
 	static final String AVAILABLE = "available";
 
-	/** Printed once, to {@code System.err}, when the bridge fails to define. */
+	/** Printed once, to {@code System.err}, when the bridge fails to link. */
 	private static final String UNAVAILABLE_WARNING = "rontolisp: warning: --simd: jdk.incubator.vector is unavailable, "
 			+ "running the scalar vec:/linalg: kernels; re-run with "
 			+ "`java --add-modules jdk.incubator.vector ...`, or use the native binary.";
 
-	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
-	private static final int CHUNK_SIZE = 40000;
-
 	private JvmSimdRuntimeBuilder() {
+	}
+
+	/**
+	 * The internal name of a program's bridge class: named after the program, in its
+	 * package, so programs built by different rontolisp versions never share one file.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the bridge's internal name
+	 */
+	static String bridgeName(String programInternalName) {
+		return programInternalName + "$SimdBridge";
 	}
 
 	/**
@@ -90,39 +92,32 @@ final class JvmSimdRuntimeBuilder {
 	 * {@code linalg:} call-site compilers need ({@code ops} keys: {@code init},
 	 * {@value #AVAILABLE}, plus one per kernel member name --
 	 * {@code add}/{@code sub}/{@code mul}/ {@code scale}/{@code dot}/{@code sum}/
-	 * {@code matvec}).
+	 * {@code matvec}), and the bridge class file that travels beside the program, keyed
+	 * by its path within an output tree.
 	 */
 	record SimdRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, List<ByteCodeWriter.ExceptionTableEntry> initExceptionTable, Utf8Constant initedFieldName,
 			Utf8Constant initedFieldDesc, Utf8Constant availableFieldName, Utf8Constant availableFieldDesc,
-			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode,
-			Map<String, MethodrefConstant> ops) {
+			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode, Map<String, MethodrefConstant> ops,
+			Map<String, byte[]> classFiles) {
 	}
 
 	/**
-	 * Builds the {@code _simdInit} method body and registers the bridge references.
+	 * Builds the {@code _simdInit} method body, registers the bridge references and
+	 * renames the bridge class file.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
-	 * @param stringConcat {@code String.concat(String)}
 	 * @param parallel {@code --parallel}: bind the GEMV / GEMM members
 	 * ({@code vec:matvec}, {@code vec:matvec-into}, {@code linalg:dot},
 	 * {@code linalg::%la-matmul-nd}) to the bridge entries that split their rows across
 	 * threads; every other member and every other byte of the runtime is the same
-	 * @param packagePrefix the generated class's package as an internal-name prefix
-	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
-	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
-	 * class's package, so the bridge is renamed into this one too
+	 * @param programInternalName the generated class's internal name -- the bridge is
+	 * named after it and lives in its package (the bridge methods are package-private)
 	 * @return the runtime pieces
 	 */
-	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat, boolean parallel,
-			String packagePrefix) {
-		String bridgeName = packagePrefix + BRIDGE_NAME;
+	static SimdRuntime build(ConstantPool cp, ClassConstant thisClass, boolean parallel, String programInternalName) {
+		String bridgeName = bridgeName(programInternalName);
 		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
-		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
-		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
-		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
-			chunks.add(cp.addString(base64.substring(i, Math.min(base64.length(), i + CHUNK_SIZE))));
-		}
 
 		Utf8Constant initedFieldName = cp.addUtf8("_simdInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
@@ -132,18 +127,12 @@ final class JvmSimdRuntimeBuilder {
 		FieldrefConstant availableField = cp.addFieldref(thisClass,
 				cp.addNameAndType(availableFieldName, availableFieldDesc));
 
-		ClassConstant base64Class = cp.addClass(cp.addUtf8("java/util/Base64"));
-		MethodrefConstant getDecoder = cp.addMethodref(base64Class,
-				cp.addNameAndType(cp.addUtf8("getDecoder"), cp.addUtf8("()Ljava/util/Base64$Decoder;")));
-		ClassConstant decoderClass = cp.addClass(cp.addUtf8("java/util/Base64$Decoder"));
-		MethodrefConstant decode = cp.addMethodref(decoderClass,
-				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/lang/String;)[B")));
 		ClassConstant methodHandlesClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles"));
 		MethodrefConstant lookup = cp.addMethodref(methodHandlesClass,
 				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
 		ClassConstant lookupClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles$Lookup"));
-		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
-				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
+		MethodrefConstant ensureInitialized = cp.addMethodref(lookupClass,
+				cp.addNameAndType(cp.addUtf8("ensureInitialized"), cp.addUtf8("(Ljava/lang/Class;)Ljava/lang/Class;")));
 		ClassConstant linkageErrorClass = cp.addClass(cp.addUtf8("java/lang/LinkageError"));
 		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
 		FieldrefConstant systemErr = cp.addFieldref(systemClass,
@@ -315,7 +304,7 @@ final class JvmSimdRuntimeBuilder {
 		// --- _simdInit body (self-contained: no bind callback) ---
 		// if (_simdInited != 0) return;
 		// try {
-		// MethodHandles.lookup().defineClass(Base64.getDecoder().decode(chunks...));
+		// MethodHandles.lookup().ensureInitialized(<Program>$SimdBridge.class);
 		// _simdAvailable = 1;
 		// } catch (LinkageError e) {
 		// // jdk.incubator.vector missing: leave _simdAvailable false, warn once.
@@ -328,27 +317,17 @@ final class JvmSimdRuntimeBuilder {
 		int guardPos = code.size();
 		code.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(code, 0);
-		// MethodHandles.lookup().defineClass(Base64.getDecoder().decode(chunks...)) --
-		// the protected region: a runtime missing jdk.incubator.vector fails to LINK
-		// the bridge here (its verifier-visible types resolve at defineClass, not at
-		// the first bridge method call), and this catches that instead of the class
-		// define failure surfacing as a raw NoClassDefFoundError at some call site.
+		// MethodHandles.lookup().ensureInitialized(<Program>$SimdBridge.class) -- the
+		// protected region: a runtime missing jdk.incubator.vector fails to LINK the
+		// bridge here. The class constant alone only loads the file (a class verifies
+		// at its first use), so without the forced initialization the failure would
+		// surface as a raw NoClassDefFoundError at the first kernel call instead.
 		int tryStart = code.size();
 		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, getDecoder.index()); // [decoder]
-		JvmRuntimeBuilder.emitLdc(code, chunks.get(0).index()); // [decoder, str]
-		for (int i = 1; i < chunks.size(); i++) {
-			JvmRuntimeBuilder.emitLdc(code, chunks.get(i).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, stringConcat.index());
-		}
+		JvmRuntimeBuilder.emitU2(code, lookup.index()); // [lookup]
+		JvmRuntimeBuilder.emitLdc(code, bridgeClass.index()); // [lookup, class]
 		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, decode.index()); // [bytes]
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, lookup.index()); // [bytes, lookup]
-		code.add(Opcode.SWAP); // [lookup, bytes]
-		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, defineClass.index()); // [class]
+		JvmRuntimeBuilder.emitU2(code, ensureInitialized.index()); // [class]
 		code.add(Opcode.POP);
 		// _simdAvailable = 1
 		code.add(Opcode.ICONST_1);
@@ -383,8 +362,9 @@ final class JvmSimdRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(readyCode, availableField.index());
 		readyCode.add(Opcode.IRETURN);
 
-		return new SimdRuntime(initName, initDesc, code, 3, 1, initExceptionTable, initedFieldName, initedFieldDesc,
-				availableFieldName, availableFieldDesc, readyName, readyDesc, readyCode, ops);
+		return new SimdRuntime(initName, initDesc, code, 2, 0, initExceptionTable, initedFieldName, initedFieldDesc,
+				availableFieldName, availableFieldDesc, readyName, readyDesc, readyCode, ops,
+				Map.of(bridgeName + ".class", bridgeBytes));
 	}
 
 	/** Reads the compiled {@link JvmSimdVectorTemplate} bytecode from the classpath. */

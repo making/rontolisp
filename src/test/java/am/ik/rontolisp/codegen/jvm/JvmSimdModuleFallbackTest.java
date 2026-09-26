@@ -21,12 +21,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * A {@code --simd} compiled class must DEGRADE, not hard-fail, on a JVM without
  * {@code jdk.incubator.vector} in its module graph -- the asymmetry the interpreter never
  * had ({@code RontoLispCli#enableSimd} already warns and falls back). {@code _simdInit}
- * (see {@link JvmSimdRuntimeBuilder}) resolves the embedded bridge's verifier-visible
- * types at {@code Lookup.defineClass}, before any bridge method ever runs, so the only
- * way to reproduce the bug this item fixes is a FRESH child JVM started deliberately
- * WITHOUT {@code --add-modules jdk.incubator.vector}: the Surefire config that lets
- * {@link JvmSimdAccelCompilerTest} define the bridge in-process adds that flag to THIS
- * JVM, but a plain {@code java -cp} launch of a child process does not inherit it.
+ * (see {@link JvmSimdRuntimeBuilder}) forces the shipped bridge to link and initialize,
+ * which resolves its incubator types, before any bridge method ever runs, so the only way
+ * to reproduce the bug this item fixes is a FRESH child JVM started deliberately WITHOUT
+ * {@code --add-modules jdk.incubator.vector}: the Surefire config that lets
+ * {@link JvmSimdAccelCompilerTest} load the bridge in-process adds that flag to THIS JVM,
+ * but a plain {@code java -cp} launch of a child process does not inherit it.
  */
 class JvmSimdModuleFallbackTest {
 
@@ -63,8 +63,9 @@ class JvmSimdModuleFallbackTest {
 		Path dir = Files.createDirectories(this.tempDir.resolve("no-vector-" + System.nanoTime()));
 		Files.write(dir.resolve("Test.class"), compiled.classBytes());
 		// The artifact runs beside its travelling runtime, exactly as -o lays it
-		// out: a class whose gate fired (a sqrt mention pulls the complex group,
-		// whose holder the predicates test) resolves it from beside the class.
+		// out: the bridge, and a class whose gate fired (a sqrt mention pulls the
+		// complex group, whose holder the predicates test), resolve from beside the
+		// class.
 		for (java.util.Map.Entry<String, byte[]> runtimeClass : compiled.runtimeClasses().entrySet()) {
 			Path target = dir.resolve(runtimeClass.getKey());
 			Files.createDirectories(target.getParent());

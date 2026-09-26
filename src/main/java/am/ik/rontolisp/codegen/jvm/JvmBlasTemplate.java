@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The CBLAS bridge injected into a compiled {@code .class} when the {@code --blas} flag
+ * The CBLAS bridge shipped beside a compiled {@code .class} when the {@code --blas} flag
  * is passed: {@code linalg:dot} -- and through it {@code linalg:matmul} at rank
  * {@code <= 2} -- is lowered to a call on {@link #blasDot}, which finds a TUNED CBLAS in
  * the operating system and runs the product through its {@code gemm} / {@code gemv}.
@@ -22,12 +22,11 @@ import org.jspecify.annotations.Nullable;
  * The compiled sibling of {@code eval/LinalgBlasKernels}, and deliberately a COPY of it
  * rather than a call into it: like {@link JvmSimdVectorTemplate} and
  * {@link JavaBridgeTemplate} this class's bytecode is read from the classpath by
- * {@link JvmBlasRuntimeBuilder}, renamed into the default package, base64-embedded and
- * defined at first use, so the output stays a single self-contained {@code .class} and
- * the bytes must stand alone. The candidate list, the marker rule, the size thresholds,
- * the thread-query table and the two environment variables are therefore mirrored, and
- * the reasoning behind each of them lives once, in {@code eval/LinalgBlasKernels} and
- * {@code .kb/linalg-blas.md}; change them together.
+ * {@link JvmBlasRuntimeBuilder}, renamed after the generated program and written beside
+ * it as its own class file, so the bytes must stand alone. The candidate list, the marker
+ * rule, the size thresholds, the thread-query table and the two environment variables are
+ * therefore mirrored, and the reasoning behind each of them lives once, in
+ * {@code eval/LinalgBlasKernels} and {@code .kb/linalg-blas.md}; change them together.
  *
  * <p>
  * A packed float array here is the compiled representation: a bare {@code double[]} or

@@ -11,7 +11,7 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code geom} kernel bridge injected into a compiled {@code .class} whose program
+ * The {@code geom} kernel bridge shipped beside a compiled {@code .class} whose program
  * calls one of the four members a model FILE spends its whole load time in:
  * {@code geom:read-obj}, {@code geom:mesh}, {@code geom:wireframe} and the
  * {@code geom::%vertex-extremes} behind {@code geom:bounds} and
@@ -20,9 +20,9 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * The compiled sibling of {@code eval/GeomKernels}, and a COPY of it rather than a call
  * into it: like {@link JvmBlasTemplate} and {@link JvmSimdVectorTemplate} this class's
- * bytecode is read from the classpath by {@link JvmGeomRuntimeBuilder}, renamed into the
- * generated program's own package, base64-embedded and defined at first use, so its bytes
- * must stand alone.
+ * bytecode is read from the classpath by {@link JvmGeomRuntimeBuilder}, renamed after the
+ * generated program and written beside it as its own class file, so its bytes must stand
+ * alone.
  *
  * <h2>Bit-identity, not approximation</h2>
  *

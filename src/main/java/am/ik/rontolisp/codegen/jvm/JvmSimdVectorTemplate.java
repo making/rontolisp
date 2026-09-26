@@ -14,7 +14,7 @@ import jdk.incubator.vector.VectorSpecies;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code vec:} acceleration runtime injected into a compiled {@code .class} when the
+ * The {@code vec:} acceleration runtime shipped beside a compiled {@code .class} when the
  * {@code --simd} flag is passed. It reimplements the seven vectorizable {@code vec:}
  * kernels ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}/
  * {@code matvec}) against the compiled packed float-array representation using
@@ -65,19 +65,17 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Like {@link JavaBridgeTemplate} this class is never referenced by the rontolisp code
  * base at runtime: its compiled bytecode is read from the classpath by
- * {@link JvmSimdRuntimeBuilder}, renamed into the default package (a
- * {@code Lookup.defineClass} requirement), base64-embedded, and defined at first use by
- * the emitted {@code _simdInit} helper, so the output stays a single self-contained
- * {@code .class}. Because it references the incubator Vector API, running a compiled
- * program that uses {@code --simd} requires
- * {@code java --add-modules jdk.incubator.vector} on a JRE at least as new as the build
- * JRE (programs compiled without {@code --simd} keep running the scalar reference on any
- * Java 6+ JVM).
+ * {@link JvmSimdRuntimeBuilder}, renamed after the generated program and written beside
+ * it as its own class file, which the emitted {@code _simdInit} helper initializes at
+ * first use. Because it references the incubator Vector API, running a compiled program
+ * that uses {@code --simd} requires {@code java --add-modules jdk.incubator.vector} on a
+ * JRE at least as new as the build JRE (programs compiled without {@code --simd} keep
+ * running the scalar reference on any Java 6+ JVM).
  *
  * <p>
  * Design constraints (as for {@link JavaBridgeTemplate}): no nested classes or records
  * (lambdas are fine) and no references to other rontolisp classes -- the bytes must stand
- * alone once embedded.
+ * alone once shipped.
  *
  * <p>
  * {@code --parallel} adds no kernel: the {@code *Parallel} bridge entries

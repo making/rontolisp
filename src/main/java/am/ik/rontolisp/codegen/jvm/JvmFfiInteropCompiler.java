@@ -17,13 +17,14 @@ import am.ik.jvm.Opcode;
  * {@code ffi:call}, {@code ffi:%apply-call}, {@code ffi:callback}, {@code ffi:alloc},
  * {@code ffi:free}, {@code ffi:peek}, {@code ffi:poke}, {@code ffi:size},
  * {@code ffi:align}, {@code ffi:pointerp}, {@code ffi:address}, {@code ffi:errno}). Each
- * call site first invokes the emitted {@code _ffiInit} helper (which lazily defines the
- * embedded {@code am.ik.ffi} blob and the {@link JvmFfiTemplate bridge}, see
- * {@link JvmFfiRuntimeBuilder}), then evaluates the arguments -- the leading fixed
- * arguments as-is, {@code ffi:call}'s variadic tail packed into an {@code Object[]}, a
- * missing optional as the compiled {@code null} -- and calls the matching bridge entry
- * point. Marshalling, type parsing and every run-time validation live in the bridge, so
- * compiled behavior matches the interpreter's {@code eval/FfiBridge}.
+ * call site first invokes the emitted {@code _ffiInit} helper (which binds the program
+ * into the {@link JvmFfiTemplate bridge} shipped beside it with its copy of
+ * {@code am.ik.ffi}, see {@link JvmFfiRuntimeBuilder}), then evaluates the arguments --
+ * the leading fixed arguments as-is, {@code ffi:call}'s variadic tail packed into an
+ * {@code Object[]}, a missing optional as the compiled {@code null} -- and calls the
+ * matching bridge entry point. Marshalling, type parsing and every run-time validation
+ * live in the bridge, so compiled behavior matches the interpreter's
+ * {@code eval/FfiBridge}.
  */
 final class JvmFfiInteropCompiler {
 
@@ -50,7 +51,7 @@ final class JvmFfiInteropCompiler {
 		}
 		List<LispVal> args = cons.toList();
 		String spelled = "ffi:" + member.toLowerCase(Locale.ROOT);
-		// Make sure the blob is defined before a bridge method reference resolves.
+		// Make sure the bridge holds the program's _apply before any verb runs.
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		switch (member) {

@@ -8,8 +8,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.eval.FfiInterop;
+import am.ik.rontolisp.eval.LinalgBlas;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -21,9 +24,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * A {@code -o prog.jar} whose program needs a template bridge builds into a working
  * GraalVM native image: the bridge travels as an ordinary class file inside the jar, so
  * nothing is defined at run time (a native image refuses {@code Lookup.defineClass} with
- * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls are
- * covered by the configuration the tracing agent records from one {@code java -jar} run;
- * the {@code geom:} kernels need no configuration at all.
+ * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
+ * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
+ * the tracing agent records from one {@code java -jar} run; the {@code geom:},
+ * {@code --simd} and {@code --gpu} programs need no configuration at all. {@code objc:}
+ * needs macOS and is not covered here.
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -78,19 +83,91 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(buildImage(jar)))).isEqualTo(List.of("1000.0"));
 	}
 
-	private Path compileJar(String program) throws Exception {
+	@Test
+	void aSimdJarRunsAsANativeImageAcceleratedOrDegraded() throws Exception {
+		// The bridge is loaded and forced to link inside _simdInit's LinkageError
+		// catch: an image built without jdk.incubator.vector warns and runs the scalar
+		// defuns, one built with it runs the lanes.
+		Path jar = compileJar("(print (vec:sum (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))))", "--simd");
+		String warning = "rontolisp: warning: --simd: jdk.incubator.vector is unavailable";
+		List<String> degraded = lines(run(buildImage(jar)));
+		assertThat(degraded).hasSize(2).last().isEqualTo("21.0");
+		assertThat(degraded.getFirst()).startsWith(warning);
+		assertThat(lines(run(buildImage(jar, "--add-modules", "jdk.incubator.vector")))).containsExactly("21.0");
+	}
+
+	@Test
+	void aBlasJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
+		assumeTrue(LinalgBlas.available(), LinalgBlas::description);
+		// An 8x8 product is above the size the bridge declines, so the image makes the
+		// downcall the agent recorded; the verbose line proves the library bound.
+		Path jar = compileJar("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
+				(print (linalg:to-list (linalg:dot *a* (linalg:eye 8))))
+				""", "--blas");
+		Path config = this.tempDir.resolve("config");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		List<String> onTheJvm = lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"), java,
+				"-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString()));
+		assertThat(onTheJvm.getFirst()).startsWith("rontolisp: --blas bound ");
+		assertThat(lines(run(Map.of("RONTOLISP_BLAS_VERBOSE", "1"),
+				buildImage(jar, "-H:ConfigurationFileDirectories=" + config))))
+			.isEqualTo(onTheJvm);
+	}
+
+	@Test
+	void aGpuJarRunsAsANativeImageWithNoConfiguration() throws Exception {
+		// The whole renamed am.ik.gpu travels in the jar. A machine without a device
+		// declines every product, so this pins that the image loads the library and
+		// runs; the device path itself is .kb/gpu.md's.
+		Path jar = compileJar("""
+				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
+				(print (linalg:sum (linalg:matmul *a* *a*)))
+				""", "--gpu");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		List<String> onTheJvm = lines(run(java, "-jar", jar.toString()));
+		assertThat(onTheJvm).hasSize(1);
+		assertThat(lines(run(buildImage(jar)))).isEqualTo(onTheJvm);
+	}
+
+	@Test
+	void anFfiJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
+		assumeTrue(FfiInterop.available(), FfiInterop::description);
+		assumeTrue(Files.exists(Path.of("/lib/x86_64-linux-gnu/libm.so.6"))
+				|| Files.exists(Path.of("/lib/aarch64-linux-gnu/libm.so.6")), "a Linux libm.so.6");
+		Path jar = compileJar("""
+				(let ((strlen (ffi:symbol (ffi:open) "strlen")))
+				  (print (ffi:call strlen :long '(:string) "hello, world")))
+				(print (ffi:call (ffi:symbol (ffi:open "libm.so.6") "cos") :double '(:double) 0.0))
+				(let ((p (ffi:alloc 16)))
+				  (ffi:poke p :int 42)
+				  (print (ffi:peek p :int))
+				  (ffi:free p))
+				""");
+		List<String> expected = List.of("12", "1.0", "42");
+		Path config = this.tempDir.resolve("config");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
+			.isEqualTo(expected);
+		assertThat(lines(run(buildImage(jar, "-H:ConfigurationFileDirectories=" + config)))).isEqualTo(expected);
+	}
+
+	private Path compileJar(String program, String... flags) throws Exception {
 		Path source = this.tempDir.resolve("prog.lisp");
 		Files.writeString(source, program);
 		Path jar = this.tempDir.resolve("prog.jar");
 		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
 				new PrintStream(new ByteArrayOutputStream()));
-		cli.run(new String[] { source.toString(), "-o", jar.toString(), "--class-name", "com.example.Prog" });
+		List<String> arguments = new ArrayList<>(
+				List.of(source.toString(), "-o", jar.toString(), "--class-name", "com.example.Prog"));
+		arguments.addAll(List.of(flags));
+		cli.run(arguments.toArray(String[]::new));
 		assertThat(jar).exists();
 		return jar;
 	}
 
 	private Path buildImage(Path jar, String... options) throws Exception {
-		Path binary = this.tempDir.resolve("prog");
+		Path binary = this.tempDir.resolve("prog" + System.nanoTime());
 		List<String> arguments = new ArrayList<>(List.of("-jar", jar.toString()));
 		arguments.addAll(List.of(options));
 		arguments.addAll(List.of("-o", binary.toString()));
@@ -103,12 +180,16 @@ class ShippedBridgeNativeImageE2eTest {
 	}
 
 	private String run(Path executable, String... arguments) throws Exception {
+		return run(Map.of(), executable, arguments);
+	}
+
+	private String run(Map<String, String> environment, Path executable, String... arguments) throws Exception {
 		List<String> command = new ArrayList<>();
 		command.add(executable.toString());
 		command.addAll(List.of(arguments));
-		Process process = new ProcessBuilder(command).directory(this.tempDir.toFile())
-			.redirectErrorStream(true)
-			.start();
+		ProcessBuilder builder = new ProcessBuilder(command).directory(this.tempDir.toFile()).redirectErrorStream(true);
+		builder.environment().putAll(environment);
+		Process process = builder.start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		int status = process.waitFor();
 		assertThat(status).describedAs("%s exited %d:%n%s", command, status, output).isZero();

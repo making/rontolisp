@@ -70,7 +70,7 @@ Four things: the `JvmBlasTemplate.class` entry in `resource-config.json`; `--ena
 
 A stacked product IS a batch of gemms and `gemm`/`gemmF` already take element OFFSETS, but:
 - `JvmLinalgBlas.handles` compares one name, `JvmBlasRuntimeBuilder` registers one `ops` key (`DOT`), `JvmLinalgKernelCompiler.compile` hardcodes it: a second member needs a member->key map on all three plus the emit-gate scan.
-- `JvmBlasTemplate` must stand alone once embedded, so it needs its own `laDims` / `laBcastShape` / `laBatchStrides` / odometer (~120 lines from `JvmSimdVectorTemplate`). Grow it on `--gpu`'s blob closure renamed by one prefix rule (`.kb/gpu.md`, "The JVM backend").
+- `JvmBlasTemplate` must stand alone once shipped, so it needs its own `laDims` / `laBcastShape` / `laBatchStrides` / odometer (~120 lines from `JvmSimdVectorTemplate`). Grow it on `--gpu`'s class closure renamed by one prefix rule (`.kb/gpu.md`, "The JVM backend").
 - `worth(n, m, p)` must be re-decided per batch as PER-MATRIX work (`batches` downcalls); `--gpu`'s total-work answer does NOT carry over, since a device runs the whole stack in ONE launch. Precision grows a case too: a library gemm per batch is only "close to" `--simd`'s exact per-batch `linalg:dot`.
 
 ## Tests
@@ -81,4 +81,4 @@ A stacked product IS a batch of gemms and `gemm`/`gemmF` already take element OF
 - `codegen/jvm/JvmLinalgBlasAccelCompilerTest` (both packages) — JVM emit gate, accelerated, declined, arg-evaluated-once.
 - `cli/CliOptionsTest`, `cli/RontoLispCliTest` — the flag is value-less (the `--simd` dead-flag lesson).
 
-**Dead-flag guard: every numeric assertion in these files would pass on the scalar defun.** Defuns carry printed names now, so the printed text is the SAME (`#<function LINALG:DOT>`) whether the defun or the library kernel is installed; what fails when the flag is dead is the TYPE of the value -- `#'linalg:dot` / `#'vec:matvec` answering `LispFunction` (the installed kernel) vs `LispLambda` (the defun) -- and the `blasMatvec` / `blasMatvecInto` METHODREF appearing in the class bytes — the bridge's own bytes are base64 constants, so a methodref in the generated constant pool IS the interception.
+**Dead-flag guard: every numeric assertion in these files would pass on the scalar defun.** Defuns carry printed names now, so the printed text is the SAME (`#<function LINALG:DOT>`) whether the defun or the library kernel is installed; what fails when the flag is dead is the TYPE of the value -- `#'linalg:dot` / `#'vec:matvec` answering `LispFunction` (the installed kernel) vs `LispLambda` (the defun) -- and the `blasMatvec` / `blasMatvecInto` METHODREF appearing in the class bytes — the bridge's own bytes ship in a file of their own, so a methodref in the generated constant pool IS the interception.

@@ -52,7 +52,9 @@ import am.ik.rontolisp.reader.Features;
  * (its output), or form by form with every value echoed (the documentation site's
  * Scheme cells).</li>
  * <li>{@code rontoCompileJvm(source, className)} - compile to a JVM
- * {@code .class} file, returned as a Base64 string.</li>
+ * {@code .class} file, returned as a Base64 string; a program whose class needs files
+ * beside it (a bridge, a runtime class) answers {@value #FILES_PREFIX} and one
+ * {@code path}/Base64 line pair per file instead, which the page packs into a jar.</li>
  * <li>{@code rontoCompileWasm(source)} - compile to a {@code .wasm} module,
  * returned as a Base64 string.</li>
  * <li>{@code rontoPutFile(name, content)} - add an uploaded file.</li>
@@ -68,6 +70,9 @@ import am.ik.rontolisp.reader.Features;
 public final class RontoPlayground {
 
 	private static final String ERROR_PREFIX = "ERROR:";
+
+	/** Marks a JVM compile that produced more than the one class file. */
+	private static final String FILES_PREFIX = "FILES:";
 
 	/**
 	 * In-memory files uploaded from the browser, keyed by file name. There is no filesystem
@@ -142,13 +147,31 @@ public final class RontoPlayground {
 		}
 	}
 
-	/** Compile {@code source} to a JVM class, returned as Base64. */
+	/**
+	 * Compile {@code source} to a JVM class, returned as Base64 -- or, when the class
+	 * needs files beside it ({@link JvmLispCompiler#runtimeClassFiles()}: a hash table's
+	 * runtime, a shipped bridge), every file as a {@code path} line and a Base64 line
+	 * after {@value #FILES_PREFIX}, the class first.
+	 */
 	static String compileJvm(String source, String className) {
 		try {
 			List<LispVal> program = frontend(source, Features.JVM, WitExportDirective.Backend.OTHER);
 			String name = (className == null || className.isBlank()) ? "Main" : className;
-			byte[] bytes = new JvmLispCompiler(name).compile(program);
-			return Base64.getEncoder().encodeToString(bytes);
+			JvmLispCompiler compiler = new JvmLispCompiler(name);
+			byte[] bytes = compiler.compile(program);
+			Map<String, byte[]> beside = compiler.runtimeClassFiles();
+			if (beside.isEmpty()) {
+				return Base64.getEncoder().encodeToString(bytes);
+			}
+			StringBuilder files = new StringBuilder(FILES_PREFIX);
+			files.append('\n').append(name).append(".class\n").append(Base64.getEncoder().encodeToString(bytes));
+			for (Map.Entry<String, byte[]> file : new java.util.TreeMap<>(beside).entrySet()) {
+				files.append('\n')
+					.append(file.getKey())
+					.append('\n')
+					.append(Base64.getEncoder().encodeToString(file.getValue()));
+			}
+			return files.toString();
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();

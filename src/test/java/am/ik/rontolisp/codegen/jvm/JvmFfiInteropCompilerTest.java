@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import am.ik.ffi.FfiRuntime;
@@ -24,11 +25,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * The {@code ffi:} verbs compiled to a JVM {@code .class} (the embedded {@code am.ik.ffi}
- * blob plus the {@link JvmFfiTemplate} bridge). Mirrors the interpreter's {@code FfiTest}
- * case for case so the two stay behaviorally identical -- and unlike the {@code objc:}
- * twin it RUNS on this machine: the exercising tests need only libc/libm and are skipped
- * where the JVM denies native access.
+ * The {@code ffi:} verbs compiled to a JVM {@code .class} (the {@code am.ik.ffi} copy
+ * plus the {@link JvmFfiTemplate} bridge shipped beside it). Mirrors the interpreter's
+ * {@code FfiTest} case for case so the two stay behaviorally identical -- and unlike the
+ * {@code objc:} twin it RUNS on this machine: the exercising tests need only libc/libm
+ * and are skipped where the JVM denies native access.
  */
 class JvmFfiInteropCompilerTest {
 
@@ -46,10 +47,12 @@ class JvmFfiInteropCompilerTest {
 	private String compileAndRun(String lispCode) throws Exception {
 		// The CLI runs UserMacroExpander in CompileFrontend before the backend; doing
 		// the same here is what lets a test program carry defmacro/eval-when.
-		byte[] classBytes = new JvmLispCompiler("Test")
-			.compile(UserMacroExpander.expand(LispReader.readAllFromString(lispCode)));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(UserMacroExpander.expand(LispReader.readAllFromString(lispCode)));
 		Path classFile = this.tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
+		// The bridge and the library travel beside the class as their own files.
+		TravellingClassFiles.write(compiler, this.tempDir);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> clazz = loader.loadClass("Test");
@@ -74,7 +77,7 @@ class JvmFfiInteropCompilerTest {
 	}
 
 	private static boolean embedsFfiBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmFfiRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmFfiRuntimeBuilder.bridgeName("Test"));
 	}
 
 	private static String libm() {
@@ -201,7 +204,7 @@ class JvmFfiInteropCompilerTest {
 	}
 
 	@Test
-	void theBlobCarriesTheWholeLibrary() throws Exception {
+	void theProgramShipsTheWholeLibrary() throws Exception {
 		// The compiled backend runs am.ik.ffi's own bytes rather than a hand-kept copy
 		// of them, so a class file added to the library must be added to the list that
 		// travels (the JvmObjcRuntimeBuilder rule).
@@ -218,16 +221,29 @@ class JvmFfiInteropCompilerTest {
 		}
 		assertThat(JvmFfiRuntimeBuilder.embeddedFfiClasses()).containsExactlyInAnyOrderElementsOf(onDisk);
 		// The bridge and the handle are ONE class file each: a nested class, or the
-		// synthetic $1 an enum switch lowers to, would be a file the blob does not
-		// carry.
+		// synthetic $1 an enum switch lowers to, would be a file the builder does not
+		// ship.
 		try (Stream<Path> files = Files.list(classes.resolve("am/ik/rontolisp/codegen/jvm"))) {
 			assertThat(files.map(p -> p.getFileName().toString())
 				.filter(name -> name.startsWith("JvmFfiTemplate$") || name.startsWith("JvmFfiHandle$"))).isEmpty();
 		}
 		// And nothing of the library's own package name survives the rename: the
-		// emitted class resolves the blob under its own package or not at all.
-		String bytes = new String(compile("(print (ffi:pointerp 1))"), StandardCharsets.ISO_8859_1);
+		// emitted class resolves the shipped files under its own names or not at all.
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		String bytes = new String(compiler.compile(LispReader.readAllFromString("(print (ffi:pointerp 1))")),
+				StandardCharsets.ISO_8859_1);
 		assertThat(bytes).doesNotContain("am/ik/ffi/").doesNotContain("am/ik/rontolisp/codegen/jvm/JvmFfi");
+		List<Map.Entry<String, byte[]>> shipped = compiler.runtimeClassFiles()
+			.entrySet()
+			.stream()
+			.filter(file -> file.getKey().startsWith("Test$Ffi"))
+			.toList();
+		assertThat(shipped).hasSize(onDisk.size() + 2);
+		for (Map.Entry<String, byte[]> file : shipped) {
+			assertThat(new String(file.getValue(), StandardCharsets.ISO_8859_1)).as(file.getKey())
+				.doesNotContain("am/ik/ffi/")
+				.doesNotContain("am/ik/rontolisp/codegen/jvm/JvmFfi");
+		}
 	}
 
 	@Test

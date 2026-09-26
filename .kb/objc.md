@@ -199,31 +199,28 @@ object hold two references; classes own nothing. Hence the rule `appkit:window` 
 `objc:` window must: **`setReleasedWhenClosed:` NO**, or the close releases a reference the wrapper
 still holds. Leaking is the safe direction everywhere here.
 
-## The JVM backend: the binding travels in the class, and calls back into it
+## The JVM backend: the binding travels beside the class, and calls back into it
 `-o Prog.class` / `-o lib.jar` uses the `--gpu` route ([gpu.md](gpu.md),
 [template-class-embedding.md](template-class-embedding.md)): every class file of `am.ik.objc` is
-renamed by one prefix rule (`am/ik/objc/` -> the program's package + `RontoLispObjc`), base64'd and
-`Lookup.defineClass`'d by the emitted `_objcInit` on the first `objc:` call.
+renamed by one prefix rule (`am/ik/objc/` -> `<Program>$Objc`) and ships beside the program through
+`runtimeClassFiles()`; the emitted `_objcInit` only binds, on the first `objc:` call.
 `JvmObjcRuntimeBuilder` owns the list (pinned by
-`JvmObjcInteropCompilerTest#theBlobCarriesTheWholeLibrary`). Two classes ride along, each ONE class
-file: `JvmObjcTemplate` -> `RontoLispObjcBridge` (the seven verbs against the compiled value model,
+`JvmObjcInteropCompilerTest#theProgramShipsTheWholeLibrary`). Two classes ride along, each ONE class
+file: `JvmObjcTemplate` -> `<Program>$ObjcBridge` (the seven verbs against the compiled value model,
 the hand-kept twin of `ObjcBridge` -- **KEEP THE TWO IN SYNC**; an if-chain over
-`TypeEncoding.Kind`, because an enum `switch` lowers to a synthetic `$1` class the blob does not
-carry) and `JvmObjcHandle` -> `RontoLispObjcObject` (address + class name, `equals` by address,
+`TypeEncoding.Kind`, because an enum `switch` lowers to a synthetic `$1` class the builder does not
+ship) and `JvmObjcHandle` -> `<Program>$ObjcObject` (address + class name, `equals` by address,
 reached by the printer through the bridge's `objcPrint` hook, `JvmRuntimeBuilder.ObjcPrint`,
 emitted AHEAD of the `java:` branch which would otherwise claim it).
 
-Three differences from the `--gpu` blob:
-- **Definition order is not free**: the VERIFIER loads a class it must check assignability against
-  while defining the referencing class (a `catch` type must be a `Throwable`), so `ObjcException`
-  is defined FIRST; alphabetical order died in `defineClass` with `NoClassDefFoundError`.
-- **The blob makes UPCALLS into the program**: a `define-class` method and an `on-main` body are
+Differences from the `--gpu` library:
+- **It makes UPCALLS into the program**: a `define-class` method and an `on-main` body are
   applied through `_apply`, handed over by `bind(Class)` from `_objcInit`, which is why `usesObjc`
   forces `usesEval` and roots `_apply` for the shaker. `bind` hands over `_strv` the same way
   (nullable -- absent exactly when the program has no array runtime).
 - **The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them:
   `AppKitLibrary.process` splices the widget layer on the compile path (pruned to what the program
-  calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the blob on.
+  calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the library on.
 - **The same gate keeps the compiled `main` where it was.** Every other class with a `main` runs
   its program on a sized worker thread ([interpreter-stack.md](interpreter-stack.md),
   `JvmSizedMainBuilder`); a class with `usesObjc` does not, and its bytes are what they were

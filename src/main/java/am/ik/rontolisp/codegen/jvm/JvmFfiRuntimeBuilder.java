@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,11 +16,10 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the {@code ffi:} runtime for the generated standalone {@code .class}: the
- * {@link JvmObjcRuntimeBuilder} mechanism -- a closure of embedded classes renamed into
- * the emitted program's own package -- over {@code am.ik.ffi}, plus the two classes the
- * call sites add, {@link JvmFfiTemplate} (the bridge) and {@link JvmFfiHandle} (the
- * pointer value).
+ * Builds the {@code ffi:} runtime for the generated {@code .class}: the
+ * {@link JvmObjcRuntimeBuilder} mechanism -- a closure of shipped classes renamed after
+ * the emitted program -- over {@code am.ik.ffi}, plus the two classes the call sites add,
+ * {@link JvmFfiTemplate} (the bridge) and {@link JvmFfiHandle} (the pointer value).
  *
  * <p>
  * Why the whole library travels: the parts of the binding that were expensive to get
@@ -30,37 +28,41 @@ import am.ik.jvm.Opcode;
  * struct-by-value layouts, the upcall dispatcher bound from a CONSTANT
  * {@code findStatic}, the actionable unregistered-shape signal -- are exactly the parts a
  * hand-kept copy would fork. So every class file of {@code am.ik.ffi} is renamed by one
- * prefix rule ({@code am/ik/ffi/} -> the emitted program's own package plus
- * {@value #FFI_PREFIX}), the bridge and the handle are renamed the same way, and the
- * compiled backend runs the very bytes the interpreter runs. Like the {@code objc:} blob,
- * the embedded classes make UPCALLS into the compiled program: an {@code ffi:callback}'s
- * Lisp function runs through {@code _apply}, handed over by {@code bind(Class)}.
+ * prefix rule ({@code am/ik/ffi/} -> {@code <Program>}{@value #FFI_SUFFIX}), the bridge
+ * and the handle are renamed the same way, and the compiled backend runs the very bytes
+ * the interpreter runs. The renamed files are shipped BESIDE the program
+ * ({@link FfiRuntime#classFiles()}, joined into
+ * {@link JvmLispCompiler#runtimeClassFiles()}) -- never defined at run time, which a
+ * GraalVM native image refuses ({@code .kb/template-class-embedding.md}) -- and named
+ * after it, because {@code bind} keeps that program's {@code _apply}. Like the
+ * {@code objc:} classes, they make UPCALLS into the compiled program: an
+ * {@code ffi:callback}'s Lisp function runs through {@code _apply}, handed over by
+ * {@code bind(Class)}.
  *
  * <p>
- * The emitted {@code private static void _ffiInit()} decodes and defines every class on
- * first use (guarded by the {@code _ffiInited} int field), then binds the callback; every
- * {@code ffi:} call site is preceded by an {@code _ffiInit} call, so a bridge method
- * reference resolves only once the class it names exists.
+ * The emitted {@code private static void _ffiInit()} binds the callback on first use
+ * (guarded by the {@code _ffiInited} int field); every {@code ffi:} call site is preceded
+ * by an {@code _ffiInit} call.
  */
 final class JvmFfiRuntimeBuilder {
 
 	/**
-	 * The prefix the library's classes are renamed onto ({@code am/ik/ffi/X} -> ...X),
-	 * relative to the generated program's own package (see {@link #build}).
+	 * Appended to the generated program's internal name to form the prefix the library's
+	 * classes are renamed onto ({@code am/ik/ffi/X} -> {@code <Program>$FfiX}).
 	 */
-	static final String FFI_PREFIX = "RontoLispFfi";
+	static final String FFI_SUFFIX = "$Ffi";
 
 	/**
-	 * The name the embedded bridge is defined under, relative to the generated program's
-	 * own package (see {@link #build}).
+	 * Appended to the generated program's internal name to name the bridge
+	 * ({@link JvmFfiTemplate}).
 	 */
-	static final String BRIDGE_NAME = "RontoLispFfiBridge";
+	static final String BRIDGE_SUFFIX = "$FfiBridge";
 
 	/**
-	 * The name the embedded pointer class is defined under, relative to the generated
-	 * program's own package.
+	 * Appended to the generated program's internal name to name the pointer class
+	 * ({@link JvmFfiHandle}).
 	 */
-	static final String HANDLE_NAME = "RontoLispFfiPointer";
+	static final String HANDLE_SUFFIX = "$FfiPointer";
 
 	/** The bridge's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmFfiTemplate";
@@ -79,12 +81,10 @@ final class JvmFfiRuntimeBuilder {
 	 * annotations and is left behind.
 	 *
 	 * <p>
-	 * The order is NOT free (the {@code JvmObjcRuntimeBuilder} rule): the VERIFIER loads
-	 * a class it has to check assignability against while the referencing class is being
-	 * defined -- the type of a {@code catch} clause must be a {@code Throwable} -- so
-	 * {@code FfiException} is defined before everything that throws or catches it, and
-	 * the {@code FfiType} hierarchy before the runtime that operates on it.
-	 * {@code FfiRuntime$1} is the {@code $SwitchMap} synthetic of the enum switches.
+	 * The list names what ships; its order no longer matters. It did while the classes
+	 * were defined one by one at run time: the verifier loads a {@code catch} clause's
+	 * type while defining the class that has it, so {@code FfiException} had to come
+	 * first. Shipped as files, every class is on disk before any of them loads.
 	 */
 	private static final List<String> FFI_CLASSES = List.of("FfiException", "FfiType", "FfiType$Scalar",
 			"FfiType$Struct", "FfiRuntime$Callback", "FfiRuntime$CallbackShape", "FfiRuntime$CallRequest",
@@ -96,63 +96,73 @@ final class JvmFfiRuntimeBuilder {
 	/** The {@code ops} key of the print hook's method reference. */
 	static final String PRINT = "print";
 
-	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
-	private static final int CHUNK_SIZE = 40000;
-
 	private JvmFfiRuntimeBuilder() {
 	}
 
 	/**
 	 * The ready-to-emit {@code _ffiInit} method, its guard field, and the constant-pool
 	 * references the {@code ffi:} call-site compiler needs ({@code ops} keys:
-	 * {@code init}, one per verb, {@value #PRINT}).
+	 * {@code init}, one per verb, {@value #PRINT}). The class files that travel beside
+	 * the program are keyed by their paths within an output tree.
 	 */
 	record FfiRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
 			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, FieldrefConstant initedField,
-			Map<String, MethodrefConstant> ops) {
+			Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
 	}
 
 	/**
-	 * Builds the {@code _ffiInit} method body and registers the bridge references.
+	 * The internal name of a program's bridge class.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the bridge's internal name, in the program's own package
+	 */
+	static String bridgeName(String programInternalName) {
+		return programInternalName + BRIDGE_SUFFIX;
+	}
+
+	/**
+	 * The internal name of a program's pointer class.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the handle's internal name, in the program's own package
+	 */
+	static String handleName(String programInternalName) {
+		return programInternalName + HANDLE_SUFFIX;
+	}
+
+	/**
+	 * The prefix a program's copy of {@code am.ik.ffi} is renamed onto.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the prefix, e.g. {@code com/example/Prog$Ffi}
+	 */
+	static String ffiPrefix(String programInternalName) {
+		return programInternalName + FFI_SUFFIX;
+	}
+
+	/**
+	 * Builds the {@code _ffiInit} method body, registers the bridge references and
+	 * renames the class files that travel beside the program.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
-	 * @param stringConcat {@code String.concat(String)}
-	 * @param packagePrefix the generated class's package as an internal-name prefix
-	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
-	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
-	 * class's package, so the whole embedded library is renamed into this one too
+	 * @param programInternalName the generated class's internal name -- the classes are
+	 * named after it and live in its package (their members are package-private)
 	 * @return the runtime pieces
 	 */
-	static FfiRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
-			String packagePrefix) {
-		String bridgeName = packagePrefix + BRIDGE_NAME;
-		String handleName = packagePrefix + HANDLE_NAME;
-		String ffiPrefix = packagePrefix + FFI_PREFIX;
-		List<List<ConstantPool.StringConstant>> blobs = new ArrayList<>();
+	static FfiRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+		String bridgeName = bridgeName(programInternalName);
+		String handleName = handleName(programInternalName);
+		String ffiPrefix = ffiPrefix(programInternalName);
+		Map<String, byte[]> classFiles = new LinkedHashMap<>();
 		for (String name : FFI_CLASSES) {
-			blobs.add(chunks(cp,
-					rename(loadResource(FFI_INTERNAL_PREFIX + name + ".class"), bridgeName, handleName, ffiPrefix)));
+			classFiles.put(ffiPrefix + name + ".class",
+					rename(loadResource(FFI_INTERNAL_PREFIX + name + ".class"), bridgeName, handleName, ffiPrefix));
 		}
-		blobs.add(chunks(cp, rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName, handleName, ffiPrefix)));
-		blobs.add(
-				chunks(cp, rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, handleName, ffiPrefix)));
+		classFiles.put(handleName + ".class",
+				rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName, handleName, ffiPrefix));
+		classFiles.put(bridgeName + ".class",
+				rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, handleName, ffiPrefix));
 
 		Utf8Constant initedFieldName = cp.addUtf8("_ffiInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
 		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
-
-		ClassConstant base64Class = cp.addClass(cp.addUtf8("java/util/Base64"));
-		MethodrefConstant getDecoder = cp.addMethodref(base64Class,
-				cp.addNameAndType(cp.addUtf8("getDecoder"), cp.addUtf8("()Ljava/util/Base64$Decoder;")));
-		ClassConstant decoderClass = cp.addClass(cp.addUtf8("java/util/Base64$Decoder"));
-		MethodrefConstant decode = cp.addMethodref(decoderClass,
-				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/lang/String;)[B")));
-		ClassConstant methodHandlesClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles"));
-		MethodrefConstant lookup = cp.addMethodref(methodHandlesClass,
-				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
-		ClassConstant lookupClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles$Lookup"));
-		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
-				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		MethodrefConstant bind = cp.addMethodref(bridgeClass,
@@ -202,24 +212,8 @@ final class JvmFfiRuntimeBuilder {
 		int guardPos = code.size();
 		code.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(code, 0);
-		// One MethodHandles.lookup().defineClass(...) per embedded class, in the list's
-		// order (see FFI_CLASSES: the exception type first, the bridge and the handle
-		// last); a reference from a method body resolves lazily, long after all of them
-		// are defined.
-		for (List<ConstantPool.StringConstant> blob : blobs) {
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, lookup.index()); // [lookup]
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, getDecoder.index()); // [lookup, decoder]
-			emitConcatenated(code, blob, stringConcat); // [lookup, decoder, str]
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, decode.index()); // [lookup, bytes]
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, defineClass.index()); // [class]
-			code.add(Opcode.POP);
-		}
-		// RontoLispFfiBridge.bind(ThisClass.class) -- the bridge class reference
-		// resolves here, right after defineClass registered it in this class's loader.
+		// <Program>$FfiBridge.bind(<Program>.class) -- the bridge loads from the
+		// program's own class loader like any other class beside it.
 		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
 		code.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(code, bind.index());
@@ -230,38 +224,17 @@ final class JvmFfiRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
 		code.add(Opcode.RETURN);
 
-		// The deepest stack is [lookup, decoder, chunk, chunk] inside a class blob.
-		return new FfiRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, initedField, ops);
-	}
-
-	/** Loads one chunk sequence onto the stack, concatenated back into one string. */
-	private static void emitConcatenated(List<Integer> code, List<ConstantPool.StringConstant> chunks,
-			MethodrefConstant stringConcat) {
-		JvmRuntimeBuilder.emitLdc(code, chunks.get(0).index());
-		for (int i = 1; i < chunks.size(); i++) {
-			JvmRuntimeBuilder.emitLdc(code, chunks.get(i).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, stringConcat.index());
-		}
-	}
-
-	/** The base64 of a class file, split into Utf8-sized string constants. */
-	private static List<ConstantPool.StringConstant> chunks(ConstantPool cp, byte[] classFile) {
-		String text = Base64.getEncoder().encodeToString(classFile);
-		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
-		for (int i = 0; i < text.length(); i += CHUNK_SIZE) {
-			chunks.add(cp.addString(text.substring(i, Math.min(text.length(), i + CHUNK_SIZE))));
-		}
-		return chunks;
+		return new FfiRuntime(initName, initDesc, code, 1, 0, initedFieldName, initedFieldDesc, initedField, ops,
+				classFiles);
 	}
 
 	/**
-	 * Renames one class file out of its own package and out of {@code am.ik.ffi}, into
-	 * the generated program's own package. All three renames run over every file: the
-	 * bridge names the handle and the library, the library names itself, and a name that
-	 * is not in a given file simply does not match. The library's rename is a PREFIX
-	 * rule, so a nested class ({@code am/ik/ffi/FfiType$Scalar}) follows its outer one
-	 * without being listed.
+	 * Renames one class file out of its own package and out of {@code am.ik.ffi}, after
+	 * the generated program. All three renames run over every file: the bridge names the
+	 * handle and the library, the library names itself, and a name that is not in a given
+	 * file simply does not match. The library's rename is a PREFIX rule, so a nested
+	 * class ({@code am/ik/ffi/FfiType$Scalar}) follows its outer one without being
+	 * listed.
 	 */
 	private static byte[] rename(byte[] classFile, String bridgeName, String handleName, String ffiPrefix) {
 		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, TEMPLATE_INTERNAL_NAME, bridgeName);
@@ -282,7 +255,7 @@ final class JvmFfiRuntimeBuilder {
 		}
 	}
 
-	/** The class files this builder embeds, for the test that pins the list. */
+	/** The library class files this builder ships, for the test that pins the list. */
 	static List<String> embeddedFfiClasses() {
 		return FFI_CLASSES;
 	}
