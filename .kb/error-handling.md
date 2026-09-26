@@ -406,7 +406,7 @@ the JVM backend does not yet.
   names the initargs AS WRITTEN (`:DATUM "abc" :EXPECTED-TYPE INTEGER`), which a built instance
   cannot reproduce. A class that INHERITS a report builds no fallback at all
   (`inheritsConditionReport`): it always renders, and the fallback was dead code on every backend.
-  Measured 2026-09-26 (EH mode, bytes): zlib `--optimize=size` 89,623 -> 89,734 (+111),
+  Measured 2026-09-26 on e6e49385b (EH mode, bytes): zlib `--optimize=size` 89,623 -> 89,734 (+111),
   `--optimize` 117,008 -> 117,119, component 93,712 -> 93,819; `postgres-hello --component
   --optimize` 2,708,177 -> 2,700,709 (-7,468, the dead fallbacks), `postgres-crud` 2,783,155 ->
   2,776,452; a toy `(error 'c)` 22,547 -> 25,917 -- the `~s` of the initarg list brings the
