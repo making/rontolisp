@@ -4912,7 +4912,7 @@ public final class LispMacroExpander {
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
 		// (do ((__member_item item) (__member_cur lst (cdr __member_cur)))
-		// ((atom __member_cur) (%check-list __member_cur 'member))  ; nil for a literal list
+		// ((atom __member_cur) (%check-list __member_cur 'member))
 		// (if (eql __member_item (car __member_cur)) (return __member_cur)))
 		// With :test fn, the match becomes (funcall fn __member_item <elem>); with :key
 		// fn, <elem> becomes (funcall fn (car __member_cur)).
@@ -6549,7 +6549,7 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__assoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__assoc_key key) (__assoc_cur alist (cdr __assoc_cur)))
-		// ((atom __assoc_cur) (%check-list __assoc_cur 'assoc))  ; nil for a literal list
+		// ((atom __assoc_cur) (%check-list __assoc_cur 'assoc))
 		// (if (and (consp (car __assoc_cur)) (eql __assoc_key (car (car __assoc_cur))))
 		// (return (car __assoc_cur))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
@@ -6584,7 +6584,7 @@ public final class LispMacroExpander {
 		LispSymbol pred = new LispSymbol("__memberif_pred");
 		LispSymbol cur = new LispSymbol("__memberif_cur");
 		// (do ((__memberif_pred pred) (__memberif_cur lst (cdr __memberif_cur)))
-		// ((atom __memberif_cur) (%check-list __memberif_cur 'member-if))  ; nil for a literal list
+		// ((atom __memberif_cur) (%check-list __memberif_cur 'member-if))
 		// (if (funcall __memberif_pred (car __memberif_cur)) (return __memberif_cur)
 		// nil))
 		// With :key fn, the tested value becomes (funcall fn (car __memberif_cur)).
@@ -6618,7 +6618,7 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__associf_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__associf_pred pred) (__associf_cur alist (cdr __associf_cur)))
-		// ((atom __associf_cur) (%check-list __associf_cur 'assoc-if))  ; nil for a literal list
+		// ((atom __associf_cur) (%check-list __associf_cur 'assoc-if))
 		// (if (and (consp (car __associf_cur))
 		// (funcall __associf_pred (car (car __associf_cur))))
 		// (return (car __associf_cur))))
@@ -6748,7 +6748,7 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__rassocif_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__rassocif_pred pred) (__rassocif_cur alist (cdr __rassocif_cur)))
-		// ((atom __rassocif_cur) (%check-list __rassocif_cur 'rassoc-if))  ; nil for a literal list
+		// ((atom __rassocif_cur) (%check-list __rassocif_cur 'rassoc-if))
 		// (if (and (consp (car __rassocif_cur))
 		// (funcall __rassocif_pred (cdr (car __rassocif_cur))))
 		// (return (car __rassocif_cur))))
