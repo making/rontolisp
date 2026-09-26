@@ -27419,6 +27419,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void emptyBodyLetReturnsNil() throws Exception {
+		// CLHS: a let/let* with no body forms returns nil. Was an operand-stack
+		// underflow at compile time (the body lowering pushed no value for an empty
+		// body): (let ((p 1))) and (let ()) both failed to compile.
+		assertThat(compileAndRun("""
+				(print (let ((p 1))))
+				(print (let* ((p 1))))
+				(print (let ()))
+				(defun f () (let ((p 1))))
+				(print (f))
+				""")).isEqualTo("NIL\nNIL\nNIL\nNIL");
+	}
+
+	@Test
 	void aTailCallRunsInConstantStackAndATailPositionThatKeepsItsFrameStillDoes() throws Exception {
 		// Every call in tail position is a return_call (Ctx.tailPosition,
 		// .kb/wasm-tail-calls.md): through a function value (the dispatcher tail-calls

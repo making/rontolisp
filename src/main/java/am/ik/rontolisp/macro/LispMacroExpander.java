@@ -20235,8 +20235,7 @@ public final class LispMacroExpander {
 	 * constructor (reachable from {@code make-instance}), the {@code #'}-value escapes,
 	 * {@code load} (runs code this scan never saw), and {@code warn} with a non-string
 	 * datum (its printed message renders through the report machinery). Restart mode and
-	 * {@code --dynamic} keep the broad answer -- the caller gates them, mirroring
-	 * {@code conditionNarrowing}'s bails.
+	 * {@code --dynamic} keep the broad answer -- the caller gates them.
 	 * @param program the top-level forms, AFTER the library splices
 	 * @param closRegistry the class registry
 	 * @return whether program code can hold a condition instance
@@ -24526,7 +24525,7 @@ public final class LispMacroExpander {
 		// the tags the program can actually construct, with the runtime format
 		// renderer declined when no site can hand it an unrendered control.
 		if (closRegistry.routesConditionReports()) {
-			ConditionNarrowing narrowing = conditionNarrowing(out, closRegistry, dynamic, restartMode);
+			ConditionNarrowing narrowing = conditionNarrowing(out, closRegistry, dynamic);
 			// A declined renderer means no site can hand the report a control that is not
 			// a literal string, so a FUNCTION control cannot reach it either -- and its
 			// arm is a funcall of a runtime value, which in a program that can make a
@@ -30983,7 +30982,7 @@ public final class LispMacroExpander {
 	/**
 	 * What the condition-report runtime may be narrowed to, computed by
 	 * {@link #conditionNarrowing} on the compile path and answered as {@link #none()}
-	 * everywhere the world stays open (the interpreter, {@code --dynamic}, restart mode).
+	 * everywhere the world stays open (the interpreter, {@code --dynamic}).
 	 *
 	 * @param constructibleTags the {@code %class-} tags any reachable site can construct,
 	 * or null when unknowable (no narrowing)
@@ -31027,15 +31026,21 @@ public final class LispMacroExpander {
 	 * literal string (or nil) and literal nil -- which the pre-rendering expansions
 	 * guarantee for every string-datum site, so only an explicit {@code :format-control}
 	 * initarg can force the renderer.
+	 *
+	 * <p>
+	 * Restart mode narrows too: every construction it adds is either seen here or always
+	 * in the set. The signal hook's instances are the synthesized simple-* three over a
+	 * text control, restart-mode {@code cerror} wraps the same datum in a
+	 * {@code restart-case}, and the restart runtime's defuns are injected before this
+	 * scan runs.
 	 * @param program the expanded program (post definition walk, pre report splice)
 	 * @param closRegistry the completed registry
 	 * @param dynamic whether the compile is {@code --dynamic} (never narrows)
-	 * @param restartMode whether the restart runtime is on (never narrows)
 	 * @return the narrowing, or {@link ConditionNarrowing#none()} when unknowable
 	 */
 	public static ConditionNarrowing conditionNarrowing(List<LispVal> program, ClosRegistry closRegistry,
-			boolean dynamic, boolean restartMode) {
-		if (dynamic || restartMode) {
+			boolean dynamic) {
+		if (dynamic) {
 			return ConditionNarrowing.none();
 		}
 		ConditionTagScan scan = new ConditionTagScan(closRegistry);

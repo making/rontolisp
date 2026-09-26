@@ -1465,6 +1465,25 @@ class WasmLispCompilerTest {
 		// sequence-op-runtime-arm-routing ci-spec case (all four backends).
 	}
 
+	@Test
+	void aHandlerBindHandlerThatPrintsItsConditionCarriesOnlyTheReportsItCanReach() {
+		// handler-bind puts the program into restart mode, and restart mode used to skip
+		// the condition narrowing entirely: printing the condition brought in every
+		// registered class's report arm and the runtime format renderer. Measured on
+		// wasm-GC, default optimize: 113,391 bytes against 18,094 for the same handler
+		// ignoring its condition; narrowed, 26,365 against 16,614.
+		String printing = """
+				(defun main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (ignore-errors (main)))
+				""";
+		String ignoring = printing.replace("(format t \"saw ~a~%\" c)", "(print :saw)");
+		int printingSize = WasmLispCompiler.builder().build().compile(LispReader.readAllFromString(printing)).length;
+		int ignoringSize = WasmLispCompiler.builder().build().compile(LispReader.readAllFromString(ignoring)).length;
+		assertThat(printingSize - ignoringSize).isLessThan(20_000);
+	}
+
 	private static byte[] compileForSize(String source) {
 		return WasmLispCompiler.builder()
 			.optimize(OptimizeLevel.SIZE)
