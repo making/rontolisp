@@ -2327,7 +2327,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Three struct types in ONE rec group (the first two are structurally identical,
 	// and rec-group membership is what keeps them distinct under wasm-GC's structural
 	// type canonicalization): TYPE_FUTURE {mut i32 state, mut value, mut waiters,
-	// mut source} at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill,
+	// mut extras} at asyncTypeBase(), TYPE_ASYNC_FRAME {mut i32 state, mut spill,
 	// mut future, mut env, mut owner} right after it, then TYPE_WASI_STREAM -- plus the
 	// callback function type (i32 event, i32 waitable, i32 code) -> i32 packed code
 	// used by _sched_dispatch and the serve callback export _async_cb. Appended before
@@ -6265,7 +6265,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					// apart). TYPE_WASI_STREAM joins the group for the same reason (its
 					// shape is one field away from colliding with a future refactor).
 					types.addRecGroup(rec -> {
-						// TYPE_FUTURE {mut i32 state, mut value, mut waiters, mut src}
+						// TYPE_FUTURE {mut i32 state, mut value, mut waiters,
+						// mut extras}
 						rec.addSubFinalStruct(fields -> {
 							fields.addField(true, w -> w.write(Type.I32));
 							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
@@ -7525,7 +7526,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// p1-future-await runtime helper body (FUNC_P1_FUTURE_AWAIT)
-				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait(this.usesDeferredFutures));
+				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait(this.usesDeferredFutures,
+						globalIndices.getOrDefault(LispNames.MV_SPILL, -1)));
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
@@ -7801,7 +7803,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
-								this.usesIdentityHashTables));
+								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1)));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()

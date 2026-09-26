@@ -284,6 +284,10 @@ final class JvmExprCompiler {
 	 * special that is never {@code let}-bound -- stays a single {@code getstatic}.
 	 */
 	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
+		if (ctx.mvChannel != null && LispNames.MV_SPILL.equals(name)) {
+			ctx.mvChannel.emitLoad(ctx);
+			return;
+		}
 		// A promoted global carrying the unboxed dual representation (JvmRawGlobals):
 		// the raw field when the flag is set, the _g$ shadow otherwise. Never a
 		// dynamically bound special, so this cannot skip the _dget path.
@@ -1679,11 +1683,8 @@ final class JvmExprCompiler {
 					// lambda's own tail would have cleared what an argument
 					// published (LispMacroExpander.settleFunctionBody), so the
 					// fused call clears it here.
-					am.ik.jvm.ConstantPool.FieldrefConstant spillField = ctx.globalFields.get(LispNames.MV_SPILL);
-					if (spillField != null) {
-						ctx.emit(Opcode.ACONST_NULL);
-						ctx.emit(Opcode.PUTSTATIC);
-						ctx.emitU2(spillField.index());
+					if (ctx.mvChannel != null) {
+						ctx.mvChannel.emitClear(ctx);
 					}
 				}
 				else {

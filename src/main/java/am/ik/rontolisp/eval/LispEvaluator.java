@@ -2640,20 +2640,29 @@ public final class LispEvaluator {
 						LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
 			}
 			LispVal thunk = args.get(0);
-			return AsyncRuntime.run(() -> apply(thunk, List.of(), this.globalEnv));
+			// The body's values are captured where it completes: the channel holds its
+			// extra values the moment the thunk returns, on the thread that ran it, and
+			// they travel in the future -- the awaiter publishes them from there, never
+			// from the channel it shares with every other thread.
+			return AsyncRuntime.run(future -> {
+				LispVal primary = apply(thunk, List.of(), this.globalEnv);
+				future.settleExtras(this.globalEnv.spill());
+				return primary;
+			});
 		}));
 		// %future-force: the FUNCTION spelling of await's resolve, for synchronous
 		// boundaries (the http-reactor transport resolving a future-valued application
 		// answer). A function, not a special form, so the lexical await-placement rule
-		// does not apply; a non-future passes through, like await.
+		// does not apply; a non-future passes through, and a future's values come back
+		// as await's do (the compile paths compile it to the same resolve).
 		String futureForceName = LispNames.FUTURE_FORCE_QUALIFIED;
 		this.globalEnv.defineFunction(futureForceName, new LispFunction(futureForceName, args -> {
 			if (args.size() != 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.FUTURE_FORCE_INTERNAL + " expects 1 argument, got " + args.size());
 			}
-			return awaitValue(args.get(0));
-		}));
+			return awaitValues(args.get(0));
+		}, true));
 		// %stream-new: the from-thunk stream constructor every backend shares -- a read
 		// thunk, a close thunk and a drained flag is all a stream IS. Here rather than in
 		// Environment for the %async-run reason: pulling a chunk means APPLYING a Lisp
@@ -11925,7 +11934,20 @@ public final class LispEvaluator {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					LispNames.AWAIT + " expects 1 argument, got " + (parts.size() - 1));
 		}
-		return singleValue(awaitValue(eval(parts.get(1), env)));
+		return awaitValues(eval(parts.get(1), env));
+	}
+
+	// awaitValue as a multiple-value producer (the await special form): answers the
+	// primary value and publishes the extra values the resolved future settled with --
+	// the last future of a flattened chain decides, a non-future operand is one value.
+	private LispVal awaitValues(LispVal v) {
+		LispVal extras = LispNil.INSTANCE;
+		while (v instanceof LispFuture future) {
+			v = joinFuture(future);
+			extras = future.extras();
+		}
+		this.globalEnv.publishSpill(extras);
+		return v;
 	}
 
 	// Resolves a value like JavaScript await: a future joins its computation (releasing
@@ -11935,22 +11957,27 @@ public final class LispEvaluator {
 	// type -- and flattening nested futures; a non-future passes through unchanged.
 	private LispVal awaitValue(LispVal v) {
 		while (v instanceof LispFuture future) {
-			java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
-			if (!cf.isDone()) {
-				AsyncRuntime.releaseHandoffIfPending();
-			}
-			try {
-				v = cf.join();
-			}
-			catch (java.util.concurrent.CompletionException ex) {
-				Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
-				if (cause instanceof LispEvalException lispError) {
-					throw lispError;
-				}
-				throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
-			}
+			v = joinFuture(future);
 		}
 		return v;
+	}
+
+	// One step of the resolve: joins one future's computation, unflattened.
+	private static LispVal joinFuture(LispFuture future) {
+		java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
+		if (!cf.isDone()) {
+			AsyncRuntime.releaseHandoffIfPending();
+		}
+		try {
+			return cf.join();
+		}
+		catch (java.util.concurrent.CompletionException ex) {
+			Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
+			if (cause instanceof LispEvalException lispError) {
+				throw lispError;
+			}
+			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));
+		}
 	}
 
 	// The single-argument thread-handle check shared by the thread primitives.

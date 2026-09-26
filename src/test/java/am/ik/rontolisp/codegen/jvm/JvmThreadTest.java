@@ -56,6 +56,26 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void eachThreadHasItsOwnMultipleValueChannel() throws Exception {
+		// The channel is a per-thread store in a program that spawns threads
+		// (JvmMvChannel): through the one static field a sibling's tail cleared the
+		// values between th-helper's publish and the consumer's read, and a b c came back
+		// nil ("Expected integer, got: NIL" on every run).
+		assertThat(compileAndRun("""
+				(defun th-helper (n) (values n (* n n) (- n)))
+				(defun th-work (n)
+				  (let ((acc 0))
+				    (dotimes (i 20000)
+				      (multiple-value-bind (a b c) (th-helper (+ n i))
+				        (setq acc (+ acc (- (+ a b c) (* (+ n i) (+ n i)))))))
+				    acc))
+				(let ((threads nil))
+				  (dotimes (n 8) (let ((k n)) (push (rontolisp:make-thread (lambda () (th-work k))) threads)))
+				  (print (mapcar (lambda (th) (rontolisp:join-thread th)) threads)))
+				""", "ThreadMvProg")).isEqualTo("(0 0 0 0 0 0 0 0)");
+	}
+
+	@Test
 	void joinThreadYieldsTheFunctionsValueAndTheThreadIsDeadAfterwards() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((th (rontolisp:make-thread (lambda () (+ 40 2)))))

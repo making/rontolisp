@@ -12,6 +12,7 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -92,6 +93,23 @@ class JvmAsyncCompilerTest {
 				(print (handler-case (rontolisp:await (failing))
 				         (my-err (e) (list :caught (my-err-v e)))))
 				""")).isEqualTo("(:CAUGHT 7)");
+	}
+
+	@Test
+	void awaitAnswersEveryValueOfTheAsyncBody() throws Exception {
+		assertThat(compileAndRun(AwaitValuesMatrix.PROGRAM)).isEqualTo(AwaitValuesMatrix.EXPECTED);
+	}
+
+	@Test
+	void awaitAnswersEveryValueOfAnAsyncBodyThatSuspended() throws Exception {
+		assertThat(compileAndRun(AwaitValuesMatrix.SUSPENDING_PROGRAM))
+			.isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void concurrentAsyncBodiesKeepTheirOwnValues() throws Exception {
+		assertThat(compileAndRun(AwaitValuesMatrix.CONCURRENT_PROGRAM))
+			.isEqualTo(AwaitValuesMatrix.CONCURRENT_EXPECTED);
 	}
 
 	@Test
