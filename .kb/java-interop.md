@@ -228,11 +228,13 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   (`ShippedBridgeNativeImageE2eTest#aJavaStaticJarRunsAsANativeImageWithNoConfiguration`, opt-in
   `-Drontolisp.native-image.e2e=true`; the same class keeps the agent-config route for a program
   that still needs the bridge).
-- Measured 2026-09-26 (JDK 25, default output): `(print (java:static "java.lang.Math" "max" 3 7))`
-  101,803 -> 6,839 bytes (the bridge blob no longer travels); a 13-site all-resolved program
-  103,527 -> 14,411; a program that still leaves sites to run time GROWS (127,454 -> 141,811: the
-  bridge plus the site methods). `Math.max` on a declared-int loop variable, 1M calls after
-  warm-up: bridge ~95-220 ns/call, direct 1-2 ns/call (the loop floor: the JIT inlines it).
+- Measured 2026-09-26 (JDK 25, default output, against the pre-a12 compiler that embedded the
+  bridge as base64): `(print (java:static "java.lang.Math" "max" 3 7))` 101,803 -> 6,839 bytes; a
+  13-site all-resolved program 103,527 -> 14,411; a program that still leaves sites to run time
+  GROWS (127,454 -> 141,811: the bridge plus the site methods). Since a12 the bridge is a
+  37,099-byte `$JavaBridge.class` beside the program instead -- written only when a site needs it.
+  `Math.max` on a declared-int loop variable, 1M calls after warm-up: bridge ~95-220 ns/call,
+  direct 1-2 ns/call (the loop floor: the JIT inlines it).
 - Known resolution-status difference: the compile path folds some forms before the resolver sees
   them (`(code-char 128512)` -> a literal), so such a site resolves compiled and not interpreted;
   the member is the same either way.
