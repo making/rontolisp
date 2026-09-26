@@ -258,11 +258,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
-	 * and {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
+	 * {@code _lispToString}, which the java: bridge shows a value in a message with, and
+	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
-	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_gpuMaterialize",
-			"_gpuWritten");
+	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
+			"_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -764,7 +765,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies).
+	 * library copies). Some entries are not classes: the {@code $Gpu*} and {@code $Objc*}
+	 * copies bring their native-image registration under {@code META-INF/native-image/}
+	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
+	 * {@link JvmObjcRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>
 	 * The runtime classes are written at their canonical names rather than renamed into
@@ -772,7 +776,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * package they come from imports nothing, which is what makes the output run with no
 	 * rontolisp jar on the classpath ({@code .kb/jvm-export.md}). Valid after
 	 * {@link #compile}.
-	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 * @return each file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
@@ -1433,12 +1437,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// site compiles to a direct call (JvmJavaDirectSites), a resolved java:reify /
 		// java:proxy and a function passed where an interface is expected to an object of
 		// a class generated for it (JvmJavaImplementations). The bridge runtime is
-		// emitted
-		// only when a site needs it -- one left to run time, a java:reify / java:proxy
-		// whose interface is not resolved -- and never under --java-static, which refuses
-		// such a site. The (renamed) JavaBridgeTemplate travels beside the class as its
-		// own class file, and the eval runtime is forced (the bridge applies Lisp
-		// callables through _apply).
+		// emitted only when a site needs it -- one left to run time, a java:reify /
+		// java:proxy whose interface is not resolved -- and never under --java-static,
+		// which refuses such a site. The (renamed) JavaBridgeTemplate travels beside the
+		// class as its own class file, and the eval runtime is forced (the bridge applies
+		// Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaSites javaSites = usesJava
 				? new JvmJavaSites(javaClasses(), cp, thisClass, this.className, lispToStringMethod, this.javaStatic)
@@ -2165,9 +2168,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
 		if (javaSites != null) {
-			// A value a java: interface implementation's function answers is rendered
-			// before it is converted, as the bridge renders it.
-			javaSites.implementations().marshal().strv(strvMethod);
+			// A dispatched java: site renders a mutable character vector, a sequence's
+			// elements too, before it costs and converts it -- as does the conversion
+			// of a value a java: interface implementation's function answers.
+			javaSites.direct().strv(strvMethod);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
@@ -3550,13 +3554,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// thread of its own, sized by -Drontolisp.stack, and the old main body becomes
 		// _main$body. Not where there is no main, not where the top level runs in
 		// <clinit> (a jvm-export library, a war: the JVM initializes the class on the
-		// caller's thread before main could move anything), and NOT for a program that
-		// reaches objc: -- AppKit belongs to thread 0 (.kb/objc.md), and those outputs
-		// stay byte-identical because a GUI change is verified only by hand on macOS.
-		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit && !usesObjc
+		// caller's thread before main could move anything). A program that reaches objc:
+		// also hands thread 0 to the run loop when it is a native image's main
+		// (.kb/objc.md, "AppKit belongs to thread 0").
+		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit
 				? JvmSizedMainBuilder.build(cp, thisClass, this.className,
 						cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))),
-						cp.addUtf8("([Ljava/lang/String;)V"))
+						cp.addUtf8("([Ljava/lang/String;)V"),
+						usesObjc ? JvmObjcRuntimeBuilder.mainThreadName(this.className) : null)
 				: null;
 		final MethodrefConstant ctorObjectInitRef = objectInitRef != null ? objectInitRef : sizedMain != null
 				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
@@ -3918,6 +3923,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			// body's throwable out (published by Thread.join).
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.argsName(), sizedMain.argsDesc());
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.thrownName(), sizedMain.thrownDesc());
+			if (sizedMain.exitName() != null) {
+				definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.exitName(),
+						java.util.Objects.requireNonNull(sizedMain.exitDesc()));
+			}
 		}
 		if (asyncRuntimeBodies != null) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
@@ -4739,6 +4748,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			// same invisible edge.
 			if (usesJavaBridge || usesObjc || usesFfi) {
 				roots.add("_apply");
+			}
+			// The java: bridge shows a value in a message through the program's printer,
+			// found by name like _apply.
+			if (usesJavaBridge) {
+				roots.add("_lispToString");
 			}
 			// A generated java: interface implementation calls its program-side
 			// callbacks from its own class: an edge this class's bytecode cannot show.

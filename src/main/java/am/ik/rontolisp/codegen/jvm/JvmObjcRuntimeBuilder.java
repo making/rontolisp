@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +91,26 @@ final class JvmObjcRuntimeBuilder {
 			"VariadicSelectors", "ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent",
 			"ObjcRuntime$Signature", "TypeEncoding", "TypeEncoding$Kind", "TypeEncoding$Parser", "TypeEncoding$Type");
 
+	/**
+	 * The directory a program's copy of the {@code objc:} foreign registration travels in
+	 * ({@link #nativeImageMetadataPath}).
+	 */
+	private static final String NATIVE_IMAGE_FOREIGN = "rontolisp-objc";
+
+	/**
+	 * rontolisp's own {@code objc:} foreign registration, which its binary reads and a
+	 * compiled program carries verbatim: the runtime's C downcalls, the closed
+	 * {@code objc_msgSend} table and the IMP upcalls.
+	 */
+	private static final String NATIVE_IMAGE_FOREIGN_RESOURCE = "META-INF/native-image/am.ik.rontolisp/"
+			+ NATIVE_IMAGE_FOREIGN + "/reachability-metadata.json";
+
+	/**
+	 * The directory a program's registration of the bridge's reflective lookups travels
+	 * in -- the one file written per program rather than copied.
+	 */
+	private static final String NATIVE_IMAGE_BRIDGE = "rontolisp-objc-bridge";
+
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_objcInit";
 
@@ -104,8 +125,8 @@ final class JvmObjcRuntimeBuilder {
 	 * references the {@code objc:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, {@code class}, {@code send}, {@code define-class}, {@code on-main},
 	 * {@code string}, {@code data}, {@code bytes}, {@code address}, {@code objectp},
-	 * {@value #PRINT}). The class files that travel beside the program are keyed by their
-	 * paths within an output tree.
+	 * {@value #PRINT}). The class files that travel beside the program, and their
+	 * native-image registration, are keyed by their paths within an output tree.
 	 */
 	record ObjcRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, FieldrefConstant initedField,
@@ -140,6 +161,60 @@ final class JvmObjcRuntimeBuilder {
 	}
 
 	/**
+	 * The internal name of a program's copy of {@code am.ik.objc.MainThread}, whose
+	 * {@code handOverRequired()} the sized-stack launcher asks
+	 * ({@code JvmSizedMainBuilder}).
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return e.g. {@code com/example/Prog$ObjcMainThread}
+	 */
+	static String mainThreadName(String programInternalName) {
+		return objcPrefix(programInternalName) + "MainThread";
+	}
+
+	/**
+	 * Where one of a program's native-image registrations travels: under
+	 * {@code META-INF/native-image/}, which native-image reads from every class path
+	 * entry (a jar, {@code target/classes}, the directory beside {@code -o X.class}), in
+	 * a directory named after the program so two programs in one tree keep two files. An
+	 * image is built from the user's output, which holds none of rontolisp's own
+	 * {@code META-INF} ({@code JvmGpuRuntimeBuilder.nativeImageMetadataPath} is the same
+	 * rule for {@code --gpu}).
+	 * @param registration {@value #NATIVE_IMAGE_FOREIGN} or {@value #NATIVE_IMAGE_BRIDGE}
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the path within an output tree
+	 */
+	static String nativeImageMetadataPath(String registration, String programInternalName) {
+		return "META-INF/native-image/" + registration + "/" + programInternalName.replace('/', '.')
+				+ "/reachability-metadata.json";
+	}
+
+	/**
+	 * The registration of the two program methods {@link JvmObjcTemplate}'s
+	 * {@code bind(Class)} finds by name: {@code _apply}, which every callback runs
+	 * through, and {@code _strv}, which renders every string the program built. In an
+	 * image without it the lookup of {@code _apply} fails ({@code objc: no _apply
+	 * method}) and the first built string dies in
+	 * {@code MissingReflectionRegistrationError}. {@code _strv} exists only in a program
+	 * with the array runtime; native-image skips a registered method the class does not
+	 * declare, and the lookup then answers what it answers on the JVM.
+	 */
+	private static byte[] bridgeReflection(String programInternalName) {
+		return """
+				{
+				  "reflection": [
+				    {
+				      "type": "%s",
+				      "methods": [
+				        { "name": "_apply", "parameterTypes": ["java.lang.Object", "java.lang.Object"] },
+				        { "name": "_strv", "parameterTypes": ["java.lang.Object"] }
+				      ]
+				    }
+				  ]
+				}
+				""".formatted(programInternalName.replace('/', '.')).getBytes(StandardCharsets.UTF_8);
+	}
+
+	/**
 	 * Builds the {@code _objcInit} method body, registers the bridge references and
 	 * renames the class files that travel beside the program.
 	 * @param cp the constant pool
@@ -161,6 +236,13 @@ final class JvmObjcRuntimeBuilder {
 				rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName, handleName, objcPrefix));
 		classFiles.put(bridgeName + ".class",
 				rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, handleName, objcPrefix));
+		// What an image built from the output needs to serve the classes above: the
+		// foreign shapes they bind, and the two program methods bind(Class) finds by
+		// name. Without them the image refuses every send and runs no callback.
+		classFiles.put(nativeImageMetadataPath(NATIVE_IMAGE_FOREIGN, programInternalName),
+				loadResource(NATIVE_IMAGE_FOREIGN_RESOURCE));
+		classFiles.put(nativeImageMetadataPath(NATIVE_IMAGE_BRIDGE, programInternalName),
+				bridgeReflection(programInternalName));
 
 		Utf8Constant initedFieldName = cp.addUtf8("_objcInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");

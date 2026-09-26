@@ -99,6 +99,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "META-INF/native-image/am\\.ik\\.rontolisp/rontolisp-objc/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JvmObjcTemplate\\.class"

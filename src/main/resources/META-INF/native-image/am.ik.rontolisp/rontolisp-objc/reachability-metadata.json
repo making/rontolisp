@@ -1,0 +1,591 @@
+{
+  "comment": [
+    "The objc: package's foreign calls (.kb/objc.md), for rontolisp's own binary and for a compiled",
+    "objc: program: a -o X.class/.jar output carries this file under",
+    "META-INF/native-image/rontolisp-objc/<program>/, so native-image builds the jar with no",
+    "configuration (the bridge's two reflective lookups travel beside it, in rontolisp-objc-bridge).",
+    "It stands ALONE, so the FIRST entries repeat shapes the rontolisp file beside this one registers",
+    "for the GPU drivers: the objc_msgSend ones -- the Metal driver's selectors, which metal.lisp and",
+    "scene.lisp send through objc:send, and the CUDA shapes that coincide with one -- and then the",
+    "four C shapes the runtime binds as well, jint() (pthread_main_np), void*()",
+    "(objc_autoreleasePoolPush), void*(void*) (objc_getClass, sel_registerName) and void(void*)",
+    "(objc_autoreleasePoolPop).",
+    "",
+    "After them come am.ik.objc's runtime downcalls",
+    "(objc_getClass, sel_registerName, class_addMethod, protocol_getMethodDescription with",
+    "its struct { SEL; const char* } answer, dispatch_sync_f/dispatch_async_f, pthread_main_np,",
+    "CFRunLoopRunInMode / CFRunLoopSourceCreate / CFRunLoopAddSource -- the run loop thread 0 parks in) and then the CLOSED TABLE of objc_msgSend shapes a native image",
+    "can serve: the shapes appkit.lisp, metal.lisp, scene.lisp and the documented examples send, plus the 60 most common",
+    "shapes of a census over the instance and class methods of 29 core AppKit/Foundation classes",
+    "(13,065 methods on macOS 26.3; the top 60 reach 90.6% of them, ObjcRuntime derives a shape from",
+    "the selector's own type encoding). The last one is outside the census: it is NSTimer's",
+    "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:, the repeating clock behind",
+    "appkit:timer, and the one before it is",
+    "performSelectorOnMainThread:withObject:waitUntilDone:, which appkit.lisp uses to start",
+    "-[NSApplication run] on thread 0 (without it no click is ever dispatched).",
+    "The last FOUR are the system frameworks examples/macos/system-frameworks.lisp reaches past",
+    "AppKit, the shapes the census over AppKit and Foundation did not already cover:",
+    "NSSpellChecker's checkSpellingOfString:startingAt: (an NSRange answer) and",
+    "guessesForWordRange:inString:language:inSpellDocumentWithTag: (an NSRange argument),",
+    "NSDataDetector's matchesInString:options:range:, and CIColor's colorWithRed:green:blue:.",
+    "The next TWO are Metal's, for examples/macos/metal-triangle.lisp and metal-cube.lisp:",
+    "MTLDevice's newBufferWithBytes:length:options: and MTLRenderCommandEncoder's",
+    "drawPrimitives:vertexStart:vertexCount:. Everything else those two programs send -- and every",
+    "selector objc:data, objc:bytes and the :error out slot send -- the census already covered.",
+    "The LAST one is metal:pixels' readback, MTLTexture's",
+    "getBytes:bytesPerRow:fromRegion:mipmapLevel: -- an MTLRegion (six NSUIntegers) by value, the",
+    "widest struct argument in the table, and the shape a window-free frame is read back through",
+    "(.kb/geom.md, \"How the renderer is tested\").",
+    "A selector whose shape is outside this table SIGNALS in the",
+    "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
+    "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
+    "appkit selectors on a Mac.",
+    "",
+    "Then 144 VARIADIC objc_msgSend entries: the shapes am.ik.objc.VariadicSelectors' table is",
+    "sent through (arrayWithObjects:, stringWithFormat: and the rest of the nil-terminated and",
+    "format-string family, whose type encoding is byte for byte their fixed-arity twins'). A",
+    "variadic call is its own stub -- on Apple's arm64 ABI a variadic argument travels on the",
+    "STACK where a fixed one travels in a register, which is why sending one through the declared",
+    "shape kills the process inside objc_retain -- so an entry carries firstVariadicArg and never",
+    "answers for the same layouts without it. THREE fixed halves (void*(void*,void*,void*) and",
+    "void(void*,void*,void*), both splitting at 3, and void(void*,void*,void*,void*) splitting at 4,",
+    "which is +[NSException raise:format:]) crossed with 48 variadic tails: 1 to 12 arguments, every",
+    "carrier combination (void*, jlong, jdouble -- what va_arg reads for %@, %ld and %f) up to 4",
+    "and void* only past it. The LAST variadic argument is always void*, because the binding",
+    "appends the nil terminator itself, which is what keeps the family finite. A wider or more",
+    "mixed list -- a fourth numeric format argument, a thirteenth object -- signals with the entry",
+    "to add. ObjcNativeImageForeignConfigTest generates this grid from those rules and pins it",
+    "against this file in BOTH directions.",
+    "",
+    "The upcalls are the objc: package's: one entry per",
+    "callback shape -- MainThread's trampoline (void(void*)) and ObjcClasses' closed set of IMPs",
+    "(a class defined at run time gets a method body that is an upcall stub). An upcall stub, like",
+    "a downcall stub, exists in the binary only for a registered shape."
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong,jlong)", "struct(jlong,jlong,jlong)"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jint"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jboolean"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean", "jboolean", "jlong", "jlong", "jlong", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jdouble", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)", "jlong", "jlong", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jdouble", "jdouble", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "jdouble",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jdouble"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble)"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong)"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong)"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong)", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble)"]
+      },
+      {
+        "returnType": "jdouble",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "jdouble",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)", "void*"]
+      },
+      {
+        "returnType": "jfloat",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "struct(jlong,jlong)"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)", "jboolean"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean", "jboolean"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jint"]
+      },
+      {
+        "returnType": "struct(void*,void*)",
+        "parameterTypes": ["void*", "void*", "jboolean", "jboolean"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble,jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble)"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble,jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*", "struct(jdouble,jdouble,jdouble,jdouble)"]
+      },
+      {
+        "returnType": "struct(jlong,jlong)",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble,jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "struct(jdouble,jdouble,jdouble,jdouble)",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "struct(jlong,jlong)",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "struct(jlong,jlong)",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jdouble", "void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "struct(jlong,jlong)",
+        "parameterTypes": ["void*", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong)", "void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong)"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jdouble", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong,jlong,jlong,jlong,jlong)", "jlong"]
+      },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jlong", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "jdouble", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jlong", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "void*", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jlong", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "jlong", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "jdouble", "jdouble", "jdouble", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } },
+      { "returnType": "void", "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 4 } }
+    ],
+    "upcalls": [
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*", "void*"]
+      }
+    ]
+  }
+}

@@ -59,7 +59,7 @@ public final class JavaOverloads {
 		 * @return whether the other overload is this one: the same member, packed the
 		 * same way
 		 */
-		boolean sameAs(Overload other) {
+		public boolean sameAs(Overload other) {
 			return this.packed == other.packed && sameMember(this.executable, other.executable);
 		}
 
@@ -136,6 +136,91 @@ public final class JavaOverloads {
 			}
 		}
 		return best;
+	}
+
+	/**
+	 * Every overload {@link #select} could choose among these candidates for {@code argc}
+	 * arguments -- each executable as-is when its arity matches, a varargs one packed too
+	 * -- in the order {@link #select} breaks a cost tie by: of the cheapest, the first
+	 * wins ({@link #selectRanked}). A site whose argument kinds are known only when it
+	 * runs chooses over this list, which a compiled program carries as its dispatch
+	 * ({@code codegen.jvm.JvmJavaDirectSites}).
+	 * @param candidates the methods or constructors
+	 * @param argc the argument count
+	 * @return the overloads, the tie winner first
+	 */
+	public static List<Overload> ranked(List<? extends JavaExecutable> candidates, int argc) {
+		List<Overload> ranked = new ArrayList<>();
+		for (JavaExecutable e : candidates) {
+			List<? extends JavaType> params = e.parameterTypes();
+			if (params.size() == argc) {
+				insertRanked(ranked, new Overload(e, false));
+			}
+			if (e.isVarArgs() && argc >= params.size() - 1 && params.get(params.size() - 1).componentType() != null) {
+				insertRanked(ranked, new Overload(e, true));
+			}
+		}
+		return List.copyOf(ranked);
+	}
+
+	// Stable insertion by the tie rule: an overload goes before every one it beats at
+	// equal cost.
+	private static void insertRanked(List<Overload> ranked, Overload overload) {
+		int at = ranked.size();
+		while (at > 0 && beats(overload, 0, ranked.get(at - 1), 0)) {
+			at--;
+		}
+		ranked.add(at, overload);
+	}
+
+	/**
+	 * The cheapest overload of a {@link #ranked} list, the first on a tie: what
+	 * {@link #select} chooses over the same candidates.
+	 * @param ranked the overloads, in {@link #ranked} order
+	 * @param argc the argument count
+	 * @param cost the cost of each argument against a parameter type
+	 * @return the chosen overload, or {@code null} when none accepts the arguments
+	 */
+	public static @Nullable Overload selectRanked(List<Overload> ranked, int argc, ArgumentCost cost) {
+		Overload best = null;
+		int bestCost = 0;
+		for (Overload overload : ranked) {
+			int c = overloadCost(overload, argc, cost);
+			if (c != NO_MATCH && (best == null || c < bestCost)) {
+				best = overload;
+				bestCost = c;
+			}
+		}
+		return best;
+	}
+
+	/**
+	 * What passing {@code argc} arguments to an overload costs: the sum of their costs,
+	 * plus {@link #COST_VARARGS} when the tail is packed.
+	 * @param overload the overload
+	 * @param argc the argument count
+	 * @param cost the cost of each argument against a parameter type
+	 * @return the total, or {@link #NO_MATCH}
+	 */
+	public static int overloadCost(Overload overload, int argc, ArgumentCost cost) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		return overload.packed() ? varargsCost(params, argc, cost) : fixedArityCost(params, argc, cost);
+	}
+
+	/**
+	 * The type argument {@code index} is converted to: its parameter, or the component
+	 * type of a packed varargs array.
+	 * @param overload the overload
+	 * @param index the argument index
+	 * @return the parameter type
+	 */
+	public static JavaType parameterAt(Overload overload, int index) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		int last = params.size() - 1;
+		if (overload.packed() && index >= last) {
+			return java.util.Objects.requireNonNull(params.get(last).componentType());
+		}
+		return params.get(index);
 	}
 
 	private static boolean beats(Overload a, int costA, Overload b, int costB) {

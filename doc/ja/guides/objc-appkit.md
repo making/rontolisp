@@ -323,6 +323,8 @@ $ java -jar counter.jar
 
 クラスは使用する `appkit` ウィジェットを抱え、バインディング全体 (`am.ik.objc`、クラス名に合わせてリネーム済み) は `Counter$Objc*.class` ファイルとしてクラスの隣 (または jar の中) に書き出されます。それらのファイルがあれば、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
 
+jar は設定なしで GraalVM ネイティブイメージにもビルドできます (`native-image -jar counter.jar`)。バインディングが必要とするネイティブイメージ用メタデータ、つまり `rontolisp` バイナリが扱うのと同じメッセージ形状の表を jar 自身が持っています (前述の[ネイティブバイナリ](#the-native-binary))。イメージではプログラムの `main` がプロセスの最初のスレッドで始まるので、`rontolisp` バイナリと同じく、`main` 自身がそのスレッドをイベントループに渡し、プログラムを別のスレッドで実行します。
+
 ## ネイティブ実行ファイル
 
 `--native` は同じプログラムを JVM を必要としない約 2.4 MB の実行ファイル 1 つにコンパイルします (Apple シリコン。そうした Mac では既定のターゲット、または `--native-target macos-aarch64`):

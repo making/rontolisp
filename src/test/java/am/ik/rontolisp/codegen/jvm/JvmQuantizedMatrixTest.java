@@ -25,7 +25,6 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The block-quantized weight matrix on the JVM backend ({@code .kb/quantized-matrix.md}):
@@ -339,7 +338,10 @@ class JvmQuantizedMatrixTest {
 				"(print (handler-case (rontolisp:dequantize 3 'single-float)" + " (error (e) (princ-to-string e))))",
 				false, false));
 		assertThat(message).contains("no quantized matrix can exist");
-		assertThatThrownBy(() -> compile("(rontolisp:quantize)", false, false)).hasMessageContaining("expects 2");
+		// A wrong argument count is the interpreter's call-time program-error.
+		assertThat(run(compile("(print (handler-case (rontolisp:quantize) (program-error (e) (princ-to-string e))))",
+				false, false)))
+			.contains("RONTOLISP:QUANTIZE expects 2 arguments, got 0");
 	}
 
 }

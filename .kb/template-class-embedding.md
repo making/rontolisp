@@ -28,7 +28,16 @@ degrade catches it; every such `-o prog.jar` crashed under native-image (measure
 GraalVM 25.0.4; the other five emitted the same sequence). `ShippedBridgeNativeImageE2eTest` (opt-in)
 now builds java:, geom:, `--simd` (with and without `--add-modules jdk.incubator.vector`), `--blas`,
 `--gpu` and `ffi:` jars into images: java:/`--blas`/`ffi:` with the config the tracing agent records
-from one `java -jar` run (it records FFM downcalls under `foreign`), the rest with none.
+from one `java -jar` run (it records FFM downcalls under `foreign`), the rest with none -- `--gpu`
+because it ships its own downcall registration: `am/ik/gpu/reachability-metadata.json` travels in
+`runtimeClassFiles()` to `META-INF/native-image/rontolisp-gpu/<program>/`, where native-image reads
+it from the jar or class directory. Without it (until 2026-09-27) the image built and printed the
+right answers while refusing the CUDA binding, so every member ran on the CPU -- visible only on a
+machine with a device (found on the GB10). `aGpuJarTakesTheDevicePathUnderJavaJarAndAsANativeImage`
+pins it by memory (48 lazy 16 MB results under `-Xmx256m`, which the CPU path cannot hold). On macOS
+it builds an `objc:` jar too, whose `main` hands thread 0 to the run loop, with NO configuration since
+2026-09-27: the jar carries the `rontolisp-objc` foreign registration and a per-program reflection
+entry for `_apply`/`_strv` under `META-INF/native-image/` ([[objc]], "The JVM backend").
 
 What the emitted `_*Init` does now: `_javaInit`/`_objcInit`/`_ffiInit` only `bind`; `_gpuInit` hands
 the kernel texts over; `_geomInit` `ldc`s its bridge inside a `LinkageError` catch; `_simdInit` forces

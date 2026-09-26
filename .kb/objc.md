@@ -28,6 +28,8 @@ may touch a window, and the Lisp thread is never it.
   `MainThread.runLoop()` rather than wait for the worker. UNCONDITIONAL on that platform: thread 0
   cannot be handed over later, and since the run loop never returns, the worker ends the process
   with `System.exit` whatever the code.
+- **Compiled `main`: the same hand-over, in bytecode** (`JvmSizedMainBuilder`, below). A native
+  image of an `objc:` jar is the native binary's situation exactly.
 - `runLoop()` is the launcher's `ParkEventLoop`: a no-op `CFRunLoopSource` keeps the default mode
   non-empty and `CFRunLoopRunInMode(default, 1e20)` is re-entered whenever it returns. **Trap: a
   bare `CFRunLoopRun` returns after the first click and the binary sits in `JavaMainWrapper`'s
@@ -97,7 +99,9 @@ pointers are refused by name.
 
 - A native image builds a downcall stub only for a shape registered at build time
   (`MissingForeignRegistrationError` at `Linker.downcallHandle`), so the served set is a CLOSED
-  TABLE in `reachability-metadata.json`: the runtime's own C functions, every shape `appkit.lisp`/
+  TABLE in a file of its own, `META-INF/native-image/am.ik.rontolisp/rontolisp-objc/
+  reachability-metadata.json` (rontolisp's binary reads it beside the main file; a compiled
+  program carries a copy, "The JVM backend" below): the runtime's own C functions, every shape `appkit.lisp`/
   `metal.lisp` and the documented examples send, the 60 most common shapes of a census over 29 core
   AppKit/Foundation classes (13,065 methods, 90.6% reached), plus `NSTimer`'s
   `scheduledTimerWithTimeInterval:...`. A selector outside the table signals with the exact entry
@@ -221,16 +225,26 @@ Differences from the `--gpu` library:
 - **The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them:
   `AppKitLibrary.process` splices the widget layer on the compile path (pruned to what the program
   calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the library on.
-- **The same gate keeps the compiled `main` where it was.** Every other class with a `main` runs
-  its program on a sized worker thread ([interpreter-stack.md](interpreter-stack.md),
-  `JvmSizedMainBuilder`); a class with `usesObjc` does not, and its bytes are what they were
-  before the launcher existed (`counter.lisp` as `.class` and `.jar`, compared 2026-09-19).
-  `JvmSizedMainTest#anObjcProgramKeepsItsMainOnThreadZero` pins the absence. Moving an objc
-  program onto the worker is a GUI change needing the manual macOS check; it was not attempted.
-  The check the launcher itself needed has been run (macOS 26.3.1 aarch64, Oracle GraalVM 25.0.3,
-  2026-09-20): `counter.lisp` opens its window, counts clicks and exits 0 on closing under
-  `java -jar`, the native binary, `java Counter` and `java -jar counter.jar`. A NON-objc program
-  there -- where the `java` launcher already runs `main` off thread 0 while thread 0 parks in a
+- **The same gate adds the thread-0 hand-over to the compiled `main`.** An `objc:` class gets the
+  sized-worker launcher every class with a `main` gets ([interpreter-stack.md](interpreter-stack.md),
+  `JvmSizedMainBuilder`), headed by the question `RontoLispCli.main` asks: when the program's own
+  `<Program>$ObjcMainThread.handOverRequired()` answers true, `main` marks the launcher instance
+  `_main$exit`, starts the worker and parks in `get().runLoop()`; the worker ends the process --
+  `System.exit(0)`, or the throwable dispatched to its thread's uncaught-exception handler (the
+  `Exception in thread "main"` echo) and `System.exit(1)`. Under `java` the answer is false before
+  anything native is bound (no `org.graalvm.nativeimage.imagecode`), and `main` joins the worker as
+  for any class. Until 2026-09-27 an `objc:` class kept the program ON the calling thread (no
+  launcher; a GUI change nobody could check on linux-x64), so its native image ran the program on
+  thread 0, `sync` ran everything inline, nothing drained the run loop `%app`'s
+  `performSelectorOnMainThread:` was queued on, and the window hung. Pinned by
+  `JvmSizedMainTest` (the shape; and, macOS, the hand-over simulated on the JVM:
+  `-XstartOnFirstThread` puts `main` on thread 0 and `-Dorg.graalvm.nativeimage.imagecode=runtime`
+  makes the question answer true -- an `appkit:timer` fires only once thread 0 is handed over, and
+  an uncaught condition still reports and exits 1) and by
+  `ShippedBridgeNativeImageE2eTest#anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit`
+  (macOS, opt-in: a real image, a timer clicking and closing its own window, a 60 s deadline).
+  The launcher's own check (macOS 26.3.1 aarch64, Oracle GraalVM 25.0.3, 2026-09-20): a NON-objc
+  program -- where the `java` launcher already runs `main` off thread 0 while thread 0 parks in a
   `CFRunLoop`, so the worker is a second hop -- is unaffected: `nqueens.lisp` prints byte for byte
   what the interpreter does as both `.class` and `.jar` and exits 0, and an unhandled condition
   still prints its report, echoes `Exception in thread "main"` and exits 1.
@@ -238,8 +252,37 @@ Differences from the `--gpu` library:
 Under the `java` launcher thread 0 is already parked, so no hand-over arises. A bare `.class`
 without `--enable-native-access=ALL-UNNAMED` gets the JDK's one-time warning and works; a `.jar`
 carries `Enable-Native-Access: ALL-UNNAMED` in its manifest (`JvmJarWriter`). Each compiled program
-defines its own copy into its own loader, which is why the test names a run-time class per program
-(`objc_allocateClassPair` cannot be undone).
+ships its own copy as class files named after it (`<Program>$Objc*`,
+[template-class-embedding.md](template-class-embedding.md)), which is why the test names a run-time
+class per program (`objc_allocateClassPair` cannot be undone). Verified on macOS 26.3 aarch64
+(Oracle GraalVM 25.0.3, 2026-09-27, screen locked, so clicks were `performClick:` from an
+`appkit:timer` and the close `performClose:`): `counter.lisp` counts 3 clicks and exits 0 under
+`java -jar`, the native binary, `java Counter`, `java -jar counter.jar` and `--native`; the native
+CLI and `java -jar` compile byte-identical class files. Rechecked with the hand-over
+(2026-09-27, same machine, same method): the same five routes, byte-identical class files again, and
+**a `native-image` of `counter.jar`** (agent config from one `java -jar` run) counts 3 clicks and exits
+0.
+
+**An image of a compiled `objc:` program needs no configuration** (since 2026-09-27). The image is
+built from the user's jar or class directory, which holds none of rontolisp's `META-INF`, so
+`JvmObjcRuntimeBuilder` ships two registrations beside the `$Objc*` classes, each in a directory
+named after the program: `META-INF/native-image/rontolisp-objc/<program>/` is a verbatim copy of the
+`rontolisp-objc` file above, and `rontolisp-objc-bridge/<program>/` registers the two program methods
+`JvmObjcTemplate.bind` finds by name, `_apply(Object,Object)` and `_strv(Object)`. Without the first
+every send refuses its stub; without `_apply` the program stops at `objc: no _apply method`; without
+`_strv` the first string the program BUILT (`format nil`, `concatenate`) dies in
+`MissingReflectionRegistrationError` -- `counter.lisp`'s label on the first click. `_strv` exists
+only with the array runtime, and native-image skips a registered method the class lacks. That file
+stands ALONE, so it repeats the shapes it shares with the main file (the Metal driver's
+`objc_msgSend` shapes, the CUDA ones that coincide, and `jint()`, `void*()`, `void*(void*)`,
+`void(void*)` the runtime binds); `ObjcNativeImageForeignConfigTest` checks every layer against it
+alone (`NativeImageDowncalls.OBJC`), and `ShippedBridgeClassFilesTest` pins the shipped bytes and the
+reflection entry. Verified 2026-09-27 (macOS 26.3 aarch64, Oracle GraalVM 25.0.3, screen locked,
+timer clicks): `counter.lisp` counts 3 clicks, relabels and exits 0 under `java -jar`, the native
+binary (which now reads the split file), `java Counter`, `java -jar counter.jar`, `--native`, and a
+`native-image` with NO configuration of both `counter.jar` and the `-o Counter.class` directory; the
+native CLI and `java -jar` still write byte-identical outputs. Pinned by
+`ShippedBridgeNativeImageE2eTest#anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit`.
 
 ## `--native`: the runner is the Objective-C host
 `--native -o prog` (`macos-aarch64` only: `CompileFrontend` accepts them when the native target is
@@ -356,7 +399,8 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
 - `am.ik.objc.TypeEncodingTest`; `am.ik.objc.ObjcNativeImageForeignConfigTest`;
   `eval/ObjcInteropTest` (the verbs headless, the `data`/`bytes` round trip and the `:error` slot,
   the signal off-Mac); `codegen/jvm/JvmObjcInteropCompilerTest` (the same expectations byte for byte
-  compiled, the embedded class list, one file per template); `eval/AppKitLibraryTest` /
+  compiled, the embedded class list, one file per template); `codegen/jvm/JvmSizedMainTest` and the
+  opt-in `e2e/ShippedBridgeNativeImageE2eTest` (the compiled thread-0 hand-over); `eval/AppKitLibraryTest` /
   `eval/MetalLibraryTest`; `SceneOffscreenRenderTest`; `PackageCycleTest`; `--native`:
   `eval/ObjcNativeLibraryTest` (the verbs defined, the splice), `e2e/NativeObjcE2eTest` (macOS
   aarch64: the corpus `objc-native-corpus.lisp` against the interpreter, a timer during `sleep`, the

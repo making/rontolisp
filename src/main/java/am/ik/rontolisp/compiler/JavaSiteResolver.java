@@ -21,8 +21,11 @@ import org.jspecify.annotations.Nullable;
  * Resolves a {@code java:} call site before it runs -- the one resolution model the
  * interpreter and the JVM compiler share, after Clojure's: a site whose receiver class
  * and argument kinds are known from the program text calls exactly one member, chosen by
- * the run-time rule ({@link JavaOverloads}) over what is known; every other site is left
- * to run time, where that same rule sees the receiver's class and the argument kinds.
+ * the run-time rule ({@link JavaOverloads}) over what is known; a site whose class is
+ * known but whose argument kinds are not is a DISPATCH among that class's overloads,
+ * chosen by the same rule over the kinds the arguments have when it runs; any other site
+ * is left to run time, where that same rule sees the receiver's class and the argument
+ * kinds.
  * <p>
  * What is known about a subform, all of it LEXICAL ({@link #typeOf}): a literal's kind; a
  * {@code (java:new "C" ...)} is exactly a {@code C}; a resolved member's value is what
@@ -38,8 +41,9 @@ import org.jspecify.annotations.Nullable;
  * typed by an upper bound resolves among the bound's methods, so a run-time class that
  * adds a public overload of the same name is not consulted
  * ({@code Collection.remove(Object)} rather than {@code ArrayList.remove(int)}), exactly
- * as a Java or a type-hinted Clojure call would. Arguments never do: a site resolves only
- * when EVERY kind its arguments can have selects the same member.
+ * as a Java or a type-hinted Clojure call would -- whether the site resolves to one
+ * member or dispatches. Arguments never do: a site resolves to one member only when EVERY
+ * kind its arguments can have selects it, and a dispatch chooses by the kinds they have.
  * <p>
  * The result is a pure function of the site form and the lookup, so the interpreter
  * (reflection) and the compiler (class files) resolve the same site the same way whenever
@@ -354,7 +358,7 @@ public final class JavaSiteResolver {
 					"class " + type.name() + " is " + (type.isInterface() ? "an interface" : "abstract"));
 		}
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.constructors(), member.tag());
-		return select(op, type, member, candidates, parts.subList(2, parts.size()), result);
+		return select(op, type, member, designator.value(), candidates, parts.subList(2, parts.size()), result);
 	}
 
 	private JavaSite resolveStatic(List<LispVal> parts) {
@@ -378,7 +382,7 @@ public final class JavaSiteResolver {
 		// candidate (the run-time rule, JavaOverloads.staticMethods).
 		List<? extends JavaExecutable> candidates = JavaOverloads
 			.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag());
-		return select(op, type, member, candidates, parts.subList(3, parts.size()), null);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
 	}
 
 	private JavaSite resolveCall(List<LispVal> parts) {
@@ -397,7 +401,7 @@ public final class JavaSiteResolver {
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.methods(member.name()),
 				member.tag());
-		return select(op, type, member, candidates, parts.subList(3, parts.size()), null);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
 	}
 
 	private JavaSite resolveField(List<LispVal> parts) {
@@ -432,7 +436,7 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, notStatic(type.name(), fieldName.value()));
 		}
 		return new JavaSite(op, type.name(), fieldName.value(), null, field, false,
-				JavaStaticType.ofDeclared(field.type(), this.lookup), List.of(), null);
+				JavaStaticType.ofDeclared(field.type(), this.lookup), List.of(), null, List.of());
 	}
 
 	/**
@@ -461,11 +465,15 @@ public final class JavaSiteResolver {
 	}
 
 	/**
-	 * The member every combination of the argument kinds selects, or why there is none.
+	 * The member every combination of the argument kinds selects; otherwise a dispatch
+	 * among the candidates, chosen when the site runs from the arguments' kinds -- the
+	 * static class's candidates, never the run-time class's; or why there is neither.
+	 * @param written the designator as the site writes it, which a dispatched call no
+	 * overload accepts is reported with
 	 * @param constructed the result type of a constructor site, or {@code null} for a
 	 * method site (whose result is its return type)
 	 */
-	private JavaSite select(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+	private JavaSite select(JavaSite.Operator op, JavaType type, JavaOverloads.Member member, String written,
 			List<? extends JavaExecutable> candidates, List<LispVal> args, @Nullable JavaStaticType constructed) {
 		JavaStaticType unresolvedResult = constructed != null ? constructed : JavaStaticType.UNKNOWN;
 		if (candidates.isEmpty()) {
@@ -474,55 +482,150 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, unresolvedResult, "class " + type.name() + " has no public " + what
 					+ (member.tag() != null ? " matching " + member.designator() : ""));
 		}
+		List<JavaStaticType> types = new ArrayList<>();
+		for (LispVal arg : args) {
+			types.add(typeOf(arg));
+		}
+		JavaOverloads.Overload single = singleMember(candidates, types);
+		if (single != null) {
+			JavaSite resolved = resolveTo(op, type, member, single, args, types, constructed);
+			if (resolved != null) {
+				return resolved;
+			}
+		}
+		// A dispatch: the overloads a value each argument can have may select, the
+		// arguments' promises kept.
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			arguments.add(argument(types.get(i), args.get(i)));
+		}
+		List<JavaOverloads.Overload> overloads = new ArrayList<>();
+		for (JavaOverloads.Overload overload : JavaOverloads.ranked(candidates, args.size())) {
+			if (viable(overload, arguments)) {
+				overloads.add(overload);
+			}
+		}
+		if (overloads.isEmpty()) {
+			String what = op == JavaSite.Operator.NEW ? "constructor" : "method";
+			String noMember = noMemberFor(candidates, types, what, type);
+			return JavaSite.unresolved(op, unresolvedResult, noMember != null ? noMember
+					: "no " + what + " of " + type.name() + " accepts arguments of these types");
+		}
+		for (JavaOverloads.Overload overload : overloads) {
+			for (JavaType parameter : overload.executable().parameterTypes()) {
+				String unlinkable = unlinkable("the parameter type ", parameter);
+				if (unlinkable != null) {
+					return JavaSite.unresolved(op, unresolvedResult, unlinkable);
+				}
+			}
+		}
+		JavaStaticType result = constructed != null ? constructed : commonResult(overloads);
+		return new JavaSite(op, type.name(), written, null, null, false, result, arguments, null, overloads);
+	}
+
+	/**
+	 * The one overload every combination of the argument kinds selects, or {@code null}
+	 * when an argument's kinds are not all known, there are too many combinations, two
+	 * combinations select different overloads, or one selects none.
+	 */
+	private JavaOverloads.@Nullable Overload singleMember(List<? extends JavaExecutable> candidates,
+			List<JavaStaticType> types) {
+		List<List<JavaKind>> kinds = sortedKinds(types);
+		if (kinds == null) {
+			return null;
+		}
+		JavaOverloads.Overload chosen = null;
+		JavaKind[] combination = new JavaKind[types.size()];
+		for (long n = 0, combinations = combinations(kinds); n < combinations; n++) {
+			fill(kinds, n, combination);
+			JavaOverloads.Overload overload = JavaOverloads.select(candidates, types.size(),
+					(i, target) -> JavaOverloads.kindCost(combination[i], target, this.lookup));
+			if (overload == null || (chosen != null && !chosen.sameAs(overload))) {
+				return null;
+			}
+			chosen = overload;
+		}
+		return chosen;
+	}
+
+	/**
+	 * Why no single member was chosen when some combination of known kinds selects none,
+	 * or {@code null} otherwise: the reason a site nothing can be dispatched to is left
+	 * to run time with.
+	 */
+	private @Nullable String noMemberFor(List<? extends JavaExecutable> candidates, List<JavaStaticType> types,
+			String what, JavaType type) {
+		List<List<JavaKind>> kinds = sortedKinds(types);
+		if (kinds == null) {
+			return null;
+		}
+		JavaKind[] combination = new JavaKind[types.size()];
+		for (long n = 0, combinations = combinations(kinds); n < combinations; n++) {
+			fill(kinds, n, combination);
+			if (JavaOverloads.select(candidates, types.size(),
+					(i, target) -> JavaOverloads.kindCost(combination[i], target, this.lookup)) == null) {
+				return "no " + what + " of " + type.name() + " accepts arguments of kinds "
+						+ describeKinds(combination);
+			}
+		}
+		return null;
+	}
+
+	// Each argument's kinds in a stable order (the combinations are enumerated the same
+	// way everywhere), or null when one is not a closed set or there are too many
+	// combinations.
+	private static @Nullable List<List<JavaKind>> sortedKinds(List<JavaStaticType> types) {
 		List<List<JavaKind>> kinds = new ArrayList<>();
 		long combinations = 1;
-		for (int i = 0; i < args.size(); i++) {
-			if (!(typeOf(args.get(i)) instanceof JavaStaticType.Kinds known)) {
-				return JavaSite.unresolved(op, unresolvedResult, "the type of argument " + (i + 1) + " is not known");
+		for (JavaStaticType type : types) {
+			if (!(type instanceof JavaStaticType.Kinds known)) {
+				return null;
 			}
-			// A stable order: the combinations are enumerated the same way everywhere.
-			List<JavaKind> sorted = new ArrayList<>(known.kinds());
-			sorted.sort(java.util.Comparator.comparing(JavaSiteResolver::kindKey));
+			List<JavaKind> sorted = sorted(known);
 			kinds.add(sorted);
 			combinations *= sorted.size();
 			if (combinations > COMBINATION_LIMIT) {
-				return JavaSite.unresolved(op, unresolvedResult, "the arguments can have too many kinds");
+				return null;
 			}
 		}
-		JavaOverloads.Overload chosen = null;
-		int[] index = new int[args.size()];
-		JavaKind[] combination = new JavaKind[args.size()];
-		for (long n = 0; n < combinations; n++) {
-			long rest = n;
-			for (int i = args.size() - 1; i >= 0; i--) {
-				int size = kinds.get(i).size();
-				index[i] = (int) (rest % size);
-				rest /= size;
-				combination[i] = kinds.get(i).get(index[i]);
-			}
-			JavaOverloads.Overload overload = JavaOverloads.select(candidates, args.size(),
-					(i, target) -> JavaOverloads.kindCost(combination[i], target, this.lookup));
-			if (overload == null) {
-				return JavaSite.unresolved(op, unresolvedResult,
-						"no " + (op == JavaSite.Operator.NEW ? "constructor" : "method") + " of " + type.name()
-								+ " accepts arguments of kinds " + describeKinds(combination));
-			}
-			if (chosen == null) {
-				chosen = overload;
-			}
-			else if (!chosen.sameAs(overload)) {
-				return JavaSite.unresolved(op, unresolvedResult,
-						"the member depends on the argument values (" + describeKinds(combination) + ")");
-			}
+		return kinds;
+	}
+
+	private static List<JavaKind> sorted(JavaStaticType.Kinds known) {
+		List<JavaKind> sorted = new ArrayList<>(known.kinds());
+		sorted.sort(java.util.Comparator.comparing(JavaSiteResolver::kindKey));
+		return sorted;
+	}
+
+	private static long combinations(List<List<JavaKind>> kinds) {
+		long combinations = 1;
+		for (List<JavaKind> k : kinds) {
+			combinations *= k.size();
 		}
-		if (chosen == null) {
-			throw new IllegalStateException("no combination was enumerated");
+		return combinations;
+	}
+
+	private static void fill(List<List<JavaKind>> kinds, long n, JavaKind[] combination) {
+		long rest = n;
+		for (int i = kinds.size() - 1; i >= 0; i--) {
+			int size = kinds.get(i).size();
+			combination[i] = kinds.get(i).get((int) (rest % size));
+			rest /= size;
 		}
+	}
+
+	/**
+	 * A site resolved to one member, or {@code null} when a parameter type is not
+	 * linkable -- the dispatch then meets the same parameter and leaves the site to run
+	 * time.
+	 */
+	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
+			@Nullable JavaStaticType constructed) {
 		JavaExecutable executable = chosen.executable();
 		for (JavaType parameter : executable.parameterTypes()) {
-			String unlinkable = unlinkable("the parameter type ", parameter);
-			if (unlinkable != null) {
-				return JavaSite.unresolved(op, unresolvedResult, unlinkable);
+			if (unlinkable("the parameter type ", parameter) != null) {
+				return null;
 			}
 		}
 		String name = op == JavaSite.Operator.NEW ? type.name() : member.name();
@@ -530,10 +633,61 @@ public final class JavaSiteResolver {
 				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup);
 		List<JavaSite.Argument> arguments = new ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
-			arguments.add(new JavaSite.Argument(kinds.get(i), declaredClass(args.get(i))));
+			arguments
+				.add(new JavaSite.Argument(sorted((JavaStaticType.Kinds) types.get(i)), declaredClass(args.get(i))));
 		}
 		return new JavaSite(op, type.name(), JavaOverloads.fullDesignator(executable, name), executable, null,
-				chosen.packed(), result, arguments, null);
+				chosen.packed(), result, arguments, null, List.of());
+	}
+
+	/** What a dispatched site counts on for an argument of this static type. */
+	private static JavaSite.Argument argument(JavaStaticType type, LispVal form) {
+		return switch (type) {
+			case JavaStaticType.Kinds known -> new JavaSite.Argument(sorted(known), declaredClass(form));
+			case JavaStaticType.Bounded bounded -> JavaSite.Argument.open(bounded.type().name(), declaredClass(form));
+			case JavaStaticType.Unknown ignored -> JavaSite.Argument.open(null, null);
+		};
+	}
+
+	/**
+	 * Whether a value an argument promises may make this overload match: an argument of
+	 * known kinds must have one this parameter accepts, a bounded one is {@code nil} or
+	 * an object, which only a reference or {@code boolean} parameter accepts. An overload
+	 * that fails this never matches, so leaving it out changes no choice.
+	 */
+	private boolean viable(JavaOverloads.Overload overload, List<JavaSite.Argument> arguments) {
+		for (int i = 0; i < arguments.size(); i++) {
+			JavaSite.Argument argument = arguments.get(i);
+			JavaType target = JavaOverloads.parameterAt(overload, i);
+			if (argument.known()) {
+				boolean any = false;
+				for (JavaKind kind : argument.kinds()) {
+					if (JavaOverloads.kindCost(kind, target, this.lookup) != JavaOverloads.NO_MATCH) {
+						any = true;
+						break;
+					}
+				}
+				if (!any) {
+					return false;
+				}
+			}
+			else if (argument.bound() != null && target.isPrimitive() && !"boolean".equals(target.name())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// The type of a dispatched call's value: what its overloads' one return type
+	// declares, or nothing when they declare several.
+	private JavaStaticType commonResult(List<JavaOverloads.Overload> overloads) {
+		JavaType returnType = overloads.get(0).executable().returnType();
+		for (JavaOverloads.Overload overload : overloads) {
+			if (!overload.executable().returnType().name().equals(returnType.name())) {
+				return JavaStaticType.UNKNOWN;
+			}
+		}
+		return JavaStaticType.ofDeclared(returnType, this.lookup);
 	}
 
 	private static String kindKey(JavaKind kind) {

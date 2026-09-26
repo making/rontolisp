@@ -56,9 +56,12 @@ import org.jspecify.annotations.Nullable;
  * package-private {@code static R _jimpl$K(Object fn, Object[] args)} per implemented
  * method: the arguments unmarshalled ({@code _junm}) into a list -- a proxy's with the
  * method's name first -- the function applied ({@code _apply}), and its value converted
- * to the method's return type ({@link JvmJavaMarshal}) or refused with the interpreter's
- * message. The generated classes call only those, so the program keeps them in its own
- * class when it is split and roots them for the tree-shaker ({@link #callbackNames()}).
+ * to the method's return type by the direct sites' per-type helpers
+ * ({@link JvmJavaDirectSites#returnedCost}, {@link JvmJavaDirectSites#returnedConvert}:
+ * the bridge's {@code marshal}, a function never made a proxy on the way back) or refused
+ * with the interpreter's message. The generated classes call only those, so the program
+ * keeps them in its own class when it is split and roots them for the tree-shaker
+ * ({@link #callbackNames()}).
  */
 final class JvmJavaImplementations {
 
@@ -81,8 +84,6 @@ final class JvmJavaImplementations {
 	private final JvmJavaDirectSites direct;
 
 	private final MethodrefConstant lispToString;
-
-	private final JvmJavaMarshal marshal;
 
 	/** The generated classes by shape, in the order they were first asked for. */
 	private final Map<String, Shell> shells = new LinkedHashMap<>();
@@ -127,7 +128,6 @@ final class JvmJavaImplementations {
 		this.lookup = lookup;
 		this.direct = direct;
 		this.lispToString = lispToString;
-		this.marshal = new JvmJavaMarshal(cp, thisClass, lookup);
 	}
 
 	/**
@@ -138,13 +138,6 @@ final class JvmJavaImplementations {
 	String baseClass() {
 		this.baseTested = true;
 		return this.programInternalName + "$Implementation";
-	}
-
-	/**
-	 * @return the conversions to a Java type the callbacks use
-	 */
-	JvmJavaMarshal marshal() {
-		return this.marshal;
 	}
 
 	/**
@@ -171,13 +164,11 @@ final class JvmJavaImplementations {
 	}
 
 	/**
-	 * @return the program-side methods to add to the class: the callbacks and the
-	 * conversions they use
+	 * @return the program-side callbacks to add to the class (the helpers they call are
+	 * the direct sites')
 	 */
 	List<JvmJavaDirectSites.Method> methods() {
-		List<JvmJavaDirectSites.Method> all = new ArrayList<>(this.methods);
-		all.addAll(this.marshal.methods());
-		return all;
+		return List.copyOf(this.methods);
 	}
 
 	/**
@@ -325,8 +316,8 @@ final class JvmJavaImplementations {
 		a.astore(4);
 		int fits = a.label();
 		a.aload(4);
-		a.invokestatic(this.marshal.fits(returnType));
-		a.branch(Opcode.IFNE, fits);
+		a.invokestatic(this.direct.returnedCost(returnType));
+		a.branch(Opcode.IFGE, fits);
 		MethodrefConstant concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		a.anew(cls("java/lang/RuntimeException"));
 		a.dup();
@@ -341,7 +332,7 @@ final class JvmJavaImplementations {
 		a.athrow();
 		a.bind(fits);
 		a.aload(4);
-		a.invokestatic(this.marshal.convert(returnType));
+		a.invokestatic(this.direct.returnedConvert(returnType));
 		a.op(returnOpcode(returnType));
 		return new JvmJavaDirectSites.Method(name, desc, 6, 5, a.finish(), List.of());
 	}

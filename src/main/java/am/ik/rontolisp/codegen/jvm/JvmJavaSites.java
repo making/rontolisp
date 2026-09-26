@@ -17,9 +17,10 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
-import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
+import am.ik.rontolisp.compiler.JavaType;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -194,11 +195,35 @@ final class JvmJavaSites {
 					}
 					continue;
 				}
-				JavaSite resolution = resolve(site);
-				for (JavaSite.Argument argument : resolution.arguments()) {
-					if (argument.kinds().contains(JavaKind.Lisp.FUNCTION)) {
-						return true;
-					}
+				if (passesAFunction(resolve(site))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	// Whether a resolved site may convert an argument that is a function to an
+	// interface -- directly, or as an element of a sequence made an array -- which the
+	// interface's generated proxy class then applies.
+	private static boolean passesAFunction(JavaSite site) {
+		if (!site.resolved() || site.arguments().isEmpty()) {
+			return false;
+		}
+		List<JavaOverloads.Overload> overloads = site.dispatched() ? site.overloads() : site.executable() == null
+				? List.of() : List.of(new JavaOverloads.Overload(site.executable(), site.packed()));
+		List<JavaSite.Argument> arguments = site.arguments();
+		for (int i = 0; i < arguments.size(); i++) {
+			if (!arguments.get(i).mayBeFunction()) {
+				continue;
+			}
+			for (JavaOverloads.Overload overload : overloads) {
+				JavaType type = JavaOverloads.parameterAt(overload, i);
+				while (type.componentType() != null) {
+					type = java.util.Objects.requireNonNull(type.componentType());
+				}
+				if (type.isInterface()) {
+					return true;
 				}
 			}
 		}

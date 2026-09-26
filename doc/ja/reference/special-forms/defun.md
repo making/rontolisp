@@ -66,6 +66,13 @@ Function expects 2 arguments, got 1
 ; => "CONS expects 2 arguments, got 1"
 ```
 
+組み込みオペレータを、そのラムダリストが許さない個数の引数で直接呼び出しても、コンパイルエラーにはなりません。引数を評価したうえで、実行時に同じ `program-error` を通知します。これはすべてのバックエンドで共通で、JVM/WASM のコンパイラは警告を表示します。
+
+```lisp
+(handler-case (car '(1 2) 2) (program-error (c) (princ-to-string c)))
+; => "CAR expects 1 argument, got 2"
+```
+
 ラムダリストが `&optional` パラメータで終わる関数(`&rest` も `&key` もない)が受け取れるのは、
 必須と省略可能の個数の合計までです。余分な引数は、どのバックエンドでも、デフォルト式を
 評価する前に実行時の捕捉可能な `program-error` を通知します。

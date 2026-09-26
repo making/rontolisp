@@ -41,6 +41,41 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
   pinned by `JavaBridgeTemplateParityTest` -- change the two together.
 
+## What a host object is (one rule; interpreter = `LispJavaObject`)
+- Compiled: `JavaBridgeTemplate.isJavaObject` = `JvmJavaDirectSites._jhost`, test for test
+  (`JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCountTheSameHostObjects`): NOT a
+  `Long`/`Double`/`BigInteger`/`String`, NOT any Java array (characters, ratios, conses,
+  function values, instances, streams, `#d`/`#f`/octet vectors -- a Java array a call answers
+  is unmarshalled into a list, so none is ever a host), NOT an `ArrayList` whose slot 0 is an
+  `Object[]` (a Lisp array), NOT a `LinkedHashMap` holding an `ArrayList` under
+  `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
+  (`RontoComplex`). The bridge spells the key and the package itself (no rontolisp imports);
+  `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
+- The bridge's `kindOf` ends with it (a host's kind = its exact class, anything else none);
+  `_jkind` answers HOST / NONE through `_jhost`; a direct site's exact-class kind test of
+  `ArrayList` / `LinkedHashMap` / a runtime class also calls `_jhost` (`mayHoldALispValue`).
+- Messages: the bridge's `describe` is the program's `_lispToString`, bound in `bind` beside
+  `_apply` (a shaker root while the bridge travels; `REFLECTIVELY_FOUND_METHODS` keeps it in
+  the class on a split), the old minimal text only when absent -- so a site left to run time
+  shows `(1 2)`, `1.0e10`, `#(0 0)` as the interpreter and a direct site do.
+- A Java `BigInteger` result is a Lisp integer on all three paths (a fixnum when
+  `bitLength() < 64`: interpreter `unmarshal`, bridge `unmarshal`, `_junm`); `JavaStaticType.
+  becomesLisp` counts BigInteger, its supertypes and its subclasses, so such a declared or
+  constructed type is UNKNOWN. Decided 2026-09-26: the compiled representation cannot hold a
+  host `BigInteger` apart from a bignum, so the interpreter gave up calling its methods
+  (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` now refuses `5` on both).
+- Measured 2026-09-26 before the rule, `(defun f (x) (java:call x "size"))` compiled: a list /
+  struct / function / stream / condition was described `#<java [Ljava.lang.Object;>`, a ratio
+  `#<java [Ljava.math.BigInteger;>`, a bignum `#<java java.math.BigInteger>`, `1.0e10` as
+  `1.0E10`; a vector / string / bit vector / fill-pointer vector answered `size()` (the
+  `ArrayList` with its header), a hash table answered 2, a complex / `#d` vector `No matching
+  method RontoComplex.size` / `[D.size`; `(java:new "java.math.BigInteger" "5")` printed `5`
+  compiled and `#<java java.math.BigInteger>` interpreted. All agree now
+  (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
+- Still divergent: the compiled PRINTER and type predicates on a host `ArrayList` /
+  `LinkedHashMap` (`.todo/a31`); specialized vectors and bignums are marshalled on neither
+  backend (`.todo/a32`).
+
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
 `Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
@@ -89,10 +124,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   the member (a String answer may be nil -> `append(boolean)` -> unresolved).
 - THE semantic difference (documented in the guide): a receiver typed by an upper bound resolves
   among the bound's methods; an overload only the run-time class adds is not a candidate
-  (`Collection.remove(Object)` vs `ArrayList.remove(int)`). Unresolved sites keep the run-time
-  class + run-time kinds (Clojure's reflective fallback; no "static class, dynamic kinds" middle
-  state -- a15's decision tree would introduce one).
-- A resolved site runs its RESOLVED MEMBER on both backends -- interpreter
+  (`Collection.remove(Object)` vs `ArrayList.remove(int)`) -- whether the site resolves to one
+  member or DISPATCHES (below). Only a site whose receiver class is unknown (or that the resolver
+  cannot name: no candidates, nothing viable, an unlinkable parameter) keeps the run-time class +
+  run-time kinds (Clojure's reflective fallback).
+- A resolved site runs its RESOLVED MEMBER (or, dispatched, the overload its kinds select) on
+  both backends -- interpreter
   `JavaInterop.invokeResolved` over the site's reflective executable, JVM a direct call -- with the
   same checks in the same order and the same texts: receiver not a java object (`java:call expects
   a java object as the first argument, got X` / `java:field expects a class-name string or a java
@@ -186,6 +223,74 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   java:*warn-on-reflection* t)`, with `SourceProvenance.prefix`. The interpreter memo is
   `LispEvaluator.javaSites` (identity, `EXPANSION_MEMO_LIMIT`).
 
+## Dispatch: static class, argument kinds read when it runs
+- `JavaSiteResolver.select`: one member when every kind combination agrees (as before);
+  otherwise -- an argument UNKNOWN or `Bounded`, too many combinations, combinations that
+  differ, or one that selects nothing -- a DISPATCHED site (`JavaSite.dispatched()`,
+  `resolved()` is true, `executable` null, `designator` as written): `overloads` =
+  `JavaOverloads.ranked(candidates, argc)` (each executable fixed-arity and/or packed, in the tie
+  order `select` breaks by) minus the ones no value a closed argument can have matches
+  (`viable`; exact: `select` ignores NO_MATCH overloads; a bounded argument only drops a
+  non-boolean primitive). Nothing viable -> unresolved (old reason text when kinds were closed);
+  any unlinkable parameter of a viable overload -> unresolved. Result = `ofDeclared` of the
+  overloads' one return type, else UNKNOWN (NEW: constructed).
+- `JavaSite.Argument`: `kinds` (closed, checked as before), or empty + `bound` (value is nil or
+  a host object instance of it; `Bounded` types an argument now) or empty + no bound (anything,
+  unchecked). Error text for a bound: `java:<op>: argument N is not a <C>, got X`.
+- THE choice: `JavaOverloads.selectRanked(ranked, argc, cost)` = the first strictly cheapest,
+  `overloadCost` = fixed sum or `COST_VARARGS` + sum (the `select` arithmetic). Equals `select`
+  whenever `beats` at equal cost is a strict total order (signature string, then covariant
+  return, then `tieKey`); a non-transitive trio of covariant variants of one parameter list
+  could differ -- none found: `JavaSiteResolverTest#theRankedOrderChoosesWhatSelectChooses`
+  checks >1000 (candidates, kinds) pairs over ten JDK classes. No-match text = the run-time one
+  with the STATIC class: `No matching method C.<designator> with N argument(s)` /
+  `No matching constructor for <designator> ...`.
+- Interpreter: `JavaInterop.invokeResolved` -> `dispatch`: receiver check, `keepsPromise` per
+  argument, `selectRanked` over `kindCost` (a kindless argument: `marshal` cost, never
+  remembered), memo per site IDENTITY (`DISPATCHES`, `SiteKey`; same limits as `CHOICES`) --
+  without it a 9-overload site (`String.valueOf`) cost ~1425 ns/call vs ~1165 for the old
+  run-time path; with it both measure ~1200 (2026-09-26, noisy shared host).
+- JVM (`JvmJavaDirectSites.SiteBuilder.emitDispatch`): the argument checks (`emitCheck`: the kind
+  chain, or null / `_jkind == HOST` + `instanceof` bound under a NoClassDefFoundError handler ->
+  `No such class: B`); one `_jcost$N(Object)I` call per distinct (argument, parameter type) into
+  an int local; the overloads scanned in rank order (`IFLT` skips NO_MATCH, replace only when
+  strictly cheaper); the no-match throw; one arm per overload (`iload best; iconst k;
+  if_icmpne`, the last untested): `_jconv$N(Object)T` per argument (packed tail: `newarray` +
+  store), `emitInvoke`, `emitUnmarshal`, `areturn`. Shared helpers, made once per attempt:
+  - `_jkind(Object)I`: the bridge's `kindOf` order as codes 0-8 (`LISP_KINDS`), 9 cons,
+    10 Lisp array, 11 host (`_jhost`), 12 none (symbol, bignum, ratio, hash table, ...).
+  - `_jseq(Object)Object[]`: a cons's cars (null if dotted / function-terminated), a rank-1 Lisp
+    array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), else null.
+  - `_jcost$N` per (parameter type, function arm or not): `_strv` first (a built string;
+    elements too), then the compile-time `kindCost` constant per code, a sequence
+    `COST_CONVERT`/`COST_BOXED` + its elements' `_jcost` (array component / Object for an
+    `ArrayList`-assignable type), a host object `instanceof` + `getClass() ==`. Without the
+    function arm it is the RETURNED variant a16's callbacks test a value with
+    (`returnedCost`: a function is never made a proxy on the way back).
+  - `_jconv$N` per (parameter type, functions, sequences): the existing `emitConvert` arm per
+    code, the host object `checkcast`; the OPEN variant (both; an argument that `mayBeFunction`:
+    unknown, or FUNCTION in its kinds) adds the FUNCTION arm (the interface's generated proxy
+    class) and the sequence arm (array via `newarray` + element `_jconv`, or an `ArrayList` of
+    element `_jconv(Object)`); the closed one neither; the RETURNED one (`returnedConvert`)
+    sequences without functions.
+  - The method builders share a `Body` (assembler, locals, handlers, kind tests, conversions,
+    unmarshal) that `SiteBuilder` extends.
+- No dispatched site needs the bridge (since a16): an argument that may be a function where an
+  overload's parameter is an interface, or an array (of arrays) of one, becomes the interface's
+  generated proxy class. So `String.join("-", xs)` with unknown `xs` compiles under
+  `--java-static`, generating the `CharSequence` and `Iterable` proxy classes a function would
+  need (`JvmJavaSites.passesAFunction` predicts `_apply` from the same rule); a15 measured it
+  needing the bridge.
+- Measured 2026-09-26 (JDK 25, default output, `--warn-java-reflection` counts): sites left to
+  run time swing.lisp 21 -> 8, life-gui.lisp 21 -> 8, java-interop.lisp 9 -> 9 (every one left
+  has an unknown receiver). `(defun mx (x y) (java:static "java.lang.Math" "max" x y))` +
+  one call: 88,258 bytes (51,173 class with the eval runtime + 37,085 bridge) -> 8,779 (one
+  class). 1M calls after warm-up, ns/call: `mx` bridge 82-101 -> dispatch ~1 (inlined), a
+  `String.valueOf` site 103-137 -> 82 (allocation-bound). Interpreter `mx` ~1750-2185 before,
+  ~1710-2115 after. Native image: the `--java-static` E2E program with three dispatched sites
+  (numbers, t, a list to `char[]`, a vector to `int[]`, a list to `Object[]`) builds with no
+  metadata and prints what `java -jar` prints.
+
 ## Direct calls: resolved sites without reflection (JVM)
 - A site resolves only through what bytecode can name (`JavaType.isLinkable` = primitive, or
   class-file `ACC_PUBLIC` (`isPublic`: a `protected` member class counts, as javac writes it) and
@@ -205,7 +310,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `NoClassDefFoundError` -> `No such class: C`, an `ldc C` for a class-named site; per argument a
   kind dispatch (the bridge's `kindOf` tests: `"T".equals`, `instanceof Long`, `int[]` of length 1
   and `isBmpCodePoint`, quote-framed `String` (length 3 = STRING_1), exact `getClass()` for a host
-  kind -- an `ArrayList` with an `Object[]` first element is a Lisp array, a `BigInteger` never a
+  kind -- `_jhost` for an `ArrayList`/`LinkedHashMap`/runtime class, a `BigInteger` never a
   host kind) into the bridge's `convert`/`convertLong` arm for (kind, parameter), a `checkcast` to
   a class parameter after the join (the augmenter merges arms to `Number`/`Object`); then
   `invokevirtual`/`invokeinterface` (InterfaceMethodref on an interface owner)/`invokestatic`/`new`
@@ -215,12 +320,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   converted back specialized to the declared type (`_junm` = the bridge's `unmarshal` for a type a
   box/String/array may hide behind, `_jarr` its `arrayToList` over every array type without
   `java.lang.reflect.Array`).
-- Nothing in a direct call reflects: a FUNCTION kind for an interface parameter is the
-  interface's generated proxy class (`JvmJavaImplementations.proxyFactory`, "Implementing
-  interfaces" below) -- until a16 it called `_javaInit` + the bridge's `javaProxy`, the one
-  reflective arm, and `--java-static` refused such a site. The bridge is emitted when
-  `JvmJavaSites.needsBridge` (a pre-scan: an unresolved site, an unresolved `java:reify` /
-  `java:proxy`) or when forced: a site a pass rebuilt after
+- Nothing in a direct call reflects: a FUNCTION kind for an interface parameter -- at a
+  dispatched site in an open `_jconv$N` too -- is the interface's generated proxy class
+  (`JvmJavaImplementations.proxyFactory`, "Implementing interfaces" below); until a16 it called
+  `_javaInit` + the bridge's `javaProxy`, the one reflective arm, and `--java-static` refused
+  such a site. The bridge is emitted when `JvmJavaSites.needsBridge` (a pre-scan: an unresolved
+  site, an unresolved `java:reify` / `java:proxy`) or when forced: a site a pass rebuilt after
   the scan and that needs it calls the absent `_javaInit`, `gateGroupFor` maps it to
   `GROUP_JAVA_BRIDGE`, and the attempt retries with the bridge. `usesEval` / the `_apply` root follow
   the bridge, not `usesJava`; `JavaPrint` (`#<java C>`) follows `usesJava`.
@@ -264,7 +369,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   shadowed by an abstract sibling.
 - A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT
   a function is never made a proxy (interpreter `marshal(..., proxies=false)`, the bridge's twin,
-  `JvmJavaMarshal.accepts`). Decided 2026-09-26 on a measurement: with the function arm, a return
+  the direct sites' returned `_jcost$N` / `_jconv$N`). Decided 2026-09-26 on a measurement: with the function arm, a return
   conversion to an interface needs that interface's proxy class, whose methods' interface returns
   need theirs -- one `java:reify` of `CharSequence` pulled in 19 proxy classes (the
   IntStream/Stream/Spliterator family, ~60 KB) and a 169 KB program class. Clojure's reify/proxy do
@@ -293,10 +398,9 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   (`instanceof $Implementation && instanceof I`, as strict as the interpreter's kind check). A slot
   boxes its arguments as a Proxy does and calls a PACKAGE-PRIVATE program method
   `_jimpl$K(Object fn, Object[] args)R` (one per (proxy?, interface, dispatch key)): `_junm` each
-  argument into a list (a proxy's with the name first), `_apply`, then `JvmJavaMarshal`'s
-  `_jfit$N(Object)Z` / `_jto$N(Object)T` for R (the bridge's `kindOf` order, each kind's
-  `kindCost` fixed at compile time, `_jseq` for a sequence; `_strv` only on an `ArrayList`, as the
-  bridge's `rendered()` -- `_strv` misreads a cons) or the interpreter's "cannot return" text.
+  argument into a list (a proxy's with the name first), `_apply`, then the direct sites' RETURNED
+  `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: a15's per-type helpers
+  without the function arm) or the interpreter's "cannot return" text.
   The `_jimpl$` names are shaker roots and pinned to the main class on a split
   (`JvmLispCompiler.implementationCallbacks`); `bridgeClassFiles` carries the classes, stamped with
   the program's class version. Anything else (computed names, an interface not found, an
@@ -329,11 +433,13 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 `JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),
 `JvmClassFileLookupTest` (incl. `everyInterfaceIsImplementedTheSame`),
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
-`JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts),
+`JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts,
+dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
+`testsupport/JavaInteropPrograms`; the reify/proxy programs through
+`testsupport/JavaImplementationPrograms`),
 `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`,
 `JvmClassShakerTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,
 `ShippedBridgeNativeImageE2eTest`. `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the
-same cases — keep in step, headless only; the reify/proxy programs are shared text
-(`testsupport/JavaImplementationPrograms`). `examples/jvm/{java-interop,swing,life-gui}.lisp`;
+same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,life-gui}.lisp`;
 `doc/{en,ja}/guides/java-interop.md` + six `reference/functions/java-*.md` (a GUI form hangs
 `DocExamplesTest`).

@@ -91,26 +91,126 @@ class JavaSiteResolverTest {
 
 	@Test
 	void anArgumentResolvesOnlyWhenEveryKindItCanHaveAgrees() {
-		// A String result may be nil, and nil selects append(boolean): no single member.
+		// A String result may be nil, and nil selects append(boolean): no single member,
+		// a dispatch among the overloads one of its kinds selects.
 		JavaSite site = resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (java:call (java:new \"java.lang.StringBuilder\") \"toString\"))");
-		assertThat(site.resolved()).isFalse();
-		assertThat(site.reason()).startsWith("the member depends on the argument values");
+		assertThat(site.dispatched()).isTrue();
+		assertThat(site.executable()).isNull();
+		assertThat(overloads(site)).contains("append(java.lang.String)", "append(boolean)", "append(char)")
+			.doesNotContain("append(int)", "append(long)", "append(double)");
+		assertThat(site.arguments()).containsExactly(
+				new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1), null));
 		// An int result is always an integer.
 		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (java:call (java:new \"java.lang.StringBuilder\") \"length\"))"))
 			.isEqualTo("java.lang.StringBuilder append(int)");
-		// An upper-bound argument has no known kind at all.
+		// A CharSequence may be a Lisp string: nothing is known of the argument.
 		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
 				+ " (the (java:object \"java.lang.CharSequence\") x))")
-			.reason()).isEqualTo("the type of argument 1 is not known");
+			.arguments()).containsExactly(JavaSite.Argument.open(null, null));
+	}
+
+	private static List<String> overloads(JavaSite site) {
+		return site.overloads()
+			.stream()
+			.map(o -> JavaOverloads.fullDesignator(o.executable(), o.executable().name()) + (o.packed() ? "*" : ""))
+			.toList();
+	}
+
+	// A site whose class is known but whose argument kinds are not dispatches among that
+	// class's overloads -- the static class's, never the run-time class's -- in the order
+	// a cost tie is broken by. What it counts on for each argument is checked when it
+	// runs: known kinds, or nil or an instance of a bound, or anything.
+	@Test
+	void aSiteOfUnknownArgumentKindsDispatchesAmongTheClasssOverloads() {
+		JavaSite site = resolve("(java:static \"java.lang.Math\" \"max\" x y)");
+		assertThat(site.resolved()).isTrue();
+		assertThat(site.dispatched()).isTrue();
+		assertThat(site.staticClass()).isEqualTo("java.lang.Math");
+		assertThat(site.designator()).isEqualTo("max");
+		assertThat(overloads(site)).containsExactly("max(double,double)", "max(float,float)", "max(int,int)",
+				"max(long,long)");
+		assertThat(site.arguments()).containsExactly(JavaSite.Argument.open(null, null),
+				JavaSite.Argument.open(null, null));
+		// The overloads answer different types: nothing is known of the value.
+		assertThat(site.result()).isEqualTo(JavaStaticType.UNKNOWN);
+		// The receiver's declared class decides the candidates.
+		JavaSite remove = resolve("(java:call (the (java:object \"java.util.Collection\") c) \"remove\" x)");
+		assertThat(overloads(remove)).containsExactly("remove(java.lang.Object)");
+		assertThat(remove.result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
+		// A bounded argument is nil or an object of its class.
+		JavaSite bounded = resolve("(java:call (java:new \"java.util.ArrayList\") \"addAll\""
+				+ " (the (java:object \"java.util.Collection\") c))");
+		assertThat(overloads(bounded)).containsExactly("addAll(java.util.Collection)");
+		assertThat(bounded.arguments())
+			.containsExactly(JavaSite.Argument.open("java.util.Collection", "java.util.Collection"));
+		assertThat(bounded.arguments().get(0).expected()).isEqualTo("a java.util.Collection");
+		// A varargs method is a candidate packed too.
+		assertThat(overloads(resolve("(java:static \"java.lang.String\" \"format\" \"%s\" x)"))).containsExactly(
+				"format(java.lang.String,[Ljava.lang.Object;)", "format(java.lang.String,[Ljava.lang.Object;)*");
+		// A constructor dispatches too.
+		assertThat(overloads(resolve("(java:new \"java.lang.StringBuilder\" x)"))).containsExactly("<init>(int)",
+				"<init>(java.lang.CharSequence)", "<init>(java.lang.String)");
+		// An overload no value an argument can have is accepted by is no candidate; with
+		// none left the site is resolved when it runs, from the run-time class.
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" \"a\" x)").reason())
+			.isEqualTo("no method of java.lang.Math accepts arguments of these types");
+	}
+
+	// The dispatch chooses what the run-time rule chooses: over every candidate set of a
+	// corpus of JDK classes and every combination of argument kinds, the first cheapest
+	// of the ranked overloads is the overload select() picks.
+	@Test
+	void theRankedOrderChoosesWhatSelectChooses() {
+		ReflectiveJavaClasses classes = ReflectiveJavaClasses.instance();
+		List<JavaKind> kinds = new java.util.ArrayList<>(List.of(JavaKind.Lisp.values()));
+		for (String host : List.of("java.lang.StringBuilder", "java.util.ArrayList", "java.lang.Object",
+				"java.util.Locale")) {
+			kinds.add(java.util.Objects.requireNonNull(classes.find(host)));
+		}
+		int checked = 0;
+		for (String className : List.of("java.lang.Math", "java.lang.String", "java.lang.StringBuilder",
+				"java.util.Arrays", "java.lang.Integer", "java.lang.Character", "java.util.Collections",
+				"java.util.Objects", "java.util.ArrayList", "java.io.PrintStream")) {
+			ReflectiveJavaClasses.Type type = java.util.Objects.requireNonNull(classes.find(className));
+			java.util.Set<String> names = new java.util.TreeSet<>();
+			for (java.lang.reflect.Method method : type.type().getMethods()) {
+				names.add(method.getName());
+			}
+			for (String name : names) {
+				List<? extends JavaExecutable> candidates = type.methods(name);
+				for (int argc = 0; argc <= 2; argc++) {
+					List<JavaOverloads.Overload> ranked = JavaOverloads.ranked(candidates, argc);
+					int combinations = (int) Math.pow(kinds.size(), argc);
+					for (int n = 0; n < combinations; n++) {
+						JavaKind[] combination = new JavaKind[argc];
+						for (int i = 0, rest = n; i < argc; i++, rest /= kinds.size()) {
+							combination[i] = kinds.get(rest % kinds.size());
+						}
+						JavaOverloads.ArgumentCost cost = (i, target) -> JavaOverloads.kindCost(combination[i], target,
+								classes);
+						JavaOverloads.Overload selected = JavaOverloads.select(candidates, argc, cost);
+						JavaOverloads.Overload dispatched = JavaOverloads.selectRanked(ranked, argc, cost);
+						if (selected == null) {
+							assertThat(dispatched).as(className + "." + name).isNull();
+						}
+						else {
+							assertThat(dispatched).as(className + "." + name).isNotNull();
+							assertThat(selected.sameAs(dispatched)).as(className + "." + name).isTrue();
+							checked++;
+						}
+					}
+				}
+			}
+		}
+		assertThat(checked).isGreaterThan(1000);
 	}
 
 	@Test
 	void whatIsNotKnownIsLeftToRunTime() {
 		assertThat(resolve("(java:call x \"length\")").reason()).isEqualTo("the receiver's class is not known");
-		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\" x)").reason())
-			.isEqualTo("the type of argument 1 is not known");
 		assertThat(resolve("(java:static cls \"max\" 1 2)").reason())
 			.isEqualTo("the class name is not a literal string");
 		assertThat(resolve("(java:static \"no.such.Class\" \"m\")").reason())

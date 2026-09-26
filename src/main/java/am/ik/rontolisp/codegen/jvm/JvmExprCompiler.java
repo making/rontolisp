@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -399,6 +400,17 @@ final class JvmExprCompiler {
 			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
 		}
 		if (head instanceof LispSymbol sym) {
+			// A wrapped built-in called with a count its lambda list rules out never
+			// reaches a lowering, which would drop the surplus or index past the form: it
+			// evaluates its arguments and signals the interpreter's program-error
+			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
+			// its own call path.
+			LispVal wrongCount = ctx.userDefunNames.contains(sym.name()) ? null
+					: BuiltinCallArity.wrongCountSignal(cons);
+			if (wrongCount != null) {
+				compileExpr(wrongCount, ctx, className);
+				return;
+			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
 				if (LispNames.VERSION.equals(qn.member())) {

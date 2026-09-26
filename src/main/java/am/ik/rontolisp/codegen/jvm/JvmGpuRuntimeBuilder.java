@@ -230,6 +230,12 @@ final class JvmGpuRuntimeBuilder {
 			// Layer-norm's affine adjoint ({@code g, x, w, eps, old}), todo-634.
 			"gpuLayerNormAffineGrad");
 
+	/**
+	 * The library's native-image downcall registration, beside its classes. It travels
+	 * with them to {@link #nativeImageMetadataPath}.
+	 */
+	private static final String NATIVE_IMAGE_METADATA = "reachability-metadata.json";
+
 	/** Keeps each kernel-text string constant well under the 65535-byte Utf8 limit. */
 	private static final int CHUNK_SIZE = 40000;
 
@@ -240,7 +246,8 @@ final class JvmGpuRuntimeBuilder {
 	 * The ready-to-emit {@code _gpuInit} method, its guard field, the constant-pool
 	 * references the accelerated call sites need ({@code ops} keys: {@code init},
 	 * {@value #DOT} and {@value #MATMUL_ND}), and the class files that travel beside the
-	 * program, keyed by their paths within an output tree.
+	 * program -- plus the library's native-image downcall registration -- keyed by their
+	 * paths within an output tree.
 	 */
 	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
 			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops,
@@ -269,6 +276,19 @@ final class JvmGpuRuntimeBuilder {
 	}
 
 	/**
+	 * Where a program's copy of the native-image downcall registration travels: under
+	 * {@code META-INF/native-image/}, which native-image reads from every class path
+	 * entry (a jar, {@code target/classes}, the directory beside {@code -o X.class}), in
+	 * a directory named after the program so two programs in one tree keep two files.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the path within an output tree
+	 */
+	static String nativeImageMetadataPath(String programInternalName) {
+		return "META-INF/native-image/rontolisp-gpu/" + programInternalName.replace('/', '.') + "/"
+				+ NATIVE_IMAGE_METADATA;
+	}
+
+	/**
 	 * Builds the {@code _gpuInit} method body, registers the bridge references and
 	 * renames the class files that travel beside the program.
 	 * @param cp the constant pool
@@ -289,6 +309,11 @@ final class JvmGpuRuntimeBuilder {
 		}
 		classFiles.put(bridgeName + ".class",
 				rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, gpuPrefix));
+		// The downcall shapes the classes above bind, where native-image reads them
+		// from a class path entry: without them an image built from the output refuses
+		// the binding and runs every member on the CPU.
+		classFiles.put(nativeImageMetadataPath(programInternalName),
+				loadResource(GPU_INTERNAL_PREFIX + NATIVE_IMAGE_METADATA));
 		// The PTX is text, not bytecode: it travels verbatim in the program's own
 		// constant pool and goes to Gpu.useKernels.
 		List<ConstantPool.StringConstant> ptx = chunks(cp,

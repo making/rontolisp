@@ -13,4 +13,4 @@
 
 `java.util.ArrayList` を生成し、要素を 1 つ追加してから `size` が要素数を返します。
 
-メソッド名にはパラメータ型を付けられます (`"append(CharSequence)"`)。レシーバのクラスと引数の種別がテキストから分かる呼び出し (`(java:new ...)`、宣言された戻り型、`(the (java:object "C") x)`、`(declare (type (java:object "C") v))`) は、実行前に一度だけ、そのクラスのメソッドの中から解決されます (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。
+メソッド名にはパラメータ型を付けられます (`"append(CharSequence)"`)。レシーバのクラスがテキストから分かる呼び出し (`(java:new ...)`、宣言された戻り型、`(the (java:object "C") x)`、`(declare (type (java:object "C") v))`) は、実行前に一度だけ、そのクラスのメソッドの中から解決されます。引数の種別も分かればただ 1 つのメソッドへ、分からなければオーバーロードの集合へ解決され、実行時に引数の種別でその中から選びます (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。
