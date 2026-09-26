@@ -26,12 +26,14 @@ import org.jspecify.annotations.Nullable;
 /**
  * The {@code java:} interop runtime injected into a compiled {@code .class} program. This
  * is a rewrite of the interpreter's {@code eval/JavaInterop} against the compiled runtime
- * value representation ({@code null} = nil, {@code Long} = integer, {@code Double} =
- * float, a {@code String} with surrounding quotes = string, any other {@code String} =
- * symbol ({@code "T"} = true), {@code Character} = character, an exact {@code Object[]} =
- * cons cell or (with an {@code Integer} head) a function value, an {@code ArrayList} with
- * a leading {@code Object[]} of dimension sizes = array); the overload selection costs
- * and tie-breaking are identical, so a program behaves the same interpreted and compiled.
+ * value representation ({@code null} = nil, {@code Long} = integer, {@code BigInteger} =
+ * bignum, {@code Double} = float, a {@code String} with surrounding quotes = string, any
+ * other {@code String} = symbol ({@code "T"} = true), {@code Character} = character, an
+ * exact {@code Object[]} = cons cell or (with an {@code Integer} head) a function value,
+ * an {@code ArrayList} with a leading {@code Object[]} of dimension sizes = array, a
+ * header-carrying {@code double[]} / {@code float[]} / {@code short[]} / {@code long[]} /
+ * {@code byte[]} = specialized array); the overload selection costs and tie-breaking are
+ * identical, so a program behaves the same interpreted and compiled.
  *
  * <p>
  * The class is never referenced by the rontolisp code base at runtime. Its compiled
@@ -124,6 +126,8 @@ final class JavaBridgeTemplate {
 
 	private static final String KIND_INTEGER = "integer";
 
+	private static final String KIND_BIGNUM = "bignum";
+
 	private static final String KIND_FLOAT = "float";
 
 	private static final String KIND_STRING_1 = "string/1";
@@ -162,6 +166,18 @@ final class JavaBridgeTemplate {
 	 * does -- {@code (1 2)}, {@code 1.0e10}, {@code #(0 0)} -- and not as its Java class.
 	 */
 	private static @Nullable Method lispToStringMethod;
+
+	/**
+	 * The generated program's {@code _bf16Value(int)} -- the one widening of a bfloat16
+	 * bit pattern the program's own {@code aref} reads through -- or null when the
+	 * program carries no packed float runtime (then no {@code short[]} bfloat16 array can
+	 * exist). Bound beside {@code _strv}, so an element this bridge marshals is the value
+	 * {@code aref} answers without a fourth hand copy of the arithmetic.
+	 */
+	private static @Nullable Method bf16ValueMethod;
+
+	/** The width tag slot 0 of a packed {@code (unsigned-byte 8)} vector holds. */
+	private static final int OCTET_TAG = 8;
 
 	/**
 	 * The key a compiled hash table's insertion-order list hangs off; mirrors
@@ -209,6 +225,15 @@ final class JavaBridgeTemplate {
 		}
 		catch (NoSuchMethodException ex) {
 			lispToStringMethod = null;
+		}
+		try {
+			Method bf16Value = mainClass.getDeclaredMethod("_bf16Value", int.class);
+			bf16Value.setAccessible(true);
+			bf16ValueMethod = bf16Value;
+		}
+		catch (NoSuchMethodException ex) {
+			// No packed float runtime in this program: no bfloat16 array can exist.
+			bf16ValueMethod = null;
 		}
 	}
 
@@ -835,6 +860,9 @@ final class JavaBridgeTemplate {
 		if (value instanceof Long) {
 			return KIND_INTEGER;
 		}
+		if (value instanceof BigInteger) {
+			return KIND_BIGNUM;
+		}
 		if (value instanceof Double) {
 			return KIND_FLOAT;
 		}
@@ -851,8 +879,8 @@ final class JavaBridgeTemplate {
 			Object[] arr = (Object[]) value;
 			return arr.length > 0 && arr[0] instanceof Integer ? KIND_FUNCTION : null;
 		}
-		// A host object's kind is its exact class; any other value (a bignum, a ratio, a
-		// Lisp array or hash table, ...) has none.
+		// A host object's kind is its exact class; any other value (a ratio, a Lisp array
+		// or hash table, ...) has none.
 		return isJavaObject(value) ? value.getClass() : null;
 	}
 
@@ -1146,8 +1174,72 @@ final class JavaBridgeTemplate {
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
 			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, proxies);
 		}
-		return NO_MATCH; // other symbols, bignums and ratios are not bridged (as
+		List<@Nullable Object> packed = packedElements(value);
+		if (packed != null) {
+			return marshalSequence(packed, target, out, index, proxies);
+		}
+		return NO_MATCH; // other symbols, ratios, rank-2+ arrays are not bridged (as
 							// interpreted)
+	}
+
+	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array carrying its
+	// header -- as aref reads them, or null for anything else: a packed float vector
+	// (double[] / float[] {rank, dim, e...}, bfloat16 short[] {rank, hi, lo, e...}, each
+	// element a Double), a packed (unsigned-byte 16|32) vector (long[] {width, e...}) or
+	// an octet vector (byte[] {8, e...}, widened unsigned), each element a Long. A packed
+	// array of another rank, and a quantized matrix (a byte[] whose slot 0 is its format
+	// code), is no sequence. Mirrors JvmJavaDirectSites' _jseq.
+	private static @Nullable List<@Nullable Object> packedElements(@Nullable Object value) {
+		List<@Nullable Object> elements = new ArrayList<>();
+		if (value instanceof double[] d) {
+			if (d[0] != 1) {
+				return null;
+			}
+			for (int i = 2; i < d.length; i++) {
+				elements.add(d[i]);
+			}
+			return elements;
+		}
+		if (value instanceof float[] f) {
+			if (f[0] != 1) {
+				return null;
+			}
+			for (int i = 2; i < f.length; i++) {
+				elements.add((double) f[i]);
+			}
+			return elements;
+		}
+		if (value instanceof short[] s) {
+			Method bf16Value = bf16ValueMethod;
+			if (s[0] != 1 || bf16Value == null) {
+				return null;
+			}
+			for (int i = 3; i < s.length; i++) {
+				try {
+					elements.add(bf16Value.invoke(null, (int) s[i]));
+				}
+				catch (ReflectiveOperationException ex) {
+					throw new IllegalStateException("java interop: cannot read a bfloat16 element", ex);
+				}
+			}
+			return elements;
+		}
+		if (value instanceof long[] l) {
+			for (int i = 1; i < l.length; i++) {
+				elements.add(l[i]);
+			}
+			return elements;
+		}
+		if (value instanceof byte[] b) {
+			if (b.length == 0 || b[0] != OCTET_TAG) {
+				return null;
+			}
+			for (int i = 1; i < b.length; i++) {
+				elements.add((long) (b[i] & 0xFF));
+			}
+			return elements;
+		}
+		return null;
 	}
 
 	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH.
@@ -1178,6 +1270,9 @@ final class JavaBridgeTemplate {
 				yield target.isAssignableFrom(Boolean.class) ? COST_BOXED : NO_MATCH;
 			}
 			case KIND_INTEGER -> integerCost(target);
+			// A bignum is a BigInteger: that class or a supertype, never narrower.
+			case KIND_BIGNUM -> target == BigInteger.class ? COST_EXACT
+					: (target.isAssignableFrom(BigInteger.class) ? COST_BOXED : NO_MATCH);
 			case KIND_FLOAT -> floatCost(target);
 			case KIND_STRING, KIND_STRING_1 -> {
 				if (target.isAssignableFrom(String.class)) {
@@ -1220,6 +1315,9 @@ final class JavaBridgeTemplate {
 		if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
 			return COST_NARROW;
 		}
+		if (target == BigInteger.class) {
+			return COST_CONVERT;
+		}
 		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
 				|| target.isAssignableFrom(Integer.class)) {
 			return COST_BOXED;
@@ -1250,6 +1348,9 @@ final class JavaBridgeTemplate {
 		}
 		if (value instanceof Long l) {
 			return convertLong(l, target);
+		}
+		if (value instanceof BigInteger) {
+			return value; // a bignum, for BigInteger or a supertype
 		}
 		if (value instanceof Double d) {
 			return target == float.class || target == Float.class ? (Object) (float) d.doubleValue() : (Object) d;
@@ -1291,6 +1392,9 @@ final class JavaBridgeTemplate {
 		}
 		if (target == byte.class || target == Byte.class) {
 			return (byte) v;
+		}
+		if (target == BigInteger.class) {
+			return BigInteger.valueOf(v);
 		}
 		// Box to the narrowest type that holds the value, like Common Lisp fixnums.
 		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;

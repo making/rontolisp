@@ -18,7 +18,7 @@ For a string **literal** -- and, on the compiled backends, for the few remaining
 (nstring-upcase (copy-seq "hello world")) ; => "HELLO WORLD"
 ```
 
-The whole string is folded: like their non-destructive siblings these take no `:start` / `:end`. Each is a first-class function value, so `#'nstring-upcase` can be passed to `funcall`, `mapcar` or `intern`.
+The whole string is folded: unlike their non-destructive siblings these take no `:start` / `:end`. Each is a first-class function value, so `#'nstring-upcase` can be passed to `funcall`, `mapcar` or `intern`.
 
 ## Backend support
 

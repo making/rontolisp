@@ -18,7 +18,7 @@
 (nstring-upcase (copy-seq "hello world")) ; => "HELLO WORLD"
 ```
 
-変換は文字列全体に及びます。非破壊版と同様、`:start` / `:end` は受け付けません。いずれも第一級の関数値なので、`#'nstring-upcase` を `funcall`・`mapcar`・`intern` に渡せます。
+変換は文字列全体に及びます。非破壊版と異なり、`:start` / `:end` は受け付けません。いずれも第一級の関数値なので、`#'nstring-upcase` を `funcall`・`mapcar`・`intern` に渡せます。
 
 ## バックエンド対応
 

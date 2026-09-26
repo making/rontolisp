@@ -79,13 +79,14 @@ public sealed interface JavaStaticType {
 	 * The type of a value a member declared as returning {@code type} answers, once the
 	 * bridge unmarshalled it: {@code void} is {@code nil}, {@code boolean} is {@code t}
 	 * or {@code nil}, a primitive number or character its kind, a box or {@code String}
-	 * the same or {@code nil}; an array (a list), a {@code BigInteger} (a Lisp integer,
-	 * fixnum or bignum) and a supertype of a box, of {@code String}, of
-	 * {@code BigInteger} or of an array ({@code Object}, {@code Number},
-	 * {@code CharSequence}, ...) -- whose value may have become any of those -- nothing;
-	 * a final class exactly that class or {@code nil}; any other class a {@link Bounded
-	 * bound}. A class a compiled program cannot name ({@link JavaType#isLinkable()}) is
-	 * nothing: a site resolves only through classes it can be compiled against.
+	 * the same or {@code nil}; a {@code BigInteger} or a subclass of it an integer
+	 * (fixnum or bignum) or {@code nil}; an array (a list) and a supertype of a box, of
+	 * {@code String}, of {@code BigInteger} or of an array ({@code Object},
+	 * {@code Number}, {@code CharSequence}, ...) -- whose value may have become any of
+	 * those -- nothing; a final class exactly that class or {@code nil}; any other class
+	 * a {@link Bounded bound}. A class a compiled program cannot name
+	 * ({@link JavaType#isLinkable()}) is nothing: a site resolves only through classes it
+	 * can be compiled against.
 	 * @param type the declared type
 	 * @param lookup where the boxes and {@code String} are found
 	 * @return the static type of the unmarshalled value
@@ -123,6 +124,9 @@ public sealed interface JavaStaticType {
 			default -> {
 			}
 		}
+		if (isBigInteger(type, lookup)) {
+			return new Kinds(Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM, nil));
+		}
 		if (type.isArray() || type.isPrimitive() || !type.isLinkable() || becomesLisp(type, lookup)) {
 			return UNKNOWN;
 		}
@@ -131,8 +135,8 @@ public sealed interface JavaStaticType {
 
 	/**
 	 * The type of the object {@code (java:new "C" ...)} answers: exactly {@code C}, or
-	 * the Lisp value an instance of a box or {@code String} unmarshals to (nothing for a
-	 * class a compiled program cannot name).
+	 * the Lisp value an instance of a box, of {@code String} or of {@code BigInteger}
+	 * unmarshals to (nothing for a class a compiled program cannot name).
 	 * @param type the constructed class
 	 * @param lookup where the boxes and {@code String} are found
 	 * @return the static type of the unmarshalled instance
@@ -145,8 +149,19 @@ public sealed interface JavaStaticType {
 			case "java.lang.Float", "java.lang.Double" -> new Kinds(Set.of(JavaKind.Lisp.FLOAT));
 			case "java.lang.Character" -> new Kinds(Set.of(JavaKind.Lisp.CHAR));
 			case "java.lang.String" -> new Kinds(Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1));
-			default -> !type.isLinkable() || becomesLisp(type, lookup) ? UNKNOWN : new Kinds(Set.of(type));
+			default -> {
+				if (isBigInteger(type, lookup)) {
+					yield new Kinds(Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM));
+				}
+				yield !type.isLinkable() || becomesLisp(type, lookup) ? UNKNOWN : new Kinds(Set.of(type));
+			}
 		};
+	}
+
+	// BigInteger or a subclass: every instance unmarshals to a Lisp integer.
+	private static boolean isBigInteger(JavaType type, JavaClassLookup lookup) {
+		JavaType bignum = lookup.find("java.math.BigInteger");
+		return bignum != null && bignum.isAssignableFrom(type);
 	}
 
 	/**

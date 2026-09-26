@@ -1,8 +1,8 @@
 # typep
 
-`(typep object 'type-specifier)`
+`(typep object 'type-specifier &optional environment)`
 
-`object` が指定した型かどうかを判定します。lite 版: 型指定子は通常リテラル (クオートされた) 型です — [`typecase`](typecase.md) がサポートするのと同じ集合 (アトミックな型名、登録済みクラス、引数なしのユーザー [`deftype`](deftype.md) 名、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)`/範囲付き数値型/`(unsigned-byte n)`/`(signed-byte n)`/配列系) です。未知の指定子は何にもマッチしません。
+`object` が指定した型かどうかを判定します。lite 版: 型指定子は通常リテラル (クオートされた) 型です — [`typecase`](typecase.md) がサポートするのと同じ集合 (アトミックな型名、登録済みクラス、引数なしのユーザー [`deftype`](deftype.md) 名、複合指定子 `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)`/範囲付き数値型/`(unsigned-byte n)`/`(signed-byte n)`/配列系) です。未知の指定子は何にもマッチしません。省略可能な `environment` は評価されますが使われません。環境はグローバルなもの 1 つだけです。
 
 配列系とは `(array ELEMENT-TYPE DIMENSIONS)`、`(simple-array ELEMENT-TYPE DIMENSIONS)`、`(vector ELEMENT-TYPE SIZE)`、`(simple-vector SIZE)` — [`type-of`](../functions/type-of.md) が組み立てる指定子そのものです。両方の要素が検査されます: 要素型は配列の昇格後の [`array-element-type`](../functions/array-element-type.md) と、次元は配列自身の次元と比較されます。`DIMENSIONS` にはリスト (どの位置の `*` も「任意のサイズ」を意味します)、ランクを表す整数、ランク 0 配列を表す `nil`、または `*` を書けます。`vector` 系の 2 つの綴りはランクを 1 に固定します。
 

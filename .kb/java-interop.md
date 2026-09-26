@@ -32,8 +32,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
   `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
   then (one parameter list, covariant variants) the most specific return type -- never the
-  bridge that erases it. `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, hash tables,
-  dotted lists and rank-2+ arrays are NOT marshalled.
+  bridge that erases it. `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, ratios, hash
+  tables, dotted lists and rank-2+ arrays are NOT marshalled ("Bignums and specialized vectors"
+  below for what is).
 - THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
   `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
@@ -70,8 +71,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   shows `(1 2)`, `1.0e10`, `#(0 0)` as the interpreter and a direct site do.
 - A Java `BigInteger` result is a Lisp integer on all three paths (a fixnum when
   `bitLength() < 64`: interpreter `unmarshal`, bridge `unmarshal`, `_junm`); `JavaStaticType.
-  becomesLisp` counts BigInteger, its supertypes and its subclasses, so such a declared or
-  constructed type is UNKNOWN. Decided 2026-09-26: the compiled representation cannot hold a
+  becomesLisp` counts BigInteger, its supertypes and its subclasses. A declared BigInteger (or
+  subclass) is {integer, bignum, nil}, a constructed one {integer, bignum}; its supertypes stay
+  UNKNOWN. Decided 2026-09-26: the compiled representation cannot hold a
   host `BigInteger` apart from a bignum, so the interpreter gave up calling its methods
   (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` now refuses `5` on both).
 - Measured 2026-09-26 before the rule, `(defun f (x) (java:call x "size"))` compiled: a list /
@@ -83,17 +85,41 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   compiled and `#<java java.math.BigInteger>` interpreted. All agree now
   (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
 - Still divergent: the compiled ACCESSORS on a host `ArrayList` / `LinkedHashMap` (`gethash`
-  answers `NIL`, `length` / `aref` / `hash-table-count` throw a Java exception; `.todo/a38`);
-  specialized vectors and bignums are marshalled on neither backend (`.todo/a32`).
+  answers `NIL`, `length` / `aref` / `hash-table-count` throw a Java exception; `.todo/a38`).
+
+## Bignums and specialized vectors
+- BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype
+  of it (`Number`, `Object`, `Comparable`, `Serializable`) BOXED, anything else NO_MATCH -- no
+  `long`, and no lossy `double` (a user converts with `float`). INTEGER -> `BigInteger` is
+  CONVERT (`BigInteger.valueOf`): lossless but after every primitive that holds it; a tie with
+  `double` goes to `double` by the signature order. Kind tests: interpreter `LispBigInteger`,
+  bridge / `_jkind` / `emitKindTest` `instanceof BigInteger`; conversion = the value itself.
+  A literal bignum is a BIGNUM static type (a site resolves on it); spelled
+  `(java:object "java.math.BigInteger")` = {integer, bignum, nil} (`KIND_SPELLINGS`).
+- A rank-1 SPECIALIZED vector is a sequence like any vector, its elements what `aref` reads (a
+  float of every width as a double, an unsigned integer widened): interpreter `LispFloatArray`
+  (`dims()[0]`, `elementAt`) and `LispIntVector`; compiled `double[]`/`float[]` `{rank, dim, e...}`,
+  bfloat16 `short[]` `{rank, hi, lo, e...}` read through the program's `_bf16Value`, `long[]`
+  `{width, e...}`, octet `byte[]` `{8, e...}` -- another `byte[]` is a quantized matrix, another
+  rank no sequence. Two copies: the bridge's `packedElements` (binds `_bf16Value` by name in
+  `bind`, so it is a shaker root beside `_lispToString` and in `REFLECTIVELY_FOUND_METHODS`) and
+  `_jseq`'s `emitPackedElements` arms, which `_jkind` reaches as KIND_ARRAY. The direct sites
+  test only the shapes the program can hold (`JvmJavaDirectSites.packedVectors` from
+  `usesFloatArray` / `usesIntArray`), so a program without packed arrays emits what it did.
+- Measured 2026-09-26 before: every one of these matched no parameter on both backends
+  (`No matching method`). Pins: `testsupport/JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_PROGRAM`
+  (dispatched, bridged and resolved sites, both backends),
+  `JavaBridgeTemplateParityTest#theBridgeAndADirectSiteReadASpecializedVectorAlike` and its
+  bignum corpus rows, `JavaSiteResolverTest#bignumsAndBigIntegerParametersResolve`.
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
 `Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
 - A KIND is the smallest token every conversion cost is a pure function of: nil, t, integer,
-  float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP char,
+  bignum, float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP char,
   supplementary char, function value, host object = its exact `Class`. Canonical (constants /
   `Class`), compared by identity. Conses and Lisp arrays have NO kind (the cost sums the
-  elements); values `marshal` never bridges (symbols, bignums, ...) have none either.
+  elements); values `marshal` never bridges (symbols, ratios, ...) have none either.
 - `kindCost(kind, target)` is THE cost table; `marshal` = `kindCost` + `convert` for a value
   with a kind, element-wise `marshal` for a sequence. So cost and conversion cannot drift.
 - `select(candidates, argc, cost)` returns an overload (executable, parameter types,
@@ -175,7 +201,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
     exact = `(java:object "C" :exact)` (= `ofConstructed`, never nil; users may write it); a Lisp
     kind set = the smallest declared type covering it ("int" {integer}, "java.lang.Long"
     {integer,nil}, "boolean" {t,nil}, "java.lang.String" {string,string-1,nil}, a final class
-    {C,nil}, "void" {nil}); FUNCTION/supplementary char: no spelling, not inferred. Wider = fewer
+    {C,nil}, "void" {nil}, "java.math.BigInteger" {integer,bignum,nil}); FUNCTION/supplementary
+    char: no spelling, not inferred. Wider = fewer
     sites resolve, never a different member.
   - One `JavaDeclarations` per program, fed EVERY top-level form in order (`lower`), a top-level
     `progn`/`eval-when` element by element (as the compile path's flattened program): it keeps the
@@ -267,10 +294,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   strictly cheaper); the no-match throw; one arm per overload (`iload best; iconst k;
   if_icmpne`, the last untested): `_jconv$N(Object)T` per argument (packed tail: `newarray` +
   store), `emitInvoke`, `emitUnmarshal`, `areturn`. Shared helpers, made once per attempt:
-  - `_jkind(Object)I`: the bridge's `kindOf` order as codes 0-8 (`LISP_KINDS`), 9 cons,
-    10 Lisp array, 11 host (`_jhost`), 12 none (symbol, bignum, ratio, hash table, ...).
+  - `_jkind(Object)I`: the bridge's `kindOf` order as codes: a Lisp kind's ordinal
+    (`LISP_KINDS` = `JavaKind.Lisp.values()`), then cons, Lisp array (a specialized one too),
+    host (`_jhost`), none (symbol, ratio, hash table, ...).
   - `_jseq(Object)Object[]`: a cons's cars (null if dotted / function-terminated), a rank-1 Lisp
-    array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), else null.
+    array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), a rank-1
+    specialized vector's ("Bignums and specialized vectors"), else null.
   - `_jcost$N` per (parameter type, function arm or not): `_strv` first (a built string;
     elements too), then the compile-time `kindCost` constant per code, a sequence
     `COST_CONVERT`/`COST_BOXED` + its elements' `_jcost` (array component / Object for an

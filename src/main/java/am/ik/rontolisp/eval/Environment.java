@@ -4511,19 +4511,53 @@ public final class Environment implements Scope {
 		};
 	}
 
+	/**
+	 * {@code (string-upcase string &key start end)} and its two siblings: only the
+	 * bounded substring (character positions) is converted, the text around it is kept --
+	 * the rule {@code LispMacroExpander.expandBoundedCaseConversion} lowers the compiled
+	 * call to.
+	 */
+	private static LispString boundedCaseConversion(String name, List<LispVal> args,
+			java.util.function.UnaryOperator<String> convert) {
+		requireMinArgCount(name, args, 1);
+		String full = stringDesignator(name, args.get(0));
+		if (args.size() == 1) {
+			return new LispString(convert.apply(full));
+		}
+		String problem = am.ik.rontolisp.macro.LispMacroExpander.keywordTailProblem(name, args, 1,
+				List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD));
+		if (problem != null) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, problem);
+		}
+		int cpLen = full.codePointCount(0, full.length());
+		LispVal startArg = null;
+		LispVal endArg = null;
+		for (int i = 1; i + 1 < args.size(); i += 2) {
+			String key = ((LispSymbol) args.get(i)).name();
+			if (LispNames.START_KEYWORD.equals(key) && startArg == null) {
+				startArg = args.get(i + 1);
+			}
+			else if (LispNames.END_KEYWORD.equals(key) && endArg == null) {
+				endArg = args.get(i + 1);
+			}
+		}
+		int start = startArg == null ? 0 : requireIndex(name, startArg);
+		int end = endArg == null || endArg instanceof LispNil ? cpLen : requireIndex(name, endArg);
+		if (start > end || end > cpLen) {
+			throw new LispEvalException(name + ": bad bounding indices " + start + ".." + end);
+		}
+		int from = full.offsetByCodePoints(0, start);
+		int to = full.offsetByCodePoints(0, end);
+		return new LispString(full.substring(0, from) + convert.apply(full.substring(from, to)) + full.substring(to));
+	}
+
 	private static void registerStringOps(Environment env) {
-		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE, args -> {
-			requireArgCount(LispNames.STRING_UPCASE, args, 1);
-			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_UPCASE, args.get(0)), true));
-		}));
-		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE, args -> {
-			requireArgCount(LispNames.STRING_DOWNCASE, args, 1);
-			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_DOWNCASE, args.get(0)), false));
-		}));
-		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE, args -> {
-			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
-			return new LispString(capitalizeString(stringDesignator(LispNames.STRING_CAPITALIZE, args.get(0))));
-		}));
+		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE,
+				args -> boundedCaseConversion(LispNames.STRING_UPCASE, args, s -> caseFoldString(s, true))));
+		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE,
+				args -> boundedCaseConversion(LispNames.STRING_DOWNCASE, args, s -> caseFoldString(s, false))));
+		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE,
+				args -> boundedCaseConversion(LispNames.STRING_CAPITALIZE, args, Environment::capitalizeString)));
 		// subseq: strings and lists. (seq start [end]); end defaults to the sequence
 		// length.
 		env.defineFunction(LispNames.SUBSEQ, new LispFunction(LispNames.SUBSEQ, args -> {

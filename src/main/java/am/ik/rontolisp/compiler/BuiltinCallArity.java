@@ -29,10 +29,9 @@ import org.jspecify.annotations.Nullable;
  * where each backend decides a form is a built-in call, and a wrong one never reaches a
  * lowering. The shape is the catalog wrapper's lambda list
  * ({@link BuiltinFunctionWrappers}, the function VALUE every backend hands out), widened
- * where the operator's standard lambda list takes more than the wrapper spells: a sort
- * predicate is a two-argument call, so {@code #'<} is binary while {@code (< a b c)} is
- * legal. A count this class accepts is left to the lowering exactly as before; only a
- * count the standard lambda list rules out is rejected.
+ * where the operator's standard lambda list takes more than the wrapper spells. A count
+ * this class accepts is left to the lowering exactly as before; only a count the standard
+ * lambda list rules out is rejected.
  *
  * <p>
  * The built-ins outside the catalog that the interpreter implements natively take their
@@ -46,11 +45,20 @@ public final class BuiltinCallArity {
 
 	/**
 	 * The call-position shapes that are WIDER than the catalog wrapper's lambda list:
-	 * name, minimum, maximum. Each is the operator's standard lambda list (the CLHS, or
-	 * rontolisp's reference page for its own operators); keyword arguments count as
-	 * unbounded (the keyword-tail check is the operator's own). A row that is not wider
-	 * than its wrapper fails the class's initialization, so widening a wrapper retires
-	 * its row here.
+	 * name, minimum, maximum. Each is the operator's standard lambda list (the CLHS);
+	 * keyword arguments count as unbounded (the keyword-tail check is the operator's
+	 * own). A row that is not wider than its wrapper fails the class's initialization, so
+	 * widening a wrapper retires its row here. What is left:
+	 * <ul>
+	 * <li>the comparisons and {@code logand}/{@code logior}/{@code logxor}, whose
+	 * wrappers keep TWO required parameters so the two-argument call -- a sort
+	 * predicate's, a fold's -- conses no rest list
+	 * ({@code BuiltinFunctionWrappers.comparison} has the measurement); their one- and
+	 * zero-argument call positions are legal;</li>
+	 * <li>{@code make-broadcast-stream} with components, {@code read-from-string}'s
+	 * optional and keyword arguments and {@code write-to-string}'s keywords, which their
+	 * function values do not forward yet.</li>
+	 * </ul>
 	 */
 	private static final Object[][] STANDARD_WIDER = { { LispNames.EQ, 1, UNBOUNDED }, { LispNames.LT, 1, UNBOUNDED },
 			{ LispNames.GT, 1, UNBOUNDED }, { LispNames.LE, 1, UNBOUNDED }, { LispNames.GE, 1, UNBOUNDED },
@@ -59,18 +67,8 @@ public final class BuiltinCallArity {
 			{ LispNames.CHAR_LE, 1, UNBOUNDED }, { LispNames.CHAR_GE, 1, UNBOUNDED },
 			{ LispNames.CHAR_EQUAL, 1, UNBOUNDED }, { LispNames.LOGAND, 0, UNBOUNDED },
 			{ LispNames.LOGIOR, 0, UNBOUNDED }, { LispNames.LOGXOR, 0, UNBOUNDED },
-			{ LispNames.ADJUST_ARRAY, 2, UNBOUNDED }, { LispNames.CONSTANTP, 1, 2 }, { LispNames.DIGIT_CHAR_P, 1, 2 },
-			{ LispNames.FILE_POSITION, 1, 2 }, { LispNames.FLOAT, 1, 2 }, { LispNames.GENSYM, 0, 1 },
-			{ LispNames.GETHASH, 2, 3 }, { LispNames.INTERN, 1, 2 }, { LispNames.MAKE_BROADCAST_STREAM, 0, UNBOUNDED },
-			{ LispNames.MAKE_STRING, 1, UNBOUNDED }, { LispNames.PAIRLIS, 2, 3 },
-			{ LispNames.PARSE_INTEGER, 1, UNBOUNDED }, { LispNames.RANDOM, 1, 2 }, { LispNames.READ_BYTE, 1, 3 },
-			{ LispNames.READ_CHAR_NO_HANG, 0, 4 }, { LispNames.READ_FROM_STRING, 1, UNBOUNDED },
-			{ LispNames.STRING_CAPITALIZE, 1, UNBOUNDED }, { LispNames.STRING_DOWNCASE, 1, UNBOUNDED },
-			{ LispNames.STRING_UPCASE, 1, UNBOUNDED }, { LispNames.TYPEP, 2, 3 }, { LispNames.UNREAD_CHAR, 1, 2 },
-			{ LispNames.UPGRADED_COMPLEX_PART_TYPE, 1, 2 }, { LispNames.VECTOR_PUSH_EXTEND, 2, 3 },
-			{ LispNames.WRITE_STRING, 1, UNBOUNDED }, { LispNames.WRITE_TO_STRING, 1, UNBOUNDED },
-			{ PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS), 3, UNBOUNDED },
-			{ PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS), 3, UNBOUNDED } };
+			{ LispNames.MAKE_BROADCAST_STREAM, 0, UNBOUNDED }, { LispNames.READ_FROM_STRING, 1, UNBOUNDED },
+			{ LispNames.WRITE_TO_STRING, 1, UNBOUNDED } };
 
 	private static final Map<String, Shape> SHAPES = buildShapes();
 

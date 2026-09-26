@@ -40,6 +40,30 @@ class JavaSiteResolverTest {
 			.isEqualTo("java.lang.Character toString(char)");
 	}
 
+	// A bignum is a BigInteger or a supertype of one; a fixnum reaches a BigInteger
+	// parameter, after every primitive that holds it. A BigInteger answer is an integer
+	// of either kind, spelled (java:object "java.math.BigInteger").
+	@Test
+	void bignumsAndBigIntegerParametersResolve() {
+		assertThat(member("(java:static \"java.lang.String\" \"valueOf\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.lang.String valueOf(java.lang.Object)");
+		assertThat(member("(java:new \"java.math.BigDecimal\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(java.math.BigInteger)");
+		assertThat(member("(java:new \"java.math.BigDecimal\" 5 2)"))
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(java.math.BigInteger,int)");
+		assertThat(member("(java:new \"java.math.BigDecimal\" 5)"))
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(int)");
+		assertThat(resolve("(java:static \"java.lang.Math\" \"sqrt\" 1267650600228229401496703205376)").reason())
+			.isNotNull();
+		JavaStaticType whole = this.resolver.typeOf(
+				LispReader.readAllFromString("(java:call (java:new \"java.math.BigDecimal\" \"2.5\") \"toBigInteger\")")
+					.get(0));
+		assertThat(whole).isEqualTo(new JavaStaticType.Kinds(
+				java.util.Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM, JavaKind.Lisp.NIL)));
+		assertThat(java.util.Objects.requireNonNull(this.resolver.specOf(whole)).print())
+			.isEqualTo("(JAVA:OBJECT \"java.math.BigInteger\")");
+	}
+
 	@Test
 	void aVarargsTailIsPackedExactlyAsAtRunTime() {
 		assertThat(member("(java:static \"java.lang.String\" \"format\" \"%s-%s\" 1 \"x\")"))
