@@ -472,13 +472,28 @@ final class JvmSimdCompiler {
 			// operands are all float[] or all double[] (decided by the first of them),
 			// else fallback.
 			int byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B")).index();
+			List<Integer> notQuantized = new ArrayList<>();
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(slots[quantizedOperand]);
 			ctx.emit(Opcode.INSTANCEOF);
 			ctx.emitU2(byteArrayClass);
-			int notQuantized = ctx.code.size();
+			notQuantized.add(ctx.code.size());
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
+			if (ctx.usesIntArray) {
+				// An (unsigned-byte 8) vector is the other byte[]: its slot 0 is the tag.
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(slots[quantizedOperand]);
+				ctx.emit(Opcode.CHECKCAST);
+				ctx.emitU2(byteArrayClass);
+				ctx.emit(Opcode.ICONST_0);
+				ctx.emit(Opcode.BALOAD);
+				ctx.emit(Opcode.BIPUSH);
+				ctx.emit(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				notQuantized.add(ctx.code.size());
+				ctx.emit(Opcode.IF_ICMPEQ);
+				ctx.emitU2(0);
+			}
 			int first = quantizedOperand == 0 ? 1 : 0;
 			// if (slot_first instanceof float[]) { others float[] } else { first
 			// double[]; others double[] }
@@ -520,7 +535,9 @@ final class JvmSimdCompiler {
 			skipGenerals.add(ctx.code.size());
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, notQuantized, ctx.code.size());
+			for (int pos : notQuantized) {
+				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+			}
 		}
 		if (bf16Operand != null) {
 			// if (!(slot_p instanceof short[])) goto general;

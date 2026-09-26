@@ -143,11 +143,7 @@ final class ObjcBridge {
 			}
 			ObjcRuntime runtime = ObjcRuntime.get();
 			byte[] bytes = onMain(runtime, () -> runtime.dataBytes(MemorySegment.ofAddress(data.address())));
-			long[] elements = new long[bytes.length];
-			for (int i = 0; i < bytes.length; i++) {
-				elements[i] = bytes[i] & 0xFFL;
-			}
-			return new LispIntVector(8, elements);
+			return LispIntVector.wrapOctets(bytes);
 		});
 		define(globalEnv, LispNames.OBJC_DEFINE_CLASS, args -> {
 			if (args.size() < 3 || args.size() > 4 || !(args.get(0) instanceof LispString name)

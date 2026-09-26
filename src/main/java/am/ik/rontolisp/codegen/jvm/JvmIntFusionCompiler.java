@@ -1952,6 +1952,59 @@ final class JvmIntFusionCompiler {
 		ctx.allocTemp();
 		List<Integer> done = new ArrayList<>();
 		if (ctx.usesIntArray) {
+			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF. Where a
+			// quantized matrix (also a byte[]) can exist, the tag in slot 0 tells them
+			// apart, and the matrix bails to _aref1 like any other shape.
+			ClassConstant byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B"));
+			List<Integer> notOctets = new ArrayList<>();
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(byteArrayClass.index());
+			notOctets.add(branch(ctx, Opcode.IFEQ));
+			if (ctx.usesQuantized) {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(leaf.arrParam);
+				ctx.emit(Opcode.CHECKCAST);
+				ctx.emitU2(byteArrayClass.index());
+				ctx.emit(Opcode.ICONST_0);
+				ctx.emit(Opcode.BALOAD);
+				ctx.emit(Opcode.BIPUSH);
+				ctx.emit(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				notOctets.add(branch(ctx, Opcode.IF_ICMPNE));
+			}
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			bails.add(branch(ctx, Opcode.IFLT));
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(byteArrayClass.index());
+			ctx.emit(Opcode.ARRAYLENGTH);
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.ISUB);
+			bails.add(branch(ctx, Opcode.IF_ICMPGE));
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(leaf.arrParam);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(byteArrayClass.index());
+			ctx.emit(Opcode.ICONST_1);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.IADD);
+			ctx.emit(Opcode.BALOAD);
+			ctx.emit(Opcode.SIPUSH);
+			ctx.emitU2(0xFF);
+			ctx.emit(Opcode.IAND);
+			ctx.emit(Opcode.I2L);
+			ctx.emit(Opcode.LSTORE);
+			ctx.emit(leaf.longSlot);
+			done.add(branch(ctx, Opcode.GOTO));
+			for (int pos : notOctets) {
+				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+			}
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(leaf.arrParam);
 			ctx.emit(Opcode.INSTANCEOF);

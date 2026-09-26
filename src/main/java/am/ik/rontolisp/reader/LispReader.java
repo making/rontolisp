@@ -815,7 +815,7 @@ public final class LispReader {
 				default -> throw err("#" + width + "@: expected an integer element, got " + leaf.print());
 			};
 		}
-		return new am.ik.rontolisp.LispIntVector(width, data);
+		return am.ik.rontolisp.LispIntVector.of(width, data);
 	}
 
 	// Reads a #S(NAME :SLOT value ...) structure literal into a LispStructLiteral

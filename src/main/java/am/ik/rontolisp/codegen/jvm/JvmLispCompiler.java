@@ -2897,6 +2897,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functions(functions)
 				.complexValues(usesComplex)
 				.hasComplexField(hasComplexField)
+				// _arityChk comes with _apply (reportsCount below), and only then does
+				// the
+				// runtime reference it
+				.arityChkRef(usesApplyRuntime ? cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
+								cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)))
+						: null)
+				.arityOperators(arityOperators)
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
@@ -3045,19 +3053,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
 						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null,
 						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE) : null,
-						usesQuantized));
+						usesQuantized, usesIntArray));
 				if (usesQuantized) {
 					// The quantized matrix's own helpers; the _fv* byte[] arms above
 					// delegate to them.
-					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass));
+					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass, usesIntArray));
 				}
 			}
-			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
-			// and delegate any other array shape down the chain (to the _fv* tier when
-			// it is emitted, else straight to the general helpers).
+			// The packed integer-vector helpers (_iv*) dispatch on the representation
+			// (byte[] at width 8, long[] at 16/32) and delegate any other array shape
+			// down the chain (to the _fv* tier when it is emitted, else straight to the
+			// general helpers).
 			if (usesIntArray) {
-				built.addAll(
-						JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
+				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
+						usesFloatArray, usesQuantized));
 			}
 			// widen-float-bits/narrow-float-bits (.todo/671): bulk f16/bf16 bit <->
 			// packed-float conversion, over the same bare double[]/float[]/short[]/long[]
@@ -3094,13 +3103,14 @@ public final class JvmLispCompiler implements LispCompiler {
 									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC)))
 							: null);
 		}
-		// The packed integer-vector print branch: a long[] renders as a plain #(...)
-		// vector (CL prints specialized vectors this way) by converting to a general
-		// array (_ivToGeneral) and reusing the general renderer -- no prefix rewrite,
-		// unlike the #d/#f float syntax.
+		// The packed integer-vector print branch: a byte[]/long[] renders as a plain
+		// #(...) vector (CL prints specialized vectors this way) by converting to a
+		// general array (_ivToGeneral) and reusing the general renderer -- no prefix
+		// rewrite, unlike the #d/#f float syntax.
 		JvmRuntimeBuilder.@Nullable PackedIntPrint packedIntPrint = null;
 		if (usesIntArray) {
 			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.addClass(cp.addUtf8("[J")),
+					cp.addClass(cp.addUtf8("[B")), usesQuantized,
 					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL),
 							cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC))));
 		}
@@ -3331,7 +3341,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
-				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp, stringConcat) : null;
+				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets

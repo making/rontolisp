@@ -1531,6 +1531,10 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     with an optional tail spells its own range (`GETHASH expects 2 or 3 arguments, got 0`), while
     the compiled wrapper's lambda list says `at least 2`; and a wrapper's `&optional` surplus check
     says `Function expects at most N`.
+- **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
+  argument form of a registered function and the spread case judges the count, `apply` is a
+  catalog wrapper, and an eval-built closure without a `&` marker is checked
+  ([eval-runtime.md](eval-runtime.md), "Argument counts").
 - **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1 bytes):
 
   | program | JVM before | after | wasm before | after |

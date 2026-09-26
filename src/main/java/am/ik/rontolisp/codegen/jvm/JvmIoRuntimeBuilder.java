@@ -4406,17 +4406,51 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifNotLong, code.size());
+		// else if (seq instanceof byte[]) -- an (unsigned-byte 8) vector
+		// byte[]{8, e0, ...}: { base = 1; width = 1; size = len - 1 }, or, where one can
+		// exist, a quantized matrix (told apart by the tag in slot 0).
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.byteArrayClass().index());
+		int ifNotByte = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		int ifQuantized = -1;
+		if (this.quantizedBuffer) {
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, io.byteArrayClass().index());
+			code.add(Opcode.ICONST_0);
+			code.add(Opcode.BALOAD);
+			code.add(Opcode.BIPUSH);
+			code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			ifQuantized = code.size();
+			code.add(Opcode.IF_ICMPNE);
+			emitU2(code, 0);
+		}
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISTORE);
+		code.add(BASE);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISTORE);
+		code.add(WIDTH);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.byteArrayClass().index());
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.ISUB);
+		code.add(Opcode.ISTORE);
+		code.add(SIZE);
+		int gotoShapedOctets = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
 		int gotoShaped4 = -1;
 		if (this.quantizedBuffer) {
-			// else if (seq instanceof byte[]) { base = 8 + 4 * _qmInt(seq, 4); width = 1;
-			// size = len - base } -- a quantized matrix's ggml blocks, one byte an
-			// element, so a GGUF tensor is one transfer (.kb/quantized-matrix.md).
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, io.byteArrayClass().index());
-			int ifNotByte = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
+			// the quantized matrix: { base = 8 + 4 * _qmInt(seq, 4); width = 1; size =
+			// len - base } -- its ggml blocks, one byte an element, so a GGUF tensor is
+			// one transfer (.kb/quantized-matrix.md).
+			patchBranch(code, ifQuantized, code.size());
 			code.add(Opcode.ALOAD_0);
 			code.add(Opcode.CHECKCAST);
 			emitU2(code, io.byteArrayClass().index());
@@ -4445,8 +4479,8 @@ final class JvmIoRuntimeBuilder {
 			gotoShaped4 = code.size();
 			code.add(Opcode.GOTO);
 			emitU2(code, 0);
-			patchBranch(code, ifNotByte, code.size());
 		}
+		patchBranch(code, ifNotByte, code.size());
 		// else return null (not a packed buffer -- declined)
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
@@ -4454,6 +4488,7 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, gotoShaped2, code.size());
 		patchBranch(code, gotoShaped2b, code.size());
 		patchBranch(code, gotoShaped3, code.size());
+		patchBranch(code, gotoShapedOctets, code.size());
 		if (gotoShaped4 >= 0) {
 			patchBranch(code, gotoShaped4, code.size());
 		}
@@ -4651,31 +4686,30 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.GOTO);
 		emitU2(code, 0);
 		patchBranch(code, ifNotDouble2, code.size());
-		int gotoMoved3 = -1;
-		if (this.quantizedBuffer) {
-			// else if (seq instanceof byte[]) bb.get/put((byte[]) seq, base + s, n)
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, io.byteArrayClass().index());
-			int ifNotByte2 = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD);
-			code.add(BB);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.byteArrayClass().index());
-			emitBasePlusS(code, BASE, S);
-			code.add(Opcode.ILOAD);
-			code.add(N);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, (read ? io.bbGetBytes() : io.bbPutBytes()).index());
-			code.add(Opcode.POP);
-			gotoMoved3 = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotByte2, code.size());
-		}
+		// else if (seq instanceof byte[]) bb.get/put((byte[]) seq, base + s, n) -- an
+		// octet vector or a quantized matrix, whose base the shape arm above already
+		// told apart.
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, io.byteArrayClass().index());
+		int ifNotByte2 = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(BB);
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, io.byteArrayClass().index());
+		emitBasePlusS(code, BASE, S);
+		code.add(Opcode.ILOAD);
+		code.add(N);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, (read ? io.bbGetBytes() : io.bbPutBytes()).index());
+		code.add(Opcode.POP);
+		int gotoMoved3 = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNotByte2, code.size());
 		// else if (seq instanceof short[]) bb.asShortBuffer().get/put((short[]) seq,
 		// base + s, n) -- the bfloat16 width moves as its stored patterns, in one bulk
 		// transfer like the two f32/f64 arms above and unlike the long[] element loop.
@@ -4807,9 +4841,7 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, gotoMoved1, code.size());
 		patchBranch(code, gotoMoved2, code.size());
 		patchBranch(code, gotoMoved2b, code.size());
-		if (gotoMoved3 >= 0) {
-			patchBranch(code, gotoMoved3, code.size());
-		}
+		patchBranch(code, gotoMoved3, code.size());
 		if (read) {
 			// advance a file stream's position by the bytes just read; return
 			// Long.valueOf(s + n)

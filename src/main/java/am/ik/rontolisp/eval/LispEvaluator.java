@@ -12616,18 +12616,18 @@ public final class LispEvaluator {
 
 	private static final byte[] EMPTY_BODY = new byte[0];
 
-	// Raw bytes -> the (unsigned-byte 8) vector a body stream answers them as.
+	// Raw bytes -> the (unsigned-byte 8) vector a body stream answers them as. The
+	// request's bytes are this request's alone, so the vector takes them over uncopied.
 	private static LispIntVector octetVector(byte[] bytes) {
-		long[] data = new long[bytes.length];
-		for (int i = 0; i < bytes.length; i++) {
-			data[i] = bytes[i] & 0xFF;
-		}
-		return new LispIntVector(8, data);
+		return LispIntVector.wrapOctets(bytes);
 	}
 
-	// An (unsigned-byte 8) response body -> the raw octets. The elements are already
-	// masked to the width, so the narrowing cannot lose anything.
+	// An (unsigned-byte 8) response body -> the raw octets, a copy the program can no
+	// longer write. A wider vector narrows element by element, as a byte sink would.
 	private static byte[] octetsBytes(LispIntVector octets) {
+		if (octets.width() == 8) {
+			return octets.octets().clone();
+		}
 		byte[] out = new byte[octets.length()];
 		for (int i = 0; i < out.length; i++) {
 			out[i] = (byte) octets.elementAt(i);

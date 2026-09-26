@@ -197,44 +197,69 @@ class LispPreludeLibraryTest {
 				data[i] = c[i];
 				contents.append(c[i]).append(' ');
 			}
-			String expected = Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8, data));
+			int[] expected = Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, data));
 			for (String elementType : List.of("", " :element-type '(unsigned-byte 8)")) {
 				String literal = "(rontolisp::%octets-to-string (make-array " + c.length + elementType
 						+ " :initial-contents '(" + contents + ")))";
 				LispVal actual = evaluator.eval(LispReader.readFromString(literal));
 				assertThat(actual).as(literal).isInstanceOf(am.ik.rontolisp.LispString.class);
-				assertThat(((am.ik.rontolisp.LispString) actual).value()).as(literal).isEqualTo(expected);
+				assertThat(codePoints((am.ik.rontolisp.LispString) actual)).as(literal).containsExactly(expected);
 			}
 		}
 		// And the native itself decodes valid UTF-8 as the platform does.
-		assertThat(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8,
+		assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8,
 				new long[] { 0xE3, 0x81, 0x93, 0xE3, 0x82, 0x93, 0xF0, 0x9F, 0x98, 0x80 })))
-			.isEqualTo("こん\uD83D\uDE00");
+			.containsExactly("こん\uD83D\uDE00".codePoints().toArray());
 	}
 
 	@Test
-	void theStrictDecoderTakesExactlyValidUtf8() {
-		// The fast half on its own terms: a string for valid UTF-8 (which is what makes
-		// it worth taking), nil for everything else -- including a value that is not a
-		// packed octet vector at all, because answering nil is how it hands such an
-		// input back to the general loop rather than guessing at it.
-		assertThat(Environment.decodeUtf8Strict(
-				new am.ik.rontolisp.LispIntVector(8, new long[] { 0xE3, 0x81, 0x93, 0xF0, 0x9F, 0x98, 0x80, 0x41 })))
-			.isEqualTo("こ\uD83D\uDE00A");
-		assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, new long[0]))).isEmpty();
-		// U+10FFFF is the last code point; the four-byte form after it is not UTF-8.
-		assertThat(Environment
-			.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, new long[] { 0xF4, 0x8F, 0xBF, 0xBF }))).isNotNull();
-		for (long[] refused : List.of(new long[] { 0xFF }, new long[] { 0x80 }, new long[] { 0xC3 },
-				new long[] { 0xC0, 0x80 }, new long[] { 0xE0, 0x80, 0x80 }, new long[] { 0xED, 0xA0, 0x80 },
-				new long[] { 0xF0, 0x80, 0x80, 0x80 }, new long[] { 0xF4, 0x90, 0x80, 0x80 },
-				new long[] { 0xF5, 0x80, 0x80, 0x80 }, new long[] { 0xE3, 0x81 })) {
-			assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, refused)))
-				.as(java.util.Arrays.toString(refused))
-				.isNull();
+	void theDecodeOfValidUtf8IsThePlatformsStrictDecode() {
+		// The interpreter decodes in ONE lenient pass: on well-formed input every arm
+		// answers what a strict decoder answers, which is what lets it skip the platform
+		// decode it used to try first. Pinned on both sides of every strict boundary --
+		// the valid ones must be the platform's code points exactly, and each refused one
+		// must still decode (never signal) to its lenient answer.
+		List<long[]> valid = List.of(new long[] { 0xE3, 0x81, 0x93, 0xF0, 0x9F, 0x98, 0x80, 0x41 }, new long[0],
+				new long[] { 0xC2, 0x80 }, new long[] { 0xDF, 0xBF }, new long[] { 0xE0, 0xA0, 0x80 },
+				new long[] { 0xED, 0x9F, 0xBF }, new long[] { 0xEF, 0xBF, 0xBF }, new long[] { 0xF0, 0x90, 0x80, 0x80 },
+				new long[] { 0xF4, 0x8F, 0xBF, 0xBF });
+		for (long[] octets : valid) {
+			byte[] bytes = new byte[octets.length];
+			for (int i = 0; i < bytes.length; i++) {
+				bytes[i] = (byte) octets[i];
+			}
+			assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, octets)))
+				.as(java.util.Arrays.toString(octets))
+				.containsExactly(new String(bytes, java.nio.charset.StandardCharsets.UTF_8).codePoints().toArray());
 		}
-		// A vector of another element width is not the shape the fast path takes.
-		assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(16, new long[] { 0x41 }))).isNull();
+		// Refused by a strict decoder, each byte its own character here: a stray lead,
+		// an unpaired continuation, a truncated sequence, and the 4-byte form past
+		// U+10FFFF. An overlong form and an encoded surrogate assemble their bits.
+		assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, new long[] { 0xFF })))
+			.containsExactly(0xFF);
+		assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, new long[] { 0x80 })))
+			.containsExactly(0x80);
+		assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, new long[] { 0xE3, 0x81 })))
+			.containsExactly(0xE3, 0x81);
+		assertThat(Environment
+			.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, new long[] { 0xF4, 0x90, 0x80, 0x80 })))
+			.containsExactly(0xF4, 0x90, 0x80, 0x80);
+		assertThat(Environment.decodeUtf8CodePoints(am.ik.rontolisp.LispIntVector.of(8, new long[] { 0xC1, 0x81 })))
+			.containsExactly(0x41);
+		// Two encoded surrogates stay two characters: the decoder answers code points,
+		// and a pair of them is not re-read as the supplementary character a UTF-16
+		// string would make of it.
+		assertThat(Environment.decodeUtf8CodePoints(
+				am.ik.rontolisp.LispIntVector.of(8, new long[] { 0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80 })))
+			.containsExactly(0xD83D, 0xDE00);
+	}
+
+	private static int[] codePoints(am.ik.rontolisp.LispString string) {
+		int[] out = new int[string.length()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = string.charAt(i);
+		}
+		return out;
 	}
 
 	@Test

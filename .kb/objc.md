@@ -142,7 +142,8 @@ the arena after the call and before it closes) and hands the pair to `ObjcRuntim
   rule is that the RESULT says whether a call failed.
 - `ObjcRuntime$Out` is a class file, so a row in `JvmObjcRuntimeBuilder.OBJC_CLASSES`. **The
   compiled twin cannot reuse `PackedBuffer`**: a packed float array carries its dimension header IN
-  the array (`[rank, dim_0..., e_0...]`) and a packed integer vector is `long[]{width, e_0, ...}`,
+  the array (`[rank, dim_0..., e_0...]`) and a packed integer vector is `byte[]{8, e_0, ...}` /
+  `long[]{width, e_0, ...}`,
   so `JvmObjcTemplate.bufferBytes` must skip what `LispSingleFloatArray.data()` never contained --
   sending the header makes the two backends disagree by two floats.
 

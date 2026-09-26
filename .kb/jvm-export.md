@@ -13,7 +13,7 @@ byte-identical ([emitted-output-determinism.md](emitted-output-determinism.md)).
 `:s8/:s16/:s32/:s64` -> `byte/short/int/long` (result guarded only); `:u8/:u16` -> `int`,
 `:u32/:u64` -> `long`, guarded by `_exArg` in / `_exRes` out, `:u64` >= 2^63 throws; `:float`
 -> `double`; `:bool` -> `boolean` (`false`=nil=`null`, `true`=`"T"`); `:string`, `:s-expr` ->
-`String`; `:bytes` -> `byte[]` (packed octet vector `long[]{8, e0, ...}`);
+`String`; `:bytes` -> `byte[]` (packed octet vector `byte[]{8, e0, ...}`, copied each way);
 `:float-vector`/`:float-matrix` -> `RontoFloatArray`, JVM-ONLY (`jvmOnly()`). Out of range =
 `IllegalArgumentException` in / `ArithmeticException` out; wrong representation =
 `ClassCastException`, a BARE string included since that is a SYMBOL (`_exStr`;

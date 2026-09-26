@@ -12865,6 +12865,45 @@ class WasmLispCompilerIntegrationTest {
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
 	}
 
+	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
+	// registered function gets EVERY argument form evaluated and the spread dispatcher
+	// judges the count (evaluating exactly the registered arity answered (car 1 2) with
+	// a type-error and (cons 1) with (1)); apply is the catalog's wrapper, so eval
+	// reaches it and the report names it; an eval-built closure without a lambda-list
+	// keyword is checked; and the comparisons chain over every argument.
+	@Test
+	void evalReportsAWrongArgumentCountAsTheInterpreterDoes() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun ev-one (x) x)
+						(print (handler-case (eval '(apply #'car '(1 2))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(car 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(cons 1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(ev-one 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'+)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(<)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '((lambda (x) x) 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(progn (defun ev-two (a b) (list a b)) (ev-two 1))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'list 1 2)) (program-error () :pe) (error (c) (princ-to-string c))))
+						(print (list (eval '(apply #'cons '(1 2))) (eval '(apply #'+ 1 2 '(3 4))) (eval '(< 1 3 2))
+						             (eval '(<= 1 2 2 3)) (eval '(/= 1 2 1)) (eval '(/= 1 2 3)) (eval '(= 4))
+						             (eval '(funcall (lambda (a &optional b) (list a b)) 1))))
+						(print (list (funcall #'apply #'+ 1 2 '(3 4)) (mapcar #'apply (list #'+ #'*) '((1 2) (3 4)))))
+						"""))
+			.isEqualTo("""
+					"CAR expects 1 argument, got 2"
+					"CAR expects 1 argument, got 2"
+					"CONS expects 2 arguments, got 1"
+					"Function expects 1 argument, got 2"
+					"APPLY expects at least 2 arguments, got 1"
+					"< expects at least 1 argument, got 0"
+					"Function expects 1 argument, got 2"
+					"Function expects 2 arguments, got 1"
+					"APPLY: last argument must be a list"
+					((1 . 2) 10 NIL T NIL T T (1 NIL))
+					(10 (3 12))""");
+	}
+
 	@Test
 	void destructuringBindMissingElementsSignalProgramError() throws Exception {
 		assertThat(compileAndRun("""
