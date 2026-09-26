@@ -2449,14 +2449,16 @@ public final class LispPreludeLibrary {
 		// decodes the same whichever transport carried it. The interpreter mirrors this
 		// in Java arm for arm (Environment); the compile paths compile this defun.
 		//
-		// The per-byte loop is the FALLBACK. %octets-to-string-strict is native on every
-		// backend (a platform decoder on the interpreter and the JVM, a validate-then-
-		// array.copy runtime function on wasm) and answers nil on anything that is not
-		// valid UTF-8, so a well-formed body -- every real one -- decodes at the speed of
-		// a copy and only malformed bytes pay the loop. The two agree by construction:
-		// where the input is well formed the strict answer IS what the arms below build,
-		// which is what lets the fast path be taken without a second rule to keep in
-		// step (LispPreludeLibraryTest pins it).
+		// The per-byte loop is the FALLBACK, for a GENERAL array only.
+		// %octets-to-string-packed is native on every backend and answers every packed
+		// octet vector -- every HTTP body -- itself: valid UTF-8 by a platform decode (a
+		// validate-then-array.copy on wasm) and malformed bytes by a native transcode of
+		// these same arms. A compiled per-byte loop cost ~350-700 ns a byte, and a
+		// --native output reading a 256 MiB binary body exhausted the GC heap after
+		// ~65 s (.kb/fetch-http.md). The native arms are pinned against these by
+		// LispPreludeLibraryTest (the interpreter's mirror) and the compiled
+		// octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8 tests (the JVM and wasm
+		// transcodes, case for case).
 		//
 		// The 4-byte arm re-tests the code point it just assembled: an #xF5.. lead, and
 		// an #xF4 one whose continuation carries the sequence past U+10FFFF, spell no
@@ -2469,7 +2471,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.OCTETS_TO_STRING_INTERNAL, """
 				(defun rontolisp::%octets-to-string (v)
 				  (or
-				   (rontolisp::%octets-to-string-strict v)
+				   (rontolisp::%octets-to-string-packed v)
 				   (let ((n (length v)))
 				     (with-output-to-string (s)
 				       (let ((i 0))

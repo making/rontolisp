@@ -1639,10 +1639,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_OSTREAM_ROOM = FUNC_SEQ_LEN + 1;
 
 	// _iv_utf8_str ((ref null eq) v) -> (ref null eq): a packed (unsigned-byte 8) vector
-	// validated as STRICT UTF-8 and, when it is, copied into the TYPE_STRING its bytes
-	// spell -- one array.copy between the frame quotes; anything else answers nil. The
-	// native half of the prelude's %octets-to-string, so a well-formed body decodes at
-	// the speed of a copy and only malformed bytes reach the per-byte loop. Reuses the
+	// decoded into a TYPE_STRING by the prelude's lenient %octets-to-string rule -- one
+	// array.copy between the frame quotes when it is valid UTF-8, a native transcode
+	// when it is not; anything else answers nil. The native half of that decoder, so no
+	// packed vector reaches the per-byte loop. Reuses the
 	// unary ((ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no
 	// new type entry; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_IV_UTF8_STR = FUNC_OSTREAM_ROOM + 1;
@@ -7874,7 +7874,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						operandOperators.ids().getOrDefault(LispNames.LENGTH, 0)));
 				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildOstreamRoomBody(ostreamTableGlobalIndex));
-				// strict UTF-8 octet-vector decode body (FUNC_IV_UTF8_STR)
+				// lenient UTF-8 octet-vector decode body (FUNC_IV_UTF8_STR)
 				code.addFunction(WasmStringRuntimeBuilder.buildIvUtf8StrBody());
 				// preopen-resolving path front end body (FUNC_PATH_DIRFD)
 				code.addFunction(WasmIoRuntimeBuilder.buildPathDirFdBody());

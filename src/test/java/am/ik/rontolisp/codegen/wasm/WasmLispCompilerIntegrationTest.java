@@ -5410,27 +5410,39 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() throws Exception {
-		// The two WASM arms of the gate (AsyncEvalTest and
-		// JvmAsyncCompilerTest are the other two): _iv_utf8_str validates the packed
-		// octet vector as UTF-8 and, when it is, builds the string with ONE array.copy
-		// -- and the compiled per-byte loop takes only what it refuses, answering
-		// exactly what the loop alone answered. The component leg runs the same core
+	void octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8() throws Exception {
+		// The two WASM arms of the gate (AsyncEvalTest and JvmAsyncCompilerTest are the
+		// other two): _iv_utf8_str validates the packed octet vector as UTF-8 and, when
+		// it is, builds the string with ONE array.copy, and otherwise transcodes it by
+		// the lenient arms; the compiled per-byte loop is left only a GENERAL array,
+		// which the primitive declines. *cases* pins the transcode against that loop
+		// case for case (an empty remove-if list). The component leg runs the same core
 		// module through a different I/O adapter, so both are checked.
 		String source = """
 				(defun octs (bs)
 				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
 				    (dolist (b bs) (setf (aref a i) b) (setq i (+ i 1)))
 				    a))
+				(defun gen (bs) (make-array (length bs) :initial-contents bs))
+				(defvar *cases*
+				  '((65 66) (#xE3 #x81 #x93) (#xF0 #x9F #x98 #x80 #x41) (#xFF #xFE #x41) (#x80 #xBF)
+				    (#xE3 #x81) (#xC3) (#xC3 #x41) (#xF8 #x41) (#x41 #xE3 #x81 #x82 #xFF #x42 #xC3 #xBF) ()
+				    (#xC0 #x80) (#xC1 #xBF) (#xE0 #x80 #x80) (#xED #xA0 #x80) (#xE3 #x81 #xC0)
+				    (#xF0 #x80 #x80 #x80) (#xF4 #x8F #xBF #xBF) (#xF4 #x90 #x80 #x80) (#xF5 #x80 #x80 #x80)))
 				(print (list (rontolisp::%octets-to-string (octs '(72 105)))
 				             (map 'list #'char-code
 				                  (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
 				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
 				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
-				             (rontolisp::%octets-to-string-strict (octs '(72 105)))
-				             (rontolisp::%octets-to-string-strict (octs '(#xFF)))))
+				             (rontolisp::%octets-to-string-packed (octs '(72 105)))
+				             (map 'list #'char-code (rontolisp::%octets-to-string-packed (octs '(#xFF))))
+				             (rontolisp::%octets-to-string-packed (gen '(72 105)))
+				             (remove-if (lambda (c)
+				                          (equal (map 'list #'char-code (rontolisp::%octets-to-string-packed (octs c)))
+				                                 (map 'list #'char-code (rontolisp::%octets-to-string (gen c)))))
+				                        *cases*)))
 				""";
-		String expected = "(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)";
+		String expected = "(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" (255) NIL NIL)";
 		assertThat(compileAndRunProgram(
 				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source))))
 			.isEqualTo(expected);

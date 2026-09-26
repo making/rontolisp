@@ -154,6 +154,15 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
   unrolled fill measured the same within noise (the per-element `array.set` bounds check is the
   cost, not the load), so the byte loop stays. The `--host-fetch` reactor's body takes the same
   `%http-reactor-chunk` path.
+- **`read-all` of a BINARY body** (2026-09-26, same host, a 256 MiB body that is not UTF-8, so the
+  lenient arms decode it): `--native` 3.7 s wall / 3.1 s user, 1.1 GB peak RSS (a text body of the
+  same size: 2.7 s, 1.05 GB). Before, the malformed bytes walked the compiled per-byte loop: the
+  256 MiB read died after ~65 s with the GC heap exhausted, and a 16 MiB one took 6.9 s and 1.0 GB
+  RSS -- the loop cost ~550 ns and ~60 heap bytes per octet (16 MiB decoded in isolation: JVM
+  5.9 s -> 0.32 s, wasm Preview 1 9.2 s -> 0.20 s, `--native` 11.3 s -> 0.20 s). The JDK backends
+  now peak far higher than `--native` on the same read -- interpreter 13 s / 7.5 GB, JVM 6.2 s /
+  4.4 GB -- because a packed octet vector is a `long[]` there, eight bytes per octet, held twice
+  (the chunks and the joined vector).
 
 ## The cross-backend corpus and its known divergences
 
@@ -245,11 +254,12 @@ Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher bat
 `read-all` (prelude) joins the chunks (`%octets-join`, one blit) and decodes once with
 `rontolisp::%octets-to-string` -- LENIENT UTF-8, the rule `http-server.lisp`'s request decoder
 applies, one Lisp definition compiled on the compile paths and mirrored natively by `Environment`
-(`LispPreludeLibraryTest` pins the two). The per-byte loop is only the FALLBACK: the definition first
-offers the vector to the native `rontolisp::%octets-to-string-strict`, so valid UTF-8 is a platform
-decode on interpreter/JVM and one `array.copy` on wasm (500 KB body: 102 -> 2 ms wasm, 19 -> 3 ms
-JVM). **The raw copy is sound only because the validator is STRICT** -- `_str_char_at`'s lead ranges
-are NOT that validator. Gates: ci-spec `read-all-decodes-an-octet-chunk-stream` (all four backends),
+(`LispPreludeLibraryTest` pins the two). The per-byte loop is only the FALLBACK, for a general array:
+the definition first offers the vector to the native `rontolisp::%octets-to-string-packed`, which
+decodes every packed octet vector itself -- valid UTF-8 as a platform decode on interpreter/JVM and
+one `array.copy` on wasm (500 KB body: 102 -> 2 ms wasm, 19 -> 3 ms JVM), malformed bytes by a
+native transcode of the lenient arms (`.kb/async-await.md`). **The raw copy is sound only because the
+validator is STRICT** -- `_str_char_at`'s lead ranges are NOT that validator. Gates: ci-spec `read-all-decodes-an-octet-chunk-stream` (all four backends),
 `HttpHandlerTest.directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt` + its
 `HttpHandlerJvmTest` twin,
 `WasmLispCompilerIntegrationTest.httpHandlerRelaysAFetchedBodyByteExactlyUnderWasmtimeServe`.

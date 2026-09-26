@@ -170,12 +170,14 @@ class LispPreludeLibraryTest {
 		// valid input, and on every malformed shape the rule names: a stray
 		// continuation byte, an unpaired lead byte, a truncated sequence, an #xF8+ byte.
 		//
-		// The defun's first move is the NATIVE %octets-to-string-strict, so this pins
-		// the fast path too: where the bytes are valid UTF-8 the platform decode has to
-		// be exactly what the loop would have built, and where they are not it has to
-		// answer nil so the loop still runs. The cases below therefore walk both sides
-		// of every strict boundary -- the overlong forms, a surrogate, U+10FFFF and the
-		// code point after it.
+		// The defun's first move is the NATIVE %octets-to-string-packed, which answers
+		// every packed octet vector itself, so the loop is reached only by a GENERAL
+		// array: each case is decoded both ways -- the general array through the Lisp
+		// loop, the packed vector through the native -- and both must be the Java
+		// mirror's answer. The cases walk both sides of every strict boundary (the
+		// overlong forms, a surrogate, U+10FFFF and the code point after it), because
+		// the native takes valid UTF-8 by a validate-then-copy and the rest by a
+		// transcode, and the two must meet exactly where the validator draws the line.
 		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
 		for (LispVal form : LispPreludeLibrary.formsFor(am.ik.rontolisp.LispNames.OCTETS_TO_STRING_INTERNAL)) {
 			evaluator.eval(form);
@@ -190,17 +192,19 @@ class LispPreludeLibraryTest {
 				{ 0xF4, 0x8F, 0xBF, 0xBF }, { 0xF4, 0x90, 0x80, 0x80 }, { 0xF5, 0x80, 0x80, 0x80 } };
 		for (int[] c : cases) {
 			long[] data = new long[c.length];
-			StringBuilder literal = new StringBuilder("(rontolisp::%octets-to-string (make-array ").append(c.length)
-				.append(" :element-type '(unsigned-byte 8) :initial-contents '(");
+			StringBuilder contents = new StringBuilder();
 			for (int i = 0; i < c.length; i++) {
 				data[i] = c[i];
-				literal.append(c[i]).append(' ');
+				contents.append(c[i]).append(' ');
 			}
-			literal.append(")))");
-			LispVal actual = evaluator.eval(LispReader.readFromString(literal.toString()));
-			assertThat(actual).as(literal.toString()).isInstanceOf(am.ik.rontolisp.LispString.class);
-			assertThat(((am.ik.rontolisp.LispString) actual).value()).as(literal.toString())
-				.isEqualTo(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8, data)));
+			String expected = Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8, data));
+			for (String elementType : List.of("", " :element-type '(unsigned-byte 8)")) {
+				String literal = "(rontolisp::%octets-to-string (make-array " + c.length + elementType
+						+ " :initial-contents '(" + contents + ")))";
+				LispVal actual = evaluator.eval(LispReader.readFromString(literal));
+				assertThat(actual).as(literal).isInstanceOf(am.ik.rontolisp.LispString.class);
+				assertThat(((am.ik.rontolisp.LispString) actual).value()).as(literal).isEqualTo(expected);
+			}
 		}
 		// And the native itself decodes valid UTF-8 as the platform does.
 		assertThat(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8,

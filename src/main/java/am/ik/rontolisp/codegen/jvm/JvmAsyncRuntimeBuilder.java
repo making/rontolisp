@@ -126,14 +126,15 @@ final class JvmAsyncRuntimeBuilder {
 	static final String IV_OF_BYTES_DESC = "([B)[J";
 
 	/**
-	 * {@code _utf8Strict(Object) -> Object}: the packed {@code (unsigned-byte 8)} vector
-	 * ({@code long[]{8, e0, ...}}) decoded as STRICT UTF-8 -- the quote-framed string its
-	 * bytes spell, or {@code null} ({@code nil}) when they are not valid UTF-8. The
-	 * native half of {@code rontolisp::%octets-to-string}: a well-formed body is a JDK
-	 * decode, and only bytes this refuses reach the prelude's per-byte loop. Emitted only
-	 * when the program references the primitive.
+	 * {@code _octetsToString(Object) -> Object}: the packed {@code (unsigned-byte 8)}
+	 * vector ({@code long[]{8, e0, ...}}) decoded by
+	 * {@code rontolisp::%octets-to-string}'s lenient rule into the quote-framed string,
+	 * or {@code null} ({@code nil}) for any other value. The native half of that decoder:
+	 * a well-formed body is a JDK decode, malformed bytes a bytecode transcode, and only
+	 * a general array reaches the prelude's per-byte loop. Emitted only when the program
+	 * references the primitive.
 	 */
-	static final String OCTETS_STRICT_METHOD = "_utf8Strict";
+	static final String OCTETS_PACKED_METHOD = "_octetsToString";
 
 	static final String WAIT_FOR_METHOD = "_wait_for";
 
@@ -1209,23 +1210,28 @@ final class JvmAsyncRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _utf8Strict} ({@link #OCTETS_STRICT_METHOD}), the native STRICT half
-	 * of {@code rontolisp::%octets-to-string}: the packed octet vector's bytes decoded by
-	 * the JDK's UTF-8 decoder, framed in the storage quotes a compiled string carries, or
-	 * {@code null} when they are not valid UTF-8.
+	 * Builds {@code _octetsToString} ({@link #OCTETS_PACKED_METHOD}), the native half of
+	 * {@code rontolisp::%octets-to-string}: the packed octet vector's bytes decoded by
+	 * the JDK's STRICT UTF-8 decoder when they are valid UTF-8, and otherwise transcoded
+	 * arm for arm by the prelude's lenient rule; either way framed in the storage quotes
+	 * a compiled string carries.
 	 *
 	 * <p>
 	 * {@code CharsetDecoder}'s default action for malformed input and unmappable
 	 * characters is REPORT, so an ill-formed sequence raises rather than turning into
-	 * U+FFFD -- which is exactly the question being asked. Anything the fast path cannot
-	 * take -- a value that is not a {@code long[]}, a packed vector of another element
-	 * width -- answers {@code null} too, and the caller's per-byte loop (which walks the
-	 * value through the generic {@code aref}) decides.
+	 * U+FFFD, and the handler runs the transcode: a byte that leads no sequence, one a
+	 * truncated tail cuts short, and a four-byte form past U+10FFFF are their own
+	 * characters, and a lead byte takes its continuation bytes whatever their high bits
+	 * (the prelude's arms, which the interpreter's
+	 * {@code Environment.decodeUtf8Leniently} mirrors). A value that is not a
+	 * {@code long[]}, or a packed vector of another element width, answers {@code null},
+	 * and the caller's per-byte loop (which walks the value through the generic
+	 * {@code aref}) decides.
 	 * @param cp the constant pool
 	 * @param stringConcat {@code String.concat(String)}
 	 * @return the helper body
 	 */
-	static AsyncMethod buildOctetsStrict(ConstantPool cp, MethodrefConstant stringConcat) {
+	static AsyncMethod buildOctetsToString(ConstantPool cp, MethodrefConstant stringConcat) {
 		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
 		ClassConstant charsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
 		ConstantPool.FieldrefConstant utf8Field = cp.addFieldref(charsetsClass,
@@ -1243,10 +1249,21 @@ final class JvmAsyncRuntimeBuilder {
 		MethodrefConstant charBufferToString = cp.addMethodref(charBufferClass,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		ClassConstant codingExceptionClass = cp.addClass(cp.addUtf8("java/nio/charset/CharacterCodingException"));
+		ClassConstant builderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+		MethodrefConstant builderInit = cp.addMethodref(builderClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
+		MethodrefConstant builderAppendChar = cp.addMethodref(builderClass,
+				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(C)Ljava/lang/StringBuilder;")));
+		MethodrefConstant builderAppendCodePoint = cp.addMethodref(builderClass,
+				cp.addNameAndType(cp.addUtf8("appendCodePoint"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
+		MethodrefConstant builderToString = cp.addMethodref(builderClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		ConstantPool.StringConstant quote = cp.addString("\"");
 
 		Asm a = new Asm();
-		// slots: 0 v, 1 iv (long[]), 2 bytes, 3 i, 4 decoded
+		// slots: 0 v, 1 iv (long[]), 2 bytes, 3 i, 4 decoded, 5 n, 6 builder, 7 b, 8 cp,
+		// 9 adv, 10 four-byte code point
+		int bytesSlot = 2, iSlot = 3, nSlot = 5, builderSlot = 6, bSlot = 7, cpSlot = 8, advSlot = 9, cp4Slot = 10;
 		int none = a.label();
 		a.aload(0);
 		a.op(Opcode.INSTANCEOF);
@@ -1274,26 +1291,26 @@ final class JvmAsyncRuntimeBuilder {
 		a.op(Opcode.ISUB);
 		a.op(Opcode.NEWARRAY);
 		a.op(8); // T_BYTE
-		a.astore(2);
+		a.astore(bytesSlot);
 		a.iconst(0);
-		a.istore(3);
+		a.istore(iSlot);
 		int loop = a.label();
 		int done = a.label();
 		a.bind(loop);
-		a.iload(3);
-		a.aload(2);
+		a.iload(iSlot);
+		a.aload(bytesSlot);
 		a.op(Opcode.ARRAYLENGTH);
 		a.branch(Opcode.IF_ICMPGE, done);
-		a.aload(2);
-		a.iload(3);
+		a.aload(bytesSlot);
+		a.iload(iSlot);
 		a.aload(1);
-		a.iload(3);
+		a.iload(iSlot);
 		a.iconst(1);
 		a.op(Opcode.IADD);
 		a.op(Opcode.LALOAD);
 		a.op(Opcode.L2I);
 		a.op(Opcode.BASTORE);
-		a.iinc(3, 1);
+		a.iinc(iSlot, 1);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
 		int tryStart = a.pos();
@@ -1301,7 +1318,7 @@ final class JvmAsyncRuntimeBuilder {
 		a.u2(utf8Field.index());
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(newDecoder.index());
-		a.aload(2);
+		a.aload(bytesSlot);
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(bufferWrap.index());
 		a.op(Opcode.INVOKEVIRTUAL);
@@ -1320,15 +1337,140 @@ final class JvmAsyncRuntimeBuilder {
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(stringConcat.index());
 		a.areturn();
-		// The catch: the decode refused the bytes, so answer nil and let the caller walk
-		// them. Reached only through the exception table, so it needs no label.
+		// The catch: the strict decode refused the bytes, so transcode them by the
+		// lenient rule. Reached only through the exception table, so it needs no label.
 		int handlerPos = a.pos();
 		a.op(Opcode.POP);
+		a.aload(bytesSlot);
+		a.op(Opcode.ARRAYLENGTH);
+		a.istore(nSlot);
+		a.op(Opcode.NEW);
+		a.u2(builderClass.index());
+		a.op(Opcode.DUP);
+		a.iload(nSlot);
+		a.iconst(2);
+		a.op(Opcode.IADD);
+		a.op(Opcode.INVOKESPECIAL);
+		a.u2(builderInit.index());
+		a.astore(builderSlot);
+		a.aload(builderSlot);
+		a.iconst('"');
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(builderAppendChar.index());
+		a.op(Opcode.POP);
+		a.iconst(0);
+		a.istore(iSlot);
+		int walk = a.label();
+		int walked = a.label();
+		int emit = a.label();
+		a.bind(walk);
+		a.iload(iSlot);
+		a.iload(nSlot);
+		a.branch(Opcode.IF_ICMPGE, walked);
+		// b = bytes[i] & 0xFF; by default it is its own character, one byte long.
+		a.aload(bytesSlot);
+		a.iload(iSlot);
+		a.op(Opcode.BALOAD);
+		a.iconst(0xFF);
+		a.op(Opcode.IAND);
+		a.op(Opcode.DUP);
+		a.istore(bSlot);
+		a.istore(cpSlot);
+		a.iconst(1);
+		a.istore(advSlot);
+		// b < 0xC0: ASCII, or a continuation byte that leads nothing.
+		a.iload(bSlot);
+		a.iconst(0xC0);
+		a.branch(Opcode.IF_ICMPLT, emit);
+		int notTwo = a.label();
+		a.iload(bSlot);
+		a.iconst(0xE0);
+		a.branch(Opcode.IF_ICMPGE, notTwo);
+		emitLeadTakes(a, 2, 0x1F, bytesSlot, iSlot, nSlot, bSlot, emit);
+		a.istore(cpSlot);
+		a.iconst(2);
+		a.istore(advSlot);
+		a.branch(Opcode.GOTO, emit);
+		a.bind(notTwo);
+		int notThree = a.label();
+		a.iload(bSlot);
+		a.iconst(0xF0);
+		a.branch(Opcode.IF_ICMPGE, notThree);
+		emitLeadTakes(a, 3, 0x0F, bytesSlot, iSlot, nSlot, bSlot, emit);
+		a.istore(cpSlot);
+		a.iconst(3);
+		a.istore(advSlot);
+		a.branch(Opcode.GOTO, emit);
+		a.bind(notThree);
+		a.iload(bSlot);
+		a.iconst(0xF8);
+		a.branch(Opcode.IF_ICMPGE, emit);
+		emitLeadTakes(a, 4, 0x07, bytesSlot, iSlot, nSlot, bSlot, emit);
+		a.istore(cp4Slot);
+		// Past U+10FFFF (cp >> 16 > 0x10) the lead byte stays its own character.
+		a.iload(cp4Slot);
+		a.iconst(16);
+		a.op(Opcode.ISHR);
+		a.iconst(0x10);
+		a.branch(Opcode.IF_ICMPGT, emit);
+		a.iload(cp4Slot);
+		a.istore(cpSlot);
+		a.iconst(4);
+		a.istore(advSlot);
+		a.bind(emit);
+		a.aload(builderSlot);
+		a.iload(cpSlot);
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(builderAppendCodePoint.index());
+		a.op(Opcode.POP);
+		a.iload(iSlot);
+		a.iload(advSlot);
+		a.op(Opcode.IADD);
+		a.istore(iSlot);
+		a.branch(Opcode.GOTO, walk);
+		a.bind(walked);
+		a.aload(builderSlot);
+		a.iconst('"');
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(builderAppendChar.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(builderToString.index());
+		a.areturn();
 		a.bind(none);
 		a.aconstNull();
 		a.areturn();
-		return new AsyncMethod(cp.addUtf8(OCTETS_STRICT_METHOD), cp.addUtf8(UNARY_DESC), 5, 5, a.finish(),
+		return new AsyncMethod(cp.addUtf8(OCTETS_PACKED_METHOD), cp.addUtf8(UNARY_DESC), 5, 11, a.finish(),
 				List.of(new int[] { tryStart, tryEnd, handlerPos, codingExceptionClass.index() }));
+	}
+
+	/**
+	 * Emits the code point a {@code length}-byte lead at {@code bytes[i]} assembles --
+	 * {@code (b & leadMask) << 6 * (length - 1)} OR'd with the low six bits of each byte
+	 * after it -- leaving it on the stack, or branches to {@code short} (with nothing on
+	 * the stack) when the vector ends before the sequence does.
+	 */
+	private static void emitLeadTakes(Asm a, int length, int leadMask, int bytesSlot, int iSlot, int nSlot, int bSlot,
+			int shortLabel) {
+		a.iload(iSlot);
+		a.iconst(length - 1);
+		a.op(Opcode.IADD);
+		a.iload(nSlot);
+		a.branch(Opcode.IF_ICMPGE, shortLabel);
+		a.iload(bSlot);
+		a.iconst(leadMask);
+		a.op(Opcode.IAND);
+		for (int k = 1; k < length; k++) {
+			a.iconst(6);
+			a.op(Opcode.ISHL);
+			a.aload(bytesSlot);
+			a.iload(iSlot);
+			a.iconst(k);
+			a.op(Opcode.IADD);
+			a.op(Opcode.BALOAD);
+			a.iconst(0x3F);
+			a.op(Opcode.IAND);
+			a.op(Opcode.IOR);
+		}
 	}
 
 	/**
