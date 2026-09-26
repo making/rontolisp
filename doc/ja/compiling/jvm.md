@@ -72,7 +72,7 @@ java Fact
 
 その帰結として、実行時に計算した文字列から名前を組み立てて `eval`/`apply` 経由で呼び出すライブラリ関数は、通常の「undefined function」エラーを通知します。その場合は `--no-prune`（または `--dynamic`）を付けてコンパイルすると、すべてのライブラリ定義が保持されます。
 
-生成される `.class` ファイルは Java 17（クラスバージョン 61）をターゲットとするため、実行には Java 17 以降の JRE が必要です。`java.lang` と `java.io` のほか、出力されるランタイムヘルパーは `java.math`（オーバーフロー時に昇格する整数演算と厳密な有理数演算のための `BigInteger`/`BigDecimal`/`MathContext`）と `java.util`（`ArrayList`/`Arrays`、およびハッシュテーブル用の `HashMap`）を参照します。`rontolisp:fetch` を呼び出すプログラムは追加で `java.net`/`java.net.http` を参照し、`rontolisp:await` / `rontolisp:futurep` は future を `java.util.concurrent` のフューチャーとして表現しますが、これらはいずれも Java 17 に含まれるため、要件が上がることはありません。唯一の例外は [`java:` 連携パッケージ](../guides/java-interop.md)を使うプログラムで、コンパイラが (プロジェクト自身の Java リリースでコンパイルされた) リフレクションブリッジをクラスに埋め込むため、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+生成される `.class` ファイルは Java 17（クラスバージョン 61）をターゲットとするため、実行には Java 17 以降の JRE が必要です。`java.lang` と `java.io` のほか、出力されるランタイムヘルパーは `java.math`（オーバーフロー時に昇格する整数演算と厳密な有理数演算のための `BigInteger`/`BigDecimal`/`MathContext`）と `java.util`（`ArrayList`/`Arrays`、およびハッシュテーブル用の `HashMap`）を参照します。`rontolisp:fetch` を呼び出すプログラムは追加で `java.net`/`java.net.http` を参照し、`rontolisp:await` / `rontolisp:futurep` は future を `java.util.concurrent` のフューチャーとして表現しますが、これらはいずれも Java 17 に含まれるため、要件が上がることはありません。唯一の例外は [`java:` 連携パッケージ](../guides/java-interop.md)を使うプログラムで、コンパイラが (プロジェクト自身の Java リリースでコンパイルされた) リフレクションブリッジをクラスの隣に書き出すため、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 
 そうしたプログラムの `java:` 呼び出しは、プログラムのテキストが許す限りコンパイル時に JDK のクラスファイルに対して解決されます。`--java-release N` と `--java-classpath` がどのクラスファイルかを選び、`--warn-java-reflection` は実行時解決に回る呼び出しを報告します (ガイドの[実行前の呼び出し解決](../guides/java-interop.md#resolving-calls-before-they-run))。
 

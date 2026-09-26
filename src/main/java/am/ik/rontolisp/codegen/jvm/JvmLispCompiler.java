@@ -194,6 +194,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	private Map<String, byte[]> partClassFiles = Map.of();
 
 	/**
+	 * The bridge classes a feature ships beside the program rather than defining at run
+	 * time (the {@code java:} bridge, {@link JvmJavaRuntimeBuilder}, and the
+	 * {@code geom:} kernels, {@link JvmGeomRuntimeBuilder}), keyed like
+	 * {@link #partClassFiles}. Reset by every compile attempt.
+	 */
+	private Map<String, byte[]> bridgeClassFiles = new LinkedHashMap<>();
+
+	/**
 	 * The most constant-pool entries one emitted class may carry before the program is
 	 * split ({@link Builder#classPoolLimit}): the class-format limit, except in a test
 	 * that forces the split onto a small program.
@@ -703,24 +711,29 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * serves through, the {@code equalp} key fold a program that writes
 	 * {@code :test 'equalp} places its keys by, and the complex holder a program that can
 	 * observe a complex value builds. Empty unless the program does one of those, so an
-	 * ordinary compilation still produces exactly one file.
+	 * ordinary compilation still produces exactly one file. Two kinds live in the
+	 * program's own package instead: a split program's {@code $PartN} classes and the
+	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}).
 	 *
 	 * <p>
-	 * They are written at their canonical names rather than renamed into the program's
-	 * package ({@link JvmRuntimeClassFiles}), and the {@code runtime} package they come
-	 * from imports nothing, which is what makes the output run with no rontolisp jar on
-	 * the classpath ({@code .kb/jvm-export.md}). Valid after {@link #compile}.
+	 * The runtime classes are written at their canonical names rather than renamed into
+	 * the program's package ({@link JvmRuntimeClassFiles}), and the {@code runtime}
+	 * package they come from imports nothing, which is what makes the output run with no
+	 * rontolisp jar on the classpath ({@code .kb/jvm-export.md}). Valid after
+	 * {@link #compile}.
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty()) {
+				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
-		// A program too large for one class brings its $PartN classes: they are written
-		// beside the class exactly where the runtime classes are, in its own package.
+		// A program too large for one class brings its $PartN classes, and a java:
+		// program its bridge: they are written beside the class exactly where the runtime
+		// classes are, in its own package.
 		Map<String, byte[]> files = new LinkedHashMap<>(this.partClassFiles);
+		files.putAll(this.bridgeClassFiles);
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
@@ -1371,11 +1384,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 
 		// java: interop runtime: emitted only when the program uses one of the five
-		// java: functions. It embeds the (renamed) JavaBridgeTemplate bytecode and
-		// forces the eval runtime (the bridge applies Lisp callables through _apply).
+		// java: functions. The (renamed) JavaBridgeTemplate travels beside the class as
+		// its own class file, and the eval runtime is forced (the bridge applies Lisp
+		// callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
-				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmJavaRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		this.bridgeClassFiles = new LinkedHashMap<>();
+		if (javaRuntime != null) {
+			this.bridgeClassFiles.putAll(javaRuntime.classFiles());
+		}
 		// The sites resolve against class files, never the classes this compiler runs
 		// on (compiler/JavaSiteResolver, .kb/java-interop.md).
 		final JvmJavaSites javaSites = usesJava ? new JvmJavaSites(javaClasses()) : null;
@@ -2224,7 +2242,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmGeomRuntimeBuilder.@Nullable GeomRuntime geomRuntime = usesGeom
-				? JvmGeomRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmGeomRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		if (geomRuntime != null) {
+			this.bridgeClassFiles.putAll(geomRuntime.classFiles());
+		}
 
 		// Integer expression-tree fusion (.kb/jvm-int-fusion.md): the shared registry
 		// of outlined fused-site methods, plus the fusion-inlinable defuns -- uniquely

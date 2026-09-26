@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
@@ -23,8 +24,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The JVM backend's {@code geom:} kernels: the four call sites
- * {@link JvmGeomKernelCompiler} routes into the embedded {@link JvmGeomTemplate} bridge,
- * and the {@code geom.lisp} defuns they must agree with BIT FOR BIT.
+ * {@link JvmGeomKernelCompiler} routes into the {@link JvmGeomTemplate} bridge shipped
+ * beside the class, and the {@code geom.lisp} defuns they must agree with BIT FOR BIT.
  *
  * <p>
  * Two halves, and both are load-bearing. The first is the emit gate -- there is no flag
@@ -48,20 +49,47 @@ class JvmGeomKernelCompilerTest {
 			.prune(LinalgLibrary.process(GeomLibrary.process(LispReader.readAllFromString(lispCode))));
 	}
 
-	private static byte[] compile(String lispCode, boolean kernels) {
-		return JvmLispCompiler.builder()
+	/** A compiled program: the class and the files that travel beside it. */
+	private record Compiled(byte[] bytes, Map<String, byte[]> beside) {
+	}
+
+	private static Compiled compile(String lispCode, boolean kernels) {
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.geomKernels(kernels)
-			.build()
-			.compile(program(lispCode));
+			.build();
+		byte[] bytes = compiler.compile(program(lispCode));
+		return new Compiled(bytes, compiler.runtimeClassFiles());
 	}
 
-	private String run(byte[] classBytes) throws Exception {
+	private String run(Compiled compiled) throws Exception {
+		return run(compiled, true, new java.util.HashSet<>());
+	}
+
+	// Runs the class with (or without) the files that travel beside it, recording every
+	// class the loader found on disk, so an accelerated run can prove its bridge loaded:
+	// a bridge that cannot load degrades to the defuns in silence, which every oracle
+	// comparison here would still pass.
+	private String run(Compiled compiled, boolean withBeside, java.util.Set<String> loaded) throws Exception {
 		Path dir = Files.createTempDirectory(this.tempDir, "cls");
-		Files.write(dir.resolve("Test.class"), classBytes);
+		Files.write(dir.resolve("Test.class"), compiled.bytes());
+		if (withBeside) {
+			for (Map.Entry<String, byte[]> file : compiled.beside().entrySet()) {
+				Path target = dir.resolve(file.getKey());
+				Files.createDirectories(target.getParent());
+				Files.write(target, file.getValue());
+			}
+		}
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
-				ClassLoader.getSystemClassLoader())) {
+				ClassLoader.getSystemClassLoader()) {
+			@Override
+			protected Class<?> findClass(String name) throws ClassNotFoundException {
+				Class<?> found = super.findClass(name);
+				loaded.add(name);
+				return found;
+			}
+		}) {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -77,8 +105,16 @@ class JvmGeomKernelCompilerTest {
 		}
 	}
 
-	private static boolean embedsGeomBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmGeomRuntimeBuilder.BRIDGE_NAME);
+	private static final String BRIDGE = JvmGeomRuntimeBuilder.bridgeName("Test");
+
+	// The bridge travels as its own class file beside the program -- never as bytes the
+	// program defines at run time, which a GraalVM native image refuses with an Error
+	// the LinkageError degrade does not catch -- and the class names it.
+	private static boolean embedsGeomBridge(Compiled compiled) {
+		boolean named = new String(compiled.bytes(), StandardCharsets.ISO_8859_1).contains(BRIDGE);
+		boolean shipped = compiled.beside().containsKey(BRIDGE + ".class");
+		assertThat(shipped).as("the class names the bridge exactly when it ships beside it").isEqualTo(named);
+		return shipped;
 	}
 
 	/**
@@ -87,11 +123,13 @@ class JvmGeomKernelCompilerTest {
 	 * numeric assertion here would still hold on the defuns alone.
 	 */
 	private void assertMatchesTheDefunsAlone(String lispCode) throws Exception {
-		byte[] accelerated = compile(lispCode, true);
-		byte[] defunsAlone = compile(lispCode, false);
+		Compiled accelerated = compile(lispCode, true);
+		Compiled defunsAlone = compile(lispCode, false);
 		assertThat(embedsGeomBridge(accelerated)).as("the bridge travels: %s", lispCode).isTrue();
 		assertThat(embedsGeomBridge(defunsAlone)).as("the oracle carries no bridge: %s", lispCode).isFalse();
-		assertThat(run(accelerated)).as(lispCode).isEqualTo(run(defunsAlone));
+		java.util.Set<String> loaded = new java.util.HashSet<>();
+		assertThat(run(accelerated, true, loaded)).as(lispCode).isEqualTo(run(defunsAlone));
+		assertThat(loaded).as("the accelerated run loaded its bridge: %s", lispCode).contains(BRIDGE);
 	}
 
 	// --- the emit gate ---------------------------------------------------------------
@@ -118,9 +156,27 @@ class JvmGeomKernelCompilerTest {
 
 	@Test
 	void aProgramWithNoGeomKernelIsEmittedByteForByteAsBefore() {
-		assertThat(compile("(print (+ 1 2))", true)).isEqualTo(compile("(print (+ 1 2))", false));
-		assertThat(compile("(defstruct pt x y) (print (pt-x (make-pt :x 1 :y 2)))", true))
-			.isEqualTo(compile("(defstruct pt x y) (print (pt-x (make-pt :x 1 :y 2)))", false));
+		assertThat(compile("(print (+ 1 2))", true).bytes()).isEqualTo(compile("(print (+ 1 2))", false).bytes());
+		assertThat(compile("(defstruct pt x y) (print (pt-x (make-pt :x 1 :y 2)))", true).bytes())
+			.isEqualTo(compile("(defstruct pt x y) (print (pt-x (make-pt :x 1 :y 2)))", false).bytes());
+	}
+
+	@Test
+	void theClassDefinesNothingAtRunTime() {
+		Compiled accelerated = compile("(print (geom:volume (geom:box 10)))", true);
+		assertThat(new String(accelerated.bytes(), StandardCharsets.ISO_8859_1)).doesNotContain("defineClass")
+			.doesNotContain("java/util/Base64");
+	}
+
+	@Test
+	void aClassCopiedWithoutItsBridgeRunsOnTheDefuns() throws Exception {
+		// No flag stands in front of this bridge, so it must never break a program: a
+		// bridge that cannot load (left behind, or too new a class version for the JRE)
+		// is a LinkageError _geomInit swallows, and the defuns answer.
+		String source = "(print (geom:volume (geom:box 10)))";
+		java.util.Set<String> loaded = new java.util.HashSet<>();
+		assertThat(run(compile(source, true), false, loaded)).isEqualTo(run(compile(source, false)));
+		assertThat(loaded).doesNotContain(BRIDGE);
 	}
 
 	// --- the oracle ------------------------------------------------------------------

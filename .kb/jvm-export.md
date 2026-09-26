@@ -84,7 +84,8 @@ Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `R
 `resource-config.json` covers the native binary. The same map carries a program's own
 `Name$PartN.class` files when its pool outgrew one class (`.kb/jvm-method-size-limits.md`),
 keyed in the class's own package rather than at a canonical name (a default-package part has
-no directory, which the CLI's writer allows for). A split keeps the exports and the defuns
+no directory, which the CLI's writer allows for), and so does a shipped template bridge
+(`Name$JavaBridge.class`, `Name$GeomBridge.class`, `.kb/template-class-embedding.md`). A split keeps the exports and the defuns
 behind them in the class itself, so the Java API does not move. **The price**: a `runtime` class imports
 nothing at all, not even `@Nullable` — so `RontoHashTable.get` takes the absent value and
 `RontoHttpServer` nests its own `ServerException`. ONE exception, the war row's

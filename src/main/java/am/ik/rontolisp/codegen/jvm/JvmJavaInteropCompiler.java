@@ -16,14 +16,14 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the five {@code java:} interop functions ({@code java:new}, {@code java:call},
  * {@code java:static}, {@code java:field}, {@code java:proxy}). Each call site first
- * invokes the emitted {@code _javaInit} helper (which lazily defines the embedded
- * {@link JavaBridgeTemplate bridge class}, see {@link JvmJavaRuntimeBuilder}), then
- * evaluates the arguments -- the leading fixed arguments as-is and the variadic tail
- * packed into an {@code Object[]} -- and calls the matching bridge entry point. A site
- * the shared resolver resolves at compile time ({@link JvmJavaSites}) passes the member
- * it chose -- its static class and fully tagged designator -- instead of the names
- * written; marshalling and run-time validation live in the bridge, so compiled behavior
- * matches the interpreter.
+ * invokes the emitted {@code _javaInit} helper (which binds the program into the
+ * {@link JavaBridgeTemplate bridge class} shipped beside it, see
+ * {@link JvmJavaRuntimeBuilder}), then evaluates the arguments -- the leading fixed
+ * arguments as-is and the variadic tail packed into an {@code Object[]} -- and calls the
+ * matching bridge entry point. A site the shared resolver resolves at compile time
+ * ({@link JvmJavaSites}) passes the member it chose -- its static class and fully tagged
+ * designator -- instead of the names written; marshalling and run-time validation live in
+ * the bridge, so compiled behavior matches the interpreter.
  */
 final class JvmJavaInteropCompiler {
 

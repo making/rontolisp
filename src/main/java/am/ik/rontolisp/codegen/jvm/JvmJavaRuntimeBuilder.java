@@ -6,7 +6,6 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,26 +18,34 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the {@code java:} interop runtime for the generated standalone {@code .class}.
- * Unlike the other runtime builders it does not hand-assemble the interop logic: the
- * logic lives in {@link JavaBridgeTemplate} (plain Java, compiled by the project build),
- * whose bytecode is read from the classpath at compile time, renamed into the generated
- * program's own package (a {@code Lookup.defineClass(byte[])} requirement) as
- * {@value #BRIDGE_NAME}, base64-encoded, and embedded as string constants. The emitted
- * {@code private static void _javaInit()} decodes and defines the class on first use
- * (guarded by the {@code _javaInited} int field) and hands the program's {@code _apply}
- * callback over via {@code bind(Class)}, so the compiled output stays a single
- * self-contained {@code .class} file. Every {@code java:} call site is preceded by an
- * {@code _javaInit} call; the bridge method references resolve lazily (at their first
- * execution), by which time the class is defined in the program's own class loader.
+ * Builds the {@code java:} interop runtime for the generated {@code .class}. Unlike the
+ * other runtime builders it does not hand-assemble the interop logic: the logic lives in
+ * {@link JavaBridgeTemplate} (plain Java, compiled by the project build), whose bytecode
+ * is read from the classpath at compile time and renamed after the generated program
+ * ({@code <Program>}{@value #BRIDGE_SUFFIX}, in the program's own package). The renamed
+ * class is NOT embedded: it travels as an ordinary class file beside the program
+ * ({@link JavaRuntime#classFiles()}, joined into
+ * {@link JvmLispCompiler#runtimeClassFiles()} -- beside a {@code .class}, inside a
+ * {@code .jar}/{@code .war}), because a GraalVM native image cannot define a class at run
+ * time and the former {@code Lookup.defineClass} of an embedded blob made every
+ * {@code java:} program fail there. The emitted {@code private static void _javaInit()}
+ * only hands the program's {@code _apply} callback over via {@code bind(Class)} (guarded
+ * by the {@code _javaInited} int field); every {@code java:} call site is preceded by an
+ * {@code _javaInit} call.
+ *
+ * <p>
+ * The bridge is named after the program, not shared, because {@code bind} stores that
+ * program's {@code _apply} in a static field: two programs in one package and one class
+ * loader (a Maven module's {@code target/classes}) would otherwise overwrite each other's
+ * file and callback.
  */
 final class JvmJavaRuntimeBuilder {
 
 	/**
-	 * The name the embedded bridge class is defined under at runtime, relative to the
-	 * generated program's own package (see {@link #build}).
+	 * Appended to the generated program's internal class name to name its bridge class
+	 * (see {@link #bridgeName}).
 	 */
-	static final String BRIDGE_NAME = "RontoLispJavaBridge";
+	static final String BRIDGE_SUFFIX = "$JavaBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate";
@@ -46,60 +53,46 @@ final class JvmJavaRuntimeBuilder {
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_javaInit";
 
-	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
-	private static final int CHUNK_SIZE = 40000;
-
 	private JvmJavaRuntimeBuilder() {
 	}
 
 	/**
-	 * The ready-to-emit {@code _javaInit} method, its guard field, and the constant-pool
+	 * The ready-to-emit {@code _javaInit} method, its guard field, the constant-pool
 	 * references the {@code java:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, {@code new}, {@code call}, {@code callAs}, {@code static},
-	 * {@code field}, {@code fieldAs}, {@code proxy}).
+	 * {@code field}, {@code fieldAs}, {@code proxy}), and the bridge class file that
+	 * travels beside the program, keyed by its path within an output tree.
 	 */
 	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
-			Map<String, MethodrefConstant> ops) {
+			Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
 	}
 
 	/**
-	 * Builds the {@code _javaInit} method body and registers the bridge references.
+	 * The internal name of a program's bridge class.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the bridge's internal name, in the program's own package
+	 */
+	static String bridgeName(String programInternalName) {
+		return programInternalName + BRIDGE_SUFFIX;
+	}
+
+	/**
+	 * Builds the {@code _javaInit} method body, registers the bridge references and
+	 * renames the bridge class file.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
-	 * @param stringConcat {@code String.concat(String)}
-	 * @param packagePrefix the generated class's package as an internal-name prefix
-	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
-	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
-	 * class's package, so the bridge is renamed into this one too
+	 * @param programInternalName the generated class's internal name -- the bridge is
+	 * named after it and lives in its package (the bridge methods are package-private)
 	 * @return the runtime pieces
 	 */
-	static JavaRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
-			String packagePrefix) {
-		String bridgeName = packagePrefix + BRIDGE_NAME;
+	static JavaRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+		String bridgeName = bridgeName(programInternalName);
 		byte[] bridgeBytes = renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
-		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
-		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
-		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
-			chunks.add(cp.addString(base64.substring(i, Math.min(base64.length(), i + CHUNK_SIZE))));
-		}
 
 		Utf8Constant initedFieldName = cp.addUtf8("_javaInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
 		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
-
-		ClassConstant base64Class = cp.addClass(cp.addUtf8("java/util/Base64"));
-		MethodrefConstant getDecoder = cp.addMethodref(base64Class,
-				cp.addNameAndType(cp.addUtf8("getDecoder"), cp.addUtf8("()Ljava/util/Base64$Decoder;")));
-		ClassConstant decoderClass = cp.addClass(cp.addUtf8("java/util/Base64$Decoder"));
-		MethodrefConstant decode = cp.addMethodref(decoderClass,
-				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/lang/String;)[B")));
-		ClassConstant methodHandlesClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles"));
-		MethodrefConstant lookup = cp.addMethodref(methodHandlesClass,
-				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
-		ClassConstant lookupClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles$Lookup"));
-		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
-				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
 		MethodrefConstant bind = cp.addMethodref(bridgeClass,
@@ -133,25 +126,8 @@ final class JvmJavaRuntimeBuilder {
 		int guardPos = code.size();
 		code.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(code, 0);
-		// MethodHandles.lookup().defineClass(Base64.getDecoder().decode(chunks...))
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, getDecoder.index()); // [decoder]
-		JvmRuntimeBuilder.emitLdc(code, chunks.get(0).index()); // [decoder, str]
-		for (int i = 1; i < chunks.size(); i++) {
-			JvmRuntimeBuilder.emitLdc(code, chunks.get(i).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, stringConcat.index());
-		}
-		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, decode.index()); // [bytes]
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, lookup.index()); // [bytes, lookup]
-		code.add(Opcode.SWAP); // [lookup, bytes]
-		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, defineClass.index()); // [class]
-		code.add(Opcode.POP);
-		// RontoLispJavaBridge.bind(ThisClass.class) -- the bridge class reference
-		// resolves here, right after defineClass registered it in this class's loader.
+		// <Program>$JavaBridge.bind(<Program>.class) -- the bridge loads from the
+		// program's own class loader like any other class beside it.
 		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
 		code.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(code, bind.index());
@@ -162,7 +138,8 @@ final class JvmJavaRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
 		code.add(Opcode.RETURN);
 
-		return new JavaRuntime(initName, initDesc, code, 4, 1, initedFieldName, initedFieldDesc, ops);
+		return new JavaRuntime(initName, initDesc, code, 1, 0, initedFieldName, initedFieldDesc, ops,
+				Map.of(bridgeName + ".class", bridgeBytes));
 	}
 
 	/** Reads the compiled {@link JavaBridgeTemplate} bytecode from the classpath. */

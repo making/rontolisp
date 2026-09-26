@@ -29,17 +29,17 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The class is never referenced by the rontolisp code base at runtime. Its compiled
- * bytecode is read from the classpath by {@link JvmJavaRuntimeBuilder}, renamed into the
- * default package (the compiled program's package, a {@code Lookup.defineClass}
- * requirement), base64-embedded into the generated class, and defined at first use by the
- * emitted {@code _javaInit} helper -- so the output stays a single self-contained
- * {@code .class} file. Because it is compiled with the project's Java release, running a
- * compiled program that uses {@code java:} requires a JRE at least as new as the one
- * rontolisp was built with (other programs keep running on any Java 6+ JVM).
+ * bytecode is read from the classpath by {@link JvmJavaRuntimeBuilder}, renamed after the
+ * compiled program ({@code <Program>$JavaBridge}, in the program's package: the entry
+ * points are package-private), and written beside the program as an ordinary class file
+ * -- never defined at run time, which a GraalVM native image cannot do. Because it is
+ * compiled with the project's Java release, running a compiled program that uses
+ * {@code java:} requires a JRE at least as new as the one rontolisp was built with (other
+ * programs keep running on any Java 6+ JVM).
  *
  * <p>
  * Design constraints: no nested classes or records (each would become a second class file
- * the injection cannot carry -- lambdas are fine, they stay in this class file) and no
+ * the rename does not carry -- lambdas are fine, they stay in this class file) and no
  * references to other rontolisp classes (the bytes must stand alone). Lisp callables (for
  * {@code java:proxy} and auto-proxied arguments) are applied through the generated
  * program's {@code _apply(Object, Object)} eval-runtime method, handed over as a
@@ -129,8 +129,8 @@ final class JavaBridgeTemplate {
 	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
 	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
 	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
-	 * adding a class to the travelling blob or duplicating the representation walk
-	 * {@code _strv} owns.
+	 * adding a class that must travel with the bridge or duplicating the representation
+	 * walk {@code _strv} owns.
 	 */
 	private static @Nullable Method strvMethod;
 
@@ -139,7 +139,7 @@ final class JavaBridgeTemplate {
 
 	/**
 	 * Binds the callback into the generated program. Called once by the emitted
-	 * {@code _javaInit} right after this class is defined.
+	 * {@code _javaInit}, before the first bridge call.
 	 * @param mainClass the generated program class
 	 */
 	static void bind(Class<?> mainClass) {
