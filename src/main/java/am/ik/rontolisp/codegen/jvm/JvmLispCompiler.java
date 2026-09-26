@@ -3181,7 +3181,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass, renderGuard, quoteAbbrev);
-		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(objectArrayClass, objectClass);
+		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
 		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
 				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);

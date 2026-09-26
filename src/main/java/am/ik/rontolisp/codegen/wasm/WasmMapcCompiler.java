@@ -31,16 +31,13 @@ final class WasmMapcCompiler {
 		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), nLists,
 				() -> WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPC, nLists, ctx), ctx);
 
-		// Compile each list expression; mapc operates on lists, so a non-list (e.g. a
-		// string) traps.
+		// Compile each list expression; the walk's end checks it is a list.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(listSlot);
-			// A non-list is MAPC's type-error (EH mode; a trap outside it).
-			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
 			listSlots.add(listSlot);
 		}
 
@@ -95,6 +92,12 @@ final class WasmMapcCompiler {
 		ctx.writer.write(Instruction.BR, 0);
 		ctx.writer.write(Instruction.END); // end loop
 		ctx.writer.write(Instruction.END); // end block
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error (EH mode; a
+		// trap outside it).
+		for (int cursorSlot : cursorSlots) {
+			WasmEmitHelper.emitListCheck(ctx, cursorSlot, true);
+		}
 
 		// Result: the first list
 		ctx.writer.write(Instruction.GET_LOCAL);

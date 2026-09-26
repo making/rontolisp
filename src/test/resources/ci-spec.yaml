@@ -1073,7 +1073,7 @@ cases:
       (print (search '(1 2) '(1 2 3) :end2 99))
       (print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
       (print (search '(1 2 3) '(1 2 3) :start2 -1))
-      (print (search '(1) '(1 2 . 3)))
+      (print (handler-case (search '(1) '(1 2 . 3)) (type-error (sm-e) (princ-to-string sm-e))))
       (print (mismatch '(1 2 3) '(1 2 3) :end1 99))
       (print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
       (let ((sm-long (let ((out nil))
@@ -1114,7 +1114,7 @@ cases:
       0
       NIL
       0
-      0
+      "LENGTH: The value 3 is not of type SEQUENCE"
       3
       NIL
       (NIL 5 397 NIL 399)
@@ -18106,6 +18106,77 @@ cases:
       ("ENDP: The value 5 is not of type LIST" 5 LIST)
       (("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
       ((1 2) NIL NIL)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": the list
+  # consumers beyond the first set -- reverse/nreverse (SEQUENCE), append, the
+  # member/assoc/rassoc scans, list-length, a dotted list's tail under length and
+  # the map* walks, a mapcan/mapcon piece that is no list, the multi-list map*
+  # value path -- report OP: The value X is not of type T on every backend.
+  - name: list-consumers-beyond-the-first-set-name-the-operator
+    source: |
+      (defun ci-lcb (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-lcb-five* 5)
+      (defvar *ci-lcb-dotted* '(1 2 . 3))
+      (print (ci-lcb (lambda () (length *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (reverse *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (reverse *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (nreverse *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (funcall #'reverse *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (append *ci-lcb-five* nil))))
+      (print (ci-lcb (lambda () (append *ci-lcb-dotted* '(4)))))
+      (print (ci-lcb (lambda () (funcall #'append *ci-lcb-five* nil))))
+      (print (ci-lcb (lambda () (member 1 *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (member 9 *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (funcall #'member 1 *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (member-if #'evenp *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (assoc 1 *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (assoc-if #'evenp *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (rassoc 1 *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (rassoc-if #'evenp *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (list-length *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (list-length *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (mapcar #'1+ *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (mapc #'1+ *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (mapcan #'list *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (maplist #'car *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (mapcan (lambda (x) x) '(1 2)))))
+      (print (ci-lcb (lambda () (mapcon (lambda (x) 5) '(1 2)))))
+      (print (ci-lcb (lambda () (funcall #'mapcar #'+ '(1 2) *ci-lcb-five*))))
+      (print (ci-lcb (lambda () (funcall #'mapcar #'+ '(1 2) *ci-lcb-dotted*))))
+      (print (ci-lcb (lambda () (funcall #'mapcan (lambda (x y) x) '(1 2) '(3 4)))))
+      (print (list (reverse '(1 2)) (member 1 *ci-lcb-dotted*) (member 3 '(1 2)) (assoc 2 '((1 . a) (2 . b)))
+                   (append '(1) 2) (mapcan #'list '(1 2)) (list-length '(1 2)) (mapcar #'+ '(1 2 3) '(1 2))))
+    expected: |
+      ("LENGTH: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+      ("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("REVERSE: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+      ("NREVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("APPEND: The value 5 is not of type LIST" 5 LIST)
+      ("APPEND: The value 3 is not of type LIST" 3 LIST)
+      ("APPEND: The value 5 is not of type LIST" 5 LIST)
+      ("MEMBER: The value 5 is not of type LIST" 5 LIST)
+      ("MEMBER: The value 3 is not of type LIST" 3 LIST)
+      ("MEMBER: The value 5 is not of type LIST" 5 LIST)
+      ("MEMBER-IF: The value 5 is not of type LIST" 5 LIST)
+      ("ASSOC: The value 5 is not of type LIST" 5 LIST)
+      ("ASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+      ("RASSOC: The value 5 is not of type LIST" 5 LIST)
+      ("RASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+      ("LIST-LENGTH: The value 5 is not of type LIST" 5 LIST)
+      ("LIST-LENGTH: The value 3 is not of type LIST" 3 LIST)
+      ("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+      ("MAPC: The value 3 is not of type LIST" 3 LIST)
+      ("MAPCAN: The value 3 is not of type LIST" 3 LIST)
+      ("MAPLIST: The value 3 is not of type LIST" 3 LIST)
+      ("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+      ("MAPCON: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+      ("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+      ((2 1) (1 2 . 3) NIL (2 . B) (1 . 2) (1 2) 2 (2 4))
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

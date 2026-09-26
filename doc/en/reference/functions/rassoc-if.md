@@ -2,7 +2,7 @@
 
 `(rassoc-if predicate alist &key key)`
 
-Searches an association list and returns the first pair whose cdr satisfies `predicate`, or `nil` if none does. It is the mirror of `assoc-if`, which tests each pair's car, and the predicate form of `rassoc`. Each pair is tested with `(funcall predicate (cdr pair))`; non-cons elements of the list are skipped. The returned pair shares structure with the alist.
+Searches an association list and returns the first pair whose cdr satisfies `predicate`, or `nil` if none does. It is the mirror of `assoc-if`, which tests each pair's car, and the predicate form of `rassoc`. Each pair is tested with `(funcall predicate (cdr pair))`; non-cons elements of the list are skipped. The returned pair shares structure with the alist. An `alist` that is not a list, or a dotted one the search reaches the end of, signals a `type-error`.
 
 ```lisp
 (rassoc-if #'oddp '((a . 2) (b . 3))) ; => (B . 3)

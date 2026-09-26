@@ -38,17 +38,15 @@ final class WasmMapcanCompiler {
 		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), nLists,
 				() -> WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPCAN, nLists, ctx), ctx);
 
-		// Compile each list expression; mapcan operates on lists, so a non-list (e.g. a
-		// string) traps. The slots double as the cursors -- only the concatenation is
-		// returned, so no list has to survive the walk.
+		// Compile each list expression; the walk's end checks it is a list. The slots
+		// double as the cursors -- only the concatenation is returned, so no list has to
+		// survive the walk.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(listSlot);
-			// A non-list is MAPCAN's type-error (EH mode; a trap outside it).
-			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
 			listSlots.add(listSlot);
 		}
 
@@ -95,9 +93,9 @@ final class WasmMapcanCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(mappedSlot);
 
-		// A nil piece contributes nothing; anything else is spliced in as a fresh
-		// copy below. A non-list piece fails the copy's ref.cast, trapping like the
-		// interpreter's append over it signals.
+		// A piece that is no list is MAPCAN's type-error (EH mode; a trap outside it); a
+		// nil piece contributes nothing, a cons is spliced in as a fresh copy below.
+		WasmEmitHelper.emitListCheck(ctx, mappedSlot, true);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(mappedSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
@@ -172,6 +170,12 @@ final class WasmMapcanCompiler {
 		ctx.writer.write(Instruction.BR, 0);
 		ctx.writer.write(Instruction.END); // end loop
 		ctx.writer.write(Instruction.END); // end block
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error (EH mode; a
+		// trap outside it).
+		for (int listSlot : listSlots) {
+			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
+		}
 
 		// Result: head.cdr (cdr of sentinel)
 		ctx.writer.write(Instruction.GET_LOCAL);

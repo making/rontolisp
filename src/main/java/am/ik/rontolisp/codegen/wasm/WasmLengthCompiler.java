@@ -15,12 +15,12 @@ import am.ik.wasm.WasmWriter;
  * quotes, counting one per lead byte); a vector (rank-1 array) returns its element count;
  * any other argument is treated as a list and its cons cells are counted (Common Lisp
  * sequences). A symbol (which shares the string struct representation but lacks the
- * leading quote), a hash table and any other non-list are no sequence: {@code LENGTH}'s
- * type-error in EH mode, a trap outside it. A rank-2 array is not a sequence and traps.
- * An array and a hash table are both {@code TYPE_CELL} boxes; the header's car
- * distinguishes them (a bucket array for an array, an i31 count for a hash table). A
- * packed float vector ({@code TYPE_FARRAY}) is handled first: a rank-1 one yields its
- * {@code dims[0]}, a higher-rank one traps like a general rank-n array.
+ * leading quote), a hash table, any other non-list and a dotted list's tail are no
+ * sequence: {@code LENGTH}'s type-error in EH mode, a trap outside it. A rank-2 array is
+ * not a sequence and traps. An array and a hash table are both {@code TYPE_CELL} boxes;
+ * the header's car distinguishes them (a bucket array for an array, an i31 count for a
+ * hash table). A packed float vector ({@code TYPE_FARRAY}) is handled first: a rank-1 one
+ * yields its {@code dims[0]}, a higher-rank one traps like a general rank-n array.
  *
  * <p>
  * The dispatch is ONE shared function, {@code _seq_len}
@@ -239,19 +239,9 @@ final class WasmLengthCompiler {
 		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
 		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
-		// List case: anything but nil or a cons is no sequence; count cons cells until
-		// the value is no longer a cons. The counter reuses fpSlot; the cursor is the
-		// parameter itself.
-		get(w, valSlot);
-		w.write(Instruction.REF_IS_NULL);
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
-		w.write(Instruction.END);
+		// List case: count cons cells until the value is no longer a cons, which must be
+		// nil -- anything else (a non-list, a dotted list's tail) is no sequence. The
+		// counter reuses fpSlot; the cursor is the parameter itself.
 		int countSlot = fpSlot;
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -286,6 +276,12 @@ final class WasmLengthCompiler {
 		w.write(Instruction.BR, 0); // continue loop
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		get(w, valSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
+		w.write(Instruction.END);
 		get(w, countSlot);
 
 		w.write(Instruction.END); // array/hash-table-vs-list if

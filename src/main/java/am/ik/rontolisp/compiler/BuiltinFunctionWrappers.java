@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Generates synthetic {@code (setq name (lambda ...))} wrapper defuns for built-in
@@ -841,15 +842,17 @@ public final class BuiltinFunctionWrappers {
 	 * (lambda (f l &amp;rest more)
 	 *   (if (null more)
 	 *       (mapcar f l)                              ; one list: the primitive
-	 *       (do ((ls (cons l more)) (acc nil))         ; N lists: shortest-list walk
+	 *       (do ((ls (mapcar (lambda (x) (%check-list x 'mapcar)) (cons l more)))
+	 *            (acc nil))                        ; N lists: shortest-list walk
 	 *           ((member nil ls) (reverse acc))
 	 *         (setq acc (cons (apply f (mapcar (lambda (x) (car x)) ls)) acc))
-	 *         (setq ls (mapcar (lambda (x) (cdr x)) ls)))))
+	 *         (setq ls (mapcar (lambda (x) (%check-list (cdr x) 'mapcar)) ls)))))
 	 * </pre>
 	 *
-	 * The inner {@code mapcar}s are single-list, so they compile as the primitive;
-	 * {@code (member nil ls)} is exactly "some list is exhausted", CL's termination rule
-	 * for proper lists.
+	 * The inner {@code mapcar}s are single-list, so they compile as the primitive. Every
+	 * cursor is checked to be a list as it is taken, so {@code (member nil ls)} is
+	 * exactly "some list is exhausted", CL's termination rule, and a list that is no list
+	 * or ends dotted is the operator's type-error, as in call position.
 	 *
 	 * <p>
 	 * The six members differ only in the two axes below, which is why they share one
@@ -864,7 +867,8 @@ public final class BuiltinFunctionWrappers {
 	 */
 	private static WrapperDef mapFamilyWrapper(String name, boolean tails, MapAccumulation accumulation) {
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(callV("ls", callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more"))));
+		bindings.add(callV("ls", callV(LispNames.MAPCAR, checkedProjection(name, null),
+				callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more")))));
 		if (accumulation != MapAccumulation.DISCARD) {
 			bindings.add(callV("acc", LispNil.INSTANCE));
 		}
@@ -881,12 +885,12 @@ public final class BuiltinFunctionWrappers {
 		LispVal step = switch (accumulation) {
 			case COLLECT ->
 				callV(LispNames.SETQ, new LispSymbol("acc"), callV(LispNames.CONS, apply, new LispSymbol("acc")));
-			case CONCATENATE ->
-				callV(LispNames.SETQ, new LispSymbol("acc"), callV(LispNames.APPEND, new LispSymbol("acc"), apply));
+			case CONCATENATE -> callV(LispNames.SETQ, new LispSymbol("acc"),
+					callV(LispNames.APPEND, new LispSymbol("acc"), checkList(apply, name)));
 			case DISCARD -> apply;
 		};
 		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ls"),
-				callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ls")));
+				callV(LispNames.MAPCAR, checkedProjection(name, LispNames.CDR), new LispSymbol("ls")));
 		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings), exit, step, advance));
 		LispVal dispatch = listToCons(
 				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"), call(name, "f", "l"), walk));
@@ -962,6 +966,22 @@ public final class BuiltinFunctionWrappers {
 
 	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
 	// body does not depend on another wrapper's setq having run first.
+	/**
+	 * {@code (lambda (x) (%check-list (op x) 'operator))}, or of {@code x} itself without
+	 * an {@code op}: a {@code map*} wrapper's cursors, each checked to be a list under
+	 * the operator the wrapper stands for.
+	 */
+	private static LispVal checkedProjection(String operator, @Nullable String op) {
+		LispVal x = new LispSymbol("x");
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x)),
+				checkList(op == null ? x : callV(op, x), operator)));
+	}
+
+	/** {@code (%check-list form 'operator)}. */
+	private static LispVal checkList(LispVal form, String operator) {
+		return callV(LispNames.CHECK_LIST_INTERNAL, form, callV(LispNames.QUOTE, new LispSymbol(operator)));
+	}
+
 	private static LispVal projection(String op) {
 		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
 				call(op, "x")));

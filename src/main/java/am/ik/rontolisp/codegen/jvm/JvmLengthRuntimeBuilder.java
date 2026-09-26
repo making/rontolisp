@@ -19,11 +19,11 @@ import am.ik.rontolisp.compiler.OperandTypes;
  * A string returns its character count (the stored length minus the two surrounding
  * quotes); a vector (rank-1 array) returns its element count; a list's cons cells are
  * counted (Common Lisp sequences). A rank-2+ array is not a sequence, so it throws; any
- * other value -- a symbol, a number, a hash table -- is {@code LENGTH}'s {@code SEQUENCE}
- * type-error ({@link JvmOperandTypeRuntime}). An array is an {@link java.util.ArrayList}
- * whose slot 0 holds the {@code {dims, fillPointer, adjustable}} header (see
- * {@link JvmArrayRuntimeBuilder}), so its element count is the fill pointer when the
- * header carries one, otherwise {@code size() - 1}.
+ * other value -- a symbol, a number, a hash table, a dotted list's tail -- is
+ * {@code LENGTH}'s {@code SEQUENCE} type-error ({@link JvmOperandTypeRuntime}). An array
+ * is an {@link java.util.ArrayList} whose slot 0 holds the {@code {dims, fillPointer,
+ * adjustable}} header (see {@link JvmArrayRuntimeBuilder}), so its element count is the
+ * fill pointer when the header carries one, otherwise {@code size() - 1}.
  *
  * <p>
  * The whole computation lives in this single helper (emitted once) rather than inline at
@@ -140,15 +140,9 @@ final class JvmLengthRuntimeBuilder {
 		a.areturn();
 		a.bind(notArray);
 
-		// List: count cons cells (Object[]) until the value is no longer a cons. Anything
-		// else that is not nil is no sequence.
-		int list = a.label();
-		a.aload(0);
-		a.branch(Opcode.IFNULL, list);
-		a.aload(0);
-		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, notSequence);
-		a.bind(list);
+		// List: count cons cells (Object[]) until the value is no longer a cons. The walk
+		// must end at nil: anything else -- a non-list, a dotted list's tail -- is no
+		// sequence.
 		a.op(Opcode.LCONST_0);
 		a.op(Opcode.LSTORE);
 		a.op0(1);
@@ -169,6 +163,8 @@ final class JvmLengthRuntimeBuilder {
 		a.astore(0);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
+		a.aload(0);
+		a.branch(Opcode.IFNONNULL, notSequence);
 		a.op(Opcode.LLOAD);
 		a.op0(1);
 		a.invokestatic(longValueOf);

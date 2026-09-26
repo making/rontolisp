@@ -32,15 +32,13 @@ final class WasmMapcarCompiler {
 		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), nLists,
 				() -> WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPCAR, nLists, ctx), ctx);
 
-		// Compile each list expression, guarding it is a list.
+		// Compile each list expression; the walk's end checks it is a list.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(listSlot);
-			// A non-list is MAPCAR's type-error (EH mode; a trap outside it).
-			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
 			listSlots.add(listSlot);
 		}
 
@@ -124,6 +122,12 @@ final class WasmMapcarCompiler {
 		ctx.writer.write(Instruction.BR, 0);
 		ctx.writer.write(Instruction.END); // end loop
 		ctx.writer.write(Instruction.END); // end block
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error (EH mode; a
+		// trap outside it).
+		for (int listSlot : listSlots) {
+			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
+		}
 
 		// Result: head.cdr (cdr of sentinel)
 		ctx.writer.write(Instruction.GET_LOCAL);
