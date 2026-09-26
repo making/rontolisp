@@ -363,8 +363,8 @@ final class WasmComplexCompiler {
 
 	// The two-real-operands guard, over the two operand slots the caller already
 	// filled: a complex in either lands in _type_err_real (the interpreter's
-	// "The value <prin1> is not of type REAL", caught as a simple-error on this
-	// backend, like every instance-less throw). min/max and the two-argument atan
+	// "The value <prin1> is not of type REAL", a type-error behind a handler landing
+	// pad, WasmOperandTypes.buildLandingBody). min/max and the two-argument atan
 	// share it.
 	static void emitRealOperandGuard(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
 		emitTestComplex(ctx, aSlot);

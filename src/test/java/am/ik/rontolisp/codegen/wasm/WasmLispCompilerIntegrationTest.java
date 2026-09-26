@@ -15743,10 +15743,9 @@ class WasmLispCompilerIntegrationTest {
 	// over complex, phase) reuse the backend's software cores, so like every WASM
 	// transcendental they are close but not bit-exact (the expSoftwareApproximation
 	// precedent); those assert closeness, everything else print equality. Ordering
-	// over a complex is catchable with the interpreter's text, but as a simple-error --
-	// the documented instance-less-throw divergence
-	// (ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere) -- so the ordering
-	// test catches (error ...) and compares the message.
+	// over a complex is a catchable type-error with the interpreter's text
+	// (ehANonNumberArithmeticOperandSignalsATypeError); the ordering test compares
+	// the message.
 	@Test
 	void compileAndRunComplexConstructor() throws Exception {
 		assertThat(compileAndRun("(print (complex 1 2))")).isEqualTo("#C(1 2)");
@@ -15765,10 +15764,9 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("\"The value #C(1 2) is not of type NUMBER\"");
 		assertThat(compileAndRunEhExpectTrap("(print (complex #c(1 2) 3))")).contains("unreachable");
 		assertThat(compileAndRunEhExpectTrap("(print (complex 1 \"a\"))")).contains("unreachable");
-		// Caught as a plain error (not type-error): the documented
-		// instance-less-throw divergence
-		// (ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere).
-		assertThat(compileAndRunEh("(print (handler-case (complex #c(1 2) 3) (error (e) :caught)))"))
+		// A type-error, as on the interpreter and the JVM
+		// (ehANonNumberArithmeticOperandSignalsATypeError).
+		assertThat(compileAndRunEh("(print (handler-case (complex #c(1 2) 3) (type-error (e) :caught)))"))
 			.isEqualTo(":CAUGHT");
 	}
 
@@ -16322,10 +16320,9 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileAndRunComplexRealOnlyOperationsSignalCatchableErrors() throws Exception {
-		// Real-only by contract (.todo/754): caught as a plain error (not
-		// type-error) -- the documented instance-less-throw divergence -- so the
-		// test catches (error ...) and compares the message, like the ordering test
-		// above it.
+		// Real-only by contract (.todo/754): a catchable type-error
+		// (ehANonNumberArithmeticOperandSignalsATypeError); the test compares the
+		// message, like the ordering test above it.
 		assertThat(compileAndRunEh("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (error (e) (princ-to-string e))))
@@ -24447,14 +24444,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere() throws Exception {
-		// Divergence by CLASS, not catchability (the undefined-function precedent): the
-		// payload a fixed runtime helper can build is instance-less, so the landing
-		// synthesizes a simple-error where the interpreter and the JVM answer
-		// type-error. .kb/error-handling.md carries the re-evaluation trigger.
-		assertThat(compileAndRunEh("""
-				(print (handler-case (+ 1 nil) (type-error (e) :type-error) (error (e) :plain-error)))
-				""")).isEqualTo(":PLAIN-ERROR");
+	void ehANonNumberArithmeticOperandSignalsATypeError() throws Exception {
+		// The _type_err_* landings throw a type-error instance whose datum and
+		// expected-type answer the operand and the operator's type, as on the
+		// interpreter and the JVM (.kb/error-handling.md, "A non-number reaching
+		// arithmetic"): a type-error clause and handler-bind match, a simple-error
+		// clause does not, and type-of answers the class even where no form names it.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (type-error-expected-type e)
+				                          (eq (type-error-expected-type e) 'number)
+				                          (princ-to-string e)))))
+				(print (te (lambda () (+ 1 nil))))
+				(print (te (lambda () (< 1 "x"))))
+				(print (te (lambda () (logand 1 2.5))))
+				(print (te (lambda () (< #c(1 2) 1))))
+				(print (te (lambda () (setf (aref #d(1.0 2.0) 0) "x"))))
+				(print (handler-case
+				           (handler-bind ((type-error (lambda (c) (print (list :hb (type-error-datum c))))))
+				             (* 2 :k))
+				         (error () :done)))
+				""";
+		String expected = """
+				(NIL NUMBER T "+: The value NIL is not of type NUMBER")
+				("x" REAL NIL "<: The value \\"x\\" is not of type REAL")
+				(2.5 INTEGER NIL "LOGAND: The value 2.5 is not of type INTEGER")
+				(#C(1 2) REAL NIL "<: The value #C(1 2) is not of type REAL")
+				("x" NUMBER T "The value \\"x\\" is not of type NUMBER")
+				(:HB :K)
+				:DONE""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+		String unnamed = """
+				(print (handler-case (+ 1 nil) (simple-error () :simple) (error (e) (type-of e))))
+				""";
+		assertThat(compileAndRunPrelude(unnamed)).isEqualTo("TYPE-ERROR");
+		assertThat(compileComponentAndRunPrelude(unnamed)).isEqualTo("TYPE-ERROR");
 	}
 
 	@Test

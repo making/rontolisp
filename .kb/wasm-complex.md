@@ -99,9 +99,8 @@ over one is a guaranteed bail plus a trap.
 ## Errors: the interpreter's texts, the backend's classes
 
 - Ordering/`min`/`max` over a complex: `FUNC_TYPE_ERR_REAL`
-  (`<: The value #C(1 2) is not of type REAL`), catchable in EH mode -- as a `simple-error`, the documented
-  instance-less-throw divergence (the interpreter and the JVM answer
-  `type-error`; `.kb/error-handling.md`).
+  (`<: The value #C(1 2) is not of type REAL`), catchable in EH mode as a `type-error`
+  (`.kb/error-handling.md`, "A non-number reaching arithmetic").
 - Non-real `complex` parts, `realpart`/`imagpart`/`conjugate`/`phase` of a
   non-number: `_type_err_num` (`The value ... is not of type NUMBER`), the same funnel
   as every other mistyped arithmetic operand.

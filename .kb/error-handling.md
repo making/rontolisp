@@ -563,14 +563,14 @@ message at the catching end** -- except for the failures the backends report as 
   bytecode with no channel to carry a class; a wrong-type operand's exception is recognized by
   identity instead (`_teSlot`, see "A non-number reaching arithmetic"). The arms are compiled Lisp forms built by `LispMacroExpander.reportingConditionForm`, so no
   slot index is baked here.
-- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **Two
-  families diverge by CLASS rather than catchability**: an undefined-function call and a non-number
-  reaching arithmetic are both catchable but as a `simple-error`. **The stub cannot construct the
-  typed instance**: it is produced during BODY compilation, after `mayCreateInstances` fixed whether
-  the artifact has an instance representation and after `usedLayoutTags` chose which layouts to bake
-  (`%OBJ-NEW reached the compiler with no instance representation`). **Trigger: teach both gates
-  about undefined calls** -- `usedLayoutTags` already stands in for the `end-of-file` tag on the read
-  family's presence -- and fix the two families together.
+- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **An
+  undefined-function call diverges by CLASS rather than catchability**: catchable, but as a
+  `simple-error`. **The stub cannot construct the typed instance**: it is produced during BODY
+  compilation, after `mayCreateInstances` fixed whether the artifact has an instance representation
+  and after `usedLayoutTags` chose which layouts to bake (`%OBJ-NEW reached the compiler with no
+  instance representation`). **Trigger: teach both gates about undefined calls** -- the precedent is
+  the non-number family ("A non-number reaching arithmetic"), whose `type-error` layout
+  `usedLayoutTags` bakes on the pad's presence alone.
 - **Undefined functions keep the call-time stub contract**: a call to a name with no definition
   compiles to `The function X is undefined` at call time plus a compile-time warning, matching the
   interpreter's late binding. It stays a STRING signal for the gate reason above.
@@ -595,15 +595,15 @@ message at the catching end** -- except for the failures the backends report as 
 ## A non-number reaching arithmetic signals a catchable type-error
 **Invariant: a wrong-type operand reaching a numeric operator signals a CATCHABLE error whose text
 is `OP: The value <prin1> is not of type T` -- the operator and the type IT accepts, CL's
-`type-error` shape -- byte-identical on all four backends; on the interpreter and the JVM the
-condition is a `type-error` whose `type-error-datum`/`type-error-expected-type` answer the operand
-and `T`.** One table, `compiler/OperandTypes`: the named operators and their types (`NUMBER` for
+`type-error` shape -- byte-identical on all four backends, and the condition is a `type-error`
+whose `type-error-datum`/`type-error-expected-type` answer the operand and `T`.** One table, `compiler/OperandTypes`: the named operators and their types (`NUMBER` for
 `+ - * / = abs sqrt exp expt ...`, `REAL` for the orderings, `min`/`max`, the rounding family,
 `mod`/`rem`, `float`; `INTEGER` for the bitwise family, `gcd`/`lcm`/`isqrt`), narrowed to `REAL`
 where a `NUMBER` operator met a complex that must be real (two-argument `atan`). A failure outside a
 named operator reports unnamed (`The value "x" is not of type NUMBER` for a packed-array store) with
 the funnel's own kind. Pinned by `ci-spec.yaml`'s `non-number-arithmetic-operands-are-catchable` and
-`operand-type-errors-name-the-operator-wherever-it-compiles`.
+`operand-type-errors-name-the-operator-wherever-it-compiles`; the wasm class by
+`WasmLispCompilerIntegrationTest.ehANonNumberArithmeticOperandSignalsATypeError`.
 
 **Detection stays at each backend's coercion FUNNEL; the operator is attached ONE LEVEL UP**, because
 a funnel (and every shared helper above it -- `_cmpb` serves `< > <= >= = min max`) cannot know which
@@ -636,6 +636,22 @@ operator it serves:
   (`WasmOperandTypes.LOWERED_TO`); an operator missing there reports unnamed. Boxing, the fused raw
   i64 helpers and fdlibm take no register (`mayReject`). Size: +2.3% on a 109 KB EH module; a non-EH
   module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
+- **wasm-GC, the class**: the landings throw a `type-error` instance built in raw wasm
+  (`WasmOperandTypes.TypeErrorShape`, `WasmRuntimeBuilder.emitConditionThrow` -- the
+  `NotFunctionReport` precedent): `format-control` the report, `datum` the operand,
+  `expected-type` the symbol the report names. The landing is a fixed helper built after the
+  instance gates decided, so the GATE is the pad: EH mode behind a handler landing pad
+  (`establishesLandingPad`) with instances on, and `usedLayoutTags` bakes `TYPE-ERROR` on the pad
+  alone -- not on the program spelling `type-error`, because `type-of`, `class-of` and a
+  `simple-error` clause observe the class without naming it. Without a pad nothing can observe the
+  class and the landing throws the message-only `(nil . message)` payload, which the entry pad
+  reports identically. **The type symbols are interned as their own names before any body compiles**
+  (`Texts.typeNames`): a symbol's identity is its string-table entry, so `(eq (type-error-expected-type
+  e) 'number)` holds only because the landing and the program's literal share it -- a view into the
+  suffix text would print right and fail `eq`. Size: +106-116 B on zlib with a `handler-case`
+  around its body (P1/component, default and `--optimize=size`, measured 2026-09-26); zlib as
+  shipped has no pad and is byte-identical. A side effect: `NotFunctionReport`'s `type-error` for
+  `(funcall 5)` is typed under any pad now, since it rides the same baked layout.
 - **The operator is the innermost FORM being compiled**, so a lowering that re-emits an operator's
   calls away from its form sets it back: the fusion fallbacks per tree node
   (`JvmIntFusionCompiler.numOpFor`, the compare method's mask -> `compareOperator`,
@@ -645,9 +661,6 @@ operator it serves:
   -> `+`/`-`, `zerop`/`plusp`/`minusp`/`/=` -> `= > < =`, `evenp`/`oddp` -> `mod`, `logtest`/`logeqv`
   -> `logand`/`logxor`), because the compiled backends' function values (`#'1+`) ARE the rewrite
   (`BuiltinFunctionWrappers`), so the interpreter's built-in reports what a call does.
-- **Class divergence, deliberate**: the wasm pair signal a `simple-error` carrying the same text --
-  the landing is a fixed helper built after the instance gates (`mayCreateInstances`,
-  `usedLayoutTags`) decided. `(handler-case ... (type-error ...))` therefore does not match there.
 - **Outside the named operators the old divergences remain**: a one-argument `lcm`/`gcd` compiles to
   `abs` (and accepts a float), `numerator`/`random`/`nth`/`aref` over a non-number keep their own
   per-backend texts.

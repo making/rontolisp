@@ -8,8 +8,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The wasm-GC half of {@link OperandTypes}: a wrong-type operand reaching the numeric
- * runtime reports {@code OP: The value X is not of type T} (EH mode; outside it the
- * landing traps without a message).
+ * runtime signals a {@code type-error} reporting {@code OP: The value X is not of type T}
+ * (EH mode; outside it the landing traps without a message).
  *
  * <p>
  * The runtime's helpers are shared by many operators, so the operator is known only at
@@ -39,6 +39,11 @@ final class WasmOperandTypes {
 
 	/** Bytes per table row. */
 	private static final int ROW = 12;
+
+	/** The landing's {@code (ref null eq)} locals, after the two i32 ones. */
+	private static final int MSG_LOCAL = 3;
+
+	private static final int SLOTS_LOCAL = 4;
 
 	/**
 	 * Operators a compile-time lowering introduces where the source spelled another name:
@@ -184,39 +189,78 @@ final class WasmOperandTypes {
 	 * @param integerSuffix {@code " is not of type INTEGER"}
 	 * @param numberSuffix {@code " is not of type NUMBER"}
 	 * @param realSuffix {@code " is not of type REAL"}
+	 * @param typeNames the three type symbols a {@code type-error}'s
+	 * {@code expected-type} holds, or null when the module builds none
 	 */
 	record Texts(WasmLispCompiler.StringTable.StringEntry valuePrefix,
 			WasmLispCompiler.StringTable.StringEntry integerSuffix,
-			WasmLispCompiler.StringTable.StringEntry numberSuffix,
-			WasmLispCompiler.StringTable.StringEntry realSuffix) {
+			WasmLispCompiler.StringTable.StringEntry numberSuffix, WasmLispCompiler.StringTable.StringEntry realSuffix,
+			@Nullable TypeNames typeNames) {
 
-		static Texts intern(WasmLispCompiler.StringTable table) {
+		/**
+		 * Interns the texts.
+		 * @param table the module's string table
+		 * @param typeError whether the landings build a {@code type-error}
+		 * @return the texts
+		 */
+		static Texts intern(WasmLispCompiler.StringTable table, boolean typeError) {
 			return new Texts(table.addBodyString("\"" + OperandTypes.VALUE_PREFIX + "\""),
 					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.INTEGER.name() + "\""),
 					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.NUMBER.name() + "\""),
-					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.REAL.name() + "\""));
+					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.REAL.name() + "\""),
+					typeError ? new TypeNames(table.addBodyString(OperandTypes.Kind.INTEGER.name()),
+							table.addBodyString(OperandTypes.Kind.NUMBER.name()),
+							table.addBodyString(OperandTypes.Kind.REAL.name())) : null);
 		}
 
 	}
 
 	/**
+	 * The type symbols, interned as the names themselves: a symbol's identity is its
+	 * entry, so these are the entries a quoted {@code 'number} in the program shares, and
+	 * {@code eq} holds between the two.
+	 *
+	 * @param integer {@code INTEGER}
+	 * @param number {@code NUMBER}
+	 * @param real {@code REAL}
+	 */
+	record TypeNames(WasmLispCompiler.StringTable.StringEntry integer, WasmLispCompiler.StringTable.StringEntry number,
+			WasmLispCompiler.StringTable.StringEntry real) {
+	}
+
+	/**
+	 * The {@code type-error} instance a landing throws: the class's baked shape and the
+	 * slots it fills besides {@code format-control}.
+	 *
+	 * @param instance the baked layout and slot shape
+	 * @param datumSlot the index of {@code DATUM}
+	 * @param expectedTypeSlot the index of {@code EXPECTED-TYPE}
+	 */
+	record TypeErrorShape(WasmRuntimeBuilder.ConditionInstance instance, int datumSlot, int expectedTypeSlot) {
+	}
+
+	/**
 	 * Builds {@code _type_err_int} / {@code _type_err_num} / {@code _type_err_real}: the
 	 * landing for a non-number reaching the arithmetic runtime. Signature
-	 * {@code ((ref null eq)) -> ()}; it never returns. In EH mode it renders the report,
-	 * builds the instance-less {@code (nil . message)} payload and throws it on
-	 * {@code $lisp-cond} -- the channel a plain {@code %error} uses, so
-	 * {@code handler-case} catches it as a {@code simple-error} and the entry landing pad
-	 * reports it. Outside EH mode it is a bare {@code unreachable}: no tag exists, and
-	 * citing the prin1 renderer would pin the printer family into every module.
+	 * {@code ((ref null eq)) -> ()}; it never returns. In EH mode it renders the report
+	 * and throws it on {@code $lisp-cond}, the channel {@code %error-cond} uses, as a
+	 * {@code type-error} instance whose {@code datum} is the operand and whose
+	 * {@code expected-type} is the type the report names -- or, in a module that did not
+	 * bake the class ({@code typeError} null: no handler landing pad, so nothing can
+	 * observe the class), as the instance-less {@code (nil . message)} payload the entry
+	 * landing pad reports the same way. Outside EH mode it is a bare {@code unreachable}:
+	 * no tag exists, and citing the prin1 renderer would pin the printer family into
+	 * every module.
 	 * @param kind what the funnel was coercing to
 	 * @param texts the interned texts, non-null in EH mode
 	 * @param operatorTable the operator table's address ({@link Operators#base})
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param typeError the type-error shape, or null for the instance-less payload
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @return the function body
 	 */
 	static byte[] buildLandingBody(OperandTypes.Kind kind, @Nullable Texts texts, int operatorTable, int operatorGlobal,
-			boolean identityHash) {
+			@Nullable TypeErrorShape typeError, boolean identityHash) {
 		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		if (texts == null || operatorGlobal < 0) {
@@ -225,10 +269,15 @@ final class WasmOperandTypes {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		// two extra locals: $g (i32) the register's id, $row (i32) its table row
-		w.writeUnsignedLeb128(1);
+		// extra locals: $g (i32) the register's id, then the type code; $row (i32) its
+		// table row; with a type-error to build, $msg and $slots ((ref null eq))
+		w.writeUnsignedLeb128(typeError == null ? 1 : 2);
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
+		if (typeError != null) {
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(operatorGlobal);
 		w.write(Instruction.SET_LOCAL);
@@ -242,9 +291,11 @@ final class WasmOperandTypes {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(2);
-		// payload car: the condition instance slot, nil for a message-only throw
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
+		if (typeError == null) {
+			// payload car: the condition instance slot, nil for a message-only throw
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
 		// the head: "The value ", after "OP: " when the register named one
 		getLocal(w, 1);
 		w.write(Instruction.I32_EQZ);
@@ -307,11 +358,42 @@ final class WasmOperandTypes {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.THROW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		if (typeError == null) {
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			TypeNames typeNames = java.util.Objects.requireNonNull(texts.typeNames());
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(MSG_LOCAL);
+			WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), SLOTS_LOCAL, MSG_LOCAL,
+					java.util.Map.of(typeError.datumSlot(), () -> getLocal(w, 0), typeError.expectedTypeSlot(),
+							() -> emitTypeSymbol(w, typeNames)));
+		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/** Pushes the symbol naming the type code in local 1. */
+	private static void emitTypeSymbol(WasmWriter w, TypeNames names) {
+		getLocal(w, 1);
+		i32Const(w, INTEGER_CODE);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		strBuild(w, names.integer());
+		w.write(Instruction.ELSE);
+		getLocal(w, 1);
+		i32Const(w, NUMBER_CODE);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		strBuild(w, names.number());
+		w.write(Instruction.ELSE);
+		strBuild(w, names.real());
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	/** Emits {@code i32.load offset=field} of the row in local 2. */

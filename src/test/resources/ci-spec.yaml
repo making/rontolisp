@@ -17831,28 +17831,32 @@ cases:
       (1 NIL)
   - name: non-number-arithmetic-operands-are-catchable
     source: |
-      ;; A non-number reaching an arithmetic operator signals a CATCHABLE error
-      ;; carrying one text on every backend, "OP: The value X is not of type T" --
-      ;; the operator and the type IT accepts, not the coercion helper's (on the
-      ;; wasm pair it used to be an uncatchable `wasm trap: cast failure`). The
-      ;; clause is `error` because the CLASS diverges: interpreter/JVM signal a
-      ;; type-error, the wasm runtime's instance-less payload synthesizes a
-      ;; simple-error (.kb/error-handling.md, "A non-number reaching arithmetic").
+      ;; A non-number reaching an arithmetic operator signals a CATCHABLE
+      ;; type-error on every backend, whose datum is the operand, whose
+      ;; expected-type is the type the operator accepts and whose text is
+      ;; "OP: The value X is not of type T" (on the wasm pair it used to be an
+      ;; uncatchable `wasm trap: cast failure`, then a simple-error;
+      ;; .kb/error-handling.md, "A non-number reaching arithmetic").
       (defun ci-te-print (thunk)
-        (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+        (handler-case (funcall thunk)
+          (type-error (e)
+            (list (type-error-datum e) (type-error-expected-type e)
+                  (eq (type-error-expected-type e) 'real) (princ-to-string e)))))
       (print (ci-te-print (lambda () (+ 1 nil))))
       (print (ci-te-print (lambda () (< 1 nil))))
       (print (ci-te-print (lambda () (* 2 "x"))))
       (print (ci-te-print (lambda () (max 1 'ci-te-sym))))
       (print (ci-te-print (lambda () (+ 1.5 nil))))
       (print (ci-te-print (lambda () (logand 1 nil))))
+      (print (handler-case (- 3 :ci-te-key) (simple-error () :simple) (error (e) (type-of e))))
     expected: |
-      "+: The value NIL is not of type NUMBER"
-      "<: The value NIL is not of type REAL"
-      "*: The value \"x\" is not of type NUMBER"
-      "MAX: The value CI-TE-SYM is not of type REAL"
-      "+: The value NIL is not of type NUMBER"
-      "LOGAND: The value NIL is not of type INTEGER"
+      (NIL NUMBER NIL "+: The value NIL is not of type NUMBER")
+      (NIL REAL T "<: The value NIL is not of type REAL")
+      ("x" NUMBER NIL "*: The value \"x\" is not of type NUMBER")
+      (CI-TE-SYM REAL T "MAX: The value CI-TE-SYM is not of type REAL")
+      (NIL NUMBER NIL "+: The value NIL is not of type NUMBER")
+      (NIL INTEGER NIL "LOGAND: The value NIL is not of type INTEGER")
+      TYPE-ERROR
   - name: operand-type-errors-name-the-operator-wherever-it-compiles
     source: |
       ;; A wrong-type operand's report names the same operator on every backend
