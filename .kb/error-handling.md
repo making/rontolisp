@@ -1653,7 +1653,7 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     `write-to-string`'s keywords (they bind printer variables whose runtime is gated on a scan
     that cannot see a wrapper).
   - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
-    255,334 -> 262,266, under `handler-case` 462,614 -> ~493,400 / 387,082 -> 410,908 -- the eval
+    255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
     registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,
     a runtime element type, is ~8 KB), the case conversions ~3.5 KB, the fourteen comparisons
     ~5 KB. `(print (sort (list 3 1 2) #'<))` 33,039 -> 33,256 / 23,156 -> 23,158. A program that
