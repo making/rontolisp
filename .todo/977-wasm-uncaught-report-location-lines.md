@@ -12,6 +12,11 @@ Goal: the same lines on Preview 1 and `--component` (and so `--native`), with no
 to a module outside EH mode -- the report only exists there -- and the added bytes in EH mode
 measured against the size campaign's benchmarks.
 
+Size is the constraint that decides the shape: the location lines are OPT-IN for a wasm
+output (a compile option, off by default), so a default build is byte-identical to today's.
+Record the per-module cost with the option on, per granularity (function + definition line
+vs. per line), in the `.kb` file, and document the option in `doc/{en,ja}`.
+
 What is known (2026-09-26):
 
 - A module cannot inspect its own stack, and the landing pad runs in the entry function
