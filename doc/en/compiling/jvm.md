@@ -56,6 +56,10 @@ such a jar also builds into a GraalVM native image with `native-image -jar`. A `
 `objc:` jar carries the native-image metadata its foreign calls need and builds as it is;
 reflective `java:` calls and the `--blas` / `ffi:` foreign calls need the metadata the tracing
 agent records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
+A `java:reify` or `java:proxy` object, and a function passed where an interface is
+expected, is an instance of a class generated at compile time -- `Hello$Reify0.class`,
+`Hello$Proxy0.class`, ... and their common `Hello$Implementation.class`, written beside
+the class the same way -- and needs no such metadata.
 
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)

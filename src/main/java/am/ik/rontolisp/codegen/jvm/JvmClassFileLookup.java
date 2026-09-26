@@ -19,6 +19,7 @@ import am.ik.jvm.JvmClassPath;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaType;
 import org.jspecify.annotations.Nullable;
 
@@ -50,6 +51,8 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 	private final int release;
 
 	private final ConcurrentHashMap<String, Optional<JavaType>> types = new ConcurrentHashMap<>();
+
+	private final ConcurrentHashMap<JavaType, JavaImplementationType> implementations = new ConcurrentHashMap<>();
 
 	private JvmClassFileLookup(JvmClassPath classPath, @Nullable Path ctSym, int release) {
 		this.classPath = classPath;
@@ -185,6 +188,11 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 			}
 		}
 		return cached.orElse(null);
+	}
+
+	@Override
+	public JavaImplementationType implementationOf(JavaType iface) {
+		return this.implementations.computeIfAbsent(iface, JavaImplementationType::new);
 	}
 
 	private @Nullable JavaType load(String name) {
@@ -333,6 +341,11 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		}
 
 		@Override
+		public List<JavaExecutable> publicMethods() {
+			return List.of();
+		}
+
+		@Override
 		public List<JavaExecutable> constructors() {
 			return List.of();
 		}
@@ -409,6 +422,11 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 		@Override
 		public List<JavaExecutable> methods(String name) {
+			return List.of();
+		}
+
+		@Override
+		public List<JavaExecutable> publicMethods() {
 			return List.of();
 		}
 
@@ -501,6 +519,12 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		public List<? extends JavaExecutable> methods(String name) {
 			JavaType object = object();
 			return object == null ? List.of() : object.methods(name);
+		}
+
+		@Override
+		public List<? extends JavaExecutable> publicMethods() {
+			JavaType object = object();
+			return object == null ? List.of() : object.publicMethods();
 		}
 
 		@Override
@@ -622,6 +646,9 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 			if (other == this) {
 				return true;
 			}
+			if (other instanceof JavaImplementationType implementation) {
+				return implementation.isAssignableTo(this);
+			}
 			if (other instanceof Array) {
 				return "java.lang.Object".equals(this.name) || "java.lang.Cloneable".equals(this.name)
 						|| "java.io.Serializable".equals(this.name);
@@ -678,7 +705,8 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		}
 
 		/** Class.getMethods(): the PublicMethods merge. */
-		List<ClassMethod> publicMethods() {
+		@Override
+		public List<ClassMethod> publicMethods() {
 			List<ClassMethod> cached = this.publicMethods;
 			if (cached == null) {
 				Map<Signature, List<ClassMethod>> merged = new LinkedHashMap<>();
@@ -966,6 +994,11 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		@Override
 		public boolean isConstructor() {
 			return "<init>".equals(this.member.name());
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return (this.member.access() & am.ik.jvm.AccessFlag.ACC_ABSTRACT) != 0;
 		}
 
 		@Override

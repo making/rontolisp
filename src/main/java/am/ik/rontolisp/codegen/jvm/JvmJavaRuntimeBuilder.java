@@ -60,8 +60,8 @@ final class JvmJavaRuntimeBuilder {
 	 * The ready-to-emit {@code _javaInit} method, its guard field, the constant-pool
 	 * references the {@code java:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, {@code new}, {@code call}, {@code static}, {@code field},
-	 * {@code proxy}), and the bridge class file that travels beside the program, keyed by
-	 * its path within an output tree.
+	 * {@code proxy}, {@code reify}), and the bridge class file that travels beside the
+	 * program, keyed by its path within an output tree.
 	 */
 	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
@@ -112,6 +112,7 @@ final class JvmJavaRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaField"), cp.addUtf8(twoArgDesc))));
 		ops.put("proxy",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaProxy"), cp.addUtf8(twoArgDesc))));
+		ops.put("reify", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaReify"), cp.addUtf8(newDesc))));
 
 		// --- _javaInit body ---
 		List<Integer> code = new ArrayList<>();

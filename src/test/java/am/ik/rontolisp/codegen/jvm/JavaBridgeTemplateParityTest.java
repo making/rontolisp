@@ -151,6 +151,64 @@ class JavaBridgeTemplateParityTest {
 			.isEqualTo("java.lang.StringBuilder");
 	}
 
+	// A java:reify / java:proxy the bridge implements when it runs declares the slots
+	// the shared rule chooses (compiler/JavaImplementations) -- the ones the
+	// interpreter and a compiled program's generated class declare -- and refuses a
+	// designator with the same text.
+	@Test
+	void theTemplateImplementsAnInterfaceAsTheSharedRuleDoes() throws Exception {
+		List<List<String>> corpus = List.of(List.of("java.util.Comparator", "compare"),
+				List.of("java.util.Comparator", "compare", "equals"), List.of("java.util.Iterator", "hasNext"),
+				List.of("java.util.Iterator", "hasNext", "next", "remove"), List.of("java.lang.Runnable", "run"),
+				List.of("java.lang.Runnable", "run", "toString", "hashCode"),
+				List.of("java.lang.Appendable", "append(char)"),
+				List.of("java.lang.Appendable", "append(CharSequence,_,_)", "append(char)", "append(CharSequence)"),
+				List.of("java.lang.CharSequence", "length", "charAt"),
+				List.of("java.util.function.Function", "apply", "andThen"),
+				List.of("am.ik.rontolisp.compiler.JavaImplementationsTest$Narrowed", "get"),
+				List.of("java.util.Comparator", "nope"), List.of("java.lang.Appendable", "append"),
+				List.of("java.util.Iterator", "next", "next()"), List.of("java.util.Iterator", "next("));
+		for (List<String> row : corpus) {
+			Class<?> iface = Class.forName(row.get(0));
+			List<String> designators = row.subList(1, row.size());
+			String shared;
+			try {
+				shared = slots(am.ik.rontolisp.compiler.JavaImplementations.reify(ReflectiveJavaClasses.of(iface),
+						designators, ReflectiveJavaClasses.instance()));
+			}
+			catch (IllegalArgumentException ex) {
+				shared = "error: " + ex.getMessage();
+			}
+			String template;
+			try {
+				template = String.valueOf(new java.util.TreeMap<>((java.util.Map<?, ?>) invoke("reifySlots",
+						new Class<?>[] { Class.class, String[].class }, iface, designators.toArray(String[]::new))));
+			}
+			catch (java.lang.reflect.InvocationTargetException ex) {
+				template = "error: " + Objects.requireNonNull(ex.getCause()).getMessage();
+			}
+			assertThat(template).as("%s", row).isEqualTo(shared);
+		}
+		for (String name : List.of("java.util.Comparator", "java.util.function.Function", "java.lang.CharSequence",
+				"java.util.List")) {
+			Class<?> iface = Class.forName(name);
+			assertThat(String.valueOf(new java.util.TreeMap<>(
+					(java.util.Map<?, ?>) invoke("proxySlots", new Class<?>[] { Class.class }, iface))))
+				.as(name)
+				.isEqualTo(slots(am.ik.rontolisp.compiler.JavaImplementations.proxy(ReflectiveJavaClasses.of(iface),
+						ReflectiveJavaClasses.instance())));
+		}
+	}
+
+	// The shared rule's slots in the template's shape: dispatch key -> implementation.
+	private static String slots(am.ik.rontolisp.compiler.JavaImplementation implementation) {
+		java.util.TreeMap<String, Integer> slots = new java.util.TreeMap<>();
+		for (am.ik.rontolisp.compiler.JavaImplementation.Slot slot : implementation.slots()) {
+			slots.put(slot.dispatchKey(), slot.implementation());
+		}
+		return slots.toString();
+	}
+
 	// What a compiled program counts as a host object is one rule with two copies: the
 	// bridge's isJavaObject and the _jhost a resolved site calls. Over the compiled
 	// representation of every kind of Lisp value and a spread of host objects -- the

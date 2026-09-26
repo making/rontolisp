@@ -7445,6 +7445,12 @@ public final class LispNames {
 	public static final String JAVA_PROXY = "PROXY";
 
 	/**
+	 * {@code java:reify} -- implements a host interface with one function per method:
+	 * {@code (java:reify "fqcn" "method" function ...)}.
+	 */
+	public static final String JAVA_REIFY = "REIFY";
+
+	/**
 	 * {@code java:object} -- the type specifier {@code (java:object "fqcn")}: a value a
 	 * Java member answered as that class. In {@code the} and {@code declare} it types a
 	 * {@code java:} receiver or argument for static resolution
@@ -7473,6 +7479,9 @@ public final class LispNames {
 
 	/** {@code java:proxy}, qualified. */
 	public static final String JAVA_PROXY_QUALIFIED = JAVA_PKG + ":" + JAVA_PROXY;
+
+	/** {@code java:reify}, qualified. */
+	public static final String JAVA_REIFY_QUALIFIED = JAVA_PKG + ":" + JAVA_REIFY;
 
 	/** {@code java:object}, qualified. */
 	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;

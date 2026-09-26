@@ -4,6 +4,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -11,8 +12,11 @@ import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.function.ToIntBiFunction;
@@ -99,6 +103,20 @@ final class JavaBridgeTemplate {
 	// {Executable, Class<?>[] parameter types, Boolean packed-varargs} (plain arrays: a
 	// nested record would become a second class file).
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object[][]>> CHOICES = new ConcurrentHashMap<>();
+
+	// How a java:reify of (interface, designators), or a java:proxy of an interface, is
+	// implemented: its slots, resolved once.
+	private static final ConcurrentHashMap<List<Object>, Map<String, Integer>> IMPLEMENTATIONS = new ConcurrentHashMap<>();
+
+	// The designators stand-in of a java:proxy's key.
+	private static final String PROXY_KEY = "proxy";
+
+	// Object's methods a java:reify may implement and every implementation answers
+	// (mirrors compiler/JavaImplementations).
+	private static final List<String> OBJECT_METHODS = List.of("equals(java.lang.Object)", "hashCode()", "toString()");
+
+	// Mirrors compiler/JavaImplementations.REIFY_USAGE.
+	private static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
 
 	private static final String KIND_NIL = "nil";
 
@@ -292,44 +310,249 @@ final class JavaBridgeTemplate {
 		return proxy(iface, callable);
 	}
 
-	// The callable is applied as (callable method-name arg1 arg2 ...) for every
-	// interface method; Object methods (equals/hashCode/toString) keep identity
-	// behavior, like the interpreter's proxy.
-	private static Object proxy(Class<?> iface, @Nullable Object callable) {
-		return Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface }, (p, method, methodArgs) -> {
-			switch (method.getName()) {
-				case "hashCode" -> {
-					return System.identityHashCode(p);
-				}
-				case "equals" -> {
-					return p == (methodArgs == null ? null : methodArgs[0]);
-				}
-				case "toString" -> {
-					return "#<java-proxy " + iface.getName() + ">";
-				}
-				default -> {
-				}
+	/**
+	 * Implements {@code (java:reify "fully.qualified.Interface" "method" function ...)}
+	 * left to run time: the rest is designator, function, ... (mirrors
+	 * {@code compiler/JavaImplementations.reify}).
+	 */
+	static @Nullable Object javaReify(@Nullable Object interfaceName, @Nullable Object[] rest) {
+		String name = lispString(interfaceName);
+		if (name == null || rest.length % 2 != 0) {
+			throw new RuntimeException(REIFY_USAGE);
+		}
+		String[] designators = new String[rest.length / 2];
+		@Nullable Object[] functions = new @Nullable Object[rest.length / 2];
+		for (int i = 0; i < designators.length; i++) {
+			String designator = lispString(rest[2 * i]);
+			if (designator == null) {
+				throw new RuntimeException(REIFY_USAGE);
 			}
-			// Build the (method-name arg...) cons list, tail-first.
+			designators[i] = designator;
+			functions[i] = rest[2 * i + 1];
+		}
+		Class<?> iface = loadClass(name);
+		if (!iface.isInterface()) {
+			throw new RuntimeException("java:reify expects an interface, got " + name);
+		}
+		List<Object> key = List.of(iface, List.of(designators));
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = reifySlots(iface, designators);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return implementation(iface, false, slots, functions);
+	}
+
+	// A function value where an interface is expected, or java:proxy: every method but
+	// Object's three calls the callable with the method's name first.
+	private static Object proxy(Class<?> iface, @Nullable Object callable) {
+		List<Object> key = List.of(iface, PROXY_KEY);
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = proxySlots(iface);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return implementation(iface, true, slots, new @Nullable Object[] { callable });
+	}
+
+	// Every method a java:proxy of the interface declares, by name(parameters)return:
+	// all but Object's three call the callable (mirrors
+	// compiler/JavaImplementations.proxy).
+	private static Map<String, Integer> proxySlots(Class<?> iface) {
+		Map<String, Integer> slots = new HashMap<>();
+		for (Map.Entry<String, List<Method>> group : groups(iface).entrySet()) {
+			if (OBJECT_METHODS.contains(group.getKey())) {
+				continue;
+			}
+			for (List<Method> variant : variants(group.getValue()).values()) {
+				slots.put(group.getKey() + variant.get(0).getReturnType().getName(), 0);
+			}
+		}
+		return slots;
+	}
+
+	// The object: a Proxy whose handler dispatches by name(parameters)return on the
+	// slots -- a function's index, or -1 for an abstract method no function implements --
+	// as the interpreter's and a compiled program's generated class do. A default method
+	// no slot names runs its body; Object's three keep their identity behavior.
+	private static Object implementation(Class<?> iface, boolean proxy, Map<String, Integer> slots,
+			@Nullable Object[] functions) {
+		String name = iface.getName();
+		return Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface }, (p, method, methodArgs) -> {
+			String key = keyOf(method);
+			Integer index = slots.get(key + method.getReturnType().getName());
+			if (index == null) {
+				switch (key) {
+					case "hashCode()" -> {
+						return System.identityHashCode(p);
+					}
+					case "equals(java.lang.Object)" -> {
+						return p == (methodArgs == null ? null : methodArgs[0]);
+					}
+					case "toString()" -> {
+						return "#<java-" + (proxy ? "proxy " : "reify ") + name + ">";
+					}
+					default -> {
+					}
+				}
+				if (method.isDefault()) {
+					return InvocationHandler.invokeDefault(p, method, methodArgs);
+				}
+				index = -1;
+			}
+			if (index < 0) {
+				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
+			}
+			// Build the ([method-name] arg...) cons list, tail-first.
 			Object argList = null;
 			if (methodArgs != null) {
 				for (int i = methodArgs.length - 1; i >= 0; i--) {
 					argList = new Object[] { unmarshal(methodArgs[i]), argList };
 				}
 			}
-			argList = new Object[] { quote(method.getName()), argList };
-			Object result = applyCallable(callable, argList);
+			if (proxy) {
+				argList = new Object[] { quote(method.getName()), argList };
+			}
+			Object result = applyCallable(functions[index], argList);
 			Class<?> ret = method.getReturnType();
 			if (ret == void.class) {
 				return null;
 			}
 			@Nullable Object[] slot = new @Nullable Object[1];
-			if (marshal(result, ret, slot, 0) == NO_MATCH) {
-				throw new RuntimeException(
-						"java:proxy: cannot return " + describe(result) + " as " + ret + " from " + iface.getName());
+			if (marshal(result, ret, slot, 0, false) == NO_MATCH) {
+				throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
+						+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
 			}
 			return slot[0];
 		});
+	}
+
+	// The methods (java:reify "I" designator ...) declares, by name(parameters)return:
+	// the index of the designator that names it, or -1 for an abstract one none names.
+	// Mirrors compiler/JavaImplementations.reify, errors and all.
+	private static Map<String, Integer> reifySlots(Class<?> iface, String[] designators) {
+		TreeMap<String, List<Method>> groups = groups(iface);
+		TreeMap<String, List<Method>> objectGroups = new TreeMap<>();
+		for (Method method : Object.class.getMethods()) {
+			String key = keyOf(method);
+			if (OBJECT_METHODS.contains(key)) {
+				objectGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(method);
+			}
+		}
+		Map<String, Integer> assigned = new HashMap<>();
+		for (int i = 0; i < designators.length; i++) {
+			Object[] member = member(designators[i]);
+			List<String> candidates = new ArrayList<>();
+			for (Map.Entry<String, List<Method>> group : groups.entrySet()) {
+				if (named(group.getValue().get(0), member)) {
+					candidates.add(group.getKey());
+				}
+			}
+			for (Map.Entry<String, List<Method>> group : objectGroups.entrySet()) {
+				if (!groups.containsKey(group.getKey()) && named(group.getValue().get(0), member)) {
+					candidates.add(group.getKey());
+				}
+			}
+			if (candidates.isEmpty()) {
+				throw new RuntimeException(
+						"java:reify: interface " + iface.getName() + " has no method " + designators[i]);
+			}
+			if (candidates.size() > 1) {
+				throw new RuntimeException("java:reify: " + designators[i] + " names more than one method of "
+						+ iface.getName() + ": " + String.join(", ", candidates));
+			}
+			if (assigned.putIfAbsent(candidates.get(0), i) != null) {
+				throw new RuntimeException(
+						"java:reify: " + iface.getName() + "." + candidates.get(0) + " is implemented twice");
+			}
+		}
+		Map<String, Integer> slots = new HashMap<>();
+		for (Map.Entry<String, List<Method>> group : groups.entrySet()) {
+			Integer implementation = assigned.get(group.getKey());
+			for (List<Method> variant : variants(group.getValue()).values()) {
+				String dispatch = group.getKey() + variant.get(0).getReturnType().getName();
+				if (implementation != null) {
+					slots.put(dispatch, implementation);
+				}
+				else if (mustImplement(variant) && !OBJECT_METHODS.contains(group.getKey())) {
+					slots.put(dispatch, -1);
+				}
+			}
+		}
+		for (Map.Entry<String, List<Method>> group : objectGroups.entrySet()) {
+			Integer implementation = assigned.get(group.getKey());
+			if (implementation != null && !groups.containsKey(group.getKey())) {
+				slots.put(group.getKey() + group.getValue().get(0).getReturnType().getName(), implementation);
+			}
+		}
+		return slots;
+	}
+
+	// The interface's instance methods by name(parameters), in key order.
+	private static TreeMap<String, List<Method>> groups(Class<?> iface) {
+		TreeMap<String, List<Method>> groups = new TreeMap<>();
+		for (Method method : iface.getMethods()) {
+			if (!Modifier.isStatic(method.getModifiers())) {
+				groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>()).add(method);
+			}
+		}
+		return groups;
+	}
+
+	// One method's declarations by return type name.
+	private static TreeMap<String, List<Method>> variants(List<Method> declarations) {
+		TreeMap<String, List<Method>> variants = new TreeMap<>();
+		for (Method declaration : declarations) {
+			variants.computeIfAbsent(declaration.getReturnType().getName(), k -> new ArrayList<>()).add(declaration);
+		}
+		return variants;
+	}
+
+	// A class must implement a variant one declaration leaves abstract, or two
+	// interfaces supply a default for.
+	private static boolean mustImplement(List<Method> variant) {
+		int defaults = 0;
+		for (Method declaration : variant) {
+			if (Modifier.isAbstract(declaration.getModifiers())) {
+				return true;
+			}
+			defaults++;
+		}
+		return defaults > 1;
+	}
+
+	// Whether a parsed designator {name, tag} names the method.
+	private static boolean named(Method method, Object[] member) {
+		if (!method.getName().equals(member[0])) {
+			return false;
+		}
+		String[] tag = (String[]) member[1];
+		if (tag == null) {
+			return true;
+		}
+		Class<?>[] params = method.getParameterTypes();
+		if (params.length != tag.length) {
+			return false;
+		}
+		for (int i = 0; i < params.length; i++) {
+			if (!"_".equals(tag[i]) && !tag[i].equals(params[i].getName())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// name(p1,p2), the parameters in Class.getName() spelling.
+	private static String keyOf(Method method) {
+		StringBuilder sb = new StringBuilder(method.getName()).append('(');
+		Class<?>[] params = method.getParameterTypes();
+		for (int i = 0; i < params.length; i++) {
+			if (i > 0) {
+				sb.append(',');
+			}
+			sb.append(params[i].getName());
+		}
+		return sb.append(')').toString();
 	}
 
 	private static @Nullable Object applyCallable(@Nullable Object callable, @Nullable Object argList) {
@@ -872,14 +1095,25 @@ final class JavaBridgeTemplate {
 	// Writes the Java value for `value` into out[index] and returns its conversion
 	// cost, or NO_MATCH if it cannot convert, mirroring eval/JavaInterop over the
 	// compiled value representation. A value with a kind is costed by kindCost -- the
-	// one cost table -- and converted by convert(); a cons or Lisp array element-wise.
+	// one cost table -- and converted by convert(); a cons or Lisp array element-wise. A
+	// function becomes a proxy of an interface: an argument's conversion.
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
+		return marshal(value, target, out, index, true);
+	}
+
+	// With proxies false a function converts to nothing: the conversion of a value a
+	// java:reify / java:proxy function answers (mirrors eval/JavaInterop).
+	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index,
+			boolean proxies) {
 		// A mutable character vector marshals as the string it spells: rendered once
 		// here, the single source of truth for every argument position (fixed arity,
 		// varargs, constructors and sequence elements alike).
 		value = rendered(value);
 		Object kind = kindOf(value);
 		if (kind != null) {
+			if (!proxies && KIND_FUNCTION.equals(kind)) {
+				return NO_MATCH;
+			}
 			int cost = kindCost(kind, target);
 			if (cost != NO_MATCH) {
 				out[index] = convert(value, target);
@@ -891,7 +1125,7 @@ final class JavaBridgeTemplate {
 			if (elements == null) {
 				return NO_MATCH; // a dotted (improper) list is not a sequence
 			}
-			return marshalSequence(elements, target, out, index);
+			return marshalSequence(elements, target, out, index, proxies);
 		}
 		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
 			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
@@ -907,10 +1141,10 @@ final class JavaBridgeTemplate {
 				for (long v : packed) {
 					elements.add(v == Long.MIN_VALUE ? null : v);
 				}
-				return marshalSequence(elements, target, out, index);
+				return marshalSequence(elements, target, out, index, proxies);
 			}
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
-			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index);
+			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, proxies);
 		}
 		return NO_MATCH; // other symbols, bignums and ratios are not bridged (as
 							// interpreted)
@@ -1066,14 +1300,14 @@ final class JavaBridgeTemplate {
 	// component type, recursively) or, for any List-compatible reference target, to a
 	// java.util.List of boxed elements.
 	private static int marshalSequence(List<@Nullable Object> elements, Class<?> target, @Nullable Object[] out,
-			int index) {
+			int index, boolean proxies) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (target.isArray()) {
 			Class<?> component = target.getComponentType();
 			Object array = Array.newInstance(component, elements.size());
 			int total = COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
-				int cost = marshal(elements.get(i), component, slot, 0);
+				int cost = marshal(elements.get(i), component, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -1087,7 +1321,7 @@ final class JavaBridgeTemplate {
 			List<@Nullable Object> list = new ArrayList<>(elements.size());
 			int total = COST_BOXED;
 			for (Object element : elements) {
-				int cost = marshal(element, Object.class, slot, 0);
+				int cost = marshal(element, Object.class, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}

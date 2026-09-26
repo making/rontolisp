@@ -241,6 +241,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	private int classMajorVersion = CLASS_MAJOR_VERSION;
 
 	/**
+	 * The program-side methods this attempt's generated {@code java:} interface
+	 * implementations call ({@link JvmJavaImplementations#callbackNames()}): found from
+	 * another class, so kept in the program class when it is split and rooted for the
+	 * tree-shaker.
+	 */
+	private Set<String> implementationCallbacks = Set.of();
+
+	/**
 	 * The class files {@code java:} sites resolve against, opened by the first attempt
 	 * that compiles one and closed when {@link #compile(List)} returns.
 	 */
@@ -1426,15 +1434,18 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// java: interop. The sites resolve against class files, never the classes this
 		// compiler runs on (compiler/JavaSiteResolver, .kb/java-interop.md); a resolved
-		// site compiles to a direct call (JvmJavaDirectSites). The bridge runtime is
-		// emitted only when a site needs it -- a site left to run time, a java:proxy, a
-		// function value passed where an interface is expected -- and never under
-		// --java-static, which refuses such a site. The (renamed) JavaBridgeTemplate
-		// travels beside the class as its own class file, and the eval runtime is forced
-		// (the bridge applies Lisp callables through _apply).
+		// site compiles to a direct call (JvmJavaDirectSites), a resolved java:reify /
+		// java:proxy and a function passed where an interface is expected to an object of
+		// a class generated for it (JvmJavaImplementations). The bridge runtime is
+		// emitted only when a site needs it -- one left to run time, a java:reify /
+		// java:proxy whose interface is not resolved -- and never under --java-static,
+		// which refuses such a site. The (renamed) JavaBridgeTemplate travels beside the
+		// class as its own class file, and the eval runtime is forced (the bridge applies
+		// Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaSites javaSites = usesJava
-				? new JvmJavaSites(javaClasses(), cp, thisClass, lispToStringMethod, this.javaStatic) : null;
+				? new JvmJavaSites(javaClasses(), cp, thisClass, this.className, lispToStringMethod, this.javaStatic)
+				: null;
 		boolean usesJavaBridge = javaSites != null && !this.javaStatic
 				&& (forcedGroups.contains(GROUP_JAVA_BRIDGE) || javaSites.needsBridge(program));
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJavaBridge
@@ -1712,8 +1723,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		applyGateWrappers.remove(LispNames.SEQ_FLOAT_VECTOR);
 		// The injected wrapper bodies that are (apply f r) count too: the wrappers and
 		// the runtime they call are gated on the same reference (see wrapperExcludes).
+		// So do the functions of a generated java: interface implementation
+		// (JvmJavaImplementations).
 		boolean usesApplyRuntime = usesEval || LispMacroExpander.needsApplyRuntime(program, applyGateWrappers)
-				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY);
+				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY)
+				|| (javaSites != null && javaSites.needsApply(program));
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -2155,7 +2169,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		if (javaSites != null) {
 			// A dispatched java: site renders a mutable character vector, a sequence's
-			// elements too, before it costs and converts it.
+			// elements too, before it costs and converts it -- as does the conversion
+			// of a value a java: interface implementation's function answers.
 			javaSites.direct().strv(strvMethod);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
@@ -4374,12 +4389,28 @@ public final class JvmLispCompiler implements LispCompiler {
 					javaRuntime.initCode(), List.of());
 		}
 		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
-		// helpers they share, made while the bodies above were compiled.
+		// helpers they share, made while the bodies above were compiled; then the
+		// program side of the generated interface implementations
+		// (JvmJavaImplementations): the callbacks their classes call, package-private,
+		// and the conversions those use. The classes travel beside the program.
 		if (javaSites != null) {
 			for (JvmJavaDirectSites.Method site : javaSites.direct().methods()) {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc(),
 						site.maxStack(), site.maxLocals(), site.code(), site.exceptionTable());
 			}
+			JvmJavaImplementations implementations = javaSites.implementations();
+			Set<String> callbacks = implementations.callbackNames();
+			for (JvmJavaDirectSites.Method method : implementations.methods()) {
+				boolean callback = callbacks.contains(cp.utf8At(method.name().index()));
+				definition.addMethod(callback ? AccessFlag.ACC_STATIC : AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						method.name(), method.desc(), method.maxStack(), method.maxLocals(), method.code(),
+						method.exceptionTable());
+			}
+			this.implementationCallbacks = callbacks;
+			this.bridgeClassFiles.putAll(implementations.classFiles(this.classMajorVersion));
+		}
+		else {
+			this.implementationCallbacks = Set.of();
 		}
 		if (objcRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
@@ -4723,6 +4754,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesJavaBridge) {
 				roots.add("_lispToString");
 			}
+			// A generated java: interface implementation calls its program-side
+			// callbacks from its own class: an edge this class's bytecode cannot show.
+			roots.addAll(this.implementationCallbacks);
 			if (usesTlsConnect) {
 				roots.add("checkClientTrusted");
 				roots.add("checkServerTrusted");
@@ -4784,6 +4818,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			List<JvmExportDirective> exportDecls) {
 		Set<String> pinnedNames = new HashSet<>(REFLECTIVELY_FOUND_METHODS);
 		pinnedNames.add("main");
+		// The generated java: interface implementations name the program class as the
+		// owner of their callbacks.
+		pinnedNames.addAll(this.implementationCallbacks);
 		for (JvmExportDirective decl : exportDecls) {
 			pinnedNames.add(decl.methodName());
 			pinnedNames.add(mangleMethodName(decl.name()));
@@ -5030,11 +5067,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		return classes;
 	}
 
-	// True when the program references any of the five java: interop functions, so the
-	// bridge runtime (and the eval runtime its callbacks need) is emitted.
+	// True when the program references any of the six java: interop functions, so its
+	// sites are resolved against the class files (and the bridge emitted when one needs
+	// it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
 		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
-				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY)) {
+				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
 				return true;
 			}

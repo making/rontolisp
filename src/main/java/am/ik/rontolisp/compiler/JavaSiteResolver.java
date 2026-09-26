@@ -118,7 +118,9 @@ public final class JavaSiteResolver {
 	 * {@code (java:object "C")} is what a member declared to answer a {@code C} answers
 	 * ({@link JavaStaticType#ofDeclared}: a subclass of {@code C} or {@code nil}, a
 	 * primitive's Lisp kind, ...); {@code (java:object "C" :exact)} is what
-	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}).
+	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}) -- and of
+	 * an interface, whose instances are never exactly of it, what a {@code java:reify} or
+	 * {@code java:proxy} of it makes ({@link JavaImplementationType}).
 	 * @param spec a type specifier
 	 * @return its static type, or {@code null} when the specifier is not a
 	 * {@code java:object} one
@@ -133,6 +135,11 @@ public final class JavaSiteResolver {
 			return JavaStaticType.UNKNOWN;
 		}
 		boolean exact = ((LispCons) ((LispCons) spec).cdr()).cdr() instanceof LispCons;
+		if (exact && type.isInterface()) {
+			// No object's class is exactly an interface: (java:object "I" :exact) is the
+			// object a java:reify / java:proxy of I makes (JavaImplementationType).
+			return type.isLinkable() ? kinds(this.lookup.implementationOf(type)) : JavaStaticType.UNKNOWN;
+		}
 		return exact ? JavaStaticType.ofConstructed(type, this.lookup) : JavaStaticType.ofDeclared(type, this.lookup);
 	}
 
@@ -158,6 +165,10 @@ public final class JavaSiteResolver {
 		Set<JavaKind> kinds = known.kinds();
 		List<String> candidates = new ArrayList<>();
 		for (JavaKind kind : kinds) {
+			if (kind instanceof JavaImplementationType implementation) {
+				// What a java:reify / java:proxy of I makes: (java:object "I" :exact).
+				return kinds.size() == 1 ? javaObjectSpec(implementation.iface().name(), true) : null;
+			}
 			if (kind instanceof JavaType host) {
 				if (kinds.size() == 1) {
 					return javaObjectSpec(host.name(), true);
@@ -730,6 +741,13 @@ public final class JavaSiteResolver {
 	private JavaStaticType typeOfForm(LispCons cons) {
 		if (operatorOf(cons) != null) {
 			return resolve(cons).result();
+		}
+		if (JavaImplementations.isImplementationForm(cons)) {
+			// A java:reify / java:proxy whose interface resolves makes an object of a
+			// class no program names, whose kind is the interface's implementation type.
+			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
+			JavaType iface = implementation.iface();
+			return iface == null ? JavaStaticType.UNKNOWN : kinds(this.lookup.implementationOf(iface));
 		}
 		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
 			return JavaStaticType.UNKNOWN;

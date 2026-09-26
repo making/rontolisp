@@ -37,8 +37,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code --simd}, {@code --gpu} and {@code objc:} programs need no configuration at all
  * (the last two ship their native-image registration inside the jar), and neither does a
  * {@code java:} program compiled with {@code --java-static}, whose calls are all direct
- * (.kb/java-interop.md, "Direct calls"). The {@code objc:} program runs on macOS only,
- * where the image's {@code main} is thread 0 and has to hand it to AppKit (.kb/objc.md).
+ * and whose interface implementations are generated classes (.kb/java-interop.md, "Direct
+ * calls", "Implementing interfaces"). The {@code objc:} program runs on macOS only, where
+ * the image's {@code main} is thread 0 and has to hand it to AppKit (.kb/objc.md).
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -67,17 +68,19 @@ class ShippedBridgeNativeImageE2eTest {
 	@Test
 	void aJavaInteropJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
 		// The bridge's entry points a program still needs -- a class named at run time,
-		// a receiver of no known class, a proxy -- and both reflective back-calls bind()
-		// makes: _apply (the proxy's lambda) and _strv (a string built by concatenate).
-		// The calls that resolve are direct and need no configuration.
+		// a receiver of no known class, a proxy of an interface named at run time -- and
+		// both reflective back-calls bind() makes: _apply (the proxy's lambda) and _strv
+		// (a string built by concatenate). The calls that resolve are direct, and a
+		// java:proxy of a literal interface is a generated class: neither needs
+		// configuration.
 		Path jar = compileJar("""
 				(defvar *sb* (java:new "java.lang.StringBuilder" "hi"))
-				(let ((math "java.lang.Math") (int "java.lang.Integer"))
+				(let ((math "java.lang.Math") (int "java.lang.Integer") (supplier "java.util.function.Supplier"))
 				  (print (java:static math "max" 3 7))
 				  (java:call *sb* "append" (concatenate 'string "!" "?"))
 				  (print (java:call *sb* "toString"))
-				  (print (java:field int "MAX_VALUE")))
-				(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get"))
+				  (print (java:field int "MAX_VALUE"))
+				  (print (java:call (java:proxy supplier (lambda (method) 42)) "get")))
 				""");
 		List<String> expected = List.of("7", "\"hi!?\"", "2147483647", "42");
 
@@ -133,6 +136,56 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
 		try (ZipFile entries = new ZipFile(jar.toFile())) {
 			assertThat(entries.stream().map(ZipEntry::getName)).noneMatch(name -> name.contains("Bridge"));
+		}
+		assertThat(lines(run(buildImage(jar)))).isEqualTo(expected);
+	}
+
+	// java:reify, a java:proxy of a literal interface and a function passed where an
+	// interface is expected are classes generated at compile time, so a --java-static jar
+	// implementing interfaces needs no configuration either: a Swing-free listener the
+	// JDK calls back (added, fired, removed), a comparator Collections.sort calls and
+	// whose default reversed() runs, a Runnable a thread runs, a Consumer from a lambda,
+	// a proxy, a primitive-typed method.
+	@Test
+	void anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration() throws Exception {
+		Path jar = compileJar(
+				"""
+						(let ((support (java:new "java.beans.PropertyChangeSupport" "bean"))
+						      (seen nil))
+						  (let ((listener (java:reify "java.beans.PropertyChangeListener" "propertyChange"
+						                    (lambda (e)
+						                      (declare (type (java:object "java.beans.PropertyChangeEvent") e))
+						                      (push (list (java:call e "getPropertyName") (java:call e "getNewValue")) seen)))))
+						    (java:call support "addPropertyChangeListener" listener)
+						    (java:call support "firePropertyChange" "size" 1 2)
+						    (java:call support "firePropertyChange" "name" "a" "b")
+						    (java:call support "removePropertyChangeListener" listener)
+						    (java:call support "firePropertyChange" "size" 2 3)
+						    (print (reverse seen))))
+						(let ((lst (java:new "java.util.ArrayList"))
+						      (cmp (java:reify "java.util.Comparator" "compare" (lambda (a b) (- a b)))))
+						  (java:call lst "add" 3)
+						  (java:call lst "add" 1)
+						  (java:call lst "add" 2)
+						  (java:static "java.util.Collections" "sort" lst cmp)
+						  (print (java:call lst "toString"))
+						  (print (java:call (java:call cmp "reversed") "compare" 1 2))
+						  (java:call lst "forEach" (lambda (method x) (print (list method x)))))
+						(let ((thread (java:new "java.lang.Thread" (java:reify "java.lang.Runnable" "run" (lambda () (print :ran))))))
+						  (java:call thread "start")
+						  (java:call thread "join"))
+						(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) method)) "get"))
+						(print (java:call (java:reify "java.util.function.IntBinaryOperator" "applyAsInt" (lambda (a b) (* a b)))
+						                  "applyAsInt" 6 7))
+						""",
+				"--java-static");
+		List<String> expected = List.of("((\"size\" 2) (\"name\" \"b\"))", "\"[1, 2, 3]\"", "1", "(\"accept\" 1)",
+				"(\"accept\" 2)", "(\"accept\" 3)", ":RAN", "\"get\"", "42");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
+		try (ZipFile entries = new ZipFile(jar.toFile())) {
+			assertThat(entries.stream().map(ZipEntry::getName)).noneMatch(name -> name.contains("Bridge"))
+				.anyMatch(name -> name.endsWith("Prog$Reify0.class"));
 		}
 		assertThat(lines(run(buildImage(jar)))).isEqualTo(expected);
 	}

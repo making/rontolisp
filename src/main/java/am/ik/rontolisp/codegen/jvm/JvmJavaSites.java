@@ -10,21 +10,28 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
-import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
+import am.ik.rontolisp.compiler.JavaType;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The {@code java:} sites of one compile attempt, each resolved once against the class
  * files the compile reads ({@link JvmClassFileLookup}) by the resolver the interpreter
  * also uses ({@link JavaSiteResolver}); a resolved site is compiled to a direct call
- * ({@link JvmJavaDirectSites}), any other one through the embedded bridge. Under
+ * ({@link JvmJavaDirectSites}), any other one through the embedded bridge. A
+ * {@code java:reify} or {@code java:proxy} whose interface resolves
+ * ({@link JavaImplementations}) makes an object of a class generated for it
+ * ({@link JvmJavaImplementations}), as does a function value passed where an interface is
+ * expected; any other one is the bridge's {@code java.lang.reflect.Proxy}. Under
  * {@code --java-static} a site that would need the bridge is refused instead, and the
  * attempt fails naming every such site ({@link #refusals()}).
  */
@@ -34,7 +41,13 @@ final class JvmJavaSites {
 
 	private final IdentityHashMap<LispCons, JavaSite> sites = new IdentityHashMap<>();
 
+	private final IdentityHashMap<LispCons, JavaImplementation> implementationForms = new IdentityHashMap<>();
+
+	private final JavaClassLookup lookup;
+
 	private final JvmJavaDirectSites direct;
+
+	private final JvmJavaImplementations implementations;
 
 	private final boolean javaStatic;
 
@@ -46,15 +59,42 @@ final class JvmJavaSites {
 	 * @param lookup the classes sites resolve against
 	 * @param cp the class's constant pool
 	 * @param thisClass the class
+	 * @param programInternalName the class's internal name, which the generated
+	 * implementation classes are named after
 	 * @param lispToString the program's {@code _lispToString}
 	 * @param javaStatic whether a site that needs the bridge is refused
 	 * ({@code --java-static})
 	 */
-	JvmJavaSites(JavaClassLookup lookup, ConstantPool cp, ClassConstant thisClass, MethodrefConstant lispToString,
-			boolean javaStatic) {
+	JvmJavaSites(JavaClassLookup lookup, ConstantPool cp, ClassConstant thisClass, String programInternalName,
+			MethodrefConstant lispToString, boolean javaStatic) {
 		this.resolver = new JavaSiteResolver(lookup);
+		this.lookup = lookup;
 		this.direct = new JvmJavaDirectSites(cp, thisClass, lookup, lispToString);
+		this.implementations = new JvmJavaImplementations(cp, thisClass, programInternalName, lookup, this.direct,
+				lispToString);
+		this.direct.implementations(this.implementations);
 		this.javaStatic = javaStatic;
+	}
+
+	/**
+	 * How a {@code java:reify} or {@code java:proxy} form implements its interface.
+	 * @param form the form
+	 * @return the implementation, resolved or not
+	 */
+	JavaImplementation implementation(LispCons form) {
+		JavaImplementation cached = this.implementationForms.get(form);
+		if (cached == null) {
+			cached = JavaImplementations.resolve(form, this.lookup);
+			this.implementationForms.put(form, cached);
+		}
+		return cached;
+	}
+
+	/**
+	 * @return the classes this attempt implements interfaces with
+	 */
+	JvmJavaImplementations implementations() {
+		return this.implementations;
 	}
 
 	/**
@@ -87,23 +127,27 @@ final class JvmJavaSites {
 	}
 
 	/**
-	 * Why a site needs the reflective bridge, or {@code null} when it compiles to a
-	 * direct call that needs nothing else: a {@code java:proxy}; a site left to run time;
-	 * a resolved site with an argument that may be a function value where an interface is
-	 * expected, which becomes a {@code java.lang.reflect.Proxy} of it
-	 * ({@link JvmJavaDirectSites#proxyReason}).
+	 * Why a site needs the reflective bridge, or {@code null} when it compiles to code
+	 * that needs nothing else: a {@code java:reify} / {@code java:proxy} whose interface
+	 * is not resolved when it is compiled, or a site left to run time. A function value
+	 * passed where an interface is expected needs nothing: it becomes the interface's
+	 * generated proxy class.
 	 * @param site a {@code java:} form
 	 * @return the reason, or {@code null}
 	 */
 	@Nullable String bridgeReason(LispCons site) {
-		if (site.car() instanceof LispSymbol head && LispNames.JAVA_PROXY_QUALIFIED.equals(head.name())) {
-			return "java:proxy implements its interface with java.lang.reflect.Proxy";
+		if (JavaImplementations.isImplementationForm(site)) {
+			JavaImplementation implementation = implementation(site);
+			if (implementation.resolved()) {
+				return null;
+			}
+			return "it implements its interface with java.lang.reflect.Proxy: " + implementation.reason();
 		}
 		JavaSite resolution = resolve(site);
 		if (!resolution.resolved()) {
 			return "it is resolved by reflection at run time: " + resolution.reason();
 		}
-		return JvmJavaDirectSites.proxyReason(resolution);
+		return null;
 	}
 
 	/**
@@ -126,33 +170,64 @@ final class JvmJavaSites {
 		return false;
 	}
 
-	// The java: sites of a form, java:proxy ones included.
+	// The java: sites of a form, java:reify and java:proxy ones included.
 	private static List<LispCons> proxySitesAnd(LispVal form) {
 		List<LispCons> found = new ArrayList<>(JavaSiteResolver.sitesIn(form));
-		collectProxies(form, found, new IdentityHashMap<>());
+		found.addAll(JavaImplementations.formsIn(form));
 		return found;
 	}
 
-	private static void collectProxies(LispVal form, List<LispCons> found, IdentityHashMap<LispCons, Boolean> seen) {
-		LispVal current = form;
-		boolean head = true;
-		while (current instanceof LispCons cons && seen.put(cons, Boolean.TRUE) == null) {
-			if (head) {
-				if (cons.car() instanceof LispSymbol sym) {
-					if (LispNames.QUOTE.equals(sym.name())) {
-						return;
+	/**
+	 * Whether the program makes an object of a generated implementation class -- a
+	 * {@code java:reify} / {@code java:proxy} whose interface resolves, a resolved site
+	 * passing a function where an interface is expected: its functions are applied
+	 * through {@code _apply}, which the program then carries. Read off the forms before
+	 * they are compiled; a misprediction is caught by the helper-gate check.
+	 * @param program the package-resolved top-level forms
+	 * @return whether the apply runtime is needed
+	 */
+	boolean needsApply(List<LispVal> program) {
+		for (LispVal form : program) {
+			for (LispCons site : proxySitesAnd(form)) {
+				if (JavaImplementations.isImplementationForm(site)) {
+					if (implementation(site).resolved()) {
+						return true;
 					}
-					if (LispNames.JAVA_PROXY_QUALIFIED.equals(sym.name())) {
-						found.add(cons);
-					}
+					continue;
 				}
-				head = false;
+				if (passesAFunction(resolve(site))) {
+					return true;
+				}
 			}
-			if (cons.car() instanceof LispCons inner) {
-				collectProxies(inner, found, seen);
-			}
-			current = cons.cdr();
 		}
+		return false;
+	}
+
+	// Whether a resolved site may convert an argument that is a function to an
+	// interface -- directly, or as an element of a sequence made an array -- which the
+	// interface's generated proxy class then applies.
+	private static boolean passesAFunction(JavaSite site) {
+		if (!site.resolved() || site.arguments().isEmpty()) {
+			return false;
+		}
+		List<JavaOverloads.Overload> overloads = site.dispatched() ? site.overloads() : site.executable() == null
+				? List.of() : List.of(new JavaOverloads.Overload(site.executable(), site.packed()));
+		List<JavaSite.Argument> arguments = site.arguments();
+		for (int i = 0; i < arguments.size(); i++) {
+			if (!arguments.get(i).mayBeFunction()) {
+				continue;
+			}
+			for (JavaOverloads.Overload overload : overloads) {
+				JavaType type = JavaOverloads.parameterAt(overload, i);
+				while (type.componentType() != null) {
+					type = java.util.Objects.requireNonNull(type.componentType());
+				}
+				if (type.isInterface()) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -167,9 +242,8 @@ final class JvmJavaSites {
 	}
 
 	private static String describe(LispCons site) {
-		if (site.car() instanceof LispSymbol head && LispNames.JAVA_PROXY_QUALIFIED.equals(head.name())
-				&& site.cdr() instanceof LispCons rest && rest.car() instanceof LispString iface) {
-			return "java:proxy " + iface.print();
+		if (JavaImplementations.isImplementationForm(site)) {
+			return JavaImplementations.describe(site);
 		}
 		return JavaSiteResolver.describe(site);
 	}
@@ -182,11 +256,13 @@ final class JvmJavaSites {
 	}
 
 	/**
-	 * Reports, as compile warnings, the sites left to run time -- in source order, from
-	 * the top-level form on which reporting is on: from the start under
-	 * {@code --warn-java-reflection}, else from after a top-level
-	 * {@code (setq java:*warn-on-reflection* t)} (and off again after one setting it to
-	 * {@code nil}), which is when the interpreter, loading the same forms, reports them.
+	 * Reports, as compile warnings, the sites left to run time -- and the
+	 * {@code java:reify} / {@code java:proxy} forms whose interface is implemented by
+	 * reflection then -- in source order, from the top-level form on which reporting is
+	 * on: from the start under {@code --warn-java-reflection}, else from after a
+	 * top-level {@code (setq java:*warn-on-reflection* t)} (and off again after one
+	 * setting it to {@code nil}), which is when the interpreter, loading the same forms,
+	 * reports them.
 	 * @param program the package-resolved top-level forms
 	 * @param on whether reporting is on from the start
 	 */
@@ -206,6 +282,13 @@ final class JvmJavaSites {
 				if (!resolution.resolved()) {
 					CompileWarnings.warn(SourceProvenance.prefix(site) + "warning: "
 							+ JavaSiteResolver.reflectionWarning(site, resolution));
+				}
+			}
+			for (LispCons implementationForm : JavaImplementations.formsIn(form)) {
+				JavaImplementation implementation = implementation(implementationForm);
+				if (!implementation.resolved()) {
+					CompileWarnings.warn(SourceProvenance.prefix(implementationForm) + "warning: "
+							+ JavaImplementations.reflectionWarning(implementationForm, implementation));
 				}
 			}
 		}

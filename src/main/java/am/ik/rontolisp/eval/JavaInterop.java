@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -30,6 +31,9 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
@@ -308,7 +312,7 @@ final class JavaInterop {
 			case LispString s -> s.value().length() == 1 ? JavaKind.Lisp.STRING_1 : JavaKind.Lisp.STRING;
 			case LispChar c ->
 				Character.isBmpCodePoint(c.codePoint()) ? JavaKind.Lisp.CHAR : JavaKind.Lisp.SUPPLEMENTARY_CHAR;
-			case LispJavaObject obj -> ReflectiveJavaClasses.of(obj.ref().getClass());
+			case LispJavaObject obj -> hostKind(obj.ref());
 			case LispLambda ignored -> JavaKind.Lisp.FUNCTION;
 			case LispFunction ignored -> JavaKind.Lisp.FUNCTION;
 			default -> null;
@@ -525,57 +529,246 @@ final class JavaInterop {
 	}
 
 	// (java:proxy "fully.qualified.Interface" callable): the callable is applied as
-	// (callable method-name arg1 arg2 ...) for every interface method; Object methods
-	// (equals/hashCode/toString) keep identity behavior.
+	// (callable method-name arg1 arg2 ...) for every interface method, default ones too;
+	// Object's equals/hashCode/toString keep identity behavior
+	// (compiler/JavaImplementations.proxy, which a compiled program's generated class
+	// declares).
 	static LispVal proxy(String interfaceName, LispVal callable, Caller caller) {
-		Class<?> iface = loadClass(interfaceName).type();
-		if (!iface.isInterface()) {
-			throw new LispEvalException("java:proxy expects an interface, got " + interfaceName);
+		ReflectiveJavaClasses.Type type = loadClass(interfaceName);
+		if (!type.isInterface()) {
+			throw new LispEvalException(JavaImplementations.notAnInterface(true, interfaceName));
 		}
-		Object proxy = Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface },
-				(p, method, methodArgs) -> {
-					switch (method.getName()) {
-						case "hashCode" -> {
-							return System.identityHashCode(p);
-						}
-						case "equals" -> {
-							return p == (methodArgs == null ? null : methodArgs[0]);
-						}
-						case "toString" -> {
-							return "#<java-proxy " + interfaceName + ">";
-						}
-						default -> {
-						}
-					}
-					List<LispVal> callArgs = new ArrayList<>();
-					callArgs.add(new LispString(method.getName()));
-					if (methodArgs != null) {
-						for (Object a : methodArgs) {
-							callArgs.add(unmarshal(a));
-						}
-					}
-					LispVal result = caller.call(callable, callArgs);
-					Class<?> ret = method.getReturnType();
-					if (ret == void.class) {
-						return null;
-					}
-					@Nullable Object[] slot = new @Nullable Object[1];
-					if (marshal(result, ReflectiveJavaClasses.of(ret), caller, slot, 0) == NO_MATCH) {
-						throw new LispEvalException("java:proxy: cannot return " + result.print() + " as " + ret
-								+ " from " + interfaceName);
-					}
-					return slot[0];
-				});
-		return new LispJavaObject(proxy);
+		List<Object> key = List.of(type.type(), PROXY_KEY);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			dispatch = new Dispatch(JavaImplementations.proxy(type, CLASSES));
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, List.of(callable), caller);
+	}
+
+	// (java:reify "fully.qualified.Interface" "method" function ...): each function
+	// implements the one method its designator names (compiler/JavaImplementations.reify
+	// -- the rule a compiled program's generated class follows).
+	static LispVal reify(List<LispVal> args, Caller caller) {
+		if (args.isEmpty() || args.size() % 2 == 0 || !(args.get(0) instanceof LispString interfaceName)) {
+			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+		}
+		List<String> designators = new ArrayList<>();
+		List<LispVal> functions = new ArrayList<>();
+		for (int i = 1; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispString designator)) {
+				throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+			}
+			designators.add(designator.value());
+			functions.add(args.get(i + 1));
+		}
+		ReflectiveJavaClasses.Type type = loadClass(interfaceName.value());
+		if (!type.isInterface()) {
+			throw new LispEvalException(JavaImplementations.notAnInterface(false, interfaceName.value()));
+		}
+		List<Object> key = List.of(type.type(), designators);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			try {
+				dispatch = new Dispatch(JavaImplementations.reify(type, designators, CLASSES));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, functions, caller);
+	}
+
+	// The designators-list stand-in of a java:proxy's key.
+	private static final String PROXY_KEY = "proxy";
+
+	// How a java:proxy of an interface class, or a java:reify of (interface class,
+	// designators), implements it: resolved once.
+	private static final ConcurrentHashMap<List<Object>, Dispatch> IMPLEMENTATIONS = new ConcurrentHashMap<>();
+
+	// The object: a Proxy whose handler dispatches on the implementation's slots.
+	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+		Class<?> iface = ((ReflectiveJavaClasses.Type) java.util.Objects
+			.requireNonNull(dispatch.implementation.iface())).type();
+		return new LispJavaObject(Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface },
+				new ImplementationHandler(dispatch, functions, caller)));
+	}
+
+	/**
+	 * Which slot of a {@code java:reify} / {@code java:proxy} implementation an invoked
+	 * method is, remembered per method (a {@code Proxy} class passes the same
+	 * {@code Method} objects on every call).
+	 */
+	private static final class Dispatch {
+
+		// Codes beside a slot's implementation index (NONE: an abstract method no
+		// function implements).
+		static final int HASH_CODE = -2;
+
+		static final int EQUALS = -3;
+
+		static final int TO_STRING = -4;
+
+		static final int DEFAULT = -5;
+
+		final JavaImplementation implementation;
+
+		final JavaImplementationType kind;
+
+		final String ifaceName;
+
+		private final java.util.Map<String, Integer> slots = new java.util.HashMap<>();
+
+		private final ConcurrentHashMap<Method, Integer> byMethod = new ConcurrentHashMap<>();
+
+		Dispatch(JavaImplementation implementation) {
+			this.implementation = implementation;
+			JavaType iface = java.util.Objects.requireNonNull(implementation.iface());
+			this.kind = CLASSES.implementationOf(iface);
+			this.ifaceName = iface.name();
+			for (JavaImplementation.Slot slot : implementation.slots()) {
+				this.slots.put(slot.dispatchKey(), slot.implementation());
+			}
+		}
+
+		int indexOf(Method method) {
+			Integer cached = this.byMethod.get(method);
+			if (cached == null) {
+				String key = keyOf(method);
+				Integer slot = this.slots.get(key + method.getReturnType().getName());
+				if (slot != null) {
+					cached = slot;
+				}
+				else {
+					cached = switch (key) {
+						case "hashCode()" -> HASH_CODE;
+						case "equals(java.lang.Object)" -> EQUALS;
+						case "toString()" -> TO_STRING;
+						default -> method.isDefault() ? DEFAULT : JavaImplementation.NONE;
+					};
+				}
+				this.byMethod.put(method, cached);
+			}
+			return cached;
+		}
+
+		static String keyOf(Method method) {
+			Class<?>[] params = method.getParameterTypes();
+			List<ReflectiveJavaClasses.Type> types = new ArrayList<>(params.length);
+			for (Class<?> param : params) {
+				types.add(ReflectiveJavaClasses.of(param));
+			}
+			return JavaImplementation.key(method.getName(), types);
+		}
+
+	}
+
+	/**
+	 * The handler of a {@code java:reify} / {@code java:proxy} object: a method a slot
+	 * declares calls its function -- a proxy's with the method's name first -- with the
+	 * arguments unmarshalled, and its value is marshalled to the method's return type (a
+	 * function is never made a proxy there); an abstract method no function implements
+	 * throws; a default method no slot overrides runs its body; {@code Object}'s three
+	 * keep their identity behavior. What a compiled program's generated class does,
+	 * method for method.
+	 */
+	private static final class ImplementationHandler implements InvocationHandler {
+
+		private final Dispatch dispatch;
+
+		private final List<LispVal> functions;
+
+		private final Caller caller;
+
+		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+			this.dispatch = dispatch;
+			this.functions = List.copyOf(functions);
+			this.caller = caller;
+		}
+
+		@Override
+		public @Nullable Object invoke(Object p, Method method, @Nullable Object @Nullable [] methodArgs)
+				throws Throwable {
+			int index = this.dispatch.indexOf(method);
+			switch (index) {
+				case Dispatch.HASH_CODE -> {
+					return System.identityHashCode(p);
+				}
+				case Dispatch.EQUALS -> {
+					return p == (methodArgs == null ? null : methodArgs[0]);
+				}
+				case Dispatch.TO_STRING -> {
+					return this.dispatch.implementation.defaultToString();
+				}
+				case Dispatch.DEFAULT -> {
+					return InvocationHandler.invokeDefault(p, method, methodArgs);
+				}
+				case JavaImplementation.NONE -> throw new UnsupportedOperationException(
+						JavaImplementation.noImplementation(this.dispatch.ifaceName, Dispatch.keyOf(method)));
+				default -> {
+				}
+			}
+			boolean proxy = this.dispatch.implementation.proxy();
+			List<LispVal> callArgs = new ArrayList<>();
+			if (proxy) {
+				callArgs.add(new LispString(method.getName()));
+			}
+			if (methodArgs != null) {
+				for (Object a : methodArgs) {
+					callArgs.add(unmarshal(a));
+				}
+			}
+			LispVal result = this.caller.call(this.functions.get(index), callArgs);
+			Class<?> ret = method.getReturnType();
+			if (ret == void.class) {
+				return null;
+			}
+			@Nullable Object[] slot = new @Nullable Object[1];
+			ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
+			if (marshal(result, returnType, this.caller, slot, 0, false) == NO_MATCH) {
+				throw new LispEvalException(
+						JavaImplementation.returnMismatchPrefix(proxy) + result.print() + JavaImplementation
+							.returnMismatchSuffix(proxy, this.dispatch.ifaceName, method.getName(), returnType));
+			}
+			return slot[0];
+		}
+
+	}
+
+	// The kind of a host object: a java:reify / java:proxy object's is its interface's
+	// implementation type, whatever Proxy class made it (as a compiled program's
+	// generated class is); any other object's its exact class.
+	private static JavaKind hostKind(Object ref) {
+		Class<?> type = ref.getClass();
+		if (Proxy.isProxyClass(type) && Proxy.getInvocationHandler(ref) instanceof ImplementationHandler handler) {
+			return handler.dispatch.kind;
+		}
+		return ReflectiveJavaClasses.of(type);
 	}
 
 	// Writes the Java value for `value` (assignable to `target`) into out[index] and
 	// returns its conversion cost, or NO_MATCH (writing nothing) if it cannot convert. A
 	// value with a kind is costed by kindCost -- the one cost table -- and converted by
-	// convert(); a list or vector element-wise.
+	// convert(); a list or vector element-wise. A function becomes a proxy of an
+	// interface: an argument's conversion.
 	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index) {
+		return marshal(value, target, caller, out, index, true);
+	}
+
+	// With proxies false, a function converts to nothing: the conversion of a value a
+	// java:reify / java:proxy function answers to Java, which -- as in Clojure -- never
+	// coerces a function (return a java:reify or java:proxy object instead). A compiled
+	// program's generated class converts its functions' values the same way
+	// (codegen.jvm.JvmJavaDirectSites#returnedConvert).
+	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index,
+			boolean proxies) {
 		JavaKind kind = kindOf(value);
 		if (kind != null) {
+			if (!proxies && kind == JavaKind.Lisp.FUNCTION) {
+				return NO_MATCH;
+			}
 			int cost = JavaOverloads.kindCost(kind, target, CLASSES);
 			if (cost != NO_MATCH) {
 				out[index] = convert(value, classOf(target), caller);
@@ -588,7 +781,7 @@ final class JavaInterop {
 				if (elements == null) {
 					return NO_MATCH; // a dotted (improper) list is not a sequence
 				}
-				return marshalSequence(elements, target, caller, out, index);
+				return marshalSequence(elements, target, caller, out, index, proxies);
 			}
 			case LispArray array -> {
 				if (array.dimensions().length != 1) {
@@ -601,7 +794,7 @@ final class JavaInterop {
 					LispVal element = array.readFlat(i);
 					elements.add(element == null ? LispNil.INSTANCE : element);
 				}
-				return marshalSequence(elements, target, caller, out, index);
+				return marshalSequence(elements, target, caller, out, index, proxies);
 			}
 			default -> {
 				return NO_MATCH; // symbol, hash-table, ... are not bridged
@@ -661,14 +854,14 @@ final class JavaInterop {
 	// java.util.List of boxed elements. The per-element costs count toward the total so
 	// string elements still prefer a String[] parameter over Object[].
 	private static int marshalSequence(List<LispVal> elements, JavaType target, Caller caller, @Nullable Object[] out,
-			int index) {
+			int index, boolean proxies) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		JavaType component = target.componentType();
 		if (component != null) {
 			Object array = Array.newInstance(classOf(component), elements.size());
 			int total = JavaOverloads.COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
-				int cost = marshal(elements.get(i), component, caller, slot, 0);
+				int cost = marshal(elements.get(i), component, caller, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -683,7 +876,7 @@ final class JavaInterop {
 			int total = JavaOverloads.COST_BOXED;
 			JavaType object = ReflectiveJavaClasses.of(Object.class);
 			for (LispVal element : elements) {
-				int cost = marshal(element, object, caller, slot, 0);
+				int cost = marshal(element, object, caller, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}

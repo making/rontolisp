@@ -118,10 +118,18 @@ class JvmLispCompilerSplitTest {
 	}
 
 	// Direct java: calls are private methods of the class, the helpers they share too,
-	// and the bridge finds _apply by name: a forced split must leave every one reachable.
+	// the bridge finds _apply by name, and a generated interface implementation calls
+	// its program-side callback from its own class: a forced split must leave every one
+	// reachable.
 	@Test
 	void aForcedSplitKeepsJavaCallsWorking() throws Exception {
 		String source = FEATURES + """
+				(let ((lst (java:new "java.util.ArrayList")))
+				  (java:call lst "add" 2)
+				  (java:call lst "add" 1)
+				  (java:static "java.util.Collections" "sort" lst
+				    (java:reify "java.util.Comparator" "compare" (lambda (a b) (- a b))))
+				  (print (java:call lst "toString")))
 				(defun describe-point (p)
 				  (declare (type (java:object "java.awt.Point") p))
 				  (list (java:field p "x") (java:call p "getY")))
@@ -135,7 +143,7 @@ class JvmLispCompilerSplitTest {
 				""";
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
-		assertThat(expected).endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3");
+		assertThat(expected).contains("\"[1, 2]\"").endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));
 		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");

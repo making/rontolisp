@@ -31,6 +31,13 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		}
 	};
 
+	private static final ClassValue<JavaImplementationType> IMPLEMENTATIONS = new ClassValue<>() {
+		@Override
+		protected JavaImplementationType computeValue(Class<?> iface) {
+			return new JavaImplementationType(of(iface));
+		}
+	};
+
 	private static final Map<String, Class<?>> PRIMITIVES = Map.of("boolean", boolean.class, "byte", byte.class, "char",
 			char.class, "short", short.class, "int", int.class, "long", long.class, "float", float.class, "double",
 			double.class, "void", void.class);
@@ -77,6 +84,11 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		return cached instanceof Class<?> type ? of(type) : null;
 	}
 
+	@Override
+	public JavaImplementationType implementationOf(JavaType iface) {
+		return IMPLEMENTATIONS.get(((Type) iface).type());
+	}
+
 	private static @Nullable Class<?> load(String name) {
 		Class<?> primitive = PRIMITIVES.get(name);
 		if (primitive != null) {
@@ -98,6 +110,8 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		private final ConcurrentHashMap<String, List<Member>> methods = new ConcurrentHashMap<>();
 
 		private volatile @Nullable List<Member> constructors;
+
+		private volatile @Nullable List<Member> publicMethods;
 
 		private final ConcurrentHashMap<String, java.util.Optional<FieldMember>> fields = new ConcurrentHashMap<>();
 
@@ -164,6 +178,9 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 
 		@Override
 		public boolean isAssignableFrom(JavaType other) {
+			if (other instanceof JavaImplementationType implementation) {
+				return implementation.isAssignableTo(this);
+			}
 			return other instanceof Type t && this.type.isAssignableFrom(t.type);
 		}
 
@@ -182,6 +199,20 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 				}
 				cached = List.copyOf(candidates);
 				this.methods.put(name, cached);
+			}
+			return cached;
+		}
+
+		@Override
+		public List<Member> publicMethods() {
+			List<Member> cached = this.publicMethods;
+			if (cached == null) {
+				List<Member> list = new ArrayList<>();
+				for (Method method : this.type.getMethods()) {
+					list.add(new Member(method));
+				}
+				cached = List.copyOf(list);
+				this.publicMethods = cached;
 			}
 			return cached;
 		}
@@ -290,6 +321,11 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 		@Override
 		public boolean isConstructor() {
 			return this.executable instanceof Constructor<?>;
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return Modifier.isAbstract(this.executable.getModifiers());
 		}
 
 		@Override
