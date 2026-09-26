@@ -15,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.LispVal;
@@ -14032,6 +14033,14 @@ class WasmLispCompilerIntegrationTest {
 	void componentCharacterFileStreamPositionIsTheByteOffset() throws Exception {
 		assertThat(compileAndRunFrontEndWithDir(CharacterFilePositionFixture.program("pos.txt"), true))
 			.isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched() throws Exception {
+		// The WASM twin of
+		// LispEvaluatorTest#aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched.
+		assertThat(compileAndRunFrontEndWithDir(MethodedBuiltinFixture.PROGRAM, false))
+			.isEqualTo(MethodedBuiltinFixture.EXPECTED);
 	}
 
 	@Test

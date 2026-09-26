@@ -15,6 +15,9 @@ compile-time-constant flags.**
   `%princ-piece`, `%prin1-piece` — `print-object` routing, live `*print-case*`
 - `flet`, `labels` (`preExpandLocalMacros`), `symbol-macrolet` — live user-macro table
 - `read`, `floor`/`ceiling`/`round`/`truncate`, `reduce`, `sort` — partial (nullable) lowerings
+- the multiple-value consumers (`multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`,
+  `nth-value`) and lambda tails, ONLY once the program methods a producer — the methoded set
+  (`.kb/clos.md`, "Interpreter, the call side"); memoized as before while it is empty
 
 What re-expanding `setf` costs, measured 2026-09-24 (JFR, `linalg:arange` over 520000
 elements, i.e. a `(setf (aref out i) x)` loop): **24%** of the samples, 8 points of it

@@ -7,10 +7,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -55,6 +57,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -679,6 +682,34 @@ public final class LispEvaluator {
 	 * forever. See {@link #builtinDefaultMethodFor}.
 	 */
 	private final Map<String, String> builtinDefaultMethods = new HashMap<>();
+
+	/** The initial {@link #methodedExpandedBuiltins}, compared by identity. */
+	private static final Set<String> NO_METHODED_BUILTINS = Set.of();
+
+	/**
+	 * The subset of {@link #builtinDefaultMethods}' names the compile paths dispatch too
+	 * ({@link ShadowedBuiltins#loweredBuiltinFunctions()}): a call of one of these goes
+	 * straight to the global binding -- the dispatcher -- in {@link #evalCons}, ahead of
+	 * the operator tables that would otherwise expand it without ever reading the binding
+	 * ({@code (byte-size x)} into {@code (car x)}). Replaced, never mutated, so the
+	 * per-call read needs no lock; {@link #NO_METHODED_BUILTINS} until a program methods
+	 * such a name, which the call path tests by identity.
+	 */
+	private volatile Set<String> methodedExpandedBuiltins = NO_METHODED_BUILTINS;
+
+	/**
+	 * The methoded names among {@link #methodedExpandedBuiltins} that the multiple-value
+	 * lowerings recognize as syntactic producers
+	 * ({@link LispMacroExpander#isSyntacticMultipleValueProducerName}), each mapped to
+	 * the alias its dispatcher is also bound under
+	 * ({@link LispMacroExpander#shadowedDispatcherName}). A form reaching a lowering is
+	 * renamed onto the alias first ({@link #dispatchingMethodedProducers}) -- the compile
+	 * paths' {@code ShadowedBuiltins} rename, applied where the interpreter lowers -- so
+	 * {@code (floor x)} in a tail or under {@code multiple-value-bind} is a call of the
+	 * dispatcher, not the built-in's quotient-and-remainder expansion. Replaced, never
+	 * mutated; empty in every program that methods no such name.
+	 */
+	private volatile Map<String, String> methodedProducerDispatch = Map.of();
 
 	/**
 	 * The {@code compile} built-in's capture target when this evaluator is a compile
@@ -6303,7 +6334,17 @@ public final class LispEvaluator {
 					}
 					LispVal function;
 					List<LispVal> args;
-					if (head instanceof LispSymbol sym) {
+					Set<String> methoded = this.methodedExpandedBuiltins;
+					if (methoded != NO_METHODED_BUILTINS && head instanceof LispSymbol sym
+							&& methoded.contains(sym.name())) {
+						// A built-in the program defined a method on: its global binding
+						// is now the generic's dispatcher (the built-in its default
+						// method), so the call goes there rather than through the
+						// operator table's expansion, which would never consult it.
+						function = resolveFunction(sym.name());
+						args = evalArgs(cons, env, properLength - 1);
+					}
+					else if (head instanceof LispSymbol sym) {
 						switch (sym.name()) {
 							case LispNames.QUOTE:
 							case LispNames.UNSPELLED_QUOTE:
@@ -7375,17 +7416,17 @@ public final class LispEvaluator {
 			case LispNames.LABELS:
 				return LispMacroExpander.expandLabels(preExpandLocalMacros(cons));
 			case LispNames.MULTIPLE_VALUE_BIND:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueBind);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueList);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueList);
 			case LispNames.MULTIPLE_VALUE_CALL:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueCall);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueCall);
 			case LispNames.NTH_VALUE:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandNthValue);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandNthValue);
 			case LispNames.MULTIPLE_VALUE_SETQ:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueSetq);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueSetq);
 			case LispNames.MULTIPLE_VALUE_PROG1:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueProg1);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueProg1);
 			case LispNames.ROTATEF:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandRotatef);
 			case LispNames.SHIFTF:
@@ -7917,7 +7958,7 @@ public final class LispEvaluator {
 		// does (defmethod bodies arrive here as defuns). The interpreter's spill
 		// global always exists, so no gate is needed; the compile paths run the same
 		// rewrite in LispMacroExpander.injectMvSpillGlobal.
-		blockForm = LispMacroExpander.spillEscapingMvProducers(blockForm);
+		blockForm = LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(blockForm));
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		// The funcName rides on the value so it prints #<function NAME>, the text both
@@ -8119,6 +8160,43 @@ public final class LispEvaluator {
 		}
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		String alias = this.methodedProducerDispatch.get(genericName);
+		if (alias != null) {
+			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
+			if (dispatcher != null) {
+				this.globalEnv.defineFunction(alias, dispatcher);
+			}
+		}
+	}
+
+	/**
+	 * The form with its calls of methoded multiple-value producers renamed onto their
+	 * dispatcher aliases ({@link #methodedProducerDispatch}); the form itself when the
+	 * program methods none. Applied to what a multiple-value lowering is about to read.
+	 * @param form the form a lowering will see
+	 * @return the form to hand it
+	 */
+	private LispVal dispatchingMethodedProducers(LispVal form) {
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		return dispatchers.isEmpty() ? form : ShadowedBuiltins.renameCallSites(form, dispatchers);
+	}
+
+	/**
+	 * A multiple-value consumer's expansion: memoized per call site
+	 * ({@link #builtinMacroExpansion}) while the program methods no producer, re-expanded
+	 * over the renamed form once it does -- the expansion then depends on
+	 * {@link #methodedProducerDispatch}, which a later {@code defmethod} can grow, and an
+	 * expansion memoized before that would keep the built-in's lowering.
+	 * @param cons the consumer form
+	 * @param expander its expansion
+	 * @return the expansion
+	 */
+	private LispVal multipleValueConsumerExpansion(LispCons cons,
+			java.util.function.Function<LispCons, LispVal> expander) {
+		if (this.methodedProducerDispatch.isEmpty()) {
+			return builtinMacroExpansion(cons, expander);
+		}
+		return expander.apply((LispCons) dispatchingMethodedProducers(cons));
 	}
 
 	/**
@@ -8151,6 +8229,16 @@ public final class LispEvaluator {
 		String internal = LispMacroExpander.builtinDefaultMethodName(genericName);
 		this.globalEnv.defineFunction(internal, builtin);
 		this.builtinDefaultMethods.put(genericName, internal);
+		if (ShadowedBuiltins.loweredBuiltinFunctions().contains(genericName)) {
+			Set<String> methoded = new HashSet<>(this.methodedExpandedBuiltins);
+			methoded.add(genericName);
+			this.methodedExpandedBuiltins = Set.copyOf(methoded);
+			if (LispMacroExpander.isSyntacticMultipleValueProducerName(genericName)) {
+				Map<String, String> producers = new HashMap<>(this.methodedProducerDispatch);
+				producers.put(genericName, LispMacroExpander.shadowedDispatcherName(genericName));
+				this.methodedProducerDispatch = Map.copyOf(producers);
+			}
+		}
 		return internal;
 	}
 
@@ -11156,7 +11244,8 @@ public final class LispEvaluator {
 				// compiler's tail-position rewrite (spillEscapingMvProducers) so the
 				// protected form publishes them to spill just as the compile path does.
 				this.globalEnv.clearSpill();
-				LispVal protectedForEval = LispMacroExpander.spillEscapingMvProducers(protectedForm);
+				LispVal protectedForEval = LispMacroExpander
+					.spillEscapingMvProducers(dispatchingMethodedProducers(protectedForm));
 				value = eval(protectedForEval, env);
 				if (noErrorClause != null) {
 					allValues = consumeValues(value);
@@ -11592,6 +11681,11 @@ public final class LispEvaluator {
 	 * same body conses.
 	 */
 	private LispVal settledLambdaTail(LispCons tail) {
+		if (!this.methodedProducerDispatch.isEmpty()) {
+			// Not memoized: the rename depends on the methoded set, which a later
+			// defmethod can grow (multipleValueConsumerExpansion).
+			return LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(tail));
+		}
 		LispVal cached;
 		synchronized (this.lambdaTailSettlements) {
 			cached = this.lambdaTailSettlements.get(tail);
