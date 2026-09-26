@@ -2691,6 +2691,17 @@ public final class LispNames {
 	public static final String FILE_ERROR_INTERNAL = "%FILE-ERROR";
 
 	/**
+	 * Internal two-argument primitive {@code (%package-error package message)} that
+	 * signals a {@code package-error} carrying the package designator (a keyword) and
+	 * reporting the message: what the compile-path {@code intern} lowering emits for a
+	 * package that does not exist ({@code LispMacroExpander.expandInternInPackage}).
+	 * Lowered like {@link #FILE_ERROR_INTERNAL}
+	 * ({@code LispMacroExpander.lowerPackageError}); the interpreter's {@code intern}
+	 * signals directly and never sees it.
+	 */
+	public static final String PACKAGE_ERROR_INTERNAL = "%PACKAGE-ERROR";
+
+	/**
 	 * Internal {@code (%open-or-nil path direction [element-type])}: {@code open} in the
 	 * positional shape, answering nil where {@code open} would fail. Only the compiled
 	 * backends' {@code open} lowering produces it

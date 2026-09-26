@@ -11559,6 +11559,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					break;
 				}
 			}
+			// The same for an intern's package-error (lowerPackageError).
+			for (String site : LispMacroExpander.PACKAGE_ERROR_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
 		}
 		for (String tag : closRegistry.layouts().keySet()) {
 			String bare = tag.startsWith(LispLayout.CLASS_TAG_PREFIX)

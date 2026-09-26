@@ -20056,6 +20056,21 @@ standalone:
       :NOT-A-CHARACTER
       :NOT-A-CHARACTER
       "AB"
+  # intern into a package that does not exist signals a catchable package-error
+  # for a literal and a computed designator alike, and creates nothing.
+  - name: intern-into-a-missing-package
+    source: |
+      (defun ci-ipe-in (p) (intern "X" p))
+      (print (handler-case (intern "X" "CI-IPE-NOPKG") (error () :caught)))
+      (print (handler-case (ci-ipe-in "CI-IPE-NOPKG")
+               (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+      (print (handler-case (ci-ipe-in nil) (package-error () :caught)))
+      (print (find-package "CI-IPE-NOPKG"))
+    stdout: |
+      :CAUGHT
+      (:CI-IPE-NOPKG "No such package: CI-IPE-NOPKG")
+      :CAUGHT
+      NIL
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

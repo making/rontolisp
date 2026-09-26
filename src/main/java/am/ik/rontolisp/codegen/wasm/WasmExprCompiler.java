@@ -1228,6 +1228,8 @@ final class WasmExprCompiler {
 			case LispNames.OPEN_OR_NIL_INTERNAL -> WasmOpenCompiler.compile(cons, ctx);
 			case LispNames.FILE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander.lowerFileError(cons,
 					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
+			case LispNames.PACKAGE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander
+				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			case LispNames.CLOSE -> {
 				// Closing a SYNONYM stream closes the synonym, not what it forwards
 				// to -- which is nothing to do; an OPEN stream resolves to its
