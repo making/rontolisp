@@ -123,8 +123,8 @@ final class JavaBridgeTemplate {
 	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
 	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
 	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
-	 * adding a class to the travelling blob or duplicating the representation walk
-	 * {@code _strv} owns.
+	 * adding a class that must travel with the bridge or duplicating the representation
+	 * walk {@code _strv} owns.
 	 */
 	private static @Nullable Method strvMethod;
 
