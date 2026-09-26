@@ -124,10 +124,11 @@ final class WasmUncaughtReportCompiler {
 	 * <p>
 	 * The payload is {@code (condition-instance . message-string)}
 	 * ({@link WasmErrorCompiler}), and which half carries the text depends on the signal:
-	 * a typed {@code %error-cond} puts a real instance in the car and nil in the cdr, a
-	 * plain {@code %error} the other way round. Both are read here through pseudo-locals,
-	 * the {@code __hc_cond$<slot>} trick {@code WasmHandlerCaseCompiler} uses, so the
-	 * whole line is an ordinary Lisp form: the instance renders through
+	 * a typed {@code %error-cond} puts a real instance in the car and, in the cdr, nil or
+	 * the site-built text of a class that reports nothing; a plain {@code %error} puts
+	 * nil in the car and its message in the cdr. Both are read here through
+	 * pseudo-locals, the {@code __hc_cond$<slot>} trick {@code WasmHandlerCaseCompiler}
+	 * uses, so the whole line is an ordinary Lisp form: the instance renders through
 	 * {@code %condition-report-str} -- ONE call site for the whole program, which is what
 	 * lets the per-signal message renders stay deleted ({@code .kb/error-handling.md}) --
 	 * and a plain message is already the rendered text.
@@ -172,9 +173,10 @@ final class WasmUncaughtReportCompiler {
 
 	/**
 	 * {@code (%warn (%string-concat "Unhandled condition: " text))}, where {@code text}
-	 * prefers the instance's report and falls back to the message, and an absent or
-	 * report-less condition contributes the empty string rather than the value printer's
-	 * {@code NIL}.
+	 * prefers the instance's report and falls back to the message -- the plain
+	 * {@code %error}'s text, or what a typed signal of a report-less class built at its
+	 * site ({@link WasmErrorCompiler#compileCond}) -- and an absent text contributes the
+	 * empty string rather than the value printer's {@code NIL}.
 	 *
 	 * <p>
 	 * The {@code %condition-report-str} arm is emitted only when the program HAS that
@@ -182,14 +184,18 @@ final class WasmUncaughtReportCompiler {
 	 * always nil and the arm would be dead code that drags the whole report machinery in.
 	 */
 	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx) {
-		LispVal text = orEmpty("__uc_msg_text", msgVar);
+		LispVal text = msgVar;
 		if (ctx.closRegistry.routesConditionReports()) {
+			// (if cond (let ((r (%condition-report-str cond))) (if r r msg)) msg)
+			LispSymbol report = new LispSymbol("__uc_report");
 			text = list(new LispSymbol(LispNames.IF), condVar,
-					orEmpty("__uc_report", list(new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), condVar)),
-					text);
+					list(new LispSymbol(LispNames.LET),
+							list(list(report, list(new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), condVar))),
+							list(new LispSymbol(LispNames.IF), report, report, msgVar)),
+					msgVar);
 		}
-		return list(new LispSymbol(LispNames.WARN_INTERNAL),
-				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(UncaughtReport.PREFIX), text));
+		return list(new LispSymbol(LispNames.WARN_INTERNAL), list(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(UncaughtReport.PREFIX), orEmpty("__uc_text", text)));
 	}
 
 	/** {@code (let ((v form)) (if v v ""))} -- nil renders as nothing, not as NIL. */

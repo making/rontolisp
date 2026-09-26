@@ -24464,6 +24464,29 @@ class WasmLispCompilerIntegrationTest {
 				""")).contains("Unhandled condition: database error: password authentication failed");
 	}
 
+	static Stream<List<String>> reportlessSignals() {
+		return Stream.of(
+				List.of("(define-condition uc-plain (error) ()) (error 'uc-plain)",
+						"Condition (UC-PLAIN) was signalled."),
+				List.of("(defun uc-f (x) (error 'type-error :datum x :expected-type 'integer)) (uc-f \"abc\")",
+						"Condition (TYPE-ERROR :DATUM \"abc\" :EXPECTED-TYPE INTEGER) was signalled."),
+				List.of("(error 'simple-error)", "Condition (SIMPLE-ERROR) was signalled."),
+				List.of("(define-condition uc-plain (error) ()) (error (identity (make-condition 'uc-plain)))",
+						"Condition of type UC-PLAIN was signalled."));
+	}
+
+	@ParameterizedTest
+	@MethodSource("reportlessSignals")
+	void ehUncaughtReportlessConditionReportsTheSignalSiteText(List<String> signalAndText) throws Exception {
+		// No report of its own or inherited (or a nil format-control): the renderer
+		// answers nil, so the text is the one only the signal site can build -- the
+		// initargs as written -- and the payload cdr carries it. The interpreter and the
+		// JVM backend print the same line.
+		assertThat(compileAndRunEhExpectTrap(
+				"(print (handler-case (error \"caught\") (error (e) :ok)))\n" + signalAndText.get(0)))
+			.contains("Unhandled condition: " + signalAndText.get(1) + "\n");
+	}
+
 	@Test
 	void ehNonNumberArithmeticOperandsAreCaughtWithTheInterpreterText() throws Exception {
 		// A type slip into an arithmetic operator used to die as an UNCATCHABLE

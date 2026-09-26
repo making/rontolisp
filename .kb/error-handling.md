@@ -290,9 +290,12 @@ fails. What decides the gate is whether program code can ever HOLD that instance
 value can reach program hands -- never at the signal point.** In EH mode the entry landing pad is a
 second payload reader, so both gates go broad; outside EH mode nothing is observable.
 
-- **`WasmErrorCompiler.compileCond` / `WasmSignalCondCompiler` never compile their message operand**
-  (payload cdr = nil), unconditionally: those forms always carry a real instance in the car. The
-  instance operand still compiles (initargs are evaluated at construction per CL).
+- **`WasmErrorCompiler.compileCond` / `WasmSignalCondCompiler` never compile the REPORT half of their
+  message operand**: those forms always carry a real instance in the car, and the entry pad renders
+  its report itself. `compileCond` compiles only what the pad cannot rebuild -- the fallback of a
+  routed message (`LispMacroExpander.conditionReportFallback`, the recognizer of
+  `conditionReportOr`'s own shape), below "An uncaught condition reports ONE line". The instance
+  operand still compiles (initargs are evaluated at construction per CL).
 - **A plain `%error`'s message operand compiles only when `Ctx.condMessagesObservable`** -- its
   message IS what a caught raw trap becomes a `simple-error` from AND the only text the entry landing
   pad has. Forced on under restart mode / `--dynamic` / EH mode; copied in `WasmAsyncEmit.freshCtx`.
@@ -369,8 +372,8 @@ the JVM backend does not yet.
   `block $trap` + `block $cond (result (ref null eq))` +
   `try_table (catch $lisp-cond 0) (catch_all 1)`; the landing takes the payload as the inner block's
   result, splits it into `__uc_cond$N`/`__uc_msg$N` and compiles
-  `(%warn (%string-concat "Unhandled condition: " (if cond (%condition-report-str cond) msg)))`, each
-  half guarded by `(let ((v ...)) (if v v ""))` so a nil never renders as `NIL`; `%warn` is the
+  `(%warn (%string-concat "Unhandled condition: " (if cond (or (%condition-report-str cond) msg) msg)))`,
+  guarded by `(let ((v ...)) (if v v ""))` so a nil never renders as `NIL`; `%warn` is the
   existing fd-2 writer, exempt from the lazy-message narrowing. Then `unreachable`: the exit CLASS
   every host and test expects is the trap. The try_table's own `end` restores a reachable, empty
   stack while `block $cond` owes an `eqref`, so an `unreachable` sits between them. **Export wrappers
@@ -392,10 +395,25 @@ the JVM backend does not yet.
   classes that can ESCAPE buys nothing: without a catching form every constructible class
   escapes, which is what `conditionNarrowing` already keeps. What `ENTRY_REPORT` narrows instead
   is the printing operators and the function-control arm (below).
-- **Known gap (all of EH mode)**: a class with no report of its own or inherited (`(define-condition
-  c (error) ())`, a bare `type-error`) reports an EMPTY text -- `%condition-report-str` answers
-  nil and `compileCond` skipped the message, while the interpreter prints `Condition (C) was
-  signalled.`.
+- **A class that reports nothing is reported by its SIGNAL SITE** (`(define-condition c (error) ())`,
+  a bare `type-error`, `simple-error` with no control): `%condition-report-str` answers nil, and the
+  text -- `Condition (C :INITARG v) was signalled.` for a typed signal, `Condition of type C was
+  signalled.` for `(error c)` -- is the fallback half of the site's `conditionReportOr` message, which
+  `compileCond` compiles into the payload cdr and the pad prints when the report is nil. **The text is
+  built in ONE place, the expansion** (`legacySignalMessage`, `expandObjectSignal`'s `typeMessage`),
+  and every backend prints what it evaluates to: a change to its shape changes all four together.
+  Chosen over a fallback arm in the pad because the pad sees only the instance, and the typed text
+  names the initargs AS WRITTEN (`:DATUM "abc" :EXPECTED-TYPE INTEGER`), which a built instance
+  cannot reproduce. A class that INHERITS a report builds no fallback at all
+  (`inheritsConditionReport`): it always renders, and the fallback was dead code on every backend.
+  Measured 2026-09-26 (EH mode, bytes): zlib `--optimize=size` 89,623 -> 89,734 (+111),
+  `--optimize` 117,008 -> 117,119, component 93,712 -> 93,819; `postgres-hello --component
+  --optimize` 2,708,177 -> 2,700,709 (-7,468, the dead fallbacks), `postgres-crud` 2,783,155 ->
+  2,776,452; a toy `(error 'c)` 22,547 -> 25,917 -- the `~s` of the initarg list brings the
+  printer.
+- The `(error c)` text named the class through `prin1` of its `%class-` tag, which escapes since
+  symbols print with `|...|`: `Condition of type -C| was signalled.` on the interpreter and the JVM
+  until 2026-09-26; it reads `symbol-name` now.
 - Pinned cross-backend by `ci-spec.yaml`'s `standalone:` list -- a section `CiSpecE2eTest` runs one
   program at a time, per backend; the corpus cannot host these since running one ends the program.
 

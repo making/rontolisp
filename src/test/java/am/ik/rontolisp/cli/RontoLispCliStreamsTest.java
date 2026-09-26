@@ -266,6 +266,15 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aSignaledReportlessInstanceNamesItsClass() {
+		// (error c) over an instance whose class reports nothing: the text names the
+		// class as written, not the escaped printed form of its internal tag.
+		String[] result = runReporting("-e",
+				"(define-condition uc-plain (error) ()) (error (identity (make-condition 'uc-plain)))");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: Condition of type UC-PLAIN was signalled.");
+	}
+
+	@Test
 	void aRontolispDiagnosticIsNotDressedUpAsACondition() throws Exception {
 		// Only a signaled condition takes the cross-backend wording; a read error, a
 		// compile failure or a bad command line is the COMPILER talking and says

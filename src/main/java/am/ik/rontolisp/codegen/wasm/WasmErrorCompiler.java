@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -59,18 +60,21 @@ final class WasmErrorCompiler {
 	}
 
 	/**
-	 * Compiles {@code (%error-cond condition message)}. The message operand is normally
-	 * not compiled: the payload cdr is read only by the handler-case landing's
-	 * simple-error synthesis, which runs only when the instance (car) is nil -- and every
-	 * {@code %error-cond} site passes a real instance -- while an uncaught throw exits as
-	 * a bare {@code unreachable} trap, which carries no text on this backend. The text a
-	 * caught condition reports comes from its {@code :report} at print time instead, so
-	 * skipping the signal-point render changes what the artifact carries, never what it
-	 * prints. The one exception is a program with NO report renderer
-	 * ({@code routesConditionReports} off): no source site constructs a condition there,
-	 * so the only {@code %error-cond} that can exist is the {@code %program-error}
-	 * lowering's, and the entry landing pad's report of it can only come from the payload
-	 * cdr -- which then carries the message exactly as a plain {@code %error}'s does.
+	 * Compiles {@code (%error-cond condition message)}. The payload cdr carries only the
+	 * text the entry landing pad cannot rebuild from the instance: the handler-case
+	 * landing reads the cdr only to synthesize a {@code simple-error} when the instance
+	 * (car) is nil -- and every {@code %error-cond} site passes a real instance -- so the
+	 * cdr's one reader here is that pad ({@link WasmUncaughtReportCompiler}), which
+	 * renders the instance's report through {@code %condition-report-str} itself. A
+	 * message that IS the report (a class with its own {@code :report}) therefore
+	 * compiles to nil, and so does the report half of a routed message
+	 * ({@link LispMacroExpander#conditionReportFallback}); its fallback -- what a
+	 * report-less class prints, {@code Condition (TYPE :INITARG v) was signalled.}, built
+	 * from the initargs as written and gone once the instance is built -- compiles, and
+	 * the pad prints it when the renderer answers nil. A program with NO report renderer
+	 * ({@code routesConditionReports} off) constructs no condition at a source site, so
+	 * the only {@code %error-cond} is the {@code %program-error} lowering's, whose
+	 * message rides the cdr exactly as a plain {@code %error}'s does.
 	 */
 	static void compileCond(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.ehMode) {
@@ -79,8 +83,10 @@ final class WasmErrorCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		if (ctx.condMessagesObservable && !ctx.closRegistry.routesConditionReports()) {
-			WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		LispVal text = !ctx.closRegistry.routesConditionReports() ? (ctx.condMessagesObservable ? parts.get(2) : null)
+				: LispMacroExpander.conditionReportFallback(parts.get(2));
+		if (text != null) {
+			WasmExprCompiler.compileExpr(text, ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.REF_NULL);

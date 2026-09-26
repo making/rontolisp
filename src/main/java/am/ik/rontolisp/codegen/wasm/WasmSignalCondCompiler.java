@@ -20,9 +20,10 @@ import am.ik.wasm.Type;
  * match is declined), the condition is thrown on the {@code $lisp-cond} tag like
  * {@code %error-cond}; otherwise the whole form yields nil (the CL fall-through of an
  * unhandled signal). The condition operand is evaluated either way (initarg effects are
- * observable); the message operand is never compiled, for the reason
- * {@code WasmErrorCompiler.compileCond} gives -- the payload cdr of a non-nil instance
- * has no reader on this backend, and a fall-through signal discards it outright.
+ * observable); the message operand is never compiled: the payload cdr's one reader under
+ * a non-nil instance is the entry landing pad ({@code WasmErrorCompiler.compileCond}),
+ * while a signal is thrown only toward an armed handler-case, and a fall-through signal
+ * discards it outright.
  */
 final class WasmSignalCondCompiler {
 
