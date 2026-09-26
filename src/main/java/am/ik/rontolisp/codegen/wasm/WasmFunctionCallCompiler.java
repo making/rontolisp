@@ -152,7 +152,7 @@ final class WasmFunctionCallCompiler {
 			}
 			// Every compiled Lisp function answers one (ref null eq), so a tail call
 			// to any of them is a return_call from any of them.
-			ctx.writer.write(tail ? Instruction.RETURN_CALL : Instruction.CALL);
+			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));
 			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {

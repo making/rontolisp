@@ -35767,7 +35767,10 @@ public final class LispMacroExpander {
 			blockParts.add(new LispSymbol(entry.getKey()));
 			blockParts.addAll(e.body());
 			lambdaParts.add(listToCons(blockParts));
+			// The local function stands for its definition, so a compiled program's
+			// report places it there (.kb/source-positions.md, Half 2).
 			LispVal lambda = listToCons(lambdaParts);
+			SourceProvenance.inheritWhenCompiling((LispCons) defs.get(i - 1), lambda);
 			if (recursive) {
 				// labels: the lambdas see every sibling; bind nil first, setq after.
 				LispVal rewritten = rewriteLocalCalls(lambda, fnVars);
@@ -35855,6 +35858,12 @@ public final class LispMacroExpander {
 	 * whose subforms are not expressions (binding lists, parameter lists, case keys) and
 	 * the scoping of nested {@code flet}/{@code labels} (an inner definition of the same
 	 * name shadows the outer one for its scope).
+	 *
+	 * <p>
+	 * A form nothing inside changed comes back as itself, and a rebuilt one keeps the
+	 * position of the one it replaces on both paths (.kb/source-positions.md, Half 2):
+	 * otherwise every form around a local call would lose the line an uncaught report
+	 * gives for a condition inside it.
 	 */
 	private static LispVal rewriteLocalCalls(LispVal form, java.util.Map<String, LispSymbol> fns) {
 		if (fns.isEmpty() || !(form instanceof LispCons cons)) {

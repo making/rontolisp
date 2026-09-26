@@ -42,11 +42,13 @@ import org.jspecify.annotations.Nullable;
  * and prefixes the message it reports.
  *
  * <p>
- * <b>One emitter reads it: the JVM backend's line numbers.</b> A compiled class maps its
- * instructions to the forms they came from ({@code codegen.jvm.JvmSourceSites}), so an
- * uncaught condition reports where it happened as the interpreter does. A form with no
- * FILE (a {@code -e} program, a library spliced from the jar) counts as unlocated there,
- * and a class in which nothing was located is emitted exactly as without this table.
+ * <b>Two emitters read it, both for the uncaught report's location lines.</b> A compiled
+ * JVM class maps its instructions to the forms they came from
+ * ({@code codegen.jvm.JvmSourceSites}), and a wasm-GC module compiled with
+ * {@code --report-locations} wraps each located function in a frame that notes its line
+ * ({@code codegen.wasm.WasmUncaughtLocations}). A form with no FILE (a {@code -e}
+ * program, a library spliced from the jar) counts as unlocated for both, and an output in
+ * which nothing was located is emitted exactly as without this table.
  */
 public final class SourceProvenance {
 
@@ -71,7 +73,10 @@ public final class SourceProvenance {
 		final Map<LispCons, Position> positions = new IdentityHashMap<>();
 
 		/**
-		 * Each unit's line-start offsets, built on the first lookup into it. By identity:
+		 * Each unit's line-start offsets, built on the first {@link #locate} into it. A
+		 * backend that asks for the line of every form it compiles (the JVM line numbers,
+		 * the wasm-GC {@code --report-locations}) would otherwise rescan the unit's text
+		 * from the start once per form -- quadratic in the size of the file. By identity:
 		 * {@link Unit} is a record, and comparing two whole source texts per lookup is
 		 * what this index exists to avoid.
 		 */
@@ -88,17 +93,18 @@ public final class SourceProvenance {
 
 		/**
 		 * The location of a recorded position: what {@link SourceLocation#at} computes by
-		 * scanning the text from its start, answered through a line index built once per
-		 * unit -- a backend that asks for every form it emits would otherwise make its
-		 * compile quadratic in the program's size.
+		 * scanning the text from its start, answered through the line index.
 		 */
 		SourceLocation location(Position position) {
 			Unit unit = position.unit();
 			String text = unit.text();
-			int[] starts = this.lineStarts.computeIfAbsent(unit, u -> lineStartsOf(u.text()));
+			int[] starts = this.lineStarts.computeIfAbsent(unit, u -> lineStartsOf(text));
+			// The same clamp SourceLocation.at applies to an offset past the end.
 			int limit = Math.max(0, Math.min(position.offset(), text.length()));
-			int index = java.util.Arrays.binarySearch(starts, limit);
-			int line = index >= 0 ? index : -index - 2;
+			int found = java.util.Arrays.binarySearch(starts, limit);
+			// A line starts AFTER its newline, so an offset equal to a start is on that
+			// line; otherwise it is on the line whose start precedes it.
+			int line = found >= 0 ? found : -found - 2;
 			return new SourceLocation(unit.file(), line + 1, limit - starts[line] + 1);
 		}
 
@@ -110,10 +116,10 @@ public final class SourceProvenance {
 				}
 			}
 			int[] starts = new int[count];
-			int line = 1;
+			int next = 1;
 			for (int i = 0; i < text.length(); i++) {
 				if (text.charAt(i) == '\n') {
-					starts[line++] = i + 1;
+					starts[next++] = i + 1;
 				}
 			}
 			return starts;
@@ -204,6 +210,25 @@ public final class SourceProvenance {
 			state.positions.putIfAbsent(cons, position);
 		}
 		return rewritten;
+	}
+
+	/**
+	 * {@link #inherit} for the compile path only: records {@code rewritten} at the
+	 * position of {@code original} when a recording scope is open, and does nothing
+	 * otherwise -- the interpreter's forms keep exactly the {@link LocatedCons} cells
+	 * they had. For a cell whose position only a compiled output reads: the lambda a
+	 * local function or an async body is built as, which the wasm-GC
+	 * {@code --report-locations} frames name by its line. The interpreter never
+	 * attributes a condition to such a form (evaluating it only makes a closure), so a
+	 * located copy there would buy nothing and would have to replace the cell inside its
+	 * already-built parent.
+	 * @param original the cons the rewrite stands for
+	 * @param rewritten what replaced it
+	 */
+	public static void inheritWhenCompiling(LispCons original, @Nullable LispVal rewritten) {
+		if (STATE.get() != null) {
+			inherit(original, rewritten);
+		}
 	}
 
 	/**

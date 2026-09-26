@@ -108,7 +108,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Errors and concurrency
 
-- [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics
+- [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics; the uncaught report and wasm-GC's opt-in `--report-locations` frames with their measured cost
 - [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams
 - [threads.md](threads.md) -- `rontolisp:make-thread` and friends
 - [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`with-mutex`

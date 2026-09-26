@@ -18,6 +18,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The shared emission machinery of the {@code --component} async state machines. An
@@ -76,10 +77,12 @@ final class WasmAsyncEmit {
 	 * the top level)
 	 * @param topLevel whether this is the implicit top-level async function
 	 * @param usesEval the top-level eval-mirror flag
+	 * @param frame the {@code --report-locations} frame the body runs in, or {@code null}
+	 * ({@link WasmUncaughtLocations})
 	 * @return the resume identity
 	 */
 	static Resume compileResume(WasmLispCompiler.Ctx proto, List<String> paramNames, List<LispVal> bodyExprs,
-			List<String> freeVarNames, boolean topLevel, boolean usesEval) {
+			List<String> freeVarNames, boolean topLevel, boolean usesEval, WasmUncaughtLocations.@Nullable Spec frame) {
 		int funcId = proto.nextFuncId[0]++;
 		int funcIndex = proto.userFuncBase + proto.numDefuns + proto.lambdaDecls.size();
 		int lambdaIdx = proto.lambdaDecls.size();
@@ -117,6 +120,9 @@ final class WasmAsyncEmit {
 		capturedVars.addAll(FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
 				proto.functions.keySet(), ctx.captureMemo));
 		ctx.boxedVars = capturedVars;
+		// Opened after every parameter and capture slot exists: its locals are mirrored
+		// by the spill array like any other, so a resumed segment still knows its line.
+		WasmUncaughtLocations.open(ctx, frame);
 		compileGuardedProgn(bodyExprs, ctx);
 		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
 		if (spillGlobal != null && !topLevel) {
@@ -134,6 +140,7 @@ final class WasmAsyncEmit {
 			bodyWriter.writeUnsignedLeb128(ctx.futureTypeIndex);
 			bodyWriter.writeUnsignedLeb128(3);
 		}
+		WasmUncaughtLocations.close(ctx);
 		bodyWriter.write(Instruction.END);
 
 		// Prologue, built now that the local count is final: $rt = frame.state, restore
@@ -734,7 +741,8 @@ final class WasmAsyncEmit {
 		enclosingLexicals.addAll(ctx.captures.keySet());
 		List<String> freeVars = new ArrayList<>(FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),
 				ctx.functions.keySet(), ctx.globals, enclosingLexicals));
-		Resume resume = compileResume(ctx, paramNames, bodyExprs, freeVars, false, false);
+		Resume resume = compileResume(ctx, paramNames, bodyExprs, freeVars, false, false, ctx.injectedRuntimeBody ? null
+				: WasmUncaughtLocations.asyncBodySpec(ctx.uncaughtLocations, null, cons, bodyExprs));
 		int entryFuncId = ctx.nextFuncId[0]++;
 		int entryFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		byte[] entryBody = buildEntryBody(ctx, paramNames.size(), true, resume);
@@ -861,6 +869,7 @@ final class WasmAsyncEmit {
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.operandOpGlobalIndex(proto.operandOpGlobalIndex)
 			.operandOperators(proto.operandOperators)
+			.uncaughtLocations(proto.uncaughtLocations)
 			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an
 			// unboxed local's shadow is marked authoritative by reading this module
 			// global. Without it the chunk emits `global.get -1` and the module does not

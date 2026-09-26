@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -30,6 +31,13 @@ final class WasmAsyncRunCompiler {
 			throw new UnsupportedOperationException("%async-run expects 1 argument, got " + (args.size() - 1));
 		}
 		ctx.indirectCallArities.add(0);
+		// --report-locations: the thunk is the async body, so a condition leaving it
+		// crosses into whoever awaits -- the hop named after the function holding this
+		// call, as the interpreter names it.
+		if (ctx.uncaughtLocations != null && args.get(1) instanceof LispCons thunk
+				&& thunk.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(head.name())) {
+			ctx.ucPendingHop = WasmUncaughtLocations.hopText(ctx.ucFunctionName);
+		}
 		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
 		if (spillGlobal != null) {
 			compileCapturingValues(args.get(1), spillGlobal, ctx);

@@ -1,8 +1,10 @@
 # Source positions: `file:line:column` in reader AND frontend errors, the two literals a program can read, and where an uncaught condition happened
 
-Five mechanisms. Positions reach ONE emitter, the JVM backend's line numbers (Phase 5); every
-other output is byte-identical with and without any of this, and so is a JVM class in which
-nothing was located. `am.ik.rontolisp.SourceLocation` (`file`, 1-based
+Five mechanisms. Positions reach TWO emitters, both for the uncaught report's location lines:
+the JVM backend's line numbers (Phase 5) and the wasm-GC `--report-locations` frames
+([error-handling.md](error-handling.md), "Location lines on wasm-GC"). Every other output is
+byte-identical with and without any of this, and so are a JVM class in which nothing was located
+and a wasm module compiled without the option. `am.ik.rontolisp.SourceLocation` (`file`, 1-based
 `line`/`column`; `at`, `prefix`) lives in the AST package, NOT `reader`, because
 `compiler`/`codegen.*` may not import `reader`. **No file means no prefix** — `""` when
 `file` is null (runtime `read`, REPL), so runtime error text stays byte-identical.
@@ -29,8 +31,9 @@ against the containing form.
 - `RontoLispCli.compileToFile` opens the recording scope and re-reports as
   `cli.LispCompileException`; `SourceProvenance.prefix(form)` gives the same string for
   warnings. `locate` resolves a line through a line-start index built once per unit
-  (a backend asks for every form it emits; the scan from the text's start made that
-  quadratic); `locatedInFile` answers "read from a named file" without resolving one.
+  (`State.lineStarts`, binary search: a backend asks for every form it emits, and
+  `SourceLocation.at`'s scan from the text's start made that quadratic); `locatedInFile`
+  answers "read from a named file" without resolving one.
 - **A warning goes through `compiler.CompileWarnings.warn`, never `System.err`** —
   `JvmLispCompiler` may compile a program TWICE, so an attempt buffers (`startAttempt`),
   only the shipping one prints (`flushAttempt`), a retry drops its own
@@ -61,7 +64,11 @@ through it, the model for the next such pass. A pass can owe BOTH halves;
 `PackageResolver` owes them most. Legitimately coarse: a CONSUMED top-level directive
 (`in-package`, `defpackage`, `export`). A user macro's (and compiler macro's) expansion
 inherits its call's position (`UserMacroExpander.expandAllLocated`), as do the
-`flet`/`labels` expansion, a rewritten local call and a `call-next-method` rewrite.
+`flet`/`labels` expansion, a rewritten local call and a `call-next-method` rewrite -- on both
+paths. `SourceProvenance.inheritWhenCompiling` records a position on the compile path only, for
+a cell only a compiled output reads and the interpreter never attributes a condition to (it only
+makes a closure): the lambda an `flet`/`labels` definition is built as, and `LispAsync`'s
+`%async-run` thunk -- the functions a wasm-GC `--report-locations=function` frame names by line.
 
 ## Phase 3 — source position literals a PROGRAM can read
 `rontolisp:current-file` / `rontolisp:current-line` (`LispNames.CURRENT_FILE` /
@@ -118,6 +125,7 @@ instructions to site ids, which the uncaught report reads back off the stack tra
 ([error-handling.md](error-handling.md), "JVM -- read off the stack trace"). Only a position
 with a FILE counts, so the forms located are exactly the interpreter's `LocatedCons` ones. A
 class in which nothing was located is byte-identical to one compiled without a recording scope.
+
 ## Tests
 `LispReaderTest` (opening-delimiter cases, `currentFileAndCurrentLineReadAsTheirOwnPosition`),
 `LoadInlinerTest#readerErrorIn*`,

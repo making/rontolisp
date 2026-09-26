@@ -5,6 +5,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceProvenance;
 
 import java.util.List;
 
@@ -156,6 +157,23 @@ public final class LispAsync {
 		return out;
 	}
 
+	/**
+	 * Gives an async form's expansion its position, and so does its {@code %async-run}
+	 * thunk: the thunk is the async BODY, the function a wasm-GC module's
+	 * {@code --report-locations} frame names by the line the async form starts on.
+	 */
+	private static LispVal locateBody(LispCons original, LispVal expansion) {
+		LispVal located = SourceProvenance.inherit(original, expansion);
+		for (LispVal part = located; part instanceof LispCons cell; part = cell.cdr()) {
+			if (cell.car() instanceof LispCons call && call.car() instanceof LispSymbol head
+					&& LispNames.ASYNC_RUN_QUALIFIED.equals(head.name()) && call.cdr() instanceof LispCons args
+					&& args.car() instanceof LispCons thunk) {
+				SourceProvenance.inheritWhenCompiling(original, thunk);
+			}
+		}
+		return located;
+	}
+
 	private static LispVal lowerForm(LispVal form) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
@@ -165,14 +183,16 @@ public final class LispAsync {
 				case LispNames.QUOTE -> {
 					return form;
 				}
+				// Each expansion stands for the form it replaces, so it keeps its source
+				// position (.kb/source-positions.md, Half 2).
 				case LispNames.ASYNC_QUALIFIED -> {
-					return lowerForm(LispMacroExpander.expandAsync(cons));
+					return lowerForm(SourceProvenance.inherit(cons, LispMacroExpander.expandAsync(cons)));
 				}
 				case LispNames.ASYNC_DEFUN_QUALIFIED -> {
-					return lowerForm(LispMacroExpander.expandAsyncDefun(cons));
+					return lowerForm(locateBody(cons, LispMacroExpander.expandAsyncDefun(cons)));
 				}
 				case LispNames.ASYNC_LAMBDA_QUALIFIED -> {
-					return lowerForm(LispMacroExpander.expandAsyncLambda(cons));
+					return lowerForm(locateBody(cons, LispMacroExpander.expandAsyncLambda(cons)));
 				}
 				default -> {
 					// fall through to the element walk
@@ -190,11 +210,7 @@ public final class LispAsync {
 		if (!changed) {
 			return form;
 		}
-		LispVal rebuilt = LispNil.INSTANCE;
-		for (int i = lowered.size() - 1; i >= 0; i--) {
-			rebuilt = new LispCons(lowered.get(i), rebuilt);
-		}
-		return rebuilt;
+		return SourceProvenance.inherit(cons, LispCons.rebuiltList(cons, lowered));
 	}
 
 }

@@ -329,6 +329,48 @@ one it targets, but only wasm-GC (Preview 1 and `--component`) has anything to
 trade: the [JVM](jvm.md) and [`--no-gc`](../guides/wasm-nogc.md) outputs are
 byte-for-byte what `--optimize=default` produces.
 
+### Uncaught Condition Locations (`--report-locations`)
+
+When nothing catches a condition, the interpreter and a compiled JVM program print
+where it happened under the `Unhandled condition:` line
+([`error`](../reference/macros/error.md)). A wasm-GC module prints the same lines
+when compiled with `--report-locations`:
+
+```console
+$ rontolisp app.lisp -o app.wasm --report-locations=line
+$ wasmtime run app.wasm
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
+- `line` names the innermost form of the program's files that the condition
+  passed through and the named function holding it, as the interpreter does,
+  including the `in NAME (async), awaited at FILE:LINE` line of each `await`
+  that rethrew it.
+- `function` names the function and the line its definition starts on: fewer
+  bytes, a coarser answer.
+
+It works on Preview 1, `--component` and `--native` alike, and is off by
+default. It adds nothing to a module that has no uncaught report to put the
+lines under, that is, one without a catching form (`handler-case`,
+`ignore-errors`, `unwind-protect`, ...), nor to a program given with `-e`,
+which has no file to point into. The file names are the paths the compiler
+read, stored in the module. Tail calls into the program's own functions and
+through function values run in constant stack under the option as well.
+
+Every function read from a file catches the condition on its way out, and
+under `line` every form that starts a new line records it:
+
+| module (`--optimize=size`) | off | `function` | `line` |
+| --- | --- | --- | --- |
+| `zlib` (chipz gunzip) | 87,936 B | 91,792 B (+4.4%) | 93,774 B (+6.6%) |
+| 100 three-line functions | 13,196 B | 17,651 B (+33.8%) | 19,663 B (+49.0%) |
+
+That is about 40 bytes per function, and 6 to 7 more per line under `line`.
+Run time is unchanged on V8 (Node 24). On wasmtime 49 the catch costs a
+call-heavy function more: a recursive `fib` runs about 3x slower, while the other
+benchmark programs stay within 0-15%.
+
 ### SIMD Acceleration (`--simd`)
 
 `--simd` is the one acceleration switch shared by every backend: it lowers the

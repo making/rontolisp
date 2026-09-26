@@ -123,6 +123,17 @@ final class WasmExprCompiler {
 	 * compiles normally and DROPs. The caller must NOT emit its own DROP.
 	 */
 	static void compileForEffect(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (ctx.ucFrame == null || !(expr instanceof LispCons cons)) {
+			compileForEffectHere(expr, ctx);
+			return;
+		}
+		// The statement forms below bypass compileCons, so they note their own line.
+		long located = WasmUncaughtLocations.enterForm(cons, ctx);
+		compileForEffectHere(expr, ctx);
+		WasmUncaughtLocations.leaveForm(located, cons, ctx);
+	}
+
+	private static void compileForEffectHere(LispVal expr, WasmLispCompiler.Ctx ctx) {
 		// A self-evaluating literal in statement position (a defun docstring, a bare
 		// number in a progn) has no effect and no consumer: emit nothing. A string
 		// literal otherwise BUILDS its runtime string on every evaluation only to
@@ -328,6 +339,9 @@ final class WasmExprCompiler {
 		// that form's.
 		String outerOperator = ctx.operator;
 		ctx.operator = cons.car() instanceof LispSymbol head ? head.name() : null;
+		// --report-locations: the frame's line local holds this form's line while it runs
+		// (WasmUncaughtLocations; a no-op outside a frame).
+		long located = WasmUncaughtLocations.enterForm(cons, ctx);
 		try {
 			compileConsLocated(cons, ctx, tail);
 		}
@@ -339,6 +353,7 @@ final class WasmExprCompiler {
 		finally {
 			ctx.operator = outerOperator;
 		}
+		WasmUncaughtLocations.leaveForm(located, cons, ctx);
 	}
 
 	private static void compileConsLocated(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
