@@ -2625,6 +2625,18 @@ cases:
       (print (signum -7))
       (print (signum 3.5))
       (print (mapcar #'sqrt (list 1 4 9)))
+      ;; #'gcd / #'lcm are variadic like the call, not the compiled binary
+      ;; call-position form: (gcd) is 0, (lcm) is 1, one argument is its
+      ;; absolute value.
+      (print (funcall #'gcd))
+      (print (funcall #'gcd -6))
+      (print (apply #'gcd (list 24 36 48)))
+      (print (funcall #'lcm))
+      (print (funcall #'lcm -6))
+      (print (apply #'lcm (list 4 6 10)))
+      ;; #'numerator / #'denominator as function values.
+      (print (funcall #'numerator 1/2))
+      (print (funcall #'denominator 1/2))
     expected: |
       4.0
       2.5
@@ -2635,6 +2647,14 @@ cases:
       -1
       1.0
       (1.0 2.0 3.0)
+      0
+      6
+      12
+      1
+      6
+      60
+      1
+      2
   - name: packages-cl-user-default-uses-cl-and-the
     source: |
       ;; *package* holds the package KEYWORD find-package answers (so the two are eq),

@@ -1780,7 +1780,7 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CONSP), unary(LispNames.KEYWORDP), unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
 			unary(LispNames.VECTORP),
 			// Type conversion (arity 1)
-			unary(LispNames.FLOAT), unary(LispNames.RATIONAL),
+			unary(LispNames.FLOAT), unary(LispNames.RATIONAL), unary(LispNames.NUMERATOR), unary(LispNames.DENOMINATOR),
 			// The floor family takes its optional divisor as a function too; with the
 			// spill global present, LispMacroExpander.settleWrapperLambdas makes the
 			// tail publish the remainder (.kb/multiple-values.md).
@@ -1811,7 +1811,14 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.COSH), unary(LispNames.TANH), unary(LispNames.CIS), unary(LispNames.ASINH),
 			unary(LispNames.ACOSH), unary(LispNames.ATANH), unary(LispNames.RANDOM),
 			// Math functions (arity 2)
-			binary(LispNames.EXPT), binary(LispNames.GCD), binary(LispNames.LCM),
+			// gcd/lcm are variadic in Common Lisp -- (gcd) is 0, (lcm) is 1, a single
+			// argument is its absolute value -- unlike the compiled call-position form,
+			// which is always binary (LispMacroExpander.expandReduction folds a variadic
+			// call into nested binary ones before either backend ever sees it). The
+			// wrapper has to fold the same way so a #'gcd/#'lcm VALUE answers what the
+			// call answers, rather than requiring exactly two arguments.
+			binary(LispNames.EXPT), variadicIdentity(LispNames.GCD, new LispInteger(0)),
+			variadicIdentity(LispNames.LCM, new LispInteger(1)),
 			// Bitwise integer operations
 			binary(LispNames.LOGAND), binary(LispNames.LOGIOR), binary(LispNames.LOGXOR), unary(LispNames.LOGNOT),
 			binary(LispNames.LOGANDC1), binary(LispNames.LOGANDC2), binary(LispNames.LOGORC1),
