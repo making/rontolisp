@@ -14691,17 +14691,16 @@ public final class LispMacroExpander {
 			}
 			// Both arguments bound once; a runtime package interns into its member
 			// table, a read/compile-time one builds the spelling, a designator naming
-			// nothing signals.
+			// nothing (nil included: no package is named NIL unless the program made
+			// one) signals.
 			LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
 			LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
 			LispVal built = makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)),
 					listToCons(List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar))),
 					computedNoSuchPackage(pkgVar));
-			LispVal guarded = makeIf(listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)),
-					computedNoSuchPackage(pkgVar),
+			return bindFindSymbolTemps(name, parts.get(2),
 					runtimeMemberLookup(listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar)),
 							LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, nameVar, built));
-			return bindFindSymbolTemps(name, parts.get(2), guarded);
 		}
 		if (!packageTable.isEmpty() && !packageTable.containsKey(pkg)
 				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
