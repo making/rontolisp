@@ -30,6 +30,21 @@ final class JvmErrorCompiler {
 	 * expression is compiled, its quote framing stripped, and the exception thrown.
 	 */
 	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className) {
+		compileThrowRuntimeException(messageExpr, ctx, className, -1);
+	}
+
+	/**
+	 * Emits {@code throw new RuntimeException(strip(messageExpr))}, and for a condition
+	 * the exception carries, {@code throw _condPut(exception, condition)}: the record is
+	 * keyed by the exception, so it is made once the exception exists, and never by a
+	 * site whose message expression fails first.
+	 * @param messageExpr the message expression
+	 * @param ctx the method context
+	 * @param className the generated class
+	 * @param conditionSlot the local holding the condition, or {@code -1} for none
+	 */
+	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className,
+			int conditionSlot) {
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
 		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
@@ -68,6 +83,12 @@ final class JvmErrorCompiler {
 		ctx.emit(messageSlot);
 		ctx.emit(Opcode.INVOKESPECIAL);
 		ctx.emitU2(ctor.index());
+		if (conditionSlot >= 0) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(conditionSlot);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(java.util.Objects.requireNonNull(ctx.conditionChannel.condPut).index());
+		}
 		ctx.emit(Opcode.ATHROW);
 	}
 

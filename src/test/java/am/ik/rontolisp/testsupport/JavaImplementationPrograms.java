@@ -124,8 +124,9 @@ public final class JavaImplementationPrograms {
 	 * failure -- reaches the Lisp code that made the Java call as itself, through
 	 * generated and reflective implementations, direct and run-time sites, nested calls
 	 * and Java code that relays the first of two failures ({@code Stream.close}); what
-	 * Java makes of it instead ({@code FutureTask.get}) is the Java call's failure, and a
-	 * condition Java swallowed ({@code FutureTask.run}) is no later failure's.
+	 * Java makes of it instead ({@code FutureTask.get}) is the Java call's failure, a
+	 * condition Java swallowed ({@code FutureTask.run}) is no later failure's, and a
+	 * plain failure Java swallows in a cleanup leaves the condition on its way out alone.
 	 */
 	public static final String CALLBACK_SIGNALS = """
 			(define-condition callback-failed (error) ((item :initarg :item :reader callback-failed-item)))
@@ -207,6 +208,14 @@ public final class JavaImplementationPrograms {
 			  (print (handler-case (car (java:call task "isDone"))
 			           (callback-failed () :swallowed-condition)
 			           (type-error () :type-error))))
+			(print (handler-case
+			           (unwind-protect (error 'callback-failed :item :outer)
+			             (java:call (java:new "java.util.concurrent.FutureTask"
+			                                  (java:reify "java.util.concurrent.Callable" "call"
+			                                              (lambda () (error "plain"))))
+			                        "run"))
+			         (callback-failed (c) (callback-failed-item c))
+			         (error () :lost-its-type)))
 			""";
 
 	/** What {@link #CALLBACK_SIGNALS} prints. */
@@ -228,6 +237,7 @@ public final class JavaImplementationPrograms {
 			:FIRST
 			:FIRST
 			0
-			:TYPE-ERROR""";
+			:TYPE-ERROR
+			:OUTER""";
 
 }

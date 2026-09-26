@@ -388,9 +388,36 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void anAwaitHandledInACleanupLeavesTheConditionOnItsWayOut() throws Exception {
+		// _await records the body's condition under the throwable it rethrows -- none for
+		// a plain error: setting the one per-thread slot replaced (or, for the plain
+		// error, cleared) the typed condition the unwind-protect was carrying.
+		assertThat(compileAndRun("""
+				(define-condition aw-typed (error) ())
+				(define-condition aw-other (error) ())
+				(rontolisp:async-defun aw-failing () (error 'aw-other))
+				(rontolisp:async-defun aw-plain-failing () (error "plain"))
+				(print (handler-case
+				           (unwind-protect (error 'aw-typed)
+				             (print (handler-case (rontolisp:await (aw-failing))
+				                      (aw-typed () :read-as-the-typed-one)
+				                      (aw-other () :other))))
+				         (aw-typed () :typed)
+				         (error () :lost-its-type)))
+				(print (handler-case
+				           (unwind-protect (error 'aw-typed)
+				             (print (handler-case (rontolisp:await (aw-plain-failing))
+				                      (aw-typed () :read-as-the-typed-one)
+				                      (error () :plain))))
+				         (aw-typed () :typed)
+				         (error () :lost-its-type)))
+				""")).isEqualTo(":OTHER\n:TYPED\n:PLAIN\n:TYPED");
+	}
+
+	@Test
 	void catchRestoresCondTlAcrossAwait() throws Exception {
-		// the JVM stores the current condition in a ThreadLocal (_condTl); a failure
-		// on the async body's virtual thread must re-set that ThreadLocal on the
+		// the JVM records a condition under its throwable in a ThreadLocal (_condTl); a
+		// failure on the async body's virtual thread must be recorded again on the
 		// awaiting thread before rethrowing, or the type-dispatched inner handler
 		// inside the catch's handler would fail to see it. This test pins that path
 		// through the catch combinator.

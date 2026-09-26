@@ -379,12 +379,10 @@ final class JvmJavaDirectSites {
 	 * {@link am.ik.rontolisp.compiler.JavaImplementations#PENDING_SIGNALS}.
 	 * <p>
 	 * The two per-thread channels a compiled condition or exit also lives in travel with
-	 * it: {@code _jsig} takes the condition out of {@code _condTl} and the throwable's
-	 * own entry off the exit stack {@code _nleTl}, and {@code _jfail} puts both back for
-	 * the throwable it passes on. So a callback that Java lets fail meanwhile (a second
-	 * close handler) cannot leave its own in their place, and one Java swallows leaves
-	 * nothing behind: a later failure never reads its condition, and the member's own
-	 * failure clears the channel.
+	 * it: {@code _jsig} takes t's condition off {@code _condTl} and t's own entry off the
+	 * exit stack {@code _nleTl}, and {@code _jfail} puts both back for the throwable it
+	 * passes on. So a callback that Java lets fail meanwhile (a second close handler)
+	 * cannot leave its own in their place, and one Java swallows leaves nothing behind.
 	 * @param bridge whether the reflective bridge travels with the program
 	 * @param channel the program's condition channel: which of {@code _condTl} and
 	 * {@code _nleTl} it has
@@ -397,43 +395,42 @@ final class JvmJavaDirectSites {
 			signalHelper();
 		}
 		Signals signals = null;
-		FieldrefConstant condTl = channel.used ? channel.condTlField : null;
+		MethodrefConstant condTake = channel.used ? channel.condTake : null;
+		MethodrefConstant condPut = channel.used ? channel.condPut : null;
 		FieldrefConstant nleTl = channel.nleUsed ? channel.nleTlField : null;
 		if (this.signal != null) {
 			Utf8Constant name = this.cp.addUtf8(SIGNALS);
 			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
 			signals = new Signals(this.cp.addFieldref(this.thisClass, this.cp.addNameAndType(name, desc)), name, desc);
-			this.methods.add(buildSignal(signals.field(), condTl, nleTl));
+			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
 		}
 		if (this.failure != null) {
-			this.methods.add(buildFailure(signals == null ? null : signals.field(), condTl, nleTl));
+			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl));
 		}
 		this.finished = true;
 		return signals;
 	}
 
-	// static Throwable _jsig(Throwable t): _condTl's condition taken out of the channel,
-	// and the entry of _nleTl t is the exit of off the stack; then {t, that condition,
-	// that entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
-	private Method buildSignal(FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+	// static Throwable _jsig(Throwable t): t's condition taken off _condTl, and the
+	// entry of _nleTl t is the exit of off the stack; then {t, that condition, that
+	// entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
+	private Method buildSignal(FieldrefConstant signals, @Nullable MethodrefConstant condTake,
 			@Nullable FieldrefConstant nleTl) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant objects = cls("[Ljava/lang/Object;");
 		MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
 		MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
 		// 0 = t, 1 = the record, 2 = a node, 3 = its depth, 4 = the condition, 5 = the
-		// exit. The condition leaves the channel with t: one Java swallows is not read
-		// as a later failure's.
-		a.aconstNull();
-		a.astore(4);
-		if (condTl != null) {
-			a.getstatic(condTl);
-			a.invokevirtual(get);
-			a.astore(4);
-			a.getstatic(condTl);
-			a.aconstNull();
-			a.invokevirtual(set);
+		// exit. The condition leaves the channel with t: one Java swallows stays in the
+		// record, not on the channel.
+		if (condTake != null) {
+			a.aload(0);
+			a.invokestatic(condTake);
 		}
+		else {
+			a.aconstNull();
+		}
+		a.astore(4);
 		a.aconstNull();
 		a.astore(5);
 		if (nleTl != null) {
@@ -506,8 +503,8 @@ final class JvmJavaDirectSites {
 
 	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
 	// taken off with every newer node, its condition and exit entry put back -- else
-	// new RuntimeException(text + t), with no condition in the channel.
-	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+	// new RuntimeException(text + t), which carries no condition.
+	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable MethodrefConstant condPut,
 			@Nullable FieldrefConstant nleTl) {
 		JvmAsm a = new JvmAsm();
 		if (signals != null) {
@@ -542,12 +539,13 @@ final class JvmJavaDirectSites {
 			a.iconst(3);
 			a.aaload();
 			a.invokevirtual(set);
-			if (condTl != null) {
-				a.getstatic(condTl);
+			if (condPut != null) {
+				a.aload(0);
 				a.aload(2);
 				a.iconst(1);
 				a.aaload();
-				a.invokevirtual(set);
+				a.invokestatic(condPut);
+				a.pop();
 			}
 			if (nleTl != null) {
 				int noExit = a.label();
@@ -571,12 +569,6 @@ final class JvmJavaDirectSites {
 			a.aload(0);
 			a.areturn();
 			a.bind(wrap);
-		}
-		if (condTl != null) {
-			// The member's own failure carries no condition: none a callback left.
-			a.getstatic(condTl);
-			a.aconstNull();
-			a.invokevirtual(method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V"));
 		}
 		a.anew(cls("java/lang/RuntimeException"));
 		a.dup();

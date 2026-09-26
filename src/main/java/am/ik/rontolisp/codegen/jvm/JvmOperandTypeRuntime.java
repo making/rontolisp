@@ -30,11 +30,13 @@ import org.jspecify.annotations.Nullable;
  * anything else through. Zero cost on the normal path; a helper is shared by many
  * operators ({@code _cmpb} serves {@code < > <= >= = min max}), so the operator can only
  * be known at the call site, never inside the helper.</li>
- * <li>Under a landing pad the thread-local {@code _teTl} holds {@code {exception, datum,
- * type}} for the last such exception, identity-checked by {@code _teSlot(e, i)}, which is
- * how the pad fills a {@code type-error}'s {@code datum} and {@code expected-type}: a
- * {@code RuntimeException} has nowhere to carry an object, and a compiled program ships
- * no exception class of its own. A program without a pad keeps neither.</li>
+ * <li>Under a landing pad the thread-local {@code _teTl} maps such an exception to its
+ * {@code {datum, type}} record ({@link JvmThrowableRecords}: keyed by the exception, so a
+ * record made while another is on its way out replaces nothing), read by
+ * {@code _teSlot(e, i)}, which is how the pad fills a {@code type-error}'s {@code datum}
+ * and {@code expected-type}: a {@code RuntimeException} has nowhere to carry an object,
+ * and a compiled program ships no exception class of its own. A program without a pad
+ * keeps neither.</li>
  * </ul>
  */
 final class JvmOperandTypeRuntime {
@@ -222,14 +224,17 @@ final class JvmOperandTypeRuntime {
 		MethodrefConstant lispToString = self(cp, thisClass, "_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;");
 		MethodrefConstant tlGet = cp.addMethodref(threadLocal,
 				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant tlSet = cp.addMethodref(threadLocal,
-				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		// No record is set any more, but the entry keeps its place in the pool: the
+		// pool's
+		// order is part of every class's bytes, a class without a pad included.
+		cp.addMethodref(threadLocal, cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
 		if (teTl != null) {
 			// Minted now, while the pool is still open: <clinit> initializes the field
 			// through ConditionChannel's ThreadLocal constants, which resolve to these.
 			cp.addMethodref(threadLocal, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 			cp.addUtf8("<clinit>");
 		}
+		Records records = teTl != null ? Records.of(cp, thisClass, teTl, tlGet, object, objArr) : null;
 		StringConstant valuePrefix = cp.addString(OperandTypes.VALUE_PREFIX);
 		StringConstant typeInfix = cp.addString(OperandTypes.TYPE_INFIX);
 
@@ -268,9 +273,9 @@ final class JvmOperandTypeRuntime {
 		c.add(Opcode.ALOAD_1);
 		invoke(c, Opcode.INVOKEVIRTUAL, concat);
 		invoke(c, Opcode.INVOKESPECIAL, rteInit);
-		if (teTl != null) {
+		if (records != null) {
 			c.add(Opcode.ASTORE_2);
-			emitRecord(c, teTl, object, tlSet, 2, () -> c.add(Opcode.ALOAD_0), () -> c.add(Opcode.ALOAD_1));
+			records.emit(c, 2, () -> c.add(Opcode.ALOAD_0), () -> c.add(Opcode.ALOAD_1));
 			c.add(Opcode.ALOAD_2);
 		}
 		c.add(Opcode.ARETURN);
@@ -300,10 +305,10 @@ final class JvmOperandTypeRuntime {
 		JvmRuntimeBuilder.emitLdc(b, cp.addString(OperandTypes.INDEX_TYPE_SUFFIX).index());
 		invoke(b, Opcode.INVOKEVIRTUAL, concat);
 		invoke(b, Opcode.INVOKESPECIAL, rteInit);
-		if (teTl != null) {
+		if (records != null) {
 			b.add(Opcode.ASTORE_2);
 			StringConstant integerKind = cp.addString(OperandTypes.Kind.INTEGER.name());
-			emitRecord(b, teTl, object, tlSet, 2, () -> b.add(Opcode.ALOAD_0), () -> {
+			records.emit(b, 2, () -> b.add(Opcode.ALOAD_0), () -> {
 				// (INTEGER 0 (dim)): {"INTEGER", {0L, {{dimL, nil}, nil}}}
 				emitConsHead(b, object, () -> JvmRuntimeBuilder.emitLdc(b, integerKind.index()));
 				emitConsHead(b, object, () -> {
@@ -411,7 +416,8 @@ final class JvmOperandTypeRuntime {
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
 		MethodrefConstant charAt = cp.addMethodref(string, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
 		// Locals: 0=e, 1=op, 2=opType, 3=msg, 4=the type's start, 5=type, 6=the renamed
-		// exception, 7=the record, 8=1 when the type is the report's own compound one.
+		// exception, 7=e's record, 8=1 when the type is the report's own compound one,
+		// 9=the thread's record map.
 		List<Integer> o = new ArrayList<>();
 		o.add(Opcode.ALOAD_0);
 		invoke(o, Opcode.INVOKEVIRTUAL, getMessage);
@@ -509,47 +515,33 @@ final class JvmOperandTypeRuntime {
 		invoke(o, Opcode.INVOKESPECIAL, rteInit);
 		o.add(Opcode.ASTORE);
 		o.add(6);
-		if (teTl != null) {
-			// The datum travels from the funnel's record when it is THIS exception's, and
-			// so does a compound type's object (a list the text only spells).
-			o.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(o, teTl.index());
-			invoke(o, Opcode.INVOKEVIRTUAL, tlGet);
-			o.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(o, objArr.index());
-			o.add(Opcode.ASTORE);
-			o.add(7);
+		if (records != null) {
+			// The datum travels from the funnel's record of e, and so does a compound
+			// type's object (a list the text only spells), into the renamed exception's.
+			records.emitRead(o, 0, 9, 7);
 			o.add(Opcode.ALOAD);
 			o.add(7);
 			int ifNoRecord = branch(o, Opcode.IFNULL);
-			o.add(Opcode.ALOAD);
-			o.add(7);
-			o.add(Opcode.ICONST_0);
-			o.add(Opcode.AALOAD);
-			o.add(Opcode.ALOAD_0);
-			int ifOther = branch(o, Opcode.IF_ACMPNE);
 			o.add(Opcode.ILOAD);
 			o.add(8);
 			int ifSymbolType = branch(o, Opcode.IFEQ);
 			o.add(Opcode.ALOAD);
 			o.add(7);
-			o.add(Opcode.ICONST_2);
+			o.add(Opcode.ICONST_1);
 			o.add(Opcode.AALOAD);
 			o.add(Opcode.ASTORE);
 			o.add(5);
 			JvmRuntimeBuilder.patchBranch(o, ifSymbolType, o.size());
-			emitRecord(o, teTl, object, tlSet, 6, () -> {
+			records.emit(o, 6, () -> {
 				o.add(Opcode.ALOAD);
 				o.add(7);
-				o.add(Opcode.ICONST_1);
+				o.add(Opcode.ICONST_0);
 				o.add(Opcode.AALOAD);
 			}, () -> {
 				o.add(Opcode.ALOAD);
 				o.add(5);
 			});
-			int done = o.size();
-			JvmRuntimeBuilder.patchBranch(o, ifNoRecord, done);
-			JvmRuntimeBuilder.patchBranch(o, ifOther, done);
+			JvmRuntimeBuilder.patchBranch(o, ifNoRecord, o.size());
 		}
 		o.add(Opcode.ALOAD);
 		o.add(6);
@@ -561,36 +553,31 @@ final class JvmOperandTypeRuntime {
 		o.add(Opcode.ALOAD_0);
 		o.add(Opcode.ARETURN);
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OP_TYPE_ERR), cp.addUtf8(OP_TYPE_ERR_DESC), o,
-				8, 9, List.of()));
+				8, records != null ? 10 : 9, List.of()));
 
-		if (teTl != null) {
-			// _teSlot(Throwable e, int i): the record's slot i when the record is e's,
-			// else null.
+		if (records != null) {
+			// _teSlot(Throwable e, int i): e's record for 0 (null when it has none), its
+			// datum for 1, its type for 2.
 			List<Integer> s = new ArrayList<>();
-			s.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(s, teTl.index());
-			invoke(s, Opcode.INVOKEVIRTUAL, tlGet);
-			s.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(s, objArr.index());
-			s.add(Opcode.ASTORE_2);
-			s.add(Opcode.ALOAD_2);
-			int ifNoRecord = branch(s, Opcode.IFNULL);
-			s.add(Opcode.ALOAD_2);
-			s.add(Opcode.ICONST_0);
-			s.add(Opcode.AALOAD);
-			s.add(Opcode.ALOAD_0);
-			int ifOther = branch(s, Opcode.IF_ACMPNE);
-			s.add(Opcode.ALOAD_2);
+			records.emitRead(s, 0, 2, 3);
 			s.add(Opcode.ILOAD_1);
+			int ifElement = branch(s, Opcode.IFNE);
+			s.add(Opcode.ALOAD_3);
+			s.add(Opcode.ARETURN);
+			JvmRuntimeBuilder.patchBranch(s, ifElement, s.size());
+			s.add(Opcode.ALOAD_3);
+			int ifNoRecord = branch(s, Opcode.IFNULL);
+			s.add(Opcode.ALOAD_3);
+			s.add(Opcode.ILOAD_1);
+			s.add(Opcode.ICONST_M1);
+			s.add(Opcode.IADD);
 			s.add(Opcode.AALOAD);
 			s.add(Opcode.ARETURN);
-			int none = s.size();
-			JvmRuntimeBuilder.patchBranch(s, ifNoRecord, none);
-			JvmRuntimeBuilder.patchBranch(s, ifOther, none);
+			JvmRuntimeBuilder.patchBranch(s, ifNoRecord, s.size());
 			s.add(Opcode.ACONST_NULL);
 			s.add(Opcode.ARETURN);
-			methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_SLOT), cp.addUtf8(TE_SLOT_DESC), s, 2,
-					3, List.of()));
+			methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_SLOT), cp.addUtf8(TE_SLOT_DESC), s, 3,
+					4, List.of()));
 		}
 		return methods;
 	}
@@ -857,30 +844,87 @@ final class JvmOperandTypeRuntime {
 	}
 
 	/**
-	 * Emits {@code _teTl.set(new Object[] {<local excSlot>, datum, type})}. Peak operand
-	 * stack: 6.
+	 * Where a wrong-type exception's {@code {datum, type}} record lives: the
+	 * {@code _teTl} field, whose value on a thread is the map from each exception to its
+	 * record ({@link JvmThrowableRecords}), and the calls that write and read it.
+	 *
+	 * @param teTl the {@code _teTl} field
+	 * @param tlGet {@code ThreadLocal.get}
+	 * @param tlMap {@code _tlMap}
+	 * @param weakMap the {@code java/util/WeakHashMap} class
+	 * @param mapPut {@code WeakHashMap.put}
+	 * @param mapGet {@code WeakHashMap.get}
+	 * @param object the {@code java/lang/Object} class
+	 * @param objArr the {@code Object[]} class
 	 */
-	private static void emitRecord(List<Integer> c, FieldrefConstant teTl, ClassConstant object,
-			MethodrefConstant tlSet, int excSlot, Runnable datum, Runnable type) {
-		c.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(c, teTl.index());
-		c.add(Opcode.ICONST_3);
-		c.add(Opcode.ANEWARRAY);
-		JvmRuntimeBuilder.emitU2(c, object.index());
-		c.add(Opcode.DUP);
-		c.add(Opcode.ICONST_0);
-		c.add(Opcode.ALOAD);
-		c.add(excSlot);
-		c.add(Opcode.AASTORE);
-		c.add(Opcode.DUP);
-		c.add(Opcode.ICONST_1);
-		datum.run();
-		c.add(Opcode.AASTORE);
-		c.add(Opcode.DUP);
-		c.add(Opcode.ICONST_2);
-		type.run();
-		c.add(Opcode.AASTORE);
-		invoke(c, Opcode.INVOKEVIRTUAL, tlSet);
+	private record Records(FieldrefConstant teTl, MethodrefConstant tlGet, MethodrefConstant tlMap,
+			ClassConstant weakMap, MethodrefConstant mapPut, MethodrefConstant mapGet, ClassConstant object,
+			ClassConstant objArr) {
+
+		static Records of(ConstantPool cp, ClassConstant thisClass, FieldrefConstant teTl, MethodrefConstant tlGet,
+				ClassConstant object, ClassConstant objArr) {
+			return new Records(teTl, tlGet, JvmThrowableRecords.tlMap(cp, thisClass),
+					cp.addClass(cp.addUtf8(JvmThrowableRecords.WEAK_MAP)), JvmThrowableRecords.mapPut(cp),
+					JvmThrowableRecords.mapGet(cp), object, objArr);
+		}
+
+		/**
+		 * Emits {@code _tlMap(_teTl).put(<local excSlot>, new Object[] {datum, type})}.
+		 * The record never holds the exception: a map value that reaches its weak key
+		 * keeps the entry alive. Peak operand stack: 5 plus what {@code datum} and
+		 * {@code type} push.
+		 */
+		void emit(List<Integer> c, int excSlot, Runnable datum, Runnable type) {
+			c.add(Opcode.GETSTATIC);
+			JvmRuntimeBuilder.emitU2(c, this.teTl.index());
+			invoke(c, Opcode.INVOKESTATIC, this.tlMap);
+			c.add(Opcode.ALOAD);
+			c.add(excSlot);
+			c.add(Opcode.ICONST_2);
+			c.add(Opcode.ANEWARRAY);
+			JvmRuntimeBuilder.emitU2(c, this.object.index());
+			c.add(Opcode.DUP);
+			c.add(Opcode.ICONST_0);
+			datum.run();
+			c.add(Opcode.AASTORE);
+			c.add(Opcode.DUP);
+			c.add(Opcode.ICONST_1);
+			type.run();
+			c.add(Opcode.AASTORE);
+			invoke(c, Opcode.INVOKEVIRTUAL, this.mapPut);
+			c.add(Opcode.POP);
+		}
+
+		/**
+		 * Emits the read of the record of the exception in local {@code excSlot} into
+		 * local {@code recordSlot} (null when the thread has no map, or the map nothing
+		 * for it), the map passing through local {@code mapSlot}. Peak operand stack: 2.
+		 */
+		void emitRead(List<Integer> c, int excSlot, int mapSlot, int recordSlot) {
+			c.add(Opcode.GETSTATIC);
+			JvmRuntimeBuilder.emitU2(c, this.teTl.index());
+			invoke(c, Opcode.INVOKEVIRTUAL, this.tlGet);
+			c.add(Opcode.CHECKCAST);
+			JvmRuntimeBuilder.emitU2(c, this.weakMap.index());
+			c.add(Opcode.DUP);
+			c.add(Opcode.ASTORE);
+			c.add(mapSlot);
+			int ifNoMap = branch(c, Opcode.IFNULL);
+			c.add(Opcode.ALOAD);
+			c.add(mapSlot);
+			c.add(Opcode.ALOAD);
+			c.add(excSlot);
+			invoke(c, Opcode.INVOKEVIRTUAL, this.mapGet);
+			int toCast = branch(c, Opcode.GOTO);
+			JvmRuntimeBuilder.patchBranch(c, ifNoMap, c.size());
+			c.add(Opcode.ACONST_NULL);
+			JvmRuntimeBuilder.patchBranch(c, toCast, c.size());
+			c.add(Opcode.CHECKCAST);
+			JvmRuntimeBuilder.emitU2(c, this.objArr.index());
+			c.add(Opcode.ASTORE);
+			c.add(recordSlot);
+		}
+
 	}
 
 	/**

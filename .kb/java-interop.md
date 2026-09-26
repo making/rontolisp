@@ -520,16 +520,18 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   every body is compiled, since what they read depends on the channels the program has;
   `_jsig`/`_jfail` are `REFLECTIVELY_FOUND_METHODS` and, with the bridge, shaker roots.
 - Compiled custody of the two per-thread channels a condition or exit also lives in (the
-  interpreter's signals carry their own state): `_jsig` takes the condition out of `_condTl`
-  and the throwable's own entry off the `_nleTl` exit stack; `_jfail` puts both back for the
-  throwable it passes on, and clears `_condTl` for a wrapped failure. Measured 2026-09-26
-  without it: the `Stream.close` relay answered the SECOND handler's condition and lost the
-  first handler's exit (`%nlx-catch` reads only the top entry: `Unhandled condition: null`);
-  a condition `FutureTask.run` swallowed was read by the next `handler-case` on the thread,
-  for the `get` failure and for a later Lisp `type-error` alike. One loss remains: a Java call
-  made from a cleanup while a typed condition is on its way out, whose callback raises a PLAIN
-  throwable Java swallows, takes the outer condition with it -- `_condTl` is keyed by nothing,
-  which loses conditions without Java frames too (`.todo/a43`).
+  interpreter's signals carry their own state): `_jsig` takes the throwable's own condition off
+  `_condTl` (keyed by the throwable: [error-handling.md](error-handling.md), "The JVM keeps what
+  a throwable carries under the throwable") and its own entry off the `_nleTl` exit stack;
+  `_jfail` puts both back for the throwable it passes on, and a wrapped failure is a new
+  throwable no condition is recorded for. Measured 2026-09-26 without it: the `Stream.close`
+  relay answered the SECOND handler's condition and lost the first handler's exit
+  (`%nlx-catch` reads only the top entry: `Unhandled condition: null`); a condition
+  `FutureTask.run` swallowed was read by the next `handler-case` on the thread, for the `get`
+  failure and for a later Lisp `type-error` alike. Until `_condTl` was keyed (the same day), a
+  Java call made from a cleanup while a typed condition was on its way out, whose callback
+  raised a PLAIN throwable Java swallowed, took the outer condition with it (`_jsig` took
+  whatever the one slot held): the last `CALLBACK_SIGNALS` row.
 - Cost, measured 2026-09-26 (JDK 25): the normal path is unchanged (an exception-table entry):
   a 200,000-element `Collections.sort` through a `java:reify` comparator takes ~37 ms before and
   after compiled, a 20,000-element one ~71 ms interpreted. Class bytes before -> after:

@@ -17,6 +17,9 @@ a build that never knew about EH -- unless `--report-locations` asks for the unc
 - **Java frames are transparent to both**: an exit or condition a `java:` callback raises
   passes through the Java call that ran it, the compiled `_condTl` / `_nleTl` state with it
   ([java-interop.md](java-interop.md), "What a callback raises").
+- **A compiled landing reads only what ITS throwable carries** (JVM, "The JVM keeps what a
+  throwable carries under the throwable" below): the interpreter's `LispEvalException` and
+  wasm-GC's `$lisp-cond` payload carry their condition themselves.
 - **The three-point catchability spectrum**: interpreter catches `LispEvalException` only -- with
   the evaluation seam classifying an escaping `IllegalArgumentException` /
   `IndexOutOfBoundsException` (`program-error`) and cast / arithmetic / negative-size failure (the
@@ -120,9 +123,10 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   (`BuiltinFunctionWrappers.SIGNAL_FUNCTIONS`), so `(apply #'error c '(1 2))` drops the arguments on
   the compiled backends -- documented lite semantics, as for initargs.
 - Channels: interpreter `LispEvalException` carries a nullable `condition()`; JVM `%error-cond`
-  stores the instance into the emitted `private static ThreadLocal _condTl` and throws
-  `RuntimeException(message)` (that field plus `_hcDepthTl` emitted only when used,
-  `JvmLispCompiler.ConditionChannel`); WASM `%error-cond` traps like `%error`.
+  throws `RuntimeException(message)` and records the instance under it on the emitted
+  `private static ThreadLocal _condTl` (that field plus `_hcDepthTl` emitted only when used,
+  `JvmLispCompiler.ConditionChannel`; the record: "The JVM keeps what a throwable carries under
+  the throwable" below); WASM `%error-cond` traps like `%error`.
 - **The JVM message local is shared per method but NOT past its scope** (`Ctx.errorMessageSlot`):
   once `allocTemp` hands that slot to a variable, the cache drops and the next error site takes a
   fresh one. A handler-case in the SAME method resumes after the throw, so a live variable in the
@@ -137,8 +141,9 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
 Surface: `(handler-case expr (type ([var]) body...)... [(:no-error ([var]) body...)])`; clause types
 are `makeHandlerTypeTest` = `makeTypeTest` + an exact-tag fallback for unknown names. A
 condition-less throw is caught as a synthesized `simple-error` with the message in slot 1. No match
--> rethrow (the JVM rethrow RESTORES `_condTl` first). `:no-error` runs on normal completion OUTSIDE
-the handler. `ignore-errors` = `expandIgnoreErrors` over `(error (c) (values nil c))`.
+-> rethrow (the JVM records the condition under the throwable again first). `:no-error` runs on
+normal completion OUTSIDE the handler. `ignore-errors` = `expandIgnoreErrors` over
+`(error (c) (values nil c))`.
 
 - **Interpreter** `evalHandlerCase`: `try/catch (LispEvalException)`, `BlockReturnSignal` passing
   through. A per-evaluator `ThreadLocal<ArrayDeque<List<LispVal>>> handlerCaseTypes` holds every
@@ -166,6 +171,55 @@ the handler. `ignore-errors` = `expandIgnoreErrors` over `(error (c) (values nil
   reloads from the outermost escaped `SpillScope` (`JvmReturnCompiler.emitStackUnwind`).
 - `FreeVarAnalyzer` learned `handler-case` (clause var BOUND in the clause body), `ignore-errors`
   and `with-slots`.
+
+## The JVM keeps what a throwable carries under the throwable
+**Invariant: a compiled landing pad reads only the record of the throwable it caught.** A
+`RuntimeException` has nowhere to carry an object and a compiled program ships no exception class,
+so the condition a signal travels with (`_condTl`) and a wrong-type operand's datum and type
+(`_teTl`, "A non-number reaching arithmetic") live per thread in a `java.util.WeakHashMap` keyed by
+the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first record).
+
+- **Before (2026-09-26): one slot per thread, read by whichever landing came next.** A plain
+  `error`, a raw failure or another condition handled inside an `unwind-protect` cleanup while a
+  typed condition was on its way out read the typed one as its own or took it away, and it arrived
+  as a synthesized `simple-error` -- `:READ-AS-THE-TYPED-ONE` / `:LOST-ITS-TYPE` where the
+  interpreter, wasm-GC and SBCL print `:PLAIN` / `:TYPED`. A wrong-type failure lost its class to a
+  second one the same way (the slot held the last record only), an `await` of a plain failure in
+  the cleanup CLEARED the typed condition, and a condition whose `:report` handled an error of its
+  own while its message was built lost its type (the slot was set before the message ran).
+- **Writers.** `%error-cond` / `%signal-cond` evaluate the condition into a local, then the message,
+  then `throw _condPut(new RuntimeException(message), condition)`: nothing is recorded before the
+  exception exists. `_await` / `_thread_join` record the payload's condition on the awaiting thread
+  (a plain failure's: none). `_teRaw` / `_oob` / `_opTypeErr` record `{datum, type}`.
+- **Readers TAKE** (`_condTake`, the entry removed): a `handler-case` landing, the `_hbGuard` pad,
+  an async body's `run()`, a thread's `call()`, `_jsig`. What passes the throwable on records the
+  instance again (`_condPut`): a landing no clause matched and the pad -- a synthesized instance
+  included, so every pad of one flight sees the instance `%handlers-ran%` marks -- and `_jfail`.
+  **Why take, not read**: C2 throws one preallocated exception per class from a hot site
+  (`OmitStackTraceInFastThrow`, on by default), so a record left after a flight describes the next
+  failure. With a plain read, 300,000 hot `char-code` failures under a `handler-bind` ran its
+  handler 5,292-5,332 times under `-XX:-UseJVMCICompiler`: the stale instance matched
+  `%handlers-ran%` (2026-09-26). Graal, this machine's default JIT, allocates every exception and
+  shows nothing, hence the child JVM on C2 in `JvmThrowableRecordsTest`. Only a flight abandoned
+  between a pass-on and the next landing still leaves such a record. A `_teTl` record is made for a
+  fresh exception only and is never taken.
+- **Weak keys**: the record of an abandoned flight (a cleanup that exits, a caller outside the
+  program) goes with its throwable. No record holds its throwable -- a value reaching its weak key
+  never dies -- so the te record lost its `exception` slot (`_teSlot(e, 0)` answers the record).
+- Byte-identical without the channel (`ConditionChannel.used`) and, for `_teTl`, without a landing
+  pad. A landing is 8 bytes shorter, a no-match rethrow 3, a throw site 1 longer; the fixed part is
+  `_tlMap` / `_condTake` / `_condPut` and ~23 pool entries. Class bytes before -> after
+  (2026-09-26): the ci-spec pin's first case as a program of its own 36,138 -> 36,720; `(ignore-errors (f 1))`
+  11,139 -> 11,794; an async body's typed error 51,424 -> 52,053;
+  `examples/console/error-handling.lisp` 64,343 -> 64,965; `examples/net/httpbin.lisp` 185,469 ->
+  185,966; `examples/net/hello-clack.lisp` 950,310 -> 951,256.
+- Not keyed yet: `%handlers-ran%` itself, on every backend -- a condition handled in a cleanup
+  replaces the mark and the outer condition's handlers run twice (`.todo/a49`).
+- Pins: ci-spec `condition-on-its-way-out-keeps-its-record`,
+  `JvmLispCompilerTest#aConditionOnItsWayOutKeepsItsRecord*`,
+  `JvmAsyncCompilerTest#anAwaitHandledInACleanupLeavesTheConditionOnItsWayOut`,
+  `JvmThreadTest#aJoinHandledInACleanupLeavesTheConditionOnItsWayOut`, the swallowed-plain-failure
+  row of `testsupport/JavaImplementationPrograms.CALLBACK_SIGNALS`, `JvmThrowableRecordsTest`.
 
 ## WASM EH-mode specifics
 - **The gate** (`WasmLispCompiler.compile`): the program (post pre-passes, libraries spliced) is
@@ -952,10 +1006,11 @@ operator it serves:
   back as a per-(helper, operator) WRAPPER, built on first use: the same invocation under a catch-any
   entry whose handler throws `_opTypeErr(e, "OP", "TYPE")`, which renames an unnamed report and
   passes anything else through. Zero cost on the normal path (measured: no difference on a boxed
-  generic-arithmetic loop). Under a landing pad the thread-local `_teTl` holds
-  `{exception, datum, type}`, identity-checked by `_teSlot`, which is how the pad's `type-error` arm
-  fills the slots -- a `RuntimeException` has nowhere to carry an object and a compiled program ships
-  no exception class. Size: +0.8 KB on a four-defun class, +2.8 KB on a 116 KB one.
+  generic-arithmetic loop). Under a landing pad the thread-local `_teTl` maps each such exception to
+  its `{datum, type}`, read by `_teSlot`, which is how the pad's `type-error` arm fills the slots --
+  a `RuntimeException` has nowhere to carry an object and a compiled program ships no exception
+  class ("The JVM keeps what a throwable carries under the throwable"). Size: +0.8 KB on a
+  four-defun class, +2.8 KB on a 116 KB one.
 - **wasm-GC, EH mode** (`WasmOperandTypes`): a call to a helper that can reject an operand, compiled
   inside a named form (`WasmOperandTypes.emitCall`, converted at every call site of the arithmetic
   compilers and `castFloatGetF64`), stores the operator's id in the operator register (a

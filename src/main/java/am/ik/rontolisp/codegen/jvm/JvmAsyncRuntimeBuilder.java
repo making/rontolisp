@@ -42,11 +42,11 @@ import org.jspecify.annotations.Nullable;
  * cross-backend eager-start contract;</li>
  * <li>an error thrown by the body cannot ride the {@code _condTl} condition channel
  * across threads (it is a ThreadLocal), so {@code run()} completes the future NORMALLY
- * with {@code {EMARKER, throwable, condition}} and {@code _await} re-sets the condition
- * on the awaiting thread before rethrowing -- {@code handler-case} around the await then
- * dispatches by type exactly like a same-thread signal. A program whose uncaught report
- * records async boundaries adds the throwable's trace as the body left it, which each
- * await puts back ({@link JvmUncaughtHandler});</li>
+ * with {@code {EMARKER, throwable, condition}} and {@code _await} records the condition
+ * under the throwable on the awaiting thread before rethrowing it -- {@code handler-case}
+ * around the await then dispatches by type exactly like a same-thread signal. A program
+ * whose uncaught report records async boundaries adds the throwable's trace as the body
+ * left it, which each await puts back ({@link JvmUncaughtHandler});</li>
  * <li>a body that answers other than exactly one value completes the future with
  * {@code {VMARKER, primary, extras}}, the channel read on the body's own thread the
  * moment it returns; {@code _await} answers the primary and publishes the extras on the
@@ -269,7 +269,8 @@ final class JvmAsyncRuntimeBuilder {
 
 		ConstantPool.FieldrefConstant handoffField = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(HANDOFF_FIELD), cp.addUtf8("Ljava/lang/ThreadLocal;")));
-		ConstantPool.FieldrefConstant condTlField = java.util.Objects.requireNonNull(channel.condTlField);
+		MethodrefConstant condTake = java.util.Objects.requireNonNull(channel.condTake);
+		MethodrefConstant condPut = java.util.Objects.requireNonNull(channel.condPut);
 
 		ConstantPool.FieldrefConstant fnField = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(FN_FIELD), cp.addUtf8("Ljava/lang/Object;")));
@@ -450,7 +451,7 @@ final class JvmAsyncRuntimeBuilder {
 			int tryEnd = a.pos();
 			int done = a.label();
 			a.branch(Opcode.GOTO, done);
-			// catch (Throwable t): future.complete({EMARKER, t, _condTl.get()}), and
+			// catch (Throwable t): future.complete({EMARKER, t, _condTake(t)}), and
 			// t.getStackTrace() after them when the body recorded its boundary there
 			int handler = a.pos();
 			a.astore(1);
@@ -470,10 +471,9 @@ final class JvmAsyncRuntimeBuilder {
 			a.aastore();
 			a.op(Opcode.DUP);
 			a.iconst(2);
-			a.op(Opcode.GETSTATIC);
-			a.u2(condTlField.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlGet.index());
+			a.aload(1);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(condTake.index());
 			a.aastore();
 			if (throwableGetStackTrace != null) {
 				// The trace as the boundary left it, which every await puts back
@@ -602,21 +602,19 @@ final class JvmAsyncRuntimeBuilder {
 			a.aaload();
 			a.ldc(eMarker.index());
 			a.branch(Opcode.IF_ACMPNE, plain);
-			// {EMARKER, t, cond}: re-set the condition channel HERE (the awaiting
+			// {EMARKER, t, cond}: record the condition under t HERE (the awaiting
 			// thread) and rethrow, so handler-case dispatches by type
-			a.op(Opcode.GETSTATIC);
-			a.u2(condTlField.index());
-			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
-			a.aaload();
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlSet.index());
 			a.aload(4);
 			a.checkcast(objectArrayClass);
 			a.iconst(1);
 			a.aaload();
 			a.checkcast(throwableClass);
+			a.aload(4);
+			a.checkcast(objectArrayClass);
+			a.iconst(2);
+			a.aaload();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(condPut.index());
 			if (asyncAwaited != null) {
 				// The uncaught report's hop: this await completes the boundary the body's
 				// thunk recorded in the trace, put back as stored (JvmUncaughtHandler).
