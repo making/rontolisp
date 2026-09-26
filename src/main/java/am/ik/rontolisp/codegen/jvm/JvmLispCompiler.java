@@ -756,7 +756,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies).
+	 * library copies). One entry is not a class: the {@code $Gpu*} copies bring their
+	 * native-image downcall registration under {@code META-INF/native-image/}
+	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>
 	 * The runtime classes are written at their canonical names rather than renamed into
@@ -764,7 +766,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * package they come from imports nothing, which is what makes the output run with no
 	 * rontolisp jar on the classpath ({@code .kb/jvm-export.md}). Valid after
 	 * {@link #compile}.
-	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 * @return each file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime

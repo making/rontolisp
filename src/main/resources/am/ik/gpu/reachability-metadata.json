@@ -1,0 +1,173 @@
+{
+  "comment": [
+    "The --gpu downcalls a compiled program's native image needs: the CUDA driver API and",
+    "Metal shapes the shipped $Gpu* classes bind, one entry per distinct shape. A -o X.class/.jar",
+    "--gpu output carries this file under META-INF/native-image/, so native-image picks it up with",
+    "no configuration; without it the image refuses the binding and --gpu silently runs the CPU",
+    "fallback on a machine with a device (.kb/gpu.md, \"Native image\"). The same entries are in",
+    "rontolisp's own reachability-metadata.json; NativeImageForeignConfigTest pins this file",
+    "against both drivers' bindings in both directions."
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jlong"],
+        "options": {"critical": {"allowHeapAccess": true}}
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jlong"],
+        "options": {"critical": {"allowHeapAccess": true}}
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint", "jint", "jint", "jint", "jint", "jint", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "struct(jlong,jlong,jlong)", "struct(jlong,jlong,jlong)"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong", "jlong", "jint"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jboolean"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jlong", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jboolean", "jboolean", "jlong", "jlong", "jlong", "jdouble", "jdouble"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*", "void*"]
+      }
+    ]
+  }
+}
