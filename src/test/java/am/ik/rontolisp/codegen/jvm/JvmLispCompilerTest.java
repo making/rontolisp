@@ -17045,12 +17045,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aQuotedDatumCostsNoConstantPoolEntryOfItsOwn() {
+		// Every quoted datum is a slot of ONE table, named by an int operand: the pool
+		// holds the table's fixed entries, not three per datum (a per-datum Fieldref
+		// once filled 16% of the ci-spec corpus class's pool, .kb/quoted-data.md).
+		// Each '(1) below is a distinct datum by identity, so each gets its own slot.
+		java.util.function.IntFunction<Integer> poolEntries = n -> {
+			String quotes = String.join(" ", java.util.Collections.nCopies(n, "'(1)"));
+			byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString("(print (length (list " + quotes + ")))")));
+			return (((classBytes[8] & 0xff) << 8) | (classBytes[9] & 0xff)) - 1;
+		};
+		assertThat(poolEntries.apply(300)).isEqualTo(poolEntries.apply(3));
+	}
+
+	@Test
+	void aRacingFirstBuildOfAQuotedDatumAnswersTheDatumThatWon() throws Exception {
+		// Two threads can both see a quoted datum's slot empty and both build it. The
+		// fill (_qdSet) settles it under the class monitor: the first datum stored stays,
+		// and a later fill answers THAT one instead of its own, so the site hands every
+		// caller one object (.kb/quoted-data.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defun %q () '(1 2)) (print (length (%q)))")));
+		Files.write(tempDir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method read = clazz.getDeclaredMethod("_qd", int.class);
+			Method fill = clazz.getDeclaredMethod("_qdSet", Object.class, int.class);
+			read.setAccessible(true);
+			fill.setAccessible(true);
+			Object winner = new Object();
+			Object loser = new Object();
+			assertThat(read.invoke(null, 0)).isNull();
+			assertThat(fill.invoke(null, winner, 0)).isSameAs(winner);
+			assertThat(fill.invoke(null, loser, 0)).isSameAs(winner);
+			assertThat(read.invoke(null, 0)).isSameAs(winner);
+		}
+	}
+
+	@Test
 	void aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations() throws Exception {
 		// A bare #P"..." / #S(...) in code position is a CONSTANT, not a constructor:
 		// the interpreter's self-evaluating LispInstance arm hands the reader's own
 		// instance back at every evaluation, and cannot be moved (the same arm carries
 		// every live instance spliced back through (quote <value>)), so the site
-		// memoizes into the lazy _qd$N field a quoted datum uses (.kb/quoted-data.md).
+		// memoizes into the lazy table slot a quoted datum uses (.kb/quoted-data.md).
 		assertThat(compileAndRun("""
 				(defun %fp () #P"a/b.txt")
 				(print (eq (%fp) (%fp)))
@@ -17115,7 +17155,10 @@ class JvmLispCompilerTest {
 		// 10,686 since a built-in's wrong-count report names the operator: the thrown
 		// class the landing pad recognizes, the names of the runtime's own dispatchable
 		// defaults (#'identity, #'eql) and their decode in _arityMsg/_arityErr: +152 B.
-		assertThat(classBytes.length).isLessThan(10_760);
+		// 11,035 since the quoted '(1 2 3) is a slot of the quoted-datum table
+		// (JvmQuotePool, .kb/quoted-data.md), not a field of its own: the table's two
+		// helpers and names, +355 B once per class, paid back past ~15 datums.
+		assertThat(classBytes.length).isLessThan(11_110);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 

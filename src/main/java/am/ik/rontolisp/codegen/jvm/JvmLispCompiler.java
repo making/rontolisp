@@ -4107,16 +4107,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, bf.name(),
 					java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc));
 		}
-		// One private static VOLATILE Object per quoted aggregate datum, built
-		// lazily by its quote site so every evaluation answers the same object
-		// (.kb/quoted-data.md) -- volatile so a racing first build publishes a
-		// fully-constructed datum. Lazy on purpose: JvmClassShaker drops the
-		// field with the method holding its site, which a <clinit> initializer
-		// would pin alive. The attribute count MUST stay 0 -- JvmClassShaker
-		// rejects field attributes.
-		for (QuotePool.QuoteField qf : mainCtx.quotePool.fields()) {
-			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, qf.name(),
-					java.util.Objects.requireNonNull(mainCtx.quotePool.fieldDesc));
+		// The quoted-datum table (JvmQuotePool): its field and the two helpers that
+		// read and fill it, in a class with a quoted aggregate. Every body is built by
+		// now, so no new slot may be interned past this point (the table's size is
+		// baked into _qdSet); the shake drops all three with the last site.
+		mainCtx.quotePool.freeze();
+		if (mainCtx.quotePool.used()) {
+			JvmQuotePool.Members table = mainCtx.quotePool.members();
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.fieldName(), table.fieldDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc(), 2, 1,
+					table.getCode(), List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					table.setName(), table.setDesc(), 3, 2, table.setCode(), List.of());
 		}
 		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
 		// create it on first use, in a class with a callee that takes physical
@@ -6235,81 +6237,6 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The compilation-wide quoted-datum interner (.kb/quoted-data.md): one private static
-	 * volatile {@code Object} field per DISTINCT quoted aggregate datum -- a cons, a
-	 * general array, an instance or a packed array under {@code quote} -- built LAZILY by
-	 * its quote site ({@code JvmQuoteCompiler.compile}), so every evaluation answers the
-	 * SAME object: the CL-conformant constant reading, and what the interpreter always
-	 * did. Lazy rather than a {@code <clinit>} initializer on purpose:
-	 * {@link am.ik.jvm.JvmClassShaker} runs on every build and must drop a quoted table
-	 * together with the wrapper defun holding its only site, which a {@code <clinit>}
-	 * reference would pin alive. Keyed by the datum's IDENTITY, so a macro expansion
-	 * splicing one template datum into several sites shares one constant across them,
-	 * exactly like the interpreter's shared template datum. A program with no quoted
-	 * aggregate interns nothing and is emitted byte for byte as before.
-	 */
-	static final class QuotePool {
-
-		/**
-		 * One interned quoted datum.
-		 *
-		 * @param name the field name constant
-		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
-		 */
-		record QuoteField(Utf8Constant name, FieldrefConstant ref) {
-		}
-
-		// Identity-keyed lookup beside an insertion-ordered emission list: an
-		// IdentityHashMap's iteration order is not deterministic, and the emitted
-		// output must be (.kb/emitted-output-determinism.md).
-		private final java.util.IdentityHashMap<am.ik.rontolisp.LispVal, QuoteField> byDatum = new java.util.IdentityHashMap<>();
-
-		private final List<QuoteField> fieldsInOrder = new ArrayList<>();
-
-		@Nullable Utf8Constant fieldDesc;
-
-		/**
-		 * The interned quoted-datum fields, in interning order.
-		 * @return the fields to emit
-		 */
-		List<QuoteField> fields() {
-			return this.fieldsInOrder;
-		}
-
-		/**
-		 * The already-interned field for a datum, by identity.
-		 * @param datum the quoted datum
-		 * @return the fieldref, or {@code null} when this datum is not interned yet
-		 */
-		@Nullable FieldrefConstant lookup(am.ik.rontolisp.LispVal datum) {
-			QuoteField existing = this.byDatum.get(datum);
-			return existing == null ? null : existing.ref();
-		}
-
-		/**
-		 * Interns the static field holding one quoted datum; the caller emits the
-		 * lazy-build site (idempotence is {@link #lookup}'s job).
-		 * @param cp the constant pool
-		 * @param className the internal name of the class being emitted
-		 * @param datum the quoted datum (keyed by identity)
-		 * @return the fieldref of the constant
-		 */
-		FieldrefConstant intern(ConstantPool cp, String className, am.ik.rontolisp.LispVal datum) {
-			if (this.fieldDesc == null) {
-				this.fieldDesc = cp.addUtf8("Ljava/lang/Object;");
-			}
-			Utf8Constant nameUtf = cp.addUtf8("_qd$" + this.fieldsInOrder.size());
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			FieldrefConstant ref = cp.addFieldref(thisClass, cp.addNameAndType(nameUtf, this.fieldDesc));
-			QuoteField field = new QuoteField(nameUtf, ref);
-			this.byDatum.put(datum, field);
-			this.fieldsInOrder.add(field);
-			return ref;
-		}
-
-	}
-
-	/**
 	 * An active protected region during compilation -- an {@code unwind-protect}, a
 	 * {@code handler-case}'s depth bookkeeping, or a special {@code let} whose cleanups
 	 * are the {@code %dyn-restore}s of its dynamic bindings ({@code JvmLetCompiler}).
@@ -7288,12 +7215,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final BigIntPool bigIntPool;
 
 		/**
-		 * The compilation-wide quoted-datum interner (one static {@code Object} field per
-		 * distinct quoted aggregate, .kb/quoted-data.md); one instance shared across
-		 * every context of a compilation through the single builder, like
-		 * {@link #bigIntPool}.
+		 * The compilation-wide quoted-datum table (one slot per distinct quoted
+		 * aggregate, .kb/quoted-data.md); one instance shared across every context of a
+		 * compilation through the single builder, like {@link #bigIntPool}.
 		 */
-		final QuotePool quotePool;
+		final JvmQuotePool quotePool;
 
 		/**
 		 * The compilation-wide UNSUPPLIED marker (the static field a caller passes for a
@@ -7603,7 +7529,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * One quoted-datum pool per builder (= per compilation): every context built
 			 * from the same builder shares it.
 			 */
-			private final QuotePool quotePool = new QuotePool();
+			private final JvmQuotePool quotePool = new JvmQuotePool();
 
 			/**
 			 * One UNSUPPLIED marker per builder (= per compilation): every context built

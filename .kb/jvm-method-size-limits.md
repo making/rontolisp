@@ -30,7 +30,10 @@ Measured by mito's `MitoE2eTest` probe (mito-core + migration + dbd-postgres): *
 entries unshaken (2026-09-24: Utf8 33,089, String 18,775, NameAndType 14,322, Methodref 9,217,
 Fieldref 5,129 -- 3,747 of them `QuotePool` fields -- Long 1,283). It crossed at `af1c467fe`
 (2026-08-28, the bignum pool tipped it); one array field per pool would have saved ~11.4k and
-still been ~6.5k over, and the program keeps growing -- hence a split, not a diet.
+still been ~6.5k over, and the program keeps growing -- hence a split, not a diet. The quoted
+datums are one table since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by
+arithmetic, not re-measured, 3 x 3,747 = ~11.2k entries out of the probe's pool; the split
+stays the answer for the rest.
 
 - **Lossless until written.** `ConstantPool` holds entries as data (tag, component indexes,
   payload), dedup'd on that; `ConstantPool.unbounded()` (the backend's) grows past the limit.
