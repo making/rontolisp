@@ -32,9 +32,9 @@ round-trip are portable.
 - `join-thread` RE-SIGNALS the thread's error so `handler-case` dispatches by condition type. On
   the JVM the condition cannot ride `_condTl` across threads, so `call()` completes the FutureTask
   NORMALLY with `{EMARKER, throwable, condition}` and `_thread_join` records the condition under
-  the throwable on the joining thread before rethrowing it (the `_await` pattern). Join `Thread.join`s after the value settles, so
-  `thread-alive-p` answers nil deterministically. `destroy-thread` is `Thread.interrupt` — a
-  request, not a kill.
+  the throwable on the joining thread before rethrowing it (the `_await` pattern). Join
+  `Thread.join`s after the value settles, so `thread-alive-p` answers nil deterministically.
+  `destroy-thread` is `Thread.interrupt` — a request, not a kill.
 - `:thread-support` is in `Features.INTERPRETER`/`Features.JVM`, not WASM; declared statically
   because an upstream `.asd` push reaches only that file's own conditionals
   (`.kb/reader-features.md`). Consumer: `clack:clackup` (`.kb/clack.md`). Pinned by ci-spec

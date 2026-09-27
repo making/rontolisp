@@ -39,7 +39,7 @@
   payload then carrying that trace as a fourth element for each await to put back,
   [error-handling.md](error-handling.md)) and `_await` records the condition under the throwable
   on the awaiting thread before rethrowing it -- that is what makes handler-case dispatch across
-  the await, and a plain failure's none leaves a condition already on its way out alone.
+  the await. A plain failure records nothing, so a condition already on its way out stays its own.
 - **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
   kind-2 (kind 4 for several values, "Multiple values") `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not
   canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. The one
