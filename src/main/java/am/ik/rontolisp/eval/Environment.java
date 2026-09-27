@@ -77,6 +77,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
@@ -5767,16 +5769,19 @@ public final class Environment implements Scope {
 			return new LispString(printString(args.get(0)));
 		}));
 		// The &optional surplus-argument message (LambdaLists): max and required are
-		// literals, the count is required plus the rest list's length.
+		// literals, the count is required plus the rest list's length, and the
+		// function's name, when it has one, picks the operator the report names.
 		env.defineFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
 				new LispFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args -> {
-					requireArgCount(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args, 3);
+					requireArgCountBetween(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args, 3, 4);
 					int got = (int) ((LispInteger) args.get(1)).value();
 					for (LispVal l = args.get(2); l instanceof LispCons c; l = c.cdr()) {
 						got++;
 					}
+					String operator = args.size() > 3 && args.get(3) instanceof LispString name
+							? BuiltinFunctionWrappers.arityOperator(name.value()) : null;
 					return new LispString(
-							ClosRegistry.aritySurplusMessage((int) ((LispInteger) args.get(0)).value(), got));
+							ClosRegistry.aritySurplusMessage(operator, (int) ((LispInteger) args.get(0)).value(), got));
 				}));
 		// A physical optional's prologue test (LambdaLists): an flet/labels definition
 		// reaches the interpreter in the compilers' physical shape, and its missing
@@ -7877,7 +7882,7 @@ public final class Environment implements Scope {
 			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
-			requireMinArgCount(LispNames.CONSTANTP, args, 1);
+			requireCallShape(LispNames.CONSTANTP, args);
 			LispVal v = args.get(0);
 			boolean constant = v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispRatio
 					|| v instanceof LispDouble || v instanceof LispString || v instanceof LispChar
@@ -10081,6 +10086,21 @@ public final class Environment implements Scope {
 		if (args.size() < min) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					ClosRegistry.arityMessage(name, min, true, args.size()));
+		}
+	}
+
+	/**
+	 * Rejects a count the built-in's call shape ({@link BuiltinCallArity}) rules out, for
+	 * a body that would otherwise ANSWER it: {@code LispEvaluator.apply} turns what a
+	 * body raises for such a count into the shape's report, but cannot see a body that
+	 * returns.
+	 * @param name the built-in's name
+	 * @param args its arguments
+	 */
+	static void requireCallShape(String name, List<LispVal> args) {
+		String wrongCount = BuiltinCallArity.wrongCountMessage(name, args.size());
+		if (wrongCount != null) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, wrongCount);
 		}
 	}
 

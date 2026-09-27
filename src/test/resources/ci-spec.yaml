@@ -19069,6 +19069,20 @@ cases:
       "GETHASH expects at least 2 arguments, got 1"
       (T 3 1 T)
 
+  # A built-in's FUNCTION VALUE with a count its call shape rules out reports what its
+  # direct call reports: the interpreter's Java body spelled its own range ("1 to 2"),
+  # the compiled wrapper's &optional surplus check said Function.
+  - name: builtin-function-value-wrong-count-reports-the-call-shape
+    source: |
+      (defun ci-fv-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-fv-report (lambda () (apply #'floor 7 '(2 3)))))
+      (print (ci-fv-report (lambda () (apply #'gethash 1 '()))))
+      (print (ci-fv-report (lambda () (funcall 'subseq "abc" 1 2 3))))
+    expected: |
+      "FLOOR expects at most 2 arguments, got 3"
+      "GETHASH expects at least 2 arguments, got 1"
+      "SUBSEQ expects at most 3 arguments, got 4"
+
   # A DIRECT call of the program's own function with a count its lambda list rules
   # out is the interpreter's program-error at run time, its arguments evaluated first,
   # with a compile-time warning (compiler/DefinedCallArity): both compiled backends

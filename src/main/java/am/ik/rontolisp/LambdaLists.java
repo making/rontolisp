@@ -202,11 +202,25 @@ public final class LambdaLists {
 	 * @return the native-shape lambda list and body
 	 */
 	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom) {
-		return expand(paramList, body, wrapReturnFrom, null, STEPPED);
+		return expand(paramList, body, wrapReturnFrom, null);
+	}
+
+	/**
+	 * Like {@link #expand(LispVal, List, boolean)}, for a function with a name: the
+	 * {@code &optional} surplus check carries it ({@link #tooManyArgsCheck}).
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @param wrapReturnFrom whether to wrap a return-from-containing body in %fn-block
+	 * @param functionName the function's name, or {@code null} for an anonymous one
+	 * @return the native-shape lambda list and body
+	 */
+	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
+			@Nullable String functionName) {
+		return expand(paramList, body, wrapReturnFrom, null, STEPPED, functionName);
 	}
 
 	private static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
-			@Nullable LispVal blockNameSym, int maxParams) {
+			@Nullable LispVal blockNameSym, int maxParams, @Nullable String functionName) {
 		if (body.isEmpty()) {
 			// An empty function body answers nil, per CL -- dissect's
 			// (defun restarts (&optional condition)) interface stubs; without the
@@ -268,7 +282,7 @@ public final class LambdaLists {
 			// FIRST, before any default form runs -- CL signals a wrong count before
 			// binding anything. A caller hands the rest list only what is past the
 			// physical optionals, so a surplus there means every one was supplied.
-			bindings.add(tooManyArgsCheck(restVar, parsed.required().size() + physical, stepped.size()));
+			bindings.add(tooManyArgsCheck(restVar, parsed.required().size() + physical, stepped.size(), functionName));
 		}
 		List<LispSymbol> optionals = new ArrayList<>(physical);
 		for (int i = 0; i < physical; i++) {
@@ -430,7 +444,7 @@ public final class LambdaLists {
 	 * @return the physical lambda list and the prologue-wrapped body
 	 */
 	public static Expanded expandPhysical(LispVal paramList, List<LispVal> body) {
-		return expand(paramList, body, false, null, MAX_PHYSICAL_PARAMS);
+		return expand(paramList, body, false, null, MAX_PHYSICAL_PARAMS, null);
 	}
 
 	/**
@@ -483,8 +497,14 @@ public final class LambdaLists {
 	 * optional -- nested {@code cdr}s for a tail of up to {@value #NESTED_CDR_MAX}:
 	 *
 	 * <pre>
-	 * (__ll_arity (if (nthcdr k rest) (%program-error (%arity-surplus-message max req rest)) nil))
+	 * (__ll_arity (if (nthcdr k rest) (%program-error (%arity-surplus-message max req rest [name])) nil))
 	 * </pre>
+	 *
+	 * The function's name, when it has one, rides along as a string literal: each backend
+	 * reports the surplus under {@code BuiltinFunctionWrappers.arityOperator} of it --
+	 * the rule its missing-argument check follows -- so a built-in's function value names
+	 * the built-in and a program's own function stays {@code Function}. The rule lives
+	 * above this package, hence the name and not the operator.
 	 *
 	 * INLINE, not a helper call like the keyword check: first-class built-in wrappers
 	 * ({@code BuiltinFunctionWrappers}) and several expansions build {@code &optional}
@@ -495,7 +515,8 @@ public final class LambdaLists {
 	 * ({@code .kb/lambda-lists.md}). The message is computed, so the compilers' static
 	 * program-error warning (literal messages only) never fires for it.
 	 */
-	private static LispVal tooManyArgsCheck(LispVal restVar, int required, int optionals) {
+	private static LispVal tooManyArgsCheck(LispVal restVar, int required, int optionals,
+			@Nullable String functionName) {
 		// Nested cdrs for a short tail: on the JVM each is a few inline bytes, where
 		// nthcdr brings its runtime helper into a program that may not otherwise have it.
 		LispVal beyond = restVar;
@@ -507,8 +528,11 @@ public final class LambdaLists {
 		else {
 			beyond = list(new LispSymbol(LispNames.NTHCDR), new LispInteger(optionals), restVar);
 		}
-		LispVal message = list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL),
-				new LispInteger(required + optionals), new LispInteger(required), restVar);
+		LispVal message = functionName == null
+				? list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL), new LispInteger(required + optionals),
+						new LispInteger(required), restVar)
+				: list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL), new LispInteger(required + optionals),
+						new LispInteger(required), restVar, new LispString(functionName));
 		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
 		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
 	}
@@ -569,15 +593,19 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * Lowers {@code (%arity-surplus-message max req rest)} for a backend without a
+	 * Lowers {@code (%arity-surplus-message max req rest [name])} for a backend without a
 	 * runtime helper for it (WASM) to
 	 * {@code (%string-concat "Function expects at most MAX argument(s), got " (%prin1-to-string (+ req (length rest))))}
 	 * -- the non-consulting conversion, since the count is decimal whatever
-	 * {@code *print-base*} says.
+	 * {@code *print-base*} says -- with {@code operator} in place of {@code Function}
+	 * when there is one. {@code operator} is what the backend made of the form's function
+	 * name ({@link #aritySurplusFunctionName}).
 	 * @param form the {@code %arity-surplus-message} form
+	 * @param operator the operator the message names, or {@code null} for
+	 * {@code Function}
 	 * @return the lowered form
 	 */
-	public static LispVal lowerAritySurplusMessage(LispCons form) {
+	public static LispVal lowerAritySurplusMessage(LispCons form, @Nullable String operator) {
 		List<LispVal> args = form.toList();
 		int max = (int) ((LispInteger) args.get(1)).value();
 		long required = ((LispInteger) args.get(2)).value();
@@ -585,8 +613,30 @@ public final class LambdaLists {
 		LispVal count = required == 0 ? call(LispNames.LENGTH, rest)
 				: list(new LispSymbol(LispNames.ADD), new LispInteger(required), call(LispNames.LENGTH, rest));
 		String zero = ClosRegistry.aritySurplusMessage(max, 0);
-		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(zero.substring(0, zero.length() - 1)),
+		String opening = zero.substring(0, zero.length() - 1);
+		if (operator == null) {
+			return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(opening),
+					call(LispNames.PRIN1_TO_STRING_RAW, count));
+		}
+		// The operator in front of the opening's shared remainder: one literal per
+		// operator and one per bound, where a whole opening per operator put +2 KB on
+		// the eval-carrying module, whose registry holds every wrapper.
+		LispVal tail = list(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(opening.substring(ClosRegistry.ARITY_ANONYMOUS_OPERATOR.length())),
 				call(LispNames.PRIN1_TO_STRING_RAW, count));
+		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(operator), tail);
+	}
+
+	/**
+	 * The name of the function whose {@code &optional} surplus check this
+	 * {@code (%arity-surplus-message max req rest [name])} form is, or {@code null} for
+	 * an anonymous one ({@link #tooManyArgsCheck}).
+	 * @param form the {@code %arity-surplus-message} form
+	 * @return the function's name, or {@code null}
+	 */
+	public static @Nullable String aritySurplusFunctionName(LispCons form) {
+		List<LispVal> args = form.toList();
+		return args.size() > 4 && args.get(4) instanceof LispString name ? name.value() : null;
 	}
 
 	/**
@@ -646,7 +696,21 @@ public final class LambdaLists {
 	 * @return the native form
 	 */
 	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams) {
-		Expanded e = expand(paramList, body, true, null, maxParams);
+		return toNative(paramList, body, maxParams, null);
+	}
+
+	/**
+	 * {@link #toNative(LispVal, List, int)} for a function with a name: the
+	 * {@code &optional} surplus check carries it ({@link #tooManyArgsCheck}).
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @param maxParams the most physical parameters the backend lets a function take
+	 * @param functionName the function's name, or {@code null} for an anonymous one
+	 * @return the native form
+	 */
+	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams,
+			@Nullable String functionName) {
+		Expanded e = expand(paramList, body, true, null, maxParams, functionName);
 		List<String> names = new ArrayList<>(e.required().size() + e.optionals().size() + 1);
 		for (LispSymbol s : e.required()) {
 			names.add(s.name());
@@ -823,13 +887,13 @@ public final class LambdaLists {
 			// lives in expand so the lambda compilers' toNative path shares it).
 			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && (usesLambdaListKeywords(parts.get(1))
 					|| anyContainsReturnFrom(parts.subList(2, parts.size())))) {
-				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()), true, null, maxParams);
+				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()), true, null, maxParams, null);
 				return rebuildFunction(sym, null, e, maxParams);
 			}
 			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && (usesLambdaListKeywords(parts.get(2))
 					|| anyContainsReturnFrom(parts.subList(3, parts.size())))) {
 				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)),
-						maxParams);
+						maxParams, parts.get(1) instanceof LispSymbol functionName ? functionName.name() : null);
 				return rebuildFunction(sym, parts.get(1), e, maxParams);
 			}
 		}
@@ -1020,7 +1084,7 @@ public final class LambdaLists {
 		if (parsed.rest() == null && !parsed.sawKey()) {
 			// Nothing consumes the list past the optionals: a surplus element signals,
 			// before any default runs -- the function lambda lists' check.
-			out.add(tooManyArgsCheck(restVar, required, parsed.optionals().size()));
+			out.add(tooManyArgsCheck(restVar, required, parsed.optionals().size(), null));
 		}
 		appendPrologueBindings(parsed, parsed.optionals(), restVar, true, out);
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {

@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -10255,6 +10256,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aBuiltinFunctionValueReportsAWrongCountWithItsCallShape() {
+		// Pinned on all three backends: the interpreter's Java bodies spelled their own
+		// range, the compiled wrappers' &optional surplus check said Function.
+		assertThat(evalPrinting(BuiltinFunctionValueCountFixture.PROGRAM))
+			.isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
+	}
+
+	@Test
 	void closeTakesItsAbortPairInADirectCall() {
 		// (close s :abort t) was a wrong count once close had a call shape (1 argument).
 		assertThat(evalPrinting(MethodedBuiltinTailFixture.CLOSE_PROGRAM))
@@ -19653,11 +19662,43 @@ class LispEvaluatorTest {
 		}
 	}
 
+	// Every wrapped or native built-in's FUNCTION VALUE reports a count its call shape
+	// rules out with the text its direct call reports (a function value with none --
+	// rontolisp:await -- aside). Measured before (2026-09-27): 187 of 798 (name, count)
+	// pairs said something else -- the Java body's own range ("1 to 2", "2 or 3"), a
+	// description ("expects an array and new dimensions"), an index out of bounds, a
+	// type-error -- or answered ((constantp nil nil nil) => T).
+	@Test
+	void everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape() {
+		java.util.Set<String> names = new java.util.TreeSet<>(
+				am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames());
+		names.addAll(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames());
+		for (String name : names) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min()
+					: shape.max() + 1;
+			for (int count = 0; count <= last; count++) {
+				if (shape.accepts(count)) {
+					continue;
+				}
+				String value = "(funcall '" + spelled + " nil".repeat(count) + ")";
+				String reported = eval("(handler-case " + value
+						+ " (undefined-function () :none) (program-error (c) (princ-to-string c)))")
+					.print();
+				if (!":NONE".equals(reported)) {
+					assertThat(reported).as(value)
+						.isEqualTo(
+								"\"" + am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(name, count) + "\"");
+				}
+			}
+		}
+	}
+
 	// The built-ins outside the wrapper catalog the interpreter implements natively
 	// (compiler/NativeCallShapes) report a wrong direct count by their shape, under the
-	// interpreter's name for them, and that shape is never narrower than the
-	// implementation: every count it rejects, the implementation's own check rejects too
-	// (reached through a function value, which the shape does not judge).
+	// interpreter's name for them.
 	@Test
 	void everyNativeBuiltinReportsAWrongDirectCountWithItsCallShape() {
 		for (String name : new java.util.TreeSet<>(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames())) {
@@ -19673,10 +19714,6 @@ class LispEvaluatorTest {
 				String call = "(" + spelled + " nil".repeat(count) + ")";
 				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
 					.isEqualTo("\"" + am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(name, count) + "\"");
-				String value = "(funcall '" + spelled + " nil".repeat(count) + ")";
-				assertThat(eval("(handler-case " + value
-						+ " (undefined-function () \"no function value expects\") (error (c) (princ-to-string c)))")
-					.print()).as(value).contains("expects");
 			}
 		}
 	}

@@ -63,12 +63,16 @@ class LambdaListsTest {
 		assertThat(out.get(0).print()).isEqualTo(printed("""
 				(defun f (a &optional |__ll_opt_0| |__ll_opt_1| &rest |__ll_rest|)
 				  (let* ((|__ll_arity| (if |__ll_rest|
-				                           (%program-error (%arity-surplus-message 3 3 |__ll_rest|))
+				                           (%program-error (%arity-surplus-message 3 3 |__ll_rest| "F"))
 				                           nil))
 				         (b (if (%supplied-p |__ll_opt_0|) |__ll_opt_0| 2))
 				         (c (if (%supplied-p |__ll_opt_1|) |__ll_opt_1| nil)))
 				    (list a b c)))
 				"""));
+		// The defun's name rides the check, for the backend to name the operator by
+		// (BuiltinFunctionWrappers.arityOperator); a lambda has none.
+		assertThat(desugar("(lambda (a &optional b) (list a b))").get(0).print())
+			.contains(printed("(%program-error (%arity-surplus-message 2 2 |__ll_rest|))"));
 		// An &aux-only list stays FIXED arity, so the native count check covers it.
 		assertThat(desugar("(defun g (a &aux (b 1)) (list a b))").get(0).print())
 			.isEqualTo(printed("(defun g (a) (let* ((b 1)) (list a b)))"));
@@ -119,7 +123,7 @@ class LambdaListsTest {
 		assertThat(out.get(0).print()).isEqualTo(printed("""
 				(defun f (p1 p2 p3 p4 p5 p6 p7 p8 &optional |__ll_opt_0| &rest |__ll_rest|)
 				  (let* ((|__ll_arity| (if (cdr |__ll_rest|)
-				                           (%program-error (%arity-surplus-message 10 9 |__ll_rest|))
+				                           (%program-error (%arity-surplus-message 10 9 |__ll_rest| "F"))
 				                           nil))
 				         (a (if (%supplied-p |__ll_opt_0|) |__ll_opt_0| 1))
 				         (b (if (consp |__ll_rest|) (car |__ll_rest|) nil))
@@ -156,7 +160,7 @@ class LambdaListsTest {
 		assertThat(desugar("(defun f (&optional (a 1 ap)) (if ap (list a) nil))").get(0).print()).isEqualTo(printed("""
 				(defun f (&optional |__ll_opt_0| &rest |__ll_rest|)
 				  (let* ((|__ll_arity| (if |__ll_rest|
-				                           (%program-error (%arity-surplus-message 1 1 |__ll_rest|))
+				                           (%program-error (%arity-surplus-message 1 1 |__ll_rest| "F"))
 				                           nil))
 				         (a (if (%supplied-p |__ll_opt_0|) |__ll_opt_0| 1)))
 				    (if (%supplied-p |__ll_opt_0|) (list a) nil)))

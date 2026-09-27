@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -14158,6 +14159,14 @@ class WasmLispCompilerIntegrationTest {
 		// LispEvaluatorTest#aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched.
 		assertThat(compileAndRunFrontEndWithDir(MethodedBuiltinFixture.PROGRAM, false))
 			.isEqualTo(MethodedBuiltinFixture.EXPECTED);
+	}
+
+	@Test
+	void aBuiltinFunctionValueReportsAWrongCountWithItsCallShape() throws Exception {
+		// The WASM twin of
+		// LispEvaluatorTest#aBuiltinFunctionValueReportsAWrongCountWithItsCallShape.
+		assertThat(compileAndRunFrontEndWithDir(BuiltinFunctionValueCountFixture.PROGRAM, false))
+			.isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
 	}
 
 	@Test

@@ -16,9 +16,14 @@ import am.ik.rontolisp.ClosRegistry;
  * behind {@code %arity-missing-message}, the message of the destructuring missing-element
  * check:
  *
- * <pre>{@code _aritySurplus(int max, int required, Object rest) -> String}</pre>
+ * <pre>{@code _aritySurplus(String operator, int max, int required, Object rest) -> String}</pre>
  *
  * <pre>{@code _arityMissing(int required, int got) -> String}</pre>
+ *
+ * <p>
+ * The operator is the built-in a wrapper's surplus reports under, or null for
+ * {@code Function} (a program's own function), as the dispatchers' missing-argument
+ * report names it.
  *
  * <p>
  * Both answer the runtime (quote-framed) string, assembled out of the constants
@@ -45,7 +50,7 @@ final class JvmAritySurplusRuntimeBuilder {
 
 	static final String METHOD = "_aritySurplus";
 
-	static final String DESC = "(IILjava/lang/Object;)Ljava/lang/String;";
+	static final String DESC = "(Ljava/lang/String;IILjava/lang/Object;)Ljava/lang/String;";
 
 	/**
 	 * An arity-missing runtime method body ready to be emitted into the generated class.
@@ -70,25 +75,35 @@ final class JvmAritySurplusRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
 		MethodrefConstant toString = cp.addMethodref(sb,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		// Slots: 0 = max, 1 = the running count (starts at required), 2 = the rest
-		// cursor, 3 = the builder.
+		// Slots: 0 = the operator (null: Function), 1 = max, 2 = the running count
+		// (starts at required), 3 = the rest cursor, 4 = the builder.
 		JvmAsm a = new JvmAsm();
+		int named = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNONNULL, named);
+		a.ldcString(cp.addString(ClosRegistry.ARITY_ANONYMOUS_OPERATOR));
+		a.astore(0);
+		a.bind(named);
 		a.anew(sb);
 		a.dup();
-		a.ldcString(cp.addString("\"" + ClosRegistry.ARITY_MESSAGE_PREFIX + ClosRegistry.ARITY_AT_MOST));
+		a.ldcString(cp.addString("\""));
 		a.invokespecial(sbInit);
-		a.astore(3);
-		a.aload(3);
-		a.iload(0);
+		a.astore(4);
+		a.aload(4);
+		a.aload(0);
+		a.invokevirtual(appendStr);
+		a.ldcString(cp.addString(ClosRegistry.ARITY_VERB + ClosRegistry.ARITY_AT_MOST));
+		a.invokevirtual(appendStr);
+		a.iload(1);
 		a.invokevirtual(appendInt);
 		a.ldcString(cp.addString(ClosRegistry.ARITY_ARGUMENT));
 		a.invokevirtual(appendStr);
 		a.pop();
 		int singular = a.label();
-		a.iload(0);
+		a.iload(1);
 		a.iconst(1);
 		a.branch(Opcode.IF_ICMPEQ, singular);
-		a.aload(3);
+		a.aload(4);
 		a.ldcString(cp.addString(ClosRegistry.ARITY_PLURAL));
 		a.invokevirtual(appendStr);
 		a.pop();
@@ -96,26 +111,26 @@ final class JvmAritySurplusRuntimeBuilder {
 		int loop = a.label();
 		int done = a.label();
 		a.bind(loop);
-		a.aload(2);
+		a.aload(3);
 		a.branch(Opcode.IFNULL, done);
-		a.iinc(1, 1);
-		a.aload(2);
+		a.iinc(2, 1);
+		a.aload(3);
 		a.checkcast(objectArrayClass);
 		a.iconst(1);
 		a.aaload();
-		a.astore(2);
+		a.astore(3);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(done);
-		a.aload(3);
+		a.aload(4);
 		a.ldcString(cp.addString(ClosRegistry.ARITY_MESSAGE_INFIX));
 		a.invokevirtual(appendStr);
-		a.iload(1);
+		a.iload(2);
 		a.invokevirtual(appendInt);
 		a.ldcString(cp.addString("\""));
 		a.invokevirtual(appendStr);
 		a.invokevirtual(toString);
 		a.areturn();
-		return new AritySurplusMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 4, a.finish());
+		return new AritySurplusMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 5, a.finish());
 	}
 
 	/**

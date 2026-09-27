@@ -1267,10 +1267,7 @@ public final class LispEvaluator {
 		// subtypep over the built-in type lattice + the CLOS class registry. A single
 		// primary value: t when sub is known to be a subtype of super, nil otherwise.
 		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {
-			if (args.size() < 2) {
-				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.SUBTYPEP + " expects 2 arguments, got " + args.size());
-			}
+			Environment.requireCallShape(LispNames.SUBTYPEP, args);
 			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// subtypep's SECOND value, emitted beside the primary by the multiple-value
@@ -1814,6 +1811,9 @@ public final class LispEvaluator {
 		}));
 		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
 		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, rawArgs -> {
+			// Before any layer below answers: the base answers NIL without a stream, and
+			// a surplus would reach the set path, which drops a parked unread-char.
+			Environment.requireCallShape(LispNames.FILE_POSITION, rawArgs);
 			List<LispVal> args = resolveStreamArg(rawArgs, 0);
 			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				if (args.size() == 1) {
@@ -8006,7 +8006,8 @@ public final class LispEvaluator {
 		// wrap the body in a block named after the function, so (return-from name v)
 		// exits the function even from inside a do/loop (whose %block does not catch
 		// the named signal).
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false);
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false,
+				setfPlace != null ? null : funcName);
 		LispSymbol blockNameSym = setfPlace != null ? setfPlace : (LispSymbol) nameForm;
 		List<LispVal> blockParts = new ArrayList<>();
 		blockParts.add(new LispSymbol(LispNames.BLOCK));
@@ -10026,10 +10027,11 @@ public final class LispEvaluator {
 		// real lowering, so its body never resolves back to this branch.
 		// The lambda carries the operator's name, as the compiled backends' injected
 		// wrapper defun does: it prints as #<function NAME> and its wrong-count
-		// program-error names the operator (checkArity).
+		// program-error names the operator (checkArity, and the &optional surplus
+		// check its lambda list expands to).
 		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
 		if (wrapper != null) {
-			LispVal value = eval(wrapper, this.globalEnv);
+			LispVal value = evalLambdaForm((LispCons) wrapper, this.globalEnv, name);
 			return value instanceof LispLambda lambda
 					? new LispLambda(lambda.params(), lambda.rest(), lambda.body(), lambda.closure(), name, false)
 					: value;
@@ -11830,6 +11832,15 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
+		return evalLambdaForm(cons, env, null);
+	}
+
+	/**
+	 * A {@code lambda} form's closure; a function name, when it has one, rides into its
+	 * {@code &optional} surplus check
+	 * ({@link LambdaLists#expand(LispVal, List, boolean, String)}).
+	 */
+	private LispVal evalLambdaForm(LispCons cons, Environment env, @Nullable String functionName) {
 		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
 		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
@@ -11847,7 +11858,7 @@ public final class LispEvaluator {
 				body = settledBody;
 			}
 		}
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false);
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false, functionName);
 		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
 	}
 
@@ -13123,6 +13134,27 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * What a built-in's failure reports: the program-error its DIRECT call reports
+	 * ({@link BuiltinCallArity#wrongCountMessage}) when the count is one its call shape
+	 * rules out -- whatever the Java body said, its own range ({@code 1 to 2}), a
+	 * description, an index out of bounds -- and the failure itself otherwise. A direct
+	 * call was judged before its body ran; a function value (funcall, apply, a mapping
+	 * function, a methoded built-in's dispatcher) is judged here, as the compiled
+	 * wrapper's lambda list judges it. Only on the way out, so the success path pays
+	 * nothing: no body answers a count its shape rules out
+	 * ({@code LispEvaluatorTest.everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape}).
+	 * @param builtIn the built-in that failed
+	 * @param args its arguments
+	 * @param failure what its body raised
+	 * @return the condition to signal
+	 */
+	private static LispEvalException wrongCountOr(LispFunction builtIn, List<LispVal> args, LispEvalException failure) {
+		String wrongCount = BuiltinCallArity.wrongCountMessage(builtIn.name(), args.size());
+		return wrongCount == null ? failure
+				: LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, wrongCount);
+	}
+
+	/**
 	 * The elements of a lambda body that is nothing but ONE named {@code block} form --
 	 * what {@code evalDefun} and {@code expandDefmethod} wrap every function body in --
 	 * or {@code null} for any other body. See the call site in {@link #apply}.
@@ -13168,17 +13200,17 @@ public final class LispEvaluator {
 			catch (OperandTypeException e) {
 				// A coercion funnel cannot know which operator it serves; the built-in
 				// whose body raised the error does (OperandTypes).
-				throw withHandlerBindHandlersRun(e.named(builtIn.name()));
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e.named(builtIn.name())));
 			}
 			catch (LispEvalException e) {
-				throw withHandlerBindHandlersRun(e);
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e));
 			}
 			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
 					| ClassCastException raw) {
 				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
 						builtinFailureMessage(builtIn.name(), raw));
 				wrapped.initCause(raw);
-				throw withHandlerBindHandlersRun(wrapped);
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, wrapped));
 			}
 		}
 		if (function instanceof LispLambda lambda) {

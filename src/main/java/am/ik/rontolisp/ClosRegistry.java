@@ -296,7 +296,22 @@ public final class ClosRegistry {
 	 * @return the message
 	 */
 	public static String aritySurplusMessage(int max, int got) {
-		return ARITY_MESSAGE_PREFIX + ARITY_AT_MOST + arityExpectation(max, false) + ARITY_MESSAGE_INFIX + got;
+		return aritySurplusMessage(null, max, got);
+	}
+
+	/**
+	 * {@link #aritySurplusMessage(int, int)} naming the operator, as
+	 * {@link #arityMessage} does: a built-in's function value reports its surplus under
+	 * the built-in's name.
+	 * @param operator the operator's name, or {@code null} for
+	 * {@link #ARITY_ANONYMOUS_OPERATOR}
+	 * @param max the callee's required plus optional parameter count
+	 * @param got the number of arguments the call passed
+	 * @return the message
+	 */
+	public static String aritySurplusMessage(@Nullable String operator, int max, int got) {
+		return (operator == null ? ARITY_ANONYMOUS_OPERATOR : operator) + ARITY_VERB + ARITY_AT_MOST
+				+ arityExpectation(max, false) + ARITY_MESSAGE_INFIX + got;
 	}
 
 	/** What {@link #arityMessage} puts between the expectation and the actual count. */

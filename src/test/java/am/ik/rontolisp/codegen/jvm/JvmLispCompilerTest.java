@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -12826,6 +12827,15 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.withSystemPath(MethodedBuiltinFixture.PROGRAM, List.of(), false, false)
 			.forms())).isEqualTo(MethodedBuiltinFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABuiltinFunctionValueReportsAWrongCountWithItsCallShape() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aBuiltinFunctionValueReportsAWrongCountWithItsCallShape.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(BuiltinFunctionValueCountFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
 	}
 
 	@Test

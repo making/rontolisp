@@ -1830,11 +1830,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     wasm injects every wrapper and shakes most, so naming them all kept every operator's piece in
     every module. The first cut inlined the selection into each dispatcher and cost the eval
     module below +36 KB -- one copy per dispatcher arity.
-  - Still divergent, in the EXPECTATION half only: a built-in the interpreter implements in Java
-    with an optional tail spells its own range through a function value (`(funcall 'gethash)` says
-    `GETHASH expects 2 or 3 arguments, got 0`), while the compiled wrapper's lambda list says `at
-    least 2`; and a wrapper's `&optional` surplus check says `Function expects at most N`. A DIRECT
-    call says `at least` / `at most` on all four (below).
+  - The EXPECTATION half followed on 2026-09-27: a built-in's function value reports by its call
+    shape too ("A built-in's function VALUE with a wrong count", below).
 - **A DIRECT call of a built-in** (2026-09-26). **Invariant: `(op args...)` in call position,
   `op` a `BuiltinFunctionWrappers` name, with a count the operator's call shape rules out,
   evaluates its arguments and then signals `program-error` with ONE text on all four backends**
@@ -2000,8 +1997,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     report); a COMPUTED keyword is rejected too, which the interpreter would take when it
     evaluates to `:abort`. Pinned by `MethodedBuiltinTailFixture.CLOSE_PROGRAM` on three
     backends. The interpreter's direct call now reports the shape's text, so a range says
-    `at least` / `at most` where the implementation said `1 or 2` / `1 to 3` (its function value
-    still does).
+    `at least` / `at most` where the implementation said `1 or 2` / `1 to 3`; so does its
+    function value since 2026-09-27 (below).
   - A library defun that implements a native built-in (`BuiltinCallArity.builtinShapedDefuns`:
     a top-level defun of a native name whose lambda list takes exactly the row's counts, read
     before `LambdaLists.desugarProgram`) does not keep its own call path: `Ctx.builtinShapedDefuns`
@@ -2026,6 +2023,41 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   - Found on the way, not fixed here: a program whose only package operation is `delete-package`,
     `shadow`, `shadowing-import` or `unintern` fails to compile (a library splice short of
     `string<` / `%baked-packages%`), right count or wrong.
+- **A built-in's function VALUE with a wrong count** (2026-09-27). **Invariant: a wrapped or
+  native built-in reached through its function value -- `funcall` / `apply` of `#'op` or `'op`, a
+  mapping function, a methoded built-in's dispatcher, a compiled `eval` -- with a count its
+  `BuiltinCallArity` shape rules out signals `program-error` with the text its DIRECT call
+  reports, on all four backends** (`(apply #'floor 7 '(2 3))`: `FLOOR expects at most 2
+  arguments, got 3`). A program's own function keeps `Function`. Pinned by ci-spec
+  `builtin-function-value-wrong-count-reports-the-call-shape`, the `BuiltinFunctionValueCountFixture`
+  trio (`...BuiltinFunctionValueReportsAWrongCountWithItsCallShape`), the methoded lines of
+  `MethodedBuiltinTailFixture` and `LispEvaluatorTest.everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape`
+  (every catalog and native name, every rejected count up to one past the shape).
+  - Measured before on the interpreter (all 798 rejected (name, count) pairs, `(funcall 'op
+    nil...)`): 187 said something else -- the Java body's own range (`1 to 2`, `2 or 3`), a
+    description (`ADJUST-ARRAY expects an array and new dimensions`), `Index 0 out of bounds`
+    (`(funcall 'mapcar)`), a `type-error`, a condition that was no `program-error`
+    (`rontolisp:quantize`) -- and three ANSWERED: `(funcall 'constantp nil nil nil)` and
+    `(funcall 'subtypep nil nil nil nil)` => `T`, `(funcall 'file-position)` => `NIL`. Compiled,
+    the missing half already reported the shape (the dispatchers name the operator, above); the
+    surplus past a wrapper's `&optional` said `Function expects at most N`.
+  - **Interpreter**: `LispEvaluator.apply` turns whatever a `LispFunction`'s body raises into
+    `BuiltinCallArity.wrongCountMessage(name, count)`'s report when the count is one the shape
+    rules out (`wrongCountOr`) -- on the way OUT only. Judging before the body ran (one `HashMap`
+    probe per built-in application) cost +2.6% on a built-in-heavy interpreted loop (4 ABAB pairs:
+    medians 4,479 -> 4,594 ms); on the way out it is within noise (4,533 / 4,506). What that
+    cannot see is a body that ANSWERS a ruled-out count: the three that did (`constantp`,
+    `subtypep`, the Gray `file-position` layer) check it first (`Environment.requireCallShape`),
+    and the sweep test fails on the next one.
+  - **Compiled**: the wrapper's `&optional` surplus check names the operator
+    ([lambda-lists.md](lambda-lists.md), "The operator is the function's name"). Sizes (JVM
+    `.class` / wasm Preview 1): `(print (eval '(+ 1 2)))` 359,740 -> 359,886 / 263,492 unchanged,
+    under `handler-case` 493,004 -> 493,150 / 412,519 -> 413,351 (the operator concatenated in
+    front of the shared ` expects at most N arguments, got ` piece; a whole opening per operator
+    was +2,046), a one-`&optional`-defun program 6,868 -> 6,919 / 1,191 unchanged,
+    `(print (+ 1 2))` unchanged.
+  - Not covered: `rontolisp:await` has no function value in the interpreter; `peek-char`'s shape
+    admits a fifth argument (`recursive-p`) the lowerings and the Java body refuse, and `read-char` / `read-line` / `read-char-no-hang` have the same gap (`.todo/a64`).
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators

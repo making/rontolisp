@@ -9575,7 +9575,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
-				LambdaLists.MAX_PHYSICAL_PARAMS);
+				LambdaLists.MAX_PHYSICAL_PARAMS, funcName);
 		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
 	}
 

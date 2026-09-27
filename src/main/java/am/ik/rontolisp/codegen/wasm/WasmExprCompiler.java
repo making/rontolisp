@@ -15,6 +15,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -1826,7 +1827,12 @@ final class WasmExprCompiler {
 						ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			}
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL ->
-				WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons), ctx);
+				WasmExprCompiler
+					.compileExpr(
+							am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons,
+									BuiltinFunctionWrappers
+										.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons))),
+							ctx);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL ->
 				WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerArityMissingMessage(cons), ctx);
 			case LispNames.SUPPLIED_P_INTERNAL -> WasmPhysicalArgs.compileSuppliedP(cons, ctx);

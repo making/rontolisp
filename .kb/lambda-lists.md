@@ -57,9 +57,18 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   binding): `(__ll_arity (if (cdr ... rest) (%program-error (%arity-surplus-message max req
   rest)) nil))` -- nested `cdr`s for up to three optionals, `nthcdr` past that
   (`LambdaLists.tooManyArgsCheck`).
+- **The operator is the function's name through `BuiltinFunctionWrappers.arityOperator`**
+  (2026-09-27): a named function's check carries its name as a string literal
+  (`(%arity-surplus-message max req rest "FLOOR")`; a defun through `desugarProgram`, a
+  compile-path wrapper through `extractSetqLambda`'s `toNative`, the interpreter's `evalDefun`
+  and its catalog lambda through `resolveFunction`), and each backend names the operator the
+  rule answers -- a built-in's wrapper says `FLOOR expects at most 2 arguments`, a program's
+  own function still `Function` ([error-handling.md](error-handling.md), "A built-in's function
+  value"). The name, not the operator, because the rule lives in `compiler`, above this
+  package.
 - **The message is the internal primitive `%arity-surplus-message`**, text
   `ClosRegistry.aritySurplusMessage`: an `Environment` function on the interpreter, ONE shared
-  runtime method `_aritySurplus(max, req, rest)` on the JVM (`JvmAritySurplusRuntimeBuilder`,
+  runtime method `_aritySurplus(operator, max, req, rest)` (null operator: `Function`) on the JVM (`JvmAritySurplusRuntimeBuilder`,
   emitted unconditionally like `_nthcdr`, dropped by the class shaker when unused), and on
   WASM `LambdaLists.lowerAritySurplusMessage` -- `%string-concat` over the non-consulting
   `%prin1-to-string`, so the count is decimal under any `*print-base*` (ci-spec

@@ -6,8 +6,9 @@ package am.ik.rontolisp;
  * the built-in with EVERY argument -- {@code floor}'s divisor, {@code gethash}'s default,
  * {@code close}'s {@code :abort}, {@code write-line}'s stream and bounds, the second
  * argument of a generic that requires fewer than the built-in -- and a count the built-in
- * rejects reports as the built-in. {@link #CLOSE_PROGRAM} is {@code close}'s
- * {@code :abort} pair in a direct call, without a method.
+ * rejects reports as the built-in, by its call shape whether the call is direct or
+ * through the function value. {@link #CLOSE_PROGRAM} is {@code close}'s {@code :abort}
+ * pair in a direct call, without a method.
  */
 public final class MethodedBuiltinTailFixture {
 
@@ -43,13 +44,16 @@ public final class MethodedBuiltinTailFixture {
 			(print (mt-report (lambda () (rplaca (list 1)))))
 			(print (mt-report (lambda () (close *standard-output* :abort))))
 			(print (mt-report (lambda () (close *standard-output* :force t))))
+			(print (mt-report (lambda () (floor 7 2 3))))
+			(print (mt-report (lambda () (funcall #'gethash 1))))
 			""";
 
 	/** What {@link #PROGRAM} prints, one value per line. */
 	public static final String EXPECTED = String.join("\n", "((3 1) (7 0) (2 1) 44)", "((:DFLT NIL) (1 T) 45)",
 			"(T :CLOSED :OPEN)", "\"abc", "ell", "\"", "((9 2) :REPLACED)",
 			"\"OPEN-STREAM-P expects 1 argument, got 2\"", "\"RPLACA expects 2 arguments, got 1\"",
-			"\"CLOSE expects 1 or 3 arguments, got 2\"", "\"CLOSE expects 1 argument, got 3\"");
+			"\"CLOSE expects 1 or 3 arguments, got 2\"", "\"CLOSE expects 1 argument, got 3\"",
+			"\"FLOOR expects at most 2 arguments, got 3\"", "\"GETHASH expects at least 2 arguments, got 1\"");
 
 	/** A direct {@code close} with and without its {@code :abort} pair. */
 	public static final String CLOSE_PROGRAM = """

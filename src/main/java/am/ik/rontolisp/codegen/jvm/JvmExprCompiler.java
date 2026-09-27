@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -58,12 +59,21 @@ final class JvmExprCompiler {
 	}
 
 	/**
-	 * {@code (%arity-surplus-message max required rest)}: the two literal counts and the
-	 * rest list handed to the shared {@code _aritySurplus} helper
-	 * ({@link JvmAritySurplusRuntimeBuilder}).
+	 * {@code (%arity-surplus-message max required rest [name])}: the operator the report
+	 * names ({@link BuiltinFunctionWrappers#arityOperator} of the function's name, null
+	 * for {@code Function}), the two literal counts and the rest list handed to the
+	 * shared {@code _aritySurplus} helper ({@link JvmAritySurplusRuntimeBuilder}).
 	 */
 	private static void compileAritySurplusMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		String operator = BuiltinFunctionWrappers
+			.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons));
+		if (operator == null) {
+			ctx.emit(Opcode.ACONST_NULL);
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+		}
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
 		compileExpr(args.get(3), ctx, className);
