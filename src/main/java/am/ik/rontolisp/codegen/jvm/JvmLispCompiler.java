@@ -5905,6 +5905,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable MethodrefConstant hbGuardPad;
 
 		/**
+		 * The shared synthesis of a condition-less throw's instance ({@code _hcSynth}),
+		 * built on the first landing that needs it and called by every
+		 * {@code handler-case} landing and the {@code _hbGuard} pad. Class-wide for the
+		 * same reason as {@link #hbGuardPad}: it reads only the caught throwable.
+		 */
+		@Nullable MethodrefConstant conditionSynthesizer;
+
+		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
 		 * channel used, so the class writer emits the two ThreadLocal fields and their
 		 * {@code <clinit>}.

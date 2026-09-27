@@ -2486,6 +2486,44 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void handlerCaseLandingsCallOneSharedConditionSynthesis() throws Exception {
+		// The synthesis of a condition-less throw's instance depends only on the caught
+		// throwable, so it is one method per class (_hcSynth) that every landing -- and
+		// the %hb-guard pad -- calls. Inline it made each landing ~450 bytecodes larger.
+		// The program runs every raw-failure class through landings in three functions.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun hcs-f (x) (car x))
+				(defun hcs-g (x) (ignore-errors (hcs-f x)))
+				(defun hcs-h (x) (handler-case (hcs-f x) (type-error () :type)))
+				(defun hcs-k (thunk)
+				  (handler-case (funcall thunk)
+				    (division-by-zero () :div)
+				    (arithmetic-error () :arith)
+				    (unbound-variable () :unbound)
+				    (undefined-function () :undefined)
+				    (program-error () :program)
+				    (simple-error (c) (list :simple (princ-to-string c)))))
+				(print (hcs-g 1))
+				(print (hcs-g '(1 2)))
+				(print (hcs-h 1))
+				(print (hcs-k (lambda () (/ 1 (length (hcs-g nil))))))
+				(print (hcs-k (lambda () (error "boom ~a" 1))))
+				(print (handler-bind ((type-error (lambda (c) c))) (hcs-h "s")))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.merge(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength(),
+					Integer::sum);
+		}
+		assertThat(sizes).containsKey("_hcSynth");
+		// HCS-H was 667 bytes with the synthesis inline, 235 without it.
+		assertThat(sizes.get("HCS-H")).as("the landing calls the synthesis rather than holding it").isLessThan(400);
+		assertThat(compileAndRun(forms)).isEqualTo("NIL\n1\n:TYPE\n:DIV\n(:SIMPLE \"boom 1\")\n:TYPE");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseAsFirstOfSeveralArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(defun hc-first-risky () (error "boom"))

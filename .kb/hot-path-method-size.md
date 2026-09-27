@@ -93,6 +93,10 @@ One method per class, built on first use; the JIT inlines the static call.
 - **`_hbGuard`** (`JvmHandlerCaseCompiler.guardLandingPad`): every `handler-bind` wrapped its body
   in a ~500-bytecode `%hb-guard` landing pad. It is `(Throwable)Throwable` and the site is
   `invokestatic; athrow`. Under RESTART MODE `restart-case` expands through `handler-bind`.
+- **`_hcSynth`** (`JvmHandlerCaseCompiler.conditionSynthesizer`): the ~440-bytecode synthesis of a
+  condition-less throw's instance, which every `handler-case` / `ignore-errors` landing emitted
+  inline; `(Throwable)Object`, called by the landings and `_hbGuard` (`.kb/error-handling.md`, "A
+  built-in error carries its CONDITION CLASS").
 - **Type predicates** (`JvmEmitHelper.emitSharedCall`): `_pAtom`, `_pConsp`, `_pListp`, `_pStringp`
   (~90 bytecodes each), `_pEq`, `_pEql` (~45); a site is four bytes. The GENERATED dispatches
   (`%typep-runtime`, `%error-runtime`, `%sbr-*`, `%mmi-*`, `%slot-value-runtime`) are 40-57-clause

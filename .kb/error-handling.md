@@ -1030,7 +1030,19 @@ message at the catching end** -- except for the failures the backends report as 
   undefined` -> its cell-error class, because those sites are plain `RuntimeException`s emitted in
   bytecode with no channel to carry a class; a wrong-type operand's exception is recognized by
   identity instead (`_teSlot`, see "A non-number reaching arithmetic"). The arms are compiled Lisp forms built by `LispMacroExpander.reportingConditionForm`, so no
-  slot index is baked here.
+  slot index is baked here. **The synthesis is ONE method per class, `_hcSynth`
+  (`(Throwable)Object`, `JvmHandlerCaseCompiler.conditionSynthesizer`, memo
+  `ConditionChannel.conditionSynthesizer`)**: every landing and the `_hbGuard` pad call it when
+  `_condTake` answers null; the clause dispatch stays inline. Measured 2026-09-27, default
+  `--optimize`: `(defun g (x) (ignore-errors (f x)))` `G` 945 -> 513 B code, StackMapTable 211 ->
+  155 B; `(defun h (x) (handler-case (f x) (type-error () :t)))` `H` 667 -> 235 B, 211 -> 155 B;
+  `_hcSynth` 442 B, `_hbGuard` 518 -> 82 B. The ci-spec corpus class (`--optimize=off`) 7,820,580
+  -> 7,608,664 B (code 4,640,417 -> 4,495,219, StackMapTable 1,940,580 -> 1,874,069, methods 6,143
+  -> 6,139 -- fewer body-outliner continuations); `examples/net/hello-clack.lisp` 958,556 ->
+  956,748 B. **The constant pool barely moves** (corpus 51,957 -> 51,945): a landing adds no pool
+  entry of its own -- every constant it names is already interned class-wide. What fills the
+  corpus pool: 10,057 `String`s, ~6,100 self `Methodref`s (each with its own `NameAndType` and
+  name), and 2,755 `_qd$N` quoted-datum fields (three entries each).
 - **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **An
   undefined-function call diverges by CLASS rather than catchability**: catchable, but as a
   `simple-error`. **The stub cannot construct the typed instance**: it is produced during BODY

@@ -149,10 +149,11 @@ final class JvmHandlerCaseCompiler {
 		if (records) {
 			// What the landing took is the record -- a condition-less throw's being the
 			// instance just synthesized, as outside restart mode: keep it for a rethrow
-			// and dispatch on the condition it names. Unwrapped only past the synthesis,
-			// whose many branch targets would otherwise all carry the record slot in
-			// their stack-map frames: +804 B of StackMapTable on the ci-spec pin's
-			// program before the synthesis, +40 B after it (2026-09-27).
+			// and dispatch on the condition it names. Unwrapped only past the synthesis:
+			// while it was emitted inline, its many branch targets would otherwise all
+			// have carried the record slot in their stack-map frames (+804 B of
+			// StackMapTable on the ci-spec pin's program before the synthesis, +40 B
+			// after it, 2026-09-27).
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(condSlot);
 			ctx.emit(Opcode.DUP);
@@ -282,12 +283,13 @@ final class JvmHandlerCaseCompiler {
 	 * throwable's condition, synthesize the instance of a condition-less throw, run the
 	 * cluster stack unless the record says it already ran, record the instance again --
 	 * over nothing but the caught throwable, so it is emitted once per class and called
-	 * from each site. It has to be: the pad is ~500 bytecodes (the classification switch
-	 * builds one condition instance per raw-failure class), and in restart mode
-	 * {@code restart-case} expands through {@code handler-bind}, so a function that
-	 * writes {@code check-type} in a macro used forty times carried forty copies of it --
-	 * 20 KB, most of {@code fast-http}'s {@code parse-header-field-and-value} being past
-	 * HotSpot's {@code HugeMethodLimit} ({@code .kb/hot-path-method-size.md}).
+	 * from each site. It had to be: the pad was ~500 bytecodes while it held the
+	 * synthesis (now the shared {@link #conditionSynthesizer}, which leaves it ~80), and
+	 * in restart mode {@code restart-case} expands through {@code handler-bind}, so a
+	 * function that writes {@code check-type} in a macro used forty times carried forty
+	 * copies of it -- 20 KB, most of {@code fast-http}'s
+	 * {@code parse-header-field-and-value} being past HotSpot's {@code HugeMethodLimit}
+	 * ({@code .kb/hot-path-method-size.md}).
 	 */
 	private static ConstantPool.MethodrefConstant guardLandingPad(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
@@ -409,17 +411,66 @@ final class JvmHandlerCaseCompiler {
 
 	/**
 	 * Emits the synthesis of the instance a condition-less throw stands for into
-	 * {@code condSlot} when that slot holds null ({@link #emitSynthesizeCondition}).
+	 * {@code condSlot} when that slot holds null: a call of the shared
+	 * {@link #conditionSynthesizer}.
 	 */
 	private static void emitSynthesizeUnlessRecorded(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
 			String className) {
+		ConstantPool.MethodrefConstant synthesizer = conditionSynthesizer(ctx, className);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(condSlot);
 		int ifHaveCondPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
-		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(synthesizer.index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(condSlot);
 		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
+	}
+
+	/**
+	 * The descriptor of the shared synthesis method: the caught throwable in, the
+	 * condition instance it stands for out.
+	 */
+	private static final String SYNTHESIZER_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Object;";
+
+	/**
+	 * {@return the shared synthesis method ({@code _hcSynth}), built on first use}
+	 *
+	 * The synthesis ({@link #emitSynthesizeCondition}) depends on nothing but the caught
+	 * throwable and is ~450 bytecodes with a dozen branch targets -- the host-text
+	 * overrides, the quote framing, one construction per raw-failure class. Emitted
+	 * inline it made every {@code handler-case} / {@code ignore-errors} landing that
+	 * size: a one-call {@code ignore-errors} function was 945 bytes of code and 211 of
+	 * StackMapTable. One copy per class serves every landing and the {@code _hbGuard}
+	 * pad; the site is a null test, a call and a store.
+	 */
+	private static ConstantPool.MethodrefConstant conditionSynthesizer(JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		if (channel.conditionSynthesizer != null) {
+			return channel.conditionSynthesizer;
+		}
+		String methodName = "_hcSynth";
+		ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
+		ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(SYNTHESIZER_DESC);
+		ConstantPool.MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, SYNTHESIZER_DESC);
+		// Recorded BEFORE the body is emitted, as for the guard pad: the arms compile
+		// ordinary Lisp forms.
+		channel.conditionSynthesizer = ref;
+		JvmLispCompiler.Ctx synth = ctx.ctxBuilder.build();
+		synth.evalStoreRef = ctx.evalStoreRef;
+		synth.nextLocal = 1;
+		synth.maxLocals = 1;
+		int condSlot = synth.allocTemp();
+		emitSynthesizeCondition(0, condSlot, synth, className);
+		synth.emit(Opcode.ALOAD);
+		synth.emit(condSlot);
+		synth.emit(Opcode.ARETURN);
+		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, synth));
+		return ref;
 	}
 
 	/**

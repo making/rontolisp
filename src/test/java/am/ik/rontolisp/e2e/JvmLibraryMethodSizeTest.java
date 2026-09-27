@@ -90,10 +90,11 @@ class JvmLibraryMethodSizeTest {
 	 *
 	 * Every method that can run per evaluated form must stay under 8000 -- including the
 	 * tail continuations a body that would have crossed it is split into ({@code _k$N},
-	 * {@code JvmBodyOutliner}), the shared emission helpers ({@code _hbGuard}, the
-	 * {@code _p*} predicates) and the {@code _ql$N} literal builders. The top-level
-	 * chunks (and {@code main}, which only calls them) run once per process and are
-	 * bounded by the 64 KB method cap instead, so they are the one blanket exclusion.
+	 * {@code JvmBodyOutliner}), the shared emission helpers ({@code _hbGuard},
+	 * {@code _hcSynth}, the {@code _p*} predicates) and the {@code _ql$N} literal
+	 * builders. The top-level chunks (and {@code main}, which only calls them) run once
+	 * per process and are bounded by the 64 KB method cap instead, so they are the one
+	 * blanket exclusion.
 	 * @param classBytes the emitted class
 	 */
 	private static Map<String, Integer> oversizedMethods(byte[] classBytes) {
