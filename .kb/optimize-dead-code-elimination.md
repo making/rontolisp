@@ -511,7 +511,9 @@ numbers (`--optimize=size`, raw / gzip): hello-clack Worker 730,394 -> 719,754 (
 -> 194,536, httpbin Worker 160,649 -> 155,838 (-3.0%) / 55,400 -> 53,849, hello-tiny-routes
 767,253 -> 756,000, `zlib` 79,005 -> 78,572; the box-then-unbox census row 228 -> 68 on the
 Worker (what is left is a char-valued runtime call whose result is read back, not a literal).
-Pinned by `WasmLispCompilerIntegrationTest#aCharComparisonPairIsOneCodePointCompare`.
+Pinned by `WasmLispCompilerIntegrationTest#aCharComparisonPairIsOneCodePointCompare`. Since
+2026-09-27 an EH-mode non-literal operand is `i32.const id; call _chr_code` rather than the
+trapping cast ([error-handling.md](error-handling.md), "One argument is still checked").
 
 ### A conditional in statement position compiles for effect
 

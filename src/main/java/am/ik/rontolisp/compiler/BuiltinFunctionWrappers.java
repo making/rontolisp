@@ -1509,13 +1509,14 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Variadic wrapper for min/max (needs at least one argument; a single argument
-	// returns itself): (lambda (n &optional (b nil bp) &rest r) (if bp <fold> n)), the
-	// fold starting at (op n b), so a two-argument call conses nothing. The required n
-	// is what makes (funcall #'min) the count report the interpreter gives (MIN expects
-	// at least 1 argument, got 0); with a bare &rest it folded over nil and answered nil.
+	// returns itself, checked to be a real as the call's one-argument form checks it):
+	// (lambda (n &optional (b nil bp) &rest r) (if bp <fold> (op n))), the fold starting
+	// at (op n b), so a two-argument call conses nothing. The required n is what makes
+	// (funcall #'min) the count report the interpreter gives (MIN expects at least 1
+	// argument, got 0); with a bare &rest it folded over nil and answered nil.
 	private static WrapperDef variadicNonEmpty(String name) {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"),
-				leftFold(name, call(name, "n", "b")), new LispSymbol("n")));
+				leftFold(name, call(name, "n", "b")), call(name, "n")));
 		return new WrapperDef(name,
 				List.of("n", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
 				List.of(body));

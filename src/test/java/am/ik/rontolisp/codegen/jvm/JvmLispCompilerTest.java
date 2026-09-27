@@ -1331,6 +1331,58 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void oneArgumentCallsCheckTheirArgument() throws Exception {
+		// The evaluator twin is oneArgumentCallsCheckTheirArgument.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *x* 'a)
+				(defvar *c* 1)
+				(print (te (lambda () (+ *x*))))
+				(print (te (lambda () (* *x*))))
+				(print (te (lambda () (logand 1.5))))
+				(print (te (lambda () (logeqv *x*))))
+				(print (te (lambda () (> *x*))))
+				(print (te (lambda () (= *x*))))
+				(print (te (lambda () (/= *x*))))
+				(print (te (lambda () (min #c(1 2)))))
+				(print (te (lambda () (funcall #'max *x*))))
+				(print (te (lambda () (if (<= *x*) :y :n))))
+				(print (te (lambda () (char= *c*))))
+				(print (te (lambda () (char/= #\\a #\\b *c*))))
+				(print (te (lambda () (char>= #\\b #\\a *c*))))
+				(print (te (lambda () (if (char< *c* #\\a) :y :n))))
+				(print (te (lambda () (char-equal *c*))))
+				(print (te (lambda () (char-not-lessp *c*))))
+				(print (te (lambda () (funcall #'char= *c*))))
+				(print (list (+ 5) (* 2.5) (< 3) (= #c(1 2)) (/= 1) (max -0.0) (logand 6)
+				             (char= #\\a) (char/= #\\a #\\b #\\a) (char> #\\c #\\b #\\a) (char-equal #\\A #\\a #\\a)))
+				(let ((n 0)) (print (list (char= #\\a #\\b (progn (incf n) #\\c)) n)))
+				""")).isEqualTo("""
+				("+: The value A is not of type NUMBER" A NUMBER)
+				("*: The value A is not of type NUMBER" A NUMBER)
+				("LOGAND: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("LOGXOR: The value A is not of type INTEGER" A INTEGER)
+				(">: The value A is not of type REAL" A REAL)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("MIN: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+				("MAX: The value A is not of type REAL" A REAL)
+				("<=: The value A is not of type REAL" A REAL)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR/=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR>=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR<: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-EQUAL: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-NOT-LESSP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				(5 2.5 T T T -0.0 6 T NIL T T)
+				(NIL 1)""");
+	}
+
+	@Test
 	void listWalksAndStringIndicesNameTheOperator() throws Exception {
 		// A list walk over a non-list and a string index that is no integer name their
 		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's

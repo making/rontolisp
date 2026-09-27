@@ -221,6 +221,7 @@ final class JvmNumericRuntimeBuilder {
 			Map.entry(RANDOM, UNARY_DESC), Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC),
+			Map.entry(JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC));
 

@@ -3548,12 +3548,12 @@ public final class LispPreludeLibrary {
 		// The case-INSENSITIVE character ordering family, on the same "one shared walk,
 		// one-line operators" plan as %string-compare above: %char-fold-chain checks each
 		// ADJACENT pair's sign against [lo, hi] after downcasing both, which is exactly
-		// the
-		// interpreter's Java charCompareChain with a fold added. char-not-equal is the
-		// odd
-		// one out -- CL specifies it as ALL arguments pairwise distinct, not adjacent
-		// ones,
-		// so it gets its own quadratic walk (mirroring char/=).
+		// the interpreter's Java charCompareChain with a fold added. char-not-equal is
+		// the odd one out -- CL specifies it as ALL arguments pairwise distinct, not
+		// adjacent ones, so it gets its own quadratic walk (mirroring char/=). Each
+		// operator checks EVERY argument first, the lone one of a one-argument call
+		// included, so a non-character is its own CHARACTER type-error as the
+		// case-sensitive comparisons' is (.kb/error-handling.md).
 		SOURCES.put(LispNames.CHAR_FOLD_CHAIN, """
 				(defun %char-fold-chain (chars lo hi)
 				  (let ((ok t))
@@ -3568,24 +3568,33 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.CHAR_LESSP, """
 				(defun char-lessp (character &rest more-characters)
-				  (%char-fold-chain (cons character more-characters) -1 -1))
+				  (let ((chars (cons character more-characters)))
+				    (dolist (c chars) (%check-character c 'char-lessp))
+				    (%char-fold-chain chars -1 -1)))
 				""");
 		SOURCES.put(LispNames.CHAR_GREATERP, """
 				(defun char-greaterp (character &rest more-characters)
-				  (%char-fold-chain (cons character more-characters) 1 1))
+				  (let ((chars (cons character more-characters)))
+				    (dolist (c chars) (%check-character c 'char-greaterp))
+				    (%char-fold-chain chars 1 1)))
 				""");
 		SOURCES.put(LispNames.CHAR_NOT_GREATERP, """
 				(defun char-not-greaterp (character &rest more-characters)
-				  (%char-fold-chain (cons character more-characters) -1 0))
+				  (let ((chars (cons character more-characters)))
+				    (dolist (c chars) (%check-character c 'char-not-greaterp))
+				    (%char-fold-chain chars -1 0)))
 				""");
 		SOURCES.put(LispNames.CHAR_NOT_LESSP, """
 				(defun char-not-lessp (character &rest more-characters)
-				  (%char-fold-chain (cons character more-characters) 0 1))
+				  (let ((chars (cons character more-characters)))
+				    (dolist (c chars) (%check-character c 'char-not-lessp))
+				    (%char-fold-chain chars 0 1)))
 				""");
 		SOURCES.put(LispNames.CHAR_NOT_EQUAL, """
 				(defun char-not-equal (character &rest more-characters)
 				  (let ((rest (cons character more-characters))
 				        (ok t))
+				    (dolist (c rest) (%check-character c 'char-not-equal))
 				    (while rest
 				      (let ((a (char-code (char-downcase (car rest)))))
 				        (dolist (b (cdr rest))

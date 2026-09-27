@@ -5713,7 +5713,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("/= expects at least one number: " + cons.print());
 		}
 		if (parts.size() == 2) {
-			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+			// (/= x) is t for any number, and (= x)'s check of it.
+			return mvCall(LispNames.EQ, parts.get(1));
 		}
 		List<LispSymbol> temps = new java.util.ArrayList<>();
 		List<MvBinding> bindings = new java.util.ArrayList<>();
@@ -28448,7 +28449,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(((LispSymbol) op).name() + " requires at least one argument");
 		}
 		if (n == 1) {
-			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+			return checkedOneArgument(((LispSymbol) op).name(), parts.get(1), LispTrue.INSTANCE);
 		}
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> gsyms = new java.util.ArrayList<>();
@@ -28463,6 +28464,44 @@ public final class LispMacroExpander {
 			andParts.add(listToCons(List.of(op, gsyms.get(i), gsyms.get(i + 1))));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), listToCons(andParts)));
+	}
+
+	/**
+	 * The one-argument call of a numeric operator that does no arithmetic on its argument
+	 * -- {@code (+ x)}, {@code (* x)}, {@code (logand x)}, {@code (< x)}, {@code (min x)}
+	 * and their kin -- as the argument checked to be of the type the operator accepts
+	 * ({@code NUMBER} for {@code + * =}, {@code REAL} for the orderings and
+	 * {@code min}/{@code max}, {@code INTEGER} for the bitwise family): {@code (let
+	 * ((__one x)) (if (realp __one) t (%operand-type-error __one '< 'real)))}. A literal
+	 * of the type needs no check. The interpreter's built-ins check the same argument, so
+	 * a wrong-type one is the operator's type-error on every backend
+	 * ({@code .kb/error-handling.md}, "One argument is still checked").
+	 * @param operator the operator's symbol name
+	 * @param operand the argument's form
+	 * @param answer what the call answers, or null for the argument itself
+	 * @return the checked form
+	 */
+	public static LispVal checkedOneArgument(String operator, LispVal operand, @Nullable LispVal answer) {
+		String kind = switch (operator) {
+			case LispNames.ADD, LispNames.MUL, LispNames.EQ -> "NUMBER";
+			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGEQV -> "INTEGER";
+			default -> "REAL";
+		};
+		String predicate = switch (kind) {
+			case "NUMBER" -> LispNames.NUMBERP;
+			case "INTEGER" -> LispNames.INTEGERP;
+			default -> LispNames.REALP;
+		};
+		boolean integer = operand instanceof LispInteger || operand instanceof LispBigInteger;
+		boolean literalOfKind = "INTEGER".equals(kind) ? integer
+				: integer || operand instanceof LispRatio || operand instanceof LispDouble;
+		if (literalOfKind) {
+			return answer != null ? answer : operand;
+		}
+		LispSymbol v = new LispSymbol("__one");
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), v,
+				callOf(LispNames.QUOTE, new LispSymbol(operator)), callOf(LispNames.QUOTE, new LispSymbol(kind))));
+		return makeLet(v.name(), operand, makeIf(callOf(predicate, v), answer != null ? answer : v, signal));
 	}
 
 	/**
@@ -28497,7 +28536,7 @@ public final class LispMacroExpander {
 		}
 		if (n == 1) {
 			return gcdLcm ? listToCons(List.of(op, parts.get(1), new LispInteger(LispNames.GCD.equals(name) ? 0 : 1)))
-					: parts.get(1);
+					: checkedOneArgument(name, parts.get(1), null);
 		}
 		LispVal acc = listToCons(List.of(op, parts.get(1), parts.get(2)));
 		for (int i = 3; i <= n; i++) {
@@ -31052,93 +31091,6 @@ public final class LispMacroExpander {
 		letParts.addAll(assignments);
 		letParts.add(LispNil.INSTANCE);
 		return listToCons(letParts);
-	}
-
-	/**
-	 * Expands {@code (char> ...)}/{@code (char>= ...)} for the compilers: the arguments
-	 * are hoisted into {@code let*} temps (preserving left-to-right evaluation) and the
-	 * chain is delegated to the ascending sibling over the REVERSED temps --
-	 * {@code (char> a b c)} holds exactly when {@code (char< c b a)} does.
-	 * @param cons the char>/char>= expression
-	 * @param ascendingOp the delegate operator ({@code char<} or {@code char<=})
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharDescending(LispCons cons, String ascendingOp) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__chcmp_" + (i - 1));
-			bindings.add(listToCons(List.of(temp, parts.get(i))));
-			temps.add(temp);
-		}
-		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(ascendingOp));
-		for (int i = temps.size() - 1; i >= 0; i--) {
-			call.add(temps.get(i));
-		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), listToCons(call)));
-	}
-
-	/**
-	 * Expands {@code (char-equal ...)} for the compilers: a case-insensitive
-	 * {@code char=} chain over downcased {@code let*} temps.
-	 * @param cons the char-equal expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharEqual(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(LispNames.CHAR_EQUAL + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__cheq_" + (i - 1));
-			bindings.add(listToCons(
-					List.of(temp, listToCons(List.of(new LispSymbol(LispNames.CHAR_DOWNCASE), parts.get(i))))));
-			temps.add(temp);
-		}
-		List<LispVal> tests = new java.util.ArrayList<>();
-		tests.add(new LispSymbol(LispNames.AND));
-		for (int i = 0; i + 1 < temps.size(); i++) {
-			tests.add(listToCons(List.of(new LispSymbol(LispNames.CHAR_EQ), temps.get(i), temps.get(i + 1))));
-		}
-		LispVal body = tests.size() == 1 ? LispTrue.INSTANCE : listToCons(tests);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
-	}
-
-	/**
-	 * Expands {@code (char/= ...)} for the compilers: all arguments pairwise distinct
-	 * (not just adjacent pairs), as an {@code and} of negated {@code char=} tests over
-	 * {@code let*} temps.
-	 * @param cons the char/= expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharNe(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(LispNames.CHAR_NE + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__chne_" + (i - 1));
-			bindings.add(listToCons(List.of(temp, parts.get(i))));
-			temps.add(temp);
-		}
-		List<LispVal> tests = new java.util.ArrayList<>();
-		tests.add(new LispSymbol(LispNames.AND));
-		for (int i = 0; i < temps.size(); i++) {
-			for (int j = i + 1; j < temps.size(); j++) {
-				tests.add(makeNot(listToCons(List.of(new LispSymbol(LispNames.CHAR_EQ), temps.get(i), temps.get(j)))));
-			}
-		}
-		LispVal body = tests.size() == 1 ? LispTrue.INSTANCE : listToCons(tests);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
 	}
 
 	/**
@@ -38841,6 +38793,9 @@ public final class LispMacroExpander {
 		List<LispVal> operands = parts.subList(1, parts.size());
 		if (operands.isEmpty()) {
 			return new LispInteger(-1);
+		}
+		if (operands.size() == 1) {
+			return checkedOneArgument(LispNames.LOGEQV, operands.get(0), null);
 		}
 		LispVal acc = operands.get(0);
 		for (int i = 1; i < operands.size(); i++) {

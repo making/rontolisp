@@ -1444,6 +1444,49 @@ random-state objects exist" above), not a claim that a ratio or a negative numbe
   `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
   triple (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
+## One argument is still checked
+**Invariant: a one-argument call compares or folds nothing, but its argument is checked like any
+other: `(+ x)`, `(* x)`, `(logand x)`/`logior`/`logxor`/`logeqv`, `(< x)` and the other orderings,
+`(= x)`, `(/= x)`, `(min x)`/`(max x)` and every character comparison signal the operator's
+catchable `type-error` for a wrong-type argument, byte-identical on all four backends (wasm-GC: EH
+mode).** Before (measured 2026-09-26): the arithmetic and bitwise ones answered `x` on the compiled
+backends, the orderings/`=`/`min`/`max` answered on all four, and `(char= 1)` answered `T` on the
+interpreter, the generic `ClassCastException` text on the JVM and trapped on wasm -- at EVERY arity.
+
+- **Types**: `+ * =` `NUMBER`; the orderings, `min`, `max` `REAL`; the bitwise family `INTEGER`
+  (`logeqv` reports as `LOGXOR`, `/=` as `=`, the call-position-rewrite rule). The twelve character
+  comparisons (`char=` .. `char-not-lessp`) are FIXED-typed `CHARACTER` rows, last in
+  `OperandTypes`' order.
+- **Interpreter**: `compareChain`'s and `min`/`max`'s one-argument arms (`requireNumericOperand`);
+  `charOperandCodes` checks EVERY argument before any pair is compared (it stopped at the first
+  failing pair); `%check-character` is a built-in, for the prelude.
+- **Compiled numerics**: `LispMacroExpander.checkedOneArgument` -- `(let ((__one x)) (if (realp
+  __one) t (%operand-type-error __one '< 'real)))`, nothing for a literal of the type -- from
+  `expandComparison` and `expandReduction`'s one-argument arms, `expandLogEqv`,
+  `expandNumericNotEqual` (`(/= x)` is `(= x)`) and `ArithmeticIdentities.oneArgument` (`+`, `*`).
+  `#'min`/`#'max`'s lone arm calls `(min n)`. JVM: `%operand-type-error` under a `NUMBER`-typed
+  operator hands `_opTypeErr` the operator's type -- the funnel-typed rename reads a `NUMBER` kind as
+  `REAL`. `--no-gc` keeps `(< x)` as `(progn x t)`.
+- **Compiled characters**: every argument is evaluated and checked before any pair is compared (the
+  JVM chain branched out at the first failing pair and never evaluated the rest). `char>`,
+  `char>=`, `char/=` and `char-equal` compile as chains of their own (the `let*` reversal and the
+  `char-downcase` expansion are gone), so each reports its own name. JVM: `_ckChr` under the
+  comparison's wrapper before the unboxing; a literal is its `int` constant. wasm-GC, EH mode:
+  `i32.const id; call _chr_code` (`FUNC_CHR_CODE`, `br_on_cast_fail` fast path, the `CHARACTER`
+  landing) per non-literal operand -- the size of the `ref.cast; struct.get` it replaces; outside EH
+  the cast still traps, byte-identical. The case-insensitive prelude defuns check with
+  `(%check-character c 'char-lessp)`.
+- Measured 2026-09-27: hello-clack Worker (`--no-wasi --optimize=size`) 676,784 -> 676,722;
+  `zlib` P1 127,239 -> 127,234, size 97,055 -> 97,049, component 100,972 -> 101,035; JVM `zlib`
+  class 188,039 -> 187,699; `hello_world`, `pi_approx` and a non-EH module comparing characters
+  byte-identical. 40M comparisons with one non-literal operand in EH mode: wasmtime 1.49 -> 1.55 s,
+  JVM 0.31 -> 0.30 s. An inline `ref.test` check instead cost +4,428 B on the Worker (228 sites).
+- The other character built-ins (`char-code`, `char-upcase`, the predicates) still differ per
+  backend (`.todo/a63`).
+- Pinned by `ci-spec.yaml`'s `one-argument-calls-check-their-argument` and the
+  `oneArgumentCallsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+  `WasmLispCompilerIntegrationTest`).
+
 ## A sequence, array or hash-table operand of the wrong kind names its operator
 **Invariant: a sequence operator handed a value that is no sequence, an array accessor one that is
 no array and a hash-table accessor one that is no hash table report `OP: The value <prin1> is not of

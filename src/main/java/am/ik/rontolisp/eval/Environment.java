@@ -2920,6 +2920,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
+			if (args.size() == 1) {
+				requireNumericOperand(LispNames.MIN, best, true);
+			}
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
 				int sign = compareNumeric(best, cand);
@@ -2932,6 +2935,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
 			requireMinArgCount(LispNames.MAX, args, 1);
 			LispVal best = args.get(0);
+			if (args.size() == 1) {
+				requireNumericOperand(LispNames.MAX, best, true);
+			}
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
 				int sign = compareNumeric(best, cand);
@@ -7709,30 +7715,41 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.CHAR_GE,
 				new LispFunction(LispNames.CHAR_GE, args -> charCompareChain(LispNames.CHAR_GE, args, 0, 1)));
 		env.defineFunction(LispNames.CHAR_EQUAL, new LispFunction(LispNames.CHAR_EQUAL, args -> {
-			requireMinArgCount(LispNames.CHAR_EQUAL, args, 1);
-			for (int i = 0; i + 1 < args.size(); i++) {
-				int a = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i)).codePoint());
-				int b = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i + 1)).codePoint());
-				if (a != b) {
+			int[] codes = charOperandCodes(LispNames.CHAR_EQUAL, args);
+			for (int i = 0; i + 1 < codes.length; i++) {
+				if (Character.toLowerCase(codes[i]) != Character.toLowerCase(codes[i + 1])) {
 					return LispNil.INSTANCE;
 				}
 			}
 			return LispTrue.INSTANCE;
 		}));
 		env.defineFunction(LispNames.CHAR_NE, new LispFunction(LispNames.CHAR_NE, args -> {
-			requireMinArgCount(LispNames.CHAR_NE, args, 1);
+			int[] codes = charOperandCodes(LispNames.CHAR_NE, args);
 			// char/= is true when ALL arguments are pairwise distinct (not just
 			// adjacent pairs), per CL.
-			for (int i = 0; i < args.size(); i++) {
-				for (int j = i + 1; j < args.size(); j++) {
-					if (requireChar(LispNames.CHAR_NE, args.get(i))
-						.codePoint() == requireChar(LispNames.CHAR_NE, args.get(j)).codePoint()) {
+			for (int i = 0; i < codes.length; i++) {
+				for (int j = i + 1; j < codes.length; j++) {
+					if (codes[i] == codes[j]) {
 						return LispNil.INSTANCE;
 					}
 				}
 			}
 			return LispTrue.INSTANCE;
 		}));
+		// (%check-character x 'op): x when it is a character, else OP's CHARACTER
+		// type-error (unnamed for a nil op) -- the check a lowering or a prelude defun
+		// makes on its operator's behalf (the case-insensitive character comparisons).
+		env.defineFunction(LispNames.CHECK_CHARACTER_INTERNAL,
+				new LispFunction(LispNames.CHECK_CHARACTER_INTERNAL, args -> {
+					requireArgCount(LispNames.CHECK_CHARACTER_INTERNAL, args, 2);
+					LispVal x = args.get(0);
+					if (x instanceof LispChar) {
+						return x;
+					}
+					throw args.get(1) instanceof LispSymbol op
+							? OperandTypeException.of(x, OperandTypes.Kind.CHARACTER, op.name())
+							: OperandTypeException.of(x, OperandTypes.Kind.CHARACTER);
+				}));
 		env.defineFunction(LispNames.CHAR_UPCASE, new LispFunction(LispNames.CHAR_UPCASE, args -> {
 			requireArgCount(LispNames.CHAR_UPCASE, args, 1);
 			return new LispChar(Character.toUpperCase(requireChar(LispNames.CHAR_UPCASE, args.get(0)).codePoint()));
@@ -8095,13 +8112,31 @@ public final class Environment implements Scope {
 		throw new LispEvalException(name + " expects a character, got: " + val.print());
 	}
 
+	/**
+	 * The code points of a character comparison's arguments, EVERY one checked before any
+	 * pair is compared -- the lone argument of a one-argument call included -- as the
+	 * compiled chains check each operand as they evaluate it: a non-character is the
+	 * comparison's {@code CHARACTER} type-error.
+	 */
+	private static int[] charOperandCodes(String name, java.util.List<LispVal> args) {
+		requireMinArgCount(name, args, 1);
+		int[] codes = new int[args.size()];
+		for (int i = 0; i < codes.length; i++) {
+			if (!(args.get(i) instanceof LispChar c)) {
+				throw OperandTypeException.of(args.get(i), OperandTypes.Kind.CHARACTER, name);
+			}
+			codes[i] = c.codePoint();
+		}
+		return codes;
+	}
+
 	// Variadic character comparison, mirroring compareChain for numbers: true when
 	// every adjacent pair's code-point comparison falls within [low, high].
 	private static LispVal charCompareChain(String name, java.util.List<LispVal> args, int low, int high) {
-		requireMinArgCount(name, args, 1);
-		for (int i = 0; i + 1 < args.size(); i++) {
-			int a = requireChar(name, args.get(i)).codePoint();
-			int b = requireChar(name, args.get(i + 1)).codePoint();
+		int[] codes = charOperandCodes(name, args);
+		for (int i = 0; i + 1 < codes.length; i++) {
+			int a = codes[i];
+			int b = codes[i + 1];
 			int cmp = Integer.compare(a, b);
 			int normalized = cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
 			if (normalized < low || normalized > high) {
@@ -9084,6 +9119,12 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal compareChain(String name, List<LispVal> args, int loSign, int hiSign) {
 		requireMinArgCount(name, args, 1);
+		if (args.size() == 1) {
+			// No pair to compare, but the argument is still checked: a number for =, a
+			// real for the orderings, as the compiled one-argument lowering checks it.
+			requireNumericOperand(name, args.get(0), !LispNames.EQ.equals(name));
+			return LispTrue.INSTANCE;
+		}
 		if (LispNames.EQ.equals(name) && hasComplex(args)) {
 			for (int i = 1; i < args.size(); i++) {
 				if (!complexEqual(args.get(i - 1), args.get(i))) {
@@ -9151,6 +9192,21 @@ public final class Environment implements Scope {
 
 	// Signals for a complex operand only; any other value falls through to the
 	// caller's own funnel, so a non-number keeps its existing message.
+	/**
+	 * The one-argument check of a numeric operator that performs no arithmetic on its
+	 * argument ({@code (< x)}, {@code (max x)}): {@code x} must be a number, a real when
+	 * {@code real}, else the operator's type-error.
+	 */
+	private static void requireNumericOperand(String name, LispVal val, boolean real) {
+		if (!(val instanceof LispInteger || val instanceof LispBigInteger || val instanceof LispRatio
+				|| val instanceof LispDouble || val instanceof LispComplex)) {
+			throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER, name);
+		}
+		if (real) {
+			requireRealOperand(name, val);
+		}
+	}
+
 	private static void requireRealOperand(String name, LispVal val) {
 		if (val instanceof LispComplex) {
 			throw OperandTypeException.of(val, OperandTypes.Kind.REAL).named(name);

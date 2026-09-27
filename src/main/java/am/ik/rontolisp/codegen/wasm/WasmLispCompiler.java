@@ -2041,6 +2041,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// index above shifts, and shaken when no site reads through it.
 	static final int FUNC_IDX_REF = FUNC_IDX_BOUND + 1;
 
+	// _chr_code ((ref null eq) value, i32 operator id) -> i32: a character comparison's
+	// operand, EH mode only (WasmCharCompiler.buildCodeCheckBody): a character answers
+	// its code point; anything else is the operator's CHARACTER type-error. One call per
+	// operand keeps a site as small as the trapping cast it replaces. Reuses
+	// TYPE_STR_TO_MEM; appended after the last fixed helper so no index above shifts,
+	// and shaken when no site checks.
+	static final int FUNC_CHR_CODE = FUNC_IDX_REF + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2071,7 +2079,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_IDX_REF + 1;
+	static final int FUNC_VEC_BASE = FUNC_CHR_CODE + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2087,9 +2095,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
-	// (_idx_in, _idx_bound, _idx_ref) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_IDX_REF + 1;
+	// (_idx_in, _idx_bound, _idx_ref) and the character check (_chr_code) -- plus, under
+	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_CHR_CODE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7201,6 +7209,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _idx_ref (array, subscript,
 															// op) -> subscript
 															// (FUNC_IDX_REF)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _chr_code (value, op) -> i32
+													// (FUNC_CHR_CODE)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8181,6 +8191,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the read's subscript check body (FUNC_IDX_REF): shaken with its sites.
 				code.addFunction(WasmArrayRuntimeBuilder
 					.buildIndexRefBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
+				// the character check body (FUNC_CHR_CODE): shaken with its sites.
+				code.addFunction(WasmCharCompiler.buildCodeCheckBody(ehMode ? operandOpGlobalIndex : -1));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

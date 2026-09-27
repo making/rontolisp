@@ -93,6 +93,13 @@ final class JvmOperandTypeRuntime {
 	static final String CK_RAT_DESC = CK_IDX_DESC;
 
 	/**
+	 * A character comparison's operand check: a character (an {@code int[]}) answers
+	 * itself, anything else throws the unnamed {@code CHARACTER} report for the
+	 * comparison's wrapper to name. Descriptor {@link #CK_IDX_DESC}.
+	 */
+	static final String CK_CHR = "_ckChr";
+
+	/**
 	 * A hash-table accessor's operand check: a Lisp hash table (a {@code LinkedHashMap})
 	 * answers itself, anything else throws the unnamed {@code HASH-TABLE} report for the
 	 * operator's wrapper to name. A {@code java:} program's host map passes here and is
@@ -266,6 +273,8 @@ final class JvmOperandTypeRuntime {
 				cp.addString(OperandTypes.Kind.RATIONAL.name())));
 		methods.add(check(cp, CK_TAB, CK_IDX_DESC, List.of(cp.addClass(cp.addUtf8(RontoHashTable.MAP_CLASS))), teRaw,
 				cp.addString(OperandTypes.Kind.HASH_TABLE.typeName())));
+		methods.add(check(cp, CK_CHR, CK_IDX_DESC, List.of(cp.addClass(cp.addUtf8("[I"))), teRaw,
+				cp.addString(OperandTypes.Kind.CHARACTER.name())));
 		methods.add(consCheck(cp, CK_LIST, FIELD_DESC, true, shape, teRaw, listKind));
 		methods.add(
 				consCheck(cp, CK_CONS, CK_CONS_DESC, false, shape, teRaw, cp.addString(OperandTypes.Kind.CONS.name())));

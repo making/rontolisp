@@ -7688,9 +7688,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.INT;
 	}
 
-	// Numeric comparison. Binary is emitted directly; one or 3+ args expand into nested
-	// binary comparisons combined with and (all supported core forms).
+	// Numeric comparison. Binary is emitted directly; 3+ args expand into nested binary
+	// comparisons combined with and (all supported core forms). One argument is t: this
+	// backend's typed subset has no type-error to signal (a wrong-type operand traps).
 	private Ty compileComparison(LispCons cons, List<LispVal> args, Fn fn, int intOp, int floatOp) {
+		if (args.size() == 2) {
+			return compileExpr(new LispCons(new LispSymbol(LispNames.PROGN),
+					new LispCons(args.get(1), new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE))), fn);
+		}
 		if (args.size() != 3) {
 			return compileExpr(LispMacroExpander.expandComparison(cons), fn);
 		}

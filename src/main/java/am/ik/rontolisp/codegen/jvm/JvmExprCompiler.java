@@ -1404,13 +1404,10 @@ final class JvmExprCompiler {
 			case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
 			case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
 			case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
-			case LispNames.CHAR_GT -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LT), ctx, className);
-			case LispNames.CHAR_GE -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LE), ctx, className);
-			case LispNames.CHAR_NE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCharNe(cons), ctx, className);
-			case LispNames.CHAR_EQUAL ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandCharEqual(cons), ctx, className);
+			case LispNames.CHAR_GT -> JvmCharCompiler.compileGt(cons, ctx, className);
+			case LispNames.CHAR_GE -> JvmCharCompiler.compileGe(cons, ctx, className);
+			case LispNames.CHAR_NE -> JvmCharCompiler.compileNe(cons, ctx, className);
+			case LispNames.CHAR_EQUAL -> JvmCharCompiler.compileEqual(cons, ctx, className);
 			case LispNames.PARSE_INTEGER ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
 			case LispNames.VALUES_LIST ->

@@ -43,6 +43,11 @@ final class WasmArithCompiler {
 			WasmExprCompiler.compileExpr(ArithmeticIdentities.of(cons), ctx);
 			return;
 		}
+		LispVal checked = args.size() == 2 ? ArithmeticIdentities.oneArgument(cons) : null;
+		if (checked != null) {
+			WasmExprCompiler.compileExpr(checked, ctx);
+			return;
+		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			// Unary (/ x) is the reciprocal: 1.0 / x.
 			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -125,21 +126,27 @@ final class JvmCharCompiler {
 			ctx.emit(tokenSlot);
 			ctx.emit(Opcode.CHECKCAST);
 			ctx.emitU2(ctx.stringClass.index());
-			emitOpTypeErr(ctx, className);
+			emitOpTypeErr(ctx, className, OperandTypes.FUNNEL_TYPE);
 			ctx.emit(Opcode.ATHROW);
 			return;
 		}
 		String operator = OperandTypes.reportedOperator(form.operator());
 		if (operator != null) {
 			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
-			emitOpTypeErr(ctx, className);
+			// The report names the operator's own type, as its wrappers do: the
+			// funnel-typed rename reads a NUMBER kind as REAL, so a NUMBER operator
+			// ((+ x)'s one-argument check) passes its type, and every other keeps the
+			// funnel-typed rename, whose kind is the type it names.
+			boolean numberTyped = OperandTypes.Kind.NUMBER.name().equals(OperandTypes.operatorType(operator));
+			emitOpTypeErr(ctx, className, numberTyped ? OperandTypes.Kind.NUMBER.name() : OperandTypes.FUNNEL_TYPE);
 		}
 		ctx.emit(Opcode.ATHROW);
 	}
 
-	// With the raw report and the operator's name on the stack: the funnel-typed rename.
-	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className) {
-		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
+	// With the raw report and the operator's name on the stack: the rename under the
+	// operator's type (FUNNEL_TYPE: the report's own kind).
+	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className, String type) {
+		JvmEmitHelper.compileUnspelledLiteral(type, ctx);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
@@ -318,47 +325,85 @@ final class JvmCharCompiler {
 
 	/** {@code (char= ...)} variadic equality. */
 	static void compileEq(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileChain(cons, ctx, className, Opcode.IF_ICMPNE);
+		compileChain(cons, ctx, className, Opcode.IF_ICMPNE, false, false);
 	}
 
 	/** {@code (char< ...)} variadic strictly-increasing comparison. */
 	static void compileLt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileChain(cons, ctx, className, Opcode.IF_ICMPGE);
+		compileChain(cons, ctx, className, Opcode.IF_ICMPGE, false, false);
 	}
 
 	/** {@code (char<= ...)} variadic non-decreasing comparison. */
 	static void compileLe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileChain(cons, ctx, className, Opcode.IF_ICMPGT);
+		compileChain(cons, ctx, className, Opcode.IF_ICMPGT, false, false);
 	}
 
-	// Emits a variadic character comparison: each adjacent pair is compared on its code
-	// point and the chain is true only when every pair satisfies the relation. failOpcode
-	// is the branch that jumps to the nil result when a pair fails the relation.
-	private static void compileChain(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int failOpcode) {
+	/** {@code (char> ...)} variadic strictly-decreasing comparison. */
+	static void compileGt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPLE, false, false);
+	}
+
+	/** {@code (char>= ...)} variadic non-increasing comparison. */
+	static void compileGe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPLT, false, false);
+	}
+
+	/** {@code (char/= ...)}: every PAIR of arguments distinct, not just adjacent ones. */
+	static void compileNe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPEQ, false, true);
+	}
+
+	/** {@code (char-equal ...)}: {@code char=} over the downcased code points. */
+	static void compileEqual(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPNE, true, false);
+	}
+
+	// Emits a variadic character comparison: true only when every compared pair --
+	// adjacent ones, or all of them with allPairs -- satisfies the relation. failOpcode
+	// is the branch to the nil result when a pair fails it. Every argument is evaluated
+	// and checked before any pair is compared, the lone argument of a one-argument call
+	// included, so a non-character is the comparison's CHARACTER type-error wherever it
+	// stands (.kb/error-handling.md, "One argument is still checked").
+	private static void compileChain(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int failOpcode,
+			boolean fold, boolean allPairs) {
 		List<LispVal> args = cons.toList();
-		int prev = ctx.allocTemp();
-		int cur = ctx.allocTemp();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmEmitHelper.unboxCodePoint(ctx);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(prev);
+		int n = args.size() - 1;
+		if (n < 1) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects at least one argument");
+		}
+		if (n == 1) {
+			pushCheckedCode(args.get(1), ctx, className, fold);
+			ctx.emit(Opcode.POP);
+			JvmEmitHelper.compileTrue(ctx);
+			return;
+		}
 		List<Integer> failBranches = new ArrayList<>();
-		for (int i = 2; i < args.size(); i++) {
-			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			JvmEmitHelper.unboxCodePoint(ctx);
-			ctx.emit(Opcode.ISTORE);
-			ctx.emit(cur);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(prev);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(cur);
+		if (n == 2) {
+			pushCheckedCode(args.get(1), ctx, className, fold);
+			pushCheckedCode(args.get(2), ctx, className, fold);
 			failBranches.add(ctx.code.size());
 			ctx.emit(failOpcode);
 			ctx.emitU2(0);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(cur);
-			ctx.emit(Opcode.ISTORE);
-			ctx.emit(prev);
+		}
+		else {
+			int[] codes = new int[n];
+			for (int i = 0; i < n; i++) {
+				pushCheckedCode(args.get(i + 1), ctx, className, fold);
+				codes[i] = ctx.allocTemp();
+				ctx.emit(Opcode.ISTORE);
+				ctx.emit(codes[i]);
+			}
+			for (int i = 0; i + 1 < n; i++) {
+				for (int j = i + 1; j < (allPairs ? n : i + 2); j++) {
+					ctx.emit(Opcode.ILOAD);
+					ctx.emit(codes[i]);
+					ctx.emit(Opcode.ILOAD);
+					ctx.emit(codes[j]);
+					failBranches.add(ctx.code.size());
+					ctx.emit(failOpcode);
+					ctx.emitU2(0);
+				}
+			}
 		}
 		JvmEmitHelper.compileTrue(ctx);
 		int gotoEnd = ctx.code.size();
@@ -369,6 +414,24 @@ final class JvmCharCompiler {
 		}
 		ctx.emit(Opcode.ACONST_NULL);
 		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+	}
+
+	// Pushes the int code point of a comparison's argument -- downcased with fold -- a
+	// literal's as the constant it is; any other through _ckChr, under the comparison's
+	// wrapper, so a non-character is its named type-error rather than a failed cast.
+	private static void pushCheckedCode(LispVal arg, JvmLispCompiler.Ctx ctx, String className, boolean fold) {
+		if (arg instanceof LispChar c) {
+			JvmEmitHelper.emitIntConst(ctx, fold ? Character.toLowerCase(c.codePoint()) : c.codePoint());
+			return;
+		}
+		JvmExprCompiler.compileExpr(arg, ctx, className);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_CHR).index());
+		JvmEmitHelper.unboxCodePoint(ctx);
+		if (fold) {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I").index());
+		}
 	}
 
 }

@@ -110,7 +110,8 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
-			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE -> {
+			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+					LispNames.CHAR_NE -> {
 				if (args.size() != 3) {
 					return false;
 				}

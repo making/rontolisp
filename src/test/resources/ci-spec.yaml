@@ -18157,6 +18157,39 @@ cases:
       ("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
       ("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
       ("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+  # .kb/error-handling.md, "One argument is still checked": a one-argument call
+  # compares or folds nothing, but its argument is checked like any other -- the
+  # arithmetic and bitwise ones used to answer it unexamined on the compiled
+  # backends, the orderings and min/max on all four, and char= trapped on wasm.
+  - name: one-argument-calls-check-their-argument
+    source: |
+      (defun ci-one (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-one-x* 'ci-one-sym)
+      (defvar *ci-one-c* 1)
+      (print (ci-one (lambda () (+ *ci-one-x*))))
+      (print (ci-one (lambda () (logior *ci-one-x*))))
+      (print (ci-one (lambda () (< *ci-one-x*))))
+      (print (ci-one (lambda () (/= *ci-one-x*))))
+      (print (ci-one (lambda () (max #c(1 2)))))
+      (print (ci-one (lambda () (funcall #'min *ci-one-x*))))
+      (print (ci-one (lambda () (char= *ci-one-c*))))
+      (print (ci-one (lambda () (char> #\b *ci-one-c*))))
+      (print (ci-one (lambda () (char-lessp *ci-one-c*))))
+      (print (list (+ 5) (< 3) (min -0.0) (char= #\a) (char/= #\a #\b #\a) (char-equal #\A #\a)))
+    expected: |
+      ("+: The value CI-ONE-SYM is not of type NUMBER" NUMBER)
+      ("LOGIOR: The value CI-ONE-SYM is not of type INTEGER" INTEGER)
+      ("<: The value CI-ONE-SYM is not of type REAL" REAL)
+      ("=: The value CI-ONE-SYM is not of type NUMBER" NUMBER)
+      ("MAX: The value #C(1 2) is not of type REAL" REAL)
+      ("MIN: The value CI-ONE-SYM is not of type REAL" REAL)
+      ("CHAR=: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR>: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR-LESSP: The value 1 is not of type CHARACTER" CHARACTER)
+      (5 T -0.0 T NIL T)
   # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
   # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
   # an integer or float limit <= 0 is out of range either way. Both report under

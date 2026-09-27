@@ -208,6 +208,15 @@ public final class OperandTypes {
 			"MAPHASH", "HASH-TABLE-COUNT", "HASH-TABLE-SIZE", "HASH-TABLE-TEST", "HASH-TABLE-REHASH-SIZE",
 			"HASH-TABLE-REHASH-THRESHOLD");
 
+	/**
+	 * The character comparisons, fixed-typed {@code CHARACTER}: every argument is
+	 * checked, the single one of a one-argument call included. Last in the table, after
+	 * the hash-table accessors.
+	 */
+	private static final List<String> CHARACTER_OPERATORS = List.of("CHAR=", "CHAR/=", "CHAR<", "CHAR>", "CHAR<=",
+			"CHAR>=", "CHAR-EQUAL", "CHAR-NOT-EQUAL", "CHAR-LESSP", "CHAR-GREATERP", "CHAR-NOT-GREATERP",
+			"CHAR-NOT-LESSP");
+
 	/** The operators whose sites can land {@code ARRAY}. */
 	private static final List<String> ARRAY_OPERATORS = List.of("AREF", SETF_AREF, "ROW-MAJOR-AREF",
 			SETF_ROW_MAJOR_AREF, "ARRAY-DIMENSIONS");
@@ -263,6 +272,10 @@ public final class OperandTypes {
 			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
+		for (String op : CHARACTER_OPERATORS) {
+			OPERATOR_TYPES.put(op, Kind.CHARACTER.name());
+			order.add(op);
+		}
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -299,8 +312,8 @@ public final class OperandTypes {
 	 * The type a named operator accepts.
 	 * @param operator the operator's symbol name
 	 * @return {@code NUMBER}, {@code REAL}, {@code INTEGER}, {@code RATIONAL},
-	 * {@code SEQUENCE} or {@code CONS}, {@link #FUNNEL_TYPE} for a funnel-typed operator,
-	 * or null for an operator that is not named
+	 * {@code SEQUENCE}, {@code CONS} or {@code CHARACTER}, {@link #FUNNEL_TYPE} for a
+	 * funnel-typed operator, or null for an operator that is not named
 	 */
 	public static @Nullable String operatorType(String operator) {
 		return OPERATOR_TYPES.get(operator);
