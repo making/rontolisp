@@ -15,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -12947,6 +12948,13 @@ class WasmLispCompilerIntegrationTest {
 					(8 #(1 2 0) #(A B C) #(8 9))
 					("bc" :EOF T "WV-SYM")
 					(T -1)""");
+	}
+
+	// The WASM twin of JvmLispCompilerTest#compileAndRunHelperWrappedFunctionValues.
+	@Test
+	void helperWrappedFunctionValues() throws Exception {
+		assertThat(runFrontendProgramWithDir(HelperWrapperFixture.PROGRAM, false))
+			.isEqualTo(HelperWrapperFixture.EXPECTED);
 	}
 
 	// The JVM twin: JvmLispCompilerTest

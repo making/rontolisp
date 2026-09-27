@@ -5051,6 +5051,18 @@ public final class LispNames {
 	 */
 	public static final String WRITE_TO_STRING = "WRITE-TO-STRING";
 
+	/**
+	 * The {@code %write-to-string-keyed} prelude defun: {@code #'write-to-string}'s
+	 * keyword arm on the compile paths, {@code (%write-to-string-keyed object keys)}
+	 * binding the printer variables the runtime keyword list names around one print --
+	 * what the call-position lowering
+	 * ({@code LispMacroExpander.expandWriteToStringKeywords}) does with a literal tail.
+	 * Spliced only for a program that can pass a function value of
+	 * {@code write-to-string} more than one argument; the wrapper calls it only where it
+	 * was spliced ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String WRITE_TO_STRING_KEYED_INTERNAL = "%WRITE-TO-STRING-KEYED";
+
 	/** The {@code with-output-to-string} macro (collect output into a string). */
 	public static final String WITH_OUTPUT_TO_STRING = "WITH-OUTPUT-TO-STRING";
 
@@ -8382,12 +8394,11 @@ public final class LispNames {
 	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
 
 	/**
-	 * The {@code make-broadcast-stream} built-in function. With NO component streams it
-	 * returns a discarding sink (a fresh string output stream nobody reads); with
-	 * components it returns a {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream
-	 * that fans every write out to each component in order. The two shapes are chosen by
-	 * the ARGUMENT COUNT at expansion time, which is why a component-less call keeps
-	 * emitting exactly the bytes it always did.
+	 * The {@code make-broadcast-stream} built-in function: a
+	 * {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream that fans every write
+	 * out to each component in order -- with no components, one over the empty list,
+	 * whose writes are dropped. The call position expands to it and the function value
+	 * calls it ({@code BuiltinFunctionWrappers}).
 	 */
 	public static final String MAKE_BROADCAST_STREAM = "MAKE-BROADCAST-STREAM";
 

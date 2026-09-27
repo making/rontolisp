@@ -48,13 +48,10 @@ public final class BuiltinCallArity {
 	 * name, minimum, maximum. Each is the operator's standard lambda list (the CLHS);
 	 * keyword arguments count as unbounded (the keyword-tail check is the operator's
 	 * own). A row that is not wider than its wrapper fails the class's initialization, so
-	 * widening a wrapper retires its row here. What is left:
-	 * {@code make-broadcast-stream} with components, {@code read-from-string}'s optional
-	 * and keyword arguments and {@code write-to-string}'s keywords, which their function
-	 * values do not forward yet.
+	 * widening a wrapper retires its row here. What is left: {@code read-from-string}'s
+	 * optional and keyword arguments, which its function value does not forward yet.
 	 */
-	private static final Object[][] STANDARD_WIDER = { { LispNames.MAKE_BROADCAST_STREAM, 0, UNBOUNDED },
-			{ LispNames.READ_FROM_STRING, 1, UNBOUNDED }, { LispNames.WRITE_TO_STRING, 1, UNBOUNDED } };
+	private static final Object[][] STANDARD_WIDER = { { LispNames.READ_FROM_STRING, 1, UNBOUNDED } };
 
 	private static final Map<String, Shape> SHAPES = buildShapes();
 

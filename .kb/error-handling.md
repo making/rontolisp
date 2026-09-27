@@ -1687,7 +1687,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   `builtin-function-values-take-the-standard-lambda-list`, `BuiltinCallArityTest`,
   `LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
   `...BuiltinFunctionValuesTakeTheStandardLambdaList`. `STANDARD_WIDER` had 43 rows; 24 went
-  with this, the 16 comparison and bitwise ones with the physical optionals (below); 3 remain.
+  with this, the 16 comparison and bitwise ones with the physical optionals (below), 2 with the
+  helper wrappers (below); 1 remains.
   What it took:
   - An absent keyword gets the value the lowering would have used (`make-string`'s space,
     `adjust-array`'s old fill pointer and `%array-default-element`); where presence itself picks
@@ -1725,11 +1726,20 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     twice; the first cut (supplied-p arms and a `reduce` over the rest list, three copies) put
     +10.9 KB on the eval-carrying `(print (eval '(+ 1 2)))` class, this shape +2.2 KB
     (355,090 -> 357,283; Preview 1 262,266 -> 262,201).
-  - Also still rows: `make-broadcast-stream` with components (the wrapper is the sink, and the
-    Gray class it would need is gated on the program's own spelling), `read-from-string`'s
-    optional and keyword arguments (unsupported in call position too; `.todo/214`) and
-    `write-to-string`'s keywords (they bind printer variables whose runtime is gated on a scan
-    that cannot see a wrapper).
+  - **A wrapper whose body calls a prelude helper** (2026-09-27): `#'make-broadcast-stream`
+    takes its components (`(&rest c)` -> `%make-broadcast-stream`, the Gray class) and
+    `#'write-to-string` its keywords (`(a &rest kw)` -> `%write-to-string-keyed`, which binds the
+    printer variables and rejects a bad tail with the call position's text). What each helper
+    needs -- the CLOS instance gates and the Gray rewrite; the printer `defvar`s and the
+    renderer -- is decided from the program's spelling before any wrapper exists, so the
+    prelude splices the helper from that spelling (the designator counts) and the compile paths
+    inject the full wrapper exactly where the helper is in the program, the old narrow one
+    elsewhere (`BuiltinFunctionWrappers.HELPER_WRAPPERS`): the two cannot disagree. Pinned by
+    ci-spec `helper-wrapped-function-values` and the `HelperWrapperFixture` trio
+    (`...HelperWrappedFunctionValues`). Sizes: [gray-streams.md](gray-streams.md),
+    [pretty-printer.md](pretty-printer.md).
+  - Still a row: `read-from-string`'s optional and keyword arguments (unsupported in call
+    position too; `.todo/214`).
   - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
     255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
     registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,

@@ -34556,6 +34556,18 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The {@code write-to-string} keywords, keyword name to the printer variable each
+	 * binds, in the order a rejected tail's report lists them: the table the
+	 * call-position lowering ({@link #expandWriteToStringKeywords}) and the function
+	 * value's runtime twin ({@code LispPreludeLibrary}'s {@code %write-to-string-keyed})
+	 * are both built from.
+	 * @return the keyword-to-variable map
+	 */
+	public static java.util.Map<String, String> writeToStringKeywordVariables() {
+		return java.util.Collections.unmodifiableMap(WRITE_KEYWORD_VARS);
+	}
+
+	/**
 	 * Whether the program can observe a non-default printer-control variable
 	 * ({@link #PRINT_CONTROL_VARS}): it MENTIONS one anywhere, or calls
 	 * {@code write-to-string} with a keyword that binds one (that call becomes a

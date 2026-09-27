@@ -58,11 +58,10 @@ class BuiltinCallArityTest {
 
 	@Test
 	void theStandardLambdaListWidensAWrapperThatIsNarrowerThanItsOperator() {
-		// #'write-to-string does not forward its keywords yet; (write-to-string x :base
-		// 2)
-		// is legal in call position.
-		assertThat(wrapperShape(lambdaList(LispNames.WRITE_TO_STRING))).isEqualTo(new BuiltinCallArity.Shape(1, 1));
-		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.WRITE_TO_STRING, 3)).isNull();
+		// #'read-from-string does not forward its optional and keyword arguments yet;
+		// (read-from-string s nil :eof :start 1) is legal in call position.
+		assertThat(wrapperShape(lambdaList(LispNames.READ_FROM_STRING))).isEqualTo(new BuiltinCallArity.Shape(1, 1));
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.READ_FROM_STRING, 5)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 3)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 4))
 			.isEqualTo("GETHASH expects at most 3 arguments, got 4");
@@ -79,6 +78,13 @@ class BuiltinCallArityTest {
 		assertThat(wrapperShape(lambdaList(LispNames.ADJUST_ARRAY)))
 			.isEqualTo(new BuiltinCallArity.Shape(2, BuiltinCallArity.UNBOUNDED));
 		assertThat(wrapperShape(lambdaList(LispNames.READ_CHAR_NO_HANG))).isEqualTo(new BuiltinCallArity.Shape(0, 4));
+		// The two whose value calls a prelude helper: the components, the keyword tail.
+		assertThat(wrapperShape(lambdaList(LispNames.MAKE_BROADCAST_STREAM)))
+			.isEqualTo(new BuiltinCallArity.Shape(0, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.WRITE_TO_STRING)))
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.WRITE_TO_STRING, 0))
+			.isEqualTo("WRITE-TO-STRING expects at least 1 argument, got 0");
 	}
 
 	private static LispVal lambdaList(String name) {

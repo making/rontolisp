@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -5164,6 +5165,17 @@ class JvmLispCompilerTest {
 					(8 #(1 2 0) #(A B C) #(8 9))
 					("bc" :EOF T "WV-SYM")
 					(T -1)""");
+	}
+
+	// #'make-broadcast-stream builds the Gray broadcast stream and #'write-to-string
+	// binds the printer variables its runtime keyword tail names, through the CLI's
+	// front end (the prelude entries each wrapper calls are spliced there). The
+	// interpreter twin is LispEvaluatorTest#helperWrappedFunctionValues.
+	@Test
+	void compileAndRunHelperWrappedFunctionValues() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HelperWrapperFixture.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HelperWrapperFixture.EXPECTED);
 	}
 
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a

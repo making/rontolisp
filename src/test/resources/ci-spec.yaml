@@ -18791,6 +18791,41 @@ cases:
       ("bc" :EOF T "WV-SYM")
       (T T -1 5 0 5 3 3 -3 NIL (1 2))
 
+  # The two function values that call a prelude helper: #'make-broadcast-stream builds
+  # the Gray broadcast stream the call position builds (components or none), and
+  # #'write-to-string binds the printer variables its runtime keyword tail names,
+  # rejecting a bad tail with the call position's report.
+  - name: helper-wrapped-function-values
+    source: |
+      (defun ci-hw-call (f &rest a) (apply f a))
+      (defun ci-hw-report (thunk)
+        (handler-case (funcall thunk) (program-error (e) (princ-to-string e))))
+      (let* ((a (make-string-output-stream))
+             (b (make-string-output-stream))
+             (s (ci-hw-call #'make-broadcast-stream a b)))
+        (format s "hi~a" 1)
+        (write-string "!" s)
+        (print (list (get-output-stream-string a) (get-output-stream-string b)
+                     (length (broadcast-stream-streams s)) (typep s 'broadcast-stream))))
+      (let ((s (funcall 'make-broadcast-stream)))
+        (write-string "dropped" s)
+        (print (list (typep s 'broadcast-stream) (broadcast-stream-streams s) (file-length s))))
+      (print (list (ci-hw-call #'write-to-string 10 :base 2) (ci-hw-call #'write-to-string 10 :base 16 :radix t)
+                   (ci-hw-call #'write-to-string '(a b c d) :length 2 :case :downcase)
+                   (ci-hw-call #'write-to-string "s" :escape nil) (ci-hw-call #'write-to-string "s")
+                   (ci-hw-call #'write-to-string 5 :bogus 1 :allow-other-keys t)
+                   (mapcar #'write-to-string '(1 x "y"))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string 10 :bogus 2))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string 10 :base))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string))))
+    expected: |
+      ("hi1!" "hi1!" 2 T)
+      (T NIL 0)
+      ("1010" "#xA" "(a b ...)" "s" "\"s\"" "5" ("1" "X" "\"y\""))
+      "WRITE-TO-STRING expects keyword arguments :ESCAPE/:READABLY/:PRETTY/:CIRCLE/:RIGHT-MARGIN/:MISER-WIDTH/:LINES/:PPRINT-DISPATCH/:LENGTH/:LEVEL/:BASE/:RADIX/:CASE/:GENSYM/:ARRAY, got: :BOGUS"
+      "WRITE-TO-STRING expects a value after :BASE"
+      "WRITE-TO-STRING expects at least 1 argument, got 0"
+
   # An optional argument travels as a parameter of its own on every call path
   # (LambdaLists.toNative): direct, a function value at each arity, a literal apply
   # aligned and not, a computed apply, eval, an inline lambda -- a missing one is the

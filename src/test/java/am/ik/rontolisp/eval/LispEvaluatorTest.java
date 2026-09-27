@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
@@ -19495,6 +19496,17 @@ class LispEvaluatorTest {
 					(8 #(1 2 0) #(A B C) #(8 9))
 					("bc" :EOF T "WV-SYM")
 					(T -1)""");
+	}
+
+	// #'make-broadcast-stream is the catalog wrapper over the prelude broadcast stream
+	// (it was a Java sink refusing components), and #'write-to-string's keyword tail
+	// binds the printer variables. The compile-path twins are
+	// JvmLispCompilerTest#compileAndRunHelperWrappedFunctionValues and
+	// WasmLispCompilerIntegrationTest#helperWrappedFunctionValues.
+	@Test
+	void helperWrappedFunctionValues() {
+		assertThat(printedLines(HelperWrapperFixture.PROGRAM)).isEqualTo(HelperWrapperFixture.EXPECTED);
+		assertThat(eval("(list (fboundp 'make-broadcast-stream) (fboundp 'elt))").print()).isEqualTo("(T T)");
 	}
 
 	@Test

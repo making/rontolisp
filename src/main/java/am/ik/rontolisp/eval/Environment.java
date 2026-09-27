@@ -5412,8 +5412,11 @@ public final class Environment implements Scope {
 			emitTo.accept(text, dest);
 			return str;
 		}));
+		// (object &key ...): the keyword tail never reaches here -- the evaluator wraps
+		// this function (LispEvaluator.wrapPrintCaseOperator) and lowers a tail as the
+		// call position does -- so only the missing object is this body's to report.
 		env.defineFunction(LispNames.WRITE_TO_STRING, new LispFunction(LispNames.WRITE_TO_STRING, args -> {
-			requireArgCount(LispNames.WRITE_TO_STRING, args, 1);
+			requireMinArgCount(LispNames.WRITE_TO_STRING, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
 		// String streams: internal helpers behind with-output-to-string /
@@ -5481,20 +5484,6 @@ public final class Environment implements Scope {
 					streams.put(handle, new RontoStringInputStream(bounded));
 					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
-		// Lite: with no component streams a broadcast stream is a discarding sink -- a
-		// fresh string output stream nobody ever reads. A CALL with components never
-		// reaches here (LispEvaluator expands it, like the compile paths, into the Gray
-		// %make-broadcast-stream); this definition survives so #'make-broadcast-stream is
-		// still a first-class value, and that value is the sink shape only.
-		env.defineFunction(LispNames.MAKE_BROADCAST_STREAM, new LispFunction(LispNames.MAKE_BROADCAST_STREAM, args -> {
-			if (!args.isEmpty()) {
-				throw new LispEvalException(
-						LispNames.MAKE_BROADCAST_STREAM + " supports the zero-argument (sink) form only as a value");
-			}
-			long handle = nextStreamHandle.getAndIncrement();
-			streams.put(handle, new StringWriter());
-			return streamValue(handle, LispLayout.Kinds.STRING_OUTPUT);
-		}));
 		// file-position: REAL for the three position-bearing streams -- the buffered
 		// served-request body (a real byte index, what lets circular-streams rewind a
 		// body lack-request already parsed) and a BINARY FILE stream, whose position

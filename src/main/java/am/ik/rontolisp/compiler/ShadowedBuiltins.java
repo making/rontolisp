@@ -114,7 +114,7 @@ public final class ShadowedBuiltins {
 			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO, LispNames.NOTANY, LispNames.NOTEVERY,
 			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.COPY_READTABLE, LispNames.READTABLE_CASE,
 			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE,
-			LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET);
+			LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET, LispNames.MAKE_BROADCAST_STREAM);
 
 	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;
 

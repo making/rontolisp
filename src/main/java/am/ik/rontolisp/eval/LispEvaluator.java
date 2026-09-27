@@ -2187,8 +2187,13 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
 			}
 			String name = sym.name();
+			// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until
+			// its
+			// first #' resolution evaluates the wrapper (resolveFunction), and is a
+			// function all the same.
 			boolean bound = SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name);
+					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
+					|| BuiltinFunctionWrappers.names().contains(name);
 			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// fmakunbound: drop the global function binding AND any user macro of the same
@@ -7370,10 +7375,9 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
 			// use, so every broadcast stream -- with components or without -- is the
-			// Gray class on every backend from one definition. The Java built-in
-			// below stays only so #'make-broadcast-stream remains a value; it keeps
-			// the old sink shape (a zero-component broadcast as a VALUE is still
-			// the discarding sink -- .kb/read-load-streams.md).
+			// Gray class on every backend from one definition. #'make-broadcast-stream
+			// is the catalog wrapper (BuiltinFunctionWrappers), which calls the same
+			// prelude entry.
 			case LispNames.MAKE_BROADCAST_STREAM:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeBroadcastStream);
 			case LispNames.PROG2:

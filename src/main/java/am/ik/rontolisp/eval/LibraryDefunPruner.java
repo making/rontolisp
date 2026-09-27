@@ -263,11 +263,12 @@ public final class LibraryDefunPruner {
 			}
 		}
 		// %make-broadcast-stream is reached from a call the expression compilers
-		// SYNTHESIZE
-		// (LispMacroExpander.expandMakeBroadcastStream's multi-argument branch), so the
-		// reference this walk looks for does not exist yet. Root it on the same surface
-		// form LispPreludeLibrary selects it by, or the tree-shaker drops the very entry
-		// that pass just spliced.
+		// SYNTHESIZE (LispMacroExpander.expandMakeBroadcastStream) and from the
+		// #'make-broadcast-stream wrapper they inject, so the reference this walk looks
+		// for does not exist yet; %write-to-string-keyed is reached from the
+		// #'write-to-string wrapper alone. Root each on the same surface form
+		// LispPreludeLibrary selects it by, or the tree-shaker drops the very entry that
+		// pass just spliced.
 		// uiop:with-temporary-file's two expansion callees are the same case: the macro
 		// expands inside the expression compilers, after this walk.
 		// %stream-target is the same case twice over: both compile-path stream seams
@@ -418,7 +419,7 @@ public final class LibraryDefunPruner {
 			LispNames.WIDE_READ_BYTE_INTERNAL, LispNames.WIDE_WRITE_BYTE_INTERNAL, LispNames.WIDE_ELEMENTS_INTERNAL,
 			LispNames.WIDE_POSITION_OCTETS_INTERNAL, LispNames.CHARACTER_STREAM_P_INTERNAL,
 			LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL, LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL,
-			LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL);
+			LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL, LispNames.WRITE_TO_STRING_KEYED_INTERNAL);
 
 	/**
 	 * Roots every synthesized-call entry whose surface fact the forms kept SO FAR show,

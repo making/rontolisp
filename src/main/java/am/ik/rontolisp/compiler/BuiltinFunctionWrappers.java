@@ -538,10 +538,63 @@ public final class BuiltinFunctionWrappers {
 		List<LispVal> wrappers = new ArrayList<>();
 		for (WrapperDef def : WRAPPER_DEFS) {
 			if (!userDefinedNames.contains(def.name) && !excludedNames.contains(def.name)) {
-				wrappers.add(def.toSetqLambda());
+				HelperWrapper helper = HELPER_WRAPPERS.get(def.name);
+				WrapperDef chosen = helper != null && !userDefinedNames.contains(helper.helper()) ? helper.narrow()
+						: def;
+				wrappers.add(chosen.toSetqLambda());
 			}
 		}
 		return wrappers;
+	}
+
+	/**
+	 * A catalog wrapper whose body calls a PRELUDE defun, and the narrower function the
+	 * compile paths inject where that defun was not spliced.
+	 *
+	 * <p>
+	 * The prelude pass decides what to splice from the program's own spelling, before any
+	 * wrapper exists, and so do the scans that gate what the defun needs (the CLOS
+	 * instance gates and the Gray rewrite for {@code %make-broadcast-stream}; the printer
+	 * variables' {@code defvar}s and renderer for {@code %write-to-string-keyed}, which
+	 * name them). The wrapper therefore takes its full shape exactly where the defun is
+	 * in the program -- one fact, read after the splice, so the two cannot disagree --
+	 * and otherwise the narrow one, reachable only through a designator the surface does
+	 * not show ({@code eval}, a symbol built at run time). The interpreter, which loads
+	 * prelude entries on first call, always has the full shape ({@link #lambdaFor}), as
+	 * {@link BuiltinCallArity} does.
+	 *
+	 * @param helper the prelude defun the full body calls
+	 * @param narrow the wrapper injected without it
+	 */
+	private record HelperWrapper(String helper, WrapperDef narrow) {
+	}
+
+	/**
+	 * {@code #'make-broadcast-stream} is the Gray broadcast stream where its entry is
+	 * spliced -- which the prelude does for any program naming the operator -- and the
+	 * discarding sink otherwise. {@code #'write-to-string} binds the printer variables
+	 * its keyword tail names where {@code %write-to-string-keyed} is spliced -- a program
+	 * that can hand the value more than one argument -- and is the one-argument
+	 * {@code prin1-to-string} alias otherwise.
+	 */
+	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map.of(LispNames.MAKE_BROADCAST_STREAM,
+			new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
+					new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
+							List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
+			LispNames.WRITE_TO_STRING,
+			new HelperWrapper(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, new WrapperDef(LispNames.WRITE_TO_STRING,
+					List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a")))));
+
+	/**
+	 * {@code #'write-to-string}: {@code (lambda (a &rest kw) (if kw
+	 * (%write-to-string-keyed a kw) (prin1-to-string a)))} -- a keyword tail binds the
+	 * printer variables around the print, as the call-position lowering does with a
+	 * literal one.
+	 */
+	private static WrapperDef writeToStringWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"),
+				call(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, "a", "kw"), call(LispNames.PRIN1_TO_STRING, "a")));
+		return new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 
 	private static final String DEFAULT_TRUE = "=t";
@@ -2345,12 +2398,10 @@ public final class BuiltinFunctionWrappers {
 			// resolves to the real definition.
 			unary(LispNames.SLEEP), unaryOptionalSecond(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH),
 			unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
-			// make-broadcast-stream as a VALUE stays the discarding sink: the call
-			// position expands to the Gray class, but this body is injected into
-			// every program (ungated) and must not pull the broadcast prelude entry
-			// along -- the interpreter's Java built-in answers the same sink.
-			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
-					List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL))),
+			// make-broadcast-stream: the Gray broadcast stream the call position
+			// builds, over the components as they arrive (HELPER_WRAPPERS).
+			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(LispNames.LAMBDA_REST, "c"),
+					List.of(call(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, "c"))),
 			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
 			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
 			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
@@ -2482,9 +2533,9 @@ public final class BuiltinFunctionWrappers {
 			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"),
 					List.of(call(LispNames.VALUES_LIST, "r"))),
 			// write-string: write-line's (string &optional stream &key start end).
-			// write-to-string is a prin1-to-string alias
-			optionalStreamBounded(LispNames.WRITE_STRING),
-			new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"), List.of(call(LispNames.PRIN1_TO_STRING, "a"))),
+			// write-to-string: a prin1-to-string alias without keywords, the printer
+			// variables bound around it with them (HELPER_WRAPPERS).
+			optionalStreamBounded(LispNames.WRITE_STRING), writeToStringWrapper(),
 			// symbol runtime API: the pure string<->symbol converters get plain
 			// wrappers. find-symbol folds at compile time (literal-only, like
 			// symbol-function) and boundp/fboundp need the eval runtime, which is only

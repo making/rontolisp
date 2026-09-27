@@ -10,6 +10,7 @@ import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispPackageException;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -3862,6 +3863,11 @@ public final class LispPreludeLibrary {
 				                  stream))
 				  object)
 				""");
+		// #'write-to-string's keyword arm on the compile paths: the call-position
+		// lowering binds the printer variables a LITERAL keyword tail names, and this is
+		// the same binding over a RUNTIME tail -- with the same report for a rejected
+		// one. Generated from the lowering's own keyword table.
+		SOURCES.put(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, writeToStringKeyed());
 		SOURCES.put(LispNames.PPRINT, """
 				(defun pprint (object &optional (stream *standard-output*))
 				  (terpri stream)
@@ -4335,19 +4341,26 @@ public final class LispPreludeLibrary {
 	}
 
 	/**
+	 * The printer-control entries whose selection also asks
+	 * {@link #referencedBySurfaceForm} over each PULLED entry's forms: the prelude
+	 * {@code write} binds every printer-control variable, so a {@code write} user carries
+	 * the renderer and its leaves.
+	 */
+	private static final java.util.Set<String> PRINT_CONTROL_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
+			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL);
+
+	/**
 	 * Whether an entry the program never NAMES is nonetheless reached from it.
 	 *
 	 * <p>
-	 * {@code %make-broadcast-stream} is the one such entry:
+	 * {@code %make-broadcast-stream} is the first such entry:
 	 * {@code LispMacroExpander.expandMakeBroadcastStream} produces the call, and that
-	 * runs inside the expression compilers -- long after this pass. Selection therefore
-	 * keys on the SURFACE form the expansion answers to, and on its ARITY, because the
-	 * two shapes lower differently: a component-less {@code (make-broadcast-stream)}
-	 * becomes the string-output-stream sink and must keep splicing nothing (it would
-	 * otherwise drag the Gray protocol into every program that merely wanted a discarding
-	 * sink -- and into every pipeline that runs this pass without
-	 * {@code GrayStreamsLibrary.process}), while a call WITH components becomes the Gray
-	 * stream defined here.
+	 * runs inside the expression compilers -- long after this pass -- and so does the
+	 * {@code #'make-broadcast-stream} wrapper, injected by the compilers after it too.
+	 * Selection therefore keys on the SURFACE name either answers to, in any position:
+	 * every broadcast stream, with components or without and called or taken as a value,
+	 * is the Gray stream defined here, and the wrapper calls the entry exactly where it
+	 * was spliced ({@code BuiltinFunctionWrappers}).
 	 *
 	 * <p>
 	 * {@code LibraryDefunPruner} consults the same predicate, for the same reason: the
@@ -4357,19 +4370,22 @@ public final class LispPreludeLibrary {
 	 * @param canonical whether the program resolved (see {@link #matches})
 	 * @return whether the entry must be spliced
 	 */
-	/**
-	 * The printer-control entries whose selection also asks
-	 * {@link #referencedBySurfaceForm} over each PULLED entry's forms: the prelude
-	 * {@code write} binds every printer-control variable, so a {@code write} user carries
-	 * the renderer and its leaves.
-	 */
-	private static final java.util.Set<String> PRINT_CONTROL_ENTRIES = java.util.Set.of(LispNames.PRINT_CASED_INTERNAL,
-			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL);
-
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
+		}
+		// %write-to-string-keyed: called only from the #'write-to-string wrapper the
+		// compilers inject after this pass, and needed only where that value can be
+		// handed a keyword -- which the surface shows as a designator spelling outside
+		// the exactly-one-argument positions (mayPassMoreThanOneArgument).
+		if (LispNames.WRITE_TO_STRING_KEYED_INTERNAL.equals(entry)) {
+			for (LispVal form : program) {
+				if (mayPassMoreThanOneArgument(form, LispNames.WRITE_TO_STRING, canonical)) {
+					return true;
+				}
+			}
+			return false;
 		}
 		// The composite-stream entries define a whole cluster -- the constructor, the
 		// accessors and the Gray class/methods. A program that names only an ACCESSOR
@@ -4717,6 +4733,64 @@ public final class LispPreludeLibrary {
 		}
 	}
 
+	/**
+	 * Whether the form spells {@code name} as a function designator ({@code #'name} or
+	 * {@code 'name}) anywhere but a position that calls it with exactly ONE argument:
+	 * {@code (funcall D x)}, {@code (mapcar D l)} and its five siblings over one list,
+	 * {@code (map type D s)} over one sequence. Every other spelling -- a value stored,
+	 * passed, applied, a {@code 'name} inside quoted data -- counts, so the answer errs
+	 * toward true; a false answer is a program whose every call of the value passes one
+	 * argument, where a one-argument wrapper behaves identically.
+	 * @param form the form to scan
+	 * @param name the operator name
+	 * @param canonical whether the program resolved (see {@link #matches})
+	 * @return whether some spelling may be called with more than one argument
+	 */
+	static boolean mayPassMoreThanOneArgument(LispVal form, String name, boolean canonical) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (isDesignatorOf(cons, name, canonical)) {
+			return true;
+		}
+		int oneArgument = cons.car() instanceof LispSymbol head && cons.isProperList()
+				? oneArgumentDesignatorIndex(head.name(), cons.toList().size(), canonical) : -1;
+		int index = 0;
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			if (!(index == oneArgument && cell.car() instanceof LispCons designator
+					&& isDesignatorOf(designator, name, canonical))
+					&& mayPassMoreThanOneArgument(cell.car(), name, canonical)) {
+				return true;
+			}
+			rest = cell.cdr();
+			index++;
+		}
+		return false;
+	}
+
+	/** Whether the cons is {@code (function name)} or {@code (quote name)}. */
+	private static boolean isDesignatorOf(LispCons cons, String name, boolean canonical) {
+		return cons.car() instanceof LispSymbol op
+				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+				&& arg.cdr() instanceof LispNil && matches(sym.name(), name, canonical);
+	}
+
+	/**
+	 * The element index of the function argument a call of {@code head} with {@code size}
+	 * elements invokes with exactly one argument, or -1.
+	 */
+	private static int oneArgumentDesignatorIndex(String head, int size, boolean canonical) {
+		if (size == 3 && (matches(head, LispNames.FUNCALL, canonical) || matches(head, LispNames.MAPCAR, canonical)
+				|| matches(head, LispNames.MAPC, canonical) || matches(head, LispNames.MAPCAN, canonical)
+				|| matches(head, LispNames.MAPLIST, canonical) || matches(head, LispNames.MAPL, canonical)
+				|| matches(head, LispNames.MAPCON, canonical))) {
+			return 1;
+		}
+		return size == 4 && matches(head, LispNames.MAP, canonical) ? 2 : -1;
+	}
+
 	private static boolean referencesName(List<LispVal> program, String name, boolean canonical) {
 		for (LispVal form : program) {
 			if (referencesName(form, name, canonical)) {
@@ -4757,6 +4831,73 @@ public final class LispPreludeLibrary {
 	private static String member(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * The source of {@code (%write-to-string-keyed object keys)}: {@code write-to-string}
+	 * with the keyword tail {@code keys} arriving at run time, as it does through
+	 * {@code #'write-to-string} ({@code BuiltinFunctionWrappers}). It judges the tail by
+	 * the rule and the text of the call-position check
+	 * ({@code LispMacroExpander.keywordTailProblem}: the leftmost
+	 * {@code :allow-other-keys} pair decides, an unknown indicator is reported before a
+	 * missing value), binds every printer variable -- to the supplied value or to its own
+	 * -- and prints as the call-position lowering
+	 * ({@code LispMacroExpander.expandWriteToStringKeywords}) does: a tail naming
+	 * {@code :escape} or {@code :readably} picks the conversion from the two variables,
+	 * any other the one-argument primitive. Built from
+	 * {@code LispMacroExpander.writeToStringKeywordVariables()}, so a keyword added there
+	 * reaches the function value too.
+	 * @return the defun source
+	 */
+	private static String writeToStringKeyed() {
+		java.util.Map<String, String> keywords = am.ik.rontolisp.macro.LispMacroExpander
+			.writeToStringKeywordVariables();
+		String known = String.join(" ", keywords.keySet());
+		String allowed = String.join("/", keywords.keySet());
+		StringBuilder bindings = new StringBuilder();
+		for (Map.Entry<String, String> entry : keywords.entrySet()) {
+			bindings.append("\n\t\t\t(")
+				.append(entry.getValue())
+				.append(" (getf %wtk-keys ")
+				.append(entry.getKey())
+				.append(' ')
+				.append(entry.getValue())
+				.append("))");
+		}
+		return """
+				(defun %write-to-string-keyed (%wtk-object %wtk-keys)
+				  (let ((%wtk-allow nil) (%wtk-picks nil))
+				    (do ((%wtk-c %wtk-keys (cddr %wtk-c)))
+				        ((or (atom %wtk-c) (atom (cdr %wtk-c))))
+				      (when (eq (car %wtk-c) :allow-other-keys)
+				        (setq %wtk-allow (if (cadr %wtk-c) t nil))
+				        (return nil)))
+				    (do ((%wtk-c %wtk-keys (cddr %wtk-c)))
+				        ((atom %wtk-c))
+				      (let ((%wtk-bad (cond ((not (or %wtk-allow
+				                                      (member (car %wtk-c) '(:allow-other-keys @KNOWN@))))
+				                             "@NAME@ expects keyword arguments @ALLOWED@, got: ")
+				                            ((atom (cdr %wtk-c)) "@NAME@ expects a value after ")
+				                            (t nil))))
+				        (when %wtk-bad
+				          (%program-error
+				           (concatenate 'string %wtk-bad
+				                        (let ((*print-case* :upcase) (*print-length* nil)
+				                              (*print-level* nil) (*print-gensym* t)
+				                              (*print-base* 10) (*print-radix* nil))
+				                          (prin1-to-string (car %wtk-c)))))))
+				      (when (member (car %wtk-c) '(:escape :readably))
+				        (setq %wtk-picks t)))
+				    (let (@BINDINGS@)
+				      (if %wtk-picks
+				          (if (or *print-escape* *print-readably*)
+				              (prin1-to-string %wtk-object)
+				              (princ-to-string %wtk-object))
+				          (write-to-string %wtk-object)))))
+				""".replace("@KNOWN@", known)
+			.replace("@ALLOWED@", allowed)
+			.replace("@NAME@", LispNames.WRITE_TO_STRING)
+			.replace("@BINDINGS@", bindings.toString().strip());
 	}
 
 	/**
