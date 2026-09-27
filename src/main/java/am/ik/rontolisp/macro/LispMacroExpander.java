@@ -22735,8 +22735,11 @@ public final class LispMacroExpander {
 		return listToCons(defun);
 	}
 
-	/** The dispatcher's rest parameter of a variadic generic function. */
-	private static final String GF_REST_VAR = "%gf-rest";
+	/**
+	 * The dispatcher's rest parameter of a variadic generic function, also the tail
+	 * parameter of the compile paths' built-in forwarder ({@code ShadowedBuiltins}).
+	 */
+	public static final String GF_REST_VAR = "%gf-rest";
 
 	/**
 	 * The internal name a built-in is stashed under when a program defines a method on
@@ -22773,7 +22776,8 @@ public final class LispMacroExpander {
 	 * built-in stays the generic's default method), but emitted under
 	 * {@link #shadowedDispatcherName} -- under the original name the defun would be dead,
 	 * because the expression compilers lower that name in call position unconditionally.
-	 * The fallback name is bound by {@link #builtinForwarderDefun} on these paths.
+	 * The fallback name is bound by {@code ShadowedBuiltins}' forwarder defun on these
+	 * paths.
 	 * @param genericName the generic-function name (any spelling)
 	 * @param closRegistry the registry holding the generic and the class ancestor sets
 	 * @return the renamed dispatcher defun
@@ -22784,62 +22788,6 @@ public final class LispMacroExpander {
 		LispCons nameCell = (LispCons) defun.cdr();
 		return new LispCons(defun.car(),
 				new LispCons(new LispSymbol(shadowedDispatcherName(genericName)), nameCell.cdr()));
-	}
-
-	/**
-	 * The compile-path binding of {@link #builtinDefaultMethodName}: where the
-	 * interpreter stashes the Java-backed {@code LispFunction} it found in the global
-	 * environment, the compilers have no function VALUE to stash -- but they still lower
-	 * the original name in call position. So the stash becomes a forwarder defun,
-	 * {@code (defun %<generic>--builtin (p1..pn [&rest %gf-rest]) (<generic> p1..pn))}:
-	 * its body spells the ORIGINAL built-in call, which the expression compilers lower,
-	 * and the walker that rewrites the program's call sites onto the dispatcher must skip
-	 * this defun (rewriting it would recurse through the dispatcher forever -- the
-	 * {@code GrayStreamsLibrary.DISPATCH_DEFUNS} rule). A variadic generic's
-	 * {@code &rest} tail is deliberately NOT forwarded: the lite built-ins ignore their
-	 * keyword tails anyway (the lowered {@code close} strips a literal {@code :abort} the
-	 * same way), and forwarding a runtime tail would need {@code apply} over a
-	 * first-class value of the original name, which not every lowered built-in has.
-	 * @param genericName the generic-function name (any spelling)
-	 * @param closRegistry the registry holding the generic (for the parameter names)
-	 * @return the forwarder defun
-	 */
-	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry) {
-		return builtinForwarderDefun(genericName, closRegistry, genericName);
-	}
-
-	/**
-	 * As {@link #builtinForwarderDefun(String, ClosRegistry)}, but spelling
-	 * {@code targetName} in the body's call position instead of the generic's own name --
-	 * for a backend whose pre-pass has already redirected the built-in onto a dispatch
-	 * defun of its own ({@code WasmSocketsRewrite}'s {@code rontolisp::%io-close}): the
-	 * fall-through must reach THAT defun, or its bookkeeping (the socket table) silently
-	 * diverges.
-	 * @param genericName the generic-function name (any spelling)
-	 * @param closRegistry the registry holding the generic (for the parameter names)
-	 * @param targetName the function name the forwarder body calls
-	 * @return the forwarder defun
-	 */
-	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry, String targetName) {
-		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
-		if (generic == null) {
-			throw new IllegalArgumentException("Unknown generic function: " + genericName);
-		}
-		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
-		List<LispVal> defun = new java.util.ArrayList<>();
-		defun.add(new LispSymbol(LispNames.DEFUN));
-		defun.add(new LispSymbol(builtinDefaultMethodName(genericName)));
-		List<LispVal> defunParams = new java.util.ArrayList<>(params);
-		if (generic.variadic()) {
-			defunParams.add(new LispSymbol("&REST"));
-			defunParams.add(new LispSymbol(GF_REST_VAR));
-		}
-		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
-		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(targetName));
-		call.addAll(params);
-		defun.add(listToCons(call));
-		return listToCons(defun);
 	}
 
 	/**
@@ -33818,7 +33766,7 @@ public final class LispMacroExpander {
 	 */
 	public static @org.jspecify.annotations.Nullable LispVal stripCloseAbort(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 4 && parts.get(2) instanceof LispSymbol kw && ":ABORT".equals(kw.name())) {
+		if (parts.size() == 4 && parts.get(2) instanceof LispSymbol kw && LispNames.ABORT_KEYWORD.equals(kw.name())) {
 			return listToCons(List.of(parts.get(0), parts.get(1)));
 		}
 		return null;

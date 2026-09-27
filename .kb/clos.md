@@ -222,8 +222,9 @@ dies with "No applicable method: CLOSE on INTEGER".
   spliced dispatcher defun is dead. Per name in the COMPUTED set: replace the dead dispatcher
   (found by structural equality against a regenerated 2-arg dispatcher, so a user defun of the
   same name is never mistaken for it) with the interpreter's body renamed `%<name>--dispatch`;
-  bind `%<name>--builtin` to a FORWARDER defun of the original built-in call (`&rest` tail
-  dropped); rewrite call sites and `#'name` references onto the dispatcher. The walker skips
+  bind `%<name>--builtin` to a FORWARDER defun of the original built-in call
+  (`ShadowedBuiltins.forwarderDefun`); rewrite call sites and `#'name` references onto the
+  dispatcher. The walker skips
   quoted data, `defmacro`/`macrolet` bodies, the generated defuns themselves (the Gray
   `DISPATCH_DEFUNS` rule — rewriting the forwarder's fallback would recurse) and the
   non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/`handler-case`, and
@@ -231,6 +232,23 @@ dies with "No applicable method: CLOSE on INTEGER".
   `gethash` was rewritten to an unknown `%gethash--dispatch` place and failed the compile). When
   `close` is shadowed, `with-open-file`/`with-open-stream`/`with-*-to-string` are pre-expanded
   (`unwindProtect=true`) — side effect: such a WASM module is always in EH mode.
+- **The forwarder takes the whole tail** (2026-09-27; it used to drop the `&rest` tail, so a
+  methoded `floor` lost every divisor: `(floor 7 2)` was `(7 0)` on the JVM and wasm). A
+  variadic generic's forwarder cases over the tail's length into one DIRECT lowered call per
+  count the built-in's `BuiltinCallArity` shape accepts (`(floor p)`, `(floor p (car r))`);
+  past the positional counts an unbounded built-in is `(apply #'<name> p... r)` -- its
+  function-value wrapper, which re-extracts keywords the lowering needs as literals
+  (`write-line`'s `:start`/`:end`); `close`'s `(:abort v)` is checked at run time and dropped;
+  every other count is `(%program-error (%string-concat "<OP> expects ..., got " count))`, a
+  run-time message so no static warning fires for a count no call site passes. A backend alias
+  (`%io-write-line`) is called only for a count inside its `WasmSocketsRewrite.ARITIES` range
+  (`ShadowedBuiltins.BuiltinAlias`), as the pre-pass redirects only those. Pinned by
+  `MethodedBuiltinTailFixture` on three backends and
+  `ShadowedBuiltinsTest.everyForwarderCallsItsBuiltinWithACountTheCallShapeAccepts` (every
+  name x 0..4 required parameters). Residual: a count the built-in rejects through the
+  dispatcher reports the SHAPE's text (`FLOOR expects at most 2 arguments, got 3`), where the
+  interpreter applies its `LispFunction`, whose own text can differ (`1 to 2`) -- the
+  function-value message divergence `.kb/error-handling.md` already records.
 - **The name set**: `BuiltinFunctionWrappers.names()` minus `%`-internals, minus
   `NOT_SHADOWABLE` (signal operators plus `make-instance`/`class-of`), minus
   `EXPANSION_LOWERED`, plus `LOWERED_WITHOUT_WRAPPER` (`close` first). **Pinned by

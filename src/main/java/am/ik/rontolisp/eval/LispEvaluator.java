@@ -1890,8 +1890,8 @@ public final class LispEvaluator {
 		// ignored, like the built-in's.
 		LispVal baseClose = this.globalEnv.lookupFunction(LispNames.CLOSE);
 		this.globalEnv.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
-			boolean closeable = args.size() == 1
-					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name()));
+			boolean closeable = args.size() == 1 || (args.size() == 3 && args.get(1) instanceof LispSymbol kw
+					&& LispNames.ABORT_KEYWORD.equals(kw.name()));
 			if (closeable && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
 				return applyGrayDispatch(GRAY_CLOSE_DISPATCH, List.of(args.get(0)));
 			}

@@ -6145,10 +6145,14 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
 			// (close stream) or (close stream :abort expr) -- every rontolisp close is
 			// effectively aborting (no buffered data survives it), so :abort is
-			// accepted and ignored.
-			if (!(args.size() == 1
-					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name())))) {
-				requireArgCount(LispNames.CLOSE, args, 1);
+			// accepted and ignored. A wrong count reports by the call shape, as a
+			// direct call does; a wrong keyword in the pair's place, as one argument.
+			if (!(args.size() == 1 || (args.size() == 3 && args.get(1) instanceof LispSymbol kw
+					&& LispNames.ABORT_KEYWORD.equals(kw.name())))) {
+				String message = am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(LispNames.CLOSE,
+						args.size());
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						message != null ? message : ClosRegistry.arityMessage(LispNames.CLOSE, 1, false, args.size()));
 			}
 			if (isSynonymStream(args.get(0))) {
 				// Closing a synonym stream closes the SYNONYM, not the stream it

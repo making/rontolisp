@@ -614,8 +614,8 @@ public final class GrayStreamsLibrary {
 			// dispatch does too -- but V still evaluates, and AFTER the stream, which is
 			// what the let/progn preserves.
 			if (CLOSE_DISPATCH.equals(unaryStreamHelper) && parts.size() == 4
-					&& parts.get(2) instanceof am.ik.rontolisp.LispSymbol abortKw && ":ABORT".equals(abortKw.name())
-					&& streamArgMayBeInstance(parts.get(1))) {
+					&& parts.get(2) instanceof am.ik.rontolisp.LispSymbol abortKw
+					&& LispNames.ABORT_KEYWORD.equals(abortKw.name()) && streamArgMayBeInstance(parts.get(1))) {
 				am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_close_stream");
 				LispVal dispatch = listOf(dispatchSymbol(CLOSE_DISPATCH, ctx), temp);
 				return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),

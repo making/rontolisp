@@ -9,7 +9,10 @@ import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
@@ -159,12 +162,12 @@ public final class ShadowedBuiltins {
 	 * (the socket table) in the loop -- instead of the raw built-in.
 	 * @param program the top-level forms, after {@code expandTopLevelDefinitions}
 	 * @param closRegistry the completed registry (classes, generics, methods)
-	 * @param builtinAliases backend dispatch-defun name -&gt; the native built-in name it
+	 * @param builtinAliases backend dispatch-defun name -&gt; the native built-in it
 	 * stands for (empty when the backend has no such pre-pass)
 	 * @return the program with the shadowed built-ins dispatched
 	 */
 	public static List<LispVal> process(List<LispVal> program, ClosRegistry closRegistry,
-			Map<String, String> builtinAliases) {
+			Map<String, BuiltinAlias> builtinAliases) {
 		Map<String, String> shadowed = new LinkedHashMap<>();
 		for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
 			if (loweredBuiltinFunctions().contains(generic.name())) {
@@ -177,12 +180,12 @@ public final class ShadowedBuiltins {
 		// The walker matches the alias spellings alongside the native ones, and the
 		// forwarder targets the alias where one exists.
 		Map<String, String> callHeads = new LinkedHashMap<>(shadowed);
-		Map<String, String> fallbackTargets = new LinkedHashMap<>();
-		for (Map.Entry<String, String> alias : builtinAliases.entrySet()) {
-			String dispatch = shadowed.get(alias.getValue());
+		Map<String, Map.Entry<String, BuiltinAlias>> fallbackAliases = new LinkedHashMap<>();
+		for (Map.Entry<String, BuiltinAlias> alias : builtinAliases.entrySet()) {
+			String dispatch = shadowed.get(alias.getValue().builtin());
 			if (dispatch != null) {
 				callHeads.put(alias.getKey(), dispatch);
-				fallbackTargets.put(alias.getValue(), alias.getKey());
+				fallbackAliases.put(alias.getValue().builtin(), alias);
 			}
 		}
 		// The dead dispatchers are identified structurally: regenerating the 2-arg
@@ -204,8 +207,7 @@ public final class ShadowedBuiltins {
 				}
 			}
 			if (replaced != null) {
-				out.add(LispMacroExpander.builtinForwarderDefun(replaced, closRegistry,
-						fallbackTargets.getOrDefault(replaced, replaced)));
+				out.add(forwarderDefun(replaced, closRegistry, fallbackAliases.get(replaced)));
 				out.add(LispMacroExpander.shadowedBuiltinDispatcher(replaced, closRegistry));
 			}
 			else {
@@ -213,6 +215,172 @@ public final class ShadowedBuiltins {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * A backend dispatch defun standing in for a built-in ({@code WasmSocketsRewrite}'s
+	 * {@code rontolisp::%io-close} for {@code close}), with the argument counts it takes:
+	 * the pre-pass redirects only a call inside that range, and so does the forwarder.
+	 *
+	 * @param builtin the native built-in name
+	 * @param min the fewest arguments the dispatch defun takes
+	 * @param max the most arguments the dispatch defun takes
+	 */
+	public record BuiltinAlias(String builtin, int min, int max) {
+
+		boolean accepts(int count) {
+			return count >= this.min && count <= this.max;
+		}
+
+	}
+
+	/**
+	 * The compile-path binding of the fallback name
+	 * ({@link LispMacroExpander#builtinDefaultMethodName}): where the interpreter stashes
+	 * the Java-backed {@code LispFunction} it found, the compilers have no function VALUE
+	 * to stash, so the stash becomes a forwarder defun whose body spells the ORIGINAL
+	 * built-in call, which the expression compilers lower. The walker that rewrites the
+	 * program's call sites onto the dispatcher skips it (rewriting it would recurse
+	 * through the dispatcher forever -- the {@code GrayStreamsLibrary.DISPATCH_DEFUNS}
+	 * rule).
+	 *
+	 * <p>
+	 * A non-variadic generic forwards its parameters: {@code (T p1..pn)}. A variadic one
+	 * receives the dispatcher's whole tail and forwards all of it, as the interpreter
+	 * applies the stashed built-in to every argument: a case over the tail's length picks
+	 * a direct lowered call per argument count the built-in's call shape
+	 * ({@link BuiltinCallArity}) accepts -- {@code (floor x)} or {@code (floor x d)} --
+	 * and past the positional counts a keyword or {@code &rest} tail is applied to the
+	 * built-in's function value ({@code (apply #'write-line s st kw)}), which re-extracts
+	 * the keywords the lowering needs as literals. {@code close}'s {@code :abort v} is
+	 * checked here for the same reason and dropped, as the lowering drops it. Any other
+	 * count signals the built-in's wrong-count {@code program-error}, its message built
+	 * at run time so the compilers' static-program-error warning never fires for a count
+	 * no call site passes.
+	 * @param genericName the generic-function name, a lowered built-in's
+	 * @param closRegistry the registry holding the generic (for the parameter names)
+	 * @param alias the backend dispatch defun the forwarder calls in place of the
+	 * built-in for a count inside its range (name -&gt; alias), or null
+	 * @return the forwarder defun
+	 */
+	static LispVal forwarderDefun(String genericName, ClosRegistry closRegistry,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
+		if (generic == null) {
+			throw new IllegalArgumentException("Unknown generic function: " + genericName);
+		}
+		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
+		LispVal lambdaList = LispNil.INSTANCE;
+		LispVal body;
+		if (generic.variadic()) {
+			LispSymbol rest = new LispSymbol(LispMacroExpander.GF_REST_VAR);
+			List<LispVal> withRest = new ArrayList<>(params);
+			withRest.add(new LispSymbol(LispNames.LAMBDA_REST));
+			withRest.add(rest);
+			lambdaList = consList(withRest);
+			body = tailDispatch(genericName, params, rest, alias);
+		}
+		else {
+			if (!params.isEmpty()) {
+				lambdaList = consList(params);
+			}
+			body = call(genericName, params, new LispInteger(params.size()), alias);
+		}
+		return listOf(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispMacroExpander.builtinDefaultMethodName(genericName)), lambdaList, body);
+	}
+
+	// The case over the tail's length: (if tail<k> deeper arm<k>) per positional count
+	// k, innermost the count past every positional one.
+	private static LispVal tailDispatch(String builtin, List<LispVal> params, LispSymbol rest,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(builtin);
+		if (shape == null) {
+			throw new IllegalStateException(builtin + " has no call shape to forward a tail by");
+		}
+		int n = params.size();
+		LispVal length = listOf(new LispSymbol(LispNames.LENGTH), rest);
+		LispVal count = n == 0 ? length : listOf(new LispSymbol(LispNames.ADD), new LispInteger(n), length);
+		String operator = BuiltinCallArity.operator(builtin);
+		LispVal expr;
+		int last;
+		if (shape.max() == BuiltinCallArity.UNBOUNDED) {
+			if (!BuiltinFunctionWrappers.names().contains(builtin)) {
+				throw new IllegalStateException(builtin + " takes a tail but has no function value to apply");
+			}
+			List<LispVal> apply = new ArrayList<>();
+			apply.add(new LispSymbol(LispNames.APPLY));
+			apply.add(listOf(new LispSymbol(LispNames.FUNCTION), new LispSymbol(builtin)));
+			apply.addAll(params);
+			apply.add(rest);
+			expr = consList(apply);
+			last = Math.max(0, positionalCount(builtin) - n);
+		}
+		else {
+			int beyond = Math.max(n, shape.max() + 1);
+			expr = wrongCount(shape.message(operator, beyond), beyond, count);
+			last = shape.max() - n;
+		}
+		for (int k = last; k >= 0; k--) {
+			List<LispVal> args = new ArrayList<>(params);
+			LispVal cell = rest;
+			for (int i = 0; i < k; i++) {
+				args.add(listOf(new LispSymbol(LispNames.CAR), cell));
+				cell = listOf(new LispSymbol(LispNames.CDR), cell);
+			}
+			LispVal arm = shape.accepts(n + k) ? call(builtin, args, count, alias)
+					: wrongCount(shape.message(operator, n + k), n + k, count);
+			expr = listOf(new LispSymbol(LispNames.IF), cell, expr, arm);
+		}
+		return expr;
+	}
+
+	// The built-in called with these argument forms: a direct lowered call, except that
+	// close's keyword position must hold :abort, which the lowering drops (it strips a
+	// LITERAL :abort only, so a run-time one is checked here).
+	private static LispVal call(String builtin, List<LispVal> args, LispVal count,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		if (LispNames.CLOSE.equals(builtin) && args.size() == 3) {
+			String message = ClosRegistry.arityMessage(LispNames.CLOSE, 1, false, args.size());
+			return listOf(new LispSymbol(LispNames.IF),
+					listOf(new LispSymbol(LispNames.EQ_GENERAL), args.get(1), new LispSymbol(LispNames.ABORT_KEYWORD)),
+					call(builtin, args.subList(0, 1), count, alias), wrongCount(message, args.size(), count));
+		}
+		List<LispVal> call = new ArrayList<>(1 + args.size());
+		call.add(new LispSymbol(alias != null && alias.getValue().accepts(args.size()) ? alias.getKey() : builtin));
+		call.addAll(args);
+		return consList(call);
+	}
+
+	// (%program-error (%string-concat "<OP> expects ..., got " (%prin1-piece count))):
+	// the report for sampleCount with the count computed at run time.
+	private static LispVal wrongCount(String sample, int sampleCount, LispVal count) {
+		String suffix = ClosRegistry.ARITY_MESSAGE_INFIX + sampleCount;
+		if (!sample.endsWith(suffix)) {
+			throw new IllegalStateException("Unexpected arity message shape: " + sample);
+		}
+		LispVal message = listOf(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(sample.substring(0, sample.length() - String.valueOf(sampleCount).length())),
+				listOf(new LispSymbol(LispNames.PRIN1_PIECE_INTERNAL), count));
+		return listOf(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
+	}
+
+	// The parameters of a wrapper's lambda list before its &rest: how many arguments an
+	// unbounded built-in takes positionally ((s &optional st &rest kw) is 2).
+	private static int positionalCount(String builtin) {
+		LispVal lambda = BuiltinFunctionWrappers.lambdaFor(builtin);
+		int count = 0;
+		if (lambda instanceof LispCons lambdaCons && lambdaCons.cdr() instanceof LispCons listCell) {
+			for (LispVal cell = listCell.car(); cell instanceof LispCons c; cell = c.cdr()) {
+				if (c.car() instanceof LispSymbol marker && LispNames.LAMBDA_REST.equals(marker.name())) {
+					break;
+				}
+				if (!(c.car() instanceof LispSymbol marker && LispNames.LAMBDA_OPTIONAL.equals(marker.name()))) {
+					count++;
+				}
+			}
+		}
+		return count;
 	}
 
 	/**
@@ -518,6 +686,10 @@ public final class ShadowedBuiltins {
 			rebuilt.add(i < keep ? parts.get(i) : rewrite(parts.get(i), shadowed, closeShadowed));
 		}
 		return LispCons.rebuiltList(cons, rebuilt);
+	}
+
+	private static LispVal consList(List<LispVal> items) {
+		return listOf(items.toArray(LispVal[]::new));
 	}
 
 	private static LispVal listOf(LispVal... items) {

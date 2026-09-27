@@ -4329,6 +4329,9 @@ public final class LispNames {
 	/** The {@code :end} keyword recognized by {@code parse-integer}. */
 	public static final String END_KEYWORD = ":END";
 
+	/** The {@code :abort} keyword {@code close} accepts and ignores. */
+	public static final String ABORT_KEYWORD = ":ABORT";
+
 	/** The {@code :start1} keyword recognized by {@code replace}. */
 	public static final String START1_KEYWORD = ":START1";
 

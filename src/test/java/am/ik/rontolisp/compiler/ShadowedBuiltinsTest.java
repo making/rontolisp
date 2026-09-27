@@ -7,9 +7,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.eval.Environment;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.reader.LispReader;
@@ -85,6 +89,72 @@ class ShadowedBuiltinsTest {
 		// fast-io silently loses the user methods on the compile paths again.
 		assertThat(ShadowedBuiltins.loweredBuiltinFunctions()).contains("CLOSE", "OPEN-STREAM-P", "INPUT-STREAM-P",
 				"OUTPUT-STREAM-P", "STREAM-ELEMENT-TYPE");
+	}
+
+	@Test
+	void aVariadicForwarderCallsTheBuiltinPerTailLength() {
+		assertThat(forwarder("FLOOR", 1, null).print()).isEqualTo("(DEFUN |%FLOOR--builtin| (P0 &REST |%gf-rest|) "
+				+ "(IF |%gf-rest| (IF (CDR |%gf-rest|) (%PROGRAM-ERROR (%STRING-CONCAT "
+				+ "\"FLOOR expects at most 2 arguments, got \" (%PRIN1-PIECE (+ 1 (LENGTH |%gf-rest|))))) "
+				+ "(FLOOR P0 (CAR |%gf-rest|))) (FLOOR P0)))");
+		// Past the positional counts a keyword tail goes through the function value; a
+		// backend alias is called only for a count inside its range.
+		assertThat(forwarder("WRITE-LINE", 1,
+				Map.entry("RONTOLISP::%IO-WRITE-LINE", new ShadowedBuiltins.BuiltinAlias("WRITE-LINE", 1, 2)))
+			.print())
+			.isEqualTo("(DEFUN |%WRITE-LINE--builtin| (P0 &REST |%gf-rest|) "
+					+ "(IF |%gf-rest| (IF (CDR |%gf-rest|) (APPLY #'WRITE-LINE P0 |%gf-rest|) "
+					+ "(RONTOLISP::%IO-WRITE-LINE P0 (CAR |%gf-rest|))) (RONTOLISP::%IO-WRITE-LINE P0)))");
+		// A non-variadic generic forwards its parameters, as before.
+		ClosRegistry registry = new ClosRegistry();
+		registry.registerGeneric(new ClosRegistry.GenericInfo("CAR", List.of("P0")));
+		assertThat(ShadowedBuiltins.forwarderDefun("CAR", registry, null).print())
+			.isEqualTo("(DEFUN |%CAR--builtin| (P0) (CAR P0))");
+	}
+
+	@Test
+	void everyForwarderCallsItsBuiltinWithACountTheCallShapeAccepts() {
+		// Whatever a generic requires, no arm of its forwarder is a direct call the call
+		// shape rejects (a compile-time warning and a certain error) or a literal
+		// %program-error (the same warning): each wrong count is a run-time report.
+		List<String> rejected = new ArrayList<>();
+		for (String name : ShadowedBuiltins.loweredBuiltinFunctions()) {
+			for (int required = 0; required <= 4; required++) {
+				LispVal body = ((LispCons) ((LispCons) ((LispCons) ((LispCons) forwarder(name, required, null)).cdr())
+					.cdr()).cdr()).car();
+				collectRejected(body, name, rejected);
+			}
+		}
+		assertThat(rejected).isEmpty();
+	}
+
+	private static LispVal forwarder(String name, int required,
+			Map.@org.jspecify.annotations.Nullable Entry<String, ShadowedBuiltins.BuiltinAlias> alias) {
+		List<String> params = new ArrayList<>();
+		for (int i = 0; i < required; i++) {
+			params.add("P" + i);
+		}
+		ClosRegistry registry = new ClosRegistry();
+		ClosRegistry.GenericInfo generic = new ClosRegistry.GenericInfo(name, params);
+		generic.markVariadic();
+		registry.registerGeneric(generic);
+		return ShadowedBuiltins.forwarderDefun(name, registry, alias);
+	}
+
+	private static void collectRejected(LispVal form, String name, List<String> rejected) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && head.name().equals(name)
+				&& BuiltinCallArity.wrongCountSignal(cons) != null) {
+			rejected.add(cons.print());
+		}
+		if (LispMacroExpander.staticProgramErrorMessage(cons) != null) {
+			rejected.add(cons.print());
+		}
+		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+			collectRejected(cell.car(), name, rejected);
+		}
 	}
 
 }

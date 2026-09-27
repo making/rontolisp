@@ -240,7 +240,9 @@ public final class BuiltinCallArity {
 	 * argument forms evaluated left to right, as the interpreter evaluates them before
 	 * the built-in rejects the count, then {@code (%program-error "message")} -- whose
 	 * literal message is what the compile paths' static warning reports
-	 * ({@link CompileWarnings#warnStaticProgramError}).
+	 * ({@link CompileWarnings#warnStaticProgramError}). A three-argument {@code close}
+	 * whose second argument is not the literal {@code :abort} is rejected as the
+	 * interpreter's implementation rejects it ({@code CLOSE expects 1 argument, got 3}).
 	 * @param call the call, a proper list headed by a symbol
 	 * @return the replacement form, or {@code null} when the count fits
 	 */
@@ -257,6 +259,14 @@ public final class BuiltinCallArity {
 			args.add(cell.car());
 		}
 		if (shape.accepts(args.size())) {
+			// close's pair is :abort v and nothing else: the lowerings strip a LITERAL
+			// :abort, and anything else in that position is the interpreter's
+			// implementation rejecting the count (a computed keyword included -- no
+			// lowering can take one).
+			if (LispNames.CLOSE.equals(head.name()) && args.size() == 3
+					&& !(args.get(1) instanceof LispSymbol keyword && LispNames.ABORT_KEYWORD.equals(keyword.name()))) {
+				return signalAfterArguments(call, args, ClosRegistry.arityMessage(LispNames.CLOSE, 1, false, 3));
+			}
 			return null;
 		}
 		return signalAfterArguments(call, args, shape.message(operator(head.name()), args.size()));

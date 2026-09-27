@@ -18,11 +18,12 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Each row is the counts the INTERPRETER's implementation accepts -- not the standard
- * lambda list where the two differ ({@code close} takes no {@code :abort}), because a
- * shape wider than the implementation would pass a count to a lowering that cannot take
- * it. Keyword arguments count as unbounded, the keyword-tail check staying the
- * operator's. A PAIRED row takes its minimum or its minimum plus one keyword/value pair
- * ({@code tls-connect}: 2 or 4), the one shape a lambda list cannot spell.
+ * lambda list where the two differ, because a shape wider than the implementation would
+ * pass a count to a lowering that cannot take it. Keyword arguments count as unbounded,
+ * the keyword-tail check staying the operator's. A PAIRED row takes its minimum or its
+ * minimum plus one keyword/value pair ({@code tls-connect}: 2 or 4; {@code close}: 1 or
+ * 3, the pair {@code :abort v}, whose keyword {@link BuiltinCallArity#wrongCountSignal}
+ * checks), the one shape a lambda list cannot spell.
  *
  * <p>
  * The report names the operator the way the interpreter's implementation always has: the
@@ -89,12 +90,11 @@ final class NativeCallShapes {
 		Map<String, Row> rows = new HashMap<>();
 		// COMMON-LISP functions.
 		for (String name : new String[] { LispNames.ARRAY_DIMENSIONS, LispNames.ARRAYP, LispNames.BOUNDP,
-				LispNames.CHAR_NAME, LispNames.CLOSE, LispNames.DELETE_PACKAGE, LispNames.EVAL, LispNames.FBOUNDP,
-				LispNames.FDEFINITION, LispNames.FMAKUNBOUND, LispNames.GET_OUTPUT_STREAM_STRING,
-				LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_SIZE,
-				LispNames.HASH_TABLE_TEST, LispNames.OPEN_STREAM_P, LispNames.PACKAGE_NICKNAMES,
-				LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PROVIDE, LispNames.RATIONALP, LispNames.SYMBOL_FUNCTION,
-				LispNames.SYMBOL_PACKAGE }) {
+				LispNames.CHAR_NAME, LispNames.DELETE_PACKAGE, LispNames.EVAL, LispNames.FBOUNDP, LispNames.FDEFINITION,
+				LispNames.FMAKUNBOUND, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.HASH_TABLE_REHASH_SIZE,
+				LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST,
+				LispNames.OPEN_STREAM_P, LispNames.PACKAGE_NICKNAMES, LispNames.PACKAGE_SHADOWING_SYMBOLS,
+				LispNames.PROVIDE, LispNames.RATIONALP, LispNames.SYMBOL_FUNCTION, LispNames.SYMBOL_PACKAGE }) {
 			add(rows, name, 1, 1);
 		}
 		for (String name : new String[] { LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
@@ -137,6 +137,7 @@ final class NativeCallShapes {
 		}
 		add(rows, rontolisp(LispNames.TLS_LISTEN), 3, 4);
 		add(rows, rontolisp(LispNames.TLS_LISTEN_PEM), 3, 4);
+		rows.put(LispNames.CLOSE, new Row(LispNames.CLOSE, 1, 3, true));
 		for (String member : new String[] { LispNames.TLS_CONNECT, LispNames.TLS_UPGRADE }) {
 			String name = rontolisp(member);
 			rows.put(name, new Row(name, 2, 4, true));

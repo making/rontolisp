@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch;
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.HelperWrapperFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
@@ -10244,6 +10245,29 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(MethodedBuiltinFixture.EXPECTED);
+	}
+
+	@Test
+	void aMethodedBuiltinTakesTheWholeTailWhenNoMethodApplies() {
+		// The stashed built-in is applied to every argument the dispatcher received.
+		// Pinned on all three backends, whose forwarder used to drop the tail.
+		assertThat(evalPrinting(MethodedBuiltinTailFixture.PROGRAM)).isEqualTo(MethodedBuiltinTailFixture.EXPECTED);
+	}
+
+	@Test
+	void closeTakesItsAbortPairInADirectCall() {
+		// (close s :abort t) was a wrong count once close had a call shape (1 argument).
+		assertThat(evalPrinting(MethodedBuiltinTailFixture.CLOSE_PROGRAM))
+			.isEqualTo(MethodedBuiltinTailFixture.CLOSE_EXPECTED);
+	}
+
+	private static String evalPrinting(String program) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
 	}
 
 	@Test

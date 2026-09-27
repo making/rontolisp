@@ -1767,11 +1767,18 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     `find-class`, `macroexpand`, the component's sockets.lisp `tcp-*`) said `Function expects ...`,
     the `&optional` surplus from inside the callee. Only `make-string-input-stream` and
     `make-synonym-stream` agreed.
-  - A row is the counts the INTERPRETER's implementation takes, not the standard lambda list
-    (`close` takes no `:abort`): a shape wider than the implementation would hand a lowering a
-    count it cannot take. Keywords count as unbounded (`load`, `make-package`); a PAIRED row
-    (`tls-connect`, `tls-upgrade`: 2 or 4, the surplus one option pair) is the one shape a lambda
-    list cannot spell. The interpreter's direct call now reports the shape's text, so a range says
+  - A row is the counts the INTERPRETER's implementation takes, not the standard lambda list: a
+    shape wider than the implementation would hand a lowering a count it cannot take. Keywords
+    count as unbounded (`load`, `make-package`); a PAIRED row (`tls-connect`, `tls-upgrade`: 2 or
+    4, the surplus one option pair; `close`: 1 or 3, `:abort v`) is the one shape a lambda list
+    cannot spell. `close` was listed as 1 on 2026-09-26 on the belief that the interpreter took
+    no `:abort`; it did, and so did every lowering (a LITERAL `:abort` is stripped), so
+    `(close s :abort t)` was a wrong count on all four until 2026-09-27. Its keyword is the one
+    a shape cannot check: `wrongCountSignal` rejects a 3-argument `close` whose second argument
+    is not the literal `:abort` (`CLOSE expects 1 argument, got 3`, the implementation's own
+    report); a COMPUTED keyword is rejected too, which the interpreter would take when it
+    evaluates to `:abort`. Pinned by `MethodedBuiltinTailFixture.CLOSE_PROGRAM` on three
+    backends. The interpreter's direct call now reports the shape's text, so a range says
     `at least` / `at most` where the implementation said `1 or 2` / `1 to 3` (its function value
     still does).
   - A library defun that implements a native built-in (`BuiltinCallArity.builtinShapedDefuns`:

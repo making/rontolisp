@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
@@ -147,19 +148,23 @@ final class WasmSocketsRewrite {
 	 * {@code rontolisp::%io-*} dispatch defun, so a user method on such a built-in name
 	 * must intercept THOSE heads -- and its dispatcher's fall-through must call the
 	 * {@code %io-*} defun (which keeps the socket table honest and falls back to the
-	 * {@code %...-raw} native aliases itself), never the raw built-in. Returns the
-	 * canonical qualified dispatch name -&gt; native built-in name map when the rewrite
-	 * fired, an empty map otherwise.
+	 * {@code %...-raw} native aliases itself), never the raw built-in -- for a count
+	 * inside the range this rewrite substitutes ({@link #ARITIES}); any other count stays
+	 * on the native built-in, as it does here. Returns the canonical qualified dispatch
+	 * name -&gt; native built-in and range map when the rewrite fired, an empty map
+	 * otherwise.
 	 * @param program the top-level forms, after {@link #rewrite}
-	 * @return qualified {@code %io-*} name -&gt; native name, or empty
+	 * @return qualified {@code %io-*} name -&gt; native name and range, or empty
 	 */
-	static Map<String, String> builtinDispatchAliases(List<LispVal> program) {
+	static Map<String, ShadowedBuiltins.BuiltinAlias> builtinDispatchAliases(List<LispVal> program) {
 		if (!spliced(program)) {
 			return Map.of();
 		}
-		Map<String, String> aliases = new java.util.HashMap<>();
+		Map<String, ShadowedBuiltins.BuiltinAlias> aliases = new java.util.HashMap<>();
 		for (Map.Entry<String, String> entry : SYNC_DISPATCH.entrySet()) {
-			aliases.put(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, entry.getValue()), entry.getKey());
+			int[] range = java.util.Objects.requireNonNull(ARITIES.get(entry.getKey()));
+			aliases.put(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, entry.getValue()),
+					new ShadowedBuiltins.BuiltinAlias(entry.getKey(), range[0], range[1]));
 		}
 		return Map.copyOf(aliases);
 	}
@@ -286,7 +291,7 @@ final class WasmSocketsRewrite {
 		// (close stream :abort expr) normalizes to (close stream) BEFORE the arity
 		// check, so an aborting close on a socket still reaches %io-close.
 		if (LispNames.CLOSE.equals(head) && parts.size() == 4 && parts.get(2) instanceof LispSymbol kw
-				&& ":ABORT".equals(kw.name())) {
+				&& LispNames.ABORT_KEYWORD.equals(kw.name())) {
 			parts = List.of(parts.get(0), parts.get(1));
 		}
 		// (write-char c [stream]) and a BOUNDED (write-string s stream :start a :end b)
