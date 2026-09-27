@@ -1697,6 +1697,40 @@ on wasm-GC even in EH mode.
   Pinned by `LispEvaluatorTest#functionValueArefAndArrayRowMajorIndexCheckRankAndBounds`,
   `JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds` and
   `WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds`.
+- **`elt` of a LIST past its end, or at a negative index, measured 2026-09-27**: unlike a
+  vector's `elt` (which already folds to `aref` and inherits the report above), the list arm is
+  `(nth idx seq)`, which answers `nil` past the end and reaches the list itself for a negative
+  index -- it never signals, unlike CL's `elt`. A Lisp-macro-level fix -- `LispMacroExpander`
+  expanding the list arm into a `do` that walks the list decrementing a copy of the index,
+  eagerly signalling `(error 'type-error ...)` when it runs out before reaching zero (the
+  steps-so-far being the list's own length, whether the index ran out because it was too large
+  or because it started negative) -- reads correctly on all four backends when `elt` is the
+  only thing in the program, but its blast radius is unbounded: `elt` is not a narrow operator
+  like `read-sequence` (whose few call sites are already `REFERENCE_GATED_FUNCTIONS`-gated) --
+  it is read by other library bodies the compiler injects UNCONDITIONALLY, invisible to
+  `mayCreateInstances`/`conditionNarrowing`/`WasmLispCompiler.usedLayoutTags`'s "scans the
+  source program, not the injected wrappers" blind spot (`BuiltinFunctionWrappers`'
+  `findFamily` wrapper for `#'find`/`#'find-if`/`#'find-if-not` reads its match with a bare
+  `(elt seq i)`, and unlike `AREF`/`ARRAY-ROW-MAJOR-INDEX` those three names are not
+  reference-gated -- their wrapper is spliced into EVERY compiled program). The eager signal
+  made even `(print 42)` -- a program naming neither `elt` nor `find` -- fail to compile on
+  wasm ("`%OBJ-NEW reached the compiler with no instance type emitted`": the gate that decides
+  whether a `type-error` layout exists never saw this site coming). Gating `elt` the same way
+  as `aref` only moves the hole: `LispPreludeLibrary`'s `sort`/`merge`/`search` bodies, the
+  `usocket`/`uiop-utility`/`tokenizers` library sources and `HostFetchLibrary`'s HTTP header
+  reader all read a general sequence with `(elt seq i)` too, each behind its OWN reachability
+  predicate that would need the same audit -- an unbounded, one-at-a-time discovery process
+  rather than a single fix. The architecture that does not have this hole is the one `aref`'s
+  own bound check already uses: a RAW host failure the interpreter/JVM/wasm each compile
+  directly (`Environment.subscriptValue`/`OperandTypeException.outOfRange`,
+  `JvmOperandTypeRuntime`'s `_oob`, `WasmOperandTypes`'s index arm), classified into a
+  `type-error` instance lazily -- only when a landing pad exists to catch it
+  (`rawFailureConditionClasses`) -- rather than an eager `(error ...)` every compiled site
+  carries whether it is ever reachable or not. Reproduced with a one-line
+  `System.err.println` at the `ELT` case in `WasmExprCompiler.compileOperator5` showing the
+  cons compiled from the `find` wrapper (`(ELT |seq| |i|)`) reaching the gate with no user
+  program anywhere near either operator. No code from this attempt was kept -- todo a59's plan
+  is rewritten around this measurement instead of forcing it through.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
