@@ -109,12 +109,11 @@ final class WasmFunctionCallCompiler {
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);
 			List<LispVal> args = cons.toList();
-			int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 			// A count the lambda list rules out is the interpreter's program-error when
 			// the call RUNS, its arguments evaluated first, with a compile-time warning
 			// (compiler/DefinedCallArity): the call may sit in a branch never taken or
 			// under a program-error handler.
-			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, required, fi.variadic());
+			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, fi.required(), fi.variadic());
 			if (wrongCount != null) {
 				WasmExprCompiler.compileExpr(wrongCount, ctx);
 				return;
@@ -122,37 +121,15 @@ final class WasmFunctionCallCompiler {
 			// Push null env (defun functions ignore it)
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
-			for (int i = 1; i <= required; i++) {
-				WasmExprCompiler.compileExpr(args.get(i), ctx);
+			// The arguments a parameter takes go straight onto the stack, the optionals
+			// not passed are the UNSUPPLIED marker, and only a surplus past the physical
+			// optionals is linked into the rest list (WasmPhysicalArgs).
+			List<Runnable> emitters = new java.util.ArrayList<>();
+			for (int i = 1; i < args.size(); i++) {
+				LispVal arg = args.get(i);
+				emitters.add(() -> WasmExprCompiler.compileExpr(arg, ctx));
 			}
-			if (fi.variadic()) {
-				// Evaluate the surplus arguments left to right into temps, then link
-				// them into a cons list passed as the trailing rest parameter.
-				List<Integer> extraSlots = new java.util.ArrayList<>();
-				for (int i = required + 1; i < args.size(); i++) {
-					WasmExprCompiler.compileExpr(args.get(i), ctx);
-					int s = ctx.allocTemp();
-					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(s);
-					extraSlots.add(s);
-				}
-				int restSlot = ctx.allocTemp();
-				ctx.writer.write(Instruction.REF_NULL);
-				ctx.writer.writeHeapType(Type.EQ.code());
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(restSlot);
-				for (int k = extraSlots.size() - 1; k >= 0; k--) {
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(restSlot);
-					WasmEmitHelper.emitNewCons(ctx);
-					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(restSlot);
-				}
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(restSlot);
-			}
+			WasmPhysicalArgs.emit(ctx, fi, emitters);
 			// Every compiled Lisp function answers one (ref null eq), so a tail call
 			// to any of them is a return_call from any of them.
 			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));

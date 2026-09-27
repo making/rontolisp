@@ -120,6 +120,20 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
+			case LispNames.SUPPLIED_P_INTERNAL -> {
+				if (args.size() != 2) {
+					return false;
+				}
+				// A physical optional's prologue test: the parameter is not the
+				// UNSUPPLIED marker (WasmPhysicalArgs).
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmPhysicalArgs.emitUnsupplied(ctx);
+				ctx.writer.write(Instruction.REF_EQ);
+				if (!negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
 			case LispNames.AND, LispNames.OR -> {
 				compileChain(args.subList(1, args.size()), LispNames.AND.equals(head.name()), ctx);
 				if (negated) {

@@ -75,6 +75,51 @@ final class JvmExprCompiler {
 	}
 
 	/**
+	 * {@code (%supplied-p param)} as a value: {@code t} unless the parameter holds the
+	 * UNSUPPLIED marker ({@link JvmPhysicalArgs}). The prologue's own test position --
+	 * {@code (if (%supplied-p p) p default)} -- branches on the reference comparison
+	 * directly ({@link #compileSuppliedPTest}).
+	 */
+	private static void compileSuppliedP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		int suppliedPos = compileSuppliedPTest(cons, ctx, className);
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, suppliedPos, ctx.code.size());
+		JvmEmitHelper.compileTrue(ctx);
+		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	/**
+	 * Emits {@code (%supplied-p param)}'s comparison and a branch taken when the
+	 * parameter holds an argument, falling through when it holds the UNSUPPLIED marker.
+	 * @param cons the {@code %supplied-p} form
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @return the position of the branch to patch
+	 */
+	static int compileSuppliedPTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileExpr(cons.toList().get(1), ctx, className);
+		JvmPhysicalArgs.emitUnsupplied(ctx, className);
+		int branchPos = ctx.code.size();
+		ctx.emit(Opcode.IF_ACMPNE);
+		ctx.emitU2(0);
+		return branchPos;
+	}
+
+	/**
+	 * Whether a form is {@code (%supplied-p param)}.
+	 * @param form the form
+	 * @return whether it is the supplied-p test
+	 */
+	static boolean isSuppliedP(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SUPPLIED_P_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
+				&& args.cdr() instanceof LispNil;
+	}
+
+	/**
 	 * {@code (%arity-missing-message required got)}: both counts are literals, answered
 	 * by the shared {@code _arityMissing} helper ({@link JvmAritySurplusRuntimeBuilder},
 	 * emitted unconditionally and shaken out when unused) -- no printer, no length walk.
@@ -1951,6 +1996,7 @@ final class JvmExprCompiler {
 			}
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
+			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);
 			case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 			case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 			case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

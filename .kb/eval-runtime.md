@@ -81,13 +81,14 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   operator ([error-handling.md](error-handling.md), "A wrong argument COUNT"). The registry's
   arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
   surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
-- **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): their wrappers
-  take `(a b &rest r)`, not `(a &rest r)`, since a sort predicate is a two-argument call and a
-  one-required wrapper would cons a rest list per comparison ([error-handling.md](error-handling.md),
-  "A built-in's function VALUE"), so the arm evaluates every argument and tests adjacent pairs
-  (every pair for `/=`) through the wrapper's two-argument call -- which is also what serves
-  `(eval '(< 1))`. Without it the first bullet would have turned the old
-  "extra arguments ignored" (`(< 1 3 2)` => T) into a count error. `(<)` reports `< expects at
+- **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): the arm
+  evaluates every argument and tests adjacent pairs (every pair for `/=`) through the
+  wrapper's two-argument call -- which is also what serves `(eval '(< 1))`. It was needed
+  while the wrappers took `(a b &rest r)`: the registry path would have reported their count.
+  They take `(a &optional b &rest r)` since 2026-09-26 ([error-handling.md](error-handling.md),
+  "A built-in's function VALUE"), so the arm is redundant (`.todo/a52`). Without it at the time,
+  the first bullet would have turned the old "extra arguments ignored" (`(< 1 3 2)` => T)
+  into a count error. `(<)` reports `< expects at
   least 1 argument` through `_arityChk` with the operator's shape; on wasm the shape carries the
   `<` wrapper's funcId when it is in the named set, and the call traps where the module reports
   no count (no EH landing pad).

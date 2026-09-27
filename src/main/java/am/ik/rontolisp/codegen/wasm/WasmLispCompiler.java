@@ -1140,6 +1140,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// APPENDED instead (extraCallArity), which moves nothing.
 	static final int MAX_CALLABLE_ARITY = 10;
 
+	static {
+		// A lambda list the flet/labels expansion desugars before the backend is known
+		// takes up to LambdaLists.MAX_PHYSICAL_PARAMS physical parameters, and this
+		// backend compiles every one it is handed as it is.
+		if (LambdaLists.MAX_PHYSICAL_PARAMS > MAX_CALLABLE_ARITY) {
+			throw new ExceptionInInitializerError("LambdaLists.MAX_PHYSICAL_PARAMS (" + LambdaLists.MAX_PHYSICAL_PARAMS
+					+ ") exceeds the WASM callable ceiling (" + MAX_CALLABLE_ARITY + ")");
+		}
+	}
+
 	// How far past MAX_CALLABLE_ARITY a call site may pull its own per-arity dispatcher
 	// in before the SPREAD dispatcher becomes the better answer. Evidence: across the 122
 	// systems of a populated Quicklisp cache (1,886 files) the widest funcall is uiop's
@@ -3372,7 +3382,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
-		program = LambdaLists.desugarProgram(program);
+		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
@@ -4040,7 +4050,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// private TYPE_CELL instance no user value can be ref.eq to; "shadow ==
 		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
 		// mark it, because nil IS null), always the LAST globals so every mode-gated
-		// index above keeps its value.
+		// index above keeps its value. The sentinel is also the UNSUPPLIED marker of a
+		// physical optional (WasmPhysicalArgs), and Ctx.tSymGlobalIndex() reads the t
+		// global as the one right before it.
 		int tSymGlobalIndex = Math.max(Math.max(reentryGuardGlobalIndex, reentrantTaskGlobalIndex), lastModeGlobalIndex)
 				+ 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
@@ -4213,7 +4225,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ "': the WASM backend " + "supports at most " + MAX_CALLABLE_ARITY + " parameters, got "
 						+ arity + " (bundle the extra arguments into a list)");
 			}
-			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, funcId,
+			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, defun.optionals, funcId,
 					TYPE_CALLABLE_BASE + arity, userFuncBase() + i));
 			if (Boolean.getBoolean("rontolisp.debug.functable")) {
 				// Profiling aid: map a perf "wasm[0]::function[N]" index back to its
@@ -4284,7 +4296,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (WasmFunctionInfo fi : functions.values()) {
 				if (fi.paramCount() <= MAX_CALLABLE_ARITY) {
 					if (fi.variadic()) {
-						for (int a = fi.paramCount() - 1; a <= MAX_CALLABLE_ARITY; a++) {
+						for (int a = fi.required(); a <= MAX_CALLABLE_ARITY; a++) {
 							indirectCallArities.add(a);
 						}
 					}
@@ -5146,6 +5158,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							"rontolisp:wasm-export names an unknown function (must be a top-level defun): "
 									+ decl.name());
 				}
+				if (target.variadic()) {
+					// Its physical parameters are no signature a host can fill: an
+					// optional is an argument or the UNSUPPLIED marker, the rest a list
+					// (the JVM backend's jvm-export refuses it with the same words).
+					throw new UnsupportedOperationException("rontolisp:wasm-export cannot export '" + decl.name()
+							+ "': its lambda list takes &optional/&rest/&key arguments, which have no fixed"
+							+ " host signature");
+				}
 				if (decl.paramTypes().size() != target.paramCount()) {
 					throw new UnsupportedOperationException("rontolisp:wasm-export arity mismatch for '" + decl.name()
 							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
@@ -5502,7 +5522,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+						rawSentinelGlobalIndex);
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -5526,7 +5547,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
 					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+					rawSentinelGlobalIndex);
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -5555,7 +5577,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+						rawSentinelGlobalIndex);
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -9519,17 +9542,31 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
-				lambdaParts.subList(2, lambdaParts.size()));
-		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS);
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
 	}
 
 	/**
 	 * A parsed defun. {@code paramNames} are the physical parameters (when
 	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
-	 * remaining arguments as a cons list).
+	 * remaining arguments as a cons list, and the {@code optionals} names before it are
+	 * physical optionals, {@link LambdaLists.NativeForm}).
 	 */
-	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, int optionals, List<LispVal> bodyExprs) {
+
+		/** A defun without physical optionals. */
+		DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+			this(name, paramNames, variadic, 0, bodyExprs);
+		}
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramNames.size() - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
 	}
 
 	/**
@@ -9547,10 +9584,28 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * Registry entry for a compiled function. {@code paramCount} is the physical WASM
 	 * parameter count (excluding the closure env); when {@code variadic}, the last
-	 * parameter is the rest list and the callable minimum is {@code paramCount - 1}
-	 * arguments.
+	 * parameter is the rest list, the {@code optionals} before it are physical optionals
+	 * (an argument or the UNSUPPLIED marker, {@link WasmPhysicalArgs}), and the callable
+	 * minimum is {@link #required()} arguments.
 	 */
-	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int funcId, int typeIndex, int funcIndex) {
+	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int optionals, int funcId, int typeIndex,
+			int funcIndex) {
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramCount - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
+		/**
+		 * {@return the parameters before the rest list} -- the required ones and the
+		 * physical optionals
+		 */
+		int positional() {
+			return this.paramCount - (this.variadic ? 1 : 0);
+		}
+
 	}
 
 	/**
@@ -9558,13 +9613,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * entry/resume half ({@code WasmAsyncEmit}), whose body was compiled out of line;
 	 * Pass 2c then emits those bytes verbatim.
 	 */
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
+			List<LispVal> bodyExprs, List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+
+		LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
+				List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+			this(funcId, methodName, paramNames, variadic, 0, bodyExprs, freeVarNames, funcIndex, precompiled);
+		}
 
 		LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
 				List<String> freeVarNames, int funcIndex) {
-			this(funcId, methodName, paramNames, variadic, bodyExprs, freeVarNames, funcIndex, null);
+			this(funcId, methodName, paramNames, variadic, 0, bodyExprs, freeVarNames, funcIndex, null);
 		}
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramNames.size() - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
 	}
 
 	/**
@@ -9884,9 +9952,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * The module global holding the raw-local sentinel (a private TYPE_CELL
 		 * instance): a shadow slot ref.eq to it means "the raw i64 is authoritative". A
 		 * null shadow cannot carry that meaning -- nil IS null, and a local holding nil
-		 * must read as nil, not as the stale raw slot.
+		 * must read as nil, not as the stale raw slot. It is also the UNSUPPLIED marker a
+		 * caller passes for a physical optional it has no argument for
+		 * ({@link WasmPhysicalArgs}); the global right before it caches the symbol
+		 * {@code t} ({@link #tSymGlobalIndex()}).
 		 */
 		int rawSentinelGlobalIndex = -1;
+
+		/**
+		 * {@return the module global caching the symbol t} -- a mutable
+		 * {@code (ref null eq)} that {@code _t_sym} fills on first use, allocated right
+		 * before the raw-local sentinel's
+		 */
+		int tSymGlobalIndex() {
+			return this.rawSentinelGlobalIndex - 1;
+		}
 
 		/**
 		 * Lexical variables in scope whose ARRAY representation a declaration (or an

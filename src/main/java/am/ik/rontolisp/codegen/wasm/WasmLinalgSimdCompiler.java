@@ -212,8 +212,7 @@ final class WasmLinalgSimdCompiler {
 		int offset = ext != null && extendedCall ? ext.offset() : Objects.requireNonNull(KERNELS.get(member));
 		String qualified = qualifiedName(member);
 		WasmLispCompiler.WasmFunctionInfo defun = ctx.functions.get(qualified);
-		if (defun == null || (supplied != arity && !extendedCall)
-				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
+		if (defun == null || (supplied != arity && !extendedCall) || defun.required() != arity
 				|| (extendedCall && !defun.variadic())) {
 			// No spliced linalg.lisp to fall back to, a call whose option forms no kernel
 			// handles, or a defun whose required count no longer matches: the ordinary
@@ -259,30 +258,17 @@ final class WasmLinalgSimdCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		for (int i = 0; i < arity; i++) {
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(slots[i]);
-		}
-		if (defun.variadic()) {
-			// A defun with an &optional/&rest lambda list takes a trailing rest
-			// parameter: the surplus locals are linked into a cons list through the
-			// result local (an empty rest list is a null reference).
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(result);
-			for (int k = supplied - 1; k >= arity; k--) {
+		// The defun's physical shape over the same locals: an optional the call does not
+		// pass is the UNSUPPLIED marker, and only what is past the physical optionals
+		// rides the rest list (WasmPhysicalArgs).
+		List<Runnable> locals = new ArrayList<>();
+		for (int slot : slots) {
+			locals.add(() -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(slots[k]);
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(result);
-				WasmEmitHelper.emitNewCons(ctx);
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(result);
-			}
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(result);
+				ctx.writer.writeUnsignedLeb128(slot);
+			});
 		}
+		WasmPhysicalArgs.emit(ctx, defun, locals);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(defun.funcIndex());
 		ctx.writer.write(Instruction.SET_LOCAL);

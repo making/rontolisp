@@ -36,17 +36,18 @@ final class JvmApplyCompiler {
 		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			JvmLispCompiler.FunctionInfo fi = ctx.functions.get(target);
-			if (fi != null && fi.variadic() && n - 3 >= fi.paramCount() - 1) {
-				// Aligned: the leading arguments cover every required parameter, so
-				// the argument list needs no build-then-unpack round trip -- required
-				// parameters are the leading expressions and the rest parameter takes
-				// the tail verbatim (or the excess consed onto it), in source order.
-				int required = fi.paramCount() - 1;
-				for (int i = 0; i < required; i++) {
+			if (fi != null && fi.variadic() && n - 3 >= fi.positional()) {
+				// Aligned: the leading arguments cover every parameter before the rest
+				// list -- required and physical optional alike -- so the argument list
+				// needs no build-then-unpack round trip: those parameters are the leading
+				// expressions and the rest parameter takes the tail verbatim (or the
+				// excess consed onto it), in source order.
+				int positional = fi.positional();
+				for (int i = 0; i < positional; i++) {
 					JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
 				}
 				JvmExprCompiler.compileExpr(
-						am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx, className);
+						am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, positional), ctx, className);
 				if (!am.ik.rontolisp.macro.LispMacroExpander.applyListProvablyProper(cons)) {
 					// No count can be wrong here, but the tail still has to be a proper
 					// list: _arityChk with the shape (0, variadic) walks it for that
@@ -68,29 +69,16 @@ final class JvmApplyCompiler {
 				int argsSlot = ctx.allocTemp();
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(argsSlot);
-				int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 				// The count guard. This call reaches no dispatcher, so no no-match arm
 				// can report a wrong count for it, and the walk below is car/cdr -- a
 				// short list would BIND nil for the parameters it does not reach and a
 				// long one would drop its tail. _arityChk measures the list against the
 				// shape baked here and throws ClosRegistry.arityMessage's text, the same
 				// helper a SPREAD dispatcher case carries.
-				emitArityGuard(ctx, className, argsSlot, required, fi.variadic(), target);
-				for (int i = 0; i < required; i++) {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(argsSlot);
-					for (int step = 0; step < i; step++) {
-						emitNullSafeCell(ctx, 1);
-					}
-					emitNullSafeCell(ctx, 0);
-				}
-				if (fi.variadic()) {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(argsSlot);
-					for (int step = 0; step < required; step++) {
-						emitNullSafeCell(ctx, 1);
-					}
-				}
+				emitArityGuard(ctx, className, argsSlot, fi.required(), fi.variadic(), target);
+				// The parameters out of the list: an optional past its end is the
+				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
+				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(fi.methodref().index());
 				return;
@@ -168,20 +156,6 @@ final class JvmApplyCompiler {
 		JvmEmitHelper.emitIntConst(ctx, shape);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(chkRef.index());
-	}
-
-	// Replaces the cons on the stack with its car (field 0) or cdr (field 1); nil
-	// passes through, like the car/cdr built-ins.
-	private static void emitNullSafeCell(JvmLispCompiler.Ctx ctx, int field) {
-		ctx.emit(Opcode.DUP);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(field == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 	}
 
 }

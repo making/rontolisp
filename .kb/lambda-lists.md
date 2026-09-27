@@ -1,9 +1,11 @@
 # Lambda list extensions (`&optional`, `&rest`, `&key`, `&aux`, `&allow-other-keys`)
 
-`am.ik.rontolisp.LambdaLists.expand(paramList, body)` -- one desugarer shared by the
-interpreter and both compilers -- rewrites every extension into the only native shape,
-required symbols plus an optional trailing rest param, via a generated `let*` prologue.
-User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
+`am.ik.rontolisp.LambdaLists` -- one desugarer shared by the interpreter and both
+compilers -- rewrites every extension into a native shape via a generated `let*` prologue:
+for the interpreter (`expand`) required symbols plus an optional trailing rest param, the
+optionals stepped off it; for the compilers (`toNative`, `desugarProgram`) required
+symbols, PHYSICAL optional params and a rest param (section "Optional arguments travel as
+parameters"). User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
 
 - Unknown keywords signal `Unknown keyword argument: <prin1>` -- a `program-error`, through
   the `%program-error` primitive of [error-handling.md](error-handling.md) ("Argument-shape
@@ -210,16 +212,85 @@ on the interpreter, the JVM and WASM.** `(destructuring-bind (a b) '(1) ...)` an
   never destructures keeps neither helper (pinned by
   `JvmLispCompilerTest#theDestructuringMissingCheckCarriesNeitherTheStringRuntimeNorGenericLength`).
 
-## Variadic calling convention (both compilers)
-Physically fixed-arity: required params plus one trailing rest-list param
-(`DefunDecl`/`LambdaInfo`/`FunctionInfo`/`WasmFunctionInfo` carry `variadic`), reusing
-`TYPE_CALLABLE_BASE + paramCount` -- so the WASM 7-param ceiling allows at most 6
-required params for a variadic.
+## Optional arguments travel as parameters (2026-09-26)
+**Invariant: on both compilers a callee with `&optional` takes each optional as a parameter
+of its own; a caller with no argument for one passes the UNSUPPLIED marker, and the rest
+list holds only what is past the last optional -- so a call that passes an optional conses
+nothing. Every call path agrees: direct calls, the per-arity dispatchers, `apply` (literal,
+aligned or not, and computed through the spread dispatcher), the compiled `eval`, an
+inline `((lambda ...) ...)`.** The interpreter's answers are unchanged.
 
-- `compileDirectCall` accepts any argument count; funcall/apply cap at 7.
-- In `JvmRuntimeBuilder.buildDispatchMethod` / `WasmRuntimeBuilder.buildDispatchBody` a
-  variadic joins every dispatcher of arity >= required, and exact-arity matching EXCLUDES
-  variadics.
+- **The shape.** `(a &optional (b 10 bp) c &rest r &key k)` desugars to
+  `(a &optional __ll_opt_0 __ll_opt_1 &rest __ll_rest)`, the prologue
+  `(bp (%supplied-p __ll_opt_0)) (b (if (%supplied-p __ll_opt_0) __ll_opt_0 10)) ...
+  (r __ll_rest) keys...`. A callee with an optional ALWAYS takes the rest list: without
+  `&rest`/`&key` it is the surplus, and the count check is `(if __ll_rest (%program-error
+  ...))`, first. The physical names are internal, never the user's: a default must not
+  see a LATER parameter (`(&optional (x *s*) (*s* :bound))` reads the global `*s*`).
+  `NativeForm.optionals`, `DefunDecl`/`FunctionInfo`/`WasmFunctionInfo`/`LambdaInfo`
+  `.optionals`; `required()` is the count a call must pass.
+- **Idempotent.** A lambda list already in this shape (`__ll_opt_N` plain optionals,
+  `__ll_rest`, nothing else: `isPhysicalShape`) expands to itself with its body untouched.
+- **Budget** `LambdaLists.MAX_PHYSICAL_PARAMS` = 10 physical params (env not counted), both
+  backends (`WasmLispCompiler.MAX_CALLABLE_ARITY` may not be lower -- a static check says
+  so). Optionals past it are stepped off the rest list as the interpreter steps them, so
+  `(p1 .. p9 &optional a)` keeps the old shape. Past 10 the JVM would be fine, but a
+  SPREAD case walks every param from the list head: O(P^2) per case.
+- **The marker.** JVM: `_unsupp()` -> the `_unsupplied` field, created on first read by
+  the `synchronized` `_unsuppInit()` (`JvmUnsupplied`); `_optArg(cell)` reads an optional
+  out of an argument list (`car`, or the marker at the end) branch-free -- inline, each
+  was two stack-map frames per spread case, +3.6 KB on an eval-carrying class. A
+  `<clinit>` field was the first cut: it pinned the field in `(print (+ 1 2))`, whose
+  only optionals were shaken out. WASM: the raw-local sentinel global (a `TYPE_CELL` built
+  by a constant initializer, `WasmPhysicalArgs`); `%supplied-p` is one `ref.eq`
+  (`WasmConditionCompiler`), and as a value reads the cached `t` global in place (a
+  `_t_sym` call per supplied optional cost `#'<` a fifth of its call).
+- **A supplied-p only tested is the test itself** (`testSuppliedPInPlace`): when every
+  occurrence of `sp` after its binding is `(if sp ...)`, the binding goes and each test
+  becomes `(%supplied-p __ll_opt_N)`. Any other occurrence -- a value, an assignment, an
+  argument of a macro (`when`), a rebinding, a declaration -- keeps it.
+- **Call sites.** `JvmPhysicalArgs` / `WasmPhysicalArgs` (direct, designator, the linalg
+  kernel fallbacks); `JvmRuntimeBuilder.renderCase`/`renderSpreadCase`,
+  `WasmRuntimeBuilder.emitDispatchCases` (a variadic joins every dispatcher of arity >=
+  `required()`); `Jvm`/`WasmApplyCompiler` (aligned = leading args cover every param
+  before the rest list); `Jvm`/`WasmLambdaCompiler.compileCall` binds a missing optional
+  to the marker. Wrong counts: `DefinedCallArity` and the arity shapes use `required()`
+  with the variadic flag -- the upper bound stays the prologue's.
+- **`flet`/`labels`** expand before the backend is known, through `expandPhysical`: the
+  interpreter meets the physical list too and binds a missing `__ll_opt_N` to
+  `LambdaLists.UNSUPPLIED` (a `LispJavaObject` no value is `eq` to); `%supplied-p` is an
+  `Environment` function for it.
+- `wasm-export` of a variadic defun is refused like `jvm-export`'s (no host signature);
+  WIT exports already refuse `&` params.
+- **Measured** (2026-09-26, wasmtime 49, ABBA medians of 5, x86-64): sort 200,000 fixnums
+  x10 through a variable predicate `(a b)` 1.35 -> 1.31 s, `(a &rest r)` 3.78 -> 3.77,
+  `(a b &rest r)` 1.31 -> 1.37, `(a &optional b)` 3.99 -> 1.49, `#'<` 1.39 -> 1.37;
+  `(reduce #'+ data)` over 1,000,000 fixnums x10 14.15 -> 0.24, `#'logior` 0.24 -> 0.24;
+  `(f s 1)` on `(a &optional (b 1))` 10,000,000 times over a 1,000,000-cons live heap
+  4.44 -> 0.22, `(f s)` 0.20 -> 0.22. The JVM showed no difference either side. (The
+  error-handling table's 21.7 s for `(a &rest r)` came from a different program; the
+  shape of the loss is the same: a rest list per call, costlier the larger the live heap.)
+- **Sizes** (JVM `.class` / Preview 1 / component):
+
+  | program | before | after |
+  |---|---|---|
+  | `(print (+ 1 2))`, hello_world, pi_approx | | identical |
+  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 10,293 / 981 / 2,126 | 10,184 / 1,330 / 2,477 |
+  | two optional defuns, optionals passed | 10,833 / 4,556 / 5,724 | 10,726 / 3,553 / 4,721 |
+  | `(print (sort (list 3 1 2) #'<))` | 33,256 / 23,158 / 24,361 | 30,590 / 19,987 / 21,190 |
+  | `(print (reduce #'+ '(1 2 3)))` | 24,634 / 8,812 / 9,945 | 15,577 / 4,589 / 5,731 |
+  | `(print (eval '(+ 1 2)))` | 355,090 / 262,266 / 265,032 | 357,283 / 262,201 / 264,967 |
+  | zlib | 188,659 / 127,495 / 131,568 | 186,480 / 126,194 / 130,267 |
+
+  The wasm +349 B of the one-default call is the ref-type fold: `(if (ref.eq p marker) 2
+  p)` is opaque to `WasmRefTypeFolder`, so `b`'s set keeps `TYPE_CELL` where the old
+  prologue folded to the constant 2 and `+` lost its fixnum-only fold (`.todo/a51`).
+
+## Variadic calling convention (both compilers)
+Physically fixed-arity: required params, the physical optionals, then one trailing
+rest-list param (`variadic`), reusing `TYPE_CALLABLE_BASE + paramCount` on WASM.
+
+- `compileDirectCall` accepts any argument count; funcall/apply cap at the dispatcher tier.
 - Runtime eval registry: arity is `-physicalParamCount`; negative = evaluate ALL arg
   forms (`buildArgList`), non-negative = exactly arity (`buildNArgs`, nil-padded).
 
@@ -228,11 +299,17 @@ required params for a variadic.
   wrapping in `LispEvaluator.evalDefmacro` (`.kb/defmacro-backquote.md`); `&environment`
   is MACRO-only (`makeUserMacro`), rejected for functions.
 - Runtime `eval`'s own `lambda` (funcId == -1) binds positionally; `--no-gc`
-  (`NoGcWasmCompiler.extractDefun`) rejects the keywords; `BuiltinFunctionWrappers` pin
-  one arity per builtin.
+  (`NoGcWasmCompiler.extractDefun`) rejects the keywords.
 
 ## Tests
-`LambdaListsTest` (the expansion shape and the two helper bodies);
+`LambdaListsTest` (the expansion shapes -- interpreter and physical, the budget, the
+idempotence, the supplied-p test in place, the `flet` list the interpreter meets -- and the
+two helper bodies); the physical optionals on every call path: ci-spec
+`optional-arguments-travel-as-parameters`,
+`JvmLispCompilerTest#compileAndRunOptionalArgumentsTravelAsParametersOnEveryCallPath`,
+`#anOptionalIsAParameterOfTheCompiledMethodAndTheMarkerTravelsOnlyWithOne`,
+`WasmLispCompilerIntegrationTest#optionalArgumentsTravelAsParametersOnEveryCallPath`,
+`LispEvaluatorTest#optionalArgumentsAnswerTheSameOnEveryCallPath`;
 `LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux}`, `#defunEmptyKeySection`,
 `#defunExtraArgumentsPastTheLambdaListSignalProgramError`;
 `JvmLispCompilerTest#compileAndRunExtraArgumentsPastAnOptionalTailSignalProgramError`,

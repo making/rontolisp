@@ -2677,6 +2677,18 @@ public final class LispNames {
 	public static final String ARITY_MISSING_MESSAGE_INTERNAL = "%ARITY-MISSING-MESSAGE";
 
 	/**
+	 * Internal one-argument primitive {@code (%supplied-p param)}: true unless
+	 * {@code param} holds the UNSUPPLIED marker -- what a caller passes for an
+	 * {@code &optional} parameter it has no argument for, when the callee takes its
+	 * optionals as physical parameters ({@code LambdaLists.toNative}). Only the prologue
+	 * that desugaring writes reads it, over a physical optional parameter, so the marker
+	 * never reaches a Lisp binding. The interpreter answers it too, for the
+	 * {@code flet}/{@code labels} definitions that reach it in the physical shape
+	 * ({@code LambdaLists.expandPhysical}, {@code LambdaLists.UNSUPPLIED}).
+	 */
+	public static final String SUPPLIED_P_INTERNAL = "%SUPPLIED-P";
+
+	/**
 	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
 	 * a {@code file-error} carrying the pathname and reporting the message: what a failed
 	 * {@code open} lowers to on the compiled backends

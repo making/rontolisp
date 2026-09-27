@@ -1,6 +1,5 @@
 package am.ik.rontolisp.codegen.wasm;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntSupplier;
 
@@ -116,12 +115,8 @@ final class WasmDesignatorCall {
 			// car/cdr composition synthesizes a lambda, --dynamic defers to the runtime.
 			return null;
 		}
-		int required = required(fi);
+		int required = fi.required();
 		return (fi.variadic() ? arity >= required : arity == required) ? fi : null;
-	}
-
-	private static int required(WasmLispCompiler.WasmFunctionInfo fi) {
-		return fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 	}
 
 	/**
@@ -149,50 +144,12 @@ final class WasmDesignatorCall {
 			WasmUncaughtLocations.emitValueCall(ctx, tail, args.size() + 1, this.dispatchFuncIndex);
 			return;
 		}
-		int required = required(this.target);
-		if (this.arity == required) {
-			// The env every defun ignores, the arguments, and -- for a variadic callee
-			// reached at exactly its required count -- the empty rest list.
-			emitNull(ctx); // env
-			args.forEach(Runnable::run);
-			if (this.target.variadic()) {
-				emitNull(ctx);
-			}
-		}
-		else {
-			// A variadic callee reached wider than its required count: the surplus
-			// arguments are linked into the rest list, so every argument is evaluated
-			// into a temp (left to right, as the dispatching route evaluates them)
-			// before anything goes on the stack.
-			List<Integer> slots = new ArrayList<>();
-			for (Runnable arg : args) {
-				arg.run();
-				int slot = ctx.allocTemp();
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(slot);
-				slots.add(slot);
-			}
-			int restSlot = ctx.allocTemp();
-			emitNull(ctx);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(restSlot);
-			for (int i = slots.size() - 1; i >= required; i--) {
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(slots.get(i));
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(restSlot);
-				WasmEmitHelper.emitNewCons(ctx);
-				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(restSlot);
-			}
-			emitNull(ctx); // env
-			for (int i = 0; i < required; i++) {
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(slots.get(i));
-			}
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(restSlot);
-		}
+		// The ladder's own case for this callee, emitted in place: the env every defun
+		// ignores, the arguments a parameter takes, the UNSUPPLIED marker for an
+		// optional not passed, and a surplus linked into the rest list
+		// (WasmPhysicalArgs).
+		emitNull(ctx); // env
+		WasmPhysicalArgs.emit(ctx, this.target, args);
 		ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, this.target.name()));
 		ctx.writer.writeUnsignedLeb128(this.target.funcIndex());
 	}

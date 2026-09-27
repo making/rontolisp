@@ -12903,9 +12903,10 @@ class WasmLispCompilerIntegrationTest {
 	// optional and keyword arguments a direct call takes reach the call-position
 	// lowering through the wrapper (compiler/BuiltinFunctionWrappers), and a direct
 	// string-upcase :start / :end and typep's environment are lowered rather than
-	// dropped or refused. The comparisons and the logand trio keep two required
-	// parameters, so the two-argument call conses no rest list: one or zero arguments
-	// through the value stay a wrong count here, where the interpreter answers.
+	// dropped or refused. The comparisons and the logand trio take their second (and
+	// first) argument as an OPTIONAL, which a two-argument call passes as a parameter
+	// (LambdaLists.toNative), so one or zero arguments answer as the interpreter does
+	// and the sort predicate's call still conses no rest list.
 	@Test
 	void builtinFunctionValuesTakeTheStandardLambdaList() throws Exception {
 		assertThat(compileAndRun(
@@ -12929,8 +12930,7 @@ class WasmLispCompilerIntegrationTest {
 						(print (list (with-output-to-string (s) (wv-call #'write-string "abcdef" s :start 1 :end 3))
 						             (with-input-from-string (s "") (wv-call #'read-char-no-hang s nil :eof))
 						             (symbolp (wv-call #'gensym "WV")) (symbol-name (wv-call #'intern "WV-SYM" "KEYWORD"))))
-						(print (handler-case (wv-call #'< 1) (program-error (c) (princ-to-string c))))
-						(print (handler-case (wv-call #'logand) (program-error (c) (princ-to-string c))))
+						(print (list (wv-call #'< 1) (wv-call #'logand)))
 						"""))
 			.isEqualTo("""
 					(T NIL NIL T T 1 15)
@@ -12938,8 +12938,7 @@ class WasmLispCompilerIntegrationTest {
 					(255 12 "zz" "aBCd" "one Two" "abCD" T)
 					(8 #(1 2 0) #(A B C) #(8 9))
 					("bc" :EOF T "WV-SYM")
-					"< expects at least 2 arguments, got 1"
-					"LOGAND expects at least 2 arguments, got 0\"""");
+					(T -1)""");
 	}
 
 	// The JVM twin: JvmLispCompilerTest
@@ -22182,6 +22181,83 @@ class WasmLispCompilerIntegrationTest {
 				(print (g 1))
 				(print (g 1 2 3))
 				""")).isEqualTo("(1 (2 3))\n(1 NIL)\n(1 10 20 NIL)\n(1 2 3 T)");
+	}
+
+	// An optional argument travels as a parameter of its own on every call path
+	// (LambdaLists.toNative): a direct call, a function value through a dispatcher at
+	// each arity, a literal apply aligned and not, a computed apply (the spread
+	// dispatcher), eval, an inline lambda, a mapcar'd lambda -- a missing one is the
+	// UNSUPPLIED marker the prologue tests, a surplus past the last optional the rest
+	// list. A default never sees a LATER parameter (oa-late's *oa-special*), and a list
+	// wider than the physical budget keeps its trailing optionals on the rest list
+	// (oa-wide, oa-full). The three backends' twins and ci-spec
+	// optional-arguments-travel-as-parameters run this program.
+	@Test
+	void optionalArgumentsTravelAsParametersOnEveryCallPath() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defvar *oa-special* :global)
+						(defun oa-f (a &optional (b 10 bp) (c (+ a b))) (list a b bp c))
+						(defun oa-g (a &optional b &rest r) (list a b r))
+						(defun oa-k (&optional (x 1) &key (y 2)) (list x y))
+						(defun oa-late (&optional (x *oa-special*) (*oa-special* :bound)) (list x *oa-special*))
+						(defun oa-test-only (&optional (a 1 ap)) (if ap (list :given a) (list :default a)))
+						(defun oa-close (&optional (n 0)) (lambda () (incf n)))
+						(defun oa-wide (p1 p2 p3 p4 p5 p6 p7 p8 &optional (o1 :d1) (o2 :d2) (o3 :d3))
+						  (list p1 p8 o1 o2 o3))
+						(defun oa-full (p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional (o1 :d1)) (list p9 o1))
+						(defun oa-count (n &optional (acc 0)) (if (= n 0) acc (oa-count (- n 1) (+ acc 1))))
+						(print (list (oa-f 1) (oa-f 1 2) (oa-f 1 2 3) (oa-f 1 nil 0)))
+						(print (list (oa-g 1) (oa-g 1 2) (oa-g 1 2 3 4)))
+						(print (list (oa-k) (oa-k 5) (oa-k 5 :y 6)))
+						(print (list (oa-late) (oa-late :x) (oa-late :x :y) *oa-special*))
+						(print (list (oa-test-only) (oa-test-only nil) (oa-test-only 7)))
+						(print (let ((c (oa-close 5))) (funcall c) (list (funcall c) (funcall (oa-close)))))
+						(print (list (oa-wide 1 2 3 4 5 6 7 8) (oa-wide 1 2 3 4 5 6 7 8 :a :b) (oa-wide 1 2 3 4 5 6 7 8 :a :b :c)))
+						(print (list (oa-full 1 2 3 4 5 6 7 8 9) (oa-full 1 2 3 4 5 6 7 8 9 :x)))
+						(print (oa-count 10000))
+						(let ((f #'oa-f) (g #'oa-g) (w #'oa-wide))
+						  (print (list (funcall f 1) (funcall f 1 2) (funcall f 1 2 3)))
+						  (print (list (funcall g 1) (funcall g 1 2) (funcall g 1 2 3 4 5)))
+						  (print (list (apply f '(1)) (apply f 1 '(2)) (apply f 1 2 '(3)) (apply g 1 2 3 '(4))))
+						  (print (list (funcall w 1 2 3 4 5 6 7 8 :a) (apply w 1 2 3 4 5 6 7 8 '(:a :b :c)))))
+						(print (list (apply #'oa-f '(1)) (apply #'oa-f 1 '(2)) (apply #'oa-f 1 2 3 nil) (apply #'oa-g 1 2 3 '(4 5))
+						             (apply #'oa-g 1 '(2 3))))
+						(print (list (eval '(oa-f 7)) (eval '(oa-f 7 8)) (eval '(oa-g 1 2 3))))
+						(print (list ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1)
+						             ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1 2 5)))
+						(print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2) '(10 20)))
+						(print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2)))
+						(print (flet ((lf (a &optional (b 2)) (* a b))) (list (lf 3) (lf 3 4) (funcall #'lf 5))))
+						(print (labels ((lr (n &optional (acc 1)) (if (= n 0) acc (lr (- n 1) (* acc n))))) (lr 5)))
+						(print (list (handler-case (oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+						             (handler-case (funcall #'oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+						             (handler-case (apply #'oa-f '(1 2 3 4)) (program-error (e) (princ-to-string e)))
+						             (handler-case (oa-full 1 2 3 4 5 6 7 8 9 10 11) (program-error (e) (princ-to-string e)))))
+						"""))
+			.isEqualTo(
+					"""
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 NIL T 0))
+							((1 NIL NIL) (1 2 NIL) (1 2 (3 4)))
+							((1 2) (5 2) (5 6))
+							((:GLOBAL :BOUND) (:X :BOUND) (:X :Y) :GLOBAL)
+							((:DEFAULT 1) (:GIVEN NIL) (:GIVEN 7))
+							(7 1)
+							((1 8 :D1 :D2 :D3) (1 8 :A :B :D3) (1 8 :A :B :C))
+							((9 :D1) (9 :X))
+							10000
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3))
+							((1 NIL NIL) (1 2 NIL) (1 2 (3 4 5)))
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4)))
+							((1 8 :A :D2 :D3) (1 8 :A :B :C))
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4 5)) (1 2 (3)))
+							((7 10 NIL 17) (7 8 T 15) (1 2 (3)))
+							((1 3 4 NIL) (1 2 5 T))
+							(11 22)
+							(101 102)
+							(6 12 10)
+							120
+							("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")""");
 	}
 
 	@Test

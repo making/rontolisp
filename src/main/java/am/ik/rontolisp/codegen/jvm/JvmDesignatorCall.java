@@ -1,6 +1,5 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -87,12 +86,8 @@ final class JvmDesignatorCall {
 			// car/cdr composition synthesizes a lambda, --dynamic defers to the runtime.
 			return null;
 		}
-		int required = required(fi);
+		int required = fi.required();
 		return (fi.variadic() ? arity >= required : arity == required) ? fi : null;
-	}
-
-	private static int required(JvmLispCompiler.FunctionInfo fi) {
-		return fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 	}
 
 	/**
@@ -110,56 +105,10 @@ final class JvmDesignatorCall {
 			JvmFunctionCallCompiler.emitDispatchCall(this.arity, ctx, className);
 			return;
 		}
-		int required = required(this.target);
-		if (this.arity == required) {
-			args.forEach(Runnable::run);
-			if (this.target.variadic()) {
-				// A variadic callee reached at exactly its required count: the empty
-				// rest list.
-				ctx.emit(Opcode.ACONST_NULL);
-			}
-		}
-		else {
-			// A variadic callee reached wider than its required count: the surplus
-			// arguments are linked into the rest list, so every argument is evaluated
-			// into a temp (left to right, as the dispatching route evaluates them)
-			// before anything goes on the stack.
-			List<Integer> slots = new ArrayList<>();
-			for (Runnable arg : args) {
-				arg.run();
-				int slot = ctx.allocTemp();
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(slot);
-				slots.add(slot);
-			}
-			int restSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ACONST_NULL);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(restSlot);
-			for (int i = slots.size() - 1; i >= required; i--) {
-				ctx.emit(Opcode.ICONST_2);
-				ctx.emit(Opcode.ANEWARRAY);
-				ctx.emitU2(ctx.objectClass.index());
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots.get(i));
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_1);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restSlot);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(restSlot);
-			}
-			for (int i = 0; i < required; i++) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots.get(i));
-			}
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(restSlot);
-		}
+		// The ladder's own case for this callee, emitted in place: the arguments a
+		// parameter takes, the UNSUPPLIED marker for an optional not passed, and a
+		// surplus linked into the rest list (JvmPhysicalArgs).
+		JvmPhysicalArgs.emit(ctx, className, this.target, args);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(this.target.methodref().index());
 	}

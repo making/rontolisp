@@ -15423,9 +15423,11 @@ public final class LispMacroExpander {
 	 * it replaces), or {@code (list* a<sub>required+1</sub> ... ak lst)} for the excess.
 	 * Left-to-right argument evaluation order is the source order either way. The
 	 * unaligned shapes (fewer leading arguments than required parameters, or a
-	 * non-variadic target) keep the build-then-unpack path.
+	 * non-variadic target) keep the build-then-unpack path. A callee with physical
+	 * optionals ({@code LambdaLists.toNative}) passes its parameter count before the rest
+	 * list here -- the optionals are leading expressions too.
 	 * @param cons the apply expression
-	 * @param required the callee's required (non-rest) parameter count
+	 * @param required the callee's parameter count before its rest list
 	 * @return the rest-argument expression
 	 */
 	public static LispVal applyAlignedRestExpr(LispCons cons, int required) {
@@ -36623,17 +36625,24 @@ public final class LispMacroExpander {
 		int i = 0;
 		for (java.util.Map.Entry<String, LispSymbol> entry : fnVars.entrySet()) {
 			List<LispVal> dp = defParts.get(i++);
-			// Desugar the lambda list to the native "required + &rest" shape here:
-			// LambdaLists.desugarProgram (the compilers' pre-pass) does not see inside
-			// flet definition lists, and moving the defaults into the let* prologue
-			// also puts them in expression position for the body rewrite below.
+			// Desugar the lambda list to the compilers' physical shape here -- its
+			// optionals parameters of their own, so a call that passes one conses no
+			// rest list (LambdaLists.toNative): LambdaLists.desugarProgram (the
+			// compilers' pre-pass) does not see inside flet definition lists, and moving
+			// the defaults into the let* prologue also puts them in expression position
+			// for the body rewrite below. The interpreter shares this expansion and
+			// binds a missing physical optional to LambdaLists.UNSUPPLIED.
 			List<LispVal> defBody = dp.size() == 2 ? List.of((LispVal) LispNil.INSTANCE) : dp.subList(2, dp.size());
 			// No %fn-block wrap here (the interpreter shares this expansion); instead
 			// the body gets the REAL block CL mandates: an flet/labels local
 			// establishes a block named after it, so (return-from name v) exits the
 			// local function on every backend (cl-ppcre's advance-fn).
-			LambdaLists.Expanded e = LambdaLists.expand(dp.get(1), defBody, false);
+			LambdaLists.Expanded e = LambdaLists.expandPhysical(dp.get(1), defBody);
 			List<LispVal> paramParts = new java.util.ArrayList<LispVal>(e.required());
+			if (!e.optionals().isEmpty()) {
+				paramParts.add(new LispSymbol(LispNames.LAMBDA_OPTIONAL));
+				paramParts.addAll(e.optionals());
+			}
 			if (e.rest() != null) {
 				paramParts.add(new LispSymbol(LispNames.LAMBDA_REST));
 				paramParts.add(e.rest());

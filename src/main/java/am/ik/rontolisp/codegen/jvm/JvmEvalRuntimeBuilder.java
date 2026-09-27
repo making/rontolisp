@@ -2443,7 +2443,7 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- variadic + - * / : left-fold via the binary wrapper ----
+		// ---- variadic + - * / : left-fold through the wrapper's two-argument call ----
 		int arith = a.label();
 		int notArith = a.label();
 		for (String opName : new String[] { LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV }) {
@@ -2523,10 +2523,11 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(notArith);
 
 		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
-		// The wrappers are binary (a sort predicate stays a two-argument call), so a
-		// chain goes pairwise through them here: adjacent pairs for the ordering
-		// operators, every pair for /=. The registry path below would evaluate every
-		// argument too and then report the binary wrapper's count.
+		// Pairwise through the wrapper's two-argument call, which passes its second
+		// argument as a physical optional (no rest list): adjacent pairs for the
+		// ordering operators, every pair for /=. The wrappers take any count now
+		// ((a &optional b &rest r)), so the registry path below would answer the same;
+		// this arm predates that and is kept as the cons-free route.
 		comparisonChain(a, OP, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, IDX, VALID);
 
 		// ---- generic named application ----
@@ -2660,7 +2661,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(restSlot);
 		a.iload(shapeSlot);
 		a.invokestatic(this.k.arityChkRef());
-		// fn = the binary wrapper, as a function value
+		// fn = the operator's wrapper, as a function value
 		a.aload(opSlot);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(tmpSlot);

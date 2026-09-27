@@ -1621,8 +1621,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   optional and keyword arguments to the call-position lowering. Pinned by ci-spec
   `builtin-function-values-take-the-standard-lambda-list`, `BuiltinCallArityTest`,
   `LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
-  `...BuiltinFunctionValuesTakeTheStandardLambdaList`. `STANDARD_WIDER` had 43 rows; 24 are
-  gone, and the 16 comparison and bitwise wrappers widened as far as the next bullets allow.
+  `...BuiltinFunctionValuesTakeTheStandardLambdaList`. `STANDARD_WIDER` had 43 rows; 24 went
+  with this, the 16 comparison and bitwise ones with the physical optionals (below); 3 remain.
   What it took:
   - An absent keyword gets the value the lowering would have used (`make-string`'s space,
     `adjust-array`'s old fill pointer and `%array-default-element`); where presence itself picks
@@ -1641,16 +1641,25 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   - `gethash` / `intern` had a second, full-width `VALUE_SHAPES` wrapper for a program that names
     them as designators; the catalog wrapper is that shape now and the map is gone (the
     second-value publishing stays designator-gated).
-  - **What stays narrower**, as rows: the comparisons (`= < > <= >= /=`, the seven `char`
-    ones) and `logand` / `logior` / `logxor` take `(a b &rest r)`, not `(a &rest r)` / `(&rest
-    r)`, so `(funcall #'< 1)` and `(funcall #'logand)` report a wrong count on the compiled
-    backends while the interpreter's Java built-ins answer `T` / `-1`. Measured: a rest list is
-    consed on EVERY call of a variadic callee, and on wasmtime (49.0) that is expensive once the
-    heap is large -- sorting 200,000 fixnums ten times through a variable predicate took 21.7 s
-    with `(a &rest r)` against 2.4 s with `(a b)` and 1.5 s with `(a b &rest r)`; `(reduce #'+
-    data)` over a million fixnums (the `(&rest r)` wrapper) ran 5.5 s against 1.5 s for the
-    binary `#'logior`. The JVM showed no difference. The one-argument call is the price of the
-    two-argument call's speed until a call can pass an optional argument without consing.
+  - **The comparisons and the folds take their full lambda list without consing**
+    (2026-09-26). The comparisons (`= < > <= >= /=`, the seven `char` ones) take `(a &optional
+    b &rest r)`; `+ * gcd lcm logeqv logand logior logxor` take `(&optional (a identity) (b
+    identity) &rest r)` -- a left fold, `(funcall #'+)` the identity, one argument `(op a
+    identity)` so a non-number is the interpreter's type error; `min max - /` take `(n
+    &optional b &rest r)`, `append nconc` `(&optional a b &rest r)`. An optional argument
+    travels as a parameter ([lambda-lists.md](lambda-lists.md), "Optional arguments travel as
+    parameters"), so the two-argument call -- a sort predicate's, a `reduce`'s -- conses no
+    rest list, and `(funcall #'< 1)` / `(funcall #'logand)` answer `T` / `-1` as the
+    interpreter does; their `STANDARD_WIDER` rows are gone. Before, the comparisons and the
+    bitwise trio kept `(a b &rest r)` (the one-argument call a wrong count) and the folds
+    `(&rest r)`, which consed per call: on wasmtime (49.0) that cost grows with the live heap
+    -- sorting 200,000 fixnums ten times through a `(a &rest r)` predicate took 21.7 s against
+    1.5 s for `(a b &rest r)`. Measured again with this change (ABBA medians, wasmtime 49):
+    `(reduce #'+ data)` over a million fixnums x10 14.15 -> 0.24 s, sort through `#'<` 1.39 ->
+    1.37 s, through a user `(a &optional b)` 3.99 -> 1.49 s. Each fold inlines its operator
+    twice; the first cut (supplied-p arms and a `reduce` over the rest list, three copies) put
+    +10.9 KB on the eval-carrying `(print (eval '(+ 1 2)))` class, this shape +2.2 KB
+    (355,090 -> 357,283; Preview 1 262,266 -> 262,201).
   - Also still rows: `make-broadcast-stream` with components (the wrapper is the sink, and the
     Gray class it would need is gated on the program's own spelling), `read-from-string`'s
     optional and keyword arguments (unsupported in call position too; `.todo/214`) and

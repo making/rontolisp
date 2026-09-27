@@ -36,18 +36,36 @@ class BuiltinCallArityTest {
 	}
 
 	@Test
-	void theStandardLambdaListWidensAWrapperThatIsNarrowerThanItsOperator() {
-		// #'< takes (a b &rest r), so a sort predicate's call conses nothing; (< a) is
-		// legal in call position.
+	void theComparisonsAndTheBitwiseFoldsTakeTheirStandardLambdaListAsFunctionValues() {
+		// #'< takes (a &optional b &rest r) and #'logand (&optional a b &rest r): the
+		// operator's own counts, with the two-argument call -- a sort predicate's, a
+		// fold's -- passing b as a parameter rather than in a rest list.
 		assertThat(wrapperShape(lambdaList(LispNames.LT)))
-			.isEqualTo(new BuiltinCallArity.Shape(2, BuiltinCallArity.UNBOUNDED));
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.CHAR_EQUAL)))
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.LOGAND)))
+			.isEqualTo(new BuiltinCallArity.Shape(0, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.ADD)))
+			.isEqualTo(new BuiltinCallArity.Shape(0, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.MIN)))
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LT, 1)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LT, 0))
 			.isEqualTo("< expects at least 1 argument, got 0");
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LOGAND, 0)).isNull();
+	}
+
+	@Test
+	void theStandardLambdaListWidensAWrapperThatIsNarrowerThanItsOperator() {
+		// #'write-to-string does not forward its keywords yet; (write-to-string x :base
+		// 2)
+		// is legal in call position.
+		assertThat(wrapperShape(lambdaList(LispNames.WRITE_TO_STRING))).isEqualTo(new BuiltinCallArity.Shape(1, 1));
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.WRITE_TO_STRING, 3)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 3)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 4))
 			.isEqualTo("GETHASH expects at most 3 arguments, got 4");
-		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LOGAND, 0)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GENSYM, 1)).isNull();
 	}
 

@@ -30,6 +30,12 @@ dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
   `LispMacroExpander.overArityFuncallStub` -- a call-time signal, a bare `unreachable` in a
   non-EH module, no compile-time warning.
 
+- A callee with `&optional` takes each optional as a wasm parameter of its own, plus the rest
+  list, within `LambdaLists.MAX_PHYSICAL_PARAMS` (10, which `MAX_CALLABLE_ARITY` may not
+  undercut: `WasmLispCompiler`'s static check); optionals past it ride the rest list, so a
+  lambda list never needs the bundler ([lambda-lists.md](lambda-lists.md), "Optional
+  arguments travel as parameters").
+
 ## Traps
 - `MAX_CALLABLE_ARITY` is an index ORIGIN, never raised: the extra tier is APPENDED, at
   `extraDispatchFuncBase()` (shifts `userFuncBase()` only) and `extraCallableTypeBase()`

@@ -729,7 +729,8 @@ final class WasmAsyncEmit {
 	 */
 	static void compileAsyncLambdaValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()));
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS);
 		List<String> paramNames = nf.paramNames();
 		// The body's tail settles the channel as a lambda's does
 		// (WasmLambdaCompiler): its values are what the resume captures into the
@@ -747,7 +748,7 @@ final class WasmAsyncEmit {
 		int entryFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		byte[] entryBody = buildEntryBody(ctx, paramNames.size(), true, resume);
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(entryFuncId, "_async_entry_" + entryFuncId, paramNames,
-				nf.variadic(), List.of(), freeVars, entryFuncIndex, entryBody));
+				nf.variadic(), nf.optionals(), List.of(), freeVars, entryFuncIndex, entryBody));
 		WasmLambdaCompiler.emitClosureValue(entryFuncId, freeVars, ctx);
 	}
 

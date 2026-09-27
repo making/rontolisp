@@ -49,26 +49,12 @@ public final class BuiltinCallArity {
 	 * keyword arguments count as unbounded (the keyword-tail check is the operator's
 	 * own). A row that is not wider than its wrapper fails the class's initialization, so
 	 * widening a wrapper retires its row here. What is left:
-	 * <ul>
-	 * <li>the comparisons and {@code logand}/{@code logior}/{@code logxor}, whose
-	 * wrappers keep TWO required parameters so the two-argument call -- a sort
-	 * predicate's, a fold's -- conses no rest list
-	 * ({@code BuiltinFunctionWrappers.comparison} has the measurement); their one- and
-	 * zero-argument call positions are legal;</li>
-	 * <li>{@code make-broadcast-stream} with components, {@code read-from-string}'s
-	 * optional and keyword arguments and {@code write-to-string}'s keywords, which their
-	 * function values do not forward yet.</li>
-	 * </ul>
+	 * {@code make-broadcast-stream} with components, {@code read-from-string}'s optional
+	 * and keyword arguments and {@code write-to-string}'s keywords, which their function
+	 * values do not forward yet.
 	 */
-	private static final Object[][] STANDARD_WIDER = { { LispNames.EQ, 1, UNBOUNDED }, { LispNames.LT, 1, UNBOUNDED },
-			{ LispNames.GT, 1, UNBOUNDED }, { LispNames.LE, 1, UNBOUNDED }, { LispNames.GE, 1, UNBOUNDED },
-			{ LispNames.NE, 1, UNBOUNDED }, { LispNames.CHAR_EQ, 1, UNBOUNDED }, { LispNames.CHAR_NE, 1, UNBOUNDED },
-			{ LispNames.CHAR_LT, 1, UNBOUNDED }, { LispNames.CHAR_GT, 1, UNBOUNDED },
-			{ LispNames.CHAR_LE, 1, UNBOUNDED }, { LispNames.CHAR_GE, 1, UNBOUNDED },
-			{ LispNames.CHAR_EQUAL, 1, UNBOUNDED }, { LispNames.LOGAND, 0, UNBOUNDED },
-			{ LispNames.LOGIOR, 0, UNBOUNDED }, { LispNames.LOGXOR, 0, UNBOUNDED },
-			{ LispNames.MAKE_BROADCAST_STREAM, 0, UNBOUNDED }, { LispNames.READ_FROM_STRING, 1, UNBOUNDED },
-			{ LispNames.WRITE_TO_STRING, 1, UNBOUNDED } };
+	private static final Object[][] STANDARD_WIDER = { { LispNames.MAKE_BROADCAST_STREAM, 0, UNBOUNDED },
+			{ LispNames.READ_FROM_STRING, 1, UNBOUNDED }, { LispNames.WRITE_TO_STRING, 1, UNBOUNDED } };
 
 	private static final Map<String, Shape> SHAPES = buildShapes();
 

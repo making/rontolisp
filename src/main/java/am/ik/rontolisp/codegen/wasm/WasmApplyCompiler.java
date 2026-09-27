@@ -21,12 +21,6 @@ final class WasmApplyCompiler {
 	private WasmApplyCompiler() {
 	}
 
-	// Replaces the cons on the stack with its car (field 0) or cdr (field 1); nil
-	// passes through, like the car/cdr built-ins (the same shared shape).
-	private static void emitNullSafeCell(WasmLispCompiler.Ctx ctx, int field) {
-		WasmEmitHelper.emitConsField(ctx, field);
-	}
-
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		compile(cons, ctx, false);
 	}
@@ -50,19 +44,20 @@ final class WasmApplyCompiler {
 		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(target);
-			if (fi != null && fi.variadic() && n - 3 >= fi.paramCount() - 1) {
-				// Aligned: the leading arguments cover every required parameter, so
-				// the argument list needs no build-then-unpack round trip -- required
-				// parameters are the leading expressions and the rest parameter takes
-				// the tail verbatim (or the excess consed onto it), in source order.
-				int required = fi.paramCount() - 1;
+			if (fi != null && fi.variadic() && n - 3 >= fi.positional()) {
+				// Aligned: the leading arguments cover every parameter before the rest
+				// list -- required and physical optional alike -- so the argument list
+				// needs no build-then-unpack round trip: those parameters are the leading
+				// expressions and the rest parameter takes the tail verbatim (or the
+				// excess consed onto it), in source order.
+				int positional = fi.positional();
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
-				for (int i = 0; i < required; i++) {
+				for (int i = 0; i < positional; i++) {
 					WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 				}
 				WasmExprCompiler
-					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx);
+					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, positional), ctx);
 				if (ctx.arityChkFuncIndex >= 0
 						&& !am.ik.rontolisp.macro.LispMacroExpander.applyListProvablyProper(cons)) {
 					// No count can be wrong here, but the tail still has to be a proper
@@ -88,7 +83,7 @@ final class WasmApplyCompiler {
 				int argsSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(argsSlot);
-				int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+				int required = fi.required();
 				// The count guard. This call reaches no dispatcher, so no no-match arm
 				// can report a wrong count for it, and the walk below is car/cdr -- a
 				// short list would BIND nil for the parameters it does not reach and a
@@ -115,24 +110,12 @@ final class WasmApplyCompiler {
 					ctx.writer.write(Instruction.DROP);
 				}
 				// Push null env first (defun functions ignore it), like the direct-call
-				// convention.
+				// convention, then the parameters out of the list: an optional past its
+				// end is the UNSUPPLIED marker, and the rest list is the tail past the
+				// optionals (WasmPhysicalArgs).
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
-				for (int i = 0; i < required; i++) {
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(argsSlot);
-					for (int step = 0; step < i; step++) {
-						emitNullSafeCell(ctx, 1);
-					}
-					emitNullSafeCell(ctx, 0);
-				}
-				if (fi.variadic()) {
-					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(argsSlot);
-					for (int step = 0; step < required; step++) {
-						emitNullSafeCell(ctx, 1);
-					}
-				}
+				WasmPhysicalArgs.emitFromList(ctx, fi, argsSlot);
 				ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, target));
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;

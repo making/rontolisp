@@ -288,8 +288,7 @@ final class JvmLinalgKernelCompiler {
 			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
 			return;
 		}
-		if (defun == null || (supplied != arity && !extendedCall)
-				|| (defun.variadic() ? defun.paramCount() - 1 : defun.paramCount()) != arity
+		if (defun == null || (supplied != arity && !extendedCall) || defun.required() != arity
 				|| (extendedCall && !defun.variadic())) {
 			// No spliced linalg.lisp to fall back to, a call whose option forms no kernel
 			// handles, or a defun whose required count no longer matches: the ordinary
@@ -395,38 +394,17 @@ final class JvmLinalgKernelCompiler {
 			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostBranches);
 			JvmEmitHelper.patchBranch(ctx, skipPos, ctx.code.size());
 		}
-		for (int i = 0; i < arity; i++) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[i]);
-		}
-		if (defun.variadic()) {
-			// A defun with an &optional/&rest lambda list takes a trailing rest
-			// parameter: the surplus temps are linked into a cons list (an empty rest
-			// list is compiled nil, null), newest link first.
-			int restSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ACONST_NULL);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(restSlot);
-			for (int k = supplied - 1; k >= arity; k--) {
-				ctx.emit(Opcode.ICONST_2);
-				ctx.emit(Opcode.ANEWARRAY);
-				ctx.emitU2(ctx.objectClass.index());
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_0);
+		// The scalar defun over the same temps, in its physical shape: an optional the
+		// call does not pass is the UNSUPPLIED marker and only what is past the physical
+		// optionals rides the rest list (JvmPhysicalArgs).
+		List<Runnable> temps = new ArrayList<>();
+		for (int slot : slots) {
+			temps.add(() -> {
 				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[k]);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_1);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restSlot);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(restSlot);
-			}
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(restSlot);
+				ctx.emit(slot);
+			});
 		}
+		JvmPhysicalArgs.emit(ctx, className, defun, temps);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(defun.methodref().index());
 		for (int branchPos : hostBranches) {

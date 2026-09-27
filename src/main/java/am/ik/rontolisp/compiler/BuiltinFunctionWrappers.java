@@ -546,6 +546,18 @@ public final class BuiltinFunctionWrappers {
 
 	private static final String DEFAULT_TRUE = "=t";
 
+	/**
+	 * Separates an optional parameter's name from an integer default in a
+	 * {@link WrapperDef} lambda list: {@code "a=0"} is {@code (a 0)}.
+	 */
+	private static final String DEFAULT = "=";
+
+	/**
+	 * Separates an optional parameter's name from its supplied-p variable in a
+	 * {@link WrapperDef} lambda list: {@code "b?bp"} is {@code (b nil bp)}.
+	 */
+	private static final String SUPPLIED_P = "?";
+
 	// (read-char &optional s (e t) v r) -- CL's whole optional tail: the eof-error-p
 	// default is true and recursive-p is accepted and dropped. read-char's wrapper is
 	// REFERENCE_GATED, so the end-of-file construction a computed eof-error-p implies
@@ -582,11 +594,24 @@ public final class BuiltinFunctionWrappers {
 		}
 
 		// A parameter spelled "name=t" is the optional (name t): the read family's
-		// eof-error-p, whose omitted default is TRUE, unlike a bound nil.
+		// eof-error-p, whose omitted default is TRUE, unlike a bound nil; one spelled
+		// "name=0" takes that integer (an identity fold's). One spelled
+		// "name?supplied" is (name nil supplied): an optional whose absence, not its
+		// value, picks the arm -- (funcall #'max 1 nil) is a type error, not 1.
 		private static LispVal param(String p) {
 			if (p.endsWith(DEFAULT_TRUE)) {
 				return listToCons(
 						List.of(new LispSymbol(p.substring(0, p.length() - DEFAULT_TRUE.length())), LispTrue.INSTANCE));
+			}
+			int defaulted = p.indexOf(DEFAULT);
+			if (defaulted > 0) {
+				return listToCons(List.of(new LispSymbol(p.substring(0, defaulted)),
+						new LispInteger(Long.parseLong(p.substring(defaulted + DEFAULT.length())))));
+			}
+			int supplied = p.indexOf(SUPPLIED_P);
+			if (supplied > 0) {
+				return listToCons(List.of(new LispSymbol(p.substring(0, supplied)), LispNil.INSTANCE,
+						new LispSymbol(p.substring(supplied + SUPPLIED_P.length()))));
 			}
 			return new LispSymbol(p);
 		}
@@ -1107,26 +1132,27 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * A comparison ({@code = < > <= >= /=}, the {@code char} family): two required
-	 * parameters and a rest list, so the two-argument call -- every sort predicate's --
-	 * binds the rest to nil and conses nothing, and a longer call walks the chain:
+	 * A comparison ({@code = < > <= >= /=}, the {@code char} family): the operator's own
+	 * {@code (a &rest r)}, spelled with the second argument as an optional so that the
+	 * two-argument call -- every sort predicate's -- passes it as a parameter and conses
+	 * no rest list ({@code LambdaLists.toNative}), and a longer call walks the chain:
 	 *
 	 * <pre>
-	 * (lambda (a b &amp;rest r)
-	 *   (if r
+	 * (lambda (a &amp;optional (b nil bp) &amp;rest r)
+	 *   (if bp
 	 *       (if (op a b)                                  ; adjacent pairs
 	 *           (do ((x b (car l)) (l r (cdr l))) ((null l) t)
 	 *             (if (op x (car l)) nil (return nil)))
 	 *           nil)
-	 *       (op a b)))
+	 *       (op a)))
 	 * </pre>
 	 *
-	 * {@code /=} and {@code char/=} compare every pair instead. A variadic
-	 * {@code (a &amp;rest r)} would take the one-argument call too, but it conses the
-	 * rest list on EVERY call: sorting 200,000 fixnums ten times through a variable
-	 * predicate took 21.7 s on wasmtime against 2.4 s for {@code (a b &amp;rest r)}
-	 * (2026-09-26), so {@code (funcall #'< 1)} stays a wrong count and
-	 * {@code BuiltinCallArity} keeps the call position's one-argument form.
+	 * {@code /=} and {@code char/=} compare every pair instead, and only a third argument
+	 * builds the list their walk needs. The one-argument call is the call position's own
+	 * one-argument form. {@code bp} is only ever a test, so it costs no boxed {@code t}
+	 * ({@code LambdaLists}). A plain {@code (a &amp;rest r)} consed the rest list on
+	 * EVERY call: sorting 200,000 fixnums ten times through a variable predicate took
+	 * 21.7 s on wasmtime against 2.4 s for {@code (a b)} (2026-09-26).
 	 * @param name the operator
 	 * @param allPairs whether every pair must satisfy it ({@code /=}), not only adjacent
 	 * ones
@@ -1136,7 +1162,7 @@ public final class BuiltinFunctionWrappers {
 		LispSymbol b = new LispSymbol("b");
 		LispSymbol r = new LispSymbol("r");
 		LispSymbol l = new LispSymbol("l");
-		LispVal chain;
+		LispVal fromTwo;
 		if (allPairs) {
 			LispSymbol m = new LispSymbol("m");
 			LispSymbol ok = new LispSymbol("ok");
@@ -1150,8 +1176,9 @@ public final class BuiltinFunctionWrappers {
 					new LispSymbol(LispNames.DO), listToCons(List.of(callV("l",
 							callV(LispNames.CONS, a, callV(LispNames.CONS, b, r)), callV(LispNames.CDR, l)))),
 					listToCons(List.of(orNull(l, ok), ok)), inner));
-			chain = listToCons(
+			LispVal chain = listToCons(
 					List.of(new LispSymbol(LispNames.LET), listToCons(List.of(callV("ok", LispTrue.INSTANCE))), outer));
+			fromTwo = listToCons(List.of(new LispSymbol(LispNames.IF), r, chain, call(name, "a", "b")));
 		}
 		else {
 			LispSymbol x = new LispSymbol("x");
@@ -1160,10 +1187,13 @@ public final class BuiltinFunctionWrappers {
 			LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO),
 					listToCons(List.of(callV("x", b, callV(LispNames.CAR, l)), callV("l", r, callV(LispNames.CDR, l)))),
 					listToCons(List.of(callV(LispNames.NULL, l), LispTrue.INSTANCE)), test));
-			chain = listToCons(List.of(new LispSymbol(LispNames.IF), call(name, "a", "b"), walk, LispNil.INSTANCE));
+			fromTwo = listToCons(List.of(new LispSymbol(LispNames.IF), call(name, "a", "b"), walk, LispNil.INSTANCE));
 		}
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), r, chain, call(name, "a", "b")));
-		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "r"), List.of(body));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"), fromTwo, call(name, "a")));
+		return new WrapperDef(name,
+				List.of("a", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
 	}
 
 	// (or (null list) (null ok)) -- the end test of comparison's all-pairs walk.
@@ -1173,22 +1203,56 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
-	 * {@code logand} / {@code logior} / {@code logxor}: {@code (lambda (a b &rest r)
-	 * (do ((v (op a b) (op v (car l))) (l r (cdr l))) ((null l) v)))} -- a two-argument
-	 * call conses nothing, for the reason {@link #comparison} gives (a
-	 * {@code (reduce #'logior data)} over a million fixnums ran 4.4 times slower on
-	 * wasmtime through the consing {@code (&amp;rest r)} shape {@code +} has), so the
-	 * zero- and one-argument calls stay wrong counts.
+	 * {@code logand} / {@code logior} / {@code logxor}: an identity fold
+	 * ({@link #identityFold}). The operator's own {@code (&rest r)} consed the rest list
+	 * on every call, and a two-argument call -- a {@code reduce}'s -- is the one these
+	 * are made in.
 	 * @param name the operator
+	 * @param identity the operator's identity
 	 */
-	private static WrapperDef bitwiseFold(String name) {
+	private static WrapperDef bitwiseFold(String name, long identity) {
+		return identityFold(name, new LispInteger(identity));
+	}
+
+	/**
+	 * A left fold over an associative operator with an identity ({@code + * gcd lcm}, the
+	 * bitwise ones): every argument optional and defaulting to the identity, so the
+	 * two-argument call -- a {@code reduce}'s, a sort key's -- passes both as parameters
+	 * and conses no rest list ({@code LambdaLists.toNative}):
+	 *
+	 * <pre>
+	 * (lambda (&amp;optional (a identity) (b identity) &amp;rest r)
+	 *   (do ((v (op a b) (op v (car l))) (l r (cdr l))) ((null l) v)))
+	 * </pre>
+	 *
+	 * Fewer arguments fold the identity in, as the operator's own left fold does -- the
+	 * empty call answers {@code (op identity identity)}, the identity; one answers
+	 * {@code (op a identity)}, so a non-number is the same type error there -- and the
+	 * operator is inlined twice, where a supplied-p arm would have been a third copy.
+	 * {@code (reduce #'+ data)} over a million fixnums ran 13 s on wasmtime through the
+	 * {@code (&amp;rest r)} shape, 0.24 s through this (2026-09-26).
+	 * @param name the operator
+	 * @param identity the operator's identity
+	 */
+	private static WrapperDef identityFold(String name, LispVal identity) {
+		return new WrapperDef(
+				name, List.of(LispNames.LAMBDA_OPTIONAL, "a" + DEFAULT + identity.print(),
+						"b" + DEFAULT + identity.print(), LispNames.LAMBDA_REST, "r"),
+				List.of(leftFold(name, call(name, "a", "b"))));
+	}
+
+	/**
+	 * {@code (do ((v first (op v (car l))) (l r (cdr l))) ((null l) v))}: {@code first}
+	 * folded left over the rest list {@code r} -- a two-argument call's is nil, so its
+	 * answer is {@code first} itself.
+	 */
+	private static LispVal leftFold(String op, LispVal first) {
 		LispSymbol v = new LispSymbol("v");
 		LispSymbol l = new LispSymbol("l");
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.DO),
-				listToCons(List.of(callV("v", call(name, "a", "b"), callV(name, v, callV(LispNames.CAR, l))),
+		return listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(callV("v", first, callV(op, v, callV(LispNames.CAR, l))),
 						callV("l", new LispSymbol("r"), callV(LispNames.CDR, l)))),
 				listToCons(List.of(callV(LispNames.NULL, l), v))));
-		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
 	/**
@@ -1374,36 +1438,23 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "c"), List.of(dispatch));
 	}
 
-	// Builds the inner two-argument fold lambda (lambda (a x) (op a x)). The op sits in
-	// call position, so the compilers inline the primitive (the surrounding (setq op
-	// (lambda ...)) wrapper only rebinds the variable namespace, not the function one).
-	private static LispVal foldLambda(String op) {
-		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
-				listToCons(List.of(new LispSymbol("a"), new LispSymbol("x"))), call(op, "a", "x")));
-	}
-
-	// (reduce (lambda (a x) (op a x)) list :initial-value init)
-	private static LispVal foldReduce(String op, LispVal list, LispVal init) {
-		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), foldLambda(op), list,
-				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), init));
-	}
-
-	// Variadic wrapper for an associative operator with an identity (e.g. + -> 0, * ->
-	// 1):
-	// (lambda (&rest r) (reduce (lambda (a x) (op a x)) r :initial-value identity)).
+	// Variadic wrapper for an associative operator with an identity (+ -> 0, * -> 1): an
+	// identity fold (identityFold), whose two-argument call conses nothing.
 	private static WrapperDef variadicIdentity(String name, LispVal identity) {
-		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"),
-				List.of(foldReduce(name, new LispSymbol("r"), identity)));
+		return identityFold(name, identity);
 	}
 
 	// Variadic wrapper for min/max (needs at least one argument; a single argument
-	// returns itself): (lambda (n &rest r) (reduce (lambda (a x) (op a x)) r
-	// :initial-value n)). The required n is what makes (funcall #'min) the count report
-	// the interpreter gives (MIN expects at least 1 argument, got 0); with a bare &rest
-	// it folded over nil and answered nil.
+	// returns itself): (lambda (n &optional (b nil bp) &rest r) (if bp <fold> n)), the
+	// fold starting at (op n b), so a two-argument call conses nothing. The required n
+	// is what makes (funcall #'min) the count report the interpreter gives (MIN expects
+	// at least 1 argument, got 0); with a bare &rest it folded over nil and answered nil.
 	private static WrapperDef variadicNonEmpty(String name) {
-		return new WrapperDef(name, List.of("n", LispNames.LAMBDA_REST, "r"),
-				List.of(foldReduce(name, new LispSymbol("r"), new LispSymbol("n"))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"),
+				leftFold(name, call(name, "n", "b")), new LispSymbol("n")));
+		return new WrapperDef(name,
+				List.of("n", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
 	}
 
 	// Variadic wrapper for append, the same shape as nconc's below. It has to be
@@ -1412,34 +1463,42 @@ public final class BuiltinFunctionWrappers {
 	// function with no arguments, which is exactly how esrap's
 	// (reduce #'append all-children) answers nil for a result node with no children.
 	private static WrapperDef variadicAppend() {
-		LispVal reduce = listToCons(
-				List.of(new LispSymbol(LispNames.REDUCE), foldLambda(LispNames.APPEND), new LispSymbol("r")));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), reduce, LispNil.INSTANCE));
-		return new WrapperDef(LispNames.APPEND, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+		return foldReturningLone(LispNames.APPEND);
 	}
 
-	// Variadic wrapper for nconc: (lambda (&rest r) (if r (reduce (lambda (a x) (nconc a
-	// x)) r) nil)). A left fold over the 2-arg nconc yields correct CL semantics -- each
-	// pair links the accumulator's last cdr to the next argument and the fold returns the
-	// first non-nil argument; reduce returns a lone element unchanged, and the guard maps
-	// zero args to nil.
+	// Variadic wrapper for nconc, append's shape. A left fold over the 2-arg nconc yields
+	// correct CL semantics -- each pair links the accumulator's last cdr to the next
+	// argument and the fold returns the first non-nil argument.
 	private static WrapperDef variadicNconc() {
-		LispVal reduce = listToCons(
-				List.of(new LispSymbol(LispNames.REDUCE), foldLambda(LispNames.NCONC), new LispSymbol("r")));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), reduce, LispNil.INSTANCE));
-		return new WrapperDef(LispNames.NCONC, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+		return foldReturningLone(LispNames.NCONC);
+	}
+
+	// (lambda (&optional a (b nil bp) &rest r) (if bp <fold from (op a b)> a)): a lone
+	// argument comes back as it is -- not copied, not type-checked, as CL's (append x)
+	// -- none answers a's default, nil, and a two-argument call conses nothing.
+	private static WrapperDef foldReturningLone(String name) {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"),
+				leftFold(name, call(name, "a", "b")), new LispSymbol("a")));
+		return new WrapperDef(name,
+				List.of(LispNames.LAMBDA_OPTIONAL, "a", "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
 	}
 
 	// Variadic wrapper for - and /, which have distinct one-argument semantics
 	// ((- x) = -x, (/ x) = 1/x) from the multi-argument left fold:
-	// (lambda (n &rest r) (if r (reduce ... r :initial-value n) (op unaryLeft n))).
-	// Neither has an identity, so the first argument is required: (funcall #'-) is the
-	// interpreter's - expects at least 1 argument, got 0, not a type-error on nil.
+	// (lambda (n &optional (b nil bp) &rest r) <fold from (op (if bp n unaryLeft) (if bp
+	// b n))>)
+	// -- the one call covers both, so the operator is inlined twice, and a two-argument
+	// call conses nothing. Neither has an identity, so the first argument is required:
+	// (funcall #'-) is the interpreter's - expects at least 1 argument, got 0, not a
+	// type-error on nil.
 	private static WrapperDef variadicUnaryLeft(String name, LispVal unaryLeft) {
-		LispVal multi = foldReduce(name, new LispSymbol("r"), new LispSymbol("n"));
-		LispVal single = callV(name, unaryLeft, new LispSymbol("n"));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), multi, single));
-		return new WrapperDef(name, List.of("n", LispNames.LAMBDA_REST, "r"), List.of(body));
+		LispSymbol bp = new LispSymbol("bp");
+		LispVal left = listToCons(List.of(new LispSymbol(LispNames.IF), bp, new LispSymbol("n"), unaryLeft));
+		LispVal right = listToCons(List.of(new LispSymbol(LispNames.IF), bp, new LispSymbol("b"), new LispSymbol("n")));
+		return new WrapperDef(name,
+				List.of("n", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(leftFold(name, callV(name, left, right))));
 	}
 
 	// (getf kw :indicator) -- runtime keyword extraction from the wrapper's rest list.
@@ -2247,7 +2306,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.EXPT), variadicIdentity(LispNames.GCD, new LispInteger(0)),
 			variadicIdentity(LispNames.LCM, new LispInteger(1)),
 			// Bitwise integer operations
-			bitwiseFold(LispNames.LOGAND), bitwiseFold(LispNames.LOGIOR), bitwiseFold(LispNames.LOGXOR),
+			bitwiseFold(LispNames.LOGAND, -1), bitwiseFold(LispNames.LOGIOR, 0), bitwiseFold(LispNames.LOGXOR, 0),
 			unary(LispNames.LOGNOT), binary(LispNames.LOGANDC1), binary(LispNames.LOGANDC2), binary(LispNames.LOGORC1),
 			binary(LispNames.LOGORC2), binary(LispNames.LOGNAND), binary(LispNames.LOGNOR),
 			variadicIdentity(LispNames.LOGEQV, new LispInteger(-1)), binary(LispNames.ASH),

@@ -5744,6 +5744,13 @@ public final class Environment implements Scope {
 					return new LispString(
 							ClosRegistry.aritySurplusMessage((int) ((LispInteger) args.get(0)).value(), got));
 				}));
+		// A physical optional's prologue test (LambdaLists): an flet/labels definition
+		// reaches the interpreter in the compilers' physical shape, and its missing
+		// optionals are bound to LambdaLists.UNSUPPLIED.
+		env.defineFunction(LispNames.SUPPLIED_P_INTERNAL, new LispFunction(LispNames.SUPPLIED_P_INTERNAL, args -> {
+			requireArgCount(LispNames.SUPPLIED_P_INTERNAL, args, 1);
+			return args.get(0) == am.ik.rontolisp.LambdaLists.UNSUPPLIED ? LispNil.INSTANCE : LispTrue.INSTANCE;
+		}));
 		// The destructuring missing-element message (LambdaLists): required and got
 		// are literals, the message the lower-bound half of the arity report.
 		env.defineFunction(LispNames.ARITY_MISSING_MESSAGE_INTERNAL,

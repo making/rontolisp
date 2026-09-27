@@ -30,7 +30,8 @@ final class JvmLambdaCompiler {
 	 */
 	static void compileValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()));
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS);
 		List<String> paramNames = nf.paramNames();
 		// A lambda body's tail settles the multiple-value channel like a defun's does
 		// (LispMacroExpander.settleDefunTails ran over those before Pass 1): a
@@ -56,8 +57,8 @@ final class JvmLambdaCompiler {
 		// The lambda's code is written in this method's function -- unless it is an async
 		// body, whose report line names no function (its hop line names the async one).
 		String asyncHead = ctx.asyncBodyHeads.get(cons);
-		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
-				new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
+		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
+				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
 				asyncHead == null ? ctx.writtenIn : null));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
@@ -111,15 +112,16 @@ final class JvmLambdaCompiler {
 	 */
 	static void compileCall(LispCons lambda, LispCons call, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> lambdaParts = lambda.toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
-				lambdaParts.subList(2, lambdaParts.size()));
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS);
 		List<String> paramNames = nf.paramNames();
 		// The body is a function body however it is called: its tail settles the
 		// multiple-value channel (see compileValue).
 		List<LispVal> bodyExprs = ctx.globalFields.containsKey(LispNames.MV_SPILL)
 				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
 		List<LispVal> callArgs = call.toList();
-		int required = paramNames.size() - (nf.variadic() ? 1 : 0);
+		int required = nf.required();
+		int positional = required + nf.optionals();
 		int supplied = callArgs.size() - 1;
 		// A count the lambda list rules out signals when the call runs, as a named
 		// function's direct call does (compiler/DefinedCallArity).
@@ -145,19 +147,30 @@ final class JvmLambdaCompiler {
 		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
 				ctx.functions.keySet(), ctx.captureMemo);
 		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
-		for (int i = 0; i < required; i++) {
+		for (int i = 0; i < positional; i++) {
 			String name = paramNames.get(i);
+			// A physical optional the call does not pass binds the UNSUPPLIED marker the
+			// body's prologue tests (JvmPhysicalArgs).
+			boolean passed = i < supplied;
 			if (capturedParams.contains(name)) {
 				ctx.emit(Opcode.ICONST_1);
 				ctx.emit(Opcode.ANEWARRAY);
 				ctx.emitU2(ctx.objectClass.index());
 				ctx.emit(Opcode.DUP);
 				ctx.emit(Opcode.ICONST_0);
-				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+				if (passed) {
+					JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+				}
+				else {
+					JvmPhysicalArgs.emitUnsupplied(ctx, className);
+				}
 				ctx.emit(Opcode.AASTORE);
 			}
-			else {
+			else if (passed) {
 				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+			}
+			else {
+				JvmPhysicalArgs.emitUnsupplied(ctx, className);
 			}
 			int slot = ctx.allocLocal(name);
 			ctx.emit(Opcode.ASTORE);
@@ -168,14 +181,14 @@ final class JvmLambdaCompiler {
 			// Evaluate the surplus arguments left to right into temps, then link them
 			// into a cons list bound to the rest parameter.
 			List<Integer> extraSlots = new ArrayList<>();
-			for (int i = required; i < supplied; i++) {
+			for (int i = positional; i < supplied; i++) {
 				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
 				int s = ctx.allocTemp();
 				ctx.emit(Opcode.ASTORE);
 				ctx.emit(s);
 				extraSlots.add(s);
 			}
-			String restName = paramNames.get(required);
+			String restName = paramNames.get(positional);
 			int restSlot = ctx.allocLocal(restName);
 			ctx.emit(Opcode.ACONST_NULL);
 			ctx.emit(Opcode.ASTORE);

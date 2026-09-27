@@ -1057,7 +1057,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
 		// Read before the lambda lists lose their &optional bounds.
 		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
-		program = LambdaLists.desugarProgram(program);
+		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
@@ -1998,8 +1998,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(mangleMethodName(defun.name));
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, false,
-					methodref, nameUtf8, descUtf8));
+			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
+					false, methodref, nameUtf8, descUtf8));
 		}
 
 		// Validate the jvm-export directives now that every defun (and its mangled
@@ -2769,8 +2769,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(lambda.methodName);
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic, true,
-					methodref, nameUtf8, descUtf8);
+			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic,
+					lambda.optionals, true, methodref, nameUtf8, descUtf8);
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
@@ -3092,14 +3092,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (int arity : indirectCallArities) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting));
+					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting,
+					mainCtx.unsupplied));
 		}
 		// The spread dispatcher _apply calls: it takes the argument list whole, so an
 		// apply through a COMPUTED designator has no arity ceiling. Emitted with _apply.
 		if (usesApplyRuntime) {
-			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos,
-					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-					applyRefForDispatch, lookupRefForDispatch, true, dispatchableFuncIds, arityReporting));
+			dispatchMethods.addAll(
+					JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass,
+							objectArrayClass, integerClass, integerValue, objectClass, stringClass, applyRefForDispatch,
+							lookupRefForDispatch, true, dispatchableFuncIds, arityReporting, mainCtx.unsupplied));
 		}
 
 		// Build the runtime reader methods (read/load), only when used
@@ -4104,6 +4106,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (QuotePool.QuoteField qf : mainCtx.quotePool.fields()) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, qf.name(),
 					java.util.Objects.requireNonNull(mainCtx.quotePool.fieldDesc));
+		}
+		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
+		// create it on first use, in a class with a callee that takes physical
+		// optionals. Every body and dispatcher is built by now, so nothing may reference
+		// it for the first time past this point; the shake drops all three with the last
+		// caller.
+		mainCtx.unsupplied.freeze();
+		if (mainCtx.unsupplied.used()) {
+			JvmUnsupplied.Members marker = mainCtx.unsupplied.members();
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.fieldName(), marker.fieldDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
+					marker.methodDesc(), 2, 0, marker.accessorCode(), List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					marker.initName(), marker.methodDesc(), 2, 0, marker.initCode(), List.of());
+			if (marker.optArgCode() != null) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()), 2, 1,
+						marker.optArgCode(), List.of());
+			}
 		}
 
 		if (sizedMain != null) {
@@ -5583,9 +5604,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
-				lambdaParts.subList(2, lambdaParts.size()));
-		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS);
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
 	}
 
 	// A (rontolisp:wasm-import ...) stub: a defun of the declared arity whose body
@@ -5668,18 +5689,43 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * A parsed defun. {@code paramNames} are the physical parameters (when
 	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
-	 * remaining arguments as a cons list).
+	 * remaining arguments as a cons list, and the {@code optionals} names before it are
+	 * physical optionals, {@link LambdaLists.NativeForm}).
 	 */
-	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, int optionals, List<LispVal> bodyExprs) {
+
+		/** A defun without physical optionals. */
+		DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+			this(name, paramNames, variadic, 0, bodyExprs);
+		}
+
 	}
 
 	/**
 	 * Registry entry for a compiled function. {@code paramCount} is the physical JVM
-	 * parameter count; when {@code variadic}, the last parameter is the rest list and the
-	 * callable minimum is {@code paramCount - 1} arguments.
+	 * parameter count; when {@code variadic}, the last parameter is the rest list, the
+	 * {@code optionals} before it are physical optionals (an argument or the UNSUPPLIED
+	 * marker, {@link JvmPhysicalArgs}), and the callable minimum is {@link #required()}
+	 * arguments.
 	 */
-	record FunctionInfo(int funcId, int paramCount, boolean variadic, boolean isClosure, MethodrefConstant methodref,
-			Utf8Constant nameUtf8, Utf8Constant descUtf8) {
+	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
+			MethodrefConstant methodref, Utf8Constant nameUtf8, Utf8Constant descUtf8) {
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramCount - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
+		/**
+		 * {@return the parameters before the rest list} -- the required ones and the
+		 * physical optionals
+		 */
+		int positional() {
+			return this.paramCount - (this.variadic ? 1 : 0);
+		}
+
 	}
 
 	/**
@@ -5705,8 +5751,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param writtenIn the name the report calls the program function its code is written
 	 * in, or {@code null} for none (the top level, an async body)
 	 */
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
+			List<LispVal> bodyExprs, List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
 			@Nullable String writtenIn) {
 	}
 
@@ -7173,11 +7219,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final QuotePool quotePool;
 
+		/**
+		 * The compilation-wide UNSUPPLIED marker (the static field a caller passes for a
+		 * physical optional it has no argument for, {@link JvmPhysicalArgs}); one
+		 * instance shared across every context of a compilation through the single
+		 * builder, like {@link #quotePool}.
+		 */
+		final JvmUnsupplied unsupplied;
+
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
 			this.bigIntPool = builder.bigIntPool;
 			this.quotePool = builder.quotePool;
+			this.unsupplied = builder.unsupplied;
 			this.dynamic = builder.dynamic;
 			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
@@ -7473,6 +7528,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * from the same builder shares it.
 			 */
 			private final QuotePool quotePool = new QuotePool();
+
+			/**
+			 * One UNSUPPLIED marker per builder (= per compilation): every context built
+			 * from the same builder shares it.
+			 */
+			private final JvmUnsupplied unsupplied = new JvmUnsupplied();
 
 			/**
 			 * One source-site table per builder (= per compilation), or none when the

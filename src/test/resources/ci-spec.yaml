@@ -18721,12 +18721,85 @@ cases:
       (print (list (with-output-to-string (s) (ci-wv-call #'write-string "abcdef" s :start 1 :end 3))
                    (with-input-from-string (s "") (ci-wv-call #'read-char-no-hang s nil :eof))
                    (symbolp (ci-wv-call #'gensym "WV")) (symbol-name (ci-wv-call #'intern "WV-SYM" "KEYWORD"))))
+      (print (list (ci-wv-call #'< 1) (ci-wv-call #'char= #\a) (ci-wv-call #'logand) (ci-wv-call #'logior 5)
+                   (ci-wv-call #'+) (ci-wv-call #'* 5) (ci-wv-call #'+ 1 2) (ci-wv-call #'max 3) (ci-wv-call #'- 3)
+                   (ci-wv-call #'append) (ci-wv-call #'nconc (list 1) nil (list 2))))
     expected: |
       (T NIL NIL T T 1 15)
       (15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
       (255 12 "zz" "aBCd" "one Two" "abCD" T)
       (8 #(1 2 0) #(A B C) #(8 9))
       ("bc" :EOF T "WV-SYM")
+      (T T -1 5 0 5 3 3 -3 NIL (1 2))
+
+  # An optional argument travels as a parameter of its own on every call path
+  # (LambdaLists.toNative): direct, a function value at each arity, a literal apply
+  # aligned and not, a computed apply, eval, an inline lambda -- a missing one is the
+  # UNSUPPLIED marker the prologue tests, a surplus past the last optional the rest list.
+  # A default never sees a LATER parameter, and a list wider than the physical budget
+  # keeps its trailing optionals on the rest list (ci-oa-wide, ci-oa-full).
+  - name: optional-arguments-travel-as-parameters
+    source: |
+      (defvar *ci-oa-special* :global)
+      (defun ci-oa-f (a &optional (b 10 bp) (c (+ a b))) (list a b bp c))
+      (defun ci-oa-g (a &optional b &rest r) (list a b r))
+      (defun ci-oa-k (&optional (x 1) &key (y 2)) (list x y))
+      (defun ci-oa-late (&optional (x *ci-oa-special*) (*ci-oa-special* :bound)) (list x *ci-oa-special*))
+      (defun ci-oa-test-only (&optional (a 1 ap)) (if ap (list :given a) (list :default a)))
+      (defun ci-oa-close (&optional (n 0)) (lambda () (incf n)))
+      (defun ci-oa-wide (p1 p2 p3 p4 p5 p6 p7 p8 &optional (o1 :d1) (o2 :d2) (o3 :d3))
+        (list p1 p8 o1 o2 o3))
+      (defun ci-oa-full (p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional (o1 :d1)) (list p9 o1))
+      (defun ci-oa-count (n &optional (acc 0)) (if (= n 0) acc (ci-oa-count (- n 1) (+ acc 1))))
+      (print (list (ci-oa-f 1) (ci-oa-f 1 2) (ci-oa-f 1 2 3) (ci-oa-f 1 nil 0)))
+      (print (list (ci-oa-g 1) (ci-oa-g 1 2) (ci-oa-g 1 2 3 4)))
+      (print (list (ci-oa-k) (ci-oa-k 5) (ci-oa-k 5 :y 6)))
+      (print (list (ci-oa-late) (ci-oa-late :x) (ci-oa-late :x :y) *ci-oa-special*))
+      (print (list (ci-oa-test-only) (ci-oa-test-only nil) (ci-oa-test-only 7)))
+      (print (let ((c (ci-oa-close 5))) (funcall c) (list (funcall c) (funcall (ci-oa-close)))))
+      (print (list (ci-oa-wide 1 2 3 4 5 6 7 8) (ci-oa-wide 1 2 3 4 5 6 7 8 :a :b) (ci-oa-wide 1 2 3 4 5 6 7 8 :a :b :c)))
+      (print (list (ci-oa-full 1 2 3 4 5 6 7 8 9) (ci-oa-full 1 2 3 4 5 6 7 8 9 :x)))
+      (print (ci-oa-count 10000))
+      (let ((f #'ci-oa-f) (g #'ci-oa-g) (w #'ci-oa-wide))
+        (print (list (funcall f 1) (funcall f 1 2) (funcall f 1 2 3)))
+        (print (list (funcall g 1) (funcall g 1 2) (funcall g 1 2 3 4 5)))
+        (print (list (apply f '(1)) (apply f 1 '(2)) (apply f 1 2 '(3)) (apply g 1 2 3 '(4))))
+        (print (list (funcall w 1 2 3 4 5 6 7 8 :a) (apply w 1 2 3 4 5 6 7 8 '(:a :b :c)))))
+      (print (list (apply #'ci-oa-f '(1)) (apply #'ci-oa-f 1 '(2)) (apply #'ci-oa-f 1 2 3 nil) (apply #'ci-oa-g 1 2 3 '(4 5))
+                   (apply #'ci-oa-g 1 '(2 3))))
+      (print (list (eval '(ci-oa-f 7)) (eval '(ci-oa-f 7 8)) (eval '(ci-oa-g 1 2 3))))
+      (print (list ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1)
+                   ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1 2 5)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2) '(10 20)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2)))
+      (print (flet ((lf (a &optional (b 2)) (* a b))) (list (lf 3) (lf 3 4) (funcall #'lf 5))))
+      (print (labels ((lr (n &optional (acc 1)) (if (= n 0) acc (lr (- n 1) (* acc n))))) (lr 5)))
+      (print (list (handler-case (ci-oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (funcall #'ci-oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (apply #'ci-oa-f '(1 2 3 4)) (program-error (e) (princ-to-string e)))
+                   (handler-case (ci-oa-full 1 2 3 4 5 6 7 8 9 10 11) (program-error (e) (princ-to-string e)))))
+    expected: |
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 NIL T 0))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4)))
+      ((1 2) (5 2) (5 6))
+      ((:GLOBAL :BOUND) (:X :BOUND) (:X :Y) :GLOBAL)
+      ((:DEFAULT 1) (:GIVEN NIL) (:GIVEN 7))
+      (7 1)
+      ((1 8 :D1 :D2 :D3) (1 8 :A :B :D3) (1 8 :A :B :C))
+      ((9 :D1) (9 :X))
+      10000
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4 5)))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4)))
+      ((1 8 :A :D2 :D3) (1 8 :A :B :C))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4 5)) (1 2 (3)))
+      ((7 10 NIL 17) (7 8 T 15) (1 2 (3)))
+      ((1 3 4 NIL) (1 2 5 T))
+      (11 22)
+      (101 102)
+      (6 12 10)
+      120
+      ("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")
 
   # A DIRECT call of a wrapped built-in with a count its call shape rules out is the
   # interpreter's program-error at run time, its arguments evaluated first, with a

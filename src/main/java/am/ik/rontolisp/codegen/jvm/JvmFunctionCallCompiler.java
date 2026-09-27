@@ -65,54 +65,24 @@ final class JvmFunctionCallCompiler {
 		JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
 			List<LispVal> args = cons.toList();
-			int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 			// A count the lambda list rules out is the interpreter's program-error when
 			// the call RUNS, its arguments evaluated first, with a compile-time warning
 			// (compiler/DefinedCallArity): the call may sit in a branch never taken or
 			// under a program-error handler.
-			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, required, fi.variadic());
+			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, fi.required(), fi.variadic());
 			if (wrongCount != null) {
 				JvmExprCompiler.compileExpr(wrongCount, ctx, className);
 				return;
 			}
-			for (int i = 1; i <= required; i++) {
-				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			// The arguments a parameter takes go straight onto the stack, the optionals
+			// not passed are the UNSUPPLIED marker, and only a surplus past the physical
+			// optionals is linked into the rest list (JvmPhysicalArgs).
+			List<Runnable> emitters = new ArrayList<>();
+			for (int i = 1; i < args.size(); i++) {
+				LispVal arg = args.get(i);
+				emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 			}
-			if (fi.variadic()) {
-				// Evaluate the surplus arguments left to right into temps, then link
-				// them into a cons list passed as the trailing rest parameter.
-				List<Integer> extraSlots = new java.util.ArrayList<>();
-				for (int i = required + 1; i < args.size(); i++) {
-					JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-					int s = ctx.allocTemp();
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(s);
-					extraSlots.add(s);
-				}
-				int restSlot = ctx.allocTemp();
-				ctx.emit(Opcode.ACONST_NULL);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(restSlot);
-				for (int k = extraSlots.size() - 1; k >= 0; k--) {
-					ctx.emit(Opcode.ICONST_2);
-					ctx.emit(Opcode.ANEWARRAY);
-					ctx.emitU2(ctx.objectClass.index());
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ICONST_0);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(extraSlots.get(k));
-					ctx.emit(Opcode.AASTORE);
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ICONST_1);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(restSlot);
-					ctx.emit(Opcode.AASTORE);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(restSlot);
-				}
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restSlot);
-			}
+			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(fi.methodref().index());
 		}

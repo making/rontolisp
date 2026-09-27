@@ -1119,7 +1119,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- variadic + - * / : left-fold via the binary wrapper ----
+		// ---- variadic + - * / : left-fold through the wrapper's two-argument call ----
 		getLocal(w, OFF);
 		i32(w, off.of(LispNames.ADD));
 		w.write(Instruction.I32_EQ);
@@ -1206,10 +1206,11 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
-		// The wrappers are binary (a sort predicate stays a two-argument call), so a
-		// chain goes pairwise through them here: adjacent pairs for the ordering
-		// operators, every pair for /=. The registry path below would evaluate every
-		// argument too and then report the binary wrapper's count.
+		// Pairwise through the wrapper's two-argument call, which passes its second
+		// argument as a physical optional (no rest list): adjacent pairs for the
+		// ordering operators, every pair for /=. The wrappers take any count now
+		// ((a &optional b &rest r)), so the registry path below would answer the same;
+		// this arm predates that and is kept as the cons-free route.
 		emitComparisonChain(w, off, counts, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, OFF, ADDR, ARITY,
 				IDX, CH, identityHash);
 
@@ -1286,7 +1287,10 @@ final class WasmEvalRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	/** The comparison operators {@code _eval} chains pairwise over binary wrappers. */
+	/**
+	 * The comparison operators {@code _eval} chains pairwise through their wrappers'
+	 * two-argument calls.
+	 */
 	static final List<String> COMPARISON_OPERATORS = List.of(LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE,
 			LispNames.GE, LispNames.NE);
 
@@ -1399,7 +1403,7 @@ final class WasmEvalRuntimeBuilder {
 		}
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
-		// fn = the binary wrapper, as a function value
+		// fn = the operator's wrapper, as a function value
 		getLocal(w, offSlot);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
