@@ -275,16 +275,18 @@ inline `((lambda ...) ...)`.** The interpreter's answers are unchanged.
   | program | before | after |
   |---|---|---|
   | `(print (+ 1 2))`, hello_world, pi_approx | | identical |
-  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 10,293 / 981 / 2,126 | 10,184 / 1,330 / 2,477 |
+  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 10,293 / 981 / 2,126 | 10,184 / 981 / 2,126 |
   | two optional defuns, optionals passed | 10,833 / 4,556 / 5,724 | 10,726 / 3,553 / 4,721 |
   | `(print (sort (list 3 1 2) #'<))` | 33,256 / 23,158 / 24,361 | 30,590 / 19,987 / 21,190 |
   | `(print (reduce #'+ '(1 2 3)))` | 24,634 / 8,812 / 9,945 | 15,577 / 4,589 / 5,731 |
   | `(print (eval '(+ 1 2)))` | 355,090 / 262,266 / 265,032 | 357,283 / 262,201 / 264,967 |
   | zlib | 188,659 / 127,495 / 131,568 | 186,480 / 126,194 / 130,267 |
 
-  The wasm +349 B of the one-default call is the ref-type fold: `(if (ref.eq p marker) 2
-  p)` is opaque to `WasmRefTypeFolder`, so `b`'s set keeps `TYPE_CELL` where the old
-  prologue folded to the constant 2 and `+` lost its fixnum-only fold (`.todo/a51`).
+  The one-default call measured 1,330 / 2,477 at first: `(if (ref.eq p marker) 2 p)` was
+  opaque to `WasmRefTypeFolder`, so `b`'s set kept `TYPE_CELL` and `+` its non-fixnum
+  arms. The fold now treats the marker global as a singleton object and decides the
+  `ref.eq` (`.kb/wasm-ref-type-fold.md`, "Singleton objects"; 2026-09-27), pinned by
+  `WasmRefTypeFolderTest.anOptionalNoCallPassesCostsNothingOnceTheMarkerTestIsDecided`.
 
 ## Variadic calling convention (both compilers)
 Physically fixed-arity: required params, the physical optionals, then one trailing

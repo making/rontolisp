@@ -21,7 +21,9 @@ import am.ik.wasm.Type;
  * {@code struct.new TYPE_CELL} no Lisp value can be {@code ref.eq} to. nil cannot mark an
  * argument that was not passed -- nil is {@code ref.null}, a value a caller passes like
  * any other. Only a {@code %supplied-p} prologue reads a physical optional, so the marker
- * never reaches a Lisp binding.
+ * never reaches a Lisp binding. The global being immutable and initialized by an
+ * allocation is what lets {@code WasmRefTypeFolder} decide the {@code ref.eq}: where no
+ * call leaves the optional out (or every call does), the prologue folds to one arm.
  */
 final class WasmPhysicalArgs {
 
