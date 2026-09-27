@@ -5526,6 +5526,39 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFunctionValueArefChecksRankAndBounds() throws Exception {
+		// #'aref used as a FUNCTION VALUE (apply/funcall, not call position) is a
+		// synthetic wrapper (BuiltinFunctionWrappers#arefFoldBody): a Horner fold of the
+		// subscript list over array-dimensions that used to check only the total size,
+		// never the subscript count or each axis's own bound -- (apply #'aref m '(0 2))
+		// on a 2x2 array silently answered m's row-major element 3 instead of naming the
+		// out-of-range column, and (apply #'aref m '(1)) silently answered the row-major
+		// element at index 1 instead of rejecting the short subscript list. Call position
+		// ((aref m 0 2)) already reported both correctly on every backend; this pins the
+		// function-value path to the same report (todo a58). #'array-row-major-index
+		// shares the same fold and needs the same checks.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				(print (te (lambda () (apply #'aref *m* '(0 2)))))
+				(print (te (lambda () (apply #'aref *m* '(1)))))
+				(print (apply #'array-row-major-index *m* '(1 1)))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
+				""")).isEqualTo("""
+				4
+				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+				3
+				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+	}
+
+	@Test
 	void compileAndRunRowMajorArefReadsAndWritesFlat() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

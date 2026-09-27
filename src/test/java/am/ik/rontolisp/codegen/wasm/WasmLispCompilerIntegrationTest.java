@@ -20625,6 +20625,52 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileFunctionValueArefChecksRankAndBounds() throws Exception {
+		// #'aref used as a FUNCTION VALUE (apply/funcall, not call position) is a
+		// synthetic wrapper (BuiltinFunctionWrappers#arefFoldBody): a Horner fold of the
+		// subscript list over array-dimensions that used to check only the total size,
+		// never the subscript count or each axis's own bound -- (apply #'aref m '(0 2))
+		// on a 2x2 array silently answered m's row-major element 3 instead of naming the
+		// out-of-range column, and (apply #'aref m '(1)) silently answered the row-major
+		// element at index 1 instead of rejecting the short subscript list. Call position
+		// ((aref m 0 2)) already reported both correctly on every backend (bare traps on
+		// WASM, per compileArefRejectsAWrongSubscriptCount above); this pins the
+		// function-value path to the interpreter/JVM's catchable report instead (todo
+		// a58), since the fold is a portable core-forms `error`, not the array compiler's
+		// own bare-trap intrinsic. #'array-row-major-index shares the same fold and needs
+		// the same checks.
+		//
+		// Through the CLI's front end (CompileFrontendAccess), not the bare
+		// compileAndRun: taking #'aref/#'array-row-major-index as a value only NOW pulls
+		// in the type-error-datum/type-error-expected-type prelude accessors this test's
+		// own `te` helper calls, and only CompileFrontend's real splice order (not
+		// WasmLispCompiler#compile's own bare-program convenience pass, which every other
+		// caller here feeds an already-macro-expanded program) resolves them.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				(print (te (lambda () (apply #'aref *m* '(0 2)))))
+				(print (te (lambda () (apply #'aref *m* '(1)))))
+				(print (apply #'array-row-major-index *m* '(1 1)))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
+				""";
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo("""
+					4
+					("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+					(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+					3
+					("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+					(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+	}
+
+	@Test
 	void compileRowMajorArefReadsAndWritesFlat() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

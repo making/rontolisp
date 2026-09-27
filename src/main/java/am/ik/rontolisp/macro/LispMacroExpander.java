@@ -20504,12 +20504,16 @@ public final class LispMacroExpander {
 				// their wrappers run the bounds check, which signals type-error for
 				// the same reason. #'read / #'read-from-string: their
 				// wrappers can read a #P"..." pathname instance, like the head case.
+				// #'aref / #'array-row-major-index (todo a58): the shared fold's per-axis
+				// bound check and subscript-count check signal a type-error/simple-error
+				// the same way.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
 								|| LispNames.READ_SEQUENCE.equals(fn.name())
 								|| LispNames.WRITE_SEQUENCE.equals(fn.name()) || LispNames.READ.equals(fn.name())
-								|| LispNames.READ_FROM_STRING.equals(fn.name()));
+								|| LispNames.READ_FROM_STRING.equals(fn.name()) || LispNames.AREF.equals(fn.name())
+								|| LispNames.ARRAY_ROW_MAJOR_INDEX.equals(fn.name()));
 			case LispNames.ERROR, LispNames.WARN, LispNames.CERROR: {
 				List<LispVal> parts = form.toList();
 				// (cerror continue-control datum args...) drops its first argument.

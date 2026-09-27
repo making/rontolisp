@@ -19446,6 +19446,38 @@ class LispEvaluatorTest {
 			.print()).isEqualTo("(\"CHAR: The value 3 is not of type (INTEGER 0 (3))\" (INTEGER 0 (3)))");
 	}
 
+	@Test
+	void functionValueArefAndArrayRowMajorIndexCheckRankAndBounds() {
+		// #'aref already goes through Environment's own AREF LispFunction
+		// (registerArrays),
+		// so it was never affected by this bug -- pinned here alongside
+		// #'array-row-major-index, which had no such native registration and fell back to
+		// BuiltinFunctionWrappers' shared Horner fold (arefFoldBody/rowMajorFoldBody),
+		// unchecked until todo a58. The compiled-backend twins are
+		// JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds and
+		// WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				(print (te (lambda () (apply #'aref *m* '(0 2)))))
+				(print (te (lambda () (apply #'aref *m* '(1)))))
+				(print (apply #'array-row-major-index *m* '(1 1)))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
+				""";
+		assertThat(printedLines(source)).isEqualTo("""
+				4
+				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+				3
+				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+	}
+
 	// A sequence operator, an array accessor and a hash-table accessor handed a value
 	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
 	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The

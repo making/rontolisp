@@ -1681,6 +1681,22 @@ on wasm-GC even in EH mode.
   `standalone:` `uncaught-out-of-range-subscript-report`, and the
   `outOfRangeSubscriptsAreTypeErrorsNamingTheirBound` triple (`LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+- **`#'aref` / `#'array-row-major-index` as a FUNCTION VALUE** (2026-09-27, `.todo/a58`) shared one
+  Horner fold (`BuiltinFunctionWrappers.rowMajorFoldBody`) that checked only the row-major TOTAL,
+  never the subscript count or each axis's own bound -- `(apply #'aref m '(0 2))` on a 2x2 array
+  silently answered `m`'s row-major element 3 instead of naming the out-of-range column, and
+  `(apply #'aref m '(1))` silently answered the row-major element at index 1 instead of rejecting
+  the short subscript list. The fold now rejects a subscript COUNT that does not match the rank
+  with a plain (non-`type-error`) `error` reading `aref: expected N subscripts, got M`, and checks
+  each subscript against its own dimension inside the loop, signalling the same `type-error` the
+  call-position path does -- byte-identical text, catchable the same way, on the interpreter, JVM
+  and both wasm backends (`#'aref`'s call-position bound check is a separate, already-correct
+  backend intrinsic and is unaffected). `#'aref` reached the interpreter's native `AREF`
+  `LispFunction` already and so was never wrong there; `#'array-row-major-index` had no such native
+  registration and fell through to the unchecked fold on every backend, interpreter included.
+  Pinned by `LispEvaluatorTest#functionValueArefAndArrayRowMajorIndexCheckRankAndBounds`,
+  `JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds` and
+  `WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds`.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
