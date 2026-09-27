@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds WASM bytecode for the string runtime helpers that produce or compare strings:
@@ -2160,24 +2161,46 @@ final class WasmStringRuntimeBuilder {
 	 * range is copied into a fresh quoted heap string; for a list the elements from
 	 * {@code start} up to {@code end} are copied into a fresh cons chain. A nil
 	 * {@code end} defaults to the sequence length.
+	 * <p>
+	 * The string branch checks {@code 0 <= start <= end <= (length seq)} before
+	 * translating the character indices to byte offsets (todo a42): in EH mode a
+	 * violation throws the interpreter's exact
+	 * {@code "SUBSEQ: invalid bounds S, E for string of length N"} text on
+	 * {@code $lisp-cond}; outside EH mode it is a bare {@code unreachable}, like every
+	 * other unchecked failure that backend takes (no tag exists to throw on, and citing
+	 * the string/prin1 runtime would pin it into every module). The list branch is
+	 * unchecked, matching the JVM backend's `_subseqCv` (an over-large `end` there
+	 * silently truncates instead of erroring) -- not part of this fix.
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @param ehMode whether the module is in EH mode
+	 * @param boundsPrefix {@code "SUBSEQ: invalid bounds "}, interned before this body is
+	 * built (like {@code WasmOperandTypes.Texts}), non-null exactly when {@code ehMode}
+	 * @param boundsComma {@code ", "}, non-null exactly when {@code ehMode}
+	 * @param boundsForLength {@code " for string of length "}, non-null exactly when
+	 * {@code ehMode}
 	 * @return the function body
 	 */
-	static byte[] buildSubseqBody(boolean identityHash) {
+	static byte[] buildSubseqBody(boolean identityHash, boolean ehMode,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsPrefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsComma,
+			WasmLispCompiler.StringTable.@Nullable StringEntry boundsForLength) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals 3..6: node, head, tail, newc.
 		// i32 locals 7..14: pos, end, start, cur, b, startIdx, endIdx, ii.
-		// ref local 15: strArr (the input string's $str_bytes, for the string branch).
+		// i32 locals 15..16: charLen, actualEnd (the bounds check).
+		// ref local 17: strArr (the input string's $str_bytes, for the string branch).
 		w.write(3);
 		w.write(4);
 		w.writeRefType(true, Type.EQ.code());
-		w.write(8);
+		w.write(10);
 		w.write(Type.I32);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		int node = 3, head = 4, tail = 5, newc = 6;
 		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
-		int strArr = 15;
+		int charLen = 15, actualEnd = 16;
+		int strArr = 17;
 		// startIdx = i31(startArg); endIdx = (endArg nil) ? -1 : i31(endArg)
 		emitI31GetS(w, 1);
 		set(w, startIdx);
@@ -2202,6 +2225,44 @@ final class WasmStringRuntimeBuilder {
 		// the UTF-8 walking helper _str_char_byte_offset so a subseq over a string
 		// carrying non-ASCII characters preserves them.
 		setStrArray(w, 0, strArr);
+		// charLen = _seq_len(seq) unboxed; actualEnd = (endIdx < 0) ? charLen : endIdx
+		get(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SEQ_LEN);
+		WasmEmitHelper.castI31GetS(w);
+		set(w, charLen);
+		get(w, endIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		get(w, charLen);
+		w.write(Instruction.ELSE);
+		get(w, endIdx);
+		w.write(Instruction.END);
+		set(w, actualEnd);
+		// 0 <= startIdx <= actualEnd <= charLen, or a bounds error.
+		get(w, startIdx);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
+				charLen);
+		w.write(Instruction.END);
+		get(w, actualEnd);
+		get(w, charLen);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
+				charLen);
+		w.write(Instruction.END);
+		get(w, startIdx);
+		get(w, actualEnd);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitSubseqBoundsError(w, ehMode, identityHash, boundsPrefix, boundsComma, boundsForLength, startIdx, actualEnd,
+				charLen);
+		w.write(Instruction.END);
 		// pos = _str_char_byte_offset(str, startIdx)
 		get(w, 0);
 		get(w, startIdx);
@@ -3175,6 +3236,66 @@ final class WasmStringRuntimeBuilder {
 	private static void i32(WasmWriter w, int value) {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(value);
+	}
+
+	// _subseq's bounds violation (todo a42): in EH mode, throws the interpreter's exact
+	// "SUBSEQ: invalid bounds S, E for string of length N" text as a condition-less
+	// (nil . message) payload on $lisp-cond, like WasmErrorCompiler.emitThrowPayload;
+	// each int is boxed as an i31 and rendered through _prin1_to_str (the same trick
+	// WasmOperandTypes.pushBound uses for a dynamic bound), so no itoa is duplicated
+	// here. Outside EH mode a bare unreachable, matching every other unchecked failure
+	// that backend takes when no tag exists to throw on. Never returns.
+	private static void emitSubseqBoundsError(WasmWriter w, boolean ehMode, boolean identityHash,
+			WasmLispCompiler.StringTable.@Nullable StringEntry prefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry comma,
+			WasmLispCompiler.StringTable.@Nullable StringEntry forLength, int startLocal, int endLocal, int lenLocal) {
+		if (!ehMode) {
+			w.write(Instruction.UNREACHABLE);
+			return;
+		}
+		// Non-null whenever ehMode is true (buildSubseqBody interns them under the same
+		// condition).
+		java.util.Objects.requireNonNull(prefix);
+		java.util.Objects.requireNonNull(comma);
+		java.util.Objects.requireNonNull(forLength);
+		// (condition-instance . message): a plain error has no instance.
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		strBuild(w, prefix);
+		get(w, startLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		strBuild(w, comma);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		get(w, endLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		strBuild(w, forLength);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		get(w, lenLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_CONCAT);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	private static void strBuild(WasmWriter w, WasmLispCompiler.StringTable.StringEntry entry) {
+		i32(w, entry.offset());
+		i32(w, entry.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
 	}
 
 	// TYPE_STRING's character-index cursor: character CURSOR_CHAR of the string starts at

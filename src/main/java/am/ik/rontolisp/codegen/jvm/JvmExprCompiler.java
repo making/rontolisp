@@ -1681,13 +1681,15 @@ final class JvmExprCompiler {
 			case LispNames.PUTHASH -> JvmHashTableCompiler.compilePut(cons, ctx, className);
 			case LispNames.REMHASH -> JvmHashTableCompiler.compileRem(cons, ctx, className);
 			case LispNames.CLRHASH -> JvmHashTableCompiler.compileClr(cons, ctx, className);
-			case LispNames.HASH_TABLE_COUNT -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+			case LispNames.HASH_TABLE_COUNT ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_COUNT);
 			case LispNames.HASH_TABLE_TEST -> JvmHashTableCompiler.compileTest(cons, ctx, className);
-			case LispNames.HASH_TABLE_SIZE -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+			case LispNames.HASH_TABLE_SIZE ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_SIZE);
 			case LispNames.HASH_TABLE_REHASH_SIZE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx, className);
-			case LispNames.HASH_TABLE_REHASH_THRESHOLD ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx, className);
+				JvmHashTableCompiler.compileGrowthConstant(cons, ctx, className, LispNames.HASH_TABLE_REHASH_SIZE, 1.5);
+			case LispNames.HASH_TABLE_REHASH_THRESHOLD -> JvmHashTableCompiler.compileGrowthConstant(cons, ctx,
+					className, LispNames.HASH_TABLE_REHASH_THRESHOLD, 1.0);
 			case LispNames.HASH_TABLE_P -> JvmHashTableCompiler.compileP(cons, ctx, className);
 			case LispNames.MAPHASH -> JvmHashTableCompiler.compileMaphash(cons, ctx, className);
 			case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
@@ -1737,7 +1739,10 @@ final class JvmExprCompiler {
 			case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 			case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
 			case LispNames.ARRAY_ELEMENT_TYPE -> {
-				if (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray) {
+				// In a java: program the full form too: it refuses a host ArrayList,
+				// which
+				// the lite expansion would answer T for.
+				if (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray || ctx.javaSites != null) {
 					JvmArrayCompiler.compileElementType(cons, ctx, className);
 				}
 				else {

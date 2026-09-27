@@ -18,6 +18,7 @@ import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -8082,6 +8083,13 @@ class WasmLispCompilerIntegrationTest {
 	void subseq() throws Exception {
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 6))")).isEqualTo("world");
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 0 5))")).isEqualTo("hello");
+	}
+
+	@Test
+	void subseqSignalsInvalidBounds() throws Exception {
+		// The wasm twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: an
+		// invalid range used to silently truncate/pad instead of signalling (todo a42).
+		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	@Test
@@ -17493,6 +17501,16 @@ class WasmLispCompilerIntegrationTest {
 		// gensym, so the printed name matches the interpreter's ("#:<prefix><n>").
 		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
 			.isEqualTo("#:|tmp1|\n#:|tmp2|");
+	}
+
+	@Test
+	void gensymAcceptsANonNegativeIntegerSuffix() throws Exception {
+		// The wasm twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
+		// literal integer argument used to lower through the computed-prefix path
+		// unchecked, e.g. (gensym 5) printed "#:51" (todo a42).
+		assertThat(
+				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
 	}
 
 	@Test

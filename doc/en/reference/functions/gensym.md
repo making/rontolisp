@@ -6,12 +6,18 @@ Returns a fresh symbol named `#:<prefix><n>`, where `prefix` defaults to `G` and
 
 Deviations from Common Lisp: the prefix must be a **literal** string on the compilation path (JVM/WASM), so the symbol text is known at compile time — a computed prefix is a compile error (the interpreter accepts any string). There is no `*gensym-counter*` variable, and because the symbol is interned like any other, `read`ing the same printed name twice yields `eq` symbols.
 
+The optional argument may also be a non-negative integer: it is used as the suffix directly, under the default `G` prefix, and does **not** advance the counter — the next plain `(gensym)` still gets the number it would have gotten anyway.
+
 ```lisp
 (list (gensym) (gensym)) ; => (#:G1 #:G2)
 ```
 
 ```lisp
 (gensym "tmp") ; => #:|tmp3|
+```
+
+```lisp
+(gensym 5) ; => #:G5
 ```
 
 ```lisp

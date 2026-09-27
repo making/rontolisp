@@ -1028,6 +1028,20 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
 	}
 
+	// A host ArrayList / LinkedHashMap reaching an array or hash-table accessor is
+	// refused as interpreted: each accessor runs its operand through the program's
+	// guard, and length asks the shared header test. Before, measured 2026-09-26:
+	// gethash of a key the host map lacks answered NIL, (setf gethash) wrote a bucket
+	// into the host map and then threw a NullPointerException, hash-table-test and the
+	// rehash accessors answered their constants, hash-table-count / clrhash / maphash
+	// threw Java exceptions, and length / coerce / elt / aref / the fill-pointer surface
+	// a ClassCastException or IndexOutOfBoundsException.
+	@Test
+	void anAccessorRefusesAHostCollection() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_ACCESSOR_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_ACCESSOR_OUTPUT);
+	}
+
 	// java: interop composes with hash tables: the HashMap-based Lisp hash table keeps
 	// working (and hash-table-p stays t) while host objects print opaquely.
 	@Test

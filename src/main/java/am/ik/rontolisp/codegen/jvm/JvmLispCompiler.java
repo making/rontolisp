@@ -3673,7 +3673,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computation lives in one method so each call site is a single invokestatic,
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
-				objectArrayClass, stringClass, longValueOf, thisClass);
+				objectArrayClass, stringClass, longValueOf, thisClass,
+				javaSites != null ? javaSites.direct().lispArray() : null);
 
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
 		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's
@@ -4396,6 +4397,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
 						hm.maxStack(), hm.maxLocals(), hm.code(), List.of());
+			}
+		}
+		if (mainCtx.conditionChannel.used || teTlField != null) {
+			// _tlMap, and _condTake/_condPut: the records a throwable carries, keyed by
+			// it (JvmThrowableRecords).
+			for (JvmNumericRuntimeBuilder.NumericMethod rm : JvmThrowableRecords.build(cp, thisClass,
+					mainCtx.conditionChannel.used ? mainCtx.conditionChannel.condTlField : null)) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
+						rm.maxStack(), rm.maxLocals(), rm.code(), List.of());
 			}
 		}
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf, 6, 2,
@@ -5799,16 +5809,27 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code private static ThreadLocal _condTl} field that carries a condition object (a
 	 * tagged-list instance) from a {@code %error-cond} throw site to a
 	 * {@code handler-case} catch handler on the same thread of control (thread-scoped so
-	 * concurrent {@code rontolisp:http-handler} requests do not clobber each other). One
-	 * instance is shared by every {@link Ctx} of a compilation (the {@code nextFuncId}
-	 * pattern); the field and its {@code <clinit>} initializer are emitted only when a
-	 * compiler marked it {@link #used}.
+	 * concurrent {@code rontolisp:http-handler} requests do not clobber each other),
+	 * keyed by the throwable it travels with ({@link JvmThrowableRecords}: a site records
+	 * through {@link #condPut}, a landing takes through {@link #condTake}). One instance
+	 * is shared by every {@link Ctx} of a compilation (the {@code nextFuncId} pattern);
+	 * the field, its {@code <clinit>} initializer and the two helpers are emitted only
+	 * when a compiler marked it {@link #used}.
 	 */
 	static final class ConditionChannel {
 
 		boolean used = false;
 
 		@Nullable FieldrefConstant condTlField;
+
+		/** {@code _condTake(Throwable)Object}: a landing's read of what it caught. */
+		@Nullable MethodrefConstant condTake;
+
+		/**
+		 * {@code _condPut(Throwable, Object)Throwable}: a throw site's record of the
+		 * condition its throwable carries.
+		 */
+		@Nullable MethodrefConstant condPut;
 
 		@Nullable Utf8Constant fieldName;
 
@@ -5874,6 +5895,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.condTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.fieldName, this.fieldDesc));
 			this.depthFieldName = cp.addUtf8("_hcDepthTl");
 			this.depthTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.depthFieldName, this.fieldDesc));
+			this.condTake = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_TAKE,
+					JvmThrowableRecords.COND_TAKE_DESC);
+			this.condPut = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_PUT,
+					JvmThrowableRecords.COND_PUT_DESC);
 			ensureThreadLocalInfra(cp);
 		}
 

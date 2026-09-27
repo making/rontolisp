@@ -2533,6 +2533,15 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
 		MethodrefConstant strConcat = cp.addMethodref(strClass,
 				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		// The scStr bounds check's message pieces (LispNames.SUBSEQ's exact interpreter
+		// text, todo a42): "SUBSEQ: invalid bounds " + start + ", " + end + " for string
+		// of length " + cpLen.
+		MethodrefConstant intToStr = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
+		am.ik.jvm.ConstantPool.StringConstant subseqBoundsPrefix = cp
+			.addString(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ");
+		am.ik.jvm.ConstantPool.StringConstant subseqBoundsComma = cp.addString(", ");
+		am.ik.jvm.ConstantPool.StringConstant subseqBoundsForStringOfLength = cp.addString(" for string of length ");
 		JvmAsm sc = new JvmAsm();
 		int scStr = sc.label();
 		int scCv = sc.label();
@@ -2648,6 +2657,55 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(0);
 		sc.checkcast(strClass);
 		sc.astore(8);
+		// Bounds check BEFORE any code-unit offset math: start < 0, end > the character
+		// count, or start > end each raise the interpreter's exact "SUBSEQ: invalid
+		// bounds" text (todo a42) instead of falling through to a raw
+		// StringIndexOutOfBoundsException from String#substring.
+		sc.aload(8);
+		sc.invokestatic(strCount);
+		sc.istore(11);
+		int scHaveEndCk = sc.label();
+		int scGotEndCk = sc.label();
+		sc.iload(2);
+		sc.branch(Opcode.IFGE, scHaveEndCk);
+		sc.iload(11);
+		sc.istore(12);
+		sc.branch(Opcode.GOTO, scGotEndCk);
+		sc.bind(scHaveEndCk);
+		sc.iload(2);
+		sc.istore(12);
+		sc.bind(scGotEndCk);
+		int scBoundsOk = sc.label();
+		int scBoundsBad = sc.label();
+		sc.iload(1);
+		sc.branch(Opcode.IFLT, scBoundsBad);
+		sc.iload(12);
+		sc.iload(11);
+		sc.branch(Opcode.IF_ICMPGT, scBoundsBad);
+		sc.iload(1);
+		sc.iload(12);
+		sc.branch(Opcode.IF_ICMPGT, scBoundsBad);
+		sc.branch(Opcode.GOTO, scBoundsOk);
+		sc.bind(scBoundsBad);
+		sc.anew(rtExClass);
+		sc.dup();
+		sc.ldcString(subseqBoundsPrefix);
+		sc.iload(1);
+		sc.invokestatic(intToStr);
+		sc.invokevirtual(strConcat);
+		sc.ldcString(subseqBoundsComma);
+		sc.invokevirtual(strConcat);
+		sc.iload(12);
+		sc.invokestatic(intToStr);
+		sc.invokevirtual(strConcat);
+		sc.ldcString(subseqBoundsForStringOfLength);
+		sc.invokevirtual(strConcat);
+		sc.iload(11);
+		sc.invokestatic(intToStr);
+		sc.invokevirtual(strConcat);
+		sc.invokespecial(rtExInit);
+		sc.athrow();
+		sc.bind(scBoundsOk);
 		sc.aload(8);
 		sc.iload(1);
 		sc.invokestatic(strCpOffset);
@@ -2690,7 +2748,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.aastore();
 		sc.aload(6);
 		sc.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), 10, 11, sc.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), 10, 13, sc.finish()));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED
 		// String -- an actual runtime string -- converts once through _strToCharVec

@@ -84,6 +84,20 @@ final class JvmJavaDirectSites {
 	 */
 	static final String LISP_TABLE = "_jltab";
 
+	/**
+	 * {@code _jckarr(Object, String)Object}: an array accessor's operand, answered
+	 * unchanged unless it is a host {@code ArrayList}, which is refused with the
+	 * interpreter's {@code OP expects an array, got X}.
+	 */
+	static final String ARRAY_GUARD = "_jckarr";
+
+	/**
+	 * {@code _jcktab(Object, String)Object}: a hash-table accessor's operand, answered
+	 * unchanged unless it is a host {@code LinkedHashMap}, which is refused with the
+	 * interpreter's {@code OP expects a hash table, got X}.
+	 */
+	static final String TABLE_GUARD = "_jcktab";
+
 	/** {@code _junm(Object)Object}: a Java value as the Lisp value it stands for. */
 	static final String UNMARSHAL = "_junm";
 
@@ -141,6 +155,8 @@ final class JvmJavaDirectSites {
 	private static final int KIND_NONE = KIND_CONS + 3;
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String GUARD_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
 
 	/**
 	 * The package of the classes that travel with a compiled program; a value of one
@@ -201,6 +217,10 @@ final class JvmJavaDirectSites {
 	private @Nullable MethodrefConstant lispArray;
 
 	private @Nullable MethodrefConstant lispTable;
+
+	private @Nullable MethodrefConstant arrayGuard;
+
+	private @Nullable MethodrefConstant tableGuard;
 
 	private @Nullable MethodrefConstant unmarshal;
 
@@ -379,12 +399,10 @@ final class JvmJavaDirectSites {
 	 * {@link am.ik.rontolisp.compiler.JavaImplementations#PENDING_SIGNALS}.
 	 * <p>
 	 * The two per-thread channels a compiled condition or exit also lives in travel with
-	 * it: {@code _jsig} takes the condition out of {@code _condTl} and the throwable's
-	 * own entry off the exit stack {@code _nleTl}, and {@code _jfail} puts both back for
-	 * the throwable it passes on. So a callback that Java lets fail meanwhile (a second
-	 * close handler) cannot leave its own in their place, and one Java swallows leaves
-	 * nothing behind: a later failure never reads its condition, and the member's own
-	 * failure clears the channel.
+	 * it: {@code _jsig} takes t's condition off {@code _condTl} and t's own entry off the
+	 * exit stack {@code _nleTl}, and {@code _jfail} puts both back for the throwable it
+	 * passes on. So a callback that Java lets fail meanwhile (a second close handler)
+	 * cannot leave its own in their place, and one Java swallows leaves nothing behind.
 	 * @param bridge whether the reflective bridge travels with the program
 	 * @param channel the program's condition channel: which of {@code _condTl} and
 	 * {@code _nleTl} it has
@@ -397,43 +415,42 @@ final class JvmJavaDirectSites {
 			signalHelper();
 		}
 		Signals signals = null;
-		FieldrefConstant condTl = channel.used ? channel.condTlField : null;
+		MethodrefConstant condTake = channel.used ? channel.condTake : null;
+		MethodrefConstant condPut = channel.used ? channel.condPut : null;
 		FieldrefConstant nleTl = channel.nleUsed ? channel.nleTlField : null;
 		if (this.signal != null) {
 			Utf8Constant name = this.cp.addUtf8(SIGNALS);
 			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
 			signals = new Signals(this.cp.addFieldref(this.thisClass, this.cp.addNameAndType(name, desc)), name, desc);
-			this.methods.add(buildSignal(signals.field(), condTl, nleTl));
+			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
 		}
 		if (this.failure != null) {
-			this.methods.add(buildFailure(signals == null ? null : signals.field(), condTl, nleTl));
+			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl));
 		}
 		this.finished = true;
 		return signals;
 	}
 
-	// static Throwable _jsig(Throwable t): _condTl's condition taken out of the channel,
-	// and the entry of _nleTl t is the exit of off the stack; then {t, that condition,
-	// that entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
-	private Method buildSignal(FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+	// static Throwable _jsig(Throwable t): t's condition taken off _condTl, and the
+	// entry of _nleTl t is the exit of off the stack; then {t, that condition, that
+	// entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
+	private Method buildSignal(FieldrefConstant signals, @Nullable MethodrefConstant condTake,
 			@Nullable FieldrefConstant nleTl) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant objects = cls("[Ljava/lang/Object;");
 		MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
 		MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
 		// 0 = t, 1 = the record, 2 = a node, 3 = its depth, 4 = the condition, 5 = the
-		// exit. The condition leaves the channel with t: one Java swallows is not read
-		// as a later failure's.
-		a.aconstNull();
-		a.astore(4);
-		if (condTl != null) {
-			a.getstatic(condTl);
-			a.invokevirtual(get);
-			a.astore(4);
-			a.getstatic(condTl);
-			a.aconstNull();
-			a.invokevirtual(set);
+		// exit. The condition leaves the channel with t: one Java swallows stays in the
+		// record, not on the channel.
+		if (condTake != null) {
+			a.aload(0);
+			a.invokestatic(condTake);
 		}
+		else {
+			a.aconstNull();
+		}
+		a.astore(4);
 		a.aconstNull();
 		a.astore(5);
 		if (nleTl != null) {
@@ -506,8 +523,8 @@ final class JvmJavaDirectSites {
 
 	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
 	// taken off with every newer node, its condition and exit entry put back -- else
-	// new RuntimeException(text + t), with no condition in the channel.
-	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+	// new RuntimeException(text + t), which carries no condition.
+	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable MethodrefConstant condPut,
 			@Nullable FieldrefConstant nleTl) {
 		JvmAsm a = new JvmAsm();
 		if (signals != null) {
@@ -542,12 +559,13 @@ final class JvmJavaDirectSites {
 			a.iconst(3);
 			a.aaload();
 			a.invokevirtual(set);
-			if (condTl != null) {
-				a.getstatic(condTl);
+			if (condPut != null) {
+				a.aload(0);
 				a.aload(2);
 				a.iconst(1);
 				a.aaload();
-				a.invokevirtual(set);
+				a.invokestatic(condPut);
+				a.pop();
 			}
 			if (nleTl != null) {
 				int noExit = a.label();
@@ -571,12 +589,6 @@ final class JvmJavaDirectSites {
 			a.aload(0);
 			a.areturn();
 			a.bind(wrap);
-		}
-		if (condTl != null) {
-			// The member's own failure carries no condition: none a callback left.
-			a.getstatic(condTl);
-			a.aconstNull();
-			a.invokevirtual(method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V"));
 		}
 		a.anew(cls("java/lang/RuntimeException"));
 		a.dup();
@@ -753,6 +765,42 @@ final class JvmJavaDirectSites {
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.lispTable = ref;
 			this.methods.add(buildLispTable(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard an array accessor runs its array operand through in a {@code java:}
+	 * program: a host {@code ArrayList} is no Lisp array, and the accessors read the
+	 * class alone. Built on first use.
+	 * @return {@code _jckarr(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant arrayGuard() {
+		MethodrefConstant ref = this.arrayGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(ARRAY_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.arrayGuard = ref;
+			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), " expects an array, got "));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard a hash-table accessor runs its table operand through in a {@code java:}
+	 * program, as {@link #arrayGuard()} is for arrays. Built on first use.
+	 * @return {@code _jcktab(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant tableGuard() {
+		MethodrefConstant ref = this.tableGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(TABLE_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.tableGuard = ref;
+			this.methods
+				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), " expects a hash table, got "));
 		}
 		return ref;
 	}
@@ -2742,6 +2790,36 @@ final class JvmJavaDirectSites {
 		a.iconst(0);
 		a.ireturn();
 		return new Method(name, desc, 2, 1, a.finish(), List.of());
+	}
+
+	// _jckarr / _jcktab(Object v, String op)Object: v unless it is an instance of the
+	// class a Lisp array / table shares with a host collection and the shared test says
+	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
+	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
+	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodrefConstant lispTest,
+			String refusal) {
+		JvmAsm a = new JvmAsm();
+		int pass = a.label();
+		a.aload(0);
+		a.instanceOf(cls(sharedClass));
+		a.branch(Opcode.IFEQ, pass);
+		a.aload(0);
+		a.invokestatic(lispTest);
+		a.branch(Opcode.IFNE, pass);
+		a.anew(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.aload(1);
+		a.ldcString(str(refusal));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.aload(0);
+		a.invokestatic(this.lispToString);
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.athrow();
+		a.bind(pass);
+		a.aload(0);
+		a.areturn();
+		return new Method(name, desc, 4, 2, a.finish(), List.of());
 	}
 
 	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.

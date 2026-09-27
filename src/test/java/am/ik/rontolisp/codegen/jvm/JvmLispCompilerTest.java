@@ -4,6 +4,7 @@ import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -3302,6 +3303,16 @@ class JvmLispCompilerTest {
 		// (alexandria's format-symbol passes one).
 		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
 			.isEqualTo("#:|tmp1|\n#:|tmp2|");
+	}
+
+	@Test
+	void compileGensymAcceptsANonNegativeIntegerSuffix() throws Exception {
+		// The JVM twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
+		// literal integer argument used to lower through the computed-prefix path
+		// unchecked, e.g. (gensym 5) printed "#:51" (todo a42).
+		assertThat(
+				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
 	}
 
 	@Test
@@ -8457,6 +8468,13 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSubseqSignalsInvalidBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: a
+		// raw StringIndexOutOfBoundsException used to escape instead (todo a42).
+		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunSubseqList() throws Exception {
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 1 3))")).isEqualTo("(2 3)");
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 2))")).isEqualTo("(3 4 5)");
@@ -11631,6 +11649,97 @@ class JvmLispCompilerTest {
 				           (run-protected (lambda () (return-from done :past-guard))
 				                          #'catch-throw-cleanup))))
 				""")).isEqualTo(":FROM-INNER\n:FROM-INNER\n:FROM-INNER\n:PAST-GUARD");
+	}
+
+	/**
+	 * The condition-carrying twin of the nested-exit case above: what a throwable carries
+	 * -- a typed condition, a wrong-type operand's datum -- is recorded under the
+	 * throwable itself, so a failure handled inside an unwind-protect cleanup while
+	 * another is on its way out neither reads the outer one's record as its own nor takes
+	 * it away. One per-thread slot served every throwable until 2026-09-26: the inner
+	 * landing read the typed condition, and the outer one arrived as a synthesized
+	 * simple-error.
+	 */
+	static final String CONDITION_ON_ITS_WAY_OUT = """
+			(define-condition cw-typed (error) ())
+			(define-condition cw-other (error) ())
+			(define-condition cw-reporting (error) ()
+			  (:report (lambda (c s)
+			             (declare (ignore c))
+			             (format s "reported ~a"
+			                     (handler-case (error "inner")
+			                       (cw-reporting () :read-as-the-outer-one)
+			                       (error () :plain))))))
+			(defvar *cw-list* 5)
+			(defun cw-bad (x) (+ 1 x))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (error "plain") (cw-typed () :read-as-the-typed-one) (error () :plain))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (car *cw-list*) (cw-typed () :read-as-the-typed-one) (error () :raw))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (error 'cw-other) (cw-typed () :read-as-the-typed-one) (cw-other () :other))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (cw-bad "a")
+			             (print (handler-case (cw-bad "b") (type-error (e) (list :inner (type-error-datum e))))))
+			         (type-error (e) (list :typed (type-error-datum e)))
+			         (error () :lost-its-type)))
+			(print (handler-case (error 'cw-reporting)
+			         (cw-reporting (c) (format nil "~a" c))
+			         (error () :lost-its-type)))
+			""";
+
+	/** What {@link #CONDITION_ON_ITS_WAY_OUT} prints, the interpreter's answer. */
+	static final String CONDITION_ON_ITS_WAY_OUT_OUTPUT = String.join("\n", ":PLAIN", ":TYPED", ":RAW", ":TYPED",
+			":OTHER", ":TYPED", "(:INNER \"b\")", "(:TYPED \"a\")", "\"reported PLAIN\"");
+
+	@Test
+	void aConditionOnItsWayOutKeepsItsRecordWhenACleanupHandlesAnother() throws Exception {
+		assertThat(compileAndRun(CONDITION_ON_ITS_WAY_OUT)).isEqualTo(CONDITION_ON_ITS_WAY_OUT_OUTPUT);
+	}
+
+	@Test
+	void aConditionWhoseMessageIsNoStringIsStillSignalled() throws Exception {
+		// The message of a typed signal is its uncaught report text, and a nil
+		// :format-control makes it nil: the throw site cast it and failed with a
+		// NullPointerException, which the unkeyed channel passed off as the condition
+		// recorded before the message ran. Keyed, the failure was nobody's -- the handler
+		// saw a simple-error made of the NullPointerException's text.
+		assertThat(compileAndRun("""
+				(defun nm-signal (type) (error type :format-control nil))
+				(print (handler-case (error 'simple-error :format-control nil)
+				         (simple-error (c) (list :literal (simple-condition-format-control c)))))
+				(print (handler-case (nm-signal 'simple-error)
+				         (simple-error (c) (list :computed (simple-condition-format-control c)))))
+				""")).isEqualTo("(:LITERAL NIL)\n(:COMPUTED NIL)");
+	}
+
+	@Test
+	void aConditionOnItsWayOutKeepsItsRecordInRestartMode() throws Exception {
+		// A handler-bind anywhere puts the program in restart mode, where a string
+		// designator's error carries a simple-error instance of its own and every
+		// handler-bind body runs in a %hb-guard pad: the pad takes the record of the
+		// throwable it caught and puts it back for the next landing.
+		assertThat(compileAndRun(CONDITION_ON_ITS_WAY_OUT + """
+				(defvar *cw-runs* nil)
+				(print (handler-case
+				         (handler-bind ((error (lambda (c) (push (list :outer (type-of c)) *cw-runs*))))
+				           (handler-bind ((error (lambda (c) (push (list :inner (type-of c)) *cw-runs*))))
+				             (unwind-protect (cw-bad "a")
+				               (handler-case (cw-bad "b") (error () nil)))))
+				         (type-error (e) (list :typed (type-error-datum e)))
+				         (error () :lost-its-type)))
+				(print (reverse *cw-runs*))
+				"""))
+			.isEqualTo(CONDITION_ON_ITS_WAY_OUT_OUTPUT + "\n(:TYPED \"a\")\n((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR))");
 	}
 
 	@Test

@@ -21,16 +21,17 @@ import am.ik.rontolisp.LispVal;
 /**
  * Compiles {@code (handler-case expr (type ([var]) body...)... [(:no-error ([var])
  * body...)])}: the expression runs inside a catch-any exception-table region (the
- * unwind-protect machinery); the handler reads the typed condition from the per-thread
- * {@code _condTl} channel (set by {@code %error-cond}), synthesizes an instance from the
- * exception message when the channel is empty (a plain {@code %error} or a raw runtime
- * exception -- the CLASS then comes from what the throwable is, see
+ * unwind-protect machinery); the handler takes the typed condition recorded for the
+ * throwable it caught off the per-thread {@code _condTl} channel (recorded by
+ * {@code %error-cond}, keyed by the throwable: {@link JvmThrowableRecords}), synthesizes
+ * an instance from the exception message when there is none (a plain {@code %error} or a
+ * raw runtime exception -- the CLASS then comes from what the throwable is, see
  * {@code emitSynthesizeCondition}), dispatches it through the clauses' type tests --
- * ordinary compiled Lisp forms over a pseudo-local holding the condition -- and rethrows
- * when none matches. The per-thread handler depth is incremented around the protected
- * region so {@code signal} raises only under an established handler; a {@code return}
- * exiting the region decrements it through the {@code UnwindScope} cleanup channel
- * ({@code %hc-depth-dec}).
+ * ordinary compiled Lisp forms over a pseudo-local holding the condition -- and rethrows,
+ * the condition recorded again, when none matches. The per-thread handler depth is
+ * incremented around the protected region so {@code signal} raises only under an
+ * established handler; a {@code return} exiting the region decrements it through the
+ * {@code UnwindScope} cleanup channel ({@code %hc-depth-dec}).
  */
 final class JvmHandlerCaseCompiler {
 
@@ -114,8 +115,9 @@ final class JvmHandlerCaseCompiler {
 		int gotoDonePos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
-		// Handler: depth--, read (and clear) the condition channel, synthesize a
-		// simple-error from the message when it is empty, dispatch through the clauses.
+		// Handler: depth--, take the condition the caught throwable carries, synthesize a
+		// simple-error from the message when it carries none, dispatch through the
+		// clauses.
 		int handler = ctx.code.size();
 		ctx.stack.enterHandler();
 		ctx.emit(Opcode.ASTORE);
@@ -129,24 +131,7 @@ final class JvmHandlerCaseCompiler {
 		if (ctx.blockExitChannel) {
 			emitRethrowPendingNle(ctx, className, excSlot);
 		}
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		int ifHaveCondPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
-		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
+		emitTakeCondition(excSlot, condSlot, ctx, className);
 		// Dispatch: the condition rides a pseudo-local so the type tests and clause
 		// bodies compile as ordinary Lisp forms.
 		String condVarName = "__hc_cond$" + condSlot;
@@ -170,17 +155,15 @@ final class JvmHandlerCaseCompiler {
 		finally {
 			ctx.locals.remove(condVarName);
 		}
-		// No clause matched: restore the condition into the channel (an outer
+		// No clause matched: record the condition under the throwable again (an outer
 		// handler-case must see the typed instance, not a re-synthesized
-		// simple-error) and rethrow.
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		// simple-error) and rethrow it.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
 		ctx.emit(Opcode.ATHROW);
 		int done = ctx.code.size();
 		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
@@ -199,14 +182,14 @@ final class JvmHandlerCaseCompiler {
 
 	/**
 	 * Compiles the internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
-	 * expansion wraps its body in: a catch-any region over the body whose handler reads
-	 * (and clears) the condition channel, synthesizes the {@code simple-error} of a
-	 * condition-less throw (a raw runtime failure, a plain {@code %error}), runs the
+	 * expansion wraps its body in: a catch-any region over the body whose handler takes
+	 * the condition the caught throwable carries, synthesizes the {@code simple-error} of
+	 * a condition-less throw (a raw runtime failure, a plain {@code %error}), runs the
 	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless a walk
 	 * already completed for the identical instance (the {@code %handlers-ran%} mark --
 	 * the restart-mode signal hook runs handlers at the signal point and its terminals
-	 * carry the instance they ran for), restores the channel so an outer
-	 * {@code handler-case} or guard sees the same instance, and rethrows. Unlike
+	 * carry the instance they ran for), records the instance under the throwable again so
+	 * an outer {@code handler-case} or guard sees the same one, and rethrows. Unlike
 	 * {@code handler-case} it never touches the handler depth (so {@code signal}
 	 * semantics are unchanged) and has no cleanup, so it pushes no {@code UnwindScope}.
 	 */
@@ -264,11 +247,11 @@ final class JvmHandlerCaseCompiler {
 	/**
 	 * {@return the shared {@code %hb-guard} landing-pad method, built on first use}
 	 *
-	 * Every {@code handler-bind} in a program emits the SAME pad -- read and clear the
-	 * condition channel, synthesize the instance of a condition-less throw, run the
-	 * cluster stack unless it already ran for this instance, restore the channel -- over
-	 * nothing but the caught throwable, so it is emitted once per class and called from
-	 * each site. It has to be: the pad is ~500 bytecodes (the classification switch
+	 * Every {@code handler-bind} in a program emits the SAME pad -- take the caught
+	 * throwable's condition, synthesize the instance of a condition-less throw, run the
+	 * cluster stack unless it already ran for this instance, record the instance again --
+	 * over nothing but the caught throwable, so it is emitted once per class and called
+	 * from each site. It has to be: the pad is ~500 bytecodes (the classification switch
 	 * builds one condition instance per raw-failure class), and in restart mode
 	 * {@code restart-case} expands through {@code handler-bind}, so a function that
 	 * writes {@code check-type} in a macro used forty times carried forty copies of it --
@@ -310,24 +293,7 @@ final class JvmHandlerCaseCompiler {
 		if (ctx.blockExitChannel) {
 			emitRethrowPendingNle(ctx, className, excSlot);
 		}
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		int ifHaveCondPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
-		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
+		emitTakeCondition(excSlot, condSlot, ctx, className);
 		// Run the cluster stack unless already run, as an ordinary Lisp form over the
 		// condition pseudo-local.
 		String condVarName = "__hb_cond$" + condSlot;
@@ -340,17 +306,37 @@ final class JvmHandlerCaseCompiler {
 			ctx.locals.remove(condVarName);
 		}
 		ctx.emit(Opcode.POP);
-		// Restore the channel (the outer catcher must see the instance the handlers
-		// saw, a synthesized one included) and hand the throwable back to be rethrown.
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		// Record the instance under the throwable again (the outer catcher must see the
+		// instance the handlers saw, a synthesized one included) and hand the throwable
+		// back to be rethrown.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
 		ctx.emit(Opcode.ARETURN);
+	}
+
+	/**
+	 * Emits a landing's read of what it caught: the condition recorded for the throwable
+	 * in {@code excSlot}, taken off the channel, into {@code condSlot} -- or, when it
+	 * carries none, the instance {@link #emitSynthesizeCondition} makes of it.
+	 */
+	private static void emitTakeCondition(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx, String className) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condTake).index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		int ifHaveCondPos = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
+		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
 	}
 
 	/**

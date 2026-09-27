@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
@@ -23,6 +24,19 @@ final class WasmGensymCompiler {
 		List<LispVal> args = cons.toList();
 		if (args.size() > 2) {
 			throw new UnsupportedOperationException(LispNames.GENSYM + " expects at most 1 argument: " + cons.print());
+		}
+		if (args.size() == 2 && args.get(1) instanceof LispInteger n) {
+			// CL's other gensym shape: a non-negative integer IS the suffix (under the
+			// default "G" prefix) and never touches the counter -- a plain compile-time
+			// constant symbol, like a literal string/symbol elsewhere, never routed
+			// through FUNC_GENSYM (which always appends AND advances the counter) (todo
+			// a42).
+			if (n.value() < 0) {
+				throw new UnsupportedOperationException(
+						LispNames.GENSYM + " suffix must be a non-negative integer: " + cons.print());
+			}
+			WasmEmitHelper.compileStringLiteral("#:G" + n.value(), ctx);
+			return;
 		}
 		if (args.size() == 2 && !(args.get(1) instanceof LispString)) {
 			// A computed prefix: the shared string-construction lowering (the interned

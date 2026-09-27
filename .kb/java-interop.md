@@ -25,7 +25,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
 - A host `ArrayList` / `LinkedHashMap` a Java call answers is not a Lisp array / hash table
-  ("What a host object is" below): the compiled printer and predicates ask the shared tests.
+  ("What a host object is" below): the compiled printer and predicates ask the shared tests,
+  the accessors refuse it through guards built on them.
 - Trap: the template must have NO nested classes/records and NO rontolisp imports. The bridge
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
@@ -84,8 +85,24 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   method RontoComplex.size` / `[D.size`; `(java:new "java.math.BigInteger" "5")` printed `5`
   compiled and `#<java java.math.BigInteger>` interpreted. All agree now
   (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
-- Still divergent: the compiled ACCESSORS on a host `ArrayList` / `LinkedHashMap` (`gethash`
-  answers `NIL`, `length` / `aref` / `hash-table-count` throw a Java exception; `.todo/a38`).
+- The ACCESSORS refuse a host collection as the interpreter does, in a `java:` program only
+  (a program without `java:` emits nothing new): every hash-table accessor's call site runs
+  the table through `_jcktab(v, "OP")` (`JvmHashTableCompiler.emitHostTableGuard`; after
+  gethash's default / `%puthash`'s value, which the interpreter evaluates first) and every
+  array accessor's through `_jckarr` (`JvmArrayCompiler.emitHostArrayGuard`: `aref`, `%aset`,
+  `row-major-aref`, `array-dimensions`, `array-element-type`, the fill-pointer surface) --
+  `JvmJavaDirectSites.tableGuard()` / `arrayGuard()`: an instance of the shared class the
+  shared test rejects throws `OP expects a hash table / an array, got X` (a simple-error).
+  Only a host collection of the accessor's OWN class is refused; any other wrong type fails
+  as in a program without `java:` (`.todo/a48`). `_length`'s array arm asks `_jlarr`, so a
+  host list is `LENGTH`'s `SEQUENCE` type-error, and so is every sequence function that
+  measures first (`coerce`, `position`, `fill`, ...). `hash-table-test` and the rehash
+  accessors, constants elsewhere, evaluate and guard the table first. Before, measured
+  2026-09-26: `gethash` of a key the host map lacks answered `NIL`, `(setf gethash)` wrote a
+  bucket INTO the host map and then threw a `NullPointerException`, `hash-table-test` answered
+  `EQUAL`, `length` / `aref` / `hash-table-count` threw Java exceptions
+  (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends). `(apply #'aref l ...)` still
+  names `ARRAY-DIMENSIONS`, the wrapper's first reader (`.todo/a48`).
 
 ## Bignums and specialized vectors
 - BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype
@@ -520,16 +537,18 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   every body is compiled, since what they read depends on the channels the program has;
   `_jsig`/`_jfail` are `REFLECTIVELY_FOUND_METHODS` and, with the bridge, shaker roots.
 - Compiled custody of the two per-thread channels a condition or exit also lives in (the
-  interpreter's signals carry their own state): `_jsig` takes the condition out of `_condTl`
-  and the throwable's own entry off the `_nleTl` exit stack; `_jfail` puts both back for the
-  throwable it passes on, and clears `_condTl` for a wrapped failure. Measured 2026-09-26
-  without it: the `Stream.close` relay answered the SECOND handler's condition and lost the
-  first handler's exit (`%nlx-catch` reads only the top entry: `Unhandled condition: null`);
-  a condition `FutureTask.run` swallowed was read by the next `handler-case` on the thread,
-  for the `get` failure and for a later Lisp `type-error` alike. One loss remains: a Java call
-  made from a cleanup while a typed condition is on its way out, whose callback raises a PLAIN
-  throwable Java swallows, takes the outer condition with it -- `_condTl` is keyed by nothing,
-  which loses conditions without Java frames too (`.todo/a43`).
+  interpreter's signals carry their own state): `_jsig` takes the throwable's own condition off
+  `_condTl` (keyed by the throwable: [error-handling.md](error-handling.md), "The JVM keeps what
+  a throwable carries under the throwable") and its own entry off the `_nleTl` exit stack;
+  `_jfail` puts both back for the throwable it passes on, and a wrapped failure is a new
+  throwable no condition is recorded for. Measured 2026-09-26 without it: the `Stream.close`
+  relay answered the SECOND handler's condition and lost the first handler's exit
+  (`%nlx-catch` reads only the top entry: `Unhandled condition: null`); a condition
+  `FutureTask.run` swallowed was read by the next `handler-case` on the thread, for the `get`
+  failure and for a later Lisp `type-error` alike. Until `_condTl` was keyed (the same day), a
+  Java call made from a cleanup while a typed condition was on its way out, whose callback
+  raised a PLAIN throwable Java swallowed, took the outer condition with it (`_jsig` took
+  whatever the one slot held): the last `CALLBACK_SIGNALS` row.
 - Cost, measured 2026-09-26 (JDK 25): the normal path is unchanged (an exception-table entry):
   a 200,000-element `Collections.sort` through a `java:reify` comparator takes ~37 ms before and
   after compiled, a 20,000-element one ~71 ms interpreted. Class bytes before -> after:
