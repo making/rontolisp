@@ -212,11 +212,20 @@ dies with "No applicable method: CLOSE on INTEGER".
   bound under `%<name>--dispatch`, and the defun body, lambda tail, `handler-case` protected
   form and the six consumer arms are renamed onto it (`ShadowedBuiltins.renameCallSites`, the
   compile paths' own walk) before they lower; those arms then re-expand instead of memoizing.
-  **Boundary**: a `defun` evaluated BEFORE the first `defmethod` on a producer keeps the
-  built-in's lowering in its tail (the body is lowered at definition); the compile paths,
-  whole-program, dispatch it. Pinned by
+  **Order independence** (2026-09-27): a `defun` (a `defmethod` body included) and a lambda tail
+  are lowered at DEFINITION, so one made before the first `defmethod` on its producer used to keep
+  the built-in's lowering (`(defun early (x) (floor x))` then a `floor` method: `-: The value #<BX>
+  is not of type NUMBER`) while the compile paths, whole-program, dispatched it. Every tail whose
+  lowering changed something is now registered (`LispEvaluator.producerTailSites`, weakly: the
+  defun's own `(block name ...)` cons, or the `(progn settled)` wrapper a lambda tail's memo entry
+  shares between its closures), and a producer's first method, once its alias is bound, re-lowers
+  each in place from the raw form. Zero call-time cost for a defun; a producer-tail lambda pays
+  one `progn` step (3M `funcall`s of `(lambda (k) (gethash k h))`, 5 alternating pairs: 7,508-7,667
+  -> 7,626-7,823 ms, medians 7,597 -> 7,639). Pinned by
   `ShadowedBuiltinsTest.everyLoweredNameDispatchesAUserMethodOnTheInterpreter` (every name, four
-  call shapes) and `MethodedBuiltinFixture` on the interpreter, JVM and WASM.
+  call shapes), `everyLoweredNameDispatchesFromAFunctionDefinedBeforeTheMethod` (defun, method body,
+  closure, `labels`, all defined first) and `MethodedBuiltinFixture` on the interpreter, JVM and
+  WASM.
 - **Compile paths** (`compiler/ShadowedBuiltins`, run by BOTH backends right after
   `expandTopLevelDefinitions`): `(close X)` is compiler-lowered whatever defuns exist, so the
   spliced dispatcher defun is dead. Per name in the COMPUTED set: replace the dead dispatcher

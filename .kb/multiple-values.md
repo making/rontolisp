@@ -137,7 +137,9 @@ unconditional spill would tax the hottest built-ins on every call:
   bodies are tail contexts too (`settleHandlerCase`).
 - Lambda and `flet`/`labels` bodies too (2026-09-19): the interpreter's `evalLambdaForm` runs
   the same rewrite on a lambda's last body form (memoized by its cons identity,
-  `lambdaTailSettlements` -- a `flet` expansion rebuilds its lambdas around the same body conses),
+  `lambdaTailSettlements` -- a `flet` expansion rebuilds its lambdas around the same body conses;
+  a lowered tail memoizes a shared `(progn settled)` wrapper that a later `defmethod` on the
+  producer rewrites in place, `.kb/clos.md` "Interpreter, the call side"),
   and `injectMvSpillGlobal` walks the whole program for `lambda` forms and `flet`/`labels`
   definitions at any depth (`settleLambdaTails`; `quote`, `defmacro`, `define-compiler-macro` and
   `macrolet` definitions are not entered), so `(funcall (lambda () (floor 7 2)))` is `(3 1)`

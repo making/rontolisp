@@ -348,9 +348,9 @@ public final class LispEvaluator {
 	private final java.util.IdentityHashMap<LispVal, LispVal> compilerMacroExpansions = new java.util.IdentityHashMap<>();
 
 	/**
-	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity: the
-	 * rewrite is a pure function of the form, so like {@link #builtinMacroExpansions}
-	 * nothing invalidates it.
+	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity. Nothing
+	 * invalidates it: a lowered tail's value is the shared wrapper a later
+	 * {@code defmethod} on the producer rewrites in place ({@link #producerTailSites}).
 	 */
 	private final java.util.IdentityHashMap<LispVal, LispVal> lambdaTailSettlements = new java.util.IdentityHashMap<>();
 
@@ -719,6 +719,35 @@ public final class LispEvaluator {
 	 * mutated; empty in every program that methods no such name.
 	 */
 	private volatile Map<String, String> methodedProducerDispatch = Map.of();
+
+	/**
+	 * Every function-body tail a multiple-value producer was lowered into when its
+	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
+	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
+	 * comes later would be invisible to that body. When a producer gets its first method
+	 * ({@link #defineDispatcher}), {@link #relowerProducerTails} rewrites each live one
+	 * in place over the renamed form. Guarded by itself.
+	 */
+	private final List<ProducerTailSite> producerTailSites = new ArrayList<>();
+
+	/** The {@link #producerTailSites} size at which the next registration purges. */
+	private int producerTailSitePurgeAt = PRODUCER_TAIL_SITE_MIN_PURGE;
+
+	private static final int PRODUCER_TAIL_SITE_MIN_PURGE = 64;
+
+	/**
+	 * A lowered producer tail: the form a function body holds, rewritten in place when
+	 * the methoded producer set grows.
+	 *
+	 * @param holder the cons the function body holds -- a {@code defun}'s
+	 * {@code (block name ...)} form, or a lambda tail's {@code (progn settled)} wrapper
+	 * -- weakly, so a site dies with its function
+	 * @param raw the tail as written, before any rename or lowering
+	 * @param wrapped whether {@code holder} is a {@code progn} wrapper (its settled form
+	 * is its sole body form) rather than the settled form itself
+	 */
+	private record ProducerTailSite(java.lang.ref.WeakReference<LispCons> holder, LispVal raw, boolean wrapped) {
+	}
 
 	/**
 	 * The {@code compile} built-in's capture target when this evaluator is a compile
@@ -7982,8 +8011,16 @@ public final class LispEvaluator {
 		// so its secondary value survives the function return like a values tail
 		// does (defmethod bodies arrive here as defuns). The interpreter's spill
 		// global always exists, so no gate is needed; the compile paths run the same
-		// rewrite in LispMacroExpander.injectMvSpillGlobal.
-		blockForm = LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(blockForm));
+		// rewrite in LispMacroExpander.injectMvSpillGlobal. A lowered tail is registered
+		// so a later defmethod on the producer rewrites it (relowerProducerTails).
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal rawBlockForm = blockForm;
+		LispVal renamedBlockForm = dispatchingMethodedProducers(blockForm, dispatchers);
+		blockForm = LispMacroExpander.spillEscapingMvProducers(renamedBlockForm);
+		if (blockForm != renamedBlockForm && blockForm instanceof LispCons holder) {
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), rawBlockForm, false),
+					dispatchers);
+		}
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		// The funcName rides on the value so it prints #<function NAME>, the text both
@@ -8183,6 +8220,7 @@ public final class LispEvaluator {
 			this.closRegistry.ensureNoApplicableErrorSeeded();
 			eval(LispMacroExpander.noApplicableMethodDefun(), env);
 		}
+		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
 		String alias = this.methodedProducerDispatch.get(genericName);
@@ -8190,6 +8228,11 @@ public final class LispEvaluator {
 			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
 			if (dispatcher != null) {
 				this.globalEnv.defineFunction(alias, dispatcher);
+			}
+			if (!producerWasMethoded) {
+				// The alias is bound: the tails lowered before this first method can
+				// now call it.
+				relowerProducerTails();
 			}
 		}
 	}
@@ -8202,8 +8245,67 @@ public final class LispEvaluator {
 	 * @return the form to hand it
 	 */
 	private LispVal dispatchingMethodedProducers(LispVal form) {
-		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		return dispatchingMethodedProducers(form, this.methodedProducerDispatch);
+	}
+
+	private static LispVal dispatchingMethodedProducers(LispVal form, Map<String, String> dispatchers) {
 		return dispatchers.isEmpty() ? form : ShadowedBuiltins.renameCallSites(form, dispatchers);
+	}
+
+	/**
+	 * Records a lowered producer tail ({@link #producerTailSites}). A site settled under
+	 * a methoded set that has grown since -- a {@code defmethod} ran between the lowering
+	 * and this registration -- is rewritten at once, so no interleaving leaves it on the
+	 * built-in's lowering.
+	 * @param site the site
+	 * @param settledUnder the {@link #methodedProducerDispatch} its form was settled
+	 * under
+	 */
+	private void registerProducerTail(ProducerTailSite site, Map<String, String> settledUnder) {
+		synchronized (this.producerTailSites) {
+			if (this.producerTailSites.size() >= this.producerTailSitePurgeAt) {
+				this.producerTailSites.removeIf(s -> s.holder().get() == null);
+				this.producerTailSitePurgeAt = Math.max(PRODUCER_TAIL_SITE_MIN_PURGE,
+						this.producerTailSites.size() * 2);
+			}
+			this.producerTailSites.add(site);
+			if (this.methodedProducerDispatch != settledUnder) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	/**
+	 * Rewrites every live lowered producer tail over the current
+	 * {@link #methodedProducerDispatch}: called once per producer name, when it gets its
+	 * first method and its dispatcher alias is bound, so a function defined before that
+	 * {@code defmethod} calls the dispatcher from its tail as one defined after it does.
+	 * The compile paths need none of this: they rename the whole program before lowering.
+	 */
+	private void relowerProducerTails() {
+		synchronized (this.producerTailSites) {
+			this.producerTailSites.removeIf(s -> s.holder().get() == null);
+			for (ProducerTailSite site : this.producerTailSites) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	private void relowerProducerTail(ProducerTailSite site) {
+		LispCons holder = site.holder().get();
+		if (holder == null) {
+			return;
+		}
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(site.raw()));
+		if (site.wrapped()) {
+			holder.setCdr(new LispCons(settled, LispNil.INSTANCE));
+		}
+		else if (settled instanceof LispCons settledCons) {
+			// The (block name ...) a defun's body holds: its head and name are the raw
+			// form's, so only the forms after them change.
+			holder.setCar(settledCons.car());
+			holder.setCdr(settledCons.cdr());
+		}
 	}
 
 	/**
@@ -11748,11 +11850,6 @@ public final class LispEvaluator {
 	 * same body conses.
 	 */
 	private LispVal settledLambdaTail(LispCons tail) {
-		if (!this.methodedProducerDispatch.isEmpty()) {
-			// Not memoized: the rename depends on the methoded set, which a later
-			// defmethod can grow (multipleValueConsumerExpansion).
-			return LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(tail));
-		}
 		LispVal cached;
 		synchronized (this.lambdaTailSettlements) {
 			cached = this.lambdaTailSettlements.get(tail);
@@ -11760,7 +11857,24 @@ public final class LispEvaluator {
 		if (cached != null) {
 			return cached;
 		}
-		LispVal settled = LispMacroExpander.spillEscapingMvProducers(tail);
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal renamed = dispatchingMethodedProducers(tail, dispatchers);
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(renamed);
+		if (settled != renamed) {
+			// A lowered producer: the closures share one (progn settled) wrapper, which
+			// a later defmethod on the producer rewrites in place (relowerProducerTails)
+			// -- a closure made before it must dispatch too.
+			LispCons holder = new LispCons(new LispSymbol(LispNames.PROGN), new LispCons(settled, LispNil.INSTANCE));
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), tail, true),
+					dispatchers);
+			settled = holder;
+		}
+		else {
+			// Nothing lowered, so no methoded set can lower anything here later either;
+			// a rename of a non-tail call only restates what evalCons does for a
+			// methoded name.
+			settled = renamed;
+		}
 		synchronized (this.lambdaTailSettlements) {
 			if (this.lambdaTailSettlements.size() < EXPANSION_MEMO_LIMIT) {
 				this.lambdaTailSettlements.put(tail, settled);
