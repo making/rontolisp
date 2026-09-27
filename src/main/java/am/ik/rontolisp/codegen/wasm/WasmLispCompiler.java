@@ -3239,7 +3239,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// it (WasmUncaughtReportCompiler) -- which is exactly EH mode, decided below on
 		// the post-expansion program but needed here, because the report-routing gate is
 		// part of the expansion. The scan covers every trigger that can accompany a
-		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode. The one
+		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode, and the
+		// with-output-to-string the injected %error-runtime dispatch renders a lambda
+		// :report through (LispMacroExpander.runtimeErrorDispatchCatches) -- without it
+		// every computed-type (error ty initargs...) program was in EH mode with the
+		// narrow gate and reported `Unhandled condition: ` and nothing else. The one
 		// it cannot see is a cross-lambda return-from, which reaches ehMode through
 		// blockExitTag and is lowered only after this pass; a program whose SOLE EH
 		// trigger is one of those keeps the narrow gate, so its landing pad prints a
@@ -3247,7 +3251,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// that means moving the lowering above this pass -- and the lowering has to run
 		// after it, or a generated dispatcher's return-from would not be lowered at all.
 		boolean ehFormReport = programUsesEhForm(program) || this.asyncMode || restartMode
-				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW);
+				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW)
+				|| LispMacroExpander.runtimeErrorDispatchCatches(program, closRegistry);
 		// --report-locations gives the report to a program with none of those, too: EH
 		// mode for the throw path and the landing pad, with nothing else in the module
 		// able to catch (SignalMessages.ENTRY_REPORT). Only where a form was read from a

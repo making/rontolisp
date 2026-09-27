@@ -25033,6 +25033,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anUncaughtComputedConditionTypeReportsWhatTheCallPassed() throws Exception {
+		// No catching form anywhere: the %error-runtime dispatch's own
+		// with-output-to-string is what puts the module in EH mode, so the report
+		// pre-scan has to see it, or the pad printed `Unhandled condition: ` and nothing
+		// else. The text names the initargs the call passed, not every slot the helper
+		// reads.
+		for (java.util.Map.Entry<String, String> program : am.ik.rontolisp.ComputedConditionTypeReportFixture.PROGRAMS
+			.entrySet()) {
+			assertThat(compileAndRunEhExpectTrap(program.getKey())).as(program.getKey())
+				.startsWith(program.getValue() + "\n");
+		}
+	}
+
+	@Test
 	void ehNonNumberArithmeticOperandsAreCaughtWithTheInterpreterText() throws Exception {
 		// A type slip into an arithmetic operator used to die as an UNCATCHABLE
 		// `wasm trap: cast failure` straight past handler-case. The arithmetic

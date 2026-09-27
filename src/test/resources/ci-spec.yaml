@@ -19875,6 +19875,15 @@ standalone:
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
     fails: true
+  - name: uncaught-computed-condition-type-report
+    source: |
+      ;; A computed condition type with initargs, and nothing caught anywhere: the
+      ;; text names the initargs the call passed, as the literal call's does.
+      (defun ci-uc-boom (ty) (error ty :code 42))
+      (ci-uc-boom 'type-error)
+    stderr: |
+      Unhandled condition: Condition (TYPE-ERROR :CODE 42) was signalled.
+    fails: true
   - name: failing-handler-bind-handler-report
     source: |
       ;; The handler's own failure escapes: it runs with its cluster disabled, so

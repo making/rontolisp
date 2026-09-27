@@ -27941,6 +27941,19 @@ public final class LispMacroExpander {
 
 	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
 			ClosRegistry closRegistry, boolean signalHook) {
+		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, signalHook, null);
+	}
+
+	/**
+	 * The typed signal, with {@code passedInitargs} naming the variable that holds the
+	 * call's ACTUAL initarg plist when {@code args} are not the call's arguments but
+	 * {@code getf} reads of every slot from it (the {@code %error-runtime} helpers). The
+	 * message then follows what the call passed, exactly as the literal call's would: the
+	 * legacy text lists the plist itself, and a {@code :format-control} is the message
+	 * only when the plist carries one.
+	 */
+	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry closRegistry, boolean signalHook, @Nullable LispSymbol passedInitargs) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> items = new java.util.ArrayList<>();
 		ClosRegistry.ClassInfo cls = closRegistry.findClass(typeSym.name());
@@ -27981,15 +27994,15 @@ public final class LispMacroExpander {
 			// string, or a stream's contents), so its fallback is dead and not built: the
 			// wasm-GC signal compiles the fallback into every site's payload.
 			LispVal fallback = cls != null && inheritsConditionReport(cls, closRegistry) ? LispNil.INSTANCE
-					: suppliedFormatControl(cls, items) instanceof LispVal supplied ? supplied
-							: legacySignalMessage(typeSym, items, bindings, false);
+					: formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal supplied
+							? supplied : legacySignalMessage(typeSym, items, bindings, false, passedInitargs);
 			LispVal rendered = conditionReportOr(condVar, fallback);
 			message = warn
 					? listToCons(
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
 					: rendered;
 		}
-		else if (suppliedFormatControl(cls, items) instanceof LispVal formatControl) {
+		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal formatControl) {
 			// A simple-* style class with a supplied :format-control: the message is
 			// its value (lite: :format-arguments are carried in the instance but not
 			// rendered into the message), preserving the (error (make-condition
@@ -27999,7 +28012,7 @@ public final class LispMacroExpander {
 					: formatControl;
 		}
 		else {
-			message = legacySignalMessage(typeSym, items, bindings, warn);
+			message = legacySignalMessage(typeSym, items, bindings, warn, passedInitargs);
 		}
 		// The two-argument condition-carrying internal: %error maps to %error-cond
 		// (signal already is %signal-cond; warn stays the one-argument %warn).
@@ -28041,13 +28054,23 @@ public final class LispMacroExpander {
 	 * report-less condition has always signalled.
 	 */
 	private static LispVal legacySignalMessage(LispSymbol typeSym, List<LispVal> items, List<LispVal> bindings,
-			boolean warn) {
-		List<LispVal> msgListParts = new java.util.ArrayList<>();
-		msgListParts.add(new LispSymbol(LispNames.LIST));
-		msgListParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym)));
-		msgListParts.addAll(items);
+			boolean warn, @Nullable LispSymbol passedInitargs) {
+		LispVal quotedType = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		LispVal msgList;
+		if (passedInitargs != null) {
+			// The initargs as the call passed them, not the slot reads: a slot the call
+			// left out is not an initarg it wrote.
+			msgList = mvCall(LispNames.CONS, quotedType, passedInitargs);
+		}
+		else {
+			List<LispVal> msgListParts = new java.util.ArrayList<>();
+			msgListParts.add(new LispSymbol(LispNames.LIST));
+			msgListParts.add(quotedType);
+			msgListParts.addAll(items);
+			msgList = listToCons(msgListParts);
+		}
 		LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
-		bindings.add(listToCons(List.of(msgVar, listToCons(msgListParts))));
+		bindings.add(listToCons(List.of(msgVar, msgList)));
 		String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
 		return formatMessagePieces(control, List.of(msgVar));
 	}
@@ -28093,6 +28116,29 @@ public final class LispMacroExpander {
 			}
 			throw unknownType;
 		}
+	}
+
+	/**
+	 * The message a {@code :format-control} makes, or null when the class carries none or
+	 * the call supplies none ({@link #suppliedFormatControl}). Over a helper's runtime
+	 * plist ({@code passedInitargs}) the slot read is there whether or not the call
+	 * passed the key, so the message is its value only when the plist carries it, and the
+	 * legacy text over the plist otherwise.
+	 */
+	private static @Nullable LispVal formatControlMessage(LispSymbol typeSym, ClosRegistry.@Nullable ClassInfo cls,
+			List<LispVal> items, List<LispVal> bindings, @Nullable LispSymbol passedInitargs) {
+		LispVal supplied = suppliedFormatControl(cls, items);
+		if (supplied == null || passedInitargs == null) {
+			return supplied;
+		}
+		// Over a runtime plist the key is read either way, so whether the CALL passed it
+		// is a runtime question: getf defaulting to the plist itself answers it (no
+		// value inside a plist is that plist). A passed nil stays the message, as in the
+		// literal call.
+		LispVal absent = mvCall(LispNames.EQ_GENERAL,
+				mvCall(LispNames.GETF, passedInitargs, new LispSymbol(":FORMAT-CONTROL"), passedInitargs),
+				passedInitargs);
+		return makeIf(absent, legacySignalMessage(typeSym, items, bindings, false, passedInitargs), supplied);
 	}
 
 	/**
@@ -41355,6 +41401,27 @@ public final class LispMacroExpander {
 		return program.stream().anyMatch(LispMacroExpander::containsRuntimeErrorDispatch);
 	}
 
+	/**
+	 * Whether the {@code %error-runtime} dispatch {@link #needsRuntimeErrorDispatch}
+	 * injects carries a catching form: the helper of a condition class whose
+	 * {@code :report} is a lambda renders it through {@code with-output-to-string}
+	 * ({@link #expandTypedSignal}), and the seeded {@code UNBOUND-SLOT} is such a class.
+	 * No scan of the program as written sees that form, so a backend deciding from the
+	 * surface whether a caught or uncaught condition's message is read (the wasm-GC
+	 * report pre-scan) asks this.
+	 * @param program the top-level forms
+	 * @param closRegistry the class registry
+	 * @return {@code true} when the injected dispatch holds a catching form
+	 */
+	public static boolean runtimeErrorDispatchCatches(List<LispVal> program, ClosRegistry closRegistry) {
+		return needsRuntimeErrorDispatch(program) && closRegistry.classes()
+			.values()
+			.stream()
+			.anyMatch(info -> info.ancestors().contains("CONDITION")
+					&& closRegistry.findConditionReport(info.name()) instanceof LispVal report
+					&& !(report instanceof LispString));
+	}
+
 	private static boolean containsRuntimeErrorDispatch(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
@@ -41501,7 +41568,7 @@ public final class LispMacroExpander {
 				items.add(listToCons(getfParts));
 			}
 			LispVal body = expandTypedSignal(LispNames.ERROR, LispNames.ERROR_INTERNAL, new LispSymbol(info.name()),
-					items, closRegistry, signalHook);
+					items, closRegistry, signalHook, ha);
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
 					listToCons(List.<LispVal>of(ha)), body)));
 			List<String> spellings = new java.util.ArrayList<>();

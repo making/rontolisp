@@ -413,7 +413,14 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   renderer.
 - **`reportsUncaught` is a PRE-SCAN, not the definitive `ehMode`**: it runs before the passes that
   finish deciding EH mode, so `WasmLispCompiler` scans for triggers that can accompany a signal
-  (`programUsesEhForm`, `catch`/`throw`, restart mode, async mode). The one it cannot see is a
+  (`programUsesEhForm`, `catch`/`throw`, restart mode, async mode, and
+  `LispMacroExpander.runtimeErrorDispatchCatches` -- the `with-output-to-string` the injected
+  `%error-runtime` helper of a lambda-`:report` class renders through; the seeded `UNBOUND-SLOT` is
+  one, so every `(error <computed> initargs...)` program is in EH mode. Until 2026-09-27 the scan
+  missed it and such a program with no catching form of its own printed `Unhandled condition: ` and
+  nothing else. Cost, P1 / component / `--optimize=size`, bytes: `(defun f (ty) (error ty :code 42))`
+  112,679 -> 125,773 / 114,300 -> 129,489 / 90,232 -> 101,321 -- what the same program with a
+  `handler-case` already paid (129,109). A program with a catching form is byte-identical). The one it cannot see is a
   cross-lambda `return-from`, lowered afterwards by `CrossLambdaExitLowering` (which must run after
   the expansion or a GENERATED dispatcher's `return-from` would go unlowered), so a program whose
   SOLE EH trigger is that keeps the narrow gate and its landing pad prints an empty report.
@@ -581,7 +588,14 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   and every backend prints what it evaluates to: a change to its shape changes all four together.
   Chosen over a fallback arm in the pad because the pad sees only the instance, and the typed text
   names the initargs AS WRITTEN (`:DATUM "abc" :EXPECTED-TYPE INTEGER`), which a built instance
-  cannot reproduce. A class that INHERITS a report builds no fallback at all
+  cannot reproduce. A COMPUTED type (`(error ty :code 42)`, the `%error-runtime` helpers) has no
+  initargs as written -- its helper reads every initarg slot out of the call's plist -- so its text
+  lists the plist itself (`(cons 'type plist)`), and a `:format-control` is the message only when
+  the plist carries the key (`(eq (getf plist :format-control plist) plist)` says it does not): the
+  text the interpreter prints, since it rebuilds the literal call. Until 2026-09-27 the helper took
+  `(getf plist :format-control)` as the message whenever the class had the slot -- `NIL` on the
+  JVM -- and listed unpassed slots (`:A #<%UNBOUND%>`) otherwise
+  (`ComputedConditionTypeReportFixture`). A class that INHERITS a report builds no fallback at all
   (`inheritsConditionReport`): it always renders, and the fallback was dead code on every backend.
   Measured 2026-09-26 on e6e49385b (EH mode, bytes): zlib `--optimize=size` 89,623 -> 89,734 (+111),
   `--optimize` 117,008 -> 117,119, component 93,712 -> 93,819; `postgres-hello --component
