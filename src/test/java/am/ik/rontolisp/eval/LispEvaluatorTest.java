@@ -13453,6 +13453,18 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(:CAUGHT T 1)");
 	}
 
+	// Whether a condition's handlers ran rides its own throw, so a condition handled,
+	// declined or abandoned while it is on its way out -- in a cleanup, in a report --
+	// cannot make them run again (one global mark held it, and each of these replaced
+	// it). The twins are
+	// JvmLispCompilerTest#handlerBindHandlersRunOnceWhileACleanupSignals
+	// and WasmLispCompilerIntegrationTest#handlerBindHandlersRunOnceWhileACleanupSignals.
+	@Test
+	void handlerBindHandlersRunOnceWhileACleanupSignals() {
+		assertThat(printedLines(am.ik.rontolisp.HandlersRunOnceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
+	}
+
 	@Test
 	void arefOutOfBoundsAndNegativeMakeArrayAreCatchable() {
 		// These used to escape even handler-case as raw Java exceptions; the

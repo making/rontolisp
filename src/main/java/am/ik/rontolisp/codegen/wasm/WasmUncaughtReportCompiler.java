@@ -141,6 +141,10 @@ final class WasmUncaughtReportCompiler {
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		emitPayloadHalf(ctx, payloadSlot, 0, condSlot);
 		emitPayloadHalf(ctx, payloadSlot, 1, msgSlot);
+		if (ctx.restartMode) {
+			// A payload saying the handler-bind handlers ran holds (nil . message) there.
+			WasmErrorCompiler.emitUnwrapMessage(ctx, msgSlot);
+		}
 		String condVar = "__uc_cond$" + condSlot;
 		String msgVar = "__uc_msg$" + msgSlot;
 		ctx.locals.put(condVar, condSlot);

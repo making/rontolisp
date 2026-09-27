@@ -8,6 +8,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Compiles the internal {@code (%signal-cond condition message)} primitive behind
@@ -26,7 +27,9 @@ import am.ik.rontolisp.LispVal;
  * {@code %handler-clusters%} stack -- a handler-case whose clauses do not match is not an
  * applicable handler and is declined. Outside that gate (the program signals but
  * establishes no handler-case, or vice versa) the depth test alone decides, exactly as
- * before, and the emission is byte-identical.
+ * before, and the emission is byte-identical. The restart-mode signal hook's terminal
+ * ({@code (%signal-cond condition message t)}) records that the {@code handler-bind}
+ * handlers already ran, as {@code %error-cond}'s does.
  */
 final class JvmSignalCondCompiler {
 
@@ -35,7 +38,13 @@ final class JvmSignalCondCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.conditionChannel.ensure(ctx.cp, className);
+		boolean handlersRan = LispMacroExpander.handlersRan(args);
+		if (handlersRan) {
+			ctx.conditionChannel.ensureHandlersRan(ctx.cp, className);
+		}
+		else {
+			ctx.conditionChannel.ensure(ctx.cp, className);
+		}
 		int savedNextLocal = ctx.nextLocal;
 		int condSlot = ctx.allocTemp();
 		int msgSlot = ctx.allocTemp();
@@ -76,7 +85,8 @@ final class JvmSignalCondCompiler {
 		String msgVarName = "__signal_msg$" + msgSlot;
 		Integer shadowed = ctx.locals.put(msgVarName, msgSlot);
 		try {
-			JvmErrorCompiler.compileThrowRuntimeException(new LispSymbol(msgVarName), ctx, className, condSlot);
+			JvmErrorCompiler.compileThrowRuntimeException(new LispSymbol(msgVarName), ctx, className, condSlot,
+					handlersRan);
 		}
 		finally {
 			if (shadowed != null) {

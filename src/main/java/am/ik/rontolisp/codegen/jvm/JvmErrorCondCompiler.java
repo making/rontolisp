@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Compiles the internal {@code (%error-cond condition message)} primitive: it throws a
@@ -16,7 +17,9 @@ import am.ik.rontolisp.LispVal;
  * first, into a local, and recorded only once the exception exists. Using the channel
  * marks it in {@link JvmLispCompiler.ConditionChannel}, which makes the class writer emit
  * the field, its {@code <clinit>} and the helpers; a program without typed conditions
- * compiles without any of this machinery.
+ * compiles without any of this machinery. The restart-mode signal hook's terminal
+ * ({@code (%error-cond condition message t)}) records that the {@code handler-bind}
+ * handlers already ran ({@link LispMacroExpander#handlersRan}).
  */
 final class JvmErrorCondCompiler {
 
@@ -25,14 +28,21 @@ final class JvmErrorCondCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.conditionChannel.ensure(ctx.cp, className);
+		boolean handlersRan = LispMacroExpander.handlersRan(args);
+		if (handlersRan) {
+			ctx.conditionChannel.ensureHandlersRan(ctx.cp, className);
+		}
+		else {
+			ctx.conditionChannel.ensure(ctx.cp, className);
+		}
 		int savedNextLocal = ctx.nextLocal;
 		int condSlot = ctx.allocTemp();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(condSlot);
-		// throw _condPut(new RuntimeException(strip(message)), condition)
-		JvmErrorCompiler.compileThrowRuntimeException(args.get(2), ctx, className, condSlot);
+		// throw _condPut(new RuntimeException(strip(message)), condition) -- _condRan
+		// for the signal hook's terminal
+		JvmErrorCompiler.compileThrowRuntimeException(args.get(2), ctx, className, condSlot, handlersRan);
 		ctx.nextLocal = savedNextLocal;
 	}
 

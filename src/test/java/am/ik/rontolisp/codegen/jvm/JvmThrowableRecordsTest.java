@@ -18,14 +18,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@link JvmThrowableRecords}), not merely read: HotSpot's C2 throws one preallocated
  * exception per class from a hot site ({@code OmitStackTraceInFastThrow}, on by default),
  * so the instance a {@code %hb-guard} pad synthesized and recorded for one failure would
- * otherwise describe the next -- and the {@code %handlers-ran%} mark, which is that very
- * instance, would skip every later failure's handlers.
+ * otherwise describe the next -- and its record, which says the handlers ran for it
+ * ({@code _condRan}), would skip every later failure's handlers.
  *
  * <p>
  * Measured 2026-09-26 on this loop under {@code -XX:-UseJVMCICompiler}: with the record
- * read and left in place, the handler ran 5,332 times out of 300,000. Graal, this
- * machine's default JIT, allocates a fresh exception every time, so only a child JVM on
- * C2 can see it; a stock OpenJDK ignores the JVMCI option and is on C2 anyway.
+ * read and left in place, the handler ran 5,332 times out of 300,000 (the stale instance
+ * matched the global mark that said then whether the handlers ran). Graal, this machine's
+ * default JIT, allocates a fresh exception every time, so only a child JVM on C2 can see
+ * it; a stock OpenJDK ignores the JVMCI option and is on C2 anyway.
  */
 class JvmThrowableRecordsTest {
 

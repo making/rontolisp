@@ -13910,6 +13910,49 @@ cases:
       (:INNER "b")
       (:TYPED "a")
       "reported PLAIN"
+  - name: handlers-run-once-while-a-cleanup-signals
+    source: |
+      ;; A handler-bind's handlers run once per condition however much else is signalled
+      ;; while it is on its way out: a condition handled, declined or abandoned in an
+      ;; unwind-protect cleanup, one handled between the two pads, a handler-case
+      ;; declining the first on its way. Whether the handlers ran rides the condition's own
+      ;; throw. One global mark held it until 2026-09-27, the other signal replaced it, and
+      ;; the outer pair ran twice on all four backends (the raw failure handled in a
+      ;; cleanup: on the interpreter). SBCL's output. One row per mechanism and no
+      ;; define-condition, for the JVM corpus class's constant pool
+      ;; (JvmClassShakerCorpusTest): the backend suites run every row, a report that
+      ;; handles an error of its own included, over am.ik.rontolisp.HandlersRunOnceFixture.
+      (defvar *ci-hr-log* nil)
+      (defun ci-hr-bad (x) (car x))
+      (defun ci-hr (n)
+        (setq *ci-hr-log* nil)
+        (print (list (handler-case
+                         (handler-bind ((error (lambda (c) (push (list :outer (type-of c)) *ci-hr-log*))))
+                           (unwind-protect
+                                (handler-bind ((error (lambda (c) (push (list :inner (type-of c)) *ci-hr-log*))))
+                                  (case n
+                                    (1 (unwind-protect (error 'program-error)
+                                         (handler-case (error 'control-error) (control-error () nil))))
+                                    (2 (unwind-protect (ci-hr-bad "a") (ignore-errors (ci-hr-bad "b"))))
+                                    (3 (unwind-protect (error 'program-error) (signal "note")))
+                                    (4 (unwind-protect (error 'program-error)
+                                         (block ci-hr-b
+                                           (unwind-protect (error 'control-error) (return-from ci-hr-b nil)))))
+                                    (5 (handler-case
+                                           (unwind-protect (error 'program-error) (ignore-errors (error 'control-error)))
+                                         (control-error () nil)))
+                                    (t (handler-case (ci-hr-bad "a") (control-error () nil)))))
+                             (when (= n 6) (ignore-errors (error "x")))))
+                       (error (e) (type-of e)))
+                     (reverse *ci-hr-log*))))
+      (dotimes (i 6) (ci-hr (+ i 1)))
+    expected: |
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (TYPE-ERROR ((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR) (:INNER CONTROL-ERROR) (:OUTER CONTROL-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (TYPE-ERROR ((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR)))
   - name: cross-lambda-go
     source: |
       ;; A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a

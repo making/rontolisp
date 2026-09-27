@@ -199,17 +199,18 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   (`JvmLispCompilerTest#compileAndRunErrorWithComputedConditionType` caught it once the slot was
   keyed). What that computed case reports uncaught still differs per backend (`.todo/a50`).
 - **Readers TAKE** (`_condTake`, the entry removed): a `handler-case` landing, the `_hbGuard` pad,
-  an async body's `run()`, a thread's `call()`, `_jsig`. What passes the throwable on records the
-  instance again (`_condPut`): a landing no clause matched and the pad -- a synthesized instance
-  included, so every pad of one flight sees the instance `%handlers-ran%` marks -- and `_jfail`.
-  **Why take, not read**: C2 throws one preallocated exception per class from a hot site
+  an async body's `run()`, a thread's `call()`, `_jsig`. What passes the throwable on records it
+  again: a landing no clause matched (`_condPut` of the record AS TAKEN), the pad (`_condRan` of
+  the instance, a synthesized one included -- "Whether the handlers ran rides the flight" below),
+  `_jfail`. **Why take, not read**: C2 throws one preallocated exception per class from a hot site
   (`OmitStackTraceInFastThrow`, on by default), so a record left after a flight describes the next
   failure. With a plain read, 300,000 hot `char-code` failures under a `handler-bind` ran its
-  handler 5,292-5,332 times under `-XX:-UseJVMCICompiler`: the stale instance matched
-  `%handlers-ran%` (2026-09-26). Graal, this machine's default JIT, allocates every exception and
-  shows nothing, hence the child JVM on C2 in `JvmThrowableRecordsTest`. Only a flight abandoned
-  between a pass-on and the next landing still leaves such a record. A `_teTl` record is made for a
-  fresh exception only and is never taken.
+  handler 5,292-5,332 times under `-XX:-UseJVMCICompiler`: the stale instance matched the global
+  mark of the time (2026-09-26); a stale `_condRan` record would skip the handlers the same way.
+  Graal, this machine's default JIT, allocates every exception and shows nothing, hence the child
+  JVM on C2 in `JvmThrowableRecordsTest`. Only a flight abandoned between a pass-on and the next
+  landing still leaves such a record. A `_teTl` record is made for a fresh exception only and is
+  never taken.
 - **Weak keys**: the record of an abandoned flight (a cleanup that exits, a caller outside the
   program) goes with its throwable. No record holds its throwable -- a value reaching its weak key
   never dies -- so the te record lost its `exception` slot (`_teSlot(e, 0)` answers the record).
@@ -222,8 +223,8 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   11,139 -> 11,794; an async body's typed error 51,424 -> 52,011; a restart-mode program 45,991 ->
   46,415; `examples/console/error-handling.lisp` 64,343 -> 64,881; `examples/net/httpbin.lisp`
   185,469 -> 185,966; `examples/net/hello-clack.lisp` (205 throw sites) 950,310 -> 948,474.
-- Not keyed yet: `%handlers-ran%` itself, on every backend -- a condition handled in a cleanup
-  replaces the mark and the outer condition's handlers run twice (`.todo/a49`).
+- Whether the `handler-bind` handlers ran is part of the record too (`_condRan`), since
+  2026-09-27: "Whether the handlers ran rides the flight" below.
 - Pins: ci-spec `condition-on-its-way-out-keeps-its-record`,
   `JvmLispCompilerTest#aConditionOnItsWayOutKeepsItsRecord*`,
   `#aConditionWhoseMessageIsNoStringIsStillSignalled`,
@@ -644,9 +645,10 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   and, by its own name, the function (a lambda's frame is named after the function it is written
   in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
   frame) appends a hop whose await site is the next frame with a line. So every rethrow keeps the
-  payload: `%hb-guard` stores the instance it synthesized into the payload it caught rather than
-  consing a new one (under the option only, so the bytes without it stay), which lost every line a
-  `handler-bind` handler's own frame had noted.
+  payload: `%hb-guard` stores the instance it synthesized into the payload it caught, and turns its
+  cdr into the `(nil . message)` saying the handlers ran, rather than consing a new one (under the
+  option only, so the bytes without it stay) -- a fresh payload lost every line a `handler-bind`
+  handler's own frame had noted.
 - **A landing pad inside a frame notes first** (`notePad`): its code moves the line local, and its
   refresh ([wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md)) would put the local back to
   the region's entry -- so the frame's catch saw the `unwind-protect`'s, the special `let`'s or the
@@ -790,7 +792,7 @@ closures), all pinned cross-backend. `--no-gc` keeps the lite lowering.
   `LispMacroExpander.restartRuntimeForms` (injected by `expandTopLevelDefinitions` at compile time,
   `ensureRestartRuntimeLoaded()` at interpret time).
 - **Two dynamic stacks, both TOP-LEVEL GLOBALS** (`%HANDLER-CLUSTERS%`, `%RESTART-CLUSTERS%`,
-  injected as `defvar`s; plus `%HANDLERS-RAN%`, the completed-walk mark), mutated with plain `setq`
+  injected as `defvar`s), mutated with plain `setq`
   and restored through an `unwind-protect` cleanup over a LEXICALLY saved value. Plain `setq` +
   cleanup rather than special-`let` rebindings, chosen when the compile paths still skipped the
   special-binding restore on the error-throw, `catch`/`throw` and cross-lambda `return-from`
@@ -817,8 +819,9 @@ closures), all pinned cross-backend. `--no-gc` keeps the lite lowering.
   (restart-mode `warn` is wrapped in a `muffle-warning` `restart-case`). **Every restart-mode signal
   terminal CARRIES the instance the hook just ran**: the string-designator error arm throws
   `%error-cond` instead of `%error`, and `expandObjectSignal`'s string/symbol arms bind their fresh
-  instance (`__signal_inst`) and hand it to both `%run-handlers` and the terminal -- the identity
-  contract the `%hb-guard` mark depends on.
+  instance (`__signal_inst`) and hand it to both `%run-handlers` and the terminal -- so a
+  `handler-case` catches the instance the handlers saw. The terminal also says the handlers ran
+  (a third operand `t`: "Whether the handlers ran rides the flight" below).
 
 ### Errors BUILT-INS raise run handler-bind handlers too
 Rove's failure-recording model is `handler-bind` around USER code, so `(car 1)`, an out-of-range
@@ -828,20 +831,17 @@ Rove's failure-recording model is `handler-bind` around USER code, so `(car 1)`,
   compiled per backend (`JvmHandlerCaseCompiler.compileGuard`,
   `WasmHandlerCaseCompiler.compileGuard`, `LispEvaluator.evalHbGuard`): a region that synthesizes the
   `simple-error` of a condition-less throw, runs `%run-handlers` -- the FULL cluster stack from the
-  innermost, CLHS rebinding included, so ONE pad run covers every enclosing cluster and outer pads
-  skip by the mark -- and rethrows CARRYING the instance. The pad never touches the hc-depth channel,
+  innermost, CLHS rebinding included, so ONE pad run covers every enclosing cluster -- and rethrows
+  CARRYING the instance and saying the handlers ran, which every pad further out reads and passes
+  on. The pad never touches the hc-depth channel,
   has no cleanup (no `UnwindScope`, no trampoline), and does not catch the block-exit tag.
 - **A handler's own call runs in a pad too** (`runHandlersDefun`: `(%hb-guard (funcall handler
   c))`), while `%handler-clusters%` holds the REMAINING clusters. CLHS 9.1.4.1 runs a handler with
   its cluster disabled, so a built-in failing inside it is walked there, against the enclosing
-  clusters only, and marked; the handler-bind's own pad then rethrows it untouched. Without it the
+  clusters only; the handler-bind's own pad then rethrows it untouched. Without it the
   failure escaped the walk's cleanup with the full stack restored and the handler-bind's pad RAN
   THE FAILING HANDLER AGAIN on the `type-error` (JVM and both wasm-GC, until 2026-09-26). Pinned by
   ci-spec `restart-system` (the output) and `failing-handler-bind-handler-report` (the report).
-- **Identity contract**: `%run-handlers` sets `%handlers-ran%` to its argument AT THE END of a
-  completed walk, so a pad recognizes an already-walked condition by `eq` and handlers run ONCE.
-  End-of-walk (not entry) marking keeps a nested signal inside a handler from clearing the outer
-  condition's mark.
 - **The interpreter ADDITIONALLY runs handlers at the SIGNAL POINT for built-ins**:
   `LispEvaluator.apply` wraps `builtIn.body().apply` and, on an escaping `LispEvalException` -- or a
   raw `IndexOutOfBounds`/`NegativeArraySize`/`Arithmetic`/`ClassCast` wrapped into one first
@@ -852,6 +852,68 @@ Rove's failure-recording model is `handler-bind` around USER code, so `(car 1)`,
   boundary -- intervening cleanups have run and restarts below it are gone (CL runs handlers first);
   a SIGNALED condition keeps exact signal-point semantics everywhere. wasm-GC runs handlers only for
   `$lisp-cond` throws, so **a rove test whose body traps still ends a wasm run**.
+
+### Whether the handlers ran rides the flight
+**Invariant: a condition's `handler-bind` handlers run ONCE per signal, whatever else is signalled,
+handled, declined or abandoned while it is on its way out -- because whether they ran is carried by
+the condition's own throw, never by a global.** Identical on all four backends; pinned by
+`HandlersRunOnceFixture` through `LispEvaluatorTest` / `JvmLispCompilerTest` /
+`WasmLispCompilerIntegrationTest#handlerBindHandlersRunOnceWhileACleanupSignals` (every row, SBCL's
+output) and ci-spec `handlers-run-once-while-a-cleanup-signals` (one row per mechanism, the report's
+aside, over standard condition classes: the shaker corpus class's constant pool stood at 51,957 of
+its 52,000 tripwire with it, 51,891 without -- the eight rows over four `define-condition`s took
+52,138).
+
+- **Who says so**: the hook's terminal, `(%error-cond c msg t)` / `(%signal-cond c msg t)`
+  (`LispMacroExpander.handlersRanTerminal`) -- reaching it proves the walk completed, since a walk
+  that did not transferred control, so nothing after the hook (a report rendered into the message
+  included) can take it back -- and a pad that walked, on its rethrow. Every other throw (a raw
+  failure; the unhooked `%error-cond` of `%program-error` / `%file-error` / `%package-error`) is
+  walked by the first pad or interpreter seam it crosses. A hooked site that forgot its operand
+  fails SAFE: walked again, never skipped.
+- **Where it rides.** Interpreter: `LispEvalException.handlersRan()`, read by every seam through
+  `withHandlerBindHandlersRun` (`apply`, the funcall seam, `%async-run`, `evalHbGuard`). JVM: the
+  record under the throwable -- `_condRan(t, c)` records `{_condTl, c}` (no Lisp value can hold the
+  private `_condTl`), `_condOf` answers the condition either shape names; the pad passes such a
+  record on as it came, and a restart-mode `handler-case` landing that declines puts back the record
+  AS TAKEN (it rides the result slot, which nothing writes on the landing path before a clause
+  answers); what only carries a record (future, join, `_jsig` / `_jfail`) carries it unchanged.
+  wasm-GC: the payload `(instance . (nil . message))` -- a cdr that is a cons, which no message is (a
+  string, a character vector, nil); the pad tests it with one `ref.test` and rethrows such a payload
+  untouched, a declining `handler-case` rethrows the payload it caught, and the entry report takes
+  the message out of it (restart mode only).
+- **Before (until 2026-09-27)**: one global, `%handlers-ran%`, set by `%run-handlers` at the end of
+  every completed walk and compared by `eq` at each pad. A condition signalled while another was on
+  its way out replaced it -- handled in an `unwind-protect` cleanup, declined there (a `signal` no
+  handler takes), abandoned by a `return-from` out of an inner cleanup, handled inside a `:report`
+  while the message was built (interpreter and JVM; wasm-GC renders reports lazily), handled between
+  the two pads -- and the outer condition's handlers ran twice on all four backends, the interpreter
+  also for a raw failure handled in a cleanup (it walks a built-in's failure at the signal point).
+  Weighed and dropped: saving the mark around a handling `handler-case` misses the declined and the
+  abandoned cases; several marks need a bound and outlive a served request; a per-instance flag
+  changes every condition layout, and a re-signalled instance is a new flight.
+- **Cost, measured 2026-09-27 against develop at `20a17362c`** (wasmtime 49.0.0). Outside restart
+  mode byte-identical (`(ignore-errors (f 1))`, `examples/console/error-handling.lisp`,
+  `examples/console/calc.lisp`, `examples/net/httpbin.lisp`; JVM, Preview 1 default and
+  `--optimize=size`, component). Restart mode, bytes before -> after:
+
+  | program | JVM class | wasm P1 | P1 `--optimize=size` | component |
+  |---|---|---|---|---|
+  | `handler-bind` over `(ignore-errors (error "x"))` | 41,499 -> 41,634 | 16,420 -> 16,390 | 22,958 -> 22,872 | 17,899 -> 17,869 |
+  | a `restart-case` a handler invokes | 41,440 -> 41,563 | 27,528 -> 27,441 | 24,902 -> 24,816 | 29,067 -> 28,980 |
+  | the ci-spec pin as a program of its own | 104,177 -> 104,466 | 56,011 -> 55,836 | 49,765 -> 49,591 | 59,738 -> 59,563 |
+  | `examples/net/hello-clack.lisp` | 953,749 -> 953,801 | 767,972 -> 768,890 | 602,635 -> 603,553 | 888,479 -> 889,458 |
+
+  JVM: `_condRan` (21 B of code) and `_condOf` (40 B) once, ~10 B per restart-mode `handler-case`
+  landing; a throw site keeps its size. wasm-GC: the global and the pad's `eq` go, a hooked throw
+  site grows by the wrapper cons (~5 B; hello-clack has some 180). Two traps met on the way: the
+  message rode the wrapper's CAR first, a string where the type-test fold
+  ([wasm-ref-type-fold.md](wasm-ref-type-fold.md)) had proved no cons car holds one, and the string
+  and sequence runtime it prunes came back (+1,066 B on the first row); the JVM landing first
+  unwrapped before its inline synthesis, whose branch targets then all carried the record in their
+  frames (+804 B of StackMapTable on the pin's program; +40 B unwrapped after it). **Re-evaluate
+  if** the per-site wrapper matters: a hooked site whose message is nil could throw a shared
+  `(nil . nil)` global instead.
 
 ### A `handler-case` joins the cluster stack, so it SHADOWS an enclosing `handler-bind`
 **Invariant: CLHS 9.1.4.1 -- handlers run MOST RECENT FIRST and `handler-case` transfers control, so
@@ -2041,6 +2103,7 @@ all, so **`restart-case` alone unblocks nothing real**.
   `compileAndRunAnUncaughtArgumentShapeErrorReportsTheSameLine`,
   `ehAnUncaughtArgumentShapeErrorReportsTheInterpreterLineBeforeTrapping`,
   `anInnerHandlerCaseShadowsAnEnclosingHandlerBind` (+3),
+  `handlerBindHandlersRunOnceWhileACleanupSignals` (+2),
   `signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch` (+3),
   `nonNumberArithmeticOperandsSignalCatchableTypeErrors`,
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` (+2), the restart block (15-16 cases each),
@@ -2070,6 +2133,7 @@ all, so **`restart-case` alone unblocks nothing real**.
 - ci-spec: `condition-objects`, `condition-types`, `condition-report-printing`,
   `signal-runtime-control-string`, `handler-case-catches-typed-and-plain-errors` (+2),
   `handler-case-in-argument-position`, `restart-system`,
+  `handlers-run-once-while-a-cleanup-signals`,
   `signal-declines-an-unmatched-handler-case`, `no-applicable-method-report`,
   `non-number-arithmetic-operands-are-catchable`,
   `argument-type-errors-name-the-operator-beyond-arithmetic`,

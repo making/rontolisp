@@ -26083,6 +26083,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void handlerBindHandlersRunOnceWhileACleanupSignals() throws Exception {
+		// Whether the handlers ran rides the payload -- (instance . (nil . message)), a
+		// cdr
+		// no message is -- which every %hb-guard pad reads and a declining handler-case
+		// rethrows as it came, so a condition handled, declined or abandoned in a cleanup
+		// cannot make them run twice. The interpreter twin is
+		// LispEvaluatorTest#handlerBindHandlersRunOnceWhileACleanupSignals; the component
+		// path is ci-spec's handlers-run-once-while-a-cleanup-signals.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.HandlersRunOnceFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
+	}
+
+	@Test
 	void standardConditionTypeNamesAreClSymbols() throws Exception {
 		// cl owns the condition type names, so a (:use #:cl) package
 		// spells them bare -- which is also what makes the RUNTIME type test below

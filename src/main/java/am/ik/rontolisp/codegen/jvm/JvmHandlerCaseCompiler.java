@@ -59,7 +59,17 @@ final class JvmHandlerCaseCompiler {
 			}
 		}
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
-		channel.ensure(ctx.cp, className);
+		// In restart mode what a landing takes may be a record saying the handler-bind
+		// handlers ran (JvmThrowableRecords.COND_RAN): the clauses dispatch on the
+		// condition it names, and a rethrow puts the record back as it came, so the
+		// fact rides on to the pads further out.
+		boolean records = ctx.restartMode;
+		if (records) {
+			channel.ensureHandlersRan(ctx.cp, className);
+		}
+		else {
+			channel.ensure(ctx.cp, className);
+		}
 		int savedNextLocal = ctx.nextLocal;
 		// Entering the handler discards the operand stack, so the values the enclosing
 		// form had already evaluated are saved into locals and reloaded past the merge:
@@ -69,6 +79,10 @@ final class JvmHandlerCaseCompiler {
 		int resultSlot = ctx.allocTemp();
 		int excSlot = ctx.allocTemp();
 		int condSlot = ctx.allocTemp();
+		// The record rides the result slot: on the landing path nothing stores there
+		// until a clause body answers, and the no-match rethrow reads it before any
+		// does. A slot of its own would lengthen later stack-map frames of the method.
+		int recordSlot = records ? resultSlot : condSlot;
 		if (!spill.live().isEmpty()) {
 			// A return escaping the form cannot leave the enclosing block's operands on
 			// the stack: they are in the spill now, and JvmReturnCompiler reloads them.
@@ -132,6 +146,23 @@ final class JvmHandlerCaseCompiler {
 			emitRethrowPendingNle(ctx, className, excSlot);
 		}
 		emitTakeCondition(excSlot, condSlot, ctx, className);
+		if (records) {
+			// What the landing took is the record -- a condition-less throw's being the
+			// instance just synthesized, as outside restart mode: keep it for a rethrow
+			// and dispatch on the condition it names. Unwrapped only past the synthesis,
+			// whose many branch targets would otherwise all carry the record slot in
+			// their stack-map frames: +804 B of StackMapTable on the ci-spec pin's
+			// program before the synthesis, +40 B after it (2026-09-27).
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(condSlot);
+			ctx.emit(Opcode.DUP);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(recordSlot);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(Objects.requireNonNull(channel.condOf).index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(condSlot);
+		}
 		// Dispatch: the condition rides a pseudo-local so the type tests and clause
 		// bodies compile as ordinary Lisp forms.
 		String condVarName = "__hc_cond$" + condSlot;
@@ -161,7 +192,7 @@ final class JvmHandlerCaseCompiler {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
 		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
+		ctx.emit(recordSlot);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
 		ctx.emit(Opcode.ATHROW);
@@ -185,11 +216,11 @@ final class JvmHandlerCaseCompiler {
 	 * expansion wraps its body in: a catch-any region over the body whose handler takes
 	 * the condition the caught throwable carries, synthesizes the {@code simple-error} of
 	 * a condition-less throw (a raw runtime failure, a plain {@code %error}), runs the
-	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless a walk
-	 * already completed for the identical instance (the {@code %handlers-ran%} mark --
-	 * the restart-mode signal hook runs handlers at the signal point and its terminals
-	 * carry the instance they ran for), records the instance under the throwable again so
-	 * an outer {@code handler-case} or guard sees the same one, and rethrows. Unlike
+	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless the record
+	 * says they already ran (the restart-mode signal hook runs handlers at the signal
+	 * point and its terminal records {@code _condRan}; so does a pad nearer the signal),
+	 * records the instance under the throwable again, saying the handlers ran, so an
+	 * outer {@code handler-case} or guard sees the same one, and rethrows. Unlike
 	 * {@code handler-case} it never touches the handler depth (so {@code signal}
 	 * semantics are unchanged) and has no cleanup, so it pushes no {@code UnwindScope}.
 	 */
@@ -249,7 +280,7 @@ final class JvmHandlerCaseCompiler {
 	 *
 	 * Every {@code handler-bind} in a program emits the SAME pad -- take the caught
 	 * throwable's condition, synthesize the instance of a condition-less throw, run the
-	 * cluster stack unless it already ran for this instance, record the instance again --
+	 * cluster stack unless the record says it already ran, record the instance again --
 	 * over nothing but the caught throwable, so it is emitted once per class and called
 	 * from each site. It has to be: the pad is ~500 bytecodes (the classification switch
 	 * builds one condition instance per raw-failure class), and in restart mode
@@ -282,20 +313,43 @@ final class JvmHandlerCaseCompiler {
 
 	/**
 	 * Emits the landing pad's body over its single parameter (slot 0, the caught
-	 * throwable), answering that throwable so the call site can rethrow it.
+	 * throwable), answering that throwable so the call site can rethrow it. A record
+	 * saying the handlers already ran goes back as it came; otherwise the pad runs them
+	 * and records that it did ({@code _condRan}), so every pad further out -- and only
+	 * this flight's -- passes the throwable on.
 	 */
 	private static void emitGuardPadBody(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		channel.ensureHandlersRan(ctx.cp, className);
 		int excSlot = 0;
+		int recordSlot = ctx.allocTemp();
 		int condSlot = ctx.allocTemp();
 		// A cross-lambda non-local exit must pass through untouched (same gate as
 		// handler-case).
 		if (ctx.blockExitChannel) {
 			emitRethrowPendingNle(ctx, className, excSlot);
 		}
-		emitTakeCondition(excSlot, condSlot, ctx, className);
-		// Run the cluster stack unless already run, as an ordinary Lisp form over the
-		// condition pseudo-local.
+		emitTakeRecord(excSlot, recordSlot, condSlot, ctx);
+		// A record that is not its own condition is a _condRan record: the handlers ran
+		// (at the signal point, or at a pad nearer it). Put it back and pass it on.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(recordSlot);
+		int ifNotRanPos = ctx.code.size();
+		ctx.emit(Opcode.IF_ACMPEQ);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(recordSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
+		ctx.emit(Opcode.ARETURN);
+		JvmEmitHelper.patchBranch(ctx, ifNotRanPos, ctx.code.size());
+		emitSynthesizeUnlessRecorded(excSlot, condSlot, ctx, className);
+		// Run the cluster stack, as an ordinary Lisp form over the condition
+		// pseudo-local.
 		String condVarName = "__hb_cond$" + condSlot;
 		ctx.locals.put(condVarName, condSlot);
 		try {
@@ -306,15 +360,15 @@ final class JvmHandlerCaseCompiler {
 			ctx.locals.remove(condVarName);
 		}
 		ctx.emit(Opcode.POP);
-		// Record the instance under the throwable again (the outer catcher must see the
-		// instance the handlers saw, a synthesized one included) and hand the throwable
-		// back to be rethrown.
+		// Record the instance under the throwable again, saying the handlers ran (the
+		// outer catcher must see the instance the handlers saw, a synthesized one
+		// included), and hand the throwable back to be rethrown.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(condSlot);
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
+		ctx.emitU2(Objects.requireNonNull(channel.condRan).index());
 		ctx.emit(Opcode.ARETURN);
 	}
 
@@ -330,6 +384,35 @@ final class JvmHandlerCaseCompiler {
 		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condTake).index());
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(condSlot);
+		emitSynthesizeUnlessRecorded(excSlot, condSlot, ctx, className);
+	}
+
+	/**
+	 * Emits a restart-mode landing's read of what it caught, where a record may say the
+	 * {@code handler-bind} handlers ran ({@link JvmThrowableRecords#COND_RAN}): the
+	 * record taken off the channel into {@code recordSlot}, and the condition it names --
+	 * null when there is none -- into {@code condSlot}.
+	 */
+	private static void emitTakeRecord(int excSlot, int recordSlot, int condSlot, JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condTake).index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(recordSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condOf).index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(condSlot);
+	}
+
+	/**
+	 * Emits the synthesis of the instance a condition-less throw stands for into
+	 * {@code condSlot} when that slot holds null ({@link #emitSynthesizeCondition}).
+	 */
+	private static void emitSynthesizeUnlessRecorded(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
+			String className) {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(condSlot);
 		int ifHaveCondPos = ctx.code.size();

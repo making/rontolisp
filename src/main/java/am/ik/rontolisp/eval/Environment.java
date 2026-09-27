@@ -5896,11 +5896,14 @@ public final class Environment implements Scope {
 		}));
 		// %error-cond: internal two-argument primitive that signals an error carrying a
 		// condition object (a CLOS-subset tagged-list instance) alongside the message.
-		// Produced by the typed / condition-object error designator expansions.
+		// Produced by the typed / condition-object error designator expansions; the
+		// restart-mode signal hook's terminal adds a third operand, t, when the
+		// handler-bind handlers already ran for the condition, and the error says so.
 		env.defineFunction(LispNames.ERROR_COND_INTERNAL, new LispFunction(LispNames.ERROR_COND_INTERNAL, args -> {
-			requireArgCount(LispNames.ERROR_COND_INTERNAL, args, 2);
+			requireArgCountBetween(LispNames.ERROR_COND_INTERNAL, args, 2, 3);
 			String message = (args.get(1) instanceof LispString s) ? s.value() : args.get(1).display();
-			throw new LispEvalException(message, args.get(0));
+			LispEvalException error = new LispEvalException(message, args.get(0));
+			throw args.size() > 2 && args.get(2) != LispNil.INSTANCE ? error.markHandlersRan() : error;
 		}));
 		// %warn: internal primitive that writes a pre-built "WARNING: ..." message to the
 		// current *error-output* -- the seeded handle 2 (the process standard error)

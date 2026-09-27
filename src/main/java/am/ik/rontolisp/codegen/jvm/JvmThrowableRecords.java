@@ -41,6 +41,16 @@ import org.jspecify.annotations.Nullable;
  * synthesized for one failure must not describe the next; only a flight abandoned between
  * a pass-on and the next landing leaves such a record behind. A wrong-type record is made
  * for a fresh exception only, so it is never taken.
+ *
+ * <p>
+ * A record also says whether the {@code handler-bind} handlers already ran for its
+ * condition: {@link #COND_RAN} records {@code {_condTl, condition}} instead of the bare
+ * condition (no Lisp value can hold the private {@code _condTl}, so the shape is
+ * unambiguous) and {@link #COND_OF} answers the condition either shape names. What only
+ * passes a record on -- an async body's future, a thread's join, a Java callback's
+ * custody -- carries it as it is, so the fact rides the flight wherever the condition
+ * does; a {@code %hb-guard} pad reads it instead of a global mark that the next signal a
+ * cleanup handled could replace.
  */
 final class JvmThrowableRecords {
 
@@ -66,6 +76,23 @@ final class JvmThrowableRecords {
 	static final String COND_PUT = "_condPut";
 
 	static final String COND_PUT_DESC = "(Ljava/lang/Throwable;Ljava/lang/Object;)Ljava/lang/Throwable;";
+
+	/**
+	 * {@code _condRan(t, c)}: records for {@code t} that the {@code handler-bind}
+	 * handlers ran for {@code c} -- the record {@code {_condTl, c}} -- and answers
+	 * {@code t}.
+	 */
+	static final String COND_RAN = "_condRan";
+
+	static final String COND_RAN_DESC = COND_PUT_DESC;
+
+	/**
+	 * {@code _condOf(r)}: the condition the record {@code r} names -- {@code c} of a
+	 * {@link #COND_RAN} record, {@code r} itself otherwise.
+	 */
+	static final String COND_OF = "_condOf";
+
+	static final String COND_OF_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String WEAK_MAP = "java/util/WeakHashMap";
 
@@ -107,15 +134,18 @@ final class JvmThrowableRecords {
 
 	/**
 	 * Builds {@link #TL_MAP} and, for a program with a condition channel,
-	 * {@link #COND_TAKE} and {@link #COND_PUT}.
+	 * {@link #COND_TAKE} and {@link #COND_PUT} -- plus {@link #COND_RAN} and
+	 * {@link #COND_OF} when a record can say the handlers ran.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 * @param condTl the condition channel's {@code _condTl}, or null when the program has
 	 * none
+	 * @param handlersRan whether a signal hook or a {@code %hb-guard} pad records that
+	 * the handlers ran
 	 * @return the methods
 	 */
 	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassConstant thisClass,
-			@Nullable FieldrefConstant condTl) {
+			@Nullable FieldrefConstant condTl, boolean handlersRan) {
 		ClassConstant weakMap = cp.addClass(cp.addUtf8(WEAK_MAP));
 		MethodrefConstant tlGet = method(cp, "java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
 		MethodrefConstant tlSet = method(cp, "java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
@@ -181,6 +211,56 @@ final class JvmThrowableRecords {
 		put.areturn();
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_PUT), cp.addUtf8(COND_PUT_DESC),
 				put.finish(), 3, 2, List.of()));
+		if (!handlersRan) {
+			return methods;
+		}
+		ClassConstant objectArray = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+
+		// _condRan(Throwable t, Object c): _condPut(t, new Object[] {_condTl, c}).
+		JvmAsm ran = new JvmAsm();
+		ran.aload(0);
+		ran.iconst(2);
+		ran.anewarray(cp.addClass(cp.addUtf8("java/lang/Object")));
+		ran.dup();
+		ran.iconst(0);
+		ran.getstatic(condTl);
+		ran.aastore();
+		ran.dup();
+		ran.iconst(1);
+		ran.aload(1);
+		ran.aastore();
+		ran.invokestatic(self(cp, thisClass, COND_PUT, COND_PUT_DESC));
+		ran.areturn();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_RAN), cp.addUtf8(COND_RAN_DESC),
+				ran.finish(), 5, 2, List.of()));
+
+		// _condOf(Object r): r[1] when r is a {_condTl, c} record, r otherwise.
+		JvmAsm of = new JvmAsm();
+		int plain = of.label();
+		of.aload(0);
+		of.instanceOf(objectArray);
+		of.branch(Opcode.IFEQ, plain);
+		of.aload(0);
+		of.checkcast(objectArray);
+		of.astore(1);
+		of.aload(1);
+		of.arraylength();
+		of.iconst(2);
+		of.branch(Opcode.IF_ICMPNE, plain);
+		of.aload(1);
+		of.iconst(0);
+		of.aaload();
+		of.getstatic(condTl);
+		of.branch(Opcode.IF_ACMPNE, plain);
+		of.aload(1);
+		of.iconst(1);
+		of.aaload();
+		of.areturn();
+		of.bind(plain);
+		of.aload(0);
+		of.areturn();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_OF), cp.addUtf8(COND_OF_DESC),
+				of.finish(), 2, 2, List.of()));
 		return methods;
 	}
 

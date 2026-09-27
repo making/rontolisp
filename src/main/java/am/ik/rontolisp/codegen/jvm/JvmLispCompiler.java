@@ -4413,7 +4413,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// _tlMap, and _condTake/_condPut: the records a throwable carries, keyed by
 			// it (JvmThrowableRecords).
 			for (JvmNumericRuntimeBuilder.NumericMethod rm : JvmThrowableRecords.build(cp, thisClass,
-					mainCtx.conditionChannel.used ? mainCtx.conditionChannel.condTlField : null)) {
+					mainCtx.conditionChannel.used ? mainCtx.conditionChannel.condTlField : null,
+					mainCtx.conditionChannel.condRan != null)) {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
 						rm.maxStack(), rm.maxLocals(), rm.code(), List.of());
 			}
@@ -5841,6 +5842,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		@Nullable MethodrefConstant condPut;
 
+		/**
+		 * {@code _condRan(Throwable, Object)Throwable}: the record of a condition whose
+		 * {@code handler-bind} handlers already ran -- a signal hook's terminal, a
+		 * {@code %hb-guard} pad's rethrow. Null until a site asks
+		 * ({@link #ensureHandlersRan}), so a program without either stays byte-identical.
+		 */
+		@Nullable MethodrefConstant condRan;
+
+		/**
+		 * {@code _condOf(Object)Object}: the condition a record names, whichever of the
+		 * two shapes it has. Minted with {@link #condRan}.
+		 */
+		@Nullable MethodrefConstant condOf;
+
 		@Nullable Utf8Constant fieldName;
 
 		@Nullable Utf8Constant fieldDesc;
@@ -5910,6 +5925,24 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.condPut = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_PUT,
 					JvmThrowableRecords.COND_PUT_DESC);
 			ensureThreadLocalInfra(cp);
+		}
+
+		/**
+		 * {@link #ensure}, plus the two helpers of a record that says the
+		 * {@code handler-bind} handlers ran ({@link JvmThrowableRecords#COND_RAN}): what
+		 * a restart-mode signal hook's terminal, a {@code %hb-guard} pad and a
+		 * restart-mode {@code handler-case} landing call.
+		 */
+		void ensureHandlersRan(ConstantPool cp, String className) {
+			ensure(cp, className);
+			if (this.condRan != null) {
+				return;
+			}
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			this.condRan = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_RAN,
+					JvmThrowableRecords.COND_RAN_DESC);
+			this.condOf = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_OF,
+					JvmThrowableRecords.COND_OF_DESC);
 		}
 
 		/**

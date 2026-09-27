@@ -11797,6 +11797,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void handlerBindHandlersRunOnceWhileACleanupSignals() throws Exception {
+		// Whether the handlers ran is recorded under the throwable (_condRan) and read by
+		// every %hb-guard pad, a handler-case that declines the condition putting the
+		// record back as it came -- where one global mark answered, a condition handled,
+		// declined or abandoned in a cleanup (or in a report) replaced it and the outer
+		// pair ran twice. The interpreter twin is
+		// LispEvaluatorTest#handlerBindHandlersRunOnceWhileACleanupSignals.
+		assertThat(compileAndRun(am.ik.rontolisp.HandlersRunOnceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunCharComparisonExtensions() throws Exception {
 		assertThat(compileAndRun("""
 				(print (char> #\\c #\\b #\\a))

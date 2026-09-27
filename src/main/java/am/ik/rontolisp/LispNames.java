@@ -2431,19 +2431,12 @@ public final class LispNames {
 	 * expansion wraps its body in: a catch-any region that, for an escaping error whose
 	 * handlers did not run at the signal point (a raw built-in failure, an internal
 	 * {@code %error} with no signal hook), synthesizes the condition instance, runs the
-	 * {@code handler-bind} cluster stack, and rethrows carrying the instance. A condition
-	 * whose handlers already ran is recognized by identity against
-	 * {@link #HANDLERS_RAN_VAR} and rethrown untouched.
+	 * {@code handler-bind} cluster stack, and rethrows carrying the instance and saying
+	 * its handlers ran. A throw that already says so -- a signal hook's terminal
+	 * ({@link #ERROR_COND_INTERNAL}'s third operand), a pad nearer the signal -- is
+	 * rethrown untouched.
 	 */
 	public static final String HB_GUARD_INTERNAL = "%HB-GUARD";
-
-	/**
-	 * The condition instance {@code %run-handlers} last completed a cluster walk for (set
-	 * at the END of the walk, so a nested signal inside a handler cannot clear an outer
-	 * condition's mark). {@code %hb-guard} compares against it by identity to keep the
-	 * signal-point run and the landing-pad run from both firing for one condition.
-	 */
-	public static final String HANDLERS_RAN_VAR = "%HANDLERS-RAN%";
 
 	/**
 	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
@@ -2662,7 +2655,11 @@ public final class LispNames {
 	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
 	 * instance) alongside the pre-built message string. Produced by the {@code error}
 	 * macro expansion for the typed and condition-object designator forms; on the WASM
-	 * backends it traps like {@link #ERROR_INTERNAL}.
+	 * backends it traps like {@link #ERROR_INTERNAL}. A third operand {@code t} -- the
+	 * restart-mode signal hook's terminal, reached only once
+	 * {@link #RUN_HANDLERS_INTERNAL} completed a walk for the condition -- makes the
+	 * throw say the {@code handler-bind} handlers ran, so no {@link #HB_GUARD_INTERNAL}
+	 * pad runs them again ({@code LispMacroExpander.handlersRanTerminal}).
 	 */
 	public static final String ERROR_COND_INTERNAL = "%ERROR-COND";
 
@@ -2781,7 +2778,8 @@ public final class LispNames {
 	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} whose clause
 	 * types match it is established on the current thread of control, and returns nil
 	 * otherwise (CLHS 9.1.4.1: {@code signal} transfers control only to a handler that
-	 * will handle the condition).
+	 * will handle the condition). Takes the third operand {@link #ERROR_COND_INTERNAL}
+	 * does, to the same end.
 	 */
 	public static final String SIGNAL_COND_INTERNAL = "%SIGNAL-COND";
 

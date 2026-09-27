@@ -11529,8 +11529,9 @@ public final class LispEvaluator {
 	 * {@code handler-bind} expansion wraps its body in. On this backend the built-in seam
 	 * in {@link #apply} already runs handlers at the signal point, so the pad only
 	 * catches what never crossed that seam (an undefined function, an internal
-	 * {@code %error} form evaluated directly); the identity mark keeps the two from both
-	 * firing for one condition.
+	 * {@code %error} form evaluated directly); the error says when its handlers ran
+	 * ({@link LispEvalException#handlersRan}), which keeps the two from both firing for
+	 * one condition.
 	 */
 	private LispVal evalHbGuard(LispCons cons, Environment env) {
 		LispVal body = ((LispCons) cons.cdr()).car();
@@ -11544,10 +11545,10 @@ public final class LispEvaluator {
 
 	/**
 	 * Runs the {@code handler-bind} cluster stack for the condition an escaping error
-	 * carries (synthesizing the {@code simple-error} of a plain error first), unless
-	 * {@code %run-handlers} already completed a walk for the IDENTICAL instance (the
-	 * {@code %handlers-ran%} mark it sets at the end of a walk -- the signal hook and
-	 * this seam never both fire for one condition). Answers the exception to rethrow: the
+	 * carries (synthesizing the {@code simple-error} of a plain error first), unless the
+	 * error says its handlers already ran ({@link LispEvalException#handlersRan}: the
+	 * signal hook's terminal, or the first seam it crossed -- the two never both fire for
+	 * one condition). Answers the exception to rethrow, saying the handlers ran: the
 	 * original when it already carried the instance, otherwise a replacement carrying it,
 	 * so an outer {@code handler-case} dispatches on the same instance the handlers saw.
 	 * Runs through the same {@code %run-handlers} defun the signal hook calls, so the
@@ -11555,36 +11556,21 @@ public final class LispEvaluator {
 	 * {@code return-from}) throws its own signal out of here instead.
 	 */
 	private LispEvalException withHandlerBindHandlersRun(LispEvalException e) {
-		if (!this.restartRuntimeLoaded) {
+		if (!this.restartRuntimeLoaded || e.handlersRan()) {
 			return e;
 		}
 		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
-		if (condition != handlersRanMark()) {
-			LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
-			if (fn != null) {
-				apply(fn, List.of(condition), this.globalEnv);
-			}
+		LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
+		if (fn != null) {
+			apply(fn, List.of(condition), this.globalEnv);
 		}
 		if (e.condition() == condition) {
-			return e;
+			return e.markHandlersRan();
 		}
 		String message = e.getMessage();
 		LispEvalException typed = new LispEvalException(message == null ? "" : message, condition);
 		typed.initCause(e);
-		return typed;
-	}
-
-	/**
-	 * The current {@code %handlers-ran%} mark, read the way a symbol reference reads a
-	 * special (the active dynamic binding first, else the global default), or null when
-	 * the restart runtime has not defined it.
-	 */
-	private @Nullable LispVal handlersRanMark() {
-		String name = LispNames.HANDLERS_RAN_VAR;
-		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
-			return this.dynamicBindings.get(name);
-		}
-		return this.globalEnv.lookupOrNull(name);
+		return typed.markHandlersRan();
 	}
 
 	/**
@@ -11636,14 +11622,17 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalSignalCond(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() != 3) {
+		if (parts.size() != 3 && parts.size() != 4) {
 			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
 		}
 		LispVal condition = eval(parts.get(1), env);
 		LispVal message = eval(parts.get(2), env);
 		if (anyHandlerCaseMatches(condition)) {
-			throw new LispEvalException(message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(),
-					condition);
+			LispEvalException raised = new LispEvalException(
+					message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
+			// The signal hook's terminal: the handler-bind handlers ran at the signal
+			// point, and the throw says so to every pad on its way to the handler-case.
+			throw LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
 		}
 		return LispNil.INSTANCE;
 	}

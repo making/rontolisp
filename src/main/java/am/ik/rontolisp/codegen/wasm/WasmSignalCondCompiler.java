@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -73,9 +74,12 @@ final class WasmSignalCondCompiler {
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(condSlot);
-		ctx.writer.write(Instruction.REF_NULL);
-		ctx.writer.writeHeapType(Type.EQ.code());
-		WasmErrorCompiler.emitThrowPayload(ctx);
+		// The signal hook's terminal says the handler-bind handlers ran, so no pad on
+		// the way to the handler-case runs them again.
+		WasmErrorCompiler.emitThrowPayload(ctx, LispMacroExpander.handlersRan(args), () -> {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		});
 		if (ctx.signalClauseMatch) {
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END);

@@ -50,6 +50,22 @@ final class JvmErrorCompiler {
 	 */
 	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className,
 			int conditionSlot) {
+		compileThrowRuntimeException(messageExpr, ctx, className, conditionSlot, false);
+	}
+
+	/**
+	 * {@link #compileThrowRuntimeException(LispVal, JvmLispCompiler.Ctx, String, int)},
+	 * the condition recorded through {@code _condRan} when {@code handlersRan}: the
+	 * restart-mode signal hook's terminal, whose throw says the {@code handler-bind}
+	 * handlers already ran for it ({@link JvmThrowableRecords#COND_RAN}).
+	 * @param messageExpr the message expression
+	 * @param ctx the method context
+	 * @param className the generated class
+	 * @param conditionSlot the local holding the condition, or {@code -1} for none
+	 * @param handlersRan whether the record says the handlers ran
+	 */
+	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className,
+			int conditionSlot, boolean handlersRan) {
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
 		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
@@ -103,7 +119,9 @@ final class JvmErrorCompiler {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(conditionSlot);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(ctx.conditionChannel.condPut).index());
+			ctx.emitU2(java.util.Objects
+				.requireNonNull(handlersRan ? ctx.conditionChannel.condRan : ctx.conditionChannel.condPut)
+				.index());
 		}
 		ctx.emit(Opcode.ATHROW);
 	}

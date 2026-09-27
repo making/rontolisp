@@ -27816,6 +27816,36 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The throwing terminal of a signal whose {@code handler-bind} handlers the
+	 * restart-mode hook has just run: {@code (%error-cond condition message t)} or
+	 * {@code (%signal-cond condition message t)}. The third operand says the handlers
+	 * ran, and the throw carries that fact with it (the interpreter's exception, the
+	 * JVM's record under the throwable, the wasm-GC payload), so every {@code %hb-guard}
+	 * pad the condition crosses passes it on untouched. Reaching the terminal is the
+	 * proof: a walk that did not complete transferred control, and nothing after the hook
+	 * -- the report a message renders included -- can take the fact back.
+	 * @param internalName {@link LispNames#ERROR_COND_INTERNAL} or
+	 * {@link LispNames#SIGNAL_COND_INTERNAL}
+	 * @param condition the form answering the instance the handlers saw
+	 * @param message the message form
+	 * @return the terminal
+	 */
+	private static LispVal handlersRanTerminal(String internalName, LispVal condition, LispVal message) {
+		return listToCons(List.of(new LispSymbol(internalName), condition, message, LispTrue.INSTANCE));
+	}
+
+	/**
+	 * Whether a {@code %error-cond} / {@code %signal-cond} form says the
+	 * {@code handler-bind} handlers already ran for its condition
+	 * ({@link #handlersRanTerminal}): a third operand that is not the nil literal.
+	 * @param terminal the terminal form, its operator first
+	 * @return whether its throw carries the fact
+	 */
+	public static boolean handlersRan(List<LispVal> terminal) {
+		return terminal.size() > 3 && !(terminal.get(3) instanceof LispNil);
+	}
+
+	/**
 	 * The literal-control-string designator: builds the message with the format machinery
 	 * and delegates to the internal primitive. {@code error} keeps the plain one-argument
 	 * {@code (%error message)} shape (a {@code handler-case} synthesizes the
@@ -27853,14 +27883,13 @@ public final class LispMacroExpander {
 			LispVal terminal = switch (internalName) {
 				case LispNames.WARN_INTERNAL -> listToCons(List.of(new LispSymbol(internalName), listToCons(
 						List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), msgVar))));
-				case LispNames.SIGNAL_COND_INTERNAL ->
-					listToCons(List.of(new LispSymbol(internalName), condVar, msgVar));
+				case LispNames.SIGNAL_COND_INTERNAL -> handlersRanTerminal(internalName, condVar, msgVar);
 				// The error terminal carries the SAME instance %run-handlers just saw
-				// (%error-cond, uncaught output identical to %error): a %hb-guard /
-				// signal-point seam recognizes it by identity and does not run the
-				// handlers a second time, and a handler-case catches the identical
-				// instance the handler-bind handlers were given, as in CL.
-				default -> listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, msgVar));
+				// (%error-cond, uncaught output identical to %error), so a handler-case
+				// catches the identical instance the handler-bind handlers were given,
+				// as in CL -- and its throw says the handlers ran, so no %hb-guard pad
+				// or signal-point seam runs them a second time.
+				default -> handlersRanTerminal(LispNames.ERROR_COND_INTERNAL, condVar, msgVar);
 			};
 			signalCall = makeLet(SIG_MSG_VAR, message,
 					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(textControlForm(msgVar), LispNil.INSTANCE)),
@@ -27977,10 +28006,12 @@ public final class LispMacroExpander {
 		String condInternal = LispNames.ERROR_INTERNAL.equals(internalName) ? LispNames.ERROR_COND_INTERNAL
 				: internalName;
 		LispVal signalCall = warn ? listToCons(List.of(new LispSymbol(internalName), message))
-				: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
+				: signalHook ? handlersRanTerminal(condInternal, condVar, message)
+						: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
 		if (signalHook) {
 			// Restart mode: run the handler-bind handlers on the instance at the
-			// signal point, before the throwing/printing terminal.
+			// signal point, before the throwing/printing terminal -- whose throw says
+			// they ran.
 			signalCall = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), signalCall));
 		}
@@ -28185,11 +28216,10 @@ public final class LispMacroExpander {
 			// Restart mode: run the handler-bind handlers at the signal point. The
 			// string/symbol arms synthesize the same simple-* instance a handler-case
 			// would, bind it, and hand the SAME instance to the throwing terminal
-			// (%error-cond / %signal-cond): a %hb-guard landing pad or the
-			// interpreter's signal-point seam recognizes it by identity
-			// (%handlers-ran%) and does not run the handlers a second time. warn's
-			// terminal does not throw, so its hook instance stays unbound. The
-			// condition arm passes the datum's instance itself.
+			// (%error-cond / %signal-cond), whose throw says the handlers ran: no
+			// %hb-guard landing pad or interpreter signal-point seam runs them a
+			// second time. warn's terminal does not throw, so its hook instance stays
+			// unbound. The condition arm passes the datum's instance itself.
 			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
 					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
 			if (warn) {
@@ -28210,14 +28240,15 @@ public final class LispMacroExpander {
 						objNew(simpleTag, List.of(textControlForm(stringMessage), LispNil.INSTANCE)),
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
-								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
+								handlersRanTerminal(throwInternal, instVar, stringMessage))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
 				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
 						makeLet(SIGNAL_INST_VAR,
 								objNew(simpleTag, List.of(textControlForm(symMsgVar), LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
-										listToCons(List.of(new LispSymbol(throwInternal), instVar, symMsgVar))))));
+										handlersRanTerminal(throwInternal, instVar, symMsgVar)))));
+				conditionCase = handlersRanTerminal(throwInternal, condVar, message);
 			}
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), conditionCase));
@@ -34462,9 +34493,9 @@ public final class LispMacroExpander {
 		// bad car, an index out of bounds, an internal %error with no signal hook)
 		// never went through %run-handlers, so the pad synthesizes the condition
 		// instance, runs the cluster stack, and rethrows. A condition whose handlers
-		// already ran at the signal point is recognized by identity (%handlers-ran%)
-		// and rethrown untouched. The analysis expansion skips the wrapper -- it adds
-		// no variable structure.
+		// already ran -- at the signal point, or at a pad nearer it -- says so on its
+		// own throw (handlersRanTerminal) and is rethrown untouched. The analysis
+		// expansion skips the wrapper -- it adds no variable structure.
 		LispVal body = prognOrNil(parts.subList(2, parts.size()));
 		if (!analysisOnly) {
 			body = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL), body));
@@ -34528,17 +34559,18 @@ public final class LispMacroExpander {
 
 	/**
 	 * The condition-dispatch form a {@code %hb-guard} landing pad compiles over its
-	 * condition pseudo-local: run the {@code handler-bind} cluster stack unless
-	 * {@code %run-handlers} already completed a walk for THIS instance (identity against
-	 * {@code %handlers-ran%}, which {@code %run-handlers} sets at the end of a walk).
+	 * condition pseudo-local when the throw it caught does NOT say the handlers ran
+	 * ({@link #handlersRanTerminal}): run the {@code handler-bind} cluster stack. Each
+	 * backend reads the fact off what it caught before it gets here, and rethrows marked
+	 * after -- so the answer belongs to the one flight, and no signal handled, declined
+	 * or abandoned while the flight is on its way out (a cleanup's, a report's) can
+	 * change it. One global mark answered for every flight until 2026-09-27, and such a
+	 * signal replaced it: the outer condition's handlers ran twice.
 	 * @param condVar the pseudo-local holding the condition instance
 	 * @return the guard dispatch expression
 	 */
 	public static LispVal hbGuardHandlerForm(LispSymbol condVar) {
-		return makeIf(
-				listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), condVar,
-						new LispSymbol(LispNames.HANDLERS_RAN_VAR))),
-				LispNil.INSTANCE, callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar));
+		return callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar);
 	}
 
 	/**
@@ -35204,8 +35236,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * The restart-runtime globals, nil-initialized (prepended on the compile path): the
-	 * handler and restart cluster stacks plus the {@code %handlers-ran%} mark the
-	 * {@code %hb-guard} landing pad compares against.
+	 * handler and restart cluster stacks. Whether a condition's handlers already ran is
+	 * no global: its own throw carries it ({@link #hbGuardHandlerForm}).
 	 * @return the defvar forms
 	 */
 	public static List<LispVal> restartRuntimeGlobalForms() {
@@ -35213,8 +35245,6 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR),
 						LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RESTART_CLUSTERS_VAR),
-						LispNil.INSTANCE)),
-				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLERS_RAN_VAR),
 						LispNil.INSTANCE)));
 	}
 
@@ -35295,7 +35325,8 @@ public final class LispMacroExpander {
 		// backends -- must be walked HERE, against the remaining clusters the global
 		// holds now. Without it the failure escapes this walk's cleanup with the full
 		// stack restored and the handler-bind's own pad reruns the failing handler.
-		// The pad marks the walk, so every pad further out rethrows untouched.
+		// The pad rethrows it saying its handlers ran, so every pad further out passes
+		// it on untouched.
 		LispVal callHandler = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c))));
 		LispVal callEntry = makeIf(
@@ -35322,15 +35353,12 @@ public final class LispMacroExpander {
 								listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(List
 									.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
 										runCluster)))))));
-		// The mark is set at the END of the walk -- every handler declined, or a
-		// handler-case entry stopped it -- so a %hb-guard landing pad can tell this
-		// condition's handlers already ran. A nested signal inside a handler completes
-		// ITS walk first and is overwritten here when the outer walk finishes -- the
-		// identity a pad compares stays the outermost pending condition's.
-		LispVal mark = listToCons(
-				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.HANDLERS_RAN_VAR), c));
+		// A walk that returns completed -- every handler declined, or a handler-case
+		// entry stopped it -- and nothing is recorded here: the caller's throw says so
+		// (the hooked terminal, the %hb-guard pad's rethrow), since only the flight
+		// knows it until it lands.
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),
-				listToCons(List.<LispVal>of(c)), clustersLoop, mark, LispNil.INSTANCE));
+				listToCons(List.<LispVal>of(c)), clustersLoop, LispNil.INSTANCE));
 	}
 
 	// (defun %hc-match-p (__hm_c)
