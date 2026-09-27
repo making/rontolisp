@@ -240,6 +240,12 @@ final class WasmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, WasmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		if (LispNames.MV_SPILL.equals(name) && !ctx.globalIndices.containsKey(name)) {
+			// A module without the spill global publishes nothing, so an expansion's
+			// read of the channel answers nil (.kb/multiple-values.md).
+			compileExpr(LispNil.INSTANCE, ctx);
+			return;
+		}
 		// DYNAMIC-FIRST read of a dual-bound special (see WasmLetCompiler): in the
 		// binding function the lexical slot exists only so nested lambdas can capture
 		// it -- reads go to the module global, so a called function's dynamic

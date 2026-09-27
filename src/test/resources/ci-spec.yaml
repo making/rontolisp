@@ -19739,7 +19739,10 @@ cases:
       ((3.0) 1)
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
-# subject a backend does not have at all. Each is compiled and run on its own.
+# subject a backend does not have at all, one whose subject is a gate the
+# concatenated program always opens (it has every multiple-value operator, so
+# a program WITHOUT the %mv-spill global exists only on its own). Each is
+# compiled and run on its own.
 # What an ending case asserts is the standard-error report plus a non-zero exit
 # (`fails: true`); `stderr` lines must APPEAR -- wasmtime wraps its own trap
 # backtrace around ours. `refusedOn` names the backends that must REFUSE to
@@ -20734,6 +20737,32 @@ standalone:
       :CAUGHT
       NIL
       NIL
+  # A restart-case inside a lambda, in a program with no multiple-value operator
+  # and so no %mv-spill global: the expansion's read of the channel is nil there,
+  # never a variable the lambda captures.
+  - name: restart-case-in-a-lambda-without-the-spill-global
+    source: |
+      (handler-bind ((error (lambda (c) (invoke-restart 'use-value 100))))
+        (print (funcall (lambda () (restart-case (error "bad") (use-value (v) v))))))
+      (defun ci-rl-h () 4)
+      (print (mapcar (lambda (x) (restart-case (ci-rl-h) (use-value (v) (+ v x)))) (list 1 2)))
+      (print (mapcar (lambda (x) (restart-case x (use-value (v) v))) (list 1 2)))
+      (print (funcall (lambda () (with-simple-restart (ci-rl-skip "s") (ci-rl-h)))))
+    stdout: |
+      100
+      (4 4)
+      (1 2)
+      4
+  # multiple-value-setq is the program's only multiple-value operator: it alone
+  # must give the program the spill channel a callee's secondary value rides.
+  - name: multiple-value-setq-as-the-only-multiple-value-operator
+    source: |
+      (defun ci-mvs-g () (floor 7 2))
+      (let (a b) (multiple-value-setq (a b) (ci-mvs-g)) (print (list a b)))
+      (print (funcall (lambda () (let (a b) (multiple-value-setq (a b) (ci-mvs-g)) (list a b)))))
+    stdout: |
+      (3 1)
+      (3 1)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

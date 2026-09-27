@@ -25896,6 +25896,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehRestartCaseInALambdaOfAProgramWithoutAMultipleValueOperator() throws Exception {
+		// No multiple-value operator anywhere, so the module has no %mv-spill global --
+		// yet the restart-case expansion reads the channel for a primary form that may
+		// pass values along. Inside a lambda that read used to be taken for a free
+		// variable to capture.
+		assertThat(compileAndRunEh("""
+				(handler-bind ((error (lambda (c) (invoke-restart 'use-value 100))))
+				  (print (funcall (lambda () (restart-case (error "bad") (use-value (v) v))))))
+				(defun rl-h () 4)
+				(print (mapcar (lambda (x) (restart-case (rl-h) (use-value (v) (+ v x)))) (list 1 2)))
+				(print (funcall (lambda () (with-simple-restart (rl-skip "s") (rl-h)))))
+				""")).isEqualTo("100\n(4 4)\n4");
+	}
+
+	@Test
+	void multipleValueSetqOfAUserFunctionsValuesInAProgramWithNoOtherOperator() throws Exception {
+		// multiple-value-setq is a consumer: it must give the module its spill channel
+		// on its own, or the callee's secondary value never reaches it.
+		assertThat(compileAndRun("""
+				(defun mvs-g () (floor 7 2))
+				(let (a b) (multiple-value-setq (a b) (mvs-g)) (print (list a b)))
+				(print (funcall (lambda () (let (a b) (multiple-value-setq (a b) (mvs-g)) (list a b)))))
+				""")).isEqualTo("(3 1)\n(3 1)");
+	}
+
+	@Test
 	void ehHandlerBindInvokesKeywordRestartAcrossFunctions() throws Exception {
 		// The postmodern prepare.lisp shape: the restart is ESTABLISHED in one
 		// function and INVOKED (by keyword name, with an argument) from a

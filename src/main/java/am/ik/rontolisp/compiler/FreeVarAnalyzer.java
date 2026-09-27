@@ -36,7 +36,13 @@ public final class FreeVarAnalyzer {
 			// counted it as a free variable and failed to compile with "Cannot capture
 			// variable: *ERROR-OUTPUT*". A program that DOES bind one lexically still
 			// captures it: findFreeVars subtracts enclosingLexicals from this set.
-			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR);
+			LispNames.STANDARD_OUTPUT_VAR, LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR,
+			// The multiple-value channel is never a lexical: the program's global when it
+			// has one, and nothing at all when it does not -- the backends then read it
+			// as nil and drop the stores (.kb/multiple-values.md). Counting it free made
+			// a lambda whose expansion reads it (a restart-case's primary form) try to
+			// capture it from its enclosing scope.
+			LispNames.MV_SPILL);
 
 	/** The operators that can build a closure -- see {@link #createsAClosure}. */
 	private static final Set<String> CLOSURE_OPERATORS = Set.of(LispNames.LAMBDA, LispNames.DEFUN,

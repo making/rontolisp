@@ -61,8 +61,22 @@ are represented (`MV_ZERO_VALUES`), and `values-list` of nil says the same.
   variable `%mv-spill` resolves to it through `lookup`/`set`); compilers call
   `LispMacroExpander.injectMvSpillGlobal` AFTER lambda-list desugaring, gated on a name scan.
   Scalar `--no-gc` keeps `expandValuesPrimary` (no reference globals).
+- **A program WITHOUT the global still compiles every expansion that names the channel**:
+  a read of `%mv-spill` is nil and a `setq` of it keeps only the value
+  (`Jvm`/`WasmExprCompiler.compileSymbolRef`, `Jvm`/`WasmSetqCompiler.compilePair`), and
+  `FreeVarAnalyzer` never counts it free. Sound because the gate below puts every CONSUMER in
+  the scan, so nothing could read what a pass-through expansion published. Such expansions
+  exist: `restart-case`/`with-simple-restart` (and restart-mode `warn`/`cerror`) carry the
+  primary form's values through `multiple-value-list`/`values-list`. Until 2026-09-27 the
+  name fell through to a method-local (a `setq` allocated one) or, at top level, an
+  accidentally promoted global -- and inside a lambda to a capture of a variable no scope
+  had: `Cannot capture variable: %MV-SPILL` (JVM), `Cannot find variable for closure` (wasm).
+  Pinned by ci-spec standalone `restart-case-in-a-lambda-without-the-spill-global`.
 - `values-list` is the spread operator; `parse-integer`'s stop position is a literal second
-  value, so PARSE_INTEGER and VALUES_LIST are in the `injectMvSpillGlobal` scan. The `#'values`
+  value, so PARSE_INTEGER and VALUES_LIST are in the `injectMvSpillGlobal` scan. So is
+  MULTIPLE_VALUE_SETQ (since 2026-09-27; before it a program whose only operator it was read a
+  callee's secondary as nil on the compiled backends -- ci-spec standalone
+  `multiple-value-setq-as-the-only-multiple-value-operator`). The `#'values`
   wrapper is `(values-list r)`, so `(funcall #'values 1 2)` and `(apply #'values '())` answer to
   a consumer as `(values 1 2)` and `(values)` do on every backend.
 

@@ -272,6 +272,12 @@ final class JvmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		if (ctx.mvChannel == null && LispNames.MV_SPILL.equals(name)) {
+			// A program without the spill global publishes nothing, so an expansion's
+			// read of the channel answers nil (.kb/multiple-values.md).
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
 		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
 		// never captured, never in ctx.locals -- resolved first. (A raw GLOBAL is
 		// resolved in compileSpecialRead, below every lexical binding of the name.)
