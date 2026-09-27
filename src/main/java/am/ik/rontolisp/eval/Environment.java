@@ -1620,6 +1620,12 @@ public final class Environment implements Scope {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
 			}
+			// The array is checked before anything else reads it: the :displaced-to
+			// half would otherwise build a fresh view whatever the source was.
+			if (!(args.get(0) instanceof LispString || args.get(0) instanceof LispArray
+					|| args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector)) {
+				throw accessorTypeError(LispNames.ADJUST_ARRAY, args.get(0), OperandTypes.Kind.ARRAY);
+			}
 			// The slots the adjustment OPENS take the value's own element type zero, the
 			// same fill make-array gives an unsupplied element, unless an explicit
 			// :initial-element says otherwise.

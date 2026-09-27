@@ -28768,21 +28768,52 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (array-element-type array) into {@code (if (stringp array) 'character t)}
+	 * Expands (array-element-type array) into {@code (let ((v array)) (if (stringp v)
+	 * 'character (if (%arrayp v) t (%operand-type-error v 'array-element-type 'array))))}
 	 * on the compile path: a string is a vector of characters, so it answers
-	 * {@code character} (the one character type), and a general array answers {@code t}
-	 * because element types are not tracked. The array expression is evaluated once, as
-	 * the {@code stringp} argument, and the synthesized {@code character} name is an
-	 * unspelled quote -- real run-time data, not a spelling the program wrote
-	 * ({@code character} is also a function name, which a plain quote would arm in the
-	 * funcall-dispatch gate).
+	 * {@code character} (the one character type), a general array answers {@code t}
+	 * because element types are not tracked, and a value that is no array is the
+	 * operator's {@code ARRAY} type-error. The array expression is evaluated once, and
+	 * the synthesized {@code character} name is an unspelled quote -- real run-time data,
+	 * not a spelling the program wrote ({@code character} is also a function name, which
+	 * a plain quote would arm in the funcall-dispatch gate).
 	 * @param cons the array-element-type expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandArrayElementType(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		return listToCons(List.of(new LispSymbol(LispNames.IF), fmtCall(LispNames.STRINGP, parts.get(1)),
-				unspelledQuoteOf(LispNames.CHARACTER_TYPE), LispTrue.INSTANCE));
+		LispSymbol v = new LispSymbol("__aet");
+		LispVal general = makeIf(callOf(LispNames.ARRAYP_INTERNAL, v), LispTrue.INSTANCE,
+				arrayTypeErrorOf(v, LispNames.ARRAY_ELEMENT_TYPE));
+		return makeLet(v.name(), parts.get(1),
+				makeIf(callOf(LispNames.STRINGP, v), unspelledQuoteOf(LispNames.CHARACTER_TYPE), general));
+	}
+
+	/**
+	 * {@code (%operand-type-error form 'operator 'ARRAY)}: the operator's {@code ARRAY}
+	 * type-error over the form's value, as {@link #sequenceTypeErrorOf} is for
+	 * {@code SEQUENCE}.
+	 * @param form the offending value's form
+	 * @param operator the operator the report names
+	 * @return the signalling form
+	 */
+	static LispVal arrayTypeErrorOf(LispVal form, String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), form,
+				callOf(LispNames.QUOTE, new LispSymbol(operator)), callOf(LispNames.QUOTE, new LispSymbol("ARRAY"))));
+	}
+
+	/**
+	 * {@code (let ((v form)) (if (arrayp v) v (%operand-type-error v 'operator 'ARRAY)))}:
+	 * the form's value when it is an array of any representation, else the operator's
+	 * {@code ARRAY} type-error -- for a lowering that reads its array argument through
+	 * internal operators that name no operator of their own.
+	 * @param form the array argument's form
+	 * @param operator the operator the report names
+	 * @return the checked form
+	 */
+	public static LispVal checkedArrayOf(LispVal form, String operator) {
+		LispSymbol v = new LispSymbol("__arc");
+		return makeLet(v.name(), form, makeIf(callOf(LispNames.ARRAYP, v), v, arrayTypeErrorOf(v, operator)));
 	}
 
 	/**
@@ -28880,6 +28911,9 @@ public final class LispMacroExpander {
 			}
 		}
 		boolean displaced = displacedToExpr != null && !(displacedToExpr instanceof LispNil);
+		// The source is checked before any internal reader sees it: each of them would
+		// name itself, or (the :displaced-to half) build a fresh view whatever it was.
+		LispVal source = checkedArrayOf(parts.get(1), LispNames.ADJUST_ARRAY);
 		LispSymbol a = new LispSymbol("__adj_a");
 		LispSymbol nd = new LispSymbol("__adj_nd");
 		LispSymbol ndl = new LispSymbol("__adj_ndl");
@@ -28887,8 +28921,7 @@ public final class LispMacroExpander {
 		// the carried-over fill pointer: the explicit expression, else the array's own
 		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
 				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
-		List<LispVal> baseBindings = List.of(listToCons(List.of(a, parts.get(1))),
-				listToCons(List.of(nd, parts.get(2))),
+		List<LispVal> baseBindings = List.of(listToCons(List.of(a, source)), listToCons(List.of(nd, parts.get(2))),
 				listToCons(List.of(ndl,
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(fp, fpInit)));
@@ -28949,7 +28982,7 @@ public final class LispMacroExpander {
 		// the result) would otherwise leave the adjusted array pointing at data it no
 		// longer owns.
 		List<LispVal> bindings = new java.util.ArrayList<>(
-				List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, parts.get(1)))),
+				List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, source))),
 						listToCons(List.of(nd, parts.get(2))),
 						listToCons(List.of(ndl,
 								makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),

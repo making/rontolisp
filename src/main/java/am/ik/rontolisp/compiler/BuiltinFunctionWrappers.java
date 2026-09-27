@@ -1403,6 +1403,7 @@ public final class BuiltinFunctionWrappers {
 	 *
 	 * <pre>
 	 * (lambda (a d &amp;rest kw)
+	 *   (let ((a (let ((v a)) (if (arrayp v) v (%operand-type-error v 'adjust-array 'array)))))
 	 *   (let ((fp (getf kw :fill-pointer (if (array-has-fill-pointer-p a) (fill-pointer a) nil)))
 	 *         (dt (getf kw :displaced-to nil)))
 	 *     (if dt
@@ -1412,7 +1413,7 @@ public final class BuiltinFunctionWrappers {
 	 *         (let ((ic (getf kw :initial-contents kw)))
 	 *           (adjust-array a d :initial-contents ic
 	 *                             :initial-element (getf kw :initial-element (%array-default-element a))
-	 *                             :%contents-p (not (eq ic kw)) :fill-pointer fp)))))
+	 *                             :%contents-p (not (eq ic kw)) :fill-pointer fp))))))
 	 * </pre>
 	 */
 	private static WrapperDef adjustArrayWrapper() {
@@ -1438,10 +1439,16 @@ public final class BuiltinFunctionWrappers {
 				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), fp));
 		LispVal undisplaced = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(callV("ic", getfWithDefault(kw, LispNames.INITIAL_CONTENTS_KEYWORD, kw)))), filled));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+		LispVal adjusted = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(callV("fp", getfWithDefault(kw, LispNames.FILL_POINTER_KEYWORD, oldFillPointer)),
 						callV("dt", getfWithDefault(kw, LispNames.DISPLACED_TO_KEYWORD, LispNil.INSTANCE)))),
 				listToCons(List.of(new LispSymbol(LispNames.IF), dt, displaced, undisplaced))));
+		// The array is ADJUST-ARRAY's to refuse before the fill-pointer default reads it
+		// (which would name ARRAY-HAS-FILL-POINTER-P).
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(
+						List.of(listToCons(List.of(a, LispMacroExpander.checkedArrayOf(a, LispNames.ADJUST_ARRAY))))),
+				adjusted));
 		return new WrapperDef(LispNames.ADJUST_ARRAY, List.of("a", "d", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 

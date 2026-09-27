@@ -1155,10 +1155,10 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries, the array argument
-  of an array-shape accessor outside the aref / `array-dimensions` family (the fill-pointer
-  surface, `array-element-type`) -- and everything outside EH mode. (The array argument of an
-  access is named since 2026-09-27: "A sequence, array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
+- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries, a vector with no
+  fill pointer handed the fill-pointer surface -- and everything outside EH mode. (The array
+  argument of an access and of an array-shape accessor is named since 2026-09-27: "A sequence,
+  array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
   2026-09-26: "A wrong-type argument names its operator".)
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
   same `_dbl`/`_as_f64`, and reports under `(SETF AREF)` since 972. Pinned by `JvmFloatArrayTest`'s
@@ -1503,6 +1503,7 @@ datum-less cast failure on the JVM and a trap on wasm.
 | --- | --- |
 | `every` `some` (`notany` `notevery` under them, `OperandTypes.REWRITTEN`), `sort` `stable-sort` (`sort :key` is `stable-sort`), `find` `position` `count` `remove` `delete` `substitute` `nsubstitute` and their `-if`/`-if-not`, `remove-duplicates` `delete-duplicates`, `reduce`, `map` `map-into`, `mismatch` `search`, `fill` `replace` `concatenate`, `subseq` (`copy-seq` under it), `coerce` | their own name, `SEQUENCE`; a rank-2 array is no sequence |
 | `aref` `svref` `elt` `#'aref`, `(setf aref)`, `row-major-aref` `(setf row-major-aref)`, `array-dimensions` (`array-rank` `array-dimension` `array-total-size` under it) | own name, `ARRAY` |
+| `fill-pointer` `(setf fill-pointer)` (`%set-fill-pointer`) `vector-push` `vector-push-extend` `vector-pop` `array-element-type` `adjustable-array-p` `array-has-fill-pointer-p` `array-displacement` (`%array-disp-target`) `adjust-array`, and `#'` of each | own name, `ARRAY` (since 2026-09-27, `.todo/a57`) |
 | `gethash` `(setf gethash)` (`%puthash`) `remhash` `clrhash` `maphash` `hash-table-count` `hash-table-size` `hash-table-test` `hash-table-rehash-size` `hash-table-rehash-threshold` | own name, `HASH-TABLE` |
 
 - **Table** (`OperandTypes`): the three families are FUNNEL-typed (`SEQUENCE_OPERATORS`,
@@ -1566,10 +1567,47 @@ datum-less cast failure on the JVM and a trap on wasm.
   handler: wasm 26,857 -> 28,723, JVM 51,246 -> 53,043. The shaker corpus class's constant pool
   stood at 51,893 of its 52,000 tripwire after this item's ci-spec rows
   (`JvmClassShakerCorpusTest`), which is why the ci-spec case holds one row per mechanism.
-- **Not covered**: the array-shape accessors outside the table -- `fill-pointer`,
-  `vector-push`(`-extend`), `vector-pop`, `array-element-type`, `adjustable-array-p`,
-  `array-has-fill-pointer-p`, `array-displacement`, `adjust-array` -- report unnamed interpreted, a
-  datum-less cast failure on the JVM and a trap on wasm.
+- **The array-shape accessors** (2026-09-27, `.todo/a57`; they reported unnamed interpreted, a
+  datum-less cast failure on the JVM -- `array-element-type`, `adjustable-array-p` and
+  `array-has-fill-pointer-p` answered `T`/`NIL` there -- and trapped on wasm): the rows are
+  `OperandTypes.ARRAY_SHAPE_OPERATORS`, appended after the character comparisons, and `REWRITTEN`
+  maps `%set-fill-pointer` to `(SETF FILL-POINTER)` and `%array-disp-target` to
+  `ARRAY-DISPLACEMENT` (their one user each; `WasmOperandTypes.LOWERED_TO` adds
+  `(SETF FILL-POINTER)` for `FILL-POINTER`). Interpreter: the rows name
+  `requireArray`/`requireGeneralArray`'s report; `adjust-array` checks its array first (its
+  `:displaced-to` half built a fresh view of anything). JVM: one shared `_ckArr`
+  (`JvmArrayRuntimeBuilder.CK_ARRAY`: any representation passes, a quote-framed `String` being
+  the string) under the operator's wrapper at each site, after the `java:` guard
+  (`JvmArrayCompiler.emitArrayOperandCheck`) -- a check at the site rather than in each helper
+  because the predicates must answer nil for a packed array and a string, which a helper testing
+  the general shape cannot tell from a non-array. The lite `array-element-type` expansion (no
+  typed or packed array; now also a `java:` program without the array runtime) is `(if (stringp
+  v) 'character (if (%arrayp v) t (%operand-type-error v 'array-element-type 'array)))`. wasm, EH
+  mode only: `_arr_check_rank(x, ANY_RANK | id << 8)` at each site, over the operand on the stack
+  where the site casts it straight away (`WasmArrayCompiler.emitArrayCheckOnStack`, no temp) or its
+  slot. `adjust-array` is checked by the shared expansion (`LispMacroExpander.checkedArrayOf`,
+  an `arrayp` test ahead of every internal reader; `#'adjust-array`'s wrapper rebinds its array
+  through it before its fill-pointer default reads it).
+- **A symbol is no array** (2026-09-27): a symbol shares the string representation on both
+  compiled backends (a bare `String`; wasm's string struct without the quote frame), and the
+  array checks tested the representation alone, so `(aref 'foo 0)` answered `#\O` and
+  `(array-dimensions 'foo)` `(1)` on the JVM and wasm (EH mode). `_aref1`, `_arrayDims`,
+  `_arrayCheckRank` and `_aset1`'s check test the frame as `stringp` does
+  (`JvmArrayRuntimeBuilder.emitStringTest`); wasm's EH `_arr_check_rank` lands `ARRAY` for an
+  unframed string struct (a non-EH module keeps its bytes).
+- **Not covered**: a vector with no fill pointer handed the fill-pointer surface (`(fill-pointer
+  "abc")`, `(vector-pop (vector 1))`): a simple-error interpreted (`FILL-POINTER: string has no
+  fill pointer`, `vector-pop: vector has no fill pointer`), lowercase texts or a datum-less cast
+  failure on the JVM, a trap on wasm; SBCL signals a `type-error` whose expected type is `(AND
+  VECTOR (NOT SIMPLE-ARRAY))` (`.todo/a65`).
+- **Cost, measured 2026-09-27** (wasmtime 49, JDK 25; zlib spells none of the operators, so this is
+  the internal uses -- the `class-of`/`typep` expansions' `array-element-type`, the library's
+  `vector-push-extend` -- and the string-frame tests): zlib P1 129,608 -> 129,704, unoptimized
+  540,298 -> 541,334, size level 99,423 -> 99,519, component 103,403 -> 103,528, JVM class 187,753
+  -> 188,109; `hello_world`, `pi_approx`, `dom_reactor` byte-identical on wasm, and `hello_world`,
+  `pi_approx` on the JVM. A `vector-push-extend`/`vector-pop` loop (200k x20, JDK 25, 8 interleaved
+  runs on 4 pinned cores): 391-467 ms before, 355-425 after -- noise; its class +524 B (`_ckArr`
+  and the wrappers). Corpus class constant pool 43,845 of 52,000 (`JvmClassShakerCorpusTest`).
 - Pinned by `WrongTypeArgumentFixture` through `sequenceAndAccessorOperatorsNameTheirWrongTypeArgument`
   (`LispEvaluatorTest`, `WasmLispCompilerIntegrationTest`) and
   `compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument` (`JvmLispCompilerTest`), and

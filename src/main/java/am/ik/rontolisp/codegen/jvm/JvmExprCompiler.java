@@ -1752,10 +1752,12 @@ final class JvmExprCompiler {
 			case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 			case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
 			case LispNames.ARRAY_ELEMENT_TYPE -> {
-				// In a java: program the full form too: it refuses a host ArrayList,
-				// which
-				// the lite expansion would answer T for.
-				if (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray || ctx.javaSites != null) {
+				// In a java: program the full form too, where an array can exist: its
+				// guard refuses a host ArrayList with the java: text. Without the array
+				// runtime nothing but a string is an array, which the lite expansion
+				// answers exactly (a host ArrayList fails its %arrayp).
+				if (ctx.usesArrays
+						&& (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray || ctx.javaSites != null)) {
 					JvmArrayCompiler.compileElementType(cons, ctx, className);
 				}
 				else {

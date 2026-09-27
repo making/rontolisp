@@ -75,7 +75,9 @@ final class WasmOperandTypes {
 	 * {@code row-major-aref} place through its own store name and of an {@code elt} place
 	 * through {@code %aset}'s, a {@code sort} with a {@code :key} through
 	 * {@code stable-sort}, a {@code setf} of a {@code gethash} place through
-	 * {@code %puthash}, and the array shape readers through {@code array-dimensions}.
+	 * {@code %puthash}, of a {@code fill-pointer} place through
+	 * {@code %set-fill-pointer}, and the array shape readers through
+	 * {@code array-dimensions}.
 	 */
 	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
 
@@ -116,6 +118,7 @@ final class WasmOperandTypes {
 		map.put("DOLIST", java.util.List.of("ENDP"));
 		map.put("SORT", java.util.List.of("STABLE-SORT"));
 		map.put("GETHASH", java.util.List.of(OperandTypes.SETF_GETHASH));
+		map.put("FILL-POINTER", java.util.List.of(OperandTypes.SETF_FILL_POINTER));
 		for (String shape : java.util.List.of("ARRAY-RANK", "ARRAY-DIMENSION", "ARRAY-TOTAL-SIZE",
 				"ARRAY-ROW-MAJOR-INDEX")) {
 			map.put(shape, java.util.List.of("ARRAY-DIMENSIONS"));

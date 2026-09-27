@@ -1,14 +1,15 @@
 package am.ik.rontolisp;
 
 /**
- * A program that hands every sequence operator, array accessor and hash-table accessor a
- * value that is not the sequence, array or hash table it reads -- directly, as a function
- * value and through the lowerings that rewrite one operator into another -- and prints
- * the {@code type-error} each signals: the operator it names, the datum and the expected
- * type ({@code SEQUENCE}, {@code ARRAY}, {@code HASH-TABLE}). Several of them answered
- * silently (nil, the value itself) or refused with a {@code simple-error} or a host cast
- * failure that carried no datum. Shared by the backend suites, so every backend is held
- * to one expected text; {@code ci-spec.yaml}'s
+ * A program that hands every sequence operator, array accessor (the shape accessors
+ * {@code fill-pointer}, {@code vector-push} and their kin included) and hash-table
+ * accessor a value that is not the sequence, array or hash table it reads -- directly, as
+ * a function value and through the lowerings that rewrite one operator into another --
+ * and prints the {@code type-error} each signals: the operator it names, the datum and
+ * the expected type ({@code SEQUENCE}, {@code ARRAY}, {@code HASH-TABLE}). Several of
+ * them answered silently (nil, the value itself) or refused with a {@code simple-error}
+ * or a host cast failure that carried no datum. Shared by the backend suites, so every
+ * backend is held to one expected text; {@code ci-spec.yaml}'s
  * {@code sequence-and-accessor-operators-name-their-wrong-type-argument} pins the same
  * rows on the native binary.
  */
@@ -63,6 +64,9 @@ public final class WrongTypeArgumentFixture {
 			(print (te (lambda () (svref *wt-table* 0))))
 			(print (te (lambda () (setf (aref *wt-five* 0) 1))))
 			(print (te (lambda () (row-major-aref *wt-five* 0))))
+			(print (te (lambda () (aref 'wt-symbol 0))))
+			(print (te (lambda () (row-major-aref 'wt-symbol 0))))
+			(print (te (lambda () (array-dimensions 'wt-symbol))))
 			(print (te (lambda () (array-rank *wt-five*))))
 			(print (te (lambda () (apply #'aref *wt-five* '(0)))))
 			(print (te (lambda () (+ 1 (aref *wt-five* 0)))))
@@ -75,8 +79,28 @@ public final class WrongTypeArgumentFixture {
 			(print (te (lambda () (hash-table-rehash-size *wt-five*))))
 			(print (te (lambda () (funcall #'gethash 1 *wt-five*))))
 			(print (te (lambda () (gethash 1 (vector 1)))))
+			(print (te (lambda () (fill-pointer *wt-five*))))
+			(print (te (lambda () (setf (fill-pointer *wt-five*) 0))))
+			(print (te (lambda () (vector-push 1 *wt-five*))))
+			(print (te (lambda () (vector-push-extend 1 *wt-table*))))
+			(print (te (lambda () (vector-pop *wt-five*))))
+			(print (te (lambda () (array-element-type *wt-five*))))
+			(print (te (lambda () (adjustable-array-p *wt-five*))))
+			(print (te (lambda () (array-has-fill-pointer-p 'wt-symbol))))
+			(print (te (lambda () (array-displacement *wt-five*))))
+			(print (te (lambda () (multiple-value-list (array-displacement 'wt-symbol)))))
+			(print (te (lambda () (adjust-array *wt-five* 3))))
+			(print (te (lambda () (adjust-array *wt-five* 3 :displaced-to (vector 1 2 3)))))
+			(print (te (lambda () (funcall #'vector-pop *wt-five*))))
+			(print (te (lambda () (funcall #'array-element-type *wt-five*))))
+			(print (te (lambda () (funcall #'adjust-array *wt-five* 3))))
 			(print (list (find 2 (vector 1 2)) (coerce #(1 2) 'list) (sort (vector 3 1 2) #'<) (subseq "abc" 1)
 			             (coerce '(1 2) 'vector) (aref *wt-grid* 1 1) (gethash 1 *wt-table* :none)))
+			(let ((v (make-array 2 :fill-pointer 0 :adjustable t)))
+			  (vector-push 1 v)
+			  (vector-push-extend 2 v)
+			  (print (list (fill-pointer v) (vector-pop v) (array-has-fill-pointer-p "ab") (adjustable-array-p v)
+			               (array-element-type "ab") (array-displacement "ab") (length (adjust-array v 4)))))
 			""";
 
 	/** What {@link #SOURCE} prints on every backend. */
@@ -118,6 +142,9 @@ public final class WrongTypeArgumentFixture {
 			("AREF: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type ARRAY" #<HASH-TABLE :TEST EQUAL :COUNT 0> ARRAY)
 			("(SETF AREF): The value 5 is not of type ARRAY" 5 ARRAY)
 			("ROW-MAJOR-AREF: The value 5 is not of type ARRAY" 5 ARRAY)
+			("AREF: The value WT-SYMBOL is not of type ARRAY" WT-SYMBOL ARRAY)
+			("ROW-MAJOR-AREF: The value WT-SYMBOL is not of type ARRAY" WT-SYMBOL ARRAY)
+			("ARRAY-DIMENSIONS: The value WT-SYMBOL is not of type ARRAY" WT-SYMBOL ARRAY)
 			("ARRAY-DIMENSIONS: The value 5 is not of type ARRAY" 5 ARRAY)
 			("AREF: The value 5 is not of type ARRAY" 5 ARRAY)
 			("AREF: The value 5 is not of type ARRAY" 5 ARRAY)
@@ -130,6 +157,22 @@ public final class WrongTypeArgumentFixture {
 			("HASH-TABLE-REHASH-SIZE: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
 			("GETHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
 			("GETHASH: The value #(1) is not of type HASH-TABLE" #(1) HASH-TABLE)
-			(2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)""";
+			("FILL-POINTER: The value 5 is not of type ARRAY" 5 ARRAY)
+			("(SETF FILL-POINTER): The value 5 is not of type ARRAY" 5 ARRAY)
+			("VECTOR-PUSH: The value 5 is not of type ARRAY" 5 ARRAY)
+			("VECTOR-PUSH-EXTEND: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type ARRAY" #<HASH-TABLE :TEST EQUAL :COUNT 0> ARRAY)
+			("VECTOR-POP: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ARRAY-ELEMENT-TYPE: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ADJUSTABLE-ARRAY-P: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ARRAY-HAS-FILL-POINTER-P: The value WT-SYMBOL is not of type ARRAY" WT-SYMBOL ARRAY)
+			("ARRAY-DISPLACEMENT: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ARRAY-DISPLACEMENT: The value WT-SYMBOL is not of type ARRAY" WT-SYMBOL ARRAY)
+			("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
+			("VECTOR-POP: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ARRAY-ELEMENT-TYPE: The value 5 is not of type ARRAY" 5 ARRAY)
+			("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
+			(2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)
+			(2 2 NIL T CHARACTER NIL 1)""";
 
 }

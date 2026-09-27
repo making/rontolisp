@@ -2,7 +2,7 @@
 
 `(fill-pointer vector)`
 
-[`make-array`](make-array.md) の `:fill-pointer` で作成されたベクタのフィルポインタを返します。フィルポインタはベクタの実効長です。`length` や印字はフィルポインタで止まりますが、[`aref`](aref.md) はバッキングストレージ全体にアクセスできます。`setf` 可能な場所であり、`(setf (fill-pointer v) n)` で 0 からベクタの総サイズまでの任意の位置に移動できます。配列にフィルポインタがない場合はエラーを通知します (事前に [`array-has-fill-pointer-p`](array-has-fill-pointer-p.md) で確認してください)。
+[`make-array`](make-array.md) の `:fill-pointer` で作成されたベクタのフィルポインタを返します。フィルポインタはベクタの実効長です。`length` や印字はフィルポインタで止まりますが、[`aref`](aref.md) はバッキングストレージ全体にアクセスできます。`setf` 可能な場所であり、`(setf (fill-pointer v) n)` で 0 からベクタの総サイズまでの任意の位置に移動できます。配列にフィルポインタがない場合はエラーを通知します (事前に [`array-has-fill-pointer-p`](array-has-fill-pointer-p.md) で確認してください)。`vector` がそもそも配列でなければ、期待型を `array` とする `type-error` を通知します: `FILL-POINTER: The value 5 is not of type ARRAY`(wasm-GC バックエンドでは捕捉フォームを含むプログラムの場合。含まなければトラップします)。`vector-push`、`vector-pop`、`adjust-array` など配列の形状を扱う他のアクセサも、それぞれの名前で同じように報告し、格納は `(SETF FILL-POINTER)` として報告します。
 
 ```lisp
 (defparameter *v* (make-array 5 :fill-pointer 2 :initial-element 0))

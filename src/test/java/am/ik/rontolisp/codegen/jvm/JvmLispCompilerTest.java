@@ -2311,10 +2311,13 @@ class JvmLispCompilerTest {
 		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
 		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
 		// (listConsumersNameTheOperator), and so does an access's array argument
-		// (sequenceAndAccessorOperatorsNameTheirWrongTypeArgument); an array-shape
-		// accessor's is still a bare cast.
-		assertThat(compileAndRun("(print (handler-case (fill-pointer 5) (type-error (e) (princ-to-string e))))"))
+		// (sequenceAndAccessorOperatorsNameTheirWrongTypeArgument), an array-shape
+		// accessor's included; a string handed a fill-pointer accessor is still a bare
+		// cast.
+		assertThat(compileAndRun("(print (handler-case (fill-pointer \"abc\") (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
+		assertThat(compileAndRun("(print (handler-case (fill-pointer 5) (type-error (e) (princ-to-string e))))"))
+			.isEqualTo("\"FILL-POINTER: The value 5 is not of type ARRAY\"");
 		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"AREF: The value 5 is not of type ARRAY\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))

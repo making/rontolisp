@@ -128,6 +128,9 @@ public final class OperandTypes {
 	/** The reported name of a store through a {@code gethash} place. */
 	public static final String SETF_GETHASH = "(SETF GETHASH)";
 
+	/** The reported name of a store through a {@code fill-pointer} place. */
+	public static final String SETF_FILL_POINTER = "(SETF FILL-POINTER)";
+
 	/** The reported name of a store through a {@code row-major-aref} place. */
 	public static final String SETF_ROW_MAJOR_AREF = "(SETF ROW-MAJOR-AREF)";
 
@@ -157,7 +160,8 @@ public final class OperandTypes {
 	 * a call does -- the compiled backends' function value IS that rewrite
 	 * ({@code BuiltinFunctionWrappers}). {@code notany}/{@code notevery} are
 	 * {@code (not (some ...))}/{@code (not (every ...))}, {@code copy-seq} is
-	 * {@code (subseq x 0)}.
+	 * {@code (subseq x 0)}. {@code %set-fill-pointer} is a {@code fill-pointer} place's
+	 * store and {@code %array-disp-target} {@code array-displacement}'s primary value.
 	 */
 	private static final Map<String, String> REWRITTEN = Map.ofEntries(Map.entry("1+", "+"), Map.entry("1-", "-"),
 			Map.entry("/=", "="), Map.entry("ZEROP", "="), Map.entry("PLUSP", ">"), Map.entry("MINUSP", "<"),
@@ -165,7 +169,8 @@ public final class OperandTypes {
 			Map.entry("LOGEQV", "LOGXOR"), Map.entry("FIRST", "CAR"), Map.entry("REST", "CDR"),
 			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF),
 			Map.entry("%ROW-MAJOR-ASET", SETF_ROW_MAJOR_AREF), Map.entry("NOTANY", "SOME"),
-			Map.entry("NOTEVERY", "EVERY"), Map.entry("COPY-SEQ", "SUBSEQ"), Map.entry("%PUTHASH", SETF_GETHASH));
+			Map.entry("NOTEVERY", "EVERY"), Map.entry("COPY-SEQ", "SUBSEQ"), Map.entry("%PUTHASH", SETF_GETHASH),
+			Map.entry("%SET-FILL-POINTER", SETF_FILL_POINTER), Map.entry("%ARRAY-DISP-TARGET", "ARRAY-DISPLACEMENT"));
 
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
@@ -217,9 +222,22 @@ public final class OperandTypes {
 			"CHAR>=", "CHAR-EQUAL", "CHAR-NOT-EQUAL", "CHAR-LESSP", "CHAR-GREATERP", "CHAR-NOT-GREATERP",
 			"CHAR-NOT-LESSP");
 
+	/**
+	 * The accessors of a vector's fill pointer, adjustability, displacement and element
+	 * type, funnel-typed like {@code aref}: an operand that is no array lands
+	 * {@code ARRAY}. {@code (setf fill-pointer)} is {@code %set-fill-pointer}'s reported
+	 * name, {@code array-displacement} {@code %array-disp-target}'s. Last in the table,
+	 * after the character comparisons.
+	 */
+	private static final List<String> ARRAY_SHAPE_OPERATORS = List.of("FILL-POINTER", SETF_FILL_POINTER, "VECTOR-PUSH",
+			"VECTOR-PUSH-EXTEND", "VECTOR-POP", "ARRAY-ELEMENT-TYPE", "ADJUSTABLE-ARRAY-P", "ARRAY-HAS-FILL-POINTER-P",
+			"ARRAY-DISPLACEMENT", "ADJUST-ARRAY");
+
 	/** The operators whose sites can land {@code ARRAY}. */
-	private static final List<String> ARRAY_OPERATORS = List.of("AREF", SETF_AREF, "ROW-MAJOR-AREF",
-			SETF_ROW_MAJOR_AREF, "ARRAY-DIMENSIONS");
+	private static final List<String> ARRAY_OPERATORS = java.util.stream.Stream
+		.concat(java.util.stream.Stream.of("AREF", SETF_AREF, "ROW-MAJOR-AREF", SETF_ROW_MAJOR_AREF,
+				"ARRAY-DIMENSIONS"), ARRAY_SHAPE_OPERATORS.stream())
+		.toList();
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
@@ -274,6 +292,10 @@ public final class OperandTypes {
 		}
 		for (String op : CHARACTER_OPERATORS) {
 			OPERATOR_TYPES.put(op, Kind.CHARACTER.name());
+			order.add(op);
+		}
+		for (String op : ARRAY_SHAPE_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
 		OPERATORS = List.copyOf(order);

@@ -748,10 +748,12 @@ final class WasmArrayRuntimeBuilder {
 	 * spells, {@link #ANY_RANK} for a site that reads every rank alike
 	 * ({@code row-major-aref}, {@code array-dimensions}), and the bits above it the
 	 * site's operator id, which the check hands the operator register only when it fails
-	 * -- so a site pays no register write. A value that is no array (neither a string, a
-	 * packed array nor a cell whose header car is the dims array -- a hash table shares
-	 * the cell box with an i31 count there) lands as the operator's {@code ARRAY}
-	 * type-error ({@code _type_err}); it trapped on the general arm's cast.
+	 * -- so a site pays no register write. A value that is no array (neither a
+	 * quote-framed string -- a symbol's name shares the string struct -- a packed array
+	 * nor a cell whose header car is the dims array -- a hash table shares the cell box
+	 * with an i31 count there) lands as the operator's {@code ARRAY} type-error
+	 * ({@code _type_err}); it trapped on the general arm's cast, and a symbol read as its
+	 * name.
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
 	 * @return the function body
 	 */
@@ -776,6 +778,20 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, Type.I32.code());
+		if (reports) {
+			// A string struct is a string only quote-framed: a symbol's name shares
+			// the type without the frame, and is no array (stringp's test).
+			get(w, 0);
+			WasmEmitHelper.emitStrBytesArray(w);
+			i32(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			i32(w, '"');
+			w.write(Instruction.I32_NE);
+			w.write(Instruction.IF, 0x40);
+			emitArrayLanding(w, operatorGlobal);
+			w.write(Instruction.END);
+		}
 		i32(w, 1);
 		w.write(Instruction.ELSE);
 		get(w, 0);
@@ -838,16 +854,7 @@ final class WasmArrayRuntimeBuilder {
 			w.write(Instruction.END);
 			w.write(Instruction.I32_EQZ);
 			w.write(Instruction.IF, 0x40);
-			// no array: the site's operator into the register, then ARRAY's landing
-			get(w, 1);
-			i32(w, 8);
-			w.write(Instruction.I32_SHR_U);
-			w.write(Instruction.SET_GLOBAL);
-			w.writeUnsignedLeb128(operatorGlobal);
-			get(w, 0);
-			i32(w, OperandTypes.Kind.ARRAY.ordinal() + 1);
-			call(w, WasmLispCompiler.FUNC_TYPE_ERR);
-			w.write(Instruction.UNREACHABLE);
+			emitArrayLanding(w, operatorGlobal);
 			w.write(Instruction.END);
 			get(w, headerSlot);
 		}
@@ -891,6 +898,20 @@ final class WasmArrayRuntimeBuilder {
 		get(w, 0);
 		w.write(Instruction.END);
 		return out.toByteArray();
+	}
+
+	// _arr_check_rank's miss: the site's operator (the bits of `given` above the rank
+	// byte) into the register, then ARRAY's landing over the value, which never returns.
+	private static void emitArrayLanding(WasmWriter w, int operatorGlobal) {
+		get(w, 1);
+		i32(w, 8);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		get(w, 0);
+		i32(w, OperandTypes.Kind.ARRAY.ordinal() + 1);
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR);
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	/**

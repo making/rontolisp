@@ -1021,6 +1021,23 @@ final class WasmArrayCompiler {
 	}
 
 	/**
+	 * EH mode only: {@link #emitArrayCheck} over the value on top of the stack, which it
+	 * leaves there ({@code _arr_check_rank} answers its array) -- for the shape accessors
+	 * ({@code fill-pointer}, {@code vector-push} and their kin), whose first read of the
+	 * operand is a cell cast. A module outside EH mode emits nothing, so it keeps the
+	 * trap and its bytes.
+	 * @param ctx the compile context
+	 */
+	private static void emitArrayCheckOnStack(WasmLispCompiler.Ctx ctx) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		i32Const(ctx, WasmArrayRuntimeBuilder.ANY_RANK | WasmOperandTypes.operatorId(ctx) << 8);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_CHECK_RANK);
+	}
+
+	/**
 	 * EH mode only: the rank-1 {@code aref}'s own check over {@code arrSlot}, for a read
 	 * that reaches {@link #emitAref1FromSlots} without {@link #compileAref} -- the fused
 	 * integer tree's fallback ({@code WasmIntFusionCompiler}), whose fast path took only
@@ -2248,6 +2265,9 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		// A value that is no array is the operator's type-error in EH mode, where the
+		// last arm below would answer the general array's t.
+		emitArrayCheck(ctx, arrSlot);
 		// A string answers character before the packed/general dispatch: the synthesized
 		// name is unspelled (real run-time data, and character is also a function name).
 		WasmStringpCompiler.emitStringpI32(ctx, arrSlot);
@@ -2512,6 +2532,7 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 2, "fill-pointer expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		emitArrayCheckOnStack(ctx);
 		castCellGet0(ctx);
 		getMeta(ctx);
 		int metaSlot = setTemp(ctx);
@@ -2526,6 +2547,7 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 3, "%set-fill-pointer expects an array and a value");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		emitArrayCheckOnStack(ctx);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		getLocal(ctx, headerSlot);
@@ -2572,6 +2594,8 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = setTemp(ctx);
+		// A value that is no array at all is the operator's type-error in EH mode.
+		emitArrayCheck(ctx, valueSlot);
 		getLocal(ctx, valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -2607,6 +2631,8 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = setTemp(ctx);
+		// A value that is no array at all is the operator's type-error in EH mode.
+		emitArrayCheck(ctx, valueSlot);
 		getLocal(ctx, valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -2990,6 +3016,9 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dtSlot = setTemp(ctx);
+		// array-displacement's reported name (OperandTypes.reportedOperator): a value
+		// that is no array is its type-error in EH mode.
+		emitArrayCheck(ctx, dtSlot);
 		getLocal(ctx, dtSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
@@ -3097,6 +3126,7 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		emitArrayCheckOnStack(ctx);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		int metaSlot = ctx.allocTemp();
@@ -3129,6 +3159,7 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 2, "vector-pop expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		emitArrayCheckOnStack(ctx);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		int metaSlot = ctx.allocTemp();
@@ -3177,6 +3208,7 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		emitArrayCheckOnStack(ctx);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
 		int extSlot = -1;

@@ -18420,6 +18420,11 @@ cases:
       (print (ci-wt (lambda () (maphash #'list *ci-wt-five*))))
       (print (ci-wt (lambda () (hash-table-rehash-size *ci-wt-five*))))
       (print (ci-wt (lambda () (funcall #'gethash 1 *ci-wt-five*))))
+      (print (ci-wt (lambda () (setf (fill-pointer *ci-wt-five*) 0))))
+      (print (ci-wt (lambda () (adjustable-array-p 'ci-wt-symbol))))
+      (print (ci-wt (lambda () (aref 'ci-wt-symbol 0))))
+      (print (ci-wt (lambda () (array-displacement *ci-wt-five*))))
+      (print (ci-wt (lambda () (funcall #'adjust-array *ci-wt-five* 3))))
       (print (list (find 2 (vector 1 2)) (coerce #(1 2) 'list) (sort (vector 3 1 2) #'<) (subseq "abc" 1)
                    (coerce '(1 2) 'vector) (aref *ci-wt-grid* 1 1) (gethash 1 *ci-wt-table* :none)))
     expected: |
@@ -18441,6 +18446,11 @@ cases:
       ("MAPHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
       ("HASH-TABLE-REHASH-SIZE: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
       ("GETHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("(SETF FILL-POINTER): The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ADJUSTABLE-ARRAY-P: The value CI-WT-SYMBOL is not of type ARRAY" CI-WT-SYMBOL ARRAY)
+      ("AREF: The value CI-WT-SYMBOL is not of type ARRAY" CI-WT-SYMBOL ARRAY)
+      ("ARRAY-DISPLACEMENT: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
       (2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)
   - name: list-consumers-beyond-the-first-set-name-the-operator
     source: |

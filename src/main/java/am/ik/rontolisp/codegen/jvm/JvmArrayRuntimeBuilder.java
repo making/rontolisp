@@ -134,6 +134,22 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String TO_STRING_DESC = "(Ljava/lang/Object;)Ljava/lang/String;";
 
+	/**
+	 * {@code _ckArr(Object) -> Object}: an array-shape accessor's operand check
+	 * ({@code fill-pointer}, {@code vector-push}, {@code array-element-type} and their
+	 * kin). Any array -- a general one (an {@code ArrayList}), a string (a quote-framed
+	 * {@code String}; a symbol, the other {@code String}, is none) or a packed one (a
+	 * {@code long[]}, {@code double[]}, {@code float[]}, {@code short[]} or
+	 * {@code byte[]}) -- answers itself for the accessor to read as it always did, and
+	 * anything else throws {@code _teRaw}'s unnamed {@code ARRAY} report for the
+	 * operator's wrapper at the call site to name: the accessors cast to the general
+	 * shape, which failed with a {@code ClassCastException} that carried no datum, and
+	 * the predicates answered nil.
+	 */
+	static final String CK_ARRAY = "_ckArr";
+
+	static final String CK_ARRAY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String FILL_POINTER = "_fillPointer";
 
 	static final String FILL_POINTER_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -317,7 +333,7 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -523,6 +539,10 @@ final class JvmArrayRuntimeBuilder {
 		// -> s.codePointAt(codeUnit) so a supplementary code point counts as one
 		// indexed element -- matching the (length s) contract everywhere else.
 		ClassConstant strClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		// A String is a string only quote-framed: a symbol is the other String, and no
+		// array (the test stringp makes, JvmStringpCompiler).
+		MethodrefConstant strCharAt = cp.addMethodref(strClass,
+				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
 		MethodrefConstant strCpOffset = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_METHOD),
 						cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_DESC)));
@@ -532,10 +552,8 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_METHOD),
 						cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_DESC)));
 		JvmAsm a1 = new JvmAsm();
-		a1.aload(0);
-		a1.instanceOf(strClass);
 		int a1NotString = a1.label();
-		a1.branch(Opcode.IFEQ, a1NotString);
+		emitStringTest(a1, strClass, strCharAt, 0, a1NotString);
 		// s = (String) arr; codeUnit = _cpoff(s, ((Long)i).intValue());
 		// return int[]{s.codePointAt(codeUnit)}.
 		a1.aload(0);
@@ -561,7 +579,7 @@ final class JvmArrayRuntimeBuilder {
 		a1.iastore();
 		a1.areturn();
 		a1.bind(a1NotString);
-		emitArrayCheck(a1, cp, selfClass, arrayListClass, null, 0);
+		emitArrayCheck(a1, cp, selfClass, arrayListClass, null, null, 0);
 		// A flat access (rank 1, or row-major-aref at any rank): the bound is the total
 		// size.
 		emitFlatBound(a1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
@@ -590,7 +608,7 @@ final class JvmArrayRuntimeBuilder {
 		// the
 		// check: no store routes one here, and it fails the cast below as it always did.
 		JvmAsm s1 = new JvmAsm();
-		emitArrayCheck(s1, cp, selfClass, arrayListClass, strClass, 0);
+		emitArrayCheck(s1, cp, selfClass, arrayListClass, strClass, strCharAt, 0);
 		emitFlatBound(s1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
 				4, 5);
 		s1.aload(0);
@@ -616,9 +634,7 @@ final class JvmArrayRuntimeBuilder {
 		// array-row-major-index -- expands through array-dimensions, so this one arm is
 		// what lets all of them accept a string, as the interpreter's do.
 		int dNotString = d.label();
-		d.aload(dArr);
-		d.instanceOf(strClass);
-		d.branch(Opcode.IFEQ, dNotString);
+		emitStringTest(d, strClass, strCharAt, dArr, dNotString);
 		d.iconst(2);
 		d.anewarray(objectClass);
 		d.dup();
@@ -631,7 +647,7 @@ final class JvmArrayRuntimeBuilder {
 		d.aastore();
 		d.areturn();
 		d.bind(dNotString);
-		emitArrayCheck(d, cp, selfClass, arrayListClass, null, dArr);
+		emitArrayCheck(d, cp, selfClass, arrayListClass, null, null, dArr);
 		d.aload(dArr);
 		d.checkcast(arrayListClass);
 		d.iconst(0);
@@ -691,9 +707,7 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm cr = new JvmAsm();
 		int crNotString = cr.label();
 		int crHaveRank = cr.label();
-		cr.aload(crArr);
-		cr.instanceOf(strClass);
-		cr.branch(Opcode.IFEQ, crNotString);
+		emitStringTest(cr, strClass, strCharAt, crArr, crNotString);
 		cr.iconst(1);
 		cr.istore(crRank);
 		cr.branch(Opcode.GOTO, crHaveRank);
@@ -702,7 +716,7 @@ final class JvmArrayRuntimeBuilder {
 		// answered by the _iv/_fv check a step up the chain) is the ARRAY type-error, for
 		// the operator's wrapper at the call site to name: the cast failed with a
 		// ClassCastException that carried no datum.
-		emitArrayCheck(cr, cp, selfClass, arrayListClass, null, crArr);
+		emitArrayCheck(cr, cp, selfClass, arrayListClass, null, null, crArr);
 		cr.aload(crArr);
 		cr.checkcast(arrayListClass);
 		cr.iconst(0);
@@ -753,6 +767,39 @@ final class JvmArrayRuntimeBuilder {
 		sn.invokestatic(rmSet);
 		sn.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), 4, 7, sn.finish()));
+
+		// _ckArr(x): x when it is an array of any representation, else the unnamed ARRAY
+		// report (CK_ARRAY). The string test is stringp's: a String whose first char is
+		// the quote framing it. Locals: 0 = x.
+		JvmAsm ck = new JvmAsm();
+		int ckPass = ck.label();
+		int ckNotString = ck.label();
+		int ckFail = ck.label();
+		ck.aload(0);
+		ck.instanceOf(arrayListClass);
+		ck.branch(Opcode.IFNE, ckPass);
+		ck.aload(0);
+		ck.instanceOf(strClass);
+		ck.branch(Opcode.IFEQ, ckNotString);
+		emitStringTest(ck, strClass, strCharAt, 0, ckFail);
+		ck.branch(Opcode.GOTO, ckPass);
+		ck.bind(ckNotString);
+		for (ClassConstant packed : List.of(longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
+				byteArrayClass)) {
+			ck.aload(0);
+			ck.instanceOf(packed);
+			ck.branch(Opcode.IFNE, ckPass);
+		}
+		ck.bind(ckFail);
+		ck.aload(0);
+		ck.ldcString(cp.addString(OperandTypes.Kind.ARRAY.typeName()));
+		ck.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		ck.op(Opcode.ATHROW);
+		ck.bind(ckPass);
+		ck.aload(0);
+		ck.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(CK_ARRAY), cp.addUtf8(CK_ARRAY_DESC), 2, 1, ck.finish()));
 
 		// _fillPointer(arr): the fill pointer (a Long), or an error when the array has
 		// none. Locals: 0 = arr, 1 = header.
@@ -2768,8 +2815,6 @@ final class JvmArrayRuntimeBuilder {
 		// shares the java.lang.String representation bare (no quotes), and read-line's
 		// eof-value or a symbol flowing out of a producer expression must not be
 		// laundered through the string conversion. Locals: 0 = o, 1 = cv.
-		MethodrefConstant strCharAt = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
 		JvmAsm tm = new JvmAsm();
 		int tmPass = tm.label();
 		tm.aload(0);
@@ -4035,23 +4080,44 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	/**
+	 * Branches to {@code notString} unless the local {@code slot} holds a string: a
+	 * {@code String} framed by the quote, the test {@code stringp} makes -- a symbol is
+	 * the other {@code String}, and no array. Falls through for a string. Peak operand
+	 * stack: 2.
+	 */
+	private static void emitStringTest(JvmAsm a, ClassConstant strClass, MethodrefConstant strCharAt, int slot,
+			int notString) {
+		a.aload(slot);
+		a.instanceOf(strClass);
+		a.branch(Opcode.IFEQ, notString);
+		a.aload(slot);
+		a.checkcast(strClass);
+		a.iconst(0);
+		a.invokevirtual(strCharAt);
+		a.iconst('"');
+		a.branch(Opcode.IF_ICMPNE, notString);
+	}
+
+	/**
 	 * Emits the general accessors' operand check over the local {@code slot}: a general
 	 * array (an {@code ArrayList}; the packed families were answered a step up the chain)
-	 * passes, and so does an {@code also} value when one is given, and anything else
-	 * throws {@code _teRaw}'s unnamed {@code ARRAY} report for the operator's wrapper at
-	 * the call site to name -- the cast that followed failed with a
-	 * {@code ClassCastException} that carried no datum.
+	 * passes, and so does a string when {@code strClass} is given (a quote-framed
+	 * {@code String}, {@link #emitStringTest}), and anything else throws {@code _teRaw}'s
+	 * unnamed {@code ARRAY} report for the operator's wrapper at the call site to name --
+	 * the cast that followed failed with a {@code ClassCastException} that carried no
+	 * datum.
 	 */
 	private static void emitArrayCheck(JvmAsm a, ConstantPool cp, ClassConstant selfClass, ClassConstant arrayListClass,
-			@Nullable ClassConstant also, int slot) {
+			@Nullable ClassConstant strClass, @Nullable MethodrefConstant strCharAt, int slot) {
 		int pass = a.label();
 		a.aload(slot);
 		a.instanceOf(arrayListClass);
 		a.branch(Opcode.IFNE, pass);
-		if (also != null) {
-			a.aload(slot);
-			a.instanceOf(also);
-			a.branch(Opcode.IFNE, pass);
+		if (strClass != null && strCharAt != null) {
+			int notString = a.label();
+			emitStringTest(a, strClass, strCharAt, slot, notString);
+			a.branch(Opcode.GOTO, pass);
+			a.bind(notString);
 		}
 		a.aload(slot);
 		a.ldcString(cp.addString(OperandTypes.Kind.ARRAY.typeName()));

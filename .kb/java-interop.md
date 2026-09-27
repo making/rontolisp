@@ -93,8 +93,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `row-major-aref`, `array-dimensions`, `array-element-type`, the fill-pointer surface) --
   `JvmJavaDirectSites.tableGuard()` / `arrayGuard()`: an instance of the shared class the
   shared test rejects throws the interpreter's `HASH-TABLE` / `ARRAY` type-error, renamed by
-  `_opTypeErr` after the operator the site hands in (its reported name, null for one that is
-  no named operator: the fill-pointer surface, `array-element-type`). Only a host collection
+  `_opTypeErr` after the operator the site hands in (its reported name; the fill-pointer
+  surface and `array-element-type` are named since 2026-09-27). Only a host collection
   of the accessor's OWN class is refused here; any other wrong type is the every-program check
   in front of it ([error-handling.md](error-handling.md), "A sequence, array or hash-table
   operand of the wrong kind"). `_length`'s array arm asks `_jlarr`, so a

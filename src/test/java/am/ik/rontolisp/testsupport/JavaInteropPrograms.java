@@ -238,13 +238,13 @@ public final class JavaInteropPrograms {
 			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ROW-MAJOR-AREF: The value #<java java.util.ArrayList> is not of type ARRAY
 			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
 			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
-			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-ELEMENT-TYPE: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ADJUSTABLE-ARRAY-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-HAS-FILL-POINTER-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) FILL-POINTER: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH-EXTEND: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-POP: The value #<java java.util.ArrayList> is not of type ARRAY
 			"[1]"
 			(1 1 EQUAL 1 7 1 2 T)""";
 
