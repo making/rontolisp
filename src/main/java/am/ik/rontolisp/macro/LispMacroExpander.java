@@ -14234,32 +14234,21 @@ public final class LispMacroExpander {
 			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE);
 
 	/**
-	 * The operator names whose presence makes the backends inject the
-	 * {@code %baked-packages%} table: the three mutations above (their prelude defuns
-	 * validate against the read/compile-time packages), {@code package-nicknames}, and
-	 * the enumeration family ({@code do-symbols} / {@code do-external-symbols} /
-	 * {@code do-all-symbols} / {@code find-all-symbols} / {@code apropos} /
-	 * {@code apropos-list}, whose universe the table carries).
-	 */
-	public static final java.util.Set<String> BAKED_PACKAGE_TABLE_USERS = java.util.Set.of(LispNames.MAKE_PACKAGE,
-			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGE_NICKNAMES, LispNames.DO_SYMBOLS,
-			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS,
-			LispNames.APROPOS_LIST, LispNames.WITH_PACKAGE_ITERATOR, LispNames.PACKAGE_SHADOWING_SYMBOLS);
-
-	/**
-	 * Whether the program references one of {@link #BAKED_PACKAGE_TABLE_USERS} (quote
-	 * included -- a quoted mention still means the operator is in play for the
-	 * prelude-selection half of this gate). The backends call this after package
-	 * resolution, where the names are canonical.
+	 * Whether the program reads the {@code %baked-packages%} table: some form -- in
+	 * practice a spliced prelude defun ({@code %baked-package-find},
+	 * {@code %do-symbols-list}, ...) -- names it. The backends call this after package
+	 * resolution, on the program the front end spliced and pruned, so the gate is the
+	 * reader itself rather than a list of the operators whose defuns happen to reach one:
+	 * such a list missed {@code shadow} / {@code shadowing-import} / {@code unintern},
+	 * whose defuns reach the table through {@code %runtime-package-op}, and compiled them
+	 * to a reference to an undefined variable.
 	 * @param program the top-level forms
 	 * @return {@code true} when the baked package table must be injected
 	 */
 	public static boolean needsBakedPackageTable(List<LispVal> program) {
 		for (LispVal form : program) {
-			for (String name : BAKED_PACKAGE_TABLE_USERS) {
-				if (usesSymbol(form, name)) {
-					return true;
-				}
+			if (usesSymbol(form, LispNames.BAKED_PACKAGES_INTERNAL)) {
+				return true;
 			}
 		}
 		return false;

@@ -17371,6 +17371,19 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void lonePackageOperation() throws Exception {
+		// The JvmLispCompilerTest#compileAndRunALonePackageOperation twin, through the
+		// CLI's front end.
+		for (java.util.Map.Entry<String, String> lone : am.ik.rontolisp.LonePackageOperationFixture.PROGRAMS
+			.entrySet()) {
+			assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(lone.getKey(),
+					am.ik.rontolisp.reader.Features.WASM, true, false)))
+				.as(lone.getKey())
+				.isEqualTo(lone.getValue());
+		}
+	}
+
+	@Test
 	void runtimePackageMemberTable() throws Exception {
 		// The JvmLispCompilerTest.compileAndRunRuntimePackageMemberTable twin: the
 		// %runtime-packages% member table, answering exactly like the interpreter's

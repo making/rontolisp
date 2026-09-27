@@ -16595,6 +16595,17 @@ class LispEvaluatorTest {
 			.isEqualTo("((PACKAGE-ERROR :CL) :UT-DUP :UT-DUP (PACKAGE-ERROR :NOPE-UT-ZZZ) :CL :CL :NOPE-UT-ZZZ T)");
 	}
 
+	// A program whose only package operation is delete-package / shadow /
+	// shadowing-import / unintern, and a designator naming no package: a catchable
+	// package-error, spelled as the compiled backends spell it. The twins are
+	// JvmLispCompilerTest#compileAndRunALonePackageOperation and
+	// WasmLispCompilerIntegrationTest#lonePackageOperation.
+	@Test
+	void lonePackageOperation() {
+		am.ik.rontolisp.LonePackageOperationFixture.PROGRAMS
+			.forEach((program, expected) -> assertThat(printedLines(program)).as(program).isEqualTo(expected));
+	}
+
 	@Test
 	void symbolBuildersAnswerTheTAndNilSingletons() {
 		// The compiled harnesses pin the same line; (intern "T" "CL") reaches the

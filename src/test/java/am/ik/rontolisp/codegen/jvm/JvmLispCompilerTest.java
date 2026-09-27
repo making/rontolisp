@@ -14738,6 +14738,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunALonePackageOperation() throws Exception {
+		// Each program's only package operation is delete-package / shadow /
+		// shadowing-import / unintern, through the CLI's front end: the helpers their
+		// prelude defuns reach (the baked package table, string<) must arrive without
+		// another package operation to bring them. The interpreter twin is
+		// LispEvaluatorTest#lonePackageOperation.
+		for (Map.Entry<String, String> lone : am.ik.rontolisp.LonePackageOperationFixture.PROGRAMS.entrySet()) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(lone.getKey(),
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.as(lone.getKey())
+				.isEqualTo(lone.getValue());
+		}
+	}
+
+	@Test
 	void compileAndRunRuntimePackageMemberTable() throws Exception {
 		// The runtime package MEMBER table on the JVM backend (.todo/917): the
 		// %runtime-packages% entry records what intern / export / shadowing-import /

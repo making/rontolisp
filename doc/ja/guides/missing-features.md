@@ -18,7 +18,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
-| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`unintern` と実行時の `shadow` / `shadowing-import` は存在し得ない -- シンボルは名前そのものであり、削除すべき intern テーブルが存在しない |
+| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`shadow` / `shadowing-import` / `unintern` はパッケージのメンバーテーブルを変更する。コンパイル済みバックエンドでメンバーテーブルを持つのはプログラム自身が作ったパッケージだけ |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
 | `*modules*` | 利用不可（`require`/`provide` は利用可能） |
@@ -188,19 +188,20 @@ CLOS は**静的なサブセット**です
 [`do-all-symbols`](../reference/macros/do-all-symbols.md)、
 [`apropos`](../reference/functions/apropos.md) /
 [`apropos-list`](../reference/functions/apropos-list.md)。コンパイル済みバックエンドはコンパイル時に焼き込んだテーブルと、そのプログラム自身が作ったパッケージから答えます。
-`unintern`（および実行時の `shadow` / `shadowing-import`）はそもそも実現でき
-ません — シンボルは名前そのものであり、そこから取り除くべき intern テーブルが
-存在しないからです。
+[`shadow`](../reference/functions/shadow.md)、
+[`shadowing-import`](../reference/functions/shadowing-import.md)、
+[`unintern`](../reference/functions/unintern.md)
+はパッケージのメンバーテーブルを変更します。コンパイル済みバックエンドでは読込/compile
+時パッケージは凍結されているため、そこでは何も変えずに `t`（`unintern` は `nil`）を返します。
 問い合わせ系は本物です:
 [`find-package`](../reference/functions/find-package.md)、
 [`package-name`](../reference/functions/package-name.md)、
 [`list-all-packages`](../reference/functions/list-all-packages.md)、
 [`package-use-list`](../reference/functions/package-use-list.md)、
 [`package-used-by-list`](../reference/functions/package-used-by-list.md)、
-[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md)
-（常に `nil`）。コンパイル済みバックエンドはコンパイル時に焼き込まれた
-テーブルから答えるため、コンパイル済みプログラムが後から作ったパッケージは
-そこからは見えません。
+[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md)。
+コンパイル済みバックエンドはコンパイル時に焼き込まれたテーブルと、
+そのプログラム自身が作ったパッケージから答えます。
 複数の使用先パッケージが同じ名前を export している場合、
 コンフリクトをシグナルする代わりに `:use` 順で最初のパッケージが優先されます。
 

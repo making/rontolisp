@@ -20737,6 +20737,43 @@ standalone:
       :CAUGHT
       NIL
       NIL
+  # A program whose ONLY package operation is delete-package / shadow /
+  # shadowing-import / unintern: the helpers their defuns reach (the baked package
+  # table, the string< the runtime list-all-packages lowering sorts with) used to
+  # arrive only with another package operation, which the corpus always has.
+  # LonePackageOperationFixture holds the same programs for the unit suites.
+  - name: lone-delete-package
+    source: |
+      (print (handler-case (delete-package "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+      (print (if (member :cl (list-all-packages)) t nil))
+    stdout: |
+      (:CI-LONE-NOPE "DELETE-PACKAGE: no such package: CI-LONE-NOPE")
+      T
+  - name: lone-shadow
+    source: |
+      (print (shadow 'ci-lone-foo))
+      (print (handler-case (shadow 'ci-lone-foo "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      T
+      (:CI-LONE-NOPE "SHADOW: no such package: CI-LONE-NOPE")
+  - name: lone-shadowing-import
+    source: |
+      (print (shadowing-import 'ci-lone-foo))
+      (print (handler-case (shadowing-import 'ci-lone-foo "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      T
+      (:CI-LONE-NOPE "SHADOWING-IMPORT: no such package: CI-LONE-NOPE")
+  - name: lone-unintern
+    source: |
+      (print (unintern 'car))
+      (print (handler-case (unintern 'car "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      NIL
+      (:CI-LONE-NOPE "UNINTERN: no such package: CI-LONE-NOPE")
   # A restart-case inside a lambda, in a program with no multiple-value operator
   # and so no %mv-spill global: the expansion's read of the channel is nil there,
   # never a variable the lambda captures.

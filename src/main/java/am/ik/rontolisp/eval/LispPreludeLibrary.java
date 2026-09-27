@@ -4574,6 +4574,15 @@ public final class LispPreludeLibrary {
 				|| LispNames.RUNTIME_MEMBER_INTERN_INTERNAL.equals(entry)) {
 			return referencesRuntimePackageMutation(program, canonical);
 		}
+		// string<: the list-all-packages / package-used-by-list lowerings sort the
+		// runtime tier's names into the baked ones with #'string< whenever the program
+		// can create packages at run time -- and the #'list-all-packages wrapper every
+		// compiled program carries takes that lowering too. Both run inside the
+		// expression compilers, after this pass; make-package and rename-package spell
+		// string< themselves, delete-package does not.
+		if (LispNames.STRING_LT.equals(entry)) {
+			return referencesRuntimePackageMutation(program, canonical);
+		}
 		// %runtime-package-op: the export / unexport / import / use-package /
 		// unuse-package lowerings route to it when the program can create packages
 		// (the shadow / shadowing-import / unintern defuns reference it directly).

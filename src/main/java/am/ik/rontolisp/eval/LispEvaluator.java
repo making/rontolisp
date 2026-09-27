@@ -2347,6 +2347,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOW, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOW, target);
+			}
 			this.packageResolver.shadowSymbols(names, packageName(LispNames.SHADOW, target));
 			return LispTrue.INSTANCE;
 		}));
@@ -2357,6 +2360,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOWING_IMPORT, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOWING_IMPORT, target);
+			}
 			target = packageName(LispNames.SHADOWING_IMPORT, target);
 			try {
 				this.packageResolver
@@ -2376,6 +2382,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.UNINTERN, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.UNINTERN, target);
+			}
 			target = packageName(LispNames.UNINTERN, target);
 			String spelling = symbolSpelling(LispNames.UNINTERN, args.get(0), target);
 			try {
@@ -9772,6 +9781,16 @@ public final class LispEvaluator {
 	 * @param designator the offending package designator as given
 	 * @return nothing (always throws)
 	 */
+	/**
+	 * The member-table operators' ({@code shadow} / {@code shadowing-import} /
+	 * {@code unintern}) answer to a designator naming no package: a catchable
+	 * {@code package-error} spelled as the compiled backends' {@code %runtime-package-op}
+	 * spells it.
+	 */
+	private LispVal signalNoSuchPackage(String operator, String designator) {
+		return signalPackageError(operator + ": no such package: " + designator, designator);
+	}
+
 	private LispVal signalPackageError(String message, String designator) {
 		return eval(packageErrorForm(message, designator, false), this.globalEnv);
 	}

@@ -466,7 +466,25 @@ made table-aware. The model:
   `%package-spelling-normalize`, `%baked-import-redirect`, `%baked-package-find`,
   `%runtime-package-find`) are selected by surface reference
   (`referencedBySurfaceForm`) and rooted in `LibraryDefunPruner` the same way,
-  so a lowering's helper can never be missing.
+  so a lowering's helper can never be missing. That includes `string<`: the
+  `list-all-packages` / `package-used-by-list` lowerings sort with `#'string<`
+  under the gate, and so does the `#'list-all-packages` wrapper EVERY compiled
+  program carries, so it is selected by a mutation reference -- `delete-package`
+  alone used to fail with `Cannot compile: STRING<` (`make-package` and
+  `rename-package` spell it themselves).
+- **The `%baked-packages%` table is injected when a form READS it**
+  (`needsBakedPackageTable`, on the spliced and pruned program), never by a list of
+  operator names. The list it replaced (2026-09-27) named the operators whose defuns
+  happened to reach the table and missed `shadow` / `shadowing-import` / `unintern`,
+  which reach it through `%runtime-package-op` -> `%runtime-member-op` ->
+  `%runtime-external-find` -> `%baked-package-find`: each alone compiled to
+  `Cannot compile symbol reference: %BAKED-PACKAGES%`. Such a program now pays for
+  the table like any other package operation (measured: `(print (shadow 'foo))`
+  JVM jar 143,343 B vs `(print (make-package "X"))` 141,216 B). A designator naming
+  no package is a `package-error` `OP: no such package: X` from these three on
+  every backend (the interpreter used to signal a plain error). Pinned by
+  `LonePackageOperationFixture` (the interpreter / JVM / WASM suites) and the
+  ci-spec standalone `lone-*` cases.
 - The enumeration universe (`do-symbols` lowering, `find-all-symbols`,
   `apropos-list`, `do-all-symbols` expansion, `with-package-iterator` through
   `%package-iterator-entries`) is one walk: `%package-symbols-where` over
@@ -574,7 +592,7 @@ triples collected up front, an `flet` popping a cons-cell cursor and answering C
 values; no symbol type is a `program-error`). Two consumers of the consumed
 `defpackage`'s new value had to learn it: `NoGcWasmCompiler.isConsumedPackageResidue`
 drops a bare top-level keyword as it dropped the quoted name, and the REPL echoes
-`:APP`. And `package-shadowing-symbols` joining `BAKED_PACKAGE_TABLE_USERS` exposed a
+`:APP`. And `package-shadowing-symbols` joining the baked table's users exposed a
 latent WASM gate gap -- the baked table plus a symbol builder in one program tripped
 `fdlibm trig reached without its tables placed` -- fixed in the pre-scan
 (`.kb/transcendentals.md`).
@@ -617,6 +635,8 @@ cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormR
 `LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage,defpackageClauseViolationsSignalProgramError,defpackageNicknameAndPackageErrorsArePackageErrors,defpackageImportOfAMissingSymbolOffersAContinueRestartThatInternsIt,defpackageInternOfAnInheritedNameFindsTheInheritedSymbol}`,
 the member table: `LispEvaluatorTest#{internRecordsAMemberOfARuntimePackage,usePackageInheritsARuntimePackagesExports,shadowMintsAPresentSymbolAheadOfTheInheritedOne,shadowingImportDisplacesThePresentSymbol,uninternRemovesAMemberAndUnhomesTheSymbol,exportAndImportCheckAccessibilityAndConflicts,withPackageIteratorWalksTheMemberTable,doSymbolsSpellsARedirectAtItsHomeAndAClNameBare,findSymbolAnswersTheStandardSymbolsThroughAUsePackage,defpackageAnswersThePackageKeyword}`,
 `JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`,
-`WasmLispCompilerIntegrationTest#runtimePackageMemberTable`, ci-spec
+`WasmLispCompilerIntegrationTest#runtimePackageMemberTable`, one package operation alone:
+`LispEvaluatorTest#lonePackageOperation`, `JvmLispCompilerTest#compileAndRunALonePackageOperation`,
+`WasmLispCompilerIntegrationTest#lonePackageOperation`, ci-spec
 `defpackage-use-export`, `packages-cl-user-default-uses-cl-and-the`, `runtime-package-api`,
 `runtime-package-member-table`, `unuse-package`. Limitations: README.
