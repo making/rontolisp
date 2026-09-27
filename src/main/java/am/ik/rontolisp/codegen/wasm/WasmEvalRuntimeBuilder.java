@@ -1205,14 +1205,9 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
-		// Pairwise through the wrapper's two-argument call, which passes its second
-		// argument as a physical optional (no rest list): adjacent pairs for the
-		// ordering operators, every pair for /=. The wrappers take any count now
-		// ((a &optional b &rest r)), so the registry path below would answer the same;
-		// this arm predates that and is kept as the cons-free route.
-		emitComparisonChain(w, off, counts, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, OFF, ADDR, ARITY,
-				IDX, CH, identityHash);
+		// `= < > <= >= /=` have no arm of their own: the wrappers take any count
+		// ((a &optional b &rest r)), so the registry path below reports their count
+		// naming the operator, the same as any other registered function.
 
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
@@ -1288,19 +1283,10 @@ final class WasmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * The comparison operators {@code _eval} chains pairwise through their wrappers'
-	 * two-argument calls.
+	 * The operators whose {@code _eval} arm checks its own argument count: {@code eval},
+	 * which no wrapper backs.
 	 */
-	static final List<String> COMPARISON_OPERATORS = List.of(LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE,
-			LispNames.GE, LispNames.NE);
-
-	/**
-	 * The operators whose {@code _eval} arm checks its own argument count: the comparison
-	 * chain's empty call, and {@code eval}, which no wrapper backs.
-	 */
-	static final List<String> SELF_COUNTED_OPERATORS = java.util.stream.Stream
-		.concat(COMPARISON_OPERATORS.stream(), java.util.stream.Stream.of(LispNames.EVAL))
-		.toList();
+	static final List<String> SELF_COUNTED_OPERATORS = List.of(LispNames.EVAL);
 
 	/**
 	 * What the arms that check their own argument count report a wrong one through: the
@@ -1360,101 +1346,6 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, cursorSlot);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.END);
-	}
-
-	/**
-	 * Emits the {@code _eval} arm for the comparison operators: {@code (< a b c)} is
-	 * {@code (and (< a b) (< b c))} over arguments all evaluated first, as the
-	 * interpreter does, and {@code (/= a b c)} tests every pair. With no argument it
-	 * reports the interpreter's {@code < expects at least 1 argument, got 0} through
-	 * {@code _arity_chk}; one argument answers {@code T}. Falls through for any other
-	 * operator.
-	 */
-	private static void emitComparisonChain(WasmWriter w, SpecialFormOffsets off, CountChecks counts, int restSlot,
-			int envSlot, int fnSlot, int leftSlot, int rightSlot, int headSlot, int tailSlot, int cellSlot, int tmpSlot,
-			int offSlot, int addrSlot, int shapeSlot, int allPairsSlot, int matchedSlot, boolean identityHash) {
-		i32(w, 0);
-		setLocal(w, matchedSlot);
-		for (String operator : COMPARISON_OPERATORS) {
-			getLocal(w, offSlot);
-			i32(w, off.of(operator));
-			w.write(Instruction.I32_EQ);
-			w.write(Instruction.IF, 0x40);
-			i32(w, counts.shape(operator));
-			setLocal(w, shapeSlot);
-			i32(w, LispNames.NE.equals(operator) ? 1 : 0);
-			setLocal(w, allPairsSlot);
-			i32(w, 1);
-			setLocal(w, matchedSlot);
-			w.write(Instruction.END);
-		}
-		getLocal(w, matchedSlot);
-		w.write(Instruction.IF, 0x40);
-		// no argument at all: _arity_chk measures the empty list and throws
-		getLocal(w, restSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		if (counts.arityChkIndex() >= 0) {
-			getLocal(w, restSlot);
-			getLocal(w, shapeSlot);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(counts.arityChkIndex());
-			w.write(Instruction.DROP);
-		}
-		w.write(Instruction.UNREACHABLE);
-		w.write(Instruction.END);
-		// fn = the operator's wrapper, as a function value
-		getLocal(w, offSlot);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
-		setLocal(w, addrSlot);
-		getLocal(w, addrSlot);
-		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		emitNull(w);
-		WasmEmitHelper.emitNewClosure(w, identityHash);
-		setLocal(w, fnSlot);
-		emitBuildArgList(w, restSlot, envSlot, headSlot, tailSlot, cellSlot, tmpSlot, identityHash);
-		getLocal(w, headSlot);
-		setLocal(w, leftSlot);
-		w.write(Instruction.LOOP, 0x40); // outer: one left operand per round
-		emitCdrOf(w, leftSlot);
-		setLocal(w, rightSlot);
-		getLocal(w, rightSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		i32(w, off.of("T"));
-		i32(w, 1);
-		WasmEmitHelper.emitStrBuildCall(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		w.write(Instruction.BLOCK, 0x40); // next left
-		w.write(Instruction.LOOP, 0x40); // inner: the right operands this left meets
-		getLocal(w, rightSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-		getLocal(w, fnSlot);
-		emitCarOf(w, leftSlot);
-		emitCarOf(w, rightSlot);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		emitNull(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		getLocal(w, allPairsSlot);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-		emitCdrOf(w, rightSlot);
-		setLocal(w, rightSlot);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // inner loop
-		w.write(Instruction.END); // next left
-		emitCdrOf(w, leftSlot);
-		setLocal(w, leftSlot);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // outer loop
-		w.write(Instruction.END); // matched
 	}
 
 	/**

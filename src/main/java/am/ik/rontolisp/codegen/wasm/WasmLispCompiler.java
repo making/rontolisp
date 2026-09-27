@@ -5817,13 +5817,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION);
-			for (String operator : WasmEvalRuntimeBuilder.COMPARISON_OPERATORS) {
-				offsetsBuilder.add(stringTable, operator);
-			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
-			// The shape an arm that checks its own count reports through names the
-			// operator when the report can: a comparison by its wrapper's funcId in the
-			// named set, eval -- which no wrapper backs -- by the id the report reserved.
+			// The shape the arm that checks its own count reports through: eval, which no
+			// wrapper backs, named by the id the report reserved.
 			Map<String, Integer> countShapes = new HashMap<>();
 			for (String operator : WasmEvalRuntimeBuilder.SELF_COUNTED_OPERATORS) {
 				int funcId = -1;
