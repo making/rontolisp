@@ -5845,10 +5845,11 @@ public final class LispNames {
 	/**
 	 * The internal {@code rontolisp::%read-line-raw}/{@code %read-char-raw}/
 	 * {@code %read-byte-raw}/{@code %write-line-raw}/{@code %write-byte-raw}/
-	 * {@code %close-raw} aliases of the NATIVE stream built-ins on the
-	 * {@code --component} backend: the socket-dispatch defuns sockets.lisp splices
-	 * ({@code %io-read-line} &amp;c) fall back through these for a non-socket handle, so
-	 * the compile-time socket rewrite of the public names cannot recurse. Component-only.
+	 * {@code %close-raw}/{@code %open-stream-p-raw} aliases of the NATIVE stream
+	 * built-ins on the {@code --component} backend: the socket-dispatch defuns
+	 * sockets.lisp splices ({@code %io-read-line} &amp;c) fall back through these for a
+	 * non-socket handle, so the compile-time socket rewrite of the public names cannot
+	 * recurse. Component-only.
 	 */
 	public static final String READ_LINE_RAW_INTERNAL = "%READ-LINE-RAW";
 
@@ -5872,6 +5873,9 @@ public final class LispNames {
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String LISTEN_RAW_INTERNAL = "%LISTEN-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String OPEN_STREAM_P_RAW_INTERNAL = "%OPEN-STREAM-P-RAW";
 
 	/**
 	 * The compile paths' per-file-stream element-type registry: a prelude defun that

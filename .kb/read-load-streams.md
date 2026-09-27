@@ -225,10 +225,13 @@ must stay in step, and the cross-backend pin is ci-spec
   the same `descriptor` resource), so `adapter.wat`'s `$fd_close` now returns 0 when the
   slot's live flag (offset 12) is already clear; regenerate `adapter.wasm` with
   `src/wasm-component/regen.sh` after touching it. Preview 1 already ignored the EBADF.
-  **`open-stream-p` on a closed handle still answers `t` on BOTH WASM backends** -- a WASI
-  fd has no stream table behind it -- so the ci-spec case does not ask; the interpreter and
-  JVM pins are `LispEvaluatorTest#closingAnAlreadyClosedStreamAnswersTrue` and
-  `JvmLispCompilerTest#compileAndRunOpenExistenceOptions`.
+  On the WASM backends a second close of a stream VALUE never reaches the descriptor at all
+  (the closed mark, "A stream is a VALUE, not a handle"), which matters beyond the answer:
+  the descriptor may belong to a NEWER stream by then. Interpreter/JVM pins
+  `LispEvaluatorTest#closingAnAlreadyClosedStreamAnswersTrue`,
+  `JvmLispCompilerTest#compileAndRunOpenExistenceOptions`; all four: ci-spec
+  `open-if-exists-if-does-not-exist-and-probe` (the probe) and
+  `stream-operators-clear-input-and-friends` (double close after reuse).
 
 ## Five stream operators that are prelude Lisp over what exists
 
@@ -1332,6 +1335,26 @@ answer.
   `readtable` lowers to `null`. All four are in `PackageRegistry.CL_TYPES` and
   `LispMacroExpander.makeTypeTest`; **a name in the first without a case in the second is a hard
   expansion error in `typecase`, not a silent nil.**
+
+- **Open or closed is a fact about the VALUE on wasm** (2026-09-27). A WASI descriptor has no
+  stream table behind it and the host hands the lowest free one to the next `open`, so a
+  handle cannot say whether ITS stream was closed: before this, `open-stream-p` answered t
+  for every non-nil designator on both WASM backends, and a second `close` of a closed file
+  stream closed -- and forgot the registry entries of -- whatever stream had reused the
+  descriptor, silently losing its output. The layout keeps ONE reserved cell,
+  `LispLayout.STREAM_CLOSED_CELL` (capacity 3; invisible to printing and `equal` like the
+  synonym reader). `WasmExprCompiler.compileClose` wraps every `close` / `%close-raw` of a
+  program with stream values in `LispMacroExpander.markingClose` (the first close sets the
+  cell and runs the close, a later one answers t and touches nothing; the `*error-output*`
+  value, handle 2, is never marked -- a standard stream outlives a close, ci-spec
+  `error-output-designator` went red on exactly that), and
+  `open-stream-p` / `%open-stream-p-raw` read it (`expandOpenStreamPOnValue`, a synonym
+  resolved to its target VALUE first). The `--component` sockets / async-stdin dispatchers
+  fall through to the built-in under the `%open-stream-p-raw` alias. The interpreter and
+  the JVM keep answering from their stream table and never touch the cell. Pinned by
+  `WasmLispCompilerIntegrationTest#openStreamPAnswersNilAfterCloseOnPreview1` /
+  `#componentOpenStreamPAnswersNilAfterClose` (both splices included) and the two ci-spec
+  cases above.
 
 Pinned by `LispEvaluatorTest#evalStreamp`/`#theStreamAndReadtableTypeNamesResolve`,
 `JvmLispCompilerTest#compileAndRunTheMissingStandardNames`, its WASM twin, ci-spec

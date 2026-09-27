@@ -511,7 +511,8 @@ final class WasmExprCompiler {
 						|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())
-						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())) {
+						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.OPEN_STREAM_P_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
 					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
 					// these, so the compile-time socket rewrite of the public names
@@ -587,20 +588,8 @@ final class WasmExprCompiler {
 						// handle-typed close and TRAP. The read/write aliases need
 						// nothing -- they share the compilers whose designator seam
 						// already resolves it.
-						default -> {
-							LispVal forgetting = forgettingClose(cons, ctx);
-							if (forgetting != null) {
-								WasmExprCompiler.compileExpr(forgetting, ctx);
-							}
-							else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
-								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
-										ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)),
-										ctx);
-							}
-							else {
-								WasmCloseCompiler.compile(cons, ctx);
-							}
-						}
+						case LispNames.OPEN_STREAM_P_RAW_INTERNAL -> compileOpenStreamP(cons, ctx);
+						default -> compileClose(cons, ctx);
 					}
 					return;
 				}
@@ -1256,26 +1245,7 @@ final class WasmExprCompiler {
 					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			case LispNames.PACKAGE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander
 				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
-			case LispNames.CLOSE -> {
-				// Closing a SYNONYM stream closes the synonym, not what it forwards
-				// to -- which is nothing to do; an OPEN stream resolves to its
-				// handle. The guard is emitted only when the program can build one
-				// of the two; %close is the raw-handle close it falls through to.
-				LispVal forgetting = forgettingClose(cons, ctx);
-				if (forgetting != null) {
-					// The element-type registry forgets the stream first
-					// (.kb/read-load-streams.md, "Element types wider and narrower
-					// than one octet").
-					WasmExprCompiler.compileExpr(forgetting, ctx);
-				}
-				else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons, ctx.usesSynonymStreams,
-							ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx);
-				}
-				else {
-					WasmCloseCompiler.compile(cons, ctx);
-				}
-			}
+			case LispNames.CLOSE -> compileClose(cons, ctx);
 			case LispNames.CLOSE_INTERNAL -> WasmCloseCompiler.compile(cons, ctx);
 			case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
 			// The host environment read behind uiop:getenv (the public name is Lisp
@@ -1485,11 +1455,7 @@ final class WasmExprCompiler {
 						: LispNil.INSTANCE;
 				WasmExprCompiler.compileExpr(foExpansion, ctx);
 			}
-			case LispNames.OPEN_STREAM_P ->
-				// Without the sockets library spliced (which rewrites this to its
-				// table-backed dispatch defun) there is no per-fd open/closed record
-				// here: a non-nil stream designator answers t.
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandOpenStreamPLite(cons), ctx);
+			case LispNames.OPEN_STREAM_P -> compileOpenStreamP(cons, ctx);
 			case LispNames.LISTEN -> WasmListenCompiler.compile(cons, ctx);
 			case LispNames.READ_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
 					LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
@@ -2732,6 +2698,45 @@ final class WasmExprCompiler {
 		return LispMacroExpander.directedOpen(
 				registered != null ? registered : LispMacroExpander.fileStreamValue(checked),
 				OpenModes.direction(OpenModes.staticMode(OpenModes.normalizeKeywordForm(cons).toList())));
+	}
+
+	/**
+	 * {@code close} and its component alias {@code %close-raw}. Closing a SYNONYM stream
+	 * closes the synonym, not what it forwards to -- which is nothing to do; an OPEN
+	 * stream resolves to its handle, after the registries forget it
+	 * (.kb/read-load-streams.md, "Element types wider and narrower than one octet"). The
+	 * guard is emitted only when the program can build one of the two; %close is the
+	 * raw-handle close it falls through to. A stream VALUE is marked closed first, and a
+	 * second close of it touches nothing (LispMacroExpander.markingClose): the WASI
+	 * descriptor may already belong to a newer stream.
+	 */
+	private static void compileClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)) {
+			WasmCloseCompiler.compile(cons, ctx);
+			return;
+		}
+		java.util.function.Function<LispCons, LispVal> close = c -> {
+			LispVal forgetting = forgettingClose(c, ctx);
+			return forgetting != null ? forgetting : LispMacroExpander.expandCloseOverStream(c, ctx.usesSynonymStreams,
+					ctx.functions.containsKey(LispNames.STREAM_TARGET));
+		};
+		WasmExprCompiler
+			.compileExpr(ctx.usesStreamValues
+					? LispMacroExpander.markingClose(cons,
+							am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE, close)
+					: close.apply(cons), ctx);
+	}
+
+	/**
+	 * {@code open-stream-p} and its component alias {@code %open-stream-p-raw}: off the
+	 * stream value's closed mark once the program can build one
+	 * (LispMacroExpander.expandOpenStreamPOnValue), the lite non-nil answer otherwise --
+	 * no stream value, so nothing can have been closed.
+	 */
+	private static void compileOpenStreamP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler
+			.compileExpr(ctx.usesStreamValues ? LispMacroExpander.expandOpenStreamPOnValue(cons, ctx.usesSynonymStreams)
+					: LispMacroExpander.expandOpenStreamPLite(cons), ctx);
 	}
 
 	/**

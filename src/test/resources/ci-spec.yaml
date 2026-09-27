@@ -10290,11 +10290,10 @@ cases:
                          :if-does-not-exist :create)
         (write-string "z" s))
       (print (with-open-file (s "made906.txt") (read-line s)))
-      ;; open-stream-p is NOT asked here: a closed handle answers t on both WASM
-      ;; backends (a WASI fd has no stream table behind it), which is a divergence
-      ;; of its own. The interpreter/JVM pins are the unit tests.
+      ;; A probe stream is closed from the start: the WASM backends read the
+      ;; stream value's closed mark, the interpreter/JVM their stream table.
       (let ((probed (open "ie906.txt" :direction :probe)))
-        (print (list (and probed t) (typep probed 'file-stream))))
+        (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
       (print (open "gone906.txt" :direction :probe))
       (print (and (open "gone906.txt" :direction :probe :if-does-not-exist :create) t))
       (print (and (probe-file "gone906.txt") t))
@@ -10307,7 +10306,7 @@ cases:
       NIL
       :FILE-ERROR
       "z"
-      (T T)
+      (T NIL T)
       NIL
       T
       T
@@ -10385,10 +10384,25 @@ cases:
       (let ((s (open "bytes906.dat")))
         (close s)
         (print (close s)))
+      ;; A closed string stream is closed too, and a second close of a file
+      ;; stream leaves alone the descriptor a newer open may have taken over.
+      (let ((o (make-string-output-stream)) (i (make-string-input-stream "a")))
+        (close o)
+        (close i)
+        (print (list (open-stream-p o) (open-stream-p i))))
+      (let ((a (open "bytes906.dat")))
+        (close a)
+        (let ((b (open "reuse906.txt" :direction :output :if-exists :supersede)))
+          (close a)
+          (write-string "kept" b)
+          (close b)))
+      (print (with-open-file (s "reuse906.txt") (read-line s)))
     expected: |
       (NIL NIL NIL :UTF-8 1 3 2 1)
       (65 65 :EOF)
       T
+      (NIL NIL)
+      "kept"
 
   - name: uiop-stream-file-contents-and-safe-io
     # .todo/359: the "give me the contents" half of uiop/stream -- write a file,

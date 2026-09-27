@@ -3062,11 +3062,9 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	/**
-	 * Expands {@code (open-stream-p x)} to {@code (if x t nil)} -- the lite answer for a
-	 * backend with no per-stream open/closed record (Preview 1 WASM, and a component
-	 * program that never spliced the sockets library). The socket case is exact: the
-	 * component rewrite redirects this call to the sockets library's table-backed
-	 * dispatch defun before compilation.
+	 * Expands {@code (open-stream-p x)} to {@code (if x t nil)} -- the wasm answer for a
+	 * program that can build no stream value, so no designator it holds can have been
+	 * closed ({@link #expandOpenStreamPOnValue} is the answer once it can).
 	 * @param cons the open-stream-p expression
 	 * @return the expanded expression
 	 */
@@ -3076,6 +3074,84 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.OPEN_STREAM_P + " expects 1 argument: " + cons.print());
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.IF), parts.get(1), LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
+	/**
+	 * {@code (open-stream-p x)} off the stream VALUE's closed mark
+	 * ({@link LispLayout#STREAM_CLOSED_CELL}) -- the wasm backends' answer once the
+	 * program can build a stream value, whose {@code close} sets the mark
+	 * ({@link #markingClose}). A synonym answers what its target answers (resolved only
+	 * where the program can build one), and anything that is not a stream value -- the
+	 * {@code t} designator, a raw handle -- keeps the lite non-nil answer.
+	 *
+	 * <pre>
+	 * (let ((__osp_s x))
+	 *   (while (%obj-is __osp_s '%SYNONYM-STREAM) (setq __osp_s (funcall (%obj-ref __osp_s 1))))
+	 *   (if (%obj-is __osp_s '%STREAM) (if (%obj-ref __osp_s 2) nil t) (if __osp_s t nil)))
+	 * </pre>
+	 * @param cons the open-stream-p expression
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @return the expanded expression
+	 */
+	public static LispVal expandOpenStreamPOnValue(LispCons cons, boolean synonymStreams) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.OPEN_STREAM_P + " expects 1 argument: " + cons.print());
+		}
+		LispSymbol s = new LispSymbol("__osp_s");
+		List<LispVal> body = new ArrayList<>();
+		body.add(new LispSymbol(LispNames.LET));
+		body.add(listToCons(List.of(listToCons(List.of(s, parts.get(1))))));
+		if (synonymStreams) {
+			body.add(listToCons(List.of(new LispSymbol(LispNames.WHILE),
+					objIs(s, List.of(LispLayout.SYNONYM_STREAM_TAG)), listToCons(List.of(new LispSymbol(LispNames.SETQ),
+							s, listToCons(List.of(new LispSymbol(LispNames.FUNCALL), objRef(s, 1))))))));
+		}
+		body.add(makeIf(objIs(s, List.of(LispLayout.STREAM_TAG)),
+				makeIf(objRef(s, LispLayout.STREAM_CLOSED_CELL), LispNil.INSTANCE, LispTrue.INSTANCE),
+				makeIf(s, LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(body);
+	}
+
+	/**
+	 * A wasm {@code close} over a stream VALUE: the first close sets the value's closed
+	 * mark ({@link LispLayout#STREAM_CLOSED_CELL}) and runs the backend's close; a later
+	 * one answers t without touching the handle. A WASI descriptor is reused by the next
+	 * {@code open}, so closing the old handle twice would close -- and forget the
+	 * registry entries of -- whichever stream holds the descriptor now. Anything that is
+	 * not a stream value (a synonym, a raw handle, {@code t}) always reaches the close.
+	 * The standard-error value ({@code *error-output*}, the one stream value over a
+	 * process standard descriptor) is never marked: a standard stream outlives a close of
+	 * it, as the runtime's {@code _close} and the other two backends already say.
+	 *
+	 * <pre>
+	 * (let ((__cls_v s))
+	 *   (if (if (%obj-is __cls_v '%STREAM)
+	 *           (if (%obj-ref __cls_v 2) nil (if (eql (%obj-ref __cls_v 0) 2) t (%obj-set __cls_v 2 t)))
+	 *           t)
+	 *       &lt;close of __cls_v&gt;
+	 *       t))
+	 * </pre>
+	 * @param cons the close call ({@code :abort} allowed)
+	 * @param standardErrorHandle the handle the {@code *error-output*} value wraps
+	 * @param close builds the backend's own close of the bound temporary
+	 * @return the marking form, or the backend's close of {@code cons} itself for a
+	 * malformed call (which reports the arity)
+	 */
+	public static LispVal markingClose(LispCons cons, long standardErrorHandle,
+			java.util.function.Function<LispCons, LispVal> close) {
+		LispCons stripped = stripCloseAbort(cons) instanceof LispCons c ? c : cons;
+		List<LispVal> parts = stripped.toList();
+		if (parts.size() != 2) {
+			return close.apply(cons);
+		}
+		LispSymbol v = new LispSymbol("__cls_v");
+		LispVal mark = makeIf(fmtCall(LispNames.EQL, objRef(v, 0), new LispInteger(standardErrorHandle)),
+				LispTrue.INSTANCE, objSet(v, LispLayout.STREAM_CLOSED_CELL, LispTrue.INSTANCE));
+		LispVal firstClose = makeIf(objIs(v, List.of(LispLayout.STREAM_TAG)),
+				makeIf(objRef(v, LispLayout.STREAM_CLOSED_CELL), LispNil.INSTANCE, mark), LispTrue.INSTANCE);
+		LispCons inner = (LispCons) listToCons(List.of(parts.get(0), v));
+		return makeLet(v.name(), parts.get(1), makeIf(firstClose, close.apply(inner), LispTrue.INSTANCE));
 	}
 
 	/**

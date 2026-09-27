@@ -631,14 +631,15 @@
   ;; membership answers "open" for a live socket. A handle in the socket fd
   ;; range with no entry is a socket that has BEEN CLOSED -- the fds are handed
   ;; out sequentially from 200 up to *sock-next-fd*, so the range test
-  ;; distinguishes it from a file/stdin handle with no bookkeeping here (those
-  ;; answer t for any non-nil designator, the documented lite edge).
+  ;; distinguishes it from a file/stdin handle, which falls through to the
+  ;; native built-in under its %open-stream-p-raw alias (the stream value's
+  ;; closed mark).
   (if (rontolisp::%sock-entry s)
       t
       (let ((h (rontolisp::%sock-handle s)))
         (if (and (integerp h) (>= h 200) (< h rontolisp::*sock-next-fd*))
             nil
-            (if s t nil)))))
+            (rontolisp::%open-stream-p-raw s)))))
 
 (defun rontolisp::%io-close (stream)
   (let ((e (rontolisp::%sock-entry stream)))

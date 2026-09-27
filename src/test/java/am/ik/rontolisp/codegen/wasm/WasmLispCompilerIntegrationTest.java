@@ -13986,6 +13986,79 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	/**
+	 * The program the {@code open-stream-p} tests run: a string output, a string input
+	 * and a file stream each answer nil once closed, a probe stream is closed from the
+	 * start, a synonym answers its target, closing {@code *error-output*} leaves it open,
+	 * and a SECOND close of a file stream touches nothing -- the WASI descriptor it held
+	 * already belongs to the next open, whose output a second close used to lose.
+	 */
+	private static final String OPEN_STREAM_P_PROGRAM = """
+			(with-open-file (o "osp.txt" :direction :output :if-exists :supersede) (write-string "x" o))
+			(let ((s (make-string-output-stream)))
+			  (print (open-stream-p s))
+			  (close s)
+			  (print (open-stream-p s)))
+			(let ((s (make-string-input-stream "abc"))) (close s) (print (open-stream-p s)))
+			(let ((s (open "osp.txt")))
+			  (print (open-stream-p s))
+			  (close s)
+			  (print (list (open-stream-p s) (close s))))
+			(print (open-stream-p (open "osp.txt" :direction :probe)))
+			(defvar *osp* (make-string-output-stream))
+			(let ((syn (make-synonym-stream '*osp*)))
+			  (print (open-stream-p syn))
+			  (close *osp*)
+			  (print (open-stream-p syn)))
+			(print (list (open-stream-p *error-output*) (open-stream-p t)))
+			(print (list (close *error-output*) (open-stream-p *error-output*)))
+			(let ((a (open "osp.txt")))
+			  (close a)
+			  (let ((b (open "osp2.txt" :direction :output :if-exists :supersede)))
+			    (close a)
+			    (write-string "kept" b)
+			    (close b)))
+			(print (with-open-file (s "osp2.txt") (read-line s)))
+			""";
+
+	private static final String OPEN_STREAM_P_EXPECTED = "T\nNIL\nNIL\nT\n(NIL T)\nNIL\nT\nNIL\n(T T)\n(T T)\n\"kept\"";
+
+	@Test
+	void openStreamPAnswersNilAfterCloseOnPreview1() throws Exception {
+		assertThat(runFrontendProgramWithDir(OPEN_STREAM_P_PROGRAM, false)).isEqualTo(OPEN_STREAM_P_EXPECTED);
+	}
+
+	@Test
+	void componentOpenStreamPAnswersNilAfterClose() throws Exception {
+		assertThat(runComponentFrontendProgramWithDir(OPEN_STREAM_P_PROGRAM)).isEqualTo(OPEN_STREAM_P_EXPECTED);
+		// The sockets and the async-stdin splices redirect open-stream-p and close to
+		// their dispatch defuns, whose non-socket arms fall through to the built-ins
+		// under the raw aliases.
+		assertThat(runComponentFrontendProgramWithDir(
+				"(defun osp-unused () (rontolisp:tcp-connect \"localhost\" 1))\n" + OPEN_STREAM_P_PROGRAM))
+			.isEqualTo(OPEN_STREAM_P_EXPECTED);
+		assertThat(runComponentFrontendProgramWithDir("""
+				(rontolisp:async-defun osp-main () (print (read-line *standard-input* nil :eof)))
+				(rontolisp:await (osp-main))
+				""" + OPEN_STREAM_P_PROGRAM)).isEqualTo(":EOF\n" + OPEN_STREAM_P_EXPECTED);
+	}
+
+	/**
+	 * {@link #runFrontendProgramWithDir} for a component through the whole front end WITH
+	 * {@code --component}, so the component-only splices (sockets, async stdin) run as
+	 * they do in the CLI. Standard input is empty.
+	 */
+	private static String runComponentFrontendProgramWithDir(String source) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.withSystemPath(source, List.of(), true, true)
+			.forms();
+		byte[] wasmBytes = WasmLispCompiler.builder().component(true).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.component.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . test.component.wasm < /dev/null");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", source, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	/**
 	 * The program both {@code file-position} tests run, and the same one the JVM twin
 	 * runs
 	 * ({@code JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks}):
