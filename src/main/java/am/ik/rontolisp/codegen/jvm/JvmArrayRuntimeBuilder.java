@@ -13,6 +13,7 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.RenderCycleGuard;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Builds the JVM bytecode for the array runtime helpers. An array is represented at
@@ -560,6 +561,7 @@ final class JvmArrayRuntimeBuilder {
 		a1.iastore();
 		a1.areturn();
 		a1.bind(a1NotString);
+		emitArrayCheck(a1, cp, selfClass, arrayListClass, null, 0);
 		// A flat access (rank 1, or row-major-aref at any rank): the bound is the total
 		// size.
 		emitFlatBound(a1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
@@ -584,8 +586,11 @@ final class JvmArrayRuntimeBuilder {
 		a2.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), 5, 5, a2.finish()));
 
-		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val
+		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val. A string passes
+		// the
+		// check: no store routes one here, and it fails the cast below as it always did.
 		JvmAsm s1 = new JvmAsm();
+		emitArrayCheck(s1, cp, selfClass, arrayListClass, strClass, 0);
 		emitFlatBound(s1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
 				4, 5);
 		s1.aload(0);
@@ -626,6 +631,7 @@ final class JvmArrayRuntimeBuilder {
 		d.aastore();
 		d.areturn();
 		d.bind(dNotString);
+		emitArrayCheck(d, cp, selfClass, arrayListClass, null, dArr);
 		d.aload(dArr);
 		d.checkcast(arrayListClass);
 		d.iconst(0);
@@ -692,6 +698,11 @@ final class JvmArrayRuntimeBuilder {
 		cr.istore(crRank);
 		cr.branch(Opcode.GOTO, crHaveRank);
 		cr.bind(crNotString);
+		// Anything but an array (a general one is an ArrayList; the packed families were
+		// answered by the _iv/_fv check a step up the chain) is the ARRAY type-error, for
+		// the operator's wrapper at the call site to name: the cast failed with a
+		// ClassCastException that carried no datum.
+		emitArrayCheck(cr, cp, selfClass, arrayListClass, null, crArr);
 		cr.aload(crArr);
 		cr.checkcast(arrayListClass);
 		cr.iconst(0);
@@ -4021,6 +4032,33 @@ final class JvmArrayRuntimeBuilder {
 		emitDim(a, longClass, intValue, dimsSlot, 1);
 		a.invokestatic(ckBound);
 		a.op(Opcode.IADD);
+	}
+
+	/**
+	 * Emits the general accessors' operand check over the local {@code slot}: a general
+	 * array (an {@code ArrayList}; the packed families were answered a step up the chain)
+	 * passes, and so does an {@code also} value when one is given, and anything else
+	 * throws {@code _teRaw}'s unnamed {@code ARRAY} report for the operator's wrapper at
+	 * the call site to name -- the cast that followed failed with a
+	 * {@code ClassCastException} that carried no datum.
+	 */
+	private static void emitArrayCheck(JvmAsm a, ConstantPool cp, ClassConstant selfClass, ClassConstant arrayListClass,
+			@Nullable ClassConstant also, int slot) {
+		int pass = a.label();
+		a.aload(slot);
+		a.instanceOf(arrayListClass);
+		a.branch(Opcode.IFNE, pass);
+		if (also != null) {
+			a.aload(slot);
+			a.instanceOf(also);
+			a.branch(Opcode.IFNE, pass);
+		}
+		a.aload(slot);
+		a.ldcString(cp.addString(OperandTypes.Kind.ARRAY.typeName()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.op(Opcode.ATHROW);
+		a.bind(pass);
 	}
 
 	// Stores into totalSlot the total size of the general array in slot 0 -- the bound

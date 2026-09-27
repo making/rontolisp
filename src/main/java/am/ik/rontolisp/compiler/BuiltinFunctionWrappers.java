@@ -816,9 +816,16 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// The #'aref wrapper body: fold the subscript list into the row-major index, then
-	// read there.
+	// read there -- once the operand is known to be an array, since the fold's first
+	// step reads its dimensions and a value that is none would be ARRAY-DIMENSIONS'
+	// type-error rather than AREF's, which the call names:
+	// (if (arrayp a) <fold> (%operand-type-error a 'aref 'array)).
 	private static LispVal arefFoldBody() {
-		return rowMajorFoldBody(call(LispNames.ROW_MAJOR_AREF, "a", "rm"));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.ARRAYP, "a"),
+				rowMajorFoldBody(call(LispNames.ROW_MAJOR_AREF, "a", "rm")),
+				callV(LispNames.OPERAND_TYPE_ERROR_INTERNAL, new LispSymbol("a"),
+						callV(LispNames.QUOTE, new LispSymbol(LispNames.AREF)),
+						callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.ARRAY.typeName())))));
 	}
 
 	// #'array-row-major-index: the same fold, answering the index itself.
@@ -878,7 +885,7 @@ public final class BuiltinFunctionWrappers {
 		LispSymbol seqs = new LispSymbol("__map_ss");
 		LispSymbol acc = new LispSymbol("__map_acc");
 		LispSymbol collected = new LispSymbol("__map_r");
-		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(),
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(LispNames.MAP),
 				callV(LispNames.CONS, new LispSymbol("s"), new LispSymbol("more")));
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(seqs, asLists)), listToCons(List.of(acc, LispNil.INSTANCE))));
@@ -944,10 +951,13 @@ public final class BuiltinFunctionWrappers {
 		LispSymbol limit = new LispSymbol("__mi_n");
 		LispSymbol rcur = new LispSymbol("__mi_rc");
 		LispSymbol value = new LispSymbol("__mi_v");
-		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(), new LispSymbol("seqs"));
-		LispVal bindings = listToCons(List.of(listToCons(List.of(seqs, asLists)),
-				listToCons(List.of(index, new LispInteger(0))), listToCons(List.of(limit, call(LispNames.LENGTH, "r"))),
-				listToCons(List.of(rcur, new LispSymbol("r")))));
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(LispNames.MAP_INTO), new LispSymbol("seqs"));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(seqs, asLists)), listToCons(List.of(index, new LispInteger(0))),
+						listToCons(List.of(limit,
+								callV(LispNames.LENGTH,
+										LispMacroExpander.checkedSequenceOf(new LispSymbol("r"), LispNames.MAP_INTO)))),
+						listToCons(List.of(rcur, new LispSymbol("r")))));
 		LispVal done = listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.MEMBER, LispNil.INSTANCE, seqs),
 				LispTrue.INSTANCE, callV(LispNames.GE, index, limit)));
 		LispVal exit = listToCons(List.of(done, new LispSymbol("r")));
@@ -1123,7 +1133,7 @@ public final class BuiltinFunctionWrappers {
 	 * @param negated true for the {@code not-} member of the pair
 	 */
 	private static WrapperDef everySomeWrapper(String name, boolean every, boolean negated) {
-		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(),
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(name),
 				callV(LispNames.CONS, new LispSymbol("s"), new LispSymbol("more")));
 		List<LispVal> bindings = List.of(callV("ss", asLists), callV("r", LispNil.INSTANCE));
 		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ss")),
@@ -1147,10 +1157,11 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// (lambda (x) (coerce x 'list)) -- a string or vector sequence becomes a list of its
-	// elements, a list passes through.
-	private static LispVal coerceToListLambda() {
+	// elements, a list passes through, and anything else is the operator's SEQUENCE
+	// type-error.
+	private static LispVal coerceToListLambda(String operator) {
 		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
-				coerceTo("x", "LIST")));
+				coerceChecked("x", "LIST", operator)));
 	}
 
 	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
@@ -1948,8 +1959,10 @@ public final class BuiltinFunctionWrappers {
 		// program, so its result must not pick up the mutable-result wrap a
 		// program-written (coerce x 'string) gets -- every concatenate argument would
 		// pay a conversion for nothing.
+		// A concatenate 'string argument that is no sequence is CONCATENATE's type-error
+		// (the conversion would name COERCE): every other caller hands it a sequence.
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
-				new LispSymbol("x"), coerceTo("x", LispNames.SEQ_STRING_RESULT)));
+				new LispSymbol("x"), coerceChecked("x", LispNames.SEQ_STRING_RESULT, LispNames.CONCATENATE)));
 		return new WrapperDef(LispNames.SEQ_STRING, List.of("x"), List.of(body));
 	}
 
@@ -2101,10 +2114,10 @@ public final class BuiltinFunctionWrappers {
 	private static LispVal stringFamilyBuild() {
 		LispSymbol strs = new LispSymbol("__cc_strs");
 		LispSymbol out = new LispSymbol("__cc_out");
-		LispVal normalize = listToCons(
-				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("x"))),
-						listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
-								new LispSymbol("x"), coerceTo("x", LispNames.SEQ_STRING_RESULT)))));
+		LispVal normalize = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(new LispSymbol("x"))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"), new LispSymbol("x"),
+						coerceChecked("x", LispNames.SEQ_STRING_RESULT, LispNames.CONCATENATE)))));
 		LispVal normalized = callV(LispNames.MAPCAR, normalize, new LispSymbol("seqs"));
 		LispVal sumStep = listToCons(
 				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("n"), new LispSymbol("s"))),
@@ -2132,12 +2145,21 @@ public final class BuiltinFunctionWrappers {
 	// one (.kb/string-accumulate-cost.md). The nil seed is what copies the LAST argument
 	// too. Built per use so the two dispatch arms never share one AST node.
 	private static LispVal concatenatedElements() {
-		LispVal step = listToCons(
-				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("x"), new LispSymbol("a"))),
-						callV(LispNames.APPEND, coerceTo("x", "LIST"), new LispSymbol("a"))));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(new LispSymbol("x"), new LispSymbol("a"))),
+				callV(LispNames.APPEND, coerceChecked("x", "LIST", LispNames.CONCATENATE), new LispSymbol("a"))));
 		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
 				new LispSymbol(LispNames.FROM_END_KEYWORD), LispTrue.INSTANCE,
 				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE));
+	}
+
+	// (coerce <checked var> '<type>): the conversion of a value checked to be a sequence
+	// first, so one that is not is the operator's own SEQUENCE type-error rather than
+	// coerce's.
+	private static LispVal coerceChecked(String var, String type, String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.COERCE),
+				LispMacroExpander.checkedSequenceOf(new LispSymbol(var), operator),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(type)))));
 	}
 
 	// (coerce <var> '<type>)

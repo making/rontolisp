@@ -1772,6 +1772,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
+		// Through the CLI's front end, which splices the prelude defuns (mismatch,
+		// search, count-if-not) the program reaches. The interpreter twin is
+		// LispEvaluatorTest#sequenceAndAccessorOperatorsNameTheirWrongTypeArgument.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.WrongTypeArgumentFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
+	}
+
+	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
 		// The list consumers beyond the first set name their operator as the first set
 		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
@@ -2247,10 +2257,13 @@ class JvmLispCompilerTest {
 		// (outOfRangeSubscriptsAreTypeErrorsNamingTheirBound). (car 1) names itself now
 		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
 		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
-		// (listConsumersNameTheOperator); an access's array argument is still a bare
-		// cast.
-		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
+		// (listConsumersNameTheOperator), and so does an access's array argument
+		// (sequenceAndAccessorOperatorsNameTheirWrongTypeArgument); an array-shape
+		// accessor's is still a bare cast.
+		assertThat(compileAndRun("(print (handler-case (fill-pointer 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
+		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
+			.isEqualTo("\"AREF: The value 5 is not of type ARRAY\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"AREF: The value 5 is not of type (INTEGER 0 (2))\"");
 		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e))))"))
@@ -17657,14 +17670,14 @@ class JvmLispCompilerTest {
 				(print (coerce nil 'string))
 				(print (coerce nil 'vector))
 				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
-				(print (coerce 5 'vector))
+				(print (handler-case (coerce 5 'vector) (type-error (e) (type-error-expected-type e))))
 				(print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
 				(print (position #\\Space "a b c"))
 				(print (position #\\Space "a b c" :from-end t))
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nSEQUENCE\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\nSEQUENCE\nSEQUENCE\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test

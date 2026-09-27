@@ -990,14 +990,49 @@ final class WasmArrayCompiler {
 	// reads it from there -- so this is a call, not a per-site copy of the four-way
 	// representation dispatch (~90 bytes; see
 	// WasmLispCompilerTest#anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime).
-	// Never called from row-major-aref/%row-major-aset, which intentionally accept any
-	// rank.
+	// Called from row-major-aref/%row-major-aset/array-dimensions, which accept any
+	// rank, in EH mode only, with ANY_RANK (emitArrayCheck).
+	// In EH mode the call also names the site's operator for a value that is no array
+	// at all: its id rides above the rank byte (WasmArrayRuntimeBuilder
+	// #buildArrCheckRankBody(int)), 0 outside EH mode, so a module there is unchanged.
 	private static void emitArefCheckRank(WasmLispCompiler.Ctx ctx, int arrSlot, int given) {
 		getLocal(ctx, arrSlot);
-		i32Const(ctx, given);
+		i32Const(ctx, given | WasmOperandTypes.operatorId(ctx) << 8);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_CHECK_RANK);
 		ctx.writer.write(Instruction.DROP);
+	}
+
+	/**
+	 * EH mode only: checks that the value in {@code arrSlot} is an array of any rank
+	 * through {@code _arr_check_rank} ({@link WasmArrayRuntimeBuilder#ANY_RANK}), so a
+	 * value that is none is the site's operator's {@code ARRAY} type-error rather than a
+	 * trap on the first arm's cast. For the accessors that read every rank alike
+	 * ({@code row-major-aref}, {@code %row-major-aset}, {@code array-dimensions}); a
+	 * module outside EH mode emits nothing.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array operand
+	 */
+	private static void emitArrayCheck(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		emitArefCheckRank(ctx, arrSlot, WasmArrayRuntimeBuilder.ANY_RANK);
+	}
+
+	/**
+	 * EH mode only: the rank-1 {@code aref}'s own check over {@code arrSlot}, for a read
+	 * that reaches {@link #emitAref1FromSlots} without {@link #compileAref} -- the fused
+	 * integer tree's fallback ({@code WasmIntFusionCompiler}), whose fast path took only
+	 * a packed integer vector. A module outside EH mode emits nothing.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array operand
+	 */
+	static void emitRank1Check(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		emitArefCheckRank(ctx, arrSlot, 1);
 	}
 
 	// The rank-1 aref dispatch over pre-evaluated slots (array as eq, index boxed):
@@ -1397,6 +1432,7 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		// A subscript that is no integer is ROW-MAJOR-AREF's type-error.
 		int idxSlot = compileReadSubscript(args.get(2), ctx, arrSlot);
 		emitAref1FromSlots(ctx, arrSlot, idxSlot, reportsBounds(ctx));
@@ -1412,6 +1448,7 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		boolean reports = reportsBounds(ctx);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
@@ -1473,6 +1510,7 @@ final class WasmArrayCompiler {
 		// header's car) in a temp; the cons-list build below is shared.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		// An immutable string carries no header at all, but it IS a rank-1 character
 		// array: its dimensions are its length in code points. Every other shape reader
 		// -- array-rank, array-dimension, array-total-size, array-row-major-index --

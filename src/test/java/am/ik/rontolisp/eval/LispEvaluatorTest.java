@@ -17441,17 +17441,18 @@ class LispEvaluatorTest {
 		// Declining means the shared expansion runs unchanged over the already-evaluated
 		// value, so every answer below -- error, oddity and identity alike -- is the one
 		// the expansion has always given.
-		// A non-sequence is the expansion's (length x) SEQUENCE type-error -- the fast
-		// arm must reproduce it, not improve on it.
-		assertThatThrownBy(() -> eval("(coerce 5 'list)")).hasMessageContaining("The value 5 is not of type SEQUENCE");
-		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)")).hasMessageContaining("not a sequence");
+		// A non-sequence -- a rank-2 array included -- is the expansion's COERCE
+		// SEQUENCE type-error: the fast arm must reproduce it, not improve on it.
+		assertThatThrownBy(() -> eval("(coerce 5 'list)")).hasMessage("COERCE: The value 5 is not of type SEQUENCE");
+		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)"))
+			.hasMessage("COERCE: The value #2A((NIL NIL) (NIL NIL)) is not of type SEQUENCE");
 		// A non-character element on the way to a string is the expansion's business --
 		// which signals it.
 		assertThatThrownBy(() -> eval("(coerce '(1 2) 'string)"))
 			.hasMessageContaining("The value 1 is not of type CHARACTER");
-		// (coerce x 'vector) over a non-list, non-string is the identity, packed arrays
-		// included.
-		assertThat(eval("(coerce 5 'vector)").print()).isEqualTo("5");
+		// (coerce x 'vector) over a vector is the identity, packed arrays included; over
+		// anything else it is the expansion's type-error (it answered the value itself).
+		assertThatThrownBy(() -> eval("(coerce 5 'vector)")).hasMessage("COERCE: The value 5 is not of type SEQUENCE");
 		assertThat(evalMulti("""
 				(coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'vector)
 				""").print()).isEqualTo("#d(1.0 2.0)");
@@ -17466,9 +17467,9 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(let ((n 0))
 				  (list (coerce (progn (setq n (+ n 1)) "ab") 'list)
-				        (coerce (progn (setq n (+ n 1)) 5) 'vector)
+				        (coerce (progn (setq n (+ n 1)) #(5)) 'vector)
 				        n))
-				""").print()).isEqualTo("((#\\a #\\b) 5 2)");
+				""").print()).isEqualTo("((#\\a #\\b) #(5) 2)");
 	}
 
 	@Test
@@ -19356,6 +19357,19 @@ class LispEvaluatorTest {
 		assertThat(eval("(handler-case (char \"abc\" 3) (type-error (e) (list (princ-to-string e)"
 				+ " (type-error-expected-type e))))")
 			.print()).isEqualTo("(\"CHAR: The value 3 is not of type (INTEGER 0 (3))\" (INTEGER 0 (3)))");
+	}
+
+	// A sequence operator, an array accessor and a hash-table accessor handed a value
+	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
+	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The
+	// twins are
+	// JvmLispCompilerTest#compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument
+	// and
+	// WasmLispCompilerIntegrationTest#sequenceAndAccessorOperatorsNameTheirWrongTypeArgument.
+	@Test
+	void sequenceAndAccessorOperatorsNameTheirWrongTypeArgument() {
+		assertThat(printedLines(am.ik.rontolisp.WrongTypeArgumentFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
 	}
 
 	@Test

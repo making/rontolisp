@@ -154,15 +154,19 @@ public final class JavaInteropPrograms {
 	/**
 	 * A host {@code ArrayList} holding {@code 1} and a host {@code LinkedHashMap} holding
 	 * {@code "k"} through every array and hash-table accessor, directly and as a function
-	 * value: each is refused with the interpreter's text (a {@code simple-error}, and
-	 * {@code LENGTH}'s {@code SEQUENCE} type-error for {@code length}), an argument after
-	 * the table is evaluated first, and the host map is left untouched. A Lisp table and
+	 * value: each is refused with the interpreter's type-error ({@code ARRAY} or
+	 * {@code HASH-TABLE}, named after the accessor when that is a named operator, and
+	 * {@code LENGTH}'s {@code SEQUENCE} one for {@code length}), an argument after the
+	 * table is evaluated first, and the host map is left untouched. A Lisp table and
 	 * vector beside them still answer. Prints {@link #HOST_ACCESSOR_OUTPUT}.
 	 */
 	public static final String HOST_ACCESSOR_PROGRAM = """
 			(defun row (thunk)
 			  (handler-case (prin1 (funcall thunk))
-			    (type-error (e) (princ (list 'type-error (type-error-datum e) (type-error-expected-type e))))
+			    (type-error (e)
+			      (princ (list 'type-error (type-error-datum e) (type-error-expected-type e)))
+			      (princ " ")
+			      (princ e))
 			    (error (e) (princ e)))
 			  (terpri))
 			(let ((l (java:new "java.util.ArrayList"))
@@ -210,37 +214,37 @@ public final class JavaInteropPrograms {
 
 	/** What {@link #HOST_ACCESSOR_PROGRAM} prints. */
 	public static final String HOST_ACCESSOR_OUTPUT = """
-			GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			default GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			value %PUTHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			REMHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			CLRHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			HASH-TABLE-COUNT expects a hash table, got #<java java.util.LinkedHashMap>
-			HASH-TABLE-SIZE expects a hash table, got #<java java.util.LinkedHashMap>
-			HASH-TABLE-TEST expects a hash table, got #<java java.util.LinkedHashMap>
-			HASH-TABLE-REHASH-SIZE expects a hash table, got #<java java.util.LinkedHashMap>
-			HASH-TABLE-REHASH-THRESHOLD expects a hash table, got #<java java.util.LinkedHashMap>
-			MAPHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			MAPHASH expects a hash table, got #<java java.util.LinkedHashMap>
-			GETHASH expects a hash table, got #<java java.util.LinkedHashMap>
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			default (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			value (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) (SETF GETHASH): The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) REMHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) CLRHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-COUNT: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-TEST: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-THRESHOLD: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
 			"{k=1}"
-			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
-			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
-			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE)
-			AREF expects an array, got #<java java.util.ArrayList>
-			AREF expects an array, got #<java java.util.ArrayList>
-			AREF expects an array, got #<java java.util.ArrayList>
-			%ASET expects an array, got #<java java.util.ArrayList>
-			ROW-MAJOR-AREF expects an array, got #<java java.util.ArrayList>
-			ARRAY-DIMENSIONS expects an array, got #<java java.util.ArrayList>
-			ARRAY-DIMENSIONS expects an array, got #<java java.util.ArrayList>
-			ARRAY-ELEMENT-TYPE expects an array, got #<java java.util.ArrayList>
-			ADJUSTABLE-ARRAY-P expects an array, got #<java java.util.ArrayList>
-			ARRAY-HAS-FILL-POINTER-P expects an array, got #<java java.util.ArrayList>
-			FILL-POINTER expects an array, got #<java java.util.ArrayList>
-			VECTOR-PUSH expects an array, got #<java java.util.ArrayList>
-			VECTOR-PUSH-EXTEND expects an array, got #<java java.util.ArrayList>
-			VECTOR-POP expects an array, got #<java java.util.ArrayList>
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) COERCE: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) (SETF AREF): The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ROW-MAJOR-AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) The value #<java java.util.ArrayList> is not of type ARRAY
 			"[1]"
 			(1 1 EQUAL 1 7 1 2 T)""";
 

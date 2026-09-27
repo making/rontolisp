@@ -36,7 +36,7 @@ final class WasmOperandTypes {
 	 * table holds them and as the landing selects its suffix and symbol.
 	 */
 	private static final java.util.List<String> TYPES = java.util.Arrays.stream(OperandTypes.Kind.values())
-		.map(Enum::name)
+		.map(OperandTypes.Kind::typeName)
 		.toList();
 
 	/** A funnel-typed operator's row type: the landing's own kind decides. */
@@ -73,7 +73,9 @@ final class WasmOperandTypes {
 	 * place's store ({@code setf} and the modify macros) through {@code rplaca} /
 	 * {@code rplacd}, a {@code setf} of a {@code char}/{@code schar}/
 	 * {@code row-major-aref} place through its own store name and of an {@code elt} place
-	 * through {@code %aset}'s.
+	 * through {@code %aset}'s, a {@code sort} with a {@code :key} through
+	 * {@code stable-sort}, a {@code setf} of a {@code gethash} place through
+	 * {@code %puthash}, and the array shape readers through {@code array-dimensions}.
 	 */
 	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
 
@@ -112,6 +114,12 @@ final class WasmOperandTypes {
 		map.put("SCHAR", java.util.List.of(OperandTypes.SETF_SCHAR));
 		map.put("ROW-MAJOR-AREF", java.util.List.of(OperandTypes.SETF_ROW_MAJOR_AREF));
 		map.put("DOLIST", java.util.List.of("ENDP"));
+		map.put("SORT", java.util.List.of("STABLE-SORT"));
+		map.put("GETHASH", java.util.List.of(OperandTypes.SETF_GETHASH));
+		for (String shape : java.util.List.of("ARRAY-RANK", "ARRAY-DIMENSION", "ARRAY-TOTAL-SIZE",
+				"ARRAY-ROW-MAJOR-INDEX")) {
+			map.put(shape, java.util.List.of("ARRAY-DIMENSIONS"));
+		}
 		map.put("LOOP", java.util.List.of("ENDP"));
 		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
 			map.put(modify, java.util.List.of("RPLACA", "RPLACD"));
@@ -132,11 +140,13 @@ final class WasmOperandTypes {
 	 * @param ids operator to its row (1-based)
 	 * @param base the blob's absolute address
 	 * @param rowCodes the type codes the rows hold ({@link #FUNNEL_CODE} included), plus
-	 * {@code STRING}'s when a row's sites land with it directly ({@link #STRING_CHECKED})
-	 * and {@code CHARACTER}'s when the module stores into strings
-	 * ({@link #CHARACTER_CHECKED}): a landing selects among only the types they can name,
-	 * so a suffix no row can reach is never cited and drops with the string blob's dead
-	 * ranges
+	 * {@code STRING}'s when a row's sites land with it directly
+	 * ({@link #STRING_CHECKED}), {@code SEQUENCE}'s when a sequence operator's do
+	 * ({@link OperandTypes#sequenceOperators}), {@code ARRAY}'s and {@code HASH-TABLE}'s
+	 * when an array or a hash-table accessor's do and {@code CHARACTER}'s when the module
+	 * stores into strings ({@link #CHARACTER_CHECKED}): a landing selects among only the
+	 * types they can name, so a suffix no row can reach is never cited and drops with the
+	 * string blob's dead ranges
 	 */
 	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes,
 			WasmLispCompiler.StringTable.@Nullable StringEntry indexPrefix,
@@ -207,6 +217,15 @@ final class WasmOperandTypes {
 				if (STRING_CHECKED.contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.STRING));
 				}
+				if (OperandTypes.sequenceOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.SEQUENCE));
+				}
+				if (OperandTypes.arrayOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.ARRAY));
+				}
+				if (OperandTypes.hashTableOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.HASH_TABLE));
+				}
 			}
 			if (spelled.test(CHARACTER_CHECKED)) {
 				rowCodes.add(code(OperandTypes.Kind.CHARACTER));
@@ -248,10 +267,21 @@ final class WasmOperandTypes {
 	 * @return the id
 	 */
 	static int operatorId(WasmLispCompiler.Ctx ctx) {
+		return operatorId(ctx, ctx.operator);
+	}
+
+	/**
+	 * The operator register's value naming {@code operator}: its reported name's table
+	 * row, or 0 -- also outside EH mode, where no register exists.
+	 * @param ctx the emission context
+	 * @param operator the operator's symbol name, or null
+	 * @return the id
+	 */
+	static int operatorId(WasmLispCompiler.Ctx ctx, @Nullable String operator) {
 		if (ctx.operandOpGlobalIndex < 0) {
 			return 0;
 		}
-		String op = OperandTypes.reportedOperator(ctx.operator);
+		String op = OperandTypes.reportedOperator(operator);
 		Integer row = op == null ? null : ctx.operandOperators.ids().get(op);
 		return row == null ? 0 : row;
 	}

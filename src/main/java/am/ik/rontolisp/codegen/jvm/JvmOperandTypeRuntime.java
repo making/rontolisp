@@ -12,6 +12,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -90,6 +91,15 @@ final class JvmOperandTypeRuntime {
 	static final String CK_RAT = "_ckRat";
 
 	static final String CK_RAT_DESC = CK_IDX_DESC;
+
+	/**
+	 * A hash-table accessor's operand check: a Lisp hash table (a {@code LinkedHashMap})
+	 * answers itself, anything else throws the unnamed {@code HASH-TABLE} report for the
+	 * operator's wrapper to name. A {@code java:} program's host map passes here and is
+	 * refused by its own guard after ({@code JvmJavaDirectSites.TABLE_GUARD}). Descriptor
+	 * {@link #CK_IDX_DESC}.
+	 */
+	static final String CK_TAB = "_ckTab";
 
 	/**
 	 * A list argument's check ({@code last}, the {@code map*} family,
@@ -254,6 +264,8 @@ final class JvmOperandTypeRuntime {
 				cp.addString(OperandTypes.Kind.INTEGER.name())));
 		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), teRaw,
 				cp.addString(OperandTypes.Kind.RATIONAL.name())));
+		methods.add(check(cp, CK_TAB, CK_IDX_DESC, List.of(cp.addClass(cp.addUtf8(RontoHashTable.MAP_CLASS))), teRaw,
+				cp.addString(OperandTypes.Kind.HASH_TABLE.typeName())));
 		methods.add(consCheck(cp, CK_LIST, FIELD_DESC, true, shape, teRaw, listKind));
 		methods.add(
 				consCheck(cp, CK_CONS, CK_CONS_DESC, false, shape, teRaw, cp.addString(OperandTypes.Kind.CONS.name())));

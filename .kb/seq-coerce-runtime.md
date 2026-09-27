@@ -21,9 +21,10 @@ thing, including the shapes the fast arm declines.** A COST invariant.
   hit. Trade: SITE BYTES (a wasm `position` site ~1,449 vs 591), budgeted by
   `WasmLispCompilerTest.\
 aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions`.
-- `position` keeps the non-sequence-answers-nil oddity via its `vectorp` guard;
-  one edge moved -- over a RANK >= 2 array it answers nil instead of signalling
-  through `length`.
+- A non-sequence -- a rank-2 array included -- is the operator's `SEQUENCE`
+  type-error at the end of the `vectorp` guard (it answered nil until 2026-09-27,
+  [error-handling.md](error-handling.md), "A sequence, array or hash-table operand of
+  the wrong kind").
 
 ## The `coerce` seam
 
@@ -67,17 +68,20 @@ Each arm reproduces its `expandCoerce` body exactly, oddities included:
 
 - **`'list`** -- `LispCons`/`LispNil` is itself (the `(listp x)` arm, dotted
   included); the four vector representations convert. Else DECLINES: a rank-2
-  array (whose `(length ...)` signals `not a sequence`) and a non-sequence, for
-  which the expansion's `(length x)` signals `LENGTH`'s `SEQUENCE` type-error (it
-  answered nil until 2026-09-26; the report names `LENGTH`).
+  array and a non-sequence, for which the expansion's `%check-sequence` signals
+  `COERCE`'s `SEQUENCE` type-error (it answered nil until 2026-09-26, then named
+  `LENGTH` until 2026-09-27).
 - **`'string`** -- `LispString` is itself; a list or converted vector of all
   `LispChar` becomes a string. A NON-character element declines and the
   expansion's `(map 'string #'identity ...)` signals it (since 2026-09-18; it
   used to answer `"12"` for `(coerce '(1 2) 'string)`,
   [copy-list-runtime.md](copy-list-runtime.md)).
-- **`'vector`** -- a list or string fills a fresh rank-1 `LispArray`; anything
-  else is the IDENTITY (as `coerceToVectorBody`'s else arm), so this arm never
-  declines: `(coerce 5 'vector)` is `5`, a packed float array is itself.
+- **`'vector`** -- a list or string fills a fresh rank-1 `LispArray`; a vector
+  (a packed float array included) is itself; anything else DECLINES, and the
+  expansion signals `COERCE`'s `SEQUENCE` type-error (`(coerce 5 'vector)` answered
+  `5` until 2026-09-27). An unresolvable deftype name, which defaults to the vector
+  conversion, keeps the identity for a non-sequence (`coerceToVectorBody`'s lenient
+  arm): its value may already be of that type.
 
 No primitive was added to the compile paths: it would cost every wasm module
 bytes for a problem they do not have (`.kb/sequence-op-runtimes.md`).

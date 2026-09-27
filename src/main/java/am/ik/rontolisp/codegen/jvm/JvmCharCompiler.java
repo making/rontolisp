@@ -5,6 +5,9 @@ import java.util.List;
 
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -83,6 +86,92 @@ final class JvmCharCompiler {
 		ctx.emit(Opcode.INSTANCEOF);
 		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
 		emitSiteTypeError(cons, ctx, className, Opcode.IFNE, OperandTypes.Kind.CHARACTER);
+	}
+
+	/**
+	 * Compiles {@code (%operand-type-error x 'op 'kind)}: {@code kind}'s report of
+	 * {@code x}, {@code _teRaw} named by {@code _opTypeErr} after {@code op} (unnamed
+	 * when it is no named operator), thrown here. Nothing follows the throw: the form
+	 * never answers, as {@code %error} never does. In {@code %check-sequence-runtime}'s
+	 * body the operator is a run-time token instead, the reported name as a string or nil
+	 * ({@link #compileCheckSequence}), and the rename happens only when it is a name.
+	 */
+	static void compileOperandTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispMacroExpander.OperandTypeErrorForm form = LispMacroExpander.OperandTypeErrorForm.of(cons);
+		LispVal operatorForm = form.operatorForm();
+		int tokenSlot = -1;
+		if (operatorForm != null) {
+			JvmExprCompiler.compileExpr(operatorForm, ctx, className);
+			tokenSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(tokenSlot);
+		}
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.named(form.kind()).typeName(), ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(JvmEmitHelper
+			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
+			.index());
+		if (tokenSlot >= 0) {
+			// nil: the raw report, thrown as it is; a name: renamed, then thrown.
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tokenSlot);
+			int named = ctx.code.size();
+			ctx.emit(Opcode.IFNONNULL);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.ATHROW);
+			JvmEmitHelper.patchBranch(ctx, named, ctx.code.size());
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tokenSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.stringClass.index());
+			emitOpTypeErr(ctx, className);
+			ctx.emit(Opcode.ATHROW);
+			return;
+		}
+		String operator = OperandTypes.reportedOperator(form.operator());
+		if (operator != null) {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+			emitOpTypeErr(ctx, className);
+		}
+		ctx.emit(Opcode.ATHROW);
+	}
+
+	// With the raw report and the operator's name on the stack: the funnel-typed rename.
+	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className) {
+		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(JvmEmitHelper
+			.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
+			.index());
+	}
+
+	/**
+	 * Compiles {@code (%check-sequence x 'op)}: a direct call of the program's shared
+	 * {@code %check-sequence-runtime} with the operator's token -- the name the report
+	 * gives it as an unspelled string, or null -- and the inline check when the program
+	 * carries no such defun. The token is no quoted symbol: a quoted function name keeps
+	 * that function's #' wrapper from the shaker.
+	 */
+	static void compileCheckSequence(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.FunctionInfo helper = ctx.functions.get(LispNames.CHECK_SEQUENCE_RUNTIME);
+		if (helper == null) {
+			JvmExprCompiler.compileExpr(LispMacroExpander.checkSequenceInline(cons), ctx, className);
+			return;
+		}
+		String reported = OperandTypes.reportedOperator(LispMacroExpander.checkSequenceOperator(cons));
+		LispVal value = cons.toList().get(1);
+		JvmPhysicalArgs.emit(ctx, className, helper,
+				List.of(() -> JvmExprCompiler.compileExpr(value, ctx, className), () -> {
+					if (reported == null) {
+						ctx.emit(Opcode.ACONST_NULL);
+					}
+					else {
+						JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
+					}
+				}));
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(helper.methodref().index());
 	}
 
 	/**

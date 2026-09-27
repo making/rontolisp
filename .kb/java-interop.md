@@ -92,17 +92,20 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   array accessor's through `_jckarr` (`JvmArrayCompiler.emitHostArrayGuard`: `aref`, `%aset`,
   `row-major-aref`, `array-dimensions`, `array-element-type`, the fill-pointer surface) --
   `JvmJavaDirectSites.tableGuard()` / `arrayGuard()`: an instance of the shared class the
-  shared test rejects throws `OP expects a hash table / an array, got X` (a simple-error).
-  Only a host collection of the accessor's OWN class is refused; any other wrong type fails
-  as in a program without `java:` (`.todo/a48`). `_length`'s array arm asks `_jlarr`, so a
+  shared test rejects throws the interpreter's `HASH-TABLE` / `ARRAY` type-error, renamed by
+  `_opTypeErr` after the operator the site hands in (its reported name, null for one that is
+  no named operator: the fill-pointer surface, `array-element-type`). Only a host collection
+  of the accessor's OWN class is refused here; any other wrong type is the every-program check
+  in front of it ([error-handling.md](error-handling.md), "A sequence, array or hash-table
+  operand of the wrong kind"). `_length`'s array arm asks `_jlarr`, so a
   host list is `LENGTH`'s `SEQUENCE` type-error, and so is every sequence function that
   measures first (`coerce`, `position`, `fill`, ...). `hash-table-test` and the rehash
   accessors, constants elsewhere, evaluate and guard the table first. Before, measured
   2026-09-26: `gethash` of a key the host map lacks answered `NIL`, `(setf gethash)` wrote a
   bucket INTO the host map and then threw a `NullPointerException`, `hash-table-test` answered
   `EQUAL`, `length` / `aref` / `hash-table-count` threw Java exceptions
-  (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends). `(apply #'aref l ...)` still
-  names `ARRAY-DIMENSIONS`, the wrapper's first reader (`.todo/a48`).
+  (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends; its rows print the message
+  too since 2026-09-27).
 
 ## Bignums and specialized vectors
 - BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype

@@ -3140,7 +3140,9 @@ public final class LispPreludeLibrary {
 		// against +7%/+16% for this shape.
 		SOURCES.put(LispNames.MISMATCH, """
 				(defun mismatch (seq1 seq2 &key (test #'eql) key (start1 0) end1 (start2 0) end2 from-end)
-				  (let* ((e1 (or end1 (length seq1)))
+				  (let* ((seq1 (%check-sequence seq1 'mismatch))
+				         (seq2 (%check-sequence seq2 'mismatch))
+				         (e1 (or end1 (length seq1)))
 				         (e2 (or end2 (length seq2)))
 				         (i start1)
 				         (j start2)
@@ -3225,7 +3227,9 @@ public final class LispPreludeLibrary {
 		// change needed there.
 		SOURCES.put(LispNames.SEARCH, """
 				(defun search (seq1 seq2 &key (start1 0) end1 (start2 0) end2 test test-not key from-end)
-				  (let* ((e1 (or end1 (length seq1)))
+				  (let* ((seq1 (%check-sequence seq1 'search))
+				         (seq2 (%check-sequence seq2 'search))
+				         (e1 (or end1 (length seq1)))
 				         (e2 (or end2 (length seq2)))
 				         (w (- e1 start1))
 				         (h1 (if (and (listp seq1) (integerp start1) (>= start1 0))
@@ -3264,7 +3268,8 @@ public final class LispPreludeLibrary {
 		// designator and would call nil.
 		SOURCES.put(LispNames.COUNT_IF_NOT, """
 				(defun count-if-not (predicate sequence &key from-end (start 0) end key)
-				  (count-if (lambda (x) (not (funcall predicate x))) sequence
+				  (count-if (lambda (x) (not (funcall predicate x)))
+				            (%check-sequence sequence 'count-if-not)
 				            :key (if key key #'identity)
 				            :start (if start start 0) :end end :from-end from-end))
 				""");

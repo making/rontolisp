@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.PackageRegistry;
 
 /**
@@ -402,7 +403,10 @@ public final class ConcatenateForms {
 		}
 		boolean packed = spec.intWidth() != 0 || spec.packedFloat()
 				|| spec.elementType() == ArrayElementTypes.CHARACTER;
-		return packed ? packedVectorCall(parts.get(1), spec.elementType()) : null;
+		// The packed builders convert whatever they are handed; a value that is no
+		// sequence is COERCE's type-error, checked here where the operator is known.
+		return packed ? packedVectorCall(LispMacroExpander.checkedSequenceOf(parts.get(1), LispNames.COERCE),
+				spec.elementType()) : null;
 	}
 
 	// (quote X) -> X; anything else is not a literal designator.
@@ -582,7 +586,9 @@ public final class ConcatenateForms {
 		List<LispVal> call = new java.util.ArrayList<>();
 		call.add(new LispSymbol(LispNames.APPEND));
 		for (LispVal arg : args) {
-			call.add(coerceCall(arg, "LIST"));
+			// Each argument's elements as a list, or CONCATENATE's own SEQUENCE
+			// type-error for an argument that is no sequence.
+			call.add(LispMacroExpander.seqAsListForm(arg, LispNames.CONCATENATE));
 		}
 		call.add(LispNil.INSTANCE);
 		return listToCons(call);

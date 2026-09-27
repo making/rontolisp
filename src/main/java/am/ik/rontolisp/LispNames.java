@@ -1627,6 +1627,32 @@ public final class LispNames {
 	public static final String CHECK_CHARACTER_INTERNAL = "%CHECK-CHARACTER";
 
 	/**
+	 * The {@code %operand-type-error} internal: {@code (%operand-type-error x 'op 'kind)}
+	 * never returns -- it signals {@code op}'s type-error over {@code x}, naming
+	 * {@code kind} (an {@code OperandTypes.Kind}: {@code sequence}, {@code array},
+	 * {@code hash-table}); unnamed when {@code op} is nil. A lowering places it where its
+	 * own type dispatch has run out of arms, so the test is the dispatch's and the form
+	 * is only the signal.
+	 */
+	public static final String OPERAND_TYPE_ERROR_INTERNAL = "%OPERAND-TYPE-ERROR";
+
+	/**
+	 * The {@code %check-sequence} internal: {@code (%check-sequence x 'op)} answers
+	 * {@code x} when it is a sequence (a list or a vector) and otherwise signals
+	 * {@code op}'s {@code SEQUENCE} type-error -- unnamed when {@code op} is nil. A
+	 * compile path calls {@link #CHECK_SEQUENCE_RUNTIME} for it when the program carries
+	 * that defun.
+	 */
+	public static final String CHECK_SEQUENCE_INTERNAL = "%CHECK-SEQUENCE";
+
+	/**
+	 * The shared defun a compiled {@code %check-sequence} site calls:
+	 * {@code (%check-sequence-runtime x token)}, the token the backend's own spelling of
+	 * the operator {@code %operand-type-error} names at run time.
+	 */
+	public static final String CHECK_SEQUENCE_RUNTIME = "%CHECK-SEQUENCE-RUNTIME";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */

@@ -2066,10 +2066,10 @@ final class WasmExprCompiler {
 			case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
 			case LispNames.HASH_TABLE_TEST -> WasmHashTableCompiler.compileTest(cons, ctx);
 			case LispNames.HASH_TABLE_SIZE -> WasmHashTableCompiler.compileCount(cons, ctx);
-			case LispNames.HASH_TABLE_REHASH_SIZE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);
-			case LispNames.HASH_TABLE_REHASH_THRESHOLD ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx);
+			case LispNames.HASH_TABLE_REHASH_SIZE -> WasmHashTableCompiler
+				.compileTableThenConstant(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);
+			case LispNames.HASH_TABLE_REHASH_THRESHOLD -> WasmHashTableCompiler
+				.compileTableThenConstant(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx);
 			case LispNames.HASH_TABLE_P -> WasmHashTableCompiler.compileP(cons, ctx);
 			case LispNames.MAPHASH -> WasmHashTableCompiler.compileMaphash(cons, ctx);
 			case LispNames.MAKE_ARRAY -> WasmArrayCompiler.compileMake(cons, ctx);
@@ -2503,6 +2503,8 @@ final class WasmExprCompiler {
 			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);
 			case LispNames.CHECK_STRING_INTERNAL -> WasmCharCompiler.compileCheckString(cons, ctx);
 			case LispNames.CHECK_INDEX_INTERNAL -> WasmCharCompiler.compileCheckIndex(cons, ctx);
+			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> WasmCharCompiler.compileOperandTypeError(cons, ctx);
+			case LispNames.CHECK_SEQUENCE_INTERNAL -> WasmCharCompiler.compileCheckSequence(cons, ctx);
 			case LispNames.CHECK_CHARACTER_INTERNAL -> WasmCharCompiler.compileCheckCharacter(cons, ctx);
 			case LispNames.ELT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx);
 			case LispNames.RASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx);

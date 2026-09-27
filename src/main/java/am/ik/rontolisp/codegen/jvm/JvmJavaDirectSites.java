@@ -22,6 +22,7 @@ import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaStaticType;
 import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoComplex;
 import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
@@ -87,14 +88,16 @@ final class JvmJavaDirectSites {
 	/**
 	 * {@code _jckarr(Object, String)Object}: an array accessor's operand, answered
 	 * unchanged unless it is a host {@code ArrayList}, which is refused with the
-	 * interpreter's {@code OP expects an array, got X}.
+	 * interpreter's {@code ARRAY} type-error, named after the operator the second
+	 * argument spells (null for an unnamed report).
 	 */
 	static final String ARRAY_GUARD = "_jckarr";
 
 	/**
 	 * {@code _jcktab(Object, String)Object}: a hash-table accessor's operand, answered
 	 * unchanged unless it is a host {@code LinkedHashMap}, which is refused with the
-	 * interpreter's {@code OP expects a hash table, got X}.
+	 * interpreter's {@code HASH-TABLE} type-error, named as {@link #ARRAY_GUARD} names
+	 * its.
 	 */
 	static final String TABLE_GUARD = "_jcktab";
 
@@ -782,7 +785,7 @@ final class JvmJavaDirectSites {
 			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.arrayGuard = ref;
-			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), " expects an array, got "));
+			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), OperandTypes.Kind.ARRAY));
 		}
 		return ref;
 	}
@@ -800,7 +803,7 @@ final class JvmJavaDirectSites {
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.tableGuard = ref;
 			this.methods
-				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), " expects a hash table, got "));
+				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), OperandTypes.Kind.HASH_TABLE));
 		}
 		return ref;
 	}
@@ -2797,24 +2800,31 @@ final class JvmJavaDirectSites {
 	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
 	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
 	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodrefConstant lispTest,
-			String refusal) {
+			OperandTypes.Kind kind) {
 		JvmAsm a = new JvmAsm();
 		int pass = a.label();
+		int named = a.label();
 		a.aload(0);
 		a.instanceOf(cls(sharedClass));
 		a.branch(Opcode.IFEQ, pass);
 		a.aload(0);
 		a.invokestatic(lispTest);
 		a.branch(Opcode.IFNE, pass);
-		a.anew(cls("java/lang/RuntimeException"));
-		a.dup();
-		a.aload(1);
-		a.ldcString(str(refusal));
-		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		// The accessor's type-error over the host value, as the interpreter's refusal of
+		// it is: _teRaw's unnamed report, renamed after the operator the site handed in
+		// (null for one that is no named operator).
 		a.aload(0);
-		a.invokestatic(this.lispToString);
-		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
-		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.ldcString(str(kind.typeName()));
+		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.aload(1);
+		a.branch(Opcode.IFNONNULL, named);
+		a.athrow();
+		a.bind(named);
+		a.aload(1);
+		a.ldcString(str(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		a.athrow();
 		a.bind(pass);
 		a.aload(0);

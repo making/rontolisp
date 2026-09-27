@@ -1014,7 +1014,7 @@ cases:
       (print (coerce nil 'string))
       (print (coerce nil 'vector))
       (print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
-      (print (coerce 5 'vector))
+      (print (handler-case (coerce 5 'vector) (type-error (e) (type-error-expected-type e))))
       (print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
       (print (position #\Space "a b c"))
       (print (position #\Space "a b c" :from-end t))
@@ -1031,7 +1031,7 @@ cases:
       ""
       #()
       :NOT-A-CHARACTER
-      5
+      SEQUENCE
       SEQUENCE
       1
       3
@@ -18299,6 +18299,59 @@ cases:
   # member/assoc/rassoc scans, list-length, a dotted list's tail under length and
   # the map* walks, a mapcan/mapcon piece that is no list, the multi-list map*
   # value path -- report OP: The value X is not of type T on every backend.
+  # A sequence operator, an array accessor and a hash-table accessor handed a value that
+  # is none of those: the operator's type-error naming SEQUENCE / ARRAY / HASH-TABLE --
+  # one row per mechanism (WrongTypeArgumentFixture holds the backend suites to every
+  # operator; the corpus class's constant pool has no room for all of them here).
+  - name: sequence-and-accessor-operators-name-their-wrong-type-argument
+    source: |
+      (defun ci-wt (thunk)
+        (handler-case (list :value (funcall thunk))
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-wt-five* 5)
+      (defvar *ci-wt-grid* (make-array '(2 2) :initial-element 0))
+      (defvar *ci-wt-table* (make-hash-table))
+      (print (ci-wt (lambda () (every #'numberp *ci-wt-five*))))
+      (print (ci-wt (lambda () (sort *ci-wt-five* #'< :key #'identity))))
+      (print (ci-wt (lambda () (find 1 *ci-wt-grid*))))
+      (print (ci-wt (lambda () (count-if-not #'numberp *ci-wt-five*))))
+      (print (ci-wt (lambda () (reduce #'+ *ci-wt-five* :start 0))))
+      (print (ci-wt (lambda () (copy-seq *ci-wt-five*))))
+      (print (ci-wt (lambda () (fill *ci-wt-five* 0))))
+      (print (ci-wt (lambda () (concatenate 'string *ci-wt-five*))))
+      (print (ci-wt (lambda () (coerce *ci-wt-five* '(vector (unsigned-byte 8))))))
+      (print (ci-wt (lambda () (map-into *ci-wt-five* #'identity))))
+      (print (ci-wt (lambda () (funcall #'map 'list #'+ '(1) *ci-wt-five*))))
+      (print (ci-wt (lambda () (setf (aref *ci-wt-five* 0) 1))))
+      (print (ci-wt (lambda () (array-rank *ci-wt-five*))))
+      (print (ci-wt (lambda () (+ 1 (aref *ci-wt-five* 0)))))
+      (print (ci-wt (lambda () (setf (gethash 1 *ci-wt-five*) 2))))
+      (print (ci-wt (lambda () (maphash #'list *ci-wt-five*))))
+      (print (ci-wt (lambda () (hash-table-rehash-size *ci-wt-five*))))
+      (print (ci-wt (lambda () (funcall #'gethash 1 *ci-wt-five*))))
+      (print (list (find 2 (vector 1 2)) (coerce #(1 2) 'list) (sort (vector 3 1 2) #'<) (subseq "abc" 1)
+                   (coerce '(1 2) 'vector) (aref *ci-wt-grid* 1 1) (gethash 1 *ci-wt-table* :none)))
+    expected: |
+      ("EVERY: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("STABLE-SORT: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("FIND: The value #2A((0 0) (0 0)) is not of type SEQUENCE" #2A((0 0) (0 0)) SEQUENCE)
+      ("COUNT-IF-NOT: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("REDUCE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("SUBSEQ: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("FILL: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("CONCATENATE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("COERCE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("MAP-INTO: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("MAP: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("(SETF AREF): The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ARRAY-DIMENSIONS: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("AREF: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("(SETF GETHASH): The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("MAPHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("HASH-TABLE-REHASH-SIZE: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("GETHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      (2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)
   - name: list-consumers-beyond-the-first-set-name-the-operator
     source: |
       (defun ci-lcb (thunk)

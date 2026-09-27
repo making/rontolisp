@@ -1067,8 +1067,10 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: division by zero, the array argument of an access, the limb-tier
-  boundaries -- and everything outside EH mode. (A list walk over a non-list is named since
+- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries, the array argument
+  of an array-shape accessor outside the aref / `array-dimensions` family (the fill-pointer
+  surface, `array-element-type`) -- and everything outside EH mode. (The array argument of an
+  access is named since 2026-09-27: "A sequence, array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
   2026-09-26: "A wrong-type argument names its operator".)
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
   same `_dbl`/`_as_f64`, and reports under `(SETF AREF)` since 972. Pinned by `JvmFloatArrayTest`'s
@@ -1185,8 +1187,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   themselves: JVM `_append` throws `APPEND`'s report (as `_length` does `LENGTH`'s) and `_length`
   tests the walk's end; wasm `_append` (EH mode only; a non-EH body is byte-identical) and
   `_seq_len` land under their rows. Interpreter: `Environment.requireListEnd`. Not covered:
-  `member-if-not` & co. report under the `-if` operator their prelude defun calls; `nconc`, `reduce`
-  and the other sequence functions are unchanged.
+  `member-if-not` & co. report under the `-if` operator their prelude defun calls; `nconc` is
+  unchanged (the sequence functions: "A sequence, array or hash-table operand of the wrong kind").
 - **String accesses** (2026-09-26; a non-string was a message-only error, the pad's generic
   text or a trap, a symbol read as its NAME on the JVM): `char`/`schar` check the subscript,
   then the string -- that order on every backend, because the compiled sites check the
@@ -1353,6 +1355,94 @@ random-state objects exist" above), not a claim that a ratio or a negative numbe
 - Pinned by `ci-spec.yaml`'s `random-limit-domain-violations-signal-a-type-error` and the
   `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
   triple (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+
+## A sequence, array or hash-table operand of the wrong kind names its operator
+**Invariant: a sequence operator handed a value that is no sequence, an array accessor one that is
+no array and a hash-table accessor one that is no hash table report `OP: The value <prin1> is not of
+type SEQUENCE|ARRAY|HASH-TABLE` as a catchable `type-error` answering the datum and that type,
+byte-identical on all four backends (wasm-GC: in EH mode).** Closed 2026-09-27 (`.todo/a48`). Until
+then `every`/`some` answered `T`/`NIL` interpreted; `find`, `position`, `remove`, `substitute`,
+`remove-duplicates`, `sort`, `stable-sort`, `subseq` (wasm) and the `-if`/`delete`/`n-` variants
+answered nil (or the value) everywhere; `(coerce 5 'vector)` answered 5; `fill`/`replace`/
+`concatenate`/`subseq` were interpreted simple-errors against `LENGTH:` or a datum-less
+`ClassCastException` compiled; `aref`/`gethash` and their kin a simple-error interpreted, a
+datum-less cast failure on the JVM and a trap on wasm.
+
+| Operators | Reported as |
+| --- | --- |
+| `every` `some` (`notany` `notevery` under them, `OperandTypes.REWRITTEN`), `sort` `stable-sort` (`sort :key` is `stable-sort`), `find` `position` `count` `remove` `delete` `substitute` `nsubstitute` and their `-if`/`-if-not`, `remove-duplicates` `delete-duplicates`, `reduce`, `map` `map-into`, `mismatch` `search`, `fill` `replace` `concatenate`, `subseq` (`copy-seq` under it), `coerce` | their own name, `SEQUENCE`; a rank-2 array is no sequence |
+| `aref` `svref` `elt` `#'aref`, `(setf aref)`, `row-major-aref` `(setf row-major-aref)`, `array-dimensions` (`array-rank` `array-dimension` `array-total-size` under it) | own name, `ARRAY` |
+| `gethash` `(setf gethash)` (`%puthash`) `remhash` `clrhash` `maphash` `hash-table-count` `hash-table-size` `hash-table-test` `hash-table-rehash-size` `hash-table-rehash-threshold` | own name, `HASH-TABLE` |
+
+- **Table** (`OperandTypes`): the three families are FUNNEL-typed (`SEQUENCE_OPERATORS`,
+  `ARRAY_OPERATORS`, `HASH_TABLE_OPERATORS`, the last two appended after the sequence operators so a
+  module spelling none numbers every older operator as before): a `:start` that is no integer stays
+  `INTEGER`, a dotted tail `LIST`. `Kind` gains `ARRAY` and `HASH_TABLE` (`typeName()` spells
+  `HASH-TABLE`; use it, not `name()`, wherever a kind becomes text).
+- **Two internal forms**, both built by the shared expander and placed where the lowering's own type
+  dispatch runs out of arms: `(%operand-type-error x 'op 'kind)` only signals (never answers: JVM
+  `athrow`, wasm the landing plus `unreachable`), and `(%check-sequence x 'op)` answers `x` when it is
+  a list or a vector. The expander cannot resolve a name (`macro` may not import `compiler`), so a
+  backend does: `OperandTypes.reportedOperator`, nil = unnamed; on wasm a name missing from the
+  operator table reports unnamed, which is why the sites name what the program SPELLS and
+  `WasmOperandTypes.LOWERED_TO` covers the rewrites (`sort` -> `stable-sort`, `gethash` ->
+  `(setf gethash)`, the shape readers -> `array-dimensions`).
+- **`%check-sequence` is a call, not a test at the site**: its test is a whole `vectorp`, 225
+  instructions of wasm, and zlib held 13 of them (+4.9 KB). A compiled site calls the injected
+  `%check-sequence-runtime (x token)` (`LispMacroExpander.checkSequenceRuntimeWrapper`, gated by
+  `programUsesSequenceCheck`, spelled inline by `checkSequenceInline` when absent) with the
+  operator as the backend's own token: the reported name as an UNSPELLED string on the JVM
+  (`JvmCharCompiler.compileCheckSequence`; a quoted symbol there kept the named function's `#'`
+  wrapper alive -- +16 KB on a sequence-heavy class), the table row as an i31 on wasm; the helper's
+  `%operand-type-error x op` reads it at run time. A literal sequence argument is not wrapped
+  (`isLiteralSequence`): wrapping `#(...)` hid it from the folds that read it (+52 B a site).
+- **Where the checks sit**: `seqResultDispatchForm`'s non-string non-vector arm (listp, else the
+  signal), `buildPositionScan`'s length arm, `deleteOrSubstituteDispatch`, `seqAsListForm` (a list
+  passes inline, anything else `(coerce (%check-sequence ...) 'list)`), the conversion trio's
+  non-list arms (`COERCE`), `%subseq-runtime`'s list arm plus an inline JVM check on the array-free
+  `subseq` lane, `fill`/`replace`/`map`/`map-into`/`reduce :start` before their first `length`,
+  `%seq-string` (`CONCATENATE`), `ConcatenateForms`' list family and packed `coerce`, the `#'map`
+  `#'every` `#'concatenate` `#'map-into` wrappers, the `mismatch`/`search`/`count-if-not` prelude
+  defuns. `#'aref`'s wrapper tests `arrayp` before its fold reads the dimensions (it named
+  `ARRAY-DIMENSIONS`).
+- **Interpreter**: `Environment.seqAsList` throws the unnamed `SEQUENCE` report for anything but a
+  list or a vector, and the built-in seam names it; `requireArray`/`requireHashTable`/`maphash` go
+  through `Environment.accessorTypeError` (named when the accessor is a named operator); `subseq`,
+  `sequenceLength` (`fill`/`replace`) throw their own. `#'copy-seq` is `subseq`'s body now (it
+  refused a general vector), and `fill`/`replace` take a packed float array (they refused one).
+- **JVM**: `_arrayCheckRank` (every `aref`/`%aset`, now through the operator's wrapper),
+  `_aref1`/`_aset1` (`row-major-aref` and the rank-1 reads) and `_arrayDims` test `ArrayList` before
+  their cast and throw `_teRaw(x, "ARRAY")` (`JvmArrayRuntimeBuilder.emitArrayCheck`); every
+  hash-table site runs the table through `_ckTab` under the accessor's wrapper
+  (`JvmHashTableCompiler.emitTableCheck`, in front of the `java:` guard), `hash-table-test` and the
+  rehash accessors included. The `java:` guards `_jckarr`/`_jcktab` throw the same type-error
+  ([java-interop.md](java-interop.md)).
+- **wasm-GC, EH mode only** (a non-EH module keeps the trap and, for the accessors, its bytes):
+  `_arr_check_rank(arr, given)` (every `aref`/`%aset`) carries the site's operator id above the rank
+  byte (`given | id << 8`, `WasmArrayRuntimeBuilder.buildArrCheckRankBody(int)`) and lands a value
+  that is no string, packed array or cell-with-dims `ARRAY` after setting the register from it -- a
+  site pays no register write, only a wider constant (+1 B). `ANY_RANK` (0xFF) makes the same call
+  the array check of `row-major-aref`, `%row-major-aset`, `array-dimensions` and the fused integer
+  tree's `aref` fallback (`WasmArrayCompiler.emitArrayCheck`/`emitRank1Check`; the fast packed arm
+  is untouched). A hash-table site tests `hash-table-p` inline before its cell cast
+  (`WasmHashTableCompiler.emitTableCheck`: `headerSlot`, `clrhash`, the count, the constant
+  answerers). The landing selects `SEQUENCE`/`ARRAY`/`HASH-TABLE` only when the table names an
+  operator of that family.
+- **Cost, measured 2026-09-27** (wasmtime 49, JDK 25): zlib P1 126,472 -> 127,760 (+1.0%), size
+  level 95,900 -> 96,965, component 130,546 -> 131,742, JVM class 187,046 -> 187,948 -- the shared
+  check helper 451 B, the EH `_arr_check_rank` +71 B, +1 B per `aref` site; `hello_world`,
+  `pi_approx`, `dom_reactor` byte-identical. A program using thirteen sequence operators without a
+  handler: wasm 26,857 -> 28,723, JVM 51,246 -> 53,043. The shaker corpus class's constant pool
+  stood at 51,893 of its 52,000 tripwire after this item's ci-spec rows
+  (`JvmClassShakerCorpusTest`), which is why the ci-spec case holds one row per mechanism.
+- **Not covered**: the array-shape accessors outside the table -- `fill-pointer`,
+  `vector-push`(`-extend`), `vector-pop`, `array-element-type`, `adjustable-array-p`,
+  `array-has-fill-pointer-p`, `array-displacement`, `adjust-array` -- report unnamed interpreted, a
+  datum-less cast failure on the JVM and a trap on wasm.
+- Pinned by `WrongTypeArgumentFixture` through `sequenceAndAccessorOperatorsNameTheirWrongTypeArgument`
+  (`LispEvaluatorTest`, `WasmLispCompilerIntegrationTest`) and
+  `compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument` (`JvmLispCompilerTest`), and
+  `ci-spec.yaml`'s `sequence-and-accessor-operators-name-their-wrong-type-argument`.
 
 ## An out-of-range subscript is a type-error naming its bound
 **Invariant: a subscript outside its dimension reports `OP: The value S is not of type (INTEGER 0

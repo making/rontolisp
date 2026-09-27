@@ -2,6 +2,8 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
@@ -9,6 +11,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
@@ -33,22 +36,48 @@ final class JvmHashTableCompiler {
 	 * @param lispName the operator the refusal names
 	 */
 	private static void emitHostTableGuard(JvmLispCompiler.Ctx ctx, String lispName) {
+		emitTableCheck(ctx, lispName);
 		JvmJavaSites javaSites = ctx.javaSites;
 		if (javaSites == null) {
 			return;
 		}
-		JvmEmitHelper.compileUnspelledLiteral(lispName, ctx);
+		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
+		String reported = OperandTypes.reportedOperator(lispName);
+		if (reported == null) {
+			ctx.emit(Opcode.ACONST_NULL);
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(javaSites.direct().tableGuard().index());
+	}
+
+	/**
+	 * Runs the table operand on the stack through {@code _ckTab} under the accessor's
+	 * wrapper: anything but a hash table is its {@code HASH-TABLE} type-error, named
+	 * after the accessor when that is a named operator -- the helpers below cast the
+	 * operand, which failed with no datum (a {@code ClassCastException}, or an
+	 * {@code IncompatibleClassChangeError} for an interface call on a number).
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param lispName the accessor the report names
+	 */
+	private static void emitTableCheck(JvmLispCompiler.Ctx ctx, String lispName) {
+		@Nullable String outer = ctx.operator;
+		ctx.operator = lispName;
+		try {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_TAB).index());
+		}
+		finally {
+			ctx.operator = outer;
+		}
 	}
 
 	// The same guard for a table operand with one more argument evaluated above it on the
 	// stack (gethash's default, %puthash's value): every argument is evaluated before the
 	// table is refused, as the interpreter does.
 	private static void emitHostTableGuardUnderOne(JvmLispCompiler.Ctx ctx, String lispName) {
-		if (ctx.javaSites == null) {
-			return;
-		}
 		int top = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(top);
@@ -175,14 +204,11 @@ final class JvmHashTableCompiler {
 	}
 
 	// An accessor that answers a constant after evaluating its table, expanded to
-	// (progn table constant): compiled as that expansion, except that a java: program
-	// refuses a host map in between.
+	// (progn table constant): compiled as that expansion, except that the table is
+	// checked in between -- anything but a hash table is its type-error, and a java:
+	// program refuses a host map too.
 	private static void compileTableThenConstant(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
 			String lispName, LispVal expansion) {
-		if (ctx.javaSites == null) {
-			JvmExprCompiler.compileExpr(expansion, ctx, className);
-			return;
-		}
 		List<LispVal> forms = ((LispCons) expansion).toList();
 		JvmExprCompiler.compileExpr(forms.get(1), ctx, className);
 		emitHostTableGuard(ctx, lispName);

@@ -1898,6 +1898,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				defuns.add(extractSetqLambda(helper));
 			}
 		}
+		// The shared sequence check every %check-sequence site calls: one vectorp for the
+		// whole program instead of one per site. No array gate: its vectorp compiles to
+		// the string test alone in an array-free class.
+		if (!userDefinedNames.contains(LispNames.CHECK_SEQUENCE_RUNTIME)
+				&& (LispMacroExpander.programUsesSequenceCheck(program)
+						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
+						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
+			defuns.add(extractSetqLambda(LispMacroExpander.checkSequenceRuntimeWrapper()));
+		}
 
 		// Collect top-level global variables and give each a dedicated static field.
 		// A reference compiles to getstatic from any method body, so a global is
@@ -2260,6 +2269,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC },
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC },
+				{ JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC } }) {
 			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));

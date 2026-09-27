@@ -52,9 +52,9 @@ public final class OperandTypes {
 		LIST,
 
 		/**
-		 * The type of an operator that takes any sequence ({@code length},
-		 * {@code reverse}, {@code nreverse}); no funnel checks for it, the operator's row
-		 * names it.
+		 * A non-sequence reaching a sequence operator: the row type of {@code length},
+		 * {@code reverse} and {@code nreverse}, and the kind a funnel-typed sequence
+		 * operator's check lands with ({@link #sequenceOperators}).
 		 */
 		SEQUENCE,
 
@@ -69,7 +69,41 @@ public final class OperandTypes {
 		STRING,
 
 		/** A non-character stored into a string ({@code (setf char)} and its kin). */
-		CHARACTER
+		CHARACTER,
+
+		/**
+		 * A non-array reaching an array accessor ({@code aref}, {@code (setf aref)},
+		 * {@code row-major-aref}, {@code array-dimensions} and its kin).
+		 */
+		ARRAY,
+
+		/**
+		 * A non-hash-table reaching a hash-table accessor ({@code gethash},
+		 * {@code (setf gethash)}, {@code remhash}, {@code maphash},
+		 * {@code hash-table-count}, {@code clrhash}).
+		 */
+		HASH_TABLE;
+
+		/**
+		 * The type's symbol name, as a report and an {@code expected-type} spell it:
+		 * {@code HASH-TABLE} for {@link #HASH_TABLE}, the constant's own name for the
+		 * rest.
+		 * @return the type name
+		 */
+		public String typeName() {
+			return name().replace('_', '-');
+		}
+
+		/**
+		 * The kind a type name designates, as a {@code %operand-type-error} form spells
+		 * it.
+		 * @param typeName the type's symbol name
+		 * @return the kind
+		 * @throws IllegalArgumentException when no kind has that name
+		 */
+		public static Kind named(String typeName) {
+			return valueOf(typeName.replace('-', '_'));
+		}
 
 	}
 
@@ -90,6 +124,9 @@ public final class OperandTypes {
 
 	/** The reported name of a store through a {@code schar} place. */
 	public static final String SETF_SCHAR = "(SETF SCHAR)";
+
+	/** The reported name of a store through a {@code gethash} place. */
+	public static final String SETF_GETHASH = "(SETF GETHASH)";
 
 	/** The reported name of a store through a {@code row-major-aref} place. */
 	public static final String SETF_ROW_MAJOR_AREF = "(SETF ROW-MAJOR-AREF)";
@@ -118,14 +155,17 @@ public final class OperandTypes {
 	 * through {@code mod}, {@code logtest} through {@code logand}), reported under the
 	 * operator they become, so a function value ({@code (mapcar #'1+ ...)}) reports what
 	 * a call does -- the compiled backends' function value IS that rewrite
-	 * ({@code BuiltinFunctionWrappers}).
+	 * ({@code BuiltinFunctionWrappers}). {@code notany}/{@code notevery} are
+	 * {@code (not (some ...))}/{@code (not (every ...))}, {@code copy-seq} is
+	 * {@code (subseq x 0)}.
 	 */
 	private static final Map<String, String> REWRITTEN = Map.ofEntries(Map.entry("1+", "+"), Map.entry("1-", "-"),
 			Map.entry("/=", "="), Map.entry("ZEROP", "="), Map.entry("PLUSP", ">"), Map.entry("MINUSP", "<"),
 			Map.entry("EVENP", "MOD"), Map.entry("ODDP", "MOD"), Map.entry("LOGTEST", "LOGAND"),
 			Map.entry("LOGEQV", "LOGXOR"), Map.entry("FIRST", "CAR"), Map.entry("REST", "CDR"),
 			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF),
-			Map.entry("%ROW-MAJOR-ASET", SETF_ROW_MAJOR_AREF));
+			Map.entry("%ROW-MAJOR-ASET", SETF_ROW_MAJOR_AREF), Map.entry("NOTANY", "SOME"),
+			Map.entry("NOTEVERY", "EVERY"), Map.entry("COPY-SEQ", "SUBSEQ"), Map.entry("%PUTHASH", SETF_GETHASH));
 
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
@@ -142,6 +182,35 @@ public final class OperandTypes {
 			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR, "APPEND",
 			"LIST-LENGTH", "MEMBER", "MEMBER-IF", "ASSOC", "ASSOC-IF", "RASSOC", "RASSOC-IF", "ROW-MAJOR-AREF",
 			SETF_ROW_MAJOR_AREF, "COPY-LIST");
+
+	/**
+	 * The sequence operators, funnel-typed too: a lowering whose own type dispatch runs
+	 * out of arms signals {@code SEQUENCE} under the operator it expands
+	 * ({@code %operand-type-error}), the interpreter's shared conversion
+	 * ({@code Environment.seqAsList}) the same kind for the seam to name, and a subscript
+	 * or bound they check stays an {@code INTEGER}. Last in the table, so a module that
+	 * spells none of them numbers every other operator as before.
+	 */
+	private static final List<String> SEQUENCE_OPERATORS = List.of("EVERY", "SOME", "SORT", "STABLE-SORT", "FIND",
+			"FIND-IF", "FIND-IF-NOT", "POSITION", "POSITION-IF", "POSITION-IF-NOT", "COUNT", "COUNT-IF", "COUNT-IF-NOT",
+			"REMOVE", "REMOVE-IF", "REMOVE-IF-NOT", "DELETE", "DELETE-IF", "DELETE-IF-NOT", "SUBSTITUTE",
+			"SUBSTITUTE-IF", "SUBSTITUTE-IF-NOT", "NSUBSTITUTE", "NSUBSTITUTE-IF", "NSUBSTITUTE-IF-NOT",
+			"REMOVE-DUPLICATES", "DELETE-DUPLICATES", "REDUCE", "SUBSEQ", "FILL", "REPLACE", "CONCATENATE", "COERCE",
+			"MAP", "MAP-INTO", "MISMATCH", "SEARCH");
+
+	/**
+	 * The accessors of an array's shape and of a hash table, funnel-typed like
+	 * {@code aref}: an operand that is no array lands {@code ARRAY}, one that is no hash
+	 * table {@code HASH-TABLE}. {@code (setf gethash)} is {@code %puthash}'s reported
+	 * name. Last in the table, after the sequence operators.
+	 */
+	private static final List<String> HASH_TABLE_OPERATORS = List.of("GETHASH", SETF_GETHASH, "REMHASH", "CLRHASH",
+			"MAPHASH", "HASH-TABLE-COUNT", "HASH-TABLE-SIZE", "HASH-TABLE-TEST", "HASH-TABLE-REHASH-SIZE",
+			"HASH-TABLE-REHASH-THRESHOLD");
+
+	/** The operators whose sites can land {@code ARRAY}. */
+	private static final List<String> ARRAY_OPERATORS = List.of("AREF", SETF_AREF, "ROW-MAJOR-AREF",
+			SETF_ROW_MAJOR_AREF, "ARRAY-DIMENSIONS");
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
@@ -183,6 +252,16 @@ public final class OperandTypes {
 		for (String[] op : fixedOps) {
 			OPERATOR_TYPES.put(op[0], op[1]);
 			order.add(op[0]);
+		}
+		for (String op : SEQUENCE_OPERATORS) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
+		}
+		for (String op : java.util.stream.Stream
+			.concat(java.util.stream.Stream.of("ARRAY-DIMENSIONS"), HASH_TABLE_OPERATORS.stream())
+			.toList()) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
+			order.add(op);
 		}
 		OPERATORS = List.copyOf(order);
 	}
@@ -237,6 +316,34 @@ public final class OperandTypes {
 	}
 
 	/**
+	 * The funnel-typed sequence operators, whose checks land {@link Kind#SEQUENCE}: a
+	 * backend that selects a report's type among the kinds its module can reach adds it
+	 * when one of these is named.
+	 * @return the operator names
+	 */
+	public static List<String> sequenceOperators() {
+		return SEQUENCE_OPERATORS;
+	}
+
+	/**
+	 * The operators whose checks land {@link Kind#ARRAY}, as {@link #sequenceOperators()}
+	 * is for {@code SEQUENCE}.
+	 * @return the operator names
+	 */
+	public static List<String> arrayOperators() {
+		return ARRAY_OPERATORS;
+	}
+
+	/**
+	 * The operators whose checks land {@link Kind#HASH_TABLE}, as
+	 * {@link #sequenceOperators()} is for {@code SEQUENCE}.
+	 * @return the operator names
+	 */
+	public static List<String> hashTableOperators() {
+		return HASH_TABLE_OPERATORS;
+	}
+
+	/**
 	 * The type a report names: the one the operator accepts, narrowed to {@code REAL}
 	 * when a {@code NUMBER} operator met a complex where only a real will do (the
 	 * two-argument {@code atan}); for a funnel-typed operator the funnel's kind, a
@@ -249,10 +356,10 @@ public final class OperandTypes {
 	public static String expectedType(@Nullable String operator, Kind kind) {
 		String type = operator == null ? null : OPERATOR_TYPES.get(operator);
 		if (type == null) {
-			return kind.name();
+			return kind.typeName();
 		}
 		if (FUNNEL_TYPE.equals(type)) {
-			return (kind == Kind.NUMBER ? Kind.REAL : kind).name();
+			return (kind == Kind.NUMBER ? Kind.REAL : kind).typeName();
 		}
 		if (kind == Kind.REAL && Kind.NUMBER.name().equals(type)) {
 			return Kind.REAL.name();

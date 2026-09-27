@@ -64,6 +64,7 @@ import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -3025,7 +3026,7 @@ public final class LispEvaluator {
 						LispNames.MAPHASH + " expects 2 arguments, got " + args.size());
 			}
 			if (!(args.get(1) instanceof LispHashTable table)) {
-				throw new LispEvalException(LispNames.MAPHASH + " expects a hash table, got " + args.get(1).print());
+				throw Environment.accessorTypeError(LispNames.MAPHASH, args.get(1), OperandTypes.Kind.HASH_TABLE);
 			}
 			for (LispHashTable.Entry entry : new ArrayList<>(table.entries())) {
 				apply(args.get(0), List.of(entry.key(), entry.value()), this.globalEnv);
@@ -12260,9 +12261,13 @@ public final class LispEvaluator {
 			return new LispString(sb.toString());
 		}
 		if (!(value instanceof LispCons) && !(value instanceof LispNil) && !(value instanceof LispString)) {
-			// (coerce x 'vector) over anything that is neither a list nor a string is
-			// the identity, exactly as coerceToVectorBody's else arm is.
-			return value;
+			// (coerce x 'vector) over a vector is the identity, exactly as
+			// coerceToVectorBody's vectorp arm is; anything else -- no sequence, or an
+			// array of rank 2 or more -- is the expansion's COERCE type-error to raise.
+			boolean vector = value instanceof LispIntVector
+					|| value instanceof LispArray arr && arr.dimensions().length == 1
+					|| value instanceof LispFloatArray packed && packed.rank() == 1;
+			return vector ? value : null;
 		}
 		LispVal elements = (value instanceof LispString) ? sequenceElementsAsList(value) : value;
 		if (elements == null) {

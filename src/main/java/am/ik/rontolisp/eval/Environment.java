@@ -2082,7 +2082,21 @@ public final class Environment implements Scope {
 		if (val instanceof LispArray array) {
 			return array;
 		}
-		throw new LispEvalException(fn + " expects an array, got " + val.print());
+		throw accessorTypeError(fn, val, OperandTypes.Kind.ARRAY);
+	}
+
+	/**
+	 * An accessor's refusal of an operand that is not the array or hash table it reads:
+	 * the {@code type-error} naming {@code kind}, under the operator when it is a named
+	 * one and unnamed otherwise -- the report a compiled accessor gives too.
+	 * @param fn the accessor's name
+	 * @param val the operand
+	 * @param kind {@code ARRAY} or {@code HASH-TABLE}
+	 * @return the exception to throw
+	 */
+	static OperandTypeException accessorTypeError(String fn, LispVal val, OperandTypes.Kind kind) {
+		String reported = OperandTypes.reportedOperator(fn);
+		return reported == null ? OperandTypeException.of(val, kind) : OperandTypeException.of(val, kind, reported);
 	}
 
 	// The one refusal a quantized matrix gives: an element has no slot of its own (a
@@ -2352,7 +2366,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispHashTable table) {
 			return table;
 		}
-		throw new LispEvalException(fn + " expects a hash table, got " + val.print());
+		throw accessorTypeError(fn, val, OperandTypes.Kind.HASH_TABLE);
 	}
 
 	/**
@@ -3878,10 +3892,13 @@ public final class Environment implements Scope {
 
 	/**
 	 * Normalizes a sequence argument: a string becomes a list of its characters (indexed
-	 * like char/length), anything else is returned unchanged. The sequence functions
-	 * accept strings as well as lists (Common Lisp sequences) through this helper.
+	 * like char/length), a vector a list of its elements, and a list is returned
+	 * unchanged. The sequence functions accept strings and vectors as well as lists
+	 * (Common Lisp sequences) through this helper.
 	 * @param val the sequence argument
 	 * @return the value as a list
+	 * @throws OperandTypeException the unnamed {@code SEQUENCE} report for a value that
+	 * is no sequence
 	 */
 	static LispVal seqAsList(LispVal val) {
 		if (val instanceof LispString str) {
@@ -3921,7 +3938,14 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}
-		return val;
+		if (val instanceof LispCons || val instanceof LispNil) {
+			return val;
+		}
+		// Anything else -- a number, a symbol, a hash table, an array of rank 2 or more
+		// -- is no sequence: the unnamed SEQUENCE report the built-in seam names after
+		// the operator whose body asked (a scan used to see it as an empty list and
+		// answer nil).
+		throw OperandTypeException.of(val, OperandTypes.Kind.SEQUENCE);
 	}
 
 	/**
@@ -4059,9 +4083,6 @@ public final class Environment implements Scope {
 			return;
 		}
 		LispVal cur = seqAsList(seq);
-		if (!(cur instanceof LispCons) && !(cur instanceof LispNil)) {
-			throw new LispEvalException("not a sequence: " + seq.print());
-		}
 		while (cur instanceof LispCons cell) {
 			out.add(cell.car());
 			cur = cell.cdr();
@@ -4570,7 +4591,7 @@ public final class Environment implements Scope {
 				args -> boundedCaseConversion(LispNames.STRING_CAPITALIZE, args, Environment::capitalizeString)));
 		// subseq: strings and lists. (seq start [end]); end defaults to the sequence
 		// length.
-		env.defineFunction(LispNames.SUBSEQ, new LispFunction(LispNames.SUBSEQ, args -> {
+		LispFunction subseq = new LispFunction(LispNames.SUBSEQ, args -> {
 			requireMinArgCount(LispNames.SUBSEQ, args, 2);
 			if (args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -4674,11 +4695,13 @@ public final class Environment implements Scope {
 				}
 				return packedFloatVector(LispNames.SUBSEQ, fa, elements);
 			}
-			throw new LispEvalException(
-					LispNames.SUBSEQ + " expects a string, list, or vector, got: " + args.get(0).print());
-		}));
-		// copy-seq is (subseq seq 0): a fresh copy of a string or list. The call
-		// position expands to exactly that; this registration covers first-class use.
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.SEQUENCE, LispNames.SUBSEQ);
+		});
+		env.defineFunction(LispNames.SUBSEQ, subseq);
+		// copy-seq is (subseq seq 0): a fresh copy of the sequence. The call position
+		// expands to exactly that; this registration covers first-class use, and answers
+		// what that expansion does for every shape it has no arm of its own for -- a
+		// vector, and SUBSEQ's type-error for a non-sequence.
 		env.defineFunction(LispNames.COPY_SEQ, new LispFunction(LispNames.COPY_SEQ, args -> {
 			requireArgCount(LispNames.COPY_SEQ, args, 1);
 			if (args.get(0) instanceof LispString str) {
@@ -4700,7 +4723,7 @@ public final class Environment implements Scope {
 				}
 				return result;
 			}
-			throw new LispEvalException(LispNames.COPY_SEQ + " expects a string or list, got: " + args.get(0).print());
+			return subseq.body().apply(List.of(args.get(0), new LispInteger(0)));
 		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
 			String a = boundedStringArg(LispNames.STRING_EQ, args, 0);
@@ -4760,7 +4783,10 @@ public final class Environment implements Scope {
 			}
 			return n;
 		}
-		throw new LispEvalException(name + ": expected a sequence, got: " + val.print());
+		if (val instanceof LispFloatArray packed && packed.rank() == 1) {
+			return packed.totalSize();
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.SEQUENCE, name);
 	}
 
 	/**
@@ -4781,6 +4807,9 @@ public final class Environment implements Scope {
 		}
 		if (val instanceof LispIntVector iv) {
 			return new LispInteger(iv.elementAt(index));
+		}
+		if (val instanceof LispFloatArray packed) {
+			return packed.readFlat(index);
 		}
 		LispVal cur = val;
 		int i = 0;
@@ -7936,6 +7965,13 @@ public final class Environment implements Scope {
 				}
 				return targetIv;
 			}
+			if (target instanceof LispFloatArray targetFa && targetFa.rank() == 1) {
+				// A packed float target stores each element at its width, as fill does.
+				for (int k = 0; k < copied; k++) {
+					targetFa.setElement(start1 + k, asDouble(element.apply(k)));
+				}
+				return targetFa;
+			}
 			if (target instanceof LispCons || target instanceof LispNil) {
 				// A list target: walk to start1 and destructively rewrite copied cars.
 				int idx = 0;
@@ -8358,6 +8394,35 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.CHECK_LIST_INTERNAL, args, 2);
 			return requireListArgument(((LispSymbol) args.get(1)).name(), args.get(0));
 		}));
+		// (%check-sequence x 'op): x when it is a list or a vector, else OP's SEQUENCE
+		// type-error -- the check a lowering makes before its first use of a sequence.
+		env.defineFunction(LispNames.CHECK_SEQUENCE_INTERNAL,
+				new LispFunction(LispNames.CHECK_SEQUENCE_INTERNAL, args -> {
+					requireArgCount(LispNames.CHECK_SEQUENCE_INTERNAL, args, 2);
+					LispVal x = args.get(0);
+					boolean sequence = x instanceof LispCons || x instanceof LispNil || x instanceof LispString
+							|| x instanceof LispIntVector || x instanceof LispArray arr && arr.dimensions().length == 1
+							|| x instanceof LispFloatArray packed && packed.rank() == 1;
+					if (sequence) {
+						return x;
+					}
+					String reported = args.get(1) instanceof LispSymbol op ? OperandTypes.reportedOperator(op.name())
+							: null;
+					throw reported == null ? OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE)
+							: OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE, reported);
+				}));
+		// (%operand-type-error x 'op 'kind): OP's type-error over x naming KIND -- the
+		// signal a lowering places where its own type dispatch has no arm left; a nil
+		// op reports unnamed.
+		env.defineFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL,
+				new LispFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args -> {
+					requireArgCount(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args, 3);
+					OperandTypes.Kind kind = OperandTypes.Kind.named(((LispSymbol) args.get(2)).name());
+					String reported = args.get(1) instanceof LispSymbol op ? OperandTypes.reportedOperator(op.name())
+							: null;
+					throw reported == null ? OperandTypeException.of(args.get(0), kind)
+							: OperandTypeException.of(args.get(0), kind, reported);
+				}));
 		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
 			if (args.get(0) instanceof LispCons cons) {

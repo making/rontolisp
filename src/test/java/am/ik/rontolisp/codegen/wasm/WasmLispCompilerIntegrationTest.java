@@ -21882,14 +21882,14 @@ class WasmLispCompilerIntegrationTest {
 				(print (coerce nil 'string))
 				(print (coerce nil 'vector))
 				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
-				(print (coerce 5 'vector))
+				(print (handler-case (coerce 5 'vector) (type-error () :type-error)))
 				(print (handler-case (coerce 5 'list) (type-error () :type-error)))
 				(print (position #\\Space "a b c"))
 				(print (position #\\Space "a b c" :from-end t))
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\n:TYPE-ERROR\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n:TYPE-ERROR\n:TYPE-ERROR\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test
@@ -25585,6 +25585,18 @@ class WasmLispCompilerIntegrationTest {
 				(1 0 0 T)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void sequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
+		// The
+		// JvmLispCompilerTest#compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument
+		// twin, through the CLI's front end. EH mode (the program's handler-case): an
+		// operand that is none of a sequence, an array or a hash table lands as the
+		// operator's type-error rather than trapping on a cast.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.WrongTypeArgumentFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
 	}
 
 	@Test

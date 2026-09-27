@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
@@ -204,6 +205,31 @@ final class JvmSubseqCompiler {
 
 		// ---- LIST PATH ----
 		asm.bind(listLabel);
+		if (!ctx.usesArrays) {
+			// No %subseq-runtime dispatch ran ahead of this lane (expandSubseqCompat
+			// answers null without arrays), so a value that is neither a string nor a
+			// list reaches it: SUBSEQ's SEQUENCE type-error, as the dispatch's own arm.
+			int isList = asm.label();
+			asm.aload(seqSlot);
+			asm.branch(Opcode.IFNULL, isList);
+			asm.aload(seqSlot);
+			asm.instanceOf(ctx.objectArrayClass);
+			asm.branch(Opcode.IFNE, isList);
+			asm.aload(seqSlot);
+			asm.ldcString(ctx.cp.addString(OperandTypes.Kind.SEQUENCE.name()));
+			asm.op(Opcode.INVOKESTATIC);
+			asm.u2(JvmEmitHelper
+				.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
+				.index());
+			asm.ldcString(ctx.cp.addString(LispNames.SUBSEQ));
+			asm.ldcString(ctx.cp.addString(OperandTypes.FUNNEL_TYPE));
+			asm.op(Opcode.INVOKESTATIC);
+			asm.u2(JvmEmitHelper
+				.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
+				.index());
+			asm.op(Opcode.ATHROW);
+			asm.bind(isList);
+		}
 		// node = seq
 		asm.aload(seqSlot);
 		asm.astore(nodeSlot);

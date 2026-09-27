@@ -1573,8 +1573,10 @@ final class WasmIntFusionCompiler {
 						ctx);
 				// Under AREF's name: the fallback runs away from the aref form, and an
 				// out-of-range index reports the access.
-				WasmOperandTypes.withOperator(ctx, LispNames.AREF,
-						() -> WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot, false));
+				WasmOperandTypes.withOperator(ctx, LispNames.AREF, () -> {
+					WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
+					WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot, false);
+				});
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 			// The snapshot re-boxed: the shadow when non-null, else the raw value

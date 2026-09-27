@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Compiles the array built-ins ({@code make-array}, {@code aref}, {@code %aset}, and the
@@ -84,7 +85,14 @@ final class JvmArrayCompiler {
 		if (javaSites == null) {
 			return;
 		}
-		JvmEmitHelper.compileUnspelledLiteral(lispName, ctx);
+		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
+		String reported = OperandTypes.reportedOperator(lispName);
+		if (reported == null) {
+			ctx.emit(Opcode.ACONST_NULL);
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
+		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(javaSites.direct().arrayGuard().index());
 	}
@@ -426,7 +434,7 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.AREF);
 		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
-		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
 				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
 				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
 		if (subscriptCount == 0) {
@@ -588,7 +596,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.ARRAY_DIMENSIONS);
-		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.DIMS, JvmFloatArrayRuntimeBuilder.DIMS,
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.DIMS, JvmFloatArrayRuntimeBuilder.DIMS,
 				JvmArrayRuntimeBuilder.DIMS), JvmArrayRuntimeBuilder.DIMS_DESC);
 	}
 
@@ -602,7 +610,7 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.ASET);
 		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
-		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
 				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
 				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
 		if (subscriptCount == 0) {

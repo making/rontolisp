@@ -3959,6 +3959,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				defuns.add(decl);
 			}
 		}
+		// The shared sequence check every %check-sequence site calls: one vectorp for the
+		// whole module instead of one per site.
+		if (!userDefinedNames.contains(LispNames.CHECK_SEQUENCE_RUNTIME)
+				&& (LispMacroExpander.programUsesSequenceCheck(program)
+						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
+						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
+			DefunDecl decl = extractSetqLambda(LispMacroExpander.checkSequenceRuntimeWrapper());
+			injectedRuntimeDefuns.add(decl.name);
+			defuns.add(decl);
+		}
 
 		// Collect top-level global variables and give each its own module-level wasm
 		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).
@@ -8088,7 +8098,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared :fill-pointer resolution body (FUNC_ARR_FP)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody(operandOpGlobalIndex));
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)

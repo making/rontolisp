@@ -3,6 +3,10 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -59,6 +63,60 @@ final class WasmCharCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		});
+	}
+
+	/**
+	 * Compiles {@code (%operand-type-error x 'op 'kind)}: in EH mode {@code op}'s
+	 * {@code kind} type-error over {@code x} (unnamed when the operator table has no row
+	 * for it), outside it a trap -- the form never answers. In
+	 * {@code %check-sequence-runtime}'s body the operator is a run-time token instead:
+	 * the row id as an i31 ({@link #compileCheckSequence}), which goes into the operator
+	 * register as it is.
+	 */
+	static void compileOperandTypeError(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispMacroExpander.OperandTypeErrorForm form = LispMacroExpander.OperandTypeErrorForm.of(cons);
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		LispVal operatorForm = form.operatorForm();
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			if (operatorForm != null) {
+				WasmExprCompiler.compileExpr(operatorForm, ctx);
+				ctx.writer.write(Instruction.DROP);
+			}
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		OperandTypes.Kind kind = OperandTypes.Kind.named(form.kind());
+		if (operatorForm != null) {
+			WasmExprCompiler.compileExpr(operatorForm, ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			WasmOperandTypes.emitLanding(ctx.writer, kind);
+			return;
+		}
+		WasmOperandTypes.withOperator(ctx, form.operator(), () -> WasmOperandTypes.emitTypeError(ctx, slot, kind));
+	}
+
+	/**
+	 * Compiles {@code (%check-sequence x 'op)}: a call to the module's shared
+	 * {@code %check-sequence-runtime} with the operator's token -- its row id in the
+	 * operator table, 0 for none (and outside EH mode, where no table exists) -- and the
+	 * inline check when the module carries no such defun.
+	 */
+	static void compileCheckSequence(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.functions.containsKey(LispNames.CHECK_SEQUENCE_RUNTIME)) {
+			WasmExprCompiler.compileExpr(LispMacroExpander.checkSequenceInline(cons), ctx);
+			return;
+		}
+		int id = WasmOperandTypes.operatorId(ctx, LispMacroExpander.checkSequenceOperator(cons));
+		LispVal call = new LispCons(new LispSymbol(LispNames.CHECK_SEQUENCE_RUNTIME),
+				new LispCons(cons.toList().get(1), new LispCons(new LispInteger(id), LispNil.INSTANCE)));
+		WasmExprCompiler.compileExpr(call, ctx);
 	}
 
 	/**
