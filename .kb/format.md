@@ -68,9 +68,14 @@ Together these put a literal in FRONT of a backend's literal fold
 runtime-control programs take. The gate scans the PRE-EXPANSION program for (a) a renderer call
 already present; (b) `#'format`; (c) a `(format ...)` whose control the static path will
 decline, decided by running the SAME `FmtParser`; (d) a signal designator with a computed datum
-and arguments after it (`signalRendersRuntimeControl`, repeating `expandSignalDesignatorInner`'s
-case split because the expansion it predicts has not run yet). (d) carries the renderer for
-`(warn ctrl a b)`; only `error` also injects `%error-runtime`. A program with no way in carries
+and arguments after it, or with a LITERAL control whose message `formatMessagePieces` builds as a
+renderer call (`~p` and the other declined directives) -- `signalRendersRuntimeControl`, repeating
+`expandSignalDesignatorInner`'s case split because the expansion it predicts has not run yet, and
+calling `formatMessagePieces` itself for the literal. (d) carries the renderer for
+`(warn ctrl a b)`; only `error` also injects `%error-runtime`. Until 2026-09-29 the literal half was
+missing: `(error "~d arg~:p" n)` in a program with no `handler-case` compiled to a call of the
+undefined `%fmt-render` (`JvmLispCompilerTest.anUncaughtErrorWhoseLiteralControlOnlyTheRendererCanLowerReportsItsMessage`,
+`WasmLispCompilerIntegrationTest.warnWithALiteralControlOnlyTheRendererCanLowerRendersIt`). A program with no way in carries
 none of the renderer (~114 KB of wasm, NOT tree-shakeable -- every arm is reachable from
 `%fmt-render`). The interpreter cannot inject top-level defuns, so
 `LispEvaluator.ensureFormatRendererLoaded` evaluates the same forms on the first resolution of a

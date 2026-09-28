@@ -3008,6 +3008,37 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUncaughtErrorWhoseLiteralControlOnlyTheRendererCanLowerReportsItsMessage() throws Exception {
+		// ~:p is renderer-only, so the literal control's message is a %fmt-render call.
+		// With no handler-case in the program nothing else injects the renderer: the
+		// gate must count the literal site itself, or the report is "The function
+		// %FMT-RENDER is undefined".
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(defun g (x) (if x (error "x ~a takes ~a argument~:p, got ~a" 1 2 3) 5))
+					(print (g nil))
+					(print (g t))
+					"""));
+		}
+		assertThat(err.toString()).doesNotContain("%FMT-RENDER")
+			.contains("Unhandled condition: x 1 takes 2 arguments, got 3");
+		// The other signal operators share the gate: cerror carries its datum one place
+		// later.
+		err.reset();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(warn "~d thing~:p" 1)
+					(signal "~d sig~:p" 3)
+					(cerror "go on" "~d item~:p" 4)
+					"""));
+		}
+		assertThat(err.toString()).doesNotContain("%FMT-RENDER")
+			.startsWith("WARNING: 1 thing")
+			.contains("Unhandled condition: 4 items");
+	}
+
+	@Test
 	void compileAndRunUsesTheStandardOperatorWhenAProgramRedefinesACommonLispFunction() throws Exception {
 		// The compiled call site is the standard LENGTH, not the definition above it --
 		// the interpreter would answer 42. That divergence is CL-legal (CLHS 11.1.2.1.2)

@@ -25232,6 +25232,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void warnWithALiteralControlOnlyTheRendererCanLowerRendersIt() throws Exception {
+		// ~:p is renderer-only: the injection gate must count the literal site, or the
+		// message is a call of the undefined %fmt-render.
+		assertThat(compileAndRunStderr("(warn \"~d thing~:p\" 2) (warn \"~d thing~:p\" 1)"))
+			.isEqualTo("WARNING: 2 things\nWARNING: 1 thing");
+	}
+
+	@Test
 	void warnRendersTheFormatControlArgumentsOfItsCondition() throws Exception {
 		assertThat(
 				compileAndRunStderr("(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"))

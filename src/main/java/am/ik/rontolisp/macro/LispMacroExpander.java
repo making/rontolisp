@@ -25252,13 +25252,20 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the signal designator will lower this call through the runtime renderer:
-	 * the datum is neither a literal control string nor a statically known condition type
-	 * (a quoted symbol, a literal {@code make-condition}) AND arguments follow it, so the
-	 * expansion carries a {@code %fmt-render} of the datum for the case where it is a
-	 * string at run time (see
-	 * {@link #expandObjectSignal(String, LispVal, ClosRegistry, boolean, LispVal)}). The
-	 * scan runs on the SOURCE program, before the designator expansion, so it has to
+	 * Whether the signal designator will lower this call through the runtime renderer.
+	 * Two cases:
+	 * <ul>
+	 * <li>the datum is a LITERAL control string the static message builder declines (a
+	 * renderer-only directive such as {@code ~p}) or lowers to a renderer call
+	 * ({@code ~?}) -- decided by running {@link #formatMessagePieces} itself, so the
+	 * prediction and the expansion cannot answer differently;</li>
+	 * <li>the datum is neither a literal control string nor a statically known condition
+	 * type (a quoted symbol, a literal {@code make-condition}) AND arguments follow it,
+	 * so the expansion carries a {@code %fmt-render} of the datum for the case where it
+	 * is a string at run time (see
+	 * {@link #expandObjectSignal(String, LispVal, ClosRegistry, boolean, LispVal)}).</li>
+	 * </ul>
+	 * The scan runs on the SOURCE program, before the designator expansion, so it has to
 	 * repeat that case split rather than look for the renderer call.
 	 * @param head the call's operator name, qualified or plain
 	 * @param cons the call
@@ -25275,7 +25282,31 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		// (cerror continue-control datum args...) carries its datum one place later.
 		int datumIndex = LispNames.CERROR.equals(member) ? 2 : 1;
+		if (parts.size() > datumIndex && parts.get(datumIndex) instanceof LispString control) {
+			return literalSignalControlUsesRenderer(control.value(), parts.size() - datumIndex - 1);
+		}
 		return parts.size() > datumIndex + 1 && isRuntimeErrorDatum(parts.get(datumIndex));
+	}
+
+	/**
+	 * Whether {@link #expandStringSignal}'s message for this literal control contains a
+	 * renderer call, answered by building that message over stand-in argument temps.
+	 * @param control the literal control string
+	 * @param argCount the number of format arguments after it
+	 * @return true when the message renders through {@code %fmt-render}
+	 */
+	private static boolean literalSignalControlUsesRenderer(String control, int argCount) {
+		List<LispVal> argSyms = new java.util.ArrayList<>(argCount);
+		for (int i = 0; i < argCount; i++) {
+			argSyms.add(new LispSymbol(ERROR_ARG_VAR + i));
+		}
+		try {
+			return FormatRenderer.isUsed(formatMessagePieces(control, argSyms));
+		}
+		catch (RuntimeException malformed) {
+			// A control the parser rejects outright: the expansion signals the same way.
+			return false;
+		}
 	}
 
 	/**
