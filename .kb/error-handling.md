@@ -1874,9 +1874,32 @@ on wasm-GC even in EH mode.
     difference vanished -- measure a JVM fill inside a function.
   - Pinned by `compileAndRunMakeArrayInitialContentsChecksItsShape` (`JvmLispCompilerTest`) and
     `makeArrayInitialContentsChecksItsShape` (`WasmLispCompilerIntegrationTest`, P1 and component).
-    A dims form whose RANK is only known at run time still takes the rank-1 fill and fails at its
-    first store (`.todo/a69`) -- `adjust-array` of a rank >= 2 array with `:initial-contents`
-    included, since its dims are a run-time list.
+  - **A dims form whose RANK is only known at run time** (closed 2026-09-28, `.todo/a69`) took the
+    rank-1 fill and failed at its first store on every compiled backend (JVM `aref: expected 2
+    subscripts, got 1`, wasm a trap) -- `adjust-array` of a rank >= 2 array with `:initial-contents`
+    included, since its dims are a run-time list. `isRankOneDimensionSpec` now picks the fill: a
+    literal integer / one-element list, or a call to a number-answering standard operator
+    (`length`, `+`, `array-dimension`, ... -- `NUMBER_VALUED_OPERATORS`), keeps the rank-1 fill
+    byte for byte; anything else (a variable, a user call) takes
+    `buildRunTimeRankInitialContentsFill`. That walks the dims value depth first over an explicit
+    stack of `(sequence . dims-suffix)` entries -- no recursive helper, the lowering runs during
+    code generation -- running the ONE streaming level fill per popped sequence: the last axis
+    stores at a running row-major index, an outer axis collects its rows and pushes them only after
+    its length checked out, so the report order is the interpreter's recursive one (one `error`
+    site; the axis number is a `~D` argument, `(- (length dl) (length ds))`, computed only by the
+    report). An empty dims value stores the contents as the one element. The character lowering
+    branches on the run-time rank the same way: rank 1 copies into a string, any other allocates
+    the character array and takes that fill (a literal rank-0 dims now declines it too).
+  - **Cost, measured 2026-09-28** (same setup as above, second run in-process): a variable-dims
+    rank-1 fill of a 1M list, JVM 242 -> 212 ms, wasm 690 -> 630; a variable-dims 1000x1000 fill
+    (failed before) JVM 154, wasm 562, against 190 / 506 for the literal `'(1000 1000)`. Size of a
+    `defun` holding one variable-dims site: class 25,198 -> 28,046 B (method 640 -> 1,156
+    bytecodes, plus the shared `_sub` helper), P1 7,381 -> 8,856; `(funcall #'adjust-array ...)`
+    class 45,464 -> 48,298, P1 30,397 -> 31,634. `(print 42)`, a literal-dims site and a
+    `(length s)` dims site are byte-identical.
+  - Pinned by `compileAndRunMakeArrayInitialContentsFillsARunTimeRank` (`JvmLispCompilerTest`)
+    and `makeArrayInitialContentsFillsARunTimeRank` (`WasmLispCompilerIntegrationTest`, P1 and
+    component).
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in

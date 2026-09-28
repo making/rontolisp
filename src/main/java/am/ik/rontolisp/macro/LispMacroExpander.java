@@ -35835,15 +35835,18 @@ public final class LispMacroExpander {
 	 * {@code make-array} keeps every other keyword. Every level's length is checked
 	 * against its dimension and a mismatch signals the interpreter's report
 	 * ({@link #initialContentsShapeCheck}). A literal rank-0 dims list stores the
-	 * contents as the one element; a rank-1 array (dims not a literal multi-element list)
-	 * fills with {@code %aset} through {@link #buildInitialContentsLeafFill}; a literal
-	 * rank >= 2 dims list fills with {@link #buildNestedInitialContentsFillLevel}, one
-	 * nested {@code dotimes} per dimension descending into {@code contents} with a cursor
-	 * and writing each leaf through {@code %row-major-aset} at its row-major flat index
-	 * (this used to be refused outright, out of step with the interpreter, which fills
-	 * nested contents natively). {@link #lowerRuntimeElementTypeMakeArray} builds the
-	 * same fill ONCE over its whole element-type dispatch. Returns {@code null} when the
-	 * form has no {@code :initial-contents}.
+	 * contents as the one element; a dims form that is rank 1 whatever its value
+	 * ({@link #isRankOneDimensionSpec}) fills with {@code %aset} through
+	 * {@link #buildInitialContentsLeafFill}; any other run-time dims form takes
+	 * {@link #buildRunTimeRankInitialContentsFill}, which walks whatever rank arrives; a
+	 * literal rank >= 2 dims list fills with
+	 * {@link #buildNestedInitialContentsFillLevel}, one nested {@code dotimes} per
+	 * dimension descending into {@code contents} with a cursor and writing each leaf
+	 * through {@code %row-major-aset} at its row-major flat index (this used to be
+	 * refused outright, out of step with the interpreter, which fills nested contents
+	 * natively). {@link #lowerRuntimeElementTypeMakeArray} builds the same fill ONCE over
+	 * its whole element-type dispatch. Returns {@code null} when the form has no
+	 * {@code :initial-contents}.
 	 * @param cons the make-array expression
 	 * @return the lowering, or null
 	 */
@@ -35882,10 +35885,12 @@ public final class LispMacroExpander {
 	/**
 	 * Builds a compiled {@code make-array :initial-contents} fill over an allocation that
 	 * carries every other keyword: bind the array, bind the contents, fill, answer the
-	 * array. The literal shape of {@code dimsSpec} picks the fill: a multi-element list
-	 * the nested one ({@link #buildNestedInitialContentsFillLevel}), an empty one the
-	 * rank-0 store, anything else the rank-1 one, whose dimension is the literal or, for
-	 * a run-time dims form, read from {@code dimsValue}.
+	 * array. The shape of {@code dimsSpec} picks the fill: a literal multi-element list
+	 * the nested one ({@link #buildNestedInitialContentsFillLevel}), a literal empty one
+	 * the rank-0 store, a form that is rank 1 whatever its value the rank-1 one, whose
+	 * dimension is the literal or read from {@code dimsValue}, and any other form the
+	 * run-time rank walk over {@code dimsValue}
+	 * ({@link #buildRunTimeRankInitialContentsFill}).
 	 * @param allocation the form allocating the array (evaluated first)
 	 * @param dimsSpec the call's dims form, read for its literal shape only
 	 * @param dimsValue a variable holding the dims value when {@code dimsSpec} is not
@@ -35923,9 +35928,13 @@ public final class LispMacroExpander {
 			return makeLet(arrVar.name(), allocation, makeProgn(
 					List.of(fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, new LispInteger(0), contents), arrVar)));
 		}
+		if (!isRankOneDimensionSpec(dimsSpec)) {
+			return makeLet(arrVar.name(), allocation, makeLet(contentsVar.name(), contents,
+					makeProgn(List.of(buildRunTimeRankInitialContentsFill(arrVar, contentsVar, dimsValue), arrVar))));
+		}
 		LispSymbol idxVar = new LispSymbol("__mk_i");
 		LispVal fill = buildInitialContentsLeafFill(contentsVar, new LispSymbol("__mk_cur"), idxVar,
-				new LispSymbol("__mk_bad"), rankOneDimension(dimsSpec, dimsValue), 0,
+				new LispSymbol("__mk_bad"), rankOneDimension(dimsSpec, dimsValue), new LispInteger(0),
 				read -> listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, read)),
 				callOf(LispNames.AREF, arrVar, idxVar));
 		return makeLet(arrVar.name(), allocation,
@@ -35937,6 +35946,108 @@ public final class LispMacroExpander {
 	private static boolean isLiteralDimensionSpec(LispVal dimsExpr) {
 		return dimsExpr instanceof LispInteger || dimsExpr instanceof LispNil || dimsExpr instanceof LispCons quoted
 				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name());
+	}
+
+	/**
+	 * The operators whose call answers a number, so a dims form spelled as one allocates
+	 * a rank-1 array whatever it evaluates to -- {@code (make-array (length s)
+	 * :initial-contents s)} keeps the rank-1 fill. Standard names a conforming program
+	 * cannot redefine; anything else (a variable, a user call) leaves the rank a run-time
+	 * fact.
+	 */
+	private static final java.util.Set<String> NUMBER_VALUED_OPERATORS = java.util.Set.of(LispNames.LENGTH,
+			LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.ONE_PLUS, LispNames.ONE_MINUS, LispNames.MIN,
+			LispNames.MAX, LispNames.ASH, LispNames.FLOOR, LispNames.CEILING, LispNames.TRUNCATE, LispNames.ROUND,
+			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE);
+
+	// Whether a make-array dims form allocates a rank-1 array whatever its value: a
+	// literal other than a multi-element or empty list, or a call answering a number.
+	private static boolean isRankOneDimensionSpec(LispVal dimsExpr) {
+		if (isLiteralDimensionSpec(dimsExpr)) {
+			return !isLiteralMultiDimensionSpec(dimsExpr) && !isLiteralRankZeroDimensionSpec(dimsExpr);
+		}
+		return dimsExpr instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& NUMBER_VALUED_OPERATORS.contains(op.name());
+	}
+
+	/**
+	 * Builds the fill of a compiled {@code make-array :initial-contents} whose RANK is
+	 * only known at run time: the dims value, an integer or a list of them, is walked
+	 * depth first over an explicit stack of {@code (sequence . dims-suffix)} entries --
+	 * the lowering runs during code generation, so no recursive helper can be relied on
+	 * to be in the module. Every popped sequence runs the ONE streaming level fill
+	 * ({@link #buildInitialContentsLeafFill}, one report site): on the last axis it
+	 * stores at the running row-major index, above it it collects its rows, which are
+	 * pushed (first row on top) only after the level's length has checked out. A row is
+	 * thus never descended into before its parent's length is known, which is the
+	 * interpreter's recursive report order. An empty dims list stores the contents as the
+	 * one element.
+	 *
+	 * <pre>
+	 * (let ((dl (if (listp dims) dims (cons dims nil))))
+	 *   (if dl
+	 *       (let ((st (cons (cons c dl) nil)) (k 0))
+	 *         (while st
+	 *           (let* ((e (car st)) (s (car e)) (ds (cdr e)) (n (car ds)) (up (cdr ds)) (rows nil))
+	 *             (setq st (cdr st))
+	 *             (level-fill s n level
+	 *               (if up (setq rows (cons (cons read up) rows)) (%row-major-aset arr (+ k i) read)))
+	 *             (if up
+	 *                 (while rows (setq st (cons (car rows) st)) (setq rows (cdr rows)))
+	 *                 (setq k (+ k n))))))
+	 *       (%row-major-aset arr 0 c)))
+	 * </pre> where {@code level} is {@code (- (length dl) (length ds))}, computed only by
+	 * the report.
+	 * @param arrVar the variable holding the allocated array
+	 * @param contentsVar the variable holding the contents
+	 * @param dimsValue the variable holding the dims value
+	 * @return the fill, answering nil
+	 */
+	private static LispVal buildRunTimeRankInitialContentsFill(LispSymbol arrVar, LispSymbol contentsVar,
+			LispVal dimsValue) {
+		LispSymbol dl = new LispSymbol("__mk_dl");
+		LispSymbol st = new LispSymbol("__mk_st");
+		LispSymbol k = new LispSymbol("__mk_k");
+		LispSymbol entry = new LispSymbol("__mk_e");
+		LispSymbol seq = new LispSymbol("__mk_s");
+		LispSymbol ds = new LispSymbol("__mk_ds");
+		LispSymbol n = new LispSymbol("__mk_n");
+		LispSymbol up = new LispSymbol("__mk_up");
+		LispSymbol rows = new LispSymbol("__mk_rows");
+		LispSymbol idx = new LispSymbol("__mk_i");
+		LispVal level = fmtCall(LispNames.SUB, callOf(LispNames.LENGTH, dl), callOf(LispNames.LENGTH, ds));
+		LispVal slot = fmtCall(LispNames.ADD, k, idx);
+		LispVal fill = buildInitialContentsLeafFill(seq, new LispSymbol("__mk_cur"), idx, new LispSymbol("__mk_bad"), n,
+				level,
+				read -> makeIf(up, setqOf(rows, mvCall(LispNames.CONS, mvCall(LispNames.CONS, read, up), rows)),
+						fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, slot, read)),
+				makeIf(up, LispNil.INSTANCE, callOf(LispNames.ROW_MAJOR_AREF, arrVar, slot)));
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.WHILE), rows,
+				setqOf(st, mvCall(LispNames.CONS, callOf(LispNames.CAR, rows), st)),
+				setqOf(rows, callOf(LispNames.CDR, rows))));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(entry, callOf(LispNames.CAR, st))),
+						listToCons(List.of(seq, callOf(LispNames.CAR, entry))),
+						listToCons(List.of(ds, callOf(LispNames.CDR, entry))),
+						listToCons(List.of(n, callOf(LispNames.CAR, ds))),
+						listToCons(List.of(up, callOf(LispNames.CDR, ds))),
+						listToCons(List.of(rows, LispNil.INSTANCE)))),
+				setqOf(st, callOf(LispNames.CDR, st)), fill,
+				makeIf(up, push, setqOf(k, fmtCall(LispNames.ADD, k, n)))));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(st,
+								mvCall(LispNames.CONS, mvCall(LispNames.CONS, contentsVar, dl), LispNil.INSTANCE))),
+								listToCons(List.of(k, new LispInteger(0))))),
+						listToCons(List.of(new LispSymbol(LispNames.WHILE), st, step))));
+		LispVal rankZero = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, new LispInteger(0), contentsVar);
+		return makeLet(dl.name(), makeIf(callOf(LispNames.LISTP, dimsValue), dimsValue,
+				mvCall(LispNames.CONS, dimsValue, LispNil.INSTANCE)), makeIf(dl, walk, rankZero));
+	}
+
+	// (setq var value)
+	private static LispVal setqOf(LispSymbol var, LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), var, value));
 	}
 
 	// The dimension a rank-1 fill's contents must match: the literal itself for an
@@ -35988,13 +36099,14 @@ public final class LispMacroExpander {
 	 * @param idx the index variable to bind
 	 * @param bad the variable to bind to whether the shape is wrong
 	 * @param size the form answering this level's dimension, evaluated more than once
-	 * @param dimension the axis number a report names
+	 * @param dimension the axis number a report names: a literal, or a form evaluated
+	 * only by the report
 	 * @param store builds the store into {@code idx}'s slot from the read form
 	 * @param current the form reading that slot's current value
 	 * @return the fill, answering nil
 	 */
 	private static LispVal buildInitialContentsLeafFill(LispSymbol seq, LispSymbol cur, LispSymbol idx, LispSymbol bad,
-			LispVal size, int dimension, java.util.function.UnaryOperator<LispVal> store, LispVal current) {
+			LispVal size, LispVal dimension, java.util.function.UnaryOperator<LispVal> store, LispVal current) {
 		LispVal wrongLength = makeIf(callOf(LispNames.CONSP, cur), LispNil.INSTANCE,
 				fmtCall(LispNames.NE, callOf(LispNames.LENGTH, seq), size));
 		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
@@ -36021,20 +36133,25 @@ public final class LispMacroExpander {
 	 * generation, after the scans that decide which condition layouts a module carries.
 	 * @param length the form answering the level's length
 	 * @param expected the form answering the dimension it must match
-	 * @param dimension the axis number the report names
+	 * @param dimension the axis number the report names: a literal, or a form evaluated
+	 * only by the report
 	 * @return the check form, answering nil when the shape matches
 	 */
-	private static LispVal initialContentsShapeCheck(LispVal length, LispVal expected, int dimension) {
+	private static LispVal initialContentsShapeCheck(LispVal length, LispVal expected, LispVal dimension) {
 		return makeIf(fmtCall(LispNames.NE, length, expected), initialContentsShapeError(length, expected, dimension),
 				LispNil.INSTANCE);
 	}
 
 	// The report of initialContentsShapeCheck, for a site that already knows the shape
-	// is wrong.
-	private static LispVal initialContentsShapeError(LispVal length, LispVal expected, int dimension) {
-		return fmtCall(LispNames.ERROR, new LispString(
-				LispNames.MAKE_ARRAY + " :initial-contents dimension " + dimension + " has ~D elements, expected ~D"),
-				length, expected);
+	// is wrong. A literal axis number is spelled into the control string; one known only
+	// at run time is one more ~D argument.
+	private static LispVal initialContentsShapeError(LispVal length, LispVal expected, LispVal dimension) {
+		String prefix = LispNames.MAKE_ARRAY + " :initial-contents dimension ";
+		String suffix = " has ~D elements, expected ~D";
+		if (dimension instanceof LispInteger literal) {
+			return fmtCall(LispNames.ERROR, new LispString(prefix + literal.value() + suffix), length, expected);
+		}
+		return fmtCall(LispNames.ERROR, new LispString(prefix + "~D" + suffix), dimension, length, expected);
 	}
 
 	// Whether a make-array dims expression is a literal empty dimension list -- '() or
@@ -36074,8 +36191,8 @@ public final class LispMacroExpander {
 				index = fmtCall(LispNames.ADD, index, term);
 			}
 			LispVal flatIndex = index;
-			return buildInitialContentsLeafFill(seqExpr, curVar, idxVar, new LispSymbol("__mk_bad"), size, level,
-					read -> fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, flatIndex, read),
+			return buildInitialContentsLeafFill(seqExpr, curVar, idxVar, new LispSymbol("__mk_bad"), size,
+					new LispInteger(level), read -> fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, flatIndex, read),
 					callOf(LispNames.ROW_MAJOR_AREF, arrVar, flatIndex));
 		}
 		// An outer level's length is checked BEFORE any of its rows is read, as the
@@ -36087,7 +36204,7 @@ public final class LispMacroExpander {
 				buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
 		LispVal resultForm = (level == 0) ? arrVar : LispNil.INSTANCE;
 		LispVal spec = listToCons(List.of(idxVar, size, resultForm));
-		LispVal check = initialContentsShapeCheck(callOf(LispNames.LENGTH, seqExpr), size, level);
+		LispVal check = initialContentsShapeCheck(callOf(LispNames.LENGTH, seqExpr), size, new LispInteger(level));
 		return makeLet(curVar.name(), seqExpr,
 				makeProgn(List.of(check, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)))));
 	}
@@ -36656,11 +36773,11 @@ public final class LispMacroExpander {
 	 * or a non-character element type.
 	 *
 	 * <p>
-	 * It also declines a LITERAL rank >= 2 dimensions list: nothing above rank 1 is a
-	 * string, so that call is the general allocation-plus-fill of
-	 * {@link #lowerInitialContentsMakeArray} over a general array. A dims expression
-	 * whose rank is only known at run time keeps the rank-1 reading, which is the rank
-	 * the general lowering assumes there too.
+	 * It also declines a LITERAL rank >= 2 or rank-0 dimensions list: nothing but rank 1
+	 * is a string, so that call is the general allocation-plus-fill of
+	 * {@link #lowerInitialContentsMakeArray}. A dims expression whose rank is only known
+	 * at run time branches on it: rank 1 copies, any other allocates the character array
+	 * and takes the run-time rank fill.
 	 * @param cons the make-array expression
 	 * @return the lowered expression, or null when not applicable
 	 */
@@ -36683,7 +36800,9 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(parts.get(1))) {
+		LispVal dimsSpec = parts.get(1);
+		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(dimsSpec)
+				|| isLiteralRankZeroDimensionSpec(dimsSpec)) {
 			return null;
 		}
 		// (let* ((__mca_n n) (__mca_c c) (__mca_d dimension) (__mca_l length))
@@ -36695,15 +36814,31 @@ public final class LispMacroExpander {
 		LispSymbol lVar = new LispSymbol("__mca_l");
 		LispVal copy = fmtCall(LispNames.SUBSEQ, cVar, new LispInteger(0));
 		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("STRING"));
-		LispVal body = makeProgn(List.of(initialContentsShapeCheck(lVar, dVar, 0),
+		LispVal body = makeProgn(List.of(initialContentsShapeCheck(lVar, dVar, new LispInteger(0)),
 				makeIf(callOf(LispNames.STRINGP, cVar), copy, convert)));
 		// The dims form is an integer or a one-element list here: a literal multi-element
 		// list was declined above.
 		LispVal dimension = makeIf(callOf(LispNames.CONSP, nVar), callOf(LispNames.CAR, nVar), nVar);
-		LispVal bindings = listToCons(List.of(listToCons(List.of(nVar, parts.get(1))),
-				listToCons(List.of(cVar, contents)), listToCons(List.of(dVar, dimension)),
-				listToCons(List.of(lVar, callOf(LispNames.LENGTH, cVar)))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+		LispVal dBinding = listToCons(List.of(dVar, dimension));
+		LispVal lBinding = listToCons(List.of(lVar, callOf(LispNames.LENGTH, cVar)));
+		if (isRankOneDimensionSpec(dimsSpec)) {
+			LispVal bindings = listToCons(List.of(listToCons(List.of(nVar, dimsSpec)),
+					listToCons(List.of(cVar, contents)), dBinding, lBinding));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+		}
+		// A dims value whose rank is only known at run time: a rank other than 1 is no
+		// string, so it allocates the character array and takes the general fill.
+		// (if (if (listp n) (if n (cdr n) t) nil) <allocation + fill> <string copy>)
+		LispVal notRankOne = makeIf(callOf(LispNames.LISTP, nVar),
+				makeIf(nVar, callOf(LispNames.CDR, nVar), LispTrue.INSTANCE), LispNil.INSTANCE);
+		LispVal allocation = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), nVar,
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), java.util.Objects.requireNonNull(elementType)));
+		LispVal stringCopy = listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(List.of(dBinding, lBinding)), body));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(nVar, dimsSpec)), listToCons(List.of(cVar, contents))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+				makeIf(notRankOne, initialContentsFill(allocation, nVar, nVar, cVar), stringCopy)));
 	}
 
 	/**

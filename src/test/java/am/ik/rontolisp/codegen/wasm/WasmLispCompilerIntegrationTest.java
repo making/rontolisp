@@ -8348,6 +8348,46 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void makeArrayInitialContentsFillsARunTimeRank() throws Exception {
+		// A dims list that exists only at run time took the rank-1 fill, whose store
+		// rejects a rank >= 2 array (a trap). It fills row-major and checks every level,
+		// in the interpreter's depth-first order. One program per backend.
+		String source = String.join("\n",
+				"(print (let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6)))))",
+				"(print (let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3 4)) ((5 6) (7 8))))))",
+				"(print (let ((d (list 2 2))) (make-array d :initial-contents (vector \"ab\" \"cd\"))))",
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2) (list 4 5 6))))"),
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3))))"),
+				shapeError(
+						"(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6 7))))"),
+				shapeError("(let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3)) ((5 6)))))"),
+				"(print (let ((d nil)) (make-array d :initial-contents 5)))",
+				"(print (let ((d (list 3))) (make-array d :initial-contents \"abc\")))",
+				"(print (let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+						+ " :initial-contents '((1 2) (3 4)))))",
+				shapeError("(let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+						+ " :initial-contents '((1 2) (3))))"),
+				"(print (let ((d (list 2 2))) (= 3 (aref (make-array d :element-type (identity 'double-float)"
+						+ " :initial-contents '((1d0 2d0) (3d0 4d0))) 1 0))))",
+				"(print (let ((d (list 2 2))) (make-array d :element-type 'character"
+						+ " :initial-contents (list \"ab\" \"cd\"))))",
+				"(print (let ((d (list 2 2))) (make-array d :element-type (identity 'character)"
+						+ " :initial-contents (list \"ab\" \"cd\"))))",
+				"(print (let ((n 2)) (make-array n :element-type 'character :initial-contents \"ab\")))",
+				"(print (adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))",
+				"(print (funcall #'adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))");
+		List<String> expected = List.of("#2A((1 2 3) (4 5 6))", "#3A(((1 2) (3 4)) ((5 6) (7 8)))",
+				"#2A((#\\a #\\b) (#\\c #\\d))", shapeMessage(1, 2, 3), shapeMessage(0, 1, 2), shapeMessage(1, 4, 3),
+				shapeMessage(2, 1, 2), "#0A5", "#(#\\a #\\b #\\c)", "#2A((1 2) (3 4))", shapeMessage(1, 1, 2), "T",
+				"#2A((#\\a #\\b) (#\\c #\\d))", "#2A((#\\a #\\b) (#\\c #\\d))", "\"ab\"", "#2A((1 2 3) (4 5 6))",
+				"#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRunPrelude(source).lines().map(String::strip).filter(l -> !l.isEmpty()).toList())
+			.isEqualTo(expected);
+		assertThat(compileAndRunComponent(source).lines().map(String::strip).filter(l -> !l.isEmpty()).toList())
+			.isEqualTo(expected);
+	}
+
+	@Test
 	void mapWalksAListWithACursor() throws Exception {
 		// map read each operand with (nth i s) for a list, an nth walk from the head, so
 		// (map 'list ...) over a list -- and (map 'vector ...), which routes through it

@@ -9126,6 +9126,65 @@ class JvmLispCompilerTest {
 			.isEqualTo("#2A((1 2) (3 4))");
 	}
 
+	@Test
+	void compileAndRunMakeArrayInitialContentsFillsARunTimeRank() throws Exception {
+		// A dims list that exists only at run time took the rank-1 fill, whose store
+		// rejects a rank >= 2 array ("aref: expected 2 subscripts, got 1"). It fills
+		// row-major and checks every level, in the interpreter's depth-first order.
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6)))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3 4)) ((5 6) (7 8))))))"))
+			.isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		assertThat(
+				compileAndRun("(print (let ((d (list 2 2))) (make-array d :initial-contents (vector \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2) (list 4 5 6))))")))
+			.isEqualTo(shapeMessage(1, 2, 3));
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3))))")))
+			.isEqualTo(shapeMessage(0, 1, 2));
+		assertThat(compileAndRun(shapeError(
+				"(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6 7))))")))
+			.isEqualTo(shapeMessage(1, 4, 3));
+		// Depth first: the short leaf row of the first plane reports before the short
+		// second plane.
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3)) ((5 6)))))")))
+			.isEqualTo(shapeMessage(2, 1, 2));
+		assertThat(compileAndRun("(print (let ((d nil)) (make-array d :initial-contents 5)))")).isEqualTo("#0A5");
+		assertThat(compileAndRun("(print (let ((d (list 3))) (make-array d :initial-contents \"abc\")))"))
+			.isEqualTo("#(#\\a #\\b #\\c)");
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+				+ " :initial-contents '((1 2) (3 4)))))"))
+			.isEqualTo("#2A((1 2) (3 4))");
+		assertThat(compileAndRun(shapeError("(let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+				+ " :initial-contents '((1 2) (3))))")))
+			.isEqualTo(shapeMessage(1, 1, 2));
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 2))) (= 3 (aref (make-array d :element-type (identity 'double-float)"
+						+ " :initial-contents '((1d0 2d0) (3d0 4d0))) 1 0))))"))
+			.isEqualTo("T");
+		// A character array above rank 1 is no string.
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type 'character"
+				+ " :initial-contents (list \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type (identity 'character)"
+				+ " :initial-contents (list \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(
+				compileAndRun("(print (let ((n 2)) (make-array n :element-type 'character :initial-contents \"ab\")))"))
+			.isEqualTo("\"ab\"");
+		assertThat(
+				compileAndRun("(print (adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (funcall #'adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+	}
+
 	private static String shapeError(String form) {
 		// A simple-error clause: a condition of any other type (elt's or a store's
 		// type-error) escapes it and fails the run.
