@@ -521,9 +521,31 @@ MY-APP> *status*
 200
 ```
 
+### 例外と NSError
+
+呼び出しの中で送出された Objective-C の例外 (範囲外のインデックス、オブジェクトが必要な位置の `nil`、`raise` を送られた `NSException` など) は、そのスレッドで実行中の最も内側の `objc:invoke` (または C 関数、ブロックの呼び出し) から `objc:objc-exception` としてシグナルされ、プログラムは続行します。`objc:objc-exception-name`、`objc:objc-exception-reason`、`objc:objc-exception-object` は、例外の名前、理由 (なければ `nil`)、送出されたオブジェクトを返します。このオブジェクトの参照はコンディションが保持します:
+
+```console
+MY-APP> (handler-case (invoke (invoke "NSArray" "array") "objectAtIndex:" 5)
+          (objc-exception (e) (list (objc-exception-name e) (objc-exception-reason e))))
+("NSRangeException" "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
+```
+
+送出から呼び出しまでの間にある Objective-C のフレームは、Objective-C 自身の `@catch` と同じく後始末を実行しながら巻き戻されます。Cocoa が自分で捕捉する例外は Lisp に届きません。Lisp で定義したメソッドやブロックの中で送出され、そこで処理されなかった例外はコールバック内のエラーになり、表示されてメソッドは 0 を返します。
+
+最後の引数 `NSError **` で失敗を報告するメソッドは `objc:invoke-with-error` で呼びます。この引数は `objc:invoke-with-error` が渡します。結果が失敗 (`nil`、`NO` または 0) を示し、メソッドがエラーを書き込んだ場合は `objc:ns-error` をシグナルします。そのリーダー `objc:ns-error-domain`、`objc:ns-error-code`、`objc:ns-error-description`、`objc:ns-error-object` は、ドメイン、コード、ローカライズされた説明、`NSError` を返します。それ以外の場合は `objc:invoke` と同じ値を返します:
+
+```console
+MY-APP> (handler-case
+            (invoke-with-error (invoke "NSFileManager" "defaultManager")
+                               "attributesOfItemAtPath:error:" "/no/such/file")
+          (ns-error (e) (list (ns-error-domain e) (ns-error-code e))))
+("NSCocoaErrorDomain" 260)
+```
+
 ### LispWorks との違い
 
-rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。
+rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。LispWorks は Objective-C の例外でプロセスを終了させ、`NSError` の補助もありません。`objc:objc-exception`、`objc:ns-error`、`objc:invoke-with-error` はこのパッケージ独自のものです。
 
 ## ネイティブバイナリ
 
@@ -575,4 +597,4 @@ $ ./counter
 - `objc:define-class` のコールバックの形は上の閉じた集合です。`objc:define-objc-method` はどんな形でも受け付けます (`rontolisp` バイナリでは登録済みの形)。ブロックも同じです。
 - `--native` 実行ファイルが別のスレッドから呼ばれたブロックを実行するのは、そのブロックが何も返さない場合だけで、実行はプログラムの次の `sleep` の時点です。
 - 扱える可変長引数セレクタは上の表のものです。プログラム自身が宣言したものは含まれず、ランタイムにはそれを判別する手段がありません。
-- Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。
+- Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。また、呼び出しの中の Objective-C の例外は今もプロセスを終了させます。

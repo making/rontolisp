@@ -660,6 +660,41 @@ MY-APP> *status*
 200
 ```
 
+### Exceptions and NSError
+
+An Objective-C exception raised inside a call — an index out of range, a `nil` where
+an object must go, an `NSException` sent `raise` — signals `objc:objc-exception` from
+the innermost `objc:invoke` (or C function, or block call) running on that thread, and
+the program goes on. `objc:objc-exception-name`, `objc:objc-exception-reason` and
+`objc:objc-exception-object` answer the exception's name, its reason (or `nil`) and the
+thrown object, whose reference the condition holds:
+
+```console
+MY-APP> (handler-case (invoke (invoke "NSArray" "array") "objectAtIndex:" 5)
+          (objc-exception (e) (list (objc-exception-name e) (objc-exception-reason e))))
+("NSRangeException" "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
+```
+
+The Objective-C frames between the raise and the call unwind with their cleanups, as
+for Objective-C's own `@catch`, and an exception Cocoa catches itself never reaches
+Lisp. One raised inside a method or a block defined in Lisp and not handled there is an
+error inside a callback: printed, and the method answers zero.
+
+A method that reports failure through a last `NSError **` argument is called with
+`objc:invoke-with-error`, which supplies that argument. When the result says the call
+failed — `nil`, `NO` or zero — and the method wrote an error, it signals `objc:ns-error`,
+whose readers `objc:ns-error-domain`, `objc:ns-error-code`, `objc:ns-error-description`
+and `objc:ns-error-object` answer the domain, the code, the localized description and
+the `NSError`; otherwise it answers what `objc:invoke` answers:
+
+```console
+MY-APP> (handler-case
+            (invoke-with-error (invoke "NSFileManager" "defaultManager")
+                               "attributesOfItemAtPath:error:" "/no/such/file")
+          (ns-error (e) (list (ns-error-domain e) (ns-error-code e))))
+("NSCocoaErrorDomain" 260)
+```
+
 ### Where it differs from LispWorks
 
 rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
@@ -673,6 +708,9 @@ its first use. A variadic method named in the runtime's table of them
 argument typed by its value and a `nil` terminator appended. A method's structure
 result is answered as its Lisp value, or filled into the variable a non-keyword result
 style names; the manual's `fli:foreign-slot-value` over it has no counterpart.
+LispWorks lets an Objective-C exception end the process and has no `NSError` helper;
+`objc:objc-exception`, `objc:ns-error` and `objc:invoke-with-error` are this package's
+own.
 
 ## The native binary
 
@@ -772,4 +810,5 @@ quantized matrix is not accepted by `objc:data` in an executable.
 - The variadic selectors served are the table above. One a program declares itself is
   not in it, and the runtime gives the binding no way to tell.
 - Apple silicon. On an Intel Mac a struct wider than two registers is returned
-  through `objc_msgSend_stret`, which the binding selects but has not been exercised.
+  through `objc_msgSend_stret`, which the binding selects but has not been exercised,
+  and an Objective-C exception inside a call still ends the process.

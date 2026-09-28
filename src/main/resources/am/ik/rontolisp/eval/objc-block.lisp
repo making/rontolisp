@@ -156,10 +156,12 @@
                                                         temps) raws)
                                   (setq params (cdr params))
                                   (setq i (+ i 1)))
-                                (objc::%call-function
-                                 (objc::%peek (+ address 16) "^v") types -1
-                                 (nreverse raws)
-                                 (if (eq return-type :object) 1 0)))
+                                (or (objc::%call-function
+                                     (objc::%peek (+ address 16) "^v") types -1
+                                     (nreverse raws)
+                                     (if (eq return-type :object) 1 0))
+                                    (objc::%checked "objc:call-objc-block"
+                                                    :function)))
                 (when (car temps)
                   (dolist (temp (car temps)) (objc:release temp))))))
         (if (eq (objc::%declared-type result-type) :boolean)

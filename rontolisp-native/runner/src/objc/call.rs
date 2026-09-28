@@ -11,6 +11,19 @@
 //! Apple's differences from the base AAPCS64 that matter here: an argument on the stack
 //! takes its NATURAL size and alignment (not an 8-byte slot), and a variadic argument
 //! always goes on the stack in an 8-byte slot, never in a register.
+//!
+//! `rl_objc_call` is also where an Objective-C exception raised inside the call stops
+//! (`.kb/objc.md`, "The new base: exceptions and NSError"): its call site is covered by
+//! an LSDA whose one handler catches `OBJC_EHTYPE_id` -- `@catch (id)` -- under
+//! `__objc_personality_v0`, so the unwinder never reaches the host's or the module's
+//! frames above it. The landing pad hands the exception to [`rl_objc_caught`], which
+//! takes it (`objc_begin_catch`), retains it, ends the catch and marks the frame; the
+//! call answers nothing. libobjc is dlopened at run time, so the personality named in the
+//! CFI is a forwarder and the type table entry an indirection through a slot, both filled
+//! by [`install`] once the runtime is open.
+
+use std::ffi::{c_int, c_void};
+use std::sync::OnceLock;
 
 use super::encoding::{Kind, Type};
 
@@ -25,15 +38,25 @@ pub struct Frame {
     stack: *const u64,   // 152
     pub ret_x: [u64; 2], // 160
     pub ret_d: [u64; 4], // 176
+    raised: u64,         // 208: 1 when the call raised
+    exception: u64,      // 216: what it threw, retained
 }
 
 std::arch::global_asm!(
     ".globl _rl_objc_call",
     ".p2align 2",
     "_rl_objc_call:",
+    ".cfi_startproc",
+    ".cfi_personality 155, _rl_objc_personality",
+    ".cfi_lsda 16, Lrl_objc_call_lsda",
     "stp x29, x30, [sp, #-32]!",
+    ".cfi_def_cfa_offset 32",
+    ".cfi_offset w30, -24",
+    ".cfi_offset w29, -32",
     "mov x29, sp",
+    ".cfi_def_cfa w29, 32",
     "str x19, [sp, #16]",
+    ".cfi_offset w19, -16",
     "mov x19, x0",
     // The stack area, 16-byte aligned.
     "ldr x9, [x19, #144]",
@@ -61,15 +84,124 @@ std::arch::global_asm!(
     "ldp x2, x3, [x19, #24]",
     "ldp x4, x5, [x19, #40]",
     "ldp x6, x7, [x19, #56]",
+    "Lrl_objc_call_begin:",
     "blr x16",
+    "Lrl_objc_call_end:",
     "stp x0, x1, [x19, #160]",
     "stp d0, d1, [x19, #176]",
     "stp d2, d3, [x19, #192]",
+    "Lrl_objc_call_after:",
     "mov sp, x29",
     "ldr x19, [sp, #16]",
     "ldp x29, x30, [sp], #32",
     "ret",
+    // x0: the unwinder's exception object; x19 is the frame again.
+    "Lrl_objc_call_landing:",
+    "mov x1, x19",
+    "bl _rl_objc_caught",
+    "b Lrl_objc_call_after",
+    ".cfi_endproc",
+    // One call site, one handler: type 1, which the slot below names indirectly.
+    ".section __TEXT,__gcc_except_tab",
+    ".p2align 2",
+    "Lrl_objc_call_lsda:",
+    ".byte 255",
+    ".byte 155",
+    ".uleb128 Lrl_objc_call_ttbase - Lrl_objc_call_ttref",
+    "Lrl_objc_call_ttref:",
+    ".byte 1",
+    ".uleb128 Lrl_objc_call_cst_end - Lrl_objc_call_cst_begin",
+    "Lrl_objc_call_cst_begin:",
+    ".uleb128 Lrl_objc_call_begin - _rl_objc_call",
+    ".uleb128 Lrl_objc_call_end - Lrl_objc_call_begin",
+    ".uleb128 Lrl_objc_call_landing - _rl_objc_call",
+    ".byte 1",
+    "Lrl_objc_call_cst_end:",
+    ".byte 1",
+    ".byte 0",
+    ".p2align 2",
+    ".long _rl_objc_ehtype_slot - .",
+    "Lrl_objc_call_ttbase:",
+    ".text",
 );
+
+/// `OBJC_EHTYPE_id`, the type the call site catches, once the runtime is open; the LSDA's
+/// type table points here (an indirect entry), so the stub links without libobjc.
+#[unsafe(no_mangle)]
+static mut rl_objc_ehtype_slot: usize = 0;
+
+/// libobjc's pieces the catch uses, filled by [`install`].
+struct Catch {
+    personality: usize,
+    begin_catch: unsafe extern "C" fn(*mut c_void) -> usize,
+    end_catch: unsafe extern "C" fn(),
+    retain: unsafe extern "C" fn(usize) -> usize,
+}
+
+static CATCH: OnceLock<Catch> = OnceLock::new();
+
+/// Arms the catch with libobjc's personality, its `@catch (id)` type and the catch calls.
+/// Until then no exception is claimed (the forwarder answers "continue unwinding").
+///
+/// # Safety
+/// Each address is the named libobjc symbol.
+pub unsafe fn install(personality: usize, eh_type_id: usize, begin_catch: usize, end_catch: usize, retain: usize) {
+    // SAFETY: written once, before any call can raise, and read only by the personality
+    // routine of a later unwind.
+    unsafe { std::ptr::addr_of_mut!(rl_objc_ehtype_slot).write(eh_type_id) };
+    let _ = CATCH.set(Catch {
+        personality,
+        // SAFETY: the caller vouches for each symbol; these are their declared types.
+        begin_catch: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*mut c_void) -> usize>(begin_catch) },
+        end_catch: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn()>(end_catch) },
+        retain: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(usize) -> usize>(retain) },
+    });
+}
+
+/// The personality routine the CFI names: `__objc_personality_v0`'s, once installed.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rl_objc_personality(
+    version: c_int,
+    actions: c_int,
+    class: u64,
+    exception: *mut c_void,
+    context: *mut c_void,
+) -> c_int {
+    const URC_CONTINUE_UNWIND: c_int = 8;
+    match CATCH.get() {
+        Some(c) => {
+            // SAFETY: the address of __objc_personality_v0, whose signature this is.
+            let personality = unsafe {
+                std::mem::transmute::<usize, unsafe extern "C" fn(c_int, c_int, u64, *mut c_void, *mut c_void) -> c_int>(
+                    c.personality,
+                )
+            };
+            // SAFETY: the unwinder's own arguments, passed on.
+            unsafe { personality(version, actions, class, exception, context) }
+        }
+        None => URC_CONTINUE_UNWIND,
+    }
+}
+
+/// The landing pad's call: takes the exception, keeps one reference to what was thrown in
+/// the frame, and ends the catch.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rl_objc_caught(exception: *mut c_void, frame: *mut Frame) {
+    let Some(c) = CATCH.get() else { return };
+    // SAFETY: the exception the personality claimed for this frame; begin and end pair.
+    unsafe {
+        let thrown = (c.begin_catch)(exception);
+        let kept = if thrown == 0 { 0 } else { (c.retain)(thrown) };
+        (c.end_catch)();
+        (*frame).raised = 1;
+        (*frame).exception = kept as u64;
+    }
+}
+
+/// An Objective-C exception a call raised: what was thrown (0 for nil), retained once for
+/// whoever takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Raised(pub usize);
 
 unsafe extern "C" {
     fn rl_objc_call(frame: *mut Frame);
@@ -122,6 +254,8 @@ impl Call {
                 stack: std::ptr::null(),
                 ret_x: [0; 2],
                 ret_d: [0; 4],
+                raised: 0,
+                exception: 0,
             },
             ngrn: 0,
             nsrn: 0,
@@ -241,12 +375,12 @@ impl Call {
     }
 
     /// Calls, and answers the result's leaves: one for a scalar, one per leaf for a
-    /// struct, none for void.
+    /// struct, none for void -- or what the call raised.
     ///
     /// # Safety
     /// The function is `objc_msgSend` (or any function) whose real signature is what the
     /// pushed arguments and the result type describe.
-    pub unsafe fn invoke(mut self) -> Vec<Leaf> {
+    pub unsafe fn invoke(mut self) -> Result<Vec<Leaf>, Raised> {
         self.stack.resize(self.stack.len().div_ceil(8) * 8, 0);
         let words: Vec<u64> = self
             .stack
@@ -258,8 +392,11 @@ impl Call {
         // SAFETY: the frame is fully initialised; the caller vouches for the shape.
         unsafe { rl_objc_call(&mut self.frame) };
         drop(words);
+        if self.frame.raised != 0 {
+            return Err(Raised(self.frame.exception as usize));
+        }
         let ret = &self.ret;
-        match ret.kind {
+        Ok(match ret.kind {
             Kind::Void => Vec::new(),
             Kind::Float => vec![Leaf::Float(f32::from_bits(self.frame.ret_d[0] as u32) as f64)],
             Kind::Double => vec![Leaf::Float(f64::from_bits(self.frame.ret_d[0]))],
@@ -268,7 +405,7 @@ impl Call {
                 let mut bytes = Vec::with_capacity(32);
                 if let Some(element) = ret.hfa() {
                     // Each leaf in its own SIMD register.
-                    return self.frame.ret_d[..ret.leaves.len()]
+                    return Ok(self.frame.ret_d[..ret.leaves.len()]
                         .iter()
                         .map(|bits| {
                             Leaf::Float(if element == Kind::Float {
@@ -277,7 +414,7 @@ impl Call {
                                 f64::from_bits(*bits)
                             })
                         })
-                        .collect();
+                        .collect());
                 } else if size > 16 {
                     for w in &self.ret_buffer {
                         bytes.extend_from_slice(&w.to_le_bytes());
@@ -297,7 +434,7 @@ impl Call {
                 ret.unsigned,
                 &self.frame.ret_x[0].to_le_bytes()[..kind.size()],
             )],
-        }
+        })
     }
 }
 
@@ -379,7 +516,7 @@ mod tests {
         call.push(&t[3], &[Leaf::Int(200)]);
         call.push(&t[4], &[Leaf::Float(0.25)]);
         call.push(&t[5], &[Leaf::Int(1 << 40)]);
-        let out = unsafe { call.invoke() };
+        let out = unsafe { call.invoke() }.unwrap();
         assert_eq!(out, vec![Leaf::Float(-3.0 + 0.5 + 200.0 + 0.25 + (1u64 << 40) as f64)]);
     }
 
@@ -392,7 +529,7 @@ mod tests {
             &[Leaf::Float(1.0), Leaf::Float(2.0), Leaf::Float(3.0), Leaf::Float(4.0)],
         );
         call.push(&t[2], &[Leaf::Float(2.0)]);
-        let out = unsafe { call.invoke() };
+        let out = unsafe { call.invoke() }.unwrap();
         assert_eq!(
             out,
             vec![Leaf::Float(2.0), Leaf::Float(4.0), Leaf::Float(6.0), Leaf::Float(8.0)]
@@ -404,8 +541,48 @@ mod tests {
         let t = ty("{B=qiq}{B=qiq}");
         let mut call = Call::new(big_swap as *const () as usize, &t[0]);
         call.push(&t[1], &[Leaf::Int(7), Leaf::Int(41), Leaf::Int(-9)]);
-        let out = unsafe { call.invoke() };
+        let out = unsafe { call.invoke() }.unwrap();
         assert_eq!(out, vec![Leaf::Int(-9), Leaf::Int(42), Leaf::Int(7)]);
+    }
+
+    unsafe extern "C" {
+        fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+    }
+
+    #[test]
+    fn an_objective_c_exception_stops_at_the_call() {
+        // SAFETY: libobjc's own symbols, called by their declared types.
+        unsafe {
+            let objc = dlopen(c"/usr/lib/libobjc.A.dylib".as_ptr(), 2);
+            assert!(!objc.is_null());
+            let sym = |name: &std::ffi::CStr| dlsym(objc, name.as_ptr()) as usize;
+            install(
+                sym(c"__objc_personality_v0"),
+                sym(c"OBJC_EHTYPE_id"),
+                sym(c"objc_begin_catch"),
+                sym(c"objc_end_catch"),
+                sym(c"objc_retain"),
+            );
+            let get_class = std::mem::transmute::<usize, unsafe extern "C" fn(*const std::ffi::c_char) -> usize>(sym(
+                c"objc_getClass",
+            ));
+            let thrown = get_class(c"NSObject".as_ptr());
+            let t = ty("v@");
+            let mut call = Call::new(sym(c"objc_exception_throw"), &t[0]);
+            call.push(&t[1], &[Leaf::Int(thrown as i64)]);
+            assert_eq!(call.invoke(), Err(Raised(thrown)));
+            // The call after it runs as usual.
+            let t = ty("qqq");
+            let mut call = Call::new(add as *const () as usize, &t[0]);
+            call.push(&t[1], &[Leaf::Int(2)]);
+            call.push(&t[2], &[Leaf::Int(3)]);
+            assert_eq!(call.invoke(), Ok(vec![Leaf::Int(5)]));
+        }
+    }
+
+    extern "C" fn add(a: i64, b: i64) -> i64 {
+        a + b
     }
 
     #[test]
@@ -421,7 +598,7 @@ mod tests {
             };
             call.push(arg, &[Leaf::Int(v)]);
         }
-        let out = unsafe { call.invoke() };
+        let out = unsafe { call.invoke() }.unwrap();
         assert_eq!(out, vec![Leaf::Int(8 + 5000 - 200_000 + 30_000_000)]);
     }
 }

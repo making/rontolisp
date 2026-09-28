@@ -97,12 +97,13 @@ final class JvmObjcRuntimeBuilder {
 	 * type while defining the class that has it, so {@code ObjcException} had to come
 	 * first. Shipped as files, every class is on disk before any of them loads.
 	 */
-	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "MainThread", "MainThread$Slot",
-			"ObjcClasses", "ObjcClasses$Bound", "ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec",
-			"VariadicSelectors", "ObjcBlocks", "ObjcBlocks$Body", "ObjcBlocks$Entry", "ObjcMethods", "ObjcMethods$Body",
-			"ObjcMethods$Target", "ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent",
-			"ObjcRuntime$Signature", "ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind",
-			"TypeEncoding$Parser", "TypeEncoding$Type");
+	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "ObjcRaised", "ObjcCatch",
+			"ObjcCatch$Asm", "ObjcCatch$Bytes", "MainThread", "MainThread$Slot", "ObjcClasses", "ObjcClasses$Bound",
+			"ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec", "VariadicSelectors", "ObjcBlocks",
+			"ObjcBlocks$Body", "ObjcBlocks$Entry", "ObjcMethods", "ObjcMethods$Body", "ObjcMethods$Target",
+			"ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent", "ObjcRuntime$Signature",
+			"ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind", "TypeEncoding$Parser",
+			"TypeEncoding$Type");
 
 	/**
 	 * The directory a program's copy of the {@code objc:} foreign registration travels in

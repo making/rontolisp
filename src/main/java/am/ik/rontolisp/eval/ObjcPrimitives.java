@@ -11,6 +11,7 @@ import java.util.function.Function;
 import am.ik.objc.ObjcBlocks;
 import am.ik.objc.ObjcException;
 import am.ik.objc.ObjcMethods;
+import am.ik.objc.ObjcRaised;
 import am.ik.objc.ObjcReference;
 import am.ik.objc.ObjcRuntime;
 import am.ik.rontolisp.LispBigInteger;
@@ -72,9 +73,23 @@ final class ObjcPrimitives {
 			for (int i = 0; i < operands.length; i++) {
 				operands[i] = toRaw(raw.get(i));
 			}
-			Object answer = runtime.sendRawOnMain(address(args.get(0)), address(args.get(1)), string(args.get(2)),
-					(int) address(args.get(3)), operands, (int) address(args.get(5)));
-			return fromRaw(answer);
+			RAISED.get()[0] = 0;
+			try {
+				Object answer = runtime.sendRawOnMain(address(args.get(0)), address(args.get(1)), string(args.get(2)),
+						(int) address(args.get(3)), operands, (int) address(args.get(5)));
+				return fromRaw(answer);
+			}
+			catch (ObjcRaised ex) {
+				return raised(ex);
+			}
+		});
+		define(globalEnv, LispNames.OBJC_RAISED, 0, args -> {
+			long[] raised = RAISED.get();
+			if (raised[0] == 0) {
+				return LispNil.INSTANCE;
+			}
+			raised[0] = 0;
+			return integer(raised[1]);
 		});
 		define(globalEnv, LispNames.OBJC_NEW_HANDLE, 2, args -> new LispJavaObject(
 				ObjcReference.own(ObjcRuntime.get(), address(args.get(0)), address(args.get(1)))));
@@ -160,9 +175,15 @@ final class ObjcPrimitives {
 			for (int i = 0; i < operands.length; i++) {
 				operands[i] = toRaw(raw.get(i));
 			}
-			return fromRaw(ObjcRuntime.get()
-				.sendRawOnMain(address(args.get(0)), address(args.get(1)), address(args.get(2)), string(args.get(3)),
-						(int) address(args.get(4)), operands, (int) address(args.get(6))));
+			RAISED.get()[0] = 0;
+			try {
+				return fromRaw(ObjcRuntime.get()
+					.sendRawOnMain(address(args.get(0)), address(args.get(1)), address(args.get(2)),
+							string(args.get(3)), (int) address(args.get(4)), operands, (int) address(args.get(6))));
+			}
+			catch (ObjcRaised ex) {
+				return raised(ex);
+			}
 		});
 		define(globalEnv, LispNames.OBJC_IVAR_OFFSET, 2,
 				args -> integer(ObjcRuntime.get().ivarOffset(address(args.get(0)), string(args.get(1)))));
@@ -203,9 +224,15 @@ final class ObjcPrimitives {
 			for (int i = 0; i < operands.length; i++) {
 				operands[i] = toRaw(raw.get(i));
 			}
-			return fromRaw(ObjcRuntime.get()
-				.callRaw(address(args.get(0)), string(args.get(1)), (int) address(args.get(2)), operands,
-						(int) address(args.get(4))));
+			RAISED.get()[0] = 0;
+			try {
+				return fromRaw(ObjcRuntime.get()
+					.callRaw(address(args.get(0)), string(args.get(1)), (int) address(args.get(2)), operands,
+							(int) address(args.get(4))));
+			}
+			catch (ObjcRaised ex) {
+				return raised(ex);
+			}
 		});
 		define(globalEnv, LispNames.OBJC_SYMBOL_ADDRESS, 1,
 				args -> integer(ObjcRuntime.get().symbolAddress(string(args.get(0)))));
@@ -226,6 +253,21 @@ final class ObjcPrimitives {
 				throw new LispEvalException("objc: " + ex.getMessage());
 			}
 		}));
+	}
+
+	/**
+	 * The exception the last send, super send or C call of this thread raised: flag and
+	 * retained address, read (and cleared) by {@code objc::%raised}.
+	 */
+	private static final ThreadLocal<long[]> RAISED = ThreadLocal.withInitial(() -> new long[2]);
+
+	// A call that raised answers nil; objc.lisp asks %raised on a nil answer and signals
+	// objc:objc-exception, taking over the reference.
+	private static LispVal raised(ObjcRaised ex) {
+		long[] raised = RAISED.get();
+		raised[0] = 1;
+		raised[1] = ex.exception();
+		return LispNil.INSTANCE;
 	}
 
 	private static LispVal integer(long value) {

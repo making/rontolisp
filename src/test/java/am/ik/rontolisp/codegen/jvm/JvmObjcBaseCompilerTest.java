@@ -144,6 +144,16 @@ class JvmObjcBaseCompilerTest {
 	}
 
 	@Test
+	@EnabledOnOs(value = OS.MAC, architectures = "aarch64")
+	void theExceptionCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// An NSException inside a send is objc:objc-exception through the catching
+		// trampolines the shipped am.ik.objc copy writes; invoke-with-error's ns-error.
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		assertThat(run(compile(resource("objc-exception-corpus.lisp"))))
+			.isEqualTo(resource("objc-exception-corpus.expected"));
+	}
+
+	@Test
 	@EnabledOnOs(OS.MAC)
 	void theCorpusPrintsWhatTheInterpreterPrints() throws Exception {
 		assumeTrue(ObjcInterop.available(), ObjcInterop.description());

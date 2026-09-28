@@ -12,6 +12,7 @@ import java.util.List;
 import am.ik.objc.ObjcBlocks;
 import am.ik.objc.ObjcException;
 import am.ik.objc.ObjcMethods;
+import am.ik.objc.ObjcRaised;
 import am.ik.objc.ObjcReference;
 import am.ik.objc.ObjcRuntime;
 import org.jspecify.annotations.Nullable;
@@ -154,15 +155,43 @@ final class JvmObjcPrimitivesTemplate {
 		for (int i = 0; i < operands.length; i++) {
 			operands[i] = toRaw(raw.get(i));
 		}
+		RAISED.get()[0] = 0;
 		try {
 			Object answer = ObjcRuntime.get()
 				.sendRawOnMain(address(receiver), address(sel), string(types), (int) address(fixed), operands,
 						(int) address(mode));
 			return fromRaw(answer);
 		}
+		catch (ObjcRaised ex) {
+			return raised(ex);
+		}
 		catch (ObjcException ex) {
 			throw fail(ex);
 		}
+	}
+
+	/**
+	 * {@code (objc::%raised)}: the retained address of what the last call of this thread
+	 * raised, or nil; reading clears it.
+	 */
+	static @Nullable Object raised() {
+		long[] raised = RAISED.get();
+		if (raised[0] == 0) {
+			return null;
+		}
+		raised[0] = 0;
+		return raised[1];
+	}
+
+	/** The last call's raise on this thread: flag and retained address. */
+	private static final ThreadLocal<long[]> RAISED = ThreadLocal.withInitial(() -> new long[2]);
+
+	// A call that raised answers nil; objc.lisp asks %raised on a nil answer.
+	private static @Nullable Object raised(ObjcRaised ex) {
+		long[] raised = RAISED.get();
+		raised[0] = 1;
+		raised[1] = ex.exception();
+		return null;
 	}
 
 	/** {@code (objc::%new-handle address gc)}. */
@@ -301,10 +330,14 @@ final class JvmObjcPrimitivesTemplate {
 		for (int i = 0; i < operands.length; i++) {
 			operands[i] = toRaw(raw.get(i));
 		}
+		RAISED.get()[0] = 0;
 		try {
 			return fromRaw(ObjcRuntime.get()
 				.sendRawOnMain(address(receiver), address(cls), address(sel), string(types), (int) address(fixed),
 						operands, (int) address(mode)));
+		}
+		catch (ObjcRaised ex) {
+			return raised(ex);
 		}
 		catch (ObjcException ex) {
 			throw fail(ex);
@@ -385,9 +418,13 @@ final class JvmObjcPrimitivesTemplate {
 		for (int i = 0; i < operands.length; i++) {
 			operands[i] = toRaw(raw.get(i));
 		}
+		RAISED.get()[0] = 0;
 		try {
 			return fromRaw(ObjcRuntime.get()
 				.callRaw(address(function), string(types), (int) address(fixed), operands, (int) address(mode)));
+		}
+		catch (ObjcRaised ex) {
+			return raised(ex);
 		}
 		catch (ObjcException ex) {
 			throw fail(ex);

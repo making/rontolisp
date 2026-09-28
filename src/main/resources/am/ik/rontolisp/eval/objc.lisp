@@ -9,7 +9,8 @@
 ;; queries (%get-class, %class-name, %object-class, %class-p, %register-selector,
 ;; %selector-name, %method-types), the one call (%send: receiver, SEL, the encoding,
 ;; the variadic split, RAW arguments, a mode), the ownership handle (%new-handle, %refs) and
-;; the table of live pointers (%interned, %intern). Every conversion between a Lisp
+;; the table of live pointers (%interned, %intern) and the exception a call raised
+;; (%raised). Every conversion between a Lisp
 ;; value and an Objective-C one, and every ownership rule, is in this file.
 ;;
 ;; Portability constraints honored here (like appkit.lisp): do loops always declare
@@ -578,8 +579,8 @@
              pointer))))
 
 (defun objc::%message (pointer name)
-  (objc::%send (objc::%pointer-address pointer) (objc::%sel-address name)
-               "v16@0:8" -1 nil 0))
+  (or (objc::%send (objc::%pointer-address pointer) (objc::%sel-address name)
+                   "v16@0:8" -1 nil 0) (objc::%checked name pointer)))
 
 (defun objc:retain (object)
   (let ((pointer (or (objc::%as-pointer object) object)))
@@ -631,8 +632,9 @@
 (defun objc::%retain-count (pointer)
   (unless (objc::%pointerp pointer)
     (error "objc:retain-count: ~s is not an Objective-C object" pointer))
-  (objc::%send (objc::%pointer-address pointer)
-               (objc::%sel-address "retainCount") "Q16@0:8" -1 nil 0))
+  (or (objc::%send (objc::%pointer-address pointer)
+                   (objc::%sel-address "retainCount") "Q16@0:8" -1 nil 0)
+      (objc::%checked "retainCount" pointer)))
 
 (defun objc::%drain (pool)
   (let ((live (member pool objc::*autorelease-pools*)))
@@ -682,9 +684,10 @@
          (objc:invoke "NSMutableArray" "arrayWithCapacity:" (length vector))))
     (dotimes (i (length vector))
       (let ((element (aref vector i)))
-        (objc::%send (objc::%pointer-address array)
-         (objc::%sel-address "addObject:") "v24@0:8@16" -1
-         (list (objc::%raw-arg :object element "addObject:" 0 temps)) 0)))
+        (or (objc::%send (objc::%pointer-address array)
+             (objc::%sel-address "addObject:") "v24@0:8@16" -1
+             (list (objc::%raw-arg :object element "addObject:" 0 temps)) 0)
+            (objc::%checked "addObject:" array))))
     array))
 
 (defun objc::%leaf-values (value count name index expected)
@@ -848,8 +851,9 @@
            (string= method "autorelease"))))
 
 ;; The one send every invoke variant goes through. INTO is how invoke-into wants the
-;; answer, or nil.
-(defun objc::%invoke (target method args into)
+;; answer, or nil; OUT is true when the last argument is the address of an NSError *
+;; slot, whose object the host retains before the send's pool drains (invoke-with-error).
+(defun objc::%invoke (target method args into out)
   (cond ((null target) nil)
         ((objc::%counted-message-p target method args)
          (let ((pointer (objc::%as-pointer target)))
@@ -914,7 +918,7 @@
                     (mode
                      (if (and (eq return-type :cstring) (eq into :pointer))
                          2
-                         (svref plan 4)))
+                         (if out (logior (svref plan 4) 4) (svref plan 4))))
                     (raw
                      (unwind-protect (let ((raws nil) (i 0))
                                        (dolist (value args)
@@ -923,14 +927,17 @@
                                                                temps) raws)
                                          (setq params (cdr params))
                                          (setq i (+ i 1)))
-                                       (if superp
-                                           (objc::%send-super address
-                                            (objc::%super-class target)
-                                            (svref plan 3) types fixed
-                                            (nreverse raws) mode)
-                                           (objc::%send address (svref plan 3)
-                                                        types fixed
-                                                        (nreverse raws) mode)))
+                                       (or (if superp
+                                               (objc::%send-super address
+                                                (objc::%super-class target)
+                                                (svref plan 3) types fixed
+                                                (nreverse raws) mode)
+                                               (objc::%send address
+                                                            (svref plan 3) types
+                                                            fixed
+                                                            (nreverse raws)
+                                                            mode))
+                                           (objc::%checked name target)))
                        (when (car temps)
                          (dolist (temp (car temps)) (objc:release temp))))))
                (when (svref plan 5) (objc::%consume target))
@@ -941,11 +948,120 @@
                  (if into (objc::%into into return-type value) value))))))))
 
 (defun objc:invoke (class-or-object-pointer method &rest args)
-  (objc::%invoke class-or-object-pointer method args nil))
+  (objc::%invoke class-or-object-pointer method args nil nil))
 
 (defun objc:invoke-bool (class-or-object-pointer method &rest args)
-  (let ((value (objc::%invoke class-or-object-pointer method args nil)))
+  (let ((value (objc::%invoke class-or-object-pointer method args nil nil)))
     (if (or (null value) (eql value 0)) nil t)))
+
+;;; --- what Objective-C reports itself: exceptions and NSError ------------------------
+
+;; An Objective-C exception raised inside a send or a C call and caught there by the host
+;; (.kb/objc.md, "The new base: exceptions and NSError"). The call answered nothing; the
+;; object is the thrown one, whose reference the condition holds.
+(define-condition objc:objc-exception (error)
+  ((name :initarg :name :reader objc:objc-exception-name)
+   (reason :initarg :reason :initform nil :reader objc:objc-exception-reason)
+   (object :initarg :object :initform nil :reader objc:objc-exception-object)
+   (where :initarg :where :initform nil :reader objc::%exception-where))
+  (:report
+   (lambda (condition stream)
+     (format stream "~@[~a ~]raised ~a~@[: ~a~]"
+             (objc::%exception-where condition)
+             (objc:objc-exception-name condition)
+             (objc:objc-exception-reason condition)))))
+
+;; A method invoke-with-error called reported failure through its NSError **.
+(define-condition objc:ns-error (error)
+  ((domain :initarg :domain :reader objc:ns-error-domain)
+   (code :initarg :code :reader objc:ns-error-code)
+   (description :initarg :description :reader objc:ns-error-description)
+   (object :initarg :object :reader objc:ns-error-object)
+   (where :initarg :where :initform nil :reader objc::%ns-error-where))
+  (:report
+   (lambda (condition stream)
+     (format stream "~@[~a ~]failed: ~a (~a ~a)"
+             (objc::%ns-error-where condition)
+             (objc:ns-error-description condition)
+             (objc:ns-error-domain condition) (objc:ns-error-code condition)))))
+
+;; How a message names the call: +name to a class, -name to an instance, a C function's
+;; own name.
+;; TARGET is the receiver, or :class, :instance or :function where a caller knows.
+(defun objc::%where (name target)
+  (cond ((eq target :function) name)
+        ((eq target :instance) (concatenate 'string "-" name))
+        ((or (eq target :class) (stringp target)
+             (objc::%classp (objc::%as-pointer target)))
+         (concatenate 'string "+" name))
+        (t (concatenate 'string "-" name))))
+
+;; Every %send, %send-super and %call-function is written (or (call ...) (objc::%checked
+;; name target)): a call that raised answered nil and the host kept what it threw until
+;; %raised reads it, so a nil answer is checked here and a raise signals objc-exception.
+;; NAME and TARGET name the call in the report.
+(defun objc::%checked (name target)
+  (let ((thrown (objc::%raised)))
+    (if thrown (objc::%signal-exception thrown name target) nil)))
+
+(defun objc::%ns-string-value (pointer)
+  (if pointer (objc:ns-string-to-string pointer) nil))
+
+(defun objc::%signal-exception (address name target)
+  (let* ((object (objc::%wrap-object address))
+         (exceptionp
+          (and object
+               (objc:invoke-bool object "isKindOfClass:"
+                                 (objc:coerce-to-objc-class "NSException")))))
+    (error 'objc:objc-exception
+           :name (cond
+                  (exceptionp
+                   (objc::%ns-string-value (objc:invoke object "name")))
+                  (object (objc::%class-name (objc::%object-class address)))
+                  (t "nil"))
+           :reason (and exceptionp
+                        (objc::%ns-string-value (objc:invoke object "reason")))
+           :object object
+           :where (objc::%where name target))))
+
+;; calloc and free, for the NSError * slot invoke-with-error hands a method.
+(defvar objc::*calloc* nil)
+
+(defvar objc::*free* nil)
+
+(defun objc::%c-function (name)
+  (let ((address (objc::%symbol-address name)))
+    (when (= address 0) (error "objc: ~a is missing" name))
+    address))
+
+(defun objc:invoke-with-error (class-or-object-pointer method &rest args)
+  (let ((name (if (consp method) (first method) method)))
+    (unless (and (stringp name) (>= (length name) 6)
+                 (string= "error:" name :start2 (- (length name) 6)))
+      (error "objc:invoke-with-error: ~s does not end in \"error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
+             name))
+    (unless objc::*initialized* (objc::%ready))
+    (unless objc::*calloc*
+      (setq objc::*calloc* (objc::%c-function "calloc"))
+      (setq objc::*free* (objc::%c-function "free")))
+    (let ((slot (objc::%call-function objc::*calloc* "^vQQ" -1 (list 1 8) 0)))
+      (unwind-protect (let* ((result
+                              (objc::%invoke class-or-object-pointer method
+                                             (append args (list slot)) nil t))
+                             (written
+                              (objc::%wrap-object (objc::%peek slot "^v"))))
+                        (if (and written (or (null result) (eql result 0)))
+                            (error 'objc:ns-error
+                             :domain (objc::%ns-string-value
+                                      (objc:invoke written "domain"))
+                             :code (objc:invoke written "code")
+                             :description
+                             (objc::%ns-string-value
+                              (objc:invoke written "localizedDescription"))
+                             :object written
+                             :where (objc::%where name class-or-object-pointer))
+                            result))
+        (objc::%call-function objc::*free* "v^v" -1 (list slot) 0)))))
 
 ;;; --- invoke-into ------------------------------------------------------------------
 
@@ -953,7 +1069,7 @@
   (unless (objc::%pointerp ns-string)
     (error "objc:ns-string-to-string: ~s is not an Objective-C object"
            ns-string))
-  (let ((text (or (objc::%invoke ns-string "UTF8String" nil nil) "")))
+  (let ((text (or (objc::%invoke ns-string "UTF8String" nil nil nil) "")))
     (if preserve-line-terminators text (objc::%lines-of text))))
 
 ;; CR LF and a lone CR become a newline; LF stays one.
@@ -975,15 +1091,17 @@
   (unless (stringp string)
     (error "objc:string-to-ns-string: ~s is not a string" string))
   (let ((ns-string
-         (objc::%invoke "NSString" "stringWithUTF8String:" (list string) nil)))
+         (objc::%invoke "NSString" "stringWithUTF8String:" (list string) nil
+                        nil)))
     (if autoreleasep (objc:autorelease ns-string) ns-string)))
 
 (defun objc::%array-elements (pointer element)
-  (let* ((n (objc::%invoke pointer "count" nil nil)) (out (make-array n)))
+  (let* ((n (objc::%invoke pointer "count" nil nil nil)) (out (make-array n)))
     (dotimes (i n out)
       (setf (aref out i)
             (objc::%convert-element
-             (objc::%invoke pointer "objectAtIndex:" (list i) nil) element)))))
+             (objc::%invoke pointer "objectAtIndex:" (list i) nil nil)
+             element)))))
 
 (defun objc::%convert-element (value element)
   (cond ((null value) nil)
@@ -1022,7 +1140,7 @@
 
 (defun objc:invoke-into (result class-or-object-pointer method &rest args)
   (objc::%invoke class-or-object-pointer method args
-   (if (and (consp result) (eq (car result) :pointer)) :pointer result)))
+   (if (and (consp result) (eq (car result) :pointer)) :pointer result) nil))
 
 ;;; --- callbacks: what a method or a block defined in Lisp receives and answers ------
 
@@ -1150,11 +1268,12 @@
                                 raws)
                                (setq params (cdr params))
                                (setq i (+ i 1)))
-                             (objc::%call-function (svref function 0)
-                                                   (svref function 1)
-                                                   (svref function 5)
-                                                   (nreverse raws)
-                                                   (svref function 4)))
+                             (or (objc::%call-function (svref function 0)
+                                                       (svref function 1)
+                                                       (svref function 5)
+                                                       (nreverse raws)
+                                                       (svref function 4))
+                                 (objc::%checked name :function)))
              (when (car temps)
                (dolist (temp (car temps)) (objc:release temp))))))
       (if (eq (objc::%declared-type result-type) :boolean)

@@ -844,6 +844,14 @@ categories:
       - { slug: objc-call-objc-block, name: "objc:call-objc-block" }
       - { slug: objc-objc-block-pointer, name: "objc:objc-block-pointer" }
       - { slug: objc-objc-block-live-p, name: "objc:objc-block-live-p" }
+      - { slug: objc-invoke-with-error, name: "objc:invoke-with-error" }
+      - { slug: objc-objc-exception-name, name: "objc:objc-exception-name" }
+      - { slug: objc-objc-exception-reason, name: "objc:objc-exception-reason" }
+      - { slug: objc-objc-exception-object, name: "objc:objc-exception-object" }
+      - { slug: objc-ns-error-domain, name: "objc:ns-error-domain" }
+      - { slug: objc-ns-error-code, name: "objc:ns-error-code" }
+      - { slug: objc-ns-error-description, name: "objc:ns-error-description" }
+      - { slug: objc-ns-error-object, name: "objc:ns-error-object" }
   - title: "cocoa パッケージ (Foundation の構造体)"
     index_page: reference/functions/cocoa.md
     functions:

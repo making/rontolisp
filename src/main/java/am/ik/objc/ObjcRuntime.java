@@ -153,6 +153,12 @@ public final class ObjcRuntime {
 
 	private final MainThread mainThread;
 
+	/**
+	 * The catching trampolines every send and C call goes through, or {@code null} where
+	 * they cannot be built (x86_64, a macOS without the unwinder's finder API).
+	 */
+	private final @Nullable ObjcCatch catcher;
+
 	/** The shapes bound, in binding order, for the native-image registration test. */
 	private final Set<FunctionDescriptor> signatures = new LinkedHashSet<>();
 
@@ -228,6 +234,7 @@ public final class ObjcRuntime {
 		// AppKit is opened for its CLASSES, which objc_getClass finds only once the
 		// framework's images are loaded; no symbol of it is called.
 		appkit.find("NSApplicationMain");
+		this.catcher = ObjcCatch.open(objc, (name, descriptor) -> handle(objc, name, descriptor));
 	}
 
 	private MethodHandle handle(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
@@ -741,13 +748,22 @@ public final class ObjcRuntime {
 			else {
 				signature = new Signature(encoding.descriptor(), -1);
 			}
-			MethodHandle handle = this.sends.computeIfAbsent(signature, s -> downcall(target(encoding), s, selector));
+			MethodHandle handle = this.sends.computeIfAbsent(signature,
+					s -> downcall(catching(target(encoding), s), s, selector));
 			Object raw;
 			try {
 				raw = handle.invokeWithArguments(all);
 			}
 			catch (Throwable ex) {
 				throw new ObjcException(selector + " failed: " + ex, ex);
+			}
+			long thrown = ObjcCatch.takeRaised();
+			if (thrown != -1) {
+				String description = describeRaised(thrown);
+				if (thrown != 0) {
+					release(MemorySegment.ofAddress(thrown));
+				}
+				throw new ObjcException(selector + " raised " + description);
 			}
 			for (int i = 0; i < outs.size(); i++) {
 				MemorySegment written = slots.get(i).get(ValueLayout.ADDRESS, 0);
@@ -766,6 +782,65 @@ public final class ObjcRuntime {
 
 	/** {@link #sendRaw} mode bit: answer a C-string result as its address. */
 	public static final int RAW_CSTRING = 2;
+
+	/**
+	 * {@link #sendRaw} mode bit: the last argument is the address of a pointer-sized slot
+	 * the callee may write an object into (an {@code NSError **}); what it holds after
+	 * the call is retained before the hop's pool drains.
+	 */
+	public static final int RETAIN_OUT = 4;
+
+	/**
+	 * The address to call for a call of this shape to {@code target}: a catching
+	 * trampoline ({@link ObjcCatch}), or the target itself where there is none.
+	 */
+	private MemorySegment catching(MemorySegment target, Signature signature) {
+		ObjcCatch c = this.catcher;
+		return c == null ? target : c.entry(target.address(), signature.descriptor());
+	}
+
+	/**
+	 * Throws {@link ObjcRaised} when the call this thread just made raised an Objective-C
+	 * exception (its answer is then garbage and never read).
+	 */
+	private static void checkRaised(String what) {
+		long thrown = ObjcCatch.takeRaised();
+		if (thrown != -1) {
+			throw new ObjcRaised(what, thrown);
+		}
+	}
+
+	/**
+	 * What was thrown, as the old base's message says it: the exception's name and
+	 * reason, or the thrown object's class.
+	 */
+	private String describeRaised(long thrown) {
+		if (thrown == 0) {
+			return "nil";
+		}
+		try {
+			long nsException = classOrNullAddress("NSException");
+			Object kind = sendRaw(thrown, selector("isKindOfClass:").address(), "B24@0:8#16", -1,
+					new @Nullable Object[] { nsException }, 0);
+			if (!(kind instanceof Long k) || k == 0) {
+				return "an instance of " + nameOfClass(classOfAddress(thrown));
+			}
+			String name = utf8(sendRaw(thrown, selector("name").address(), "@16@0:8", -1, new Object[0], 0));
+			String reason = utf8(sendRaw(thrown, selector("reason").address(), "@16@0:8", -1, new Object[0], 0));
+			return name + (reason == null ? "" : ": " + reason);
+		}
+		catch (ObjcException ex) {
+			return "an Objective-C exception";
+		}
+	}
+
+	private @Nullable String utf8(@Nullable Object string) {
+		if (!(string instanceof Long address) || address == 0) {
+			return null;
+		}
+		Object text = sendRaw(address, selector("UTF8String").address(), "*16@0:8", -1, new Object[0], 0);
+		return text instanceof String s ? s : null;
+	}
 
 	/** Parsed encodings by spelling: a frame loop sends the same few shapes. */
 	private final Map<String, TypeEncoding> encodings = new ConcurrentHashMap<>();
@@ -870,14 +945,25 @@ public final class ObjcRuntime {
 			// The same shape through objc_msgSendSuper is a different entry point, so a
 			// different handle.
 			MethodHandle handle = superclass != 0
-					? this.superSends.computeIfAbsent(signature, s -> downcall(superTarget(encoding), s, name))
-					: this.sends.computeIfAbsent(signature, s -> downcall(target(encoding), s, name));
+					? this.superSends.computeIfAbsent(signature,
+							s -> downcall(catching(superTarget(encoding), s), s, name))
+					: this.sends.computeIfAbsent(signature, s -> downcall(catching(target(encoding), s), s, name));
 			Object raw;
 			try {
 				raw = handle.invokeWithArguments(all);
 			}
 			catch (Throwable ex) {
 				throw new ObjcException(name + " failed: " + ex, ex);
+			}
+			checkRaised(name);
+			if ((mode & RETAIN_OUT) != 0 && declared > 0 && args[declared - 1] instanceof Number slot
+					&& slot.longValue() != 0) {
+				// The object the callee wrote through the last argument, alive past the
+				// pool this send drains.
+				MemorySegment written = MemorySegment.ofAddress(slot.longValue()).reinterpret(8).get(P, 0);
+				if (written.address() != 0) {
+					retain(written);
+				}
 			}
 			return unmarshalRaw(ret, raw, mode);
 		}
@@ -958,7 +1044,8 @@ public final class ObjcRuntime {
 		MemorySegment pool = autoreleasePoolPush();
 		try (Arena arena = Arena.ofConfined()) {
 			List<Object> all = new ArrayList<>(args.length + 2);
-			all.add(MemorySegment.ofAddress(function));
+			Signature signature = new Signature(encoding.descriptor(), fixed < 0 ? -1 : fixed);
+			all.add(catching(MemorySegment.ofAddress(function), signature));
 			Type ret = encoding.returnType();
 			if (ret.isStruct()) {
 				all.add((SegmentAllocator) arena);
@@ -966,7 +1053,6 @@ public final class ObjcRuntime {
 			for (int i = 0; i < params.size(); i++) {
 				all.add(marshalRaw(params.get(i), args[i], arena, what, i));
 			}
-			Signature signature = new Signature(encoding.descriptor(), fixed < 0 ? -1 : fixed);
 			MethodHandle handle = this.calls.computeIfAbsent(signature, s -> unboundDowncall(s, what));
 			Object raw;
 			try {
@@ -975,6 +1061,7 @@ public final class ObjcRuntime {
 			catch (Throwable ex) {
 				throw new ObjcException(what + " failed: " + ex, ex);
 			}
+			checkRaised(what);
 			return unmarshalRaw(ret, raw, mode);
 		}
 		finally {

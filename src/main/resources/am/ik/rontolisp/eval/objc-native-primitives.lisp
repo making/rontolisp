@@ -269,14 +269,28 @@
   (dolist (arg args) (objc::%p-push arg))
   (objc::%p-answer (objc::%p-send-super receiver class sel types fixed mode)))
 
-;; The value of the last answer the host made, by its kind.
+;; What the last call raised, retained (0 for nil), until objc::%raised reads it.
+(defvar objc::*raised* nil)
+
+(defun objc::%raised ()
+  (let ((thrown objc::*raised*))
+    (setq objc::*raised* nil)
+    thrown))
+
+;; The value of the last answer the host made, by its kind. A call that raised answers
+;; nil and leaves what it threw for objc::%raised.
 (defun objc::%p-answer (kind)
   (case kind
-    (0 nil)
+    (0
+     (setq objc::*raised* nil)
+     nil)
     (1 (objc::%p-result-int))
     (2 (objc::%p-result-float))
     (3 (objc::%p-result-string))
     (4 (objc::%p-leaves))
+    (5
+     (setq objc::*raised* (objc::%p-result-int))
+     nil)
     (t (error "objc: ~a" (objc::%p-error)))))
 
 (defun objc::%add-ivar (cls name size alignment types)

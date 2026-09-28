@@ -137,6 +137,14 @@ fn open() -> Result<Api, String> {
                 std::mem::transmute(sym($name)?)
             };
         }
+        // An exception raised inside a call stops at rl_objc_call (call.rs).
+        call::install(
+            sym(c"__objc_personality_v0")? as usize,
+            sym(c"OBJC_EHTYPE_id")? as usize,
+            sym(c"objc_begin_catch")? as usize,
+            sym(c"objc_end_catch")? as usize,
+            sym(c"objc_retain")? as usize,
+        );
         Ok(Api {
             msg_send: sym(c"objc_msgSend")? as usize,
             msg_send_super: sym(c"objc_msgSendSuper")? as usize,
@@ -319,7 +327,10 @@ impl Api {
             call.push_variadic(Leaf::Int(0));
         }
         // SAFETY: the shape is the method's own encoding, laid out by the convention.
-        let leaves = unsafe { call.invoke() };
+        let leaves = match unsafe { call.invoke() } {
+            Ok(leaves) => leaves,
+            Err(call::Raised(thrown)) => return Err(self.raised_text(thrown, selector)),
+        };
         drop(strings);
         let ret = encoding.ret.clone();
         if let Some(slot) = slots.first() {
@@ -331,6 +342,41 @@ impl Api {
             }
         }
         Ok((ret, leaves))
+    }
+
+    /// What an exception a send raised says, for the old base's error; gives up the
+    /// reference the catch kept.
+    fn raised_text(&self, thrown: Id, selector: &str) -> String {
+        let what = if thrown == 0 {
+            "nil".to_owned()
+        } else {
+            match self.send_objects(thrown, "name", &[]) {
+                Ok(name) if name != 0 => {
+                    let reason = self.send_objects(thrown, "reason", &[]).unwrap_or(0);
+                    if reason == 0 {
+                        self.utf8(name)
+                    } else {
+                        format!("{}: {}", self.utf8(name), self.utf8(reason))
+                    }
+                }
+                _ => format!("an instance of {}", self.class_name(thrown)),
+            }
+        };
+        if thrown != 0 {
+            // SAFETY: the one reference the catch kept.
+            unsafe { (self.release)(thrown) };
+        }
+        format!("{selector} raised {what}")
+    }
+
+    fn utf8(&self, string: Id) -> String {
+        match self.send(string, "UTF8String", Vec::new()) {
+            Ok((_, leaves)) => match leaves.first() {
+                Some(Leaf::Int(p)) => text(*p as *const c_char),
+                _ => String::new(),
+            },
+            Err(_) => String::new(),
+        }
     }
 
     fn error_text(&self, error: Id, selector: &str) -> String {

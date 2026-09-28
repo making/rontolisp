@@ -367,8 +367,10 @@
 ;; alloc family hands over.
 (defun objc::%alloc-with-zone (cls meta-super zone)
   (let ((raw
-         (objc::%send-super cls meta-super (objc::%sel-address "allocWithZone:")
-                            "@@:^v" -1 (list zone) 0)))
+         (or (objc::%send-super cls meta-super
+                                (objc::%sel-address "allocWithZone:") "@@:^v" -1
+                                (list zone) 0)
+             (objc::%checked "allocWithZone:" :class))))
     (unless (= raw 0)
       (let ((name
              (gethash (objc::%class-name cls) objc::*lisp-class-by-objc-name*))
@@ -386,12 +388,14 @@
 (defun objc::%copy-with-zone (self zone)
   (let* ((cls (objc::%object-class self))
          (copy
-          (objc::%send cls (objc::%sel-address "allocWithZone:") "@@:^v" -1
-                       (list zone) 0)))
+          (or (objc::%send cls (objc::%sel-address "allocWithZone:") "@@:^v" -1
+                           (list zone) 0)
+              (objc::%checked "allocWithZone:" :class))))
     (if (= copy 0)
         0
         (let ((initialized
-               (objc::%send copy (objc::%sel-address "init") "@@:" -1 nil 0)))
+               (or (objc::%send copy (objc::%sel-address "init") "@@:" -1 nil 0)
+                   (objc::%checked "init" :instance))))
           (let ((old (gethash self objc::*lisp-objects*))
                 (new (gethash initialized objc::*lisp-objects*)))
             (when (and old new) (objc:objc-object-copied old new)))
@@ -407,7 +411,8 @@
           (format *error-output* "objc: error in objc-object-destroyed: ~a~%"
                   condition))))
     (remhash self objc::*lisp-objects*)
-    (objc::%send-super self super (objc::%sel-address "dealloc") "v@:" -1 nil 0)
+    (or (objc::%send-super self super (objc::%sel-address "dealloc") "v@:" -1
+                           nil 0) (objc::%checked "dealloc" :instance))
     nil))
 
 (defun objc::%register (instance address)

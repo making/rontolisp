@@ -1,0 +1,25 @@
+(:CAUGHT "-objectAtIndex: raised NSRangeException: *** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
+:AFTER
+
+type: (T T)
+name: "NSRangeException"
+reason: "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array"
+object: T
+object's name: "NSRangeException"
+object's retain count: 1
+class send: "+stringWithUTF8String: raised NSInvalidArgumentException: *** +[NSString stringWithUTF8String:]: NULL cString"
+raise: ("CorpusException" "made here")
+thrown string: ("__NSCFString" NIL "not an exception")
+unwind-protect: ("-objectAtIndex: raised NSRangeException: *** -[__NSArray0 objectAtIndex:]: index 0 beyond bounds for empty array" T)
+inside a pool: "-removeObjectAtIndex: raised NSRangeException: *** -[__NSArrayM removeObjectsInRange:]: range {3, 1} extends beyond bounds for empty array"
+a send after: 1
+many: 200
+caught in the method: -1
+escaping the method: :NO-ERROR
+object result, failed: ("NSCocoaErrorDomain" 260 T "NSCocoaErrorDomain")
+object result, succeeded: T
+BOOL result, failed: ("NSCocoaErrorDomain" 4 T "NSCocoaErrorDomain")
+class method, failed: ("NSCocoaErrorDomain" 260 T "NSCocoaErrorDomain")
+a condition: (T T)
+not an error method: "objc:invoke-with-error: \"attributesOfItemAtPath:\" does not end in \"error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
+no such method: (T NIL NIL)

@@ -7665,6 +7665,12 @@ public final class LispNames {
 	/** {@code objc:sel}, qualified: a selector; no {@code structure-object}. */
 	public static final String OBJC_SEL_TYPE = OBJC_PKG + ":SEL";
 
+	/** {@code objc:objc-exception}: an Objective-C exception a send raised. */
+	public static final String OBJC_EXCEPTION_TYPE = OBJC_PKG + ":OBJC-EXCEPTION";
+
+	/** {@code objc:ns-error}: the failure {@code objc:invoke-with-error} signals. */
+	public static final String NS_ERROR_TYPE = OBJC_PKG + ":NS-ERROR";
+
 	// The new base's primitive layer (objc.lisp is written over these; each backend
 	// supplies them: eval/ObjcPrimitives, codegen/jvm/JvmObjcPrimitivesTemplate,
 	// objc-native-primitives.lisp).
@@ -7696,6 +7702,13 @@ public final class LispNames {
 
 	/** {@code (objc::%send receiver sel types fixed args mode)} -- the one call. */
 	public static final String OBJC_SEND_INTERNAL = OBJC_PKG + "::%SEND";
+
+	/**
+	 * {@code (objc::%raised)}: the retained address of what the last {@code %send},
+	 * {@code %send-super} or {@code %call-function} of this thread raised (0 for nil), or
+	 * nil when it raised nothing; reading clears it. A call that raised answers nil.
+	 */
+	public static final String OBJC_RAISED = OBJC_PKG + "::%RAISED";
 
 	/**
 	 * {@code (objc::%new-handle address gc)} -- a reference handle holding {@code gc}.
@@ -7810,7 +7823,7 @@ public final class LispNames {
 			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE, OBJC_ALLOCATE_CLASS, OBJC_ADD_IVAR,
 			OBJC_REGISTER_CLASS, OBJC_ADD_METHOD, OBJC_ADD_PROTOCOL, OBJC_SUPERCLASS, OBJC_SEND_SUPER, OBJC_IVAR_OFFSET,
 			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE, OBJC_MAKE_BLOCK, OBJC_FREE_BLOCK, OBJC_CALL_FUNCTION,
-			OBJC_SYMBOL_ADDRESS);
+			OBJC_SYMBOL_ADDRESS, OBJC_RAISED);
 
 	/**
 	 * The {@code fli} package name: the part of LispWorks' foreign language interface the

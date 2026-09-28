@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ObjcExceptionTest;
 import am.ik.rontolisp.eval.ObjcInterop;
 import am.ik.rontolisp.reader.LispReader;
 import com.sun.net.httpserver.HttpServer;
@@ -71,6 +72,26 @@ class NativeObjcE2eTest {
 		// A method that signals is contained: printed, answered as nil, and the program
 		// goes on.
 		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: boom inside\n");
+	}
+
+	@Test
+	void theExceptionCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// An NSException inside a send stops at rl_objc_call (call.rs) and is
+		// objc:objc-exception; invoke-with-error's ns-error (eval/ObjcExceptionTest pins
+		// the output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-exception-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		String expected;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-exception-corpus.expected")) {
+			expected = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		assertThat(actual.stdout()).isEqualTo(expected);
+		assertThat(actual.stderr()).isEqualTo(ObjcExceptionTest.ESCAPED);
 	}
 
 	@Test

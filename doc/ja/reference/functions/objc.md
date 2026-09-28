@@ -47,6 +47,21 @@ Lisp の関数から作るブロックです。LispWorks の `OBJC` にはこの
 | [`objc:objc-block-pointer`](objc-objc-block-pointer.md) | `(objc:objc-block-pointer b)` | リテラルのアドレス (解放後は `nil`) |
 | [`objc:objc-block-live-p`](objc-objc-block-live-p.md) | `(objc:objc-block-live-p b)` | 解放するまで `t` |
 
+## 例外と NSError
+
+Objective-C 自身が報告する失敗です。LispWorks の `OBJC` はこれをコンディションにしません。呼び出しの中で送出された例外は、最も内側の `objc:invoke`、C 関数またはブロックの呼び出しから `objc:objc-exception` (`error` のサブタイプ) としてシグナルされます。`objc:invoke-with-error` は、`NSError **` で失敗を報告したメソッドについて `objc:ns-error` をシグナルします。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| [`objc:invoke-with-error`](objc-invoke-with-error.md) | `(objc:invoke-with-error fm "removeItemAtPath:error:" path)` | メソッドの値 (失敗したら `objc:ns-error`) |
+| [`objc:objc-exception-name`](objc-objc-exception-name.md) | `(objc:objc-exception-name e)` | `"NSRangeException"` |
+| [`objc:objc-exception-reason`](objc-objc-exception-reason.md) | `(objc:objc-exception-reason e)` | 理由 (なければ `nil`) |
+| [`objc:objc-exception-object`](objc-objc-exception-object.md) | `(objc:objc-exception-object e)` | 送出されたオブジェクト |
+| [`objc:ns-error-domain`](objc-ns-error-domain.md) | `(objc:ns-error-domain e)` | `"NSCocoaErrorDomain"` |
+| [`objc:ns-error-code`](objc-ns-error-code.md) | `(objc:ns-error-code e)` | コード (整数) |
+| [`objc:ns-error-description`](objc-ns-error-description.md) | `(objc:ns-error-description e)` | ローカライズされた説明 |
+| [`objc:ns-error-object`](objc-ns-error-object.md) | `(objc:ns-error-object e)` | `NSError` |
+
 ## 最初の動詞
 
 `appkit`、`metal`、`scene` の各層が土台にしている、パッケージ本来の動詞です。これらの層が LispWorks のインターフェースに移るまで残ります。

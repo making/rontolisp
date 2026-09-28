@@ -68,8 +68,8 @@ class ObjcBaseTest {
 			boolean function = eval("(progn (objc:selector-name \"x\") (fboundp '" + name + "))").equals("T");
 			boolean type = List
 				.of("OBJC-OBJECT-POINTER", "OBJC-CLASS", "SEL", "OBJC-BOOL", "OBJC-C++-BOOL", "OBJC-C-STRING",
-						"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN", "STANDARD-OBJC-OBJECT", "OBJC-BLOCK",
-						LispNames.OBJC_WITH_AUTORELEASE_POOL)
+						"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN", "STANDARD-OBJC-OBJECT", "OBJC-BLOCK", "OBJC-EXCEPTION",
+						"NS-ERROR", LispNames.OBJC_WITH_AUTORELEASE_POOL)
 				.contains(member);
 			assertThat(function || type).as(name).isTrue();
 		}

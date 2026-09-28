@@ -64,6 +64,7 @@ final class JvmObjcPrimitivesCompiler {
 			Map.entry(LispNames.OBJC_FREE_BLOCK, new Object[] { 1, "freeBlock" }),
 			Map.entry(LispNames.OBJC_CALL_FUNCTION, new Object[] { 5, "callFunction" }),
 			Map.entry(LispNames.OBJC_SYMBOL_ADDRESS, new Object[] { 1, "symbolAddress" }),
+			Map.entry(LispNames.OBJC_RAISED, new Object[] { 0, "raised" }),
 			Map.entry(ON_MAIN, new Object[] { 1, "onMain" }));
 
 	/**

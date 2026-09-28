@@ -39,8 +39,8 @@ run on every target: the interpreter loads it on the first resolution of a new-b
 `AppKitLibrary`) for a JVM class or a `--native` executable. Under it, per backend, the primitive
 layer: `objc::%get-class`, `%class-name`, `%object-class`, `%class-p`, `%register-selector`,
 `%selector-name`, `%method-types`, `%send`, `%new-handle`, `%refs`, `%interned`, `%intern`,
-`%load-module`, `%initialize` (`LispNames.OBJC_PRIMITIVES`; the class and block halves add their
-own, below), and the public `objc:on-main`.
+`%load-module`, `%initialize`, `%raised` (`LispNames.OBJC_PRIMITIVES`; the class and block halves
+add their own, below), and the public `objc:on-main`.
 
 - Interpreter: `eval/ObjcPrimitives` over `am.ik.objc` (`ObjcRuntime.sendRaw`,
   `ObjcReference`); JVM class output: `codegen/jvm/JvmObjcPrimitivesTemplate` (ships as
@@ -167,9 +167,9 @@ names every selector the corpus and the docs send; the new shapes were `jboolean
 (`object_isClass`) and `void*(void*,void*,jint)` (`numberWithInt:`). `ensure-objc-initialized`'s
 `:modules` are `SymbolLookup.libraryLookup` / `dlopen`.
 
-Not here yet, by design: `NSException` as a condition, and the FLI forms of the manual
-(`fli:with-dynamic-foreign-objects` by-reference results and foreign structure objects) -- a
-structure is the vector / cons `invoke` answers, and `cocoa:set-ns-rect*` fills one.
+Not here yet, by design: the FLI forms of the manual (`fli:with-dynamic-foreign-objects`
+by-reference results and foreign structure objects) -- a structure is the vector / cons `invoke`
+answers, and `cocoa:set-ns-rect*` fills one.
 
 ## The new base: class definition (2026-09-28)
 `define-objc-class` / `-method` / `-class-method`, `current-super`, `standard-objc-object`,
@@ -345,6 +345,112 @@ against `objc-block-corpus-native.expected`, which differs exactly on the lines 
 thread a block ran on and whether a `dispatch_async` ran before the wait; a value-answering
 block called by `dispatch_async_f` on a worker is refused), `ObjcLibraryTest`,
 `TypeEncodingTest`, the runner's `encoding.rs` tests.
+
+## The new base: exceptions and NSError (2026-09-29)
+`objc:objc-exception` (readers `objc-exception-name`, `-reason`, `-object`), `objc:ns-error`
+(`ns-error-domain`, `-code`, `-description`, `-object`) and `objc:invoke-with-error`, all in
+`objc.lisp`. Until this an `NSException` raised inside a send ended the process ("Terminating app
+due to uncaught exception"): `objc_exception_throw`'s unwinder searches up for a frame whose
+personality claims it, reaches the FFM stub / JIT frames or the wasm host frames, which have no
+unwind information, and `std::terminate` runs.
+
+- **THE decision: a real `@catch (id)` frame under every call, not the uncaught-exception
+  handler.** Every `objc_msgSend`, `objc_msgSendSuper` and `%call-function` target is called
+  through a native frame whose call site an LSDA covers -- one handler, type `OBJC_EHTYPE_id`,
+  under `__objc_personality_v0`. Phase 1 stops there; phase 2 unwinds the callee's frames WITH
+  their cleanups (`@finally`, `@synchronized`, C++ destructors), so **nothing is abandoned between
+  throw and catch** -- the frames skipped are exactly the ones Objective-C's own `@catch` would
+  unwind. An exception Cocoa catches deeper never reaches the frame; a C++ exception of another type
+  passes it and terminates as before. The rejected alternative, `objc_setUncaughtExceptionHandler`
+  plus a non-local exit to below the send, abandons the callee's frames without their cleanups and
+  leaves libc++abi's caught-exception list stale (one entry per exception), and it only runs once
+  the search has FAILED -- on the JVM that search would first have to get through the JIT frames
+  above the send (and on thread 0, `_dispatch_client_callout`'s catch-all, which terminates).
+- **The landing pad** takes the exception (`objc_begin_catch`), retains it, ends the catch and
+  hands the address up; the call answers nothing. The host's `%send` / `%send-super` /
+  `%call-function` then answer nil and keep the retained address for `objc::%raised` (a new
+  primitive: nil when the last call raised nothing, else the address, 0 for a thrown nil; reading
+  clears it). `objc::%checked` wraps EVERY call of those three in `objc.lisp`, `objc-class.lisp`
+  and `objc-block.lisp`: a nil answer asks `%raised`, and a raise becomes
+  `objc::%signal-exception` -- the object wrapped (taking over the +1), its `name` / `reason` read
+  when it `isKindOfClass:` `NSException`, else the class name and no reason. The report names the
+  call: `-objectAtIndex: raised NSRangeException: ...` (`+` to a class, a C function by name).
+  **A new call site of those primitives must go through `%checked`**, or a raise reads as nil and
+  its reference leaks; the hosts clear the record at the start of each call, so it is never
+  misattributed.
+- **Which frame catches: the innermost call on that thread.** A method or block defined in Lisp
+  that lets one escape is a Lisp error inside a callback -- printed (`objc: error in a callback:
+  ...`), answered as zero -- never an unwind through Objective-C's frames.
+- **`invoke-with-error`**: `calloc`s a pointer slot (`%symbol-address` + `%call-function`), passes
+  it as the last argument, and sends with mode bit 4 (`ObjcRuntime.RETAIN_OUT`, `prim.rs`
+  `RETAIN_OUT`): the host retains what the slot holds after the call, inside the hop, since the
+  `NSError` is autoreleased into the pool the hop drains. It signals `ns-error` when the result
+  says failed (nil, `NO`, zero, void) AND an error was written -- Foundation's rule, as the old
+  base's `Sent.failed()`; a failure with no error answers the result. The method name must end in
+  `error:`.
+
+### Interpreter and JVM class output: machine code written at run time (`am.ik.objc.ObjcCatch`)
+rontolisp ships no native code, and the catching frame must be native and sit between the FFM
+stub and the callee, so `ObjcCatch` writes one: AArch64 instructions into an `mmap`ped page made
+read-execute for good (never written again -- a page rewritten while another thread runs it would
+fault, and HotSpot's W^X state is per thread, so `MAP_JIT` toggling from Java would take the JIT's
+own code cache away mid-call). `java` carries `allow-unsigned-executable-memory`; a native image
+is not hardened. Verified: `mprotect` to `PROT_READ|PROT_EXEC` under both (2026-09-28).
+
+- **A slot forwards the call unchanged**: x0-x7, d0-d7 and x8 untouched; it copies the caller's
+  stack-argument area under its own 32-byte frame, sized by an upper bound from the
+  `FunctionDescriptor` (every argument at its size rounded to 8, plus 8; in 64-byte steps, at most
+  4032 -- a wider shape is called directly, uncaught). The callee, the size and the recorder are
+  in a per-slot DATA cell, so a slot is keyed by (target, size) and the code never changes. The
+  downcall handle is bound to the slot with the callee's own shape, so the native binary's shape
+  table serves it unchanged.
+- **The recorder** is an upcall (`void(void*)`, already registered) into the copy of `ObjcCatch`
+  that allocated the slot; it keeps the address in a `ThreadLocal`, which `ObjcRuntime` reads
+  right after the downcall and turns into `ObjcRaised` (an `ObjcException` carrying the retained
+  address). `MainThread.sync` carries it back to the Lisp thread; the primitive layer answers nil
+  and keeps it for `%raised`. The old base's `send` shares the handles, so it catches too: its
+  error reads `sel raised NSRangeException: reason`, and it releases the exception.
+- **The unwinder finds the code through `__unw_add_find_dynamic_unwind_sections` (macOS 14)**: a
+  finder, also written there, answers for a region's code page with its `.eh_frame` (one CIE with
+  `zPLR` -- absolute personality, LSDA and addresses -- and one FDE per slot, all naming one LSDA)
+  and a stand-in `mach_header` (arm64, subtype ALL) as `dso_base`. **Trap: `__register_frame` of
+  a dynamic FDE registers it with `dso_base` 0, and Apple's `unw_set_reg` reads the CPU subtype of
+  the image a new IP lies in -- SIGSEGV at the landing pad** (measured 2026-09-28, macOS 26.3).
+- **One chain of regions per PROCESS**: libunwind keeps a short fixed table of finders, and a JVM
+  holds a copy of `am.ik.objc` per compiled program it loads (plus the interpreter's) -- a finder
+  per copy ran out inside `JvmObjcBaseCompilerTest` and the next raise terminated. The first
+  region is published in the system property `rontolisp.objc.catch` (hex address; JVM-wide,
+  never inherited by a child process), the rest chained from it, one finder walks them, and every
+  copy allocates under one JVM-wide lock (`System.getProperties()`). 120 slots a region, at most
+  16 regions; past that, or without the finder API, or on x86_64, a call goes straight to its
+  callee and an exception still ends the process.
+- Registered for the native binary: `mmap`, `mprotect`, `sys_icache_invalidate` and the finder
+  registration (`reachability-metadata.json`, `ObjcNativeImageForeignConfigTest`). Travelling:
+  `ObjcRaised`, `ObjcCatch`, `ObjcCatch$Asm`, `ObjcCatch$Bytes` (`JvmObjcRuntimeBuilder`).
+
+### `--native`: the catch is in `rl_objc_call` (`call.rs`)
+The same LSDA in `global_asm!`: `.cfi_personality 155, _rl_objc_personality`, `.cfi_lsda` to a
+`__gcc_except_tab` table whose one type entry is INDIRECT through `rl_objc_ehtype_slot`. libobjc is
+dlopened at run time, so the stub cannot name `__objc_personality_v0` or `OBJC_EHTYPE_id`: the
+personality is a forwarder and the slot is filled by `call::install` when the runtime opens
+(before that the forwarder answers "continue unwinding"). The landing pad calls `rl_objc_caught`,
+which marks the `Frame`; `Call::invoke` answers `Err(Raised(thrown))`; `prim.rs` answers the new
+result kind 5 (`RAISED`, the address through `p_result_int`), which `objc-native-primitives.lisp`
+keeps for its `%raised`. The runner's own test `an_objective_c_exception_stops_at_the_call` throws
+through it. Stub size (`release-runner`, 2026-09-29): 1,931,856 -> 1,948,432 B (one 16 KB page: the new
+`__gcc_except_tab` and unwind entries).
+
+Measured per send (2026-09-29, M4 Max, `java -cp target/classes` interpreted, same method as above:
+20,000 after 2,000; length / self / rangeOfString:): before 22.7-23.5 / 22.6-23.5 / 27.6-28.7 us,
+after 23.4-24.4 / 22.8-23.7 / 28.1-29.7 us, and the same with catching switched off
+(`-Drontolisp.objc.catch=0`, which publishes "no region") -- the frame costs nothing measurable;
+the ~0.5 us is `objc.lisp`'s. A first cut that called `%checked` on every answer and took the
+slot flag as an `&optional` cost 1.5-3 us: `%checked` runs only on a nil answer, `out` is required.
+
+Tests: `ObjcExceptionTest` (the corpus `objc-exception-corpus.lisp` against `.expected`, and the
+escaping method's stderr line), `JvmObjcBaseCompilerTest` (the same bytes compiled),
+`NativeObjcE2eTest` (the same bytes as `--native`). The native binary (`-Pnative`, 2026-09-29)
+printed the same file by hand; the corpus's methods use registered shapes for that reason.
 
 ## The one architectural fact: AppKit belongs to thread 0
 The thread the kernel started the process on (`pthread_main_np()` answers 1) is the only one that
@@ -734,8 +840,9 @@ and `eval/ObjcPrimitives` (new base), reached only via `eval/ObjcInterop`'s six 
   `eval/MetalLibraryTest`; `SceneOffscreenRenderTest`; `PackageCycleTest`; `--native`:
   `eval/ObjcNativeLibraryTest` (the verbs defined, the splice), `e2e/NativeObjcE2eTest` (macOS
   aarch64: the corpus `objc-native-corpus.lisp` against the interpreter, a timer during `sleep`, the
-  event loop during a fetch's wait, an exit inside a callback, release on wrapper death, `scene:` pixels), the runner's own
-  `call.rs` / `encoding.rs` unit tests (`build.sh --test`).
+  event loop during a fetch's wait, an exit inside a callback, release on wrapper death, `scene:` pixels, the exception
+  corpus), the runner's own `call.rs` / `encoding.rs` unit tests (`build.sh --test`); exceptions and
+  NSError: `eval/ObjcExceptionTest` and the corpus runs named in their section.
 - No test opens a window (CI has no display; the guide uses `console` fences so `DocExamplesTest`
   cannot hang). **Verified by hand: `counter.lisp` on `java -jar` AND the native binary;
   `minesweeper-macos.lisp` and `life-macos.lisp` on all three targets (`java -jar`, native binary,
@@ -748,4 +855,6 @@ and `eval/ObjcPrimitives` (new base), reached only via `eval/ObjcInterop`'s six 
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
   the runtime offers no way to recognise another.
 - x86_64: `objc_msgSend_stret` (struct returns wider than 16 bytes) has not been exercised.
+- x86_64 (`java -jar`, a JVM class) and a macOS before 14: `ObjcCatch` writes no trampoline, so an
+  Objective-C exception inside a call still ends the process.
 - `--native`: a macos-x86_64 runner has no Objective-C host (`call.rs` is Apple's AArch64 convention, and there is no release stub).

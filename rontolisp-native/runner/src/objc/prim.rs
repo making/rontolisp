@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use wasmtime::{Caller, ExternRef, Linker, Rooted};
 use wasmtime_wasi::p1::WasiP1Ctx;
 
-use super::call::{Call, Leaf, read_leaf};
+use super::call::{Call, Leaf, Raised, read_leaf};
 use super::encoding::{self, Kind};
 use super::{
     Api, Entered, MODULE, PENDING, api, cstring, is_application, memory_string, release_pending, return_string, text,
@@ -99,6 +99,8 @@ mod kind {
     pub const FLOAT: i32 = 2;
     pub const STRING: i32 = 3;
     pub const LEAVES: i32 = 4;
+    /// The call raised: `p_result_int` is what it threw, retained (0 for nil).
+    pub const RAISED: i32 = 5;
     pub const FAILED: i32 = -1;
 }
 
@@ -106,6 +108,15 @@ mod kind {
 const RETAIN_RESULT: i32 = 1;
 /// `%send` mode bit: answer a C-string result as its address.
 const RAW_CSTRING: i32 = 2;
+/// `%send` mode bit: the last argument is the address of a pointer-sized slot the callee
+/// may write an object into (an `NSError **`); what it holds is retained after the call.
+const RETAIN_OUT: i32 = 4;
+
+/// A call that raised: the exception the catch kept is the answer.
+fn raised(thrown: usize) -> i32 {
+    prim(|p| p.answer.int = thrown as i64);
+    kind::RAISED
+}
 
 fn fail(message: String) -> i32 {
     prim(|p| p.error = message);
@@ -191,10 +202,29 @@ fn send(api: &Api, receiver: usize, superclass: usize, sel: usize, types: &str, 
     if let Err(failed) = push_args(api, &mut call, &encoding.args[2..], &args, fixed, &mut strings, &name) {
         return failed;
     }
+    let out = if mode & RETAIN_OUT != 0 {
+        match args.last() {
+            Some(Raw::Int(slot)) if *slot != 0 => *slot as usize,
+            _ => 0,
+        }
+    } else {
+        0
+    };
     // SAFETY: the shape is the caller's encoding, laid out by the convention.
-    let leaves = unsafe { call.invoke() };
+    let leaves = match unsafe { call.invoke() } {
+        Ok(leaves) => leaves,
+        Err(Raised(thrown)) => return raised(thrown),
+    };
     drop(strings);
     let _ = sup;
+    if out != 0 {
+        // SAFETY: the address of a pointer-sized slot the library allocated; what the
+        // callee wrote there is retained before the caller's pool drains.
+        let written = unsafe { *(out as *const usize) };
+        if written != 0 {
+            unsafe { (api.retain)(written) };
+        }
+    }
     answer(api, &encoding.ret, &leaves, mode)
 }
 
@@ -222,7 +252,10 @@ pub(super) fn call_function(api: &Api, function: usize, types: &str, fixed: i32,
         return failed;
     }
     // SAFETY: the shape is the caller's encoding, laid out by the convention.
-    let leaves = unsafe { call.invoke() };
+    let leaves = match unsafe { call.invoke() } {
+        Ok(leaves) => leaves,
+        Err(Raised(thrown)) => return raised(thrown),
+    };
     drop(strings);
     answer(api, &encoding.ret, &leaves, mode)
 }

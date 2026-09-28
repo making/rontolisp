@@ -77,6 +77,25 @@ block for the extent of a body; C functions such as `dispatch_async` are declare
 | [`objc:objc-block-pointer`](objc-objc-block-pointer.md) | `(objc:objc-block-pointer b)` | the literal's address, or `nil` once freed |
 | [`objc:objc-block-live-p`](objc-objc-block-live-p.md) | `(objc:objc-block-live-p b)` | `t` until freed |
 
+## Exceptions and NSError
+
+What Objective-C reports itself, which LispWorks' `OBJC` does not turn into conditions:
+an exception raised inside a call signals `objc:objc-exception` (a subtype of `error`)
+from the innermost `objc:invoke`, C function or block call, and
+`objc:invoke-with-error` signals `objc:ns-error` for a method that fails through its
+`NSError **`.
+
+| Function | Example | Result |
+|----------|---------|--------|
+| [`objc:invoke-with-error`](objc-invoke-with-error.md) | `(objc:invoke-with-error fm "removeItemAtPath:error:" path)` | the method's value; `objc:ns-error` when it failed |
+| [`objc:objc-exception-name`](objc-objc-exception-name.md) | `(objc:objc-exception-name e)` | `"NSRangeException"` |
+| [`objc:objc-exception-reason`](objc-objc-exception-reason.md) | `(objc:objc-exception-reason e)` | the reason, or `nil` |
+| [`objc:objc-exception-object`](objc-objc-exception-object.md) | `(objc:objc-exception-object e)` | the thrown object |
+| [`objc:ns-error-domain`](objc-ns-error-domain.md) | `(objc:ns-error-domain e)` | `"NSCocoaErrorDomain"` |
+| [`objc:ns-error-code`](objc-ns-error-code.md) | `(objc:ns-error-code e)` | the code, an integer |
+| [`objc:ns-error-description`](objc-ns-error-description.md) | `(objc:ns-error-description e)` | the localized description |
+| [`objc:ns-error-object`](objc-ns-error-object.md) | `(objc:ns-error-object e)` | the `NSError` |
+
 ## The first verbs
 
 The package's original verbs, which the `appkit`, `metal` and `scene` layers are
