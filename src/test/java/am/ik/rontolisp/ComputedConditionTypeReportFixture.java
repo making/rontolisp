@@ -8,8 +8,8 @@ import java.util.Map;
  * {@code %error-runtime} dispatch, whose per-class helper reads every initarg slot out of
  * the call's plist; the report must still name the initargs the call PASSED, and a
  * {@code :format-control} only when the call passed one -- the text the literal call, and
- * the interpreter, print. Shared by the backend suites, so every backend is held to one
- * expected line; the {@code ci-spec.yaml} standalone
+ * the interpreter, print, a nil one included. Shared by the backend suites, so every
+ * backend is held to one expected line; the {@code ci-spec.yaml} standalone
  * {@code uncaught-computed-condition-type-report} case pins the first program on the
  * native binary.
  */
@@ -33,6 +33,9 @@ public final class ComputedConditionTypeReportFixture {
 			(defun uc-boom (ty) (error ty :format-control "given ~a" :format-arguments (list 1)))
 			(uc-boom 'simple-error)
 			""", "Unhandled condition: given 1", """
+			(defun uc-boom (ty) (error ty :format-control nil))
+			(uc-boom 'simple-error)
+			""", "Unhandled condition: NIL", """
 			(define-condition uc-reported (error) ((text :initarg :text :reader uc-reported-text))
 			  (:report (lambda (c s) (format s "reported: ~a" (uc-reported-text c)))))
 			(defun uc-boom (ty) (error ty :text "pw"))

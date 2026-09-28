@@ -401,9 +401,11 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   routed message (`LispMacroExpander.conditionReportFallback`, the recognizer of
   `conditionReportOr`'s own shape), below "An uncaught condition reports ONE line". The instance
   operand still compiles (initargs are evaluated at construction per CL).
-- **A plain `%error`'s message operand compiles only when `Ctx.condMessagesObservable`** -- its
-  message IS what a caught raw trap becomes a `simple-error` from AND the only text the entry landing
-  pad has. Forced on under restart mode / `--dynamic` / EH mode; copied in `WasmAsyncEmit.freshCtx`.
+- **A plain `%error`'s message operand always compiles in EH mode** -- its message IS what a caught
+  raw trap becomes a `simple-error` from AND the only text the entry landing pad has; outside EH mode
+  `%error` is a bare `unreachable` that evaluates nothing. The `Ctx.condMessagesObservable` flag that
+  skipped it went on 2026-09-28: once every EH-mode module is compiled with `reportsUncaught`
+  (below), it was true wherever it was read.
 - **The routing gate narrows outside EH MODE**: `expandTopLevelDefinitions` takes a
   `macro/SignalMessages` (`WasmLispCompiler` passes `LAZY` when `!reportsUncaught`), under which the answer is
   `mayHoldConditions` = `mayCreateConditions` minus the throw-only constructions (literal-typed
@@ -420,11 +422,20 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   missed it and such a program with no catching form of its own printed `Unhandled condition: ` and
   nothing else. Cost, P1 / component / `--optimize=size`, bytes: `(defun f (ty) (error ty :code 42))`
   112,679 -> 125,773 / 114,300 -> 129,489 / 90,232 -> 101,321 -- what the same program with a
-  `handler-case` already paid (129,109). A program with a catching form is byte-identical). The one it cannot see is a
-  cross-lambda `return-from`, lowered afterwards by `CrossLambdaExitLowering` (which must run after
-  the expansion or a GENERATED dispatcher's `return-from` would go unlowered), so a program whose
-  SOLE EH trigger is that keeps the narrow gate and its landing pad prints an empty report.
-  **Re-evaluate if** the cross-lambda lowering ever becomes safe to run first.
+  `handler-case` already paid (129,109). A program with a catching form is byte-identical).
+- **What the pre-scan cannot see costs a second attempt, never a wrong report**: a cross-lambda
+  `return-from` is lowered by `CrossLambdaExitLowering` after the expansion (it must run after, or a
+  GENERATED dispatcher's `return-from` would go unlowered), and reaches `ehMode` through
+  `blockExitTag`. Where `ehMode` is decided, `ehMode && !reportsUncaught` abandons the attempt
+  (`UncaughtReportUnforeseen`, the `FunctionTooLarge` retry's shape) and the next one runs with the
+  pre-scan forced on, so the invariant is **EH mode implies `reportsUncaught`**, whatever produced
+  the trigger. Until 2026-09-28 such a program kept the narrow gate and its pad printed
+  `Unhandled condition: ` and nothing else, a plain `(error "boom ~a" x)` included. Cost, P1 /
+  component, bytes (a cross-lambda `mapc` exit plus an uncaught signal): plain `error` 8,252 ->
+  9,651 / 9,582 -> 11,014; a report-less typed one 10,754 -> 21,461 / 12,129 -> 22,925;
+  `simple-error` with format arguments 9,178 -> 106,722 / 10,559 -> 110,222 (the renderer "hi 5"
+  needs); the same exit with no signal 8,235 -> 8,199. Compile time: the expansion runs twice for
+  those programs only.
 - **`%no-applicable-method` signals VALUES, not prose**: `(error 'no-applicable-method-error
   :%nam-operation tail :%nam-datum-class (%class-designator arg))` against a class seeded ON DEMAND
   (`ClosRegistry.ensureNoApplicableErrorSeeded`; slot names %-fenced so `registerSlotPosition` cannot
@@ -554,9 +565,12 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   `block $trap` + `block $cond (result (ref null eq))` +
   `try_table (catch $lisp-cond 0) (catch_all 1)`; the landing takes the payload as the inner block's
   result, splits it into `__uc_cond$N`/`__uc_msg$N` and compiles
-  `(%warn (%string-concat "Unhandled condition: " (if cond (or (%condition-report-str cond) msg) msg)))`,
-  guarded by `(let ((v ...)) (if v v ""))` so a nil never renders as `NIL`; `%warn` is the
-  existing fd-2 writer, exempt from the lazy-message narrowing. Then `unreachable`: the exit CLASS
+  `(%warn (%string-concat "Unhandled condition: " (if cond (or (%condition-report-str cond) m) m)))`
+  with `m` = `(if msg msg "NIL")`: a message is a string, a character vector or nil, and a nil one is
+  the message's VALUE -- `(error 'simple-error :format-control nil)` prints `NIL` on all four
+  backends (`standalone:` `uncaught-nil-message-report`). Until 2026-09-28 the whole text was
+  guarded to `""` instead, because a narrowed-away message was a nil cdr too; the retry above
+  removed that case. `%warn` is the existing fd-2 writer, exempt from the lazy-message narrowing. Then `unreachable`: the exit CLASS
   every host and test expects is the trap. The try_table's own `end` restores a reachable, empty
   stack while `block $cond` owes an `eqref`, so an `unreachable` sits between them. **Export wrappers
   keep the catch_all-only landing** -- a host call's failure is the host's to report.

@@ -25116,7 +25116,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void ehUncaughtPlainErrorReportsItsMessageBeforeTrapping() throws Exception {
 		// The message rides the $lisp-cond payload CDR, which the entry landing pad now
-		// reads: EH mode forces Ctx.condMessagesObservable on so the operand compiles.
+		// reads: in EH mode every signal's message operand compiles.
 		assertThat(compileAndRunEhExpectTrap("""
 				(print (handler-case (error "caught ~a" 1) (error (e) (princ-to-string e))))
 				(error "boom: ~a" 42)
@@ -25144,6 +25144,9 @@ class WasmLispCompilerIntegrationTest {
 				List.of("(defun uc-f (x) (error 'type-error :datum x :expected-type 'integer)) (uc-f \"abc\")",
 						"Condition (TYPE-ERROR :DATUM \"abc\" :EXPECTED-TYPE INTEGER) was signalled."),
 				List.of("(error 'simple-error)", "Condition (SIMPLE-ERROR) was signalled."),
+				// A nil format-control SUPPLIED is the message itself, printed as princ
+				// prints nil -- not the absent message the pad once rendered as nothing.
+				List.of("(error 'simple-error :format-control nil)", "NIL"),
 				List.of("(define-condition uc-plain (error) ()) (error (identity (make-condition 'uc-plain)))",
 						"Condition of type UC-PLAIN was signalled."));
 	}
@@ -25158,6 +25161,25 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunEhExpectTrap(
 				"(print (handler-case (error \"caught\") (error (e) :ok)))\n" + signalAndText.get(0)))
 			.contains("Unhandled condition: " + signalAndText.get(1) + "\n");
+	}
+
+	@Test
+	void anUncaughtConditionReportsUnderACrossLambdaExitAlone() throws Exception {
+		// The cross-lambda return-from is the program's only EH trigger, and it is
+		// lowered after the expansion the report pre-scan sizes: the module still
+		// reaches EH mode and its landing pad, so the compile goes round again with the
+		// pad foreseen. Before that the expansion ran with messages narrowed away and
+		// every line below was `Unhandled condition: ` and nothing else.
+		String exit = "(defun uc-find (xs) (block found (mapc (lambda (x) (when (> x 2) (return-from found x))) xs) nil))\n"
+				+ "(print (uc-find '(1 2 3)))\n";
+		assertThat(compileAndRunEhExpectTrap(exit + "(defun uc-g (x) (error \"boom ~a\" x)) (uc-g 5)"))
+			.contains("Unhandled condition: boom 5\n");
+		assertThat(compileAndRunEhExpectTrap(exit
+				+ "(define-condition uc-e (error) ((v :initarg :v))) (defun uc-g (x) (error 'uc-e :v x)) (uc-g 5)"))
+			.contains("Unhandled condition: Condition (UC-E :V 5) was signalled.\n");
+		assertThat(compileAndRunEhExpectTrap(exit
+				+ "(defun uc-g (x) (error 'simple-error :format-control \"hi ~a\" :format-arguments (list x))) (uc-g 5)"))
+			.contains("Unhandled condition: hi 5\n");
 	}
 
 	@Test

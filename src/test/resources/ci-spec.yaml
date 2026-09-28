@@ -19946,6 +19946,16 @@ standalone:
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
     fails: true
+  - name: uncaught-nil-message-report
+    source: |
+      ;; A nil format-control supplied is the message itself: princ prints it NIL.
+      (print (handler-case (error "caught") (error (e) :ok)))
+      (error 'simple-error :format-control nil)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: NIL
+    fails: true
   - name: uncaught-computed-condition-type-report
     source: |
       ;; A computed condition type with initargs, and nothing caught anywhere: the

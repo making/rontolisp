@@ -36,10 +36,7 @@ final class WasmErrorCompiler {
 	/**
 	 * Compiles {@code (%error message)}: the condition instance slot is nil. The message
 	 * operand IS the payload a handler-case landing synthesizes its {@code simple-error}
-	 * from, so it compiles -- unless {@code ctx.condMessagesObservable} says no program
-	 * code can ever hold a condition (then no clause binds the synthesized instance, the
-	 * tag tests never read the string, and an uncaught throw is a textless trap), in
-	 * which case the message render is skipped like {@code %error-cond}'s.
+	 * from, and the only text the entry landing pad has, so it always compiles.
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.ehMode) {
@@ -49,13 +46,7 @@ final class WasmErrorCompiler {
 		List<LispVal> parts = cons.toList();
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		if (ctx.condMessagesObservable) {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		}
-		else {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-		}
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		emitThrowPayload(ctx);
 	}
 
@@ -83,7 +74,7 @@ final class WasmErrorCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		LispVal text = !ctx.closRegistry.routesConditionReports() ? (ctx.condMessagesObservable ? parts.get(2) : null)
+		LispVal text = !ctx.closRegistry.routesConditionReports() ? parts.get(2)
 				: LispMacroExpander.conditionReportFallback(parts.get(2));
 		emitThrowPayload(ctx, LispMacroExpander.handlersRan(parts), () -> {
 			if (text != null) {

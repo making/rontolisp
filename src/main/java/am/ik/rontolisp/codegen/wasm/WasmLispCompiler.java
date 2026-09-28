@@ -2925,6 +2925,21 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	}
 
+	/**
+	 * An attempt decided EH mode -- and with it the entry function's uncaught-report
+	 * landing pad -- on a program the report pre-scan had judged unable to reach it, so
+	 * the expansion ran with signal messages narrowed away and the pad would print an
+	 * empty report. The next attempt runs the expansion as the pad requires. Never
+	 * escapes {@link #compile(List)}.
+	 */
+	private static final class UncaughtReportUnforeseen extends RuntimeException {
+
+		private UncaughtReportUnforeseen() {
+			super(null, null, false, false);
+		}
+
+	}
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
 		// The JVM backend's outlining loop (JvmLispCompiler.compile): a function
@@ -2932,17 +2947,23 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program compiled again. The map strictly grows -- a name is added, or its
 		// target shrinks toward the floor -- so the loop terminates. An attempt's
 		// warnings print only when it is the one that ships.
+		// The uncaught-report retry flips its flag once, so it adds at most one attempt.
 		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
+		boolean reportsUncaught = false;
 		while (true) {
 			CompileWarnings.startAttempt();
 			try {
-				byte[] bytes = compileProgram(program, outline);
+				byte[] bytes = compileProgram(program, outline, reportsUncaught);
 				CompileWarnings.flushAttempt();
 				return bytes;
 			}
 			catch (FunctionTooLarge signal) {
 				CompileWarnings.discardAttempt();
 				outline.putAll(signal.budgets);
+			}
+			catch (UncaughtReportUnforeseen signal) {
+				CompileWarnings.discardAttempt();
+				reportsUncaught = true;
 			}
 			catch (RuntimeException | Error ex) {
 				CompileWarnings.flushAttempt();
@@ -2955,7 +2976,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private byte[] compileProgram(List<LispVal> program, Map<String, AstOutliner.Budget> outlineBudgets) {
+	private byte[] compileProgram(List<LispVal> program, Map<String, AstOutliner.Budget> outlineBudgets,
+			boolean reportsUncaughtUnforeseen) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -3251,14 +3273,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// with-output-to-string the injected %error-runtime dispatch renders a lambda
 		// :report through (LispMacroExpander.runtimeErrorDispatchCatches) -- without it
 		// every computed-type (error ty initargs...) program was in EH mode with the
-		// narrow gate and reported `Unhandled condition: ` and nothing else. The one
-		// it cannot see is a cross-lambda return-from, which reaches ehMode through
-		// blockExitTag and is lowered only after this pass; a program whose SOLE EH
-		// trigger is one of those keeps the narrow gate, so its landing pad prints a
-		// plain %error's message and an empty report for a typed condition. Widening
-		// that means moving the lowering above this pass -- and the lowering has to run
-		// after it, or a generated dispatcher's return-from would not be lowered at all.
-		boolean ehFormReport = programUsesEhForm(program) || this.asyncMode || restartMode
+		// narrow gate and reported `Unhandled condition: ` and nothing else. What it
+		// cannot see -- a cross-lambda return-from, which reaches ehMode through
+		// blockExitTag and is lowered only after this pass (it has to run after it, or a
+		// generated dispatcher's return-from would not be lowered at all), or any other
+		// trigger only the expansion produces -- is caught where ehMode is decided: the
+		// attempt is abandoned and the next one runs with reportsUncaughtUnforeseen, so
+		// every EH-mode module carries every signal's message.
+		boolean ehFormReport = reportsUncaughtUnforeseen || programUsesEhForm(program) || this.asyncMode || restartMode
 				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW)
 				|| LispMacroExpander.runtimeErrorDispatchCatches(program, closRegistry);
 		// --report-locations gives the report to a program with none of those, too: EH
@@ -3297,14 +3319,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
 		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
 				packageResolver.runtimePackagesMutable());
-		// Whether any signal's message string is observable: the narrowed routing answer
-		// (a message is read only through a HELD condition), forced on with it under
-		// restart mode / --dynamic, and in EH mode by the landing pad -- a plain %error
-		// carries its message in the payload cdr, which is the only text that landing
-		// has. Read by WasmErrorCompiler to decide whether a plain %error compiles its
-		// message operand.
-		boolean condMessagesObservable = closRegistry.routesConditionReports() || restartMode || this.dynamic
-				|| reportsUncaught;
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --
@@ -3526,6 +3540,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// catching form. A program without one stays byte-identical and flag-free.
 		// --report-locations outside it turns it on as well (entryReportOnly above).
 		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly;
+		if (ehMode && !reportsUncaught) {
+			// The pad below reads every escaping condition, but the expansion above ran
+			// for a module that has none: its signals carry no message.
+			throw new UncaughtReportUnforeseen();
+		}
 		// Whether the entry function gets the uncaught-condition landing pad. It writes
 		// fd 2 through a %warn call the compiler SYNTHESIZES in pass 2, so it is a
 		// producer of the reserved *error-output* handle that no scan of the user's text
@@ -4361,7 +4380,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
-			.condMessagesObservable(condMessagesObservable)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
@@ -10237,18 +10255,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = false;
 
 		/**
-		 * True when program code can HOLD a condition value
-		 * ({@code LispMacroExpander.mayHoldConditions}; forced under restart mode and
-		 * {@code --dynamic}). Off, a plain {@code %error}'s message operand is not
-		 * compiled either -- the payload string's only reader is a handler clause that
-		 * binds the synthesized condition, and none exists -- so signal-site message
-		 * renders vanish from the artifact. {@code %error-cond}/{@code %signal-cond} skip
-		 * their message unconditionally (the payload cdr of a non-nil instance is never
-		 * read); this flag extends the skip to the instance-less throw.
-		 */
-		boolean condMessagesObservable = true;
-
-		/**
 		 * True when the program throws on the block-exit tag -- it lowers a cross-lambda
 		 * {@code return-from}, or it uses {@code catch}/{@code throw}, which share the
 		 * tag. The tag (index 1) is then emitted and {@code handler-case} is made
@@ -10964,7 +10970,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.hostFetch = builder.hostFetch;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
-			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
@@ -11101,8 +11106,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean serve = false;
 
 			private boolean ehMode = false;
-
-			private boolean condMessagesObservable = true;
 
 			private boolean blockExitTag = false;
 
@@ -11383,11 +11386,6 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder ehMode(boolean ehMode) {
 				this.ehMode = ehMode;
-				return this;
-			}
-
-			Builder condMessagesObservable(boolean condMessagesObservable) {
-				this.condMessagesObservable = condMessagesObservable;
 				return this;
 			}
 

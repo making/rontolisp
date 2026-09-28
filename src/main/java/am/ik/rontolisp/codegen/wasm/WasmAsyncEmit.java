@@ -828,7 +828,6 @@ final class WasmAsyncEmit {
 			.hostFetch(proto.hostFetch)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
-			.condMessagesObservable(proto.condMessagesObservable)
 			.blockExitTag(proto.blockExitTag)
 			.restartMode(proto.restartMode)
 			// NOT optional (the restartMode lesson): without it a top-level chunk would
