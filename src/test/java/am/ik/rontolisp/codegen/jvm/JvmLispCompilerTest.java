@@ -6,6 +6,7 @@ import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -12930,6 +12931,20 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.withSystemPath(BuiltinFunctionValueCountFixture.PROGRAM, List.of(), false, false)
 			.forms())).isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTheArgumentsAnOperatorIgnoresAreTaken() throws Exception {
+		// The JVM twin of LispEvaluatorTest#theArgumentsAnOperatorIgnoresAreTaken.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.PUSHBACK_PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.PUSHBACK_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.GRAY_PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.GRAY_EXPECTED);
 	}
 
 	@Test

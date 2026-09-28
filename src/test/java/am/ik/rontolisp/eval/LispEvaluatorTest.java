@@ -17,6 +17,7 @@ import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
@@ -10264,6 +10265,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theArgumentsAnOperatorIgnoresAreTaken() {
+		// Pinned on all three backends: peek-char refused its fifth argument here, and
+		// the compile paths failed the compile or signalled for all four operators.
+		assertThat(evalPrinting(IgnoredArgumentFixture.PROGRAM)).isEqualTo(IgnoredArgumentFixture.EXPECTED);
+		assertThat(evalPrinting(IgnoredArgumentFixture.PUSHBACK_PROGRAM))
+			.isEqualTo(IgnoredArgumentFixture.PUSHBACK_EXPECTED);
+		assertThat(evalPrinting(IgnoredArgumentFixture.GRAY_PROGRAM)).isEqualTo(IgnoredArgumentFixture.GRAY_EXPECTED);
+	}
+
+	@Test
 	void closeTakesItsAbortPairInADirectCall() {
 		// (close s :abort t) was a wrong count once close had a call shape (1 argument).
 		assertThat(evalPrinting(MethodedBuiltinTailFixture.CLOSE_PROGRAM))
@@ -19793,6 +19804,57 @@ class LispEvaluatorTest {
 				}
 			}
 		}
+	}
+
+	// Every count a built-in's call shape ADMITS reaches its body: a direct call and a
+	// funcall with that many nil arguments may fail on the values, never on the count.
+	// peek-char's shape admitted recursive-p while its body refused it. The compile
+	// paths' half is cli/BuiltinCallArityCompileTest.
+	@Test
+	void everyCountABuiltinCallShapeAdmitsReachesItsBody() {
+		java.util.Set<String> names = new java.util.TreeSet<>(
+				am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames());
+		names.addAll(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames());
+		List<String> refused = new java.util.ArrayList<>();
+		for (String name : names) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min() + 2
+					: shape.max();
+			java.util.regex.Pattern refusal = java.util.regex.Pattern.compile(
+					"(?i)(" + java.util.regex.Pattern.quote(am.ik.rontolisp.compiler.BuiltinCallArity.operator(name))
+							+ "|" + java.util.regex.Pattern.quote(name)
+							+ ") (expects|requires) (at (most|least) )?(\\d+|one)( (to|or) \\d+)? argument");
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()),
+					new ByteArrayInputStream(new byte[0]));
+			for (int count = shape.min(); count <= last; count++) {
+				if (!shape.accepts(count)) {
+					continue;
+				}
+				// close's pair is :abort and its value, and nothing else.
+				String args = am.ik.rontolisp.LispNames.CLOSE.equals(name) && count == 3 ? " nil :abort nil"
+						: " nil".repeat(count);
+				for (String call : List.of("(" + spelled + args + ")", "(funcall '" + spelled + args + ")")) {
+					// A body failing on its nil values may escape handler-case as a host
+					// exception; only the text of the failure matters here.
+					String reported;
+					try {
+						reported = evaluator
+							.eval(LispReader
+								.readFromString("(handler-case " + call + " (error (c) (princ-to-string c)))"))
+							.display();
+					}
+					catch (RuntimeException ex) {
+						reported = String.valueOf(ex.getMessage());
+					}
+					if (refusal.matcher(reported).find()) {
+						refused.add(call + " => " + reported);
+					}
+				}
+			}
+		}
+		assertThat(refused).isEmpty();
 	}
 
 	// The built-ins outside the wrapper catalog the interpreter implements natively

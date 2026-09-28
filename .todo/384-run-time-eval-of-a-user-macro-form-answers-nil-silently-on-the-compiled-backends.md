@@ -38,3 +38,8 @@ Outcome (a) fixes both spellings at once.
 
 Acceptance: the three lines above pinned on all four backends (ci-spec + the
 backend suites); the `compile` and `eval` doc pages' limitation sentences.
+
+Observed 2026-09-28: a REFERENCE-GATED built-in (`BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`)
+the program never takes as a value is the same silent nil, since the eval runtime has no entry
+for it: `(eval '(read-char s))` / `(eval '(peek-char nil s))` answer NIL on JVM/wasm/component,
+and the same program with a `#'read-char` anywhere answers the character.

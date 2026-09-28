@@ -20,6 +20,7 @@ import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
 import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.LispVal;
@@ -39,6 +40,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.testcontainers.images.builder.Transferable;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14167,6 +14169,18 @@ class WasmLispCompilerIntegrationTest {
 		// LispEvaluatorTest#aBuiltinFunctionValueReportsAWrongCountWithItsCallShape.
 		assertThat(compileAndRunFrontEndWithDir(BuiltinFunctionValueCountFixture.PROGRAM, false))
 			.isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
+	}
+
+	@ParameterizedTest
+	@ValueSource(booleans = { false, true })
+	void theArgumentsAnOperatorIgnoresAreTaken(boolean component) throws Exception {
+		// The WASM twin of LispEvaluatorTest#theArgumentsAnOperatorIgnoresAreTaken.
+		assertThat(compileAndRunFrontEndWithDir(IgnoredArgumentFixture.PROGRAM, component))
+			.isEqualTo(IgnoredArgumentFixture.EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(IgnoredArgumentFixture.PUSHBACK_PROGRAM, component))
+			.isEqualTo(IgnoredArgumentFixture.PUSHBACK_EXPECTED);
+		assertThat(compileAndRunFrontEndWithDir(IgnoredArgumentFixture.GRAY_PROGRAM, component))
+			.isEqualTo(IgnoredArgumentFixture.GRAY_EXPECTED);
 	}
 
 	@Test

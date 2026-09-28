@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
@@ -262,6 +263,12 @@ final class WasmSocketsRewrite {
 				default -> {
 					// fall through to the generic call rewrite
 				}
+			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons);
+			if (withoutIgnored != cons) {
+				return rewriteForm(withoutIgnored, asyncContext);
 			}
 			LispVal substituted = substitute(sym.name(), parts, asyncContext);
 			if (substituted != null) {

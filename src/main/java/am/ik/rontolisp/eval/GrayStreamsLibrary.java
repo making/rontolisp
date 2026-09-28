@@ -9,6 +9,7 @@ import java.util.List;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -516,6 +517,12 @@ public final class GrayStreamsLibrary {
 			LispVal bindingForm = rewriteBindingForm(cons, opName, ctx);
 			if (bindingForm != null) {
 				return bindingForm;
+			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons, opName);
+			if (withoutIgnored != cons) {
+				return rewrite(withoutIgnored, ctx);
 			}
 			if (LispNames.WARN.equals(opName)) {
 				// warn writes its report to the current *error-output*, which may hold

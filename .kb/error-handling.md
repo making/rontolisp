@@ -2195,8 +2195,43 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     front of the shared ` expects at most N arguments, got ` piece; a whole opening per operator
     was +2,046), a one-`&optional`-defun program 6,868 -> 6,919 / 1,191 unchanged,
     `(print (+ 1 2))` unchanged.
-  - Not covered: `rontolisp:await` has no function value in the interpreter; `peek-char`'s shape
-    admits a fifth argument (`recursive-p`) the lowerings and the Java body refuse, and `read-char` / `read-line` / `read-char-no-hang` have the same gap (`.todo/a64`).
+  - Not covered: `rontolisp:await` has no function value in the interpreter.
+- **Every count a shape ADMITS reaches the operator** (2026-09-28). **Invariant: a direct call
+  or a function-value call with a count its `BuiltinCallArity` shape accepts is never refused
+  for its count -- not by the interpreter's Java body, not by a compile path's lowering, rewrite
+  or scan.** Pinned by `LispEvaluatorTest.everyCountABuiltinCallShapeAdmitsReachesItsBody` (every
+  catalog and native name, every admitted count up to the maximum or three past an unbounded
+  minimum, nil arguments, direct and `funcall`) and `cli/BuiltinCallArityCompileTest` (the same
+  calls through the CLI's front end on jvm / wasm / component, compile only; a lowering refusing
+  a nil that must be a literal -- `open`'s direction, a keyword -- is dropped and the rest
+  recompiled; only a COUNT refusal fails it; `tls-listen-pem` is out, it reads its certificate
+  files at compile time).
+  - Measured before: the interpreter refused `(peek-char nil s nil :eof nil)`; every backend
+    refused `(find-symbol n p x)`, which the `&rest` wrapper's shape admitted; the compile paths
+    failed the compile for `(read-char s nil :eof nil)`, `(read-line s nil :eof nil)`,
+    `(subtypep a b env)` and `(list*)`, and compiled `peek-char`'s and `read-char-no-hang`'s last
+    argument to a count report.
+  - An argument the operator accepts and IGNORES (`recursive-p` of `read-char`,
+    `read-char-no-hang`, `read-line`, `peek-char`; `environment` of `subtypep`) goes through
+    `macro/IgnoredArgument`: `drop` is the call without it, the argument still evaluated in its
+    place (dropped when inert, in front of the call when every other argument is, else in a
+    `prog1` behind the argument before it); `withoutArgument` is the call without it for a scan
+    that evaluates nothing. Its consumers are every place that judges one of these calls by its
+    count: the two backends' call dispatch (after the wrong-count check), `GrayStreamsLibrary`
+    and `UnreadCharLibrary`'s call-site rewrites, `WasmSocketsRewrite`, the `mayCreateInstances`
+    scan, the runtime-`subtypep` scan and the `subtypep` multiple-value producer (which binds
+    the environment after both specifiers). A new ignored argument is one `POSITIONS` row. Pinned
+    by the `IgnoredArgumentFixture` trio (plain, `unread-char` pushback, Gray instance), which
+    also pins the evaluation order.
+  - A shape wider than the operator's lambda list is narrowed at its wrapper instead:
+    `#'find-symbol` is `(n &optional (p nil pp))` (was `&rest`), `#'list*` is `(a &rest r)`
+    (CL's `object+`).
+  - Fixed on the way: `read-char-no-hang` was missing from `END_OF_FILE_SITES` and from the
+    `#'` list of `constructsInstance`, so a signalling `(read-char-no-hang s)` or any
+    `#'read-char-no-hang` failed the wasm compile (`no layout was baked for instance type
+    %class-END-OF-FILE`) and printed `#<END-OF-FILE :STREAM NIL>` for the report on the JVM. A
+    computed eof-value was not evaluated by a signalling read (`(read-char s t (f))`) nor, outside
+    end of file, by `(read-line s nil (f))`; both evaluate it now.
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators

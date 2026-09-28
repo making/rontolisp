@@ -916,11 +916,12 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(LispNames.VECTOR, List.of(LispNames.LAMBDA_REST, "r"), List.of(coerceTo("r", "VECTOR")));
 	}
 
-	// #'list*: (lambda (&rest r) ...) -- the last argument is the TAIL, the preceding
-	// ones are consed onto it, so the fold runs right to left over the reversed rest
-	// list. expandListStar can only do that with a static argument count.
+	// #'list*: (lambda (a &rest r) ...) -- CL's (object &rest objects), which is the
+	// call shape. The last argument is the TAIL, the preceding ones are consed onto it,
+	// so the fold runs right to left over the reversed argument list. expandListStar can
+	// only do that with a static argument count.
 	//
-	// (let ((__ls_r (reverse r)))
+	// (let ((__ls_r (reverse (cons a r))))
 	// (do ((__ls_tail (cdr __ls_r) (cdr __ls_tail))
 	// (__ls_acc (car __ls_r) (cons (car __ls_tail) __ls_acc)))
 	// ((null __ls_tail) __ls_acc)))
@@ -934,8 +935,10 @@ public final class BuiltinFunctionWrappers {
 		LispVal exit = listToCons(List.of(callV(LispNames.NULL, tail), acc));
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(reversed, call(LispNames.REVERSE, "r"))))), loop));
-		return new WrapperDef(LispNames.LIST_STAR, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+				listToCons(List.of(listToCons(List.of(reversed,
+						callV(LispNames.REVERSE, callV(LispNames.CONS, new LispSymbol("a"), new LispSymbol("r"))))))),
+				loop));
+		return new WrapperDef(LispNames.LIST_STAR, List.of("a", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
 	// #'map: (lambda (type f s &rest more) ...). Both of the operator's static facts are
@@ -2303,14 +2306,16 @@ public final class BuiltinFunctionWrappers {
 		return listToCons(List.of(new LispSymbol(LispNames.GETF), plist, new LispSymbol(option), fallback));
 	}
 
-	// #'find-symbol: (lambda (n &rest p) (if (consp p) (find-symbol n (car p))
-	// (find-symbol n))) -- both branches are call positions the backends lower.
+	// #'find-symbol: (lambda (n &optional (p nil pp)) (if pp (find-symbol n p)
+	// (find-symbol n))) -- both branches are call positions the backends lower, and the
+	// lambda list is CL's (string &optional package), which is the call shape.
 	private static WrapperDef findSymbolWrapper() {
 		LispSymbol n = new LispSymbol("n");
 		LispSymbol p = new LispSymbol("p");
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, p),
-				callV(LispNames.FIND_SYMBOL, n, callV(LispNames.CAR, p)), callV(LispNames.FIND_SYMBOL, n)));
-		return new WrapperDef(LispNames.FIND_SYMBOL, List.of("n", LispNames.LAMBDA_REST, "p"), List.of(body));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("pp"),
+				callV(LispNames.FIND_SYMBOL, n, p), callV(LispNames.FIND_SYMBOL, n)));
+		return new WrapperDef(LispNames.FIND_SYMBOL, List.of("n", LispNames.LAMBDA_OPTIONAL, "p" + SUPPLIED_P + "pp"),
+				List.of(body));
 	}
 
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(

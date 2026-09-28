@@ -1,8 +1,8 @@
 # read-line
 
-`(read-line &optional stream)`
+`(read-line &optional stream eof-error-p eof-value recursive-p)`
 
-テキストを 1 行読み取り、末尾の改行を取り除いた文字列として返します(CRLF 行末のキャリッジリターンも Java の `BufferedReader.readLine` と同様に取り除かれるため、[`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) のソケット経由の HTTP のような CRLF 終端の入力も通常の行として読めます)。引数がない場合は標準入力から読み取ります。`open` または `with-open-file` で開いたストリームを与えると、そのストリームから次の行を読み取ります。入力の終端ではエラーを通知せず `nil` を返します。3 つすべてのバックエンドで動作します。`read` と異なり、S 式として解析せずに生の行を返します。
+テキストを 1 行読み取り、末尾の改行を取り除いた文字列として返します(CRLF 行末のキャリッジリターンも Java の `BufferedReader.readLine` と同様に取り除かれるため、[`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) のソケット経由の HTTP のような CRLF 終端の入力も通常の行として読めます)。引数がない場合は標準入力から読み取ります。`open` または `with-open-file` で開いたストリームを与えると、そのストリームから次の行を読み取ります。入力の終端では通知せず `eof-value` (デフォルト `nil`) を返します。`eof-error-p` のデフォルトは CL の `t` ではなく `nil` で、真を渡すと `end-of-file` を通知します。`recursive-p` は受け付けて無視します。意味を持つのはリーダーマクロの再帰的な読み取りだけです。3 つすべてのバックエンドで動作します。`read` と異なり、S 式として解析せずに生の行を返します。
 
 ```console
 (print (read-line))

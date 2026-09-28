@@ -10414,6 +10414,10 @@ public final class LispMacroExpander {
 			bindings.add(listToCons(List.of(errpVar, eofErrorP)));
 			bindings.add(listToCons(List.of(valueVar, eofValue)));
 		}
+		else if (!IgnoredArgument.isInert(eofValue)) {
+			// The signal never answers the eof-value, but CL evaluates it all the same.
+			bindings.add(listToCons(List.of(valueVar, eofValue)));
+		}
 		bindings.add(listToCons(List.of(resultVar, fmtCall(op.name(), streamVar, LispNil.INSTANCE, LispNil.INSTANCE))));
 		LispVal signal = endOfFileSignal();
 		LispVal onEof = staticSignal ? signal
@@ -12573,7 +12577,9 @@ public final class LispMacroExpander {
 	 * <ul>
 	 * <li>{@code (read-line s nil)} -> {@code (read-line s)}</li>
 	 * <li>{@code (read-line s nil nil)} -> {@code (read-line s)}</li>
-	 * <li>{@code (read-line s nil EOF-VAL)} -> {@code (or (read-line s) EOF-VAL)}</li>
+	 * <li>{@code (read-line s nil EOF-VAL)} -> {@code (or (read-line s) EOF-VAL)}, the
+	 * stream and a computed {@code EOF-VAL} bound first so the value is evaluated whether
+	 * or not the read ends the file</li>
 	 * </ul>
 	 *
 	 * The runtime stream helpers on all backends already return {@code nil} at EOF, so
@@ -12611,8 +12617,24 @@ public final class LispMacroExpander {
 		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
 			return readLineOnly;
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.OR), readLineOnly, parts.get(3)));
+		LispVal eofValue = parts.get(3);
+		if (IgnoredArgument.isInert(eofValue)) {
+			return listToCons(List.of(new LispSymbol(LispNames.OR), readLineOnly, eofValue));
+		}
+		// The eof-value is evaluated before the read, after the stream, as CL evaluates
+		// it: the or alone would run it at end of file only.
+		LispSymbol streamVar = new LispSymbol(READ_LINE_STREAM_VAR);
+		LispSymbol valueVar = new LispSymbol(READ_LINE_VALUE_VAR);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(streamVar, stream)), listToCons(List.of(valueVar, eofValue)))),
+				listToCons(List.of(new LispSymbol(LispNames.OR), listToCons(List.of(new LispSymbol(head), streamVar)),
+						valueVar))));
 	}
+
+	/** Fixed temporaries of {@link #expandReadLineCompat} over a computed eof-value. */
+	private static final String READ_LINE_STREAM_VAR = "__rl_stream";
+
+	private static final String READ_LINE_VALUE_VAR = "__rl_value";
 
 	private static boolean isLiteralNil(LispVal expr) {
 		return expr instanceof LispNil || (expr instanceof LispSymbol sym && "NIL".equals(sym.name()));
@@ -20481,6 +20503,8 @@ public final class LispMacroExpander {
 
 	/** The per-operator half of {@link #mayCreateInstances}. */
 	private static boolean constructsInstance(String head, LispCons form) {
+		// The reads are judged without the recursive-p they ignore (IgnoredArgument).
+		form = IgnoredArgument.withoutArgument(form, head);
 		switch (head) {
 			case LispNames.OBJ_NEW, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.SIGNAL,
 					LispNames.MAKE_CONDITION:
@@ -20499,9 +20523,10 @@ public final class LispMacroExpander {
 				// they are prelude Lisp whose spliced bodies carry the %obj-new this
 				// scan already answers for.
 				return true;
-			case LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
+			case LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
 				// A read whose end of file SIGNALS builds the end-of-file condition
-				// instance (expandReadEofSignal).
+				// instance (expandReadEofSignal) -- read-char-no-hang's too, as the
+				// read-char it expands to (expandReadCharNoHang).
 				return expandReadEofSignal(form, true) != null;
 			case LispNames.READ_LINE:
 				return expandReadEofSignal(form, false) != null;
@@ -20528,17 +20553,18 @@ public final class LispMacroExpander {
 			case LispNames.FUNCTION:
 				// #'signal: the generated first-class wrapper re-enters the designator
 				// expansion, whose every signal arm builds a simple-condition.
-				// #'read-char / #'peek-char / #'read-byte: their wrappers signal
-				// end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are injected only
-				// because of this very reference. #'read-sequence / #'write-sequence:
-				// their wrappers run the bounds check, which signals type-error for
-				// the same reason. #'read / #'read-from-string: their
+				// #'read-char / #'read-char-no-hang / #'peek-char / #'read-byte: their
+				// wrappers signal end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are
+				// injected only because of this very reference. #'read-sequence /
+				// #'write-sequence: their wrappers run the bounds check, which signals
+				// type-error for the same reason. #'read / #'read-from-string: their
 				// wrappers can read a #P"..." pathname instance, like the head case.
 				// #'aref / #'array-row-major-index (todo a58): the shared fold's per-axis
 				// bound check and subscript-count check signal a type-error/simple-error
 				// the same way.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
+								|| LispNames.READ_CHAR_NO_HANG.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
 								|| LispNames.READ_SEQUENCE.equals(fn.name())
 								|| LispNames.WRITE_SEQUENCE.equals(fn.name()) || LispNames.READ.equals(fn.name())
@@ -31686,11 +31712,13 @@ public final class LispMacroExpander {
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
 	 * instance in the expression expansion ({@link #expandReadEofSignal}), after the
-	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation.
+	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation. read-char-no-hang
+	 * is the read-char it expands to ({@link #expandReadCharNoHang}).
 	 */
 	public static final java.util.Set<String> END_OF_FILE_SITES = java.util.Set.of(LispNames.READ_CHAR,
-			LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR, LispNames.PEEK_CHAR_INTERNAL,
-			LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL, LispNames.READ_LINE_RAW_INTERNAL);
+			LispNames.READ_CHAR_NO_HANG, LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR,
+			LispNames.PEEK_CHAR_INTERNAL, LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
+			LispNames.READ_LINE_RAW_INTERNAL);
 
 	/**
 	 * The sequence operators whose compiled form can construct a {@code type-error}
@@ -37512,7 +37540,8 @@ public final class LispMacroExpander {
 				size == 2 || size == 3;
 			case LispNames.GETHASH -> size == 3 || size == 4;
 			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
-			case LispNames.SUBTYPEP -> size == 3;
+			// subtypep's environment is evaluated and ignored (IgnoredArgument).
+			case LispNames.SUBTYPEP -> size == 3 || size == 4;
 			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
 			case LispNames.READ_FROM_STRING -> size == 2;
 			default -> false;
@@ -37685,7 +37714,8 @@ public final class LispMacroExpander {
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.SUBTYPEP: {
-					// (subtypep sub super) -> the answer + CL's valid-p. The valid-p is
+					// (subtypep sub super [env]) -> the answer + CL's valid-p. The
+					// valid-p is
 					// a second decision over the SAME argument temps, so each specifier
 					// is evaluated once however many values the consumer takes; both
 					// reads are pure.
@@ -37704,6 +37734,11 @@ public final class LispMacroExpander {
 						LispSymbol p = new LispSymbol(prefix + "_p");
 						bindings.add(new MvBinding(p, supRef));
 						supRef = p;
+					}
+					// The environment is evaluated after both specifiers, and ignored
+					// (IgnoredArgument).
+					if (parts.size() == 4) {
+						bindings.add(new MvBinding(new LispSymbol(prefix + "_e"), parts.get(3)));
 					}
 					values.add(mvCall(LispNames.SUBTYPEP, subRef, supRef));
 					values.add(mvCall(LispNames.SUBTYPEP_VALID, subRef, supRef));
@@ -41099,7 +41134,8 @@ public final class LispMacroExpander {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 				String member = qn == null ? op.name() : qn.member();
 				if (LispNames.SUBTYPEP.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
+					// Judged without the environment it ignores (IgnoredArgument).
+					List<LispVal> parts = IgnoredArgument.withoutArgument(cons, LispNames.SUBTYPEP).toList();
 					if (parts.size() == 3 && (literalTypeSpecifier(parts.get(1)) == null
 							|| literalTypeSpecifier(parts.get(2)) == null)) {
 						return true;

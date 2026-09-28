@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.LispNames;
@@ -472,10 +473,19 @@ final class JvmExprCompiler {
 			// its own call path -- unless it is a native built-in's and its lambda list
 			// takes the built-in's own counts (a library's implementation of it), which
 			// reports as the built-in.
-			LispVal wrongCount = ctx.userDefunNames.contains(sym.name())
-					&& !ctx.builtinShapedDefuns.contains(sym.name()) ? null : BuiltinCallArity.wrongCountSignal(cons);
+			boolean builtinCall = !ctx.userDefunNames.contains(sym.name())
+					|| ctx.builtinShapedDefuns.contains(sym.name());
+			LispVal wrongCount = builtinCall ? BuiltinCallArity.wrongCountSignal(cons) : null;
 			if (wrongCount != null) {
 				compileExpr(wrongCount, ctx, className);
+				return;
+			}
+			// A count the shape admits that no lowering takes: the argument the operator
+			// accepts and ignores (read's recursive-p, subtypep's environment) is
+			// evaluated in its place and the call compiled without it.
+			LispVal withoutIgnored = builtinCall ? IgnoredArgument.drop(cons) : cons;
+			if (withoutIgnored != cons) {
+				compileExpr(withoutIgnored, ctx, className);
 				return;
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());

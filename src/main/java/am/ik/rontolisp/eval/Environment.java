@@ -6699,14 +6699,13 @@ public final class Environment implements Scope {
 		// case. The compiled backends reach the same behavior through
 		// LispMacroExpander.expandPeekChar, which lowers the loop onto %peek-char.
 		env.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, args -> {
-			if (args.size() > 4) {
-				throw new LispEvalException(LispNames.PEEK_CHAR + " expects 0 to 4 arguments");
-			}
+			// 0 to 5: the fifth is CL's recursive-p, which nothing here reads.
+			requireArgCountBetween(LispNames.PEEK_CHAR, args, 0, 5);
 			LispVal peekType = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
 			if (!(peekType instanceof LispNil || peekType instanceof LispTrue || peekType instanceof LispChar)) {
 				throw new LispEvalException(LispNames.PEEK_CHAR + " expects nil, t or a character as the peek type");
 			}
-			List<LispVal> rest = args.isEmpty() ? List.of() : args.subList(1, args.size());
+			List<LispVal> rest = args.isEmpty() ? List.of() : args.subList(1, Math.min(args.size(), 4));
 			while (true) {
 				LispVal peeked = peekChar.apply(rest);
 				if (peekType instanceof LispNil || !(peeked instanceof LispChar ch)) {
