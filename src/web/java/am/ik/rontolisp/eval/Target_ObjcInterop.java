@@ -42,24 +42,17 @@ final class Target_ObjcInterop {
 	static void register(Environment globalEnv, ObjcCaller caller) {
 		for (String member : List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
 				LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP)) {
-			unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, member));
+			ObjcTargetSupport.unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, member));
 		}
 	}
 
 	@Substitute
 	static void registerPrimitives(Environment globalEnv,
 			java.util.function.BiFunction<am.ik.rontolisp.LispVal, java.util.List<am.ik.rontolisp.LispVal>, am.ik.rontolisp.LispVal> apply) {
-		unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, LispNames.OBJC_ON_MAIN));
+		ObjcTargetSupport.unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, LispNames.OBJC_ON_MAIN));
 		for (String name : LispNames.OBJC_PRIMITIVES) {
-			unavailable(globalEnv, name);
+			ObjcTargetSupport.unavailable(globalEnv, name);
 		}
-	}
-
-	private static void unavailable(Environment globalEnv, String name) {
-		globalEnv.defineFunction(name, new LispFunction(name, args -> {
-			throw new LispEvalException(
-					name.toLowerCase(java.util.Locale.ROOT) + ": Objective-C is not available in the browser playground");
-		}));
 	}
 
 	@Substitute
@@ -70,6 +63,26 @@ final class Target_ObjcInterop {
 	@Substitute
 	static void parkMainThread() {
 		throw new IllegalStateException("there is no main thread to park in the browser playground");
+	}
+
+}
+
+/**
+ * Helpers of {@link Target_ObjcInterop} live outside the {@code @TargetClass}: GraalVM 25
+ * rejects any member of a target class that carries none of {@code @Delete},
+ * {@code @Substitute}, {@code @AnnotateOriginal} or {@code @Alias}, and a helper has no
+ * original in {@link ObjcInterop} to substitute.
+ */
+final class ObjcTargetSupport {
+
+	private ObjcTargetSupport() {
+	}
+
+	static void unavailable(Environment globalEnv, String name) {
+		globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			throw new LispEvalException(
+					name.toLowerCase(java.util.Locale.ROOT) + ": Objective-C is not available in the browser playground");
+		}));
 	}
 
 }
