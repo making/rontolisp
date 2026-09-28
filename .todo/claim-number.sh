@@ -60,7 +60,7 @@ for attempt in $(seq 1 10); do
 	# match would read `700-the-step-at-batch-999-regresses.md` as 999 and burn
 	# every number in between.
 	used=$( {
-		git ls-tree --name-only origin/develop .todo/ | sed 's|^\.todo/||' | grep -oE '^[0-9a-z][0-9]{2}-' || true
+		git ls-tree -r --name-only origin/develop .todo/ | sed 's|^\.todo/||' | grep -oE '^[0-9a-z][0-9]{2}-' || true
 		git ls-tree --name-only origin/develop .todo/artefacts/ | sed 's|^\.todo/artefacts/||' \
 			| grep -oE '^[0-9a-z][0-9]{2}-' || true
 		git grep -h -oE '\.todo/[0-9a-z][0-9]{2}' origin/develop -- .todo/history/ | sed 's|^\.todo/||' || true
