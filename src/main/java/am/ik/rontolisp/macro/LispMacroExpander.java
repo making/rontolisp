@@ -38391,10 +38391,10 @@ public final class LispMacroExpander {
 			LispNames.NTH, LispNames.NTHCDR, LispNames.LENGTH, LispNames.NOT, LispNames.NULL, LispNames.EQ_GENERAL,
 			LispNames.EQL, LispNames.CONSP, LispNames.ATOM, LispNames.LISTP, LispNames.SYMBOLP, LispNames.STRINGP,
 			LispNames.NUMBERP, LispNames.INTEGERP, LispNames.CHARACTERP, LispNames.AREF, LispNames.SVREF,
-			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.SYMBOL_NAME,
-			LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS, LispNames.MIN, LispNames.MAX,
-			LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH, LispNames.FLOAT, LispNames.STRING_EQ,
-			LispNames.CHAR_EQ, LispNames.SETQ);
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR,
+			LispNames.SYMBOL_NAME, LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS,
+			LispNames.MIN, LispNames.MAX, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH,
+			LispNames.FLOAT, LispNames.STRING_EQ, LispNames.CHAR_EQ, LispNames.SETQ);
 
 	/** Whether evaluating the form cannot publish through the channel. */
 	private static boolean quiet(LispVal form) {

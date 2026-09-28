@@ -25540,6 +25540,7 @@ class WasmLispCompilerIntegrationTest {
 				(defvar *x* 'a)
 				(print (te (lambda () (char-code *c*))))
 				(print (te (lambda () (char-code 1))))
+				(print (te (lambda () (char-int *c*))))
 				(print (te (lambda () (char-upcase *c*))))
 				(print (te (lambda () (char-downcase *c*))))
 				(print (te (lambda () (alpha-char-p *c*))))
@@ -25557,13 +25558,14 @@ class WasmLispCompilerIntegrationTest {
 				(print (te (lambda () (mapcar #'char-upcase (list #\\a *c*)))))
 				(print (te (lambda () (funcall #'lower-case-p *c*))))
 				(print (te (lambda () (funcall #'digit-char-p *c* 16))))
-				(print (list (char-code #\\a) (char-upcase #\\a) (char-downcase #\\A) (alpha-char-p #\\a) (digit-char-p #\\7)
+				(print (list (char-code #\\a) (char-int #\\a) (char-upcase #\\a) (char-downcase #\\A) (alpha-char-p #\\a) (digit-char-p #\\7)
 				             (digit-char-p #\\f 16) (upper-case-p #\\A) (lower-case-p #\\A) (both-case-p #\\1)
 				             (alphanumericp #\\x) (char-name #\\Space) (graphic-char-p #\\a) (standard-char-p #\\Newline)))
 				""";
 		String expected = """
 				("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-INT: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("CHAR-DOWNCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
@@ -25581,7 +25583,7 @@ class WasmLispCompilerIntegrationTest {
 				("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
 				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
-				(97 #\\A #\\a T 7 15 T NIL NIL T "Space" T T)""";
+				(97 97 #\\A #\\a T 7 15 T NIL NIL T "Space" T T)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
 	}

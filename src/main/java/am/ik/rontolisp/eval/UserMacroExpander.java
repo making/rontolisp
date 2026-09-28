@@ -1034,7 +1034,7 @@ public final class UserMacroExpander {
 			"plusp", "minusp", "evenp", "oddp", "endp", "car", "cdr", "caar", "cadr", "cdar", "cddr", "caddr", "first",
 			"second", "third", "fourth", "rest", "last", "nth", "nthcdr", "elt", "length", "list", "list*", "cons",
 			"reverse", "append", "member", "assoc", "getf", "position", "find", "string", "symbol-name", "char-code",
-			"code-char");
+			"char-int", "code-char");
 
 	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
 	// the resolver consumes these, so they must be recognized BEFORE resolution to be

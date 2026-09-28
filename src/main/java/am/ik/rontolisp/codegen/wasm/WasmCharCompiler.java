@@ -160,6 +160,15 @@ final class WasmCharCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
+	/**
+	 * {@code (char-int ch)}: the same code point {@code char-code} answers -- with no
+	 * implementation-defined attributes beyond it, char-int has nothing else to encode.
+	 */
+	static void compileCharInt(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		pushCheckedCode(cons.toList().get(1), ctx, false);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
 	/** {@code (code-char n)}. */
 	static void compileCodeChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);

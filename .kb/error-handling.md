@@ -1501,7 +1501,7 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
   `WasmLispCompilerIntegrationTest`).
 
 ## A character built-in checks its argument
-**Invariant: a non-character reaching `char-code`, `char-upcase`, `char-downcase`,
+**Invariant: a non-character reaching `char-code`, `char-int`, `char-upcase`, `char-downcase`,
 `alpha-char-p`, `digit-char-p`, `upper-case-p`, `lower-case-p`, `both-case-p`, `alphanumericp`,
 `char-name`, `graphic-char-p` or `standard-char-p` -- directly or through `#'` -- reports
 `OP: The value 1 is not of type CHARACTER` as a catchable `type-error`, byte-identical on all four
@@ -1511,7 +1511,7 @@ Before (measured 2026-09-27): a simple-error `CHAR-CODE expects a character, got
 the datum-less `ClassCastException` report on the JVM (`CHAR=` for the case predicates) and a trap
 on wasm.
 
-- **Table**: eleven fixed-typed `CHARACTER` rows after the array-shape accessors, then
+- **Table**: twelve fixed-typed `CHARACTER` rows after the array-shape accessors, then
   `DIGIT-CHAR-P` funnel-typed -- a `CHARACTER` row would name its radix's `INTEGER` failure
   `CHARACTER` through the interpreter's seam. `OperandTypes.characterOperators()` is what gives a
   wasm table naming `DIGIT-CHAR-P` its `CHARACTER` text.
@@ -1533,7 +1533,9 @@ on wasm.
   class 188,098 unchanged, `examples/net/hello-clack.lisp` class 948,278 -> 949,038 (the `_ckChr`
   wrappers); `hello_world`, `pi_approx` byte-identical. 40M `char-code`/`upper-case-p`/
   `char-downcase` in EH mode: wasmtime 4.23 -> 4.20 s, JVM 0.33 -> 0.34 s.
-- `char-int` is not defined on any backend (`.todo/a67`).
+- `char-int` (measured 2026-09-28: undefined on every backend) is now the same code point
+  `char-code` answers on all four, joining this table's twelve rows -- CL leaves it no
+  implementation-defined attribute beyond the code point to differ on.
 - Pinned by `ci-spec.yaml`'s `character-built-ins-check-their-argument` and the
   `characterBuiltInsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest`).

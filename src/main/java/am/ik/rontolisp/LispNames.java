@@ -3910,6 +3910,13 @@ public final class LispNames {
 	public static final String CHAR_CODE = "CHAR-CODE";
 
 	/**
+	 * The {@code char-int} built-in function: a non-negative integer encoding the
+	 * character, the code point with no implementation-defined attributes beyond it --
+	 * the same value {@code char-code} answers.
+	 */
+	public static final String CHAR_INT = "CHAR-INT";
+
+	/**
 	 * The {@code code-char} built-in function (the character with a given code point).
 	 */
 	public static final String CODE_CHAR = "CODE-CHAR";

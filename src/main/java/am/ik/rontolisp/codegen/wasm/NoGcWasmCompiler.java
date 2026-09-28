@@ -256,10 +256,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.EQ, LispNames.LT,
 			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
 			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE, LispNames.LENGTH,
-			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
-			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS,
-			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
-			LispNames.TANH, LispNames.EXPT);
+			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT,
+			LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG,
+			LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
+			LispNames.COSH, LispNames.TANH, LispNames.EXPT);
 
 	/**
 	 * The packed double-float array operators (F64VEC). Like {@link #BUILTINS} they
@@ -1382,7 +1382,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				return Ty.BOOL;
 			}
 			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH,
-					LispNames.LENGTH, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR -> {
+					LispNames.LENGTH, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
@@ -4611,7 +4611,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.SUBSEQ -> compileSubseq(args, fn);
 			case LispNames.STRING_EQ -> compileStringEq(args, fn);
 			case LispNames.CHAR -> compileCharAt(args, fn);
-			case LispNames.CHAR_CODE, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
+			case LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
 			case LispNames.CHAR_EQ -> compileComparison(cons, args, fn, Instruction.I64_EQ, Instruction.F64_EQ);
 			case LispNames.PRINC_TO_STRING -> compilePrincToString(args, fn);
 			case LispNames.PRINT, LispNames.PRINC -> compilePrintOp(name, args, fn);

@@ -2549,14 +2549,15 @@ public final class BuiltinFunctionWrappers {
 			stringEquality(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
 			binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
-			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CODE_CHAR),
-			unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE), unary(LispNames.CHARACTERP),
-			unary(LispNames.ALPHA_CHAR_P), unary(LispNames.LOWER_CASE_P), unary(LispNames.UPPER_CASE_P),
-			ignoringEnvironment(LispNames.CONSTANTP, 1), unary(LispNames.STREAMP), unary(LispNames.SIMPLE_STRING_P),
-			unaryOptionalSecond(LispNames.DIGIT_CHAR_P), comparison(LispNames.CHAR_EQ, false),
-			comparison(LispNames.CHAR_LT, false), comparison(LispNames.CHAR_LE, false),
-			comparison(LispNames.CHAR_GT, false), comparison(LispNames.CHAR_GE, false),
-			comparison(LispNames.CHAR_NE, true), comparison(LispNames.CHAR_EQUAL, false),
+			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CHAR_INT),
+			unary(LispNames.CODE_CHAR), unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE),
+			unary(LispNames.CHARACTERP), unary(LispNames.ALPHA_CHAR_P), unary(LispNames.LOWER_CASE_P),
+			unary(LispNames.UPPER_CASE_P), ignoringEnvironment(LispNames.CONSTANTP, 1), unary(LispNames.STREAMP),
+			unary(LispNames.SIMPLE_STRING_P), unaryOptionalSecond(LispNames.DIGIT_CHAR_P),
+			comparison(LispNames.CHAR_EQ, false), comparison(LispNames.CHAR_LT, false),
+			comparison(LispNames.CHAR_LE, false), comparison(LispNames.CHAR_GT, false),
+			comparison(LispNames.CHAR_GE, false), comparison(LispNames.CHAR_NE, true),
+			comparison(LispNames.CHAR_EQUAL, false),
 			// parse-integer / read-from-string: their compiled bodies pull in runtime
 			// helpers emitted only when the program uses the operator, so each backend
 			// excludes these wrappers (via excludedNames) unless the program references

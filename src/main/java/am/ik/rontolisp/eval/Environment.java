@@ -7704,6 +7704,13 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.CHAR_CODE, args, 1);
 			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());
 		}));
+		// char-int: a non-negative integer encoding the character. With no
+		// implementation-defined attributes beyond the code point, it answers the same
+		// value char-code does.
+		env.defineFunction(LispNames.CHAR_INT, new LispFunction(LispNames.CHAR_INT, args -> {
+			requireArgCount(LispNames.CHAR_INT, args, 1);
+			return new LispInteger(requireChar(LispNames.CHAR_INT, args.get(0)).codePoint());
+		}));
 		env.defineFunction(LispNames.CODE_CHAR, new LispFunction(LispNames.CODE_CHAR, args -> {
 			requireArgCount(LispNames.CODE_CHAR, args, 1);
 			return new LispChar((int) asLong(args.get(0)));

@@ -5128,6 +5128,7 @@ cases:
   - name: characters-and-parsing-cross-backend
     source: |
       (print (char-code #\A))
+      (print (char-int #\A))
       (print (code-char 66))
       (print (char "hello" 1))
       (print (characterp #\a))
@@ -5153,6 +5154,7 @@ cases:
       (princ #\a)
       (terpri)
     expected: |
+      65
       65
       #\B
       #\e
@@ -18213,18 +18215,20 @@ cases:
           (error (e) (list :not-a-type-error (princ-to-string e)))))
       (defvar *ci-chk-c* 1)
       (print (ci-chk (lambda () (char-code *ci-chk-c*))))
+      (print (ci-chk (lambda () (char-int *ci-chk-c*))))
       (print (ci-chk (lambda () (upper-case-p *ci-chk-c*))))
       (print (ci-chk (lambda () (digit-char-p #\7 'ci-chk-sym))))
       (print (ci-chk (lambda () (alphanumericp *ci-chk-c*))))
       (print (ci-chk (lambda () (char-name *ci-chk-c*))))
-      (print (list (char-code #\a) (upper-case-p #\A) (digit-char-p #\f 16) (char-name #\Space)))
+      (print (list (char-code #\a) (char-int #\a) (upper-case-p #\A) (digit-char-p #\f 16) (char-name #\Space)))
     expected: |
       ("CHAR-CODE: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR-INT: The value 1 is not of type CHARACTER" CHARACTER)
       ("UPPER-CASE-P: The value 1 is not of type CHARACTER" CHARACTER)
       ("DIGIT-CHAR-P: The value CI-CHK-SYM is not of type INTEGER" INTEGER)
       ("ALPHANUMERICP: The value 1 is not of type CHARACTER" CHARACTER)
       ("CHAR-NAME: The value 1 is not of type CHARACTER" CHARACTER)
-      (97 T 15 "Space")
+      (97 97 T 15 "Space")
   # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
   # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
   # an integer or float limit <= 0 is out of range either way. Both report under

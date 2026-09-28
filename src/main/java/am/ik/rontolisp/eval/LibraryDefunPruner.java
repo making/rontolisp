@@ -826,8 +826,9 @@ public final class LibraryDefunPruner {
 			"CONCATENATE", "SUBSEQ", "LENGTH", "IF", "AND", "OR", "NOT", "+", "-", "*", "/", "1+", "1-", "EXPT", "MOD",
 			"REM", "FLOOR", "CEILING", "ROUND", "TRUNCATE", "FFLOOR", "FCEILING", "FROUND", "FTRUNCATE", "ABS", "MIN",
 			"MAX", "SQRT", "ISQRT", "ASH", "LOGAND", "LOGIOR", "LOGXOR", "LOGNOT", "BYTE", "=", "/=", "<", ">", "<=",
-			">=", "EQ", "EQL", "EQUAL", "EQUALP", "CODE-CHAR", "CHAR-CODE", "CHAR", "COERCE", "STRING", "SYMBOL-NAME",
-			"CAR", "CDR", "FIRST", "REST", "NTH", "ELT", "AREF", "GETHASH", "NULL", "ZEROP", "PLUSP", "MINUSP");
+			">=", "EQ", "EQL", "EQUAL", "EQUALP", "CODE-CHAR", "CHAR-CODE", "CHAR-INT", "CHAR", "COERCE", "STRING",
+			"SYMBOL-NAME", "CAR", "CDR", "FIRST", "REST", "NTH", "ELT", "AREF", "GETHASH", "NULL", "ZEROP", "PLUSP",
+			"MINUSP");
 
 	/**
 	 * Whether the top-level form is a {@code declaim}/{@code proclaim}. Both expand to

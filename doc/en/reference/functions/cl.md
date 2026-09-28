@@ -94,6 +94,7 @@ page.
 | `readtable-case` | `(readtable-case *readtable*)` | Lite stub: always `:upcase` -- the reader always upcases unescaped symbol names, the standard readtable's mode |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index (a non-string or a non-integer index signals a `type-error`) |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
+| `char-int` | `(char-int #\A)` | `65` -- a non-negative integer encoding the character; with no implementation-defined attributes, the same value `char-code` answers |
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
 | `char=` `char<` `char<=` `char>` `char>=` `char/=` `char-equal` | `(char< #\a #\b #\c)` | `t` (variadic comparison by code point; `char/=` = pairwise distinct, `char-equal` = case-insensitive `char=`) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t` (the case-INSENSITIVE ordering family) |

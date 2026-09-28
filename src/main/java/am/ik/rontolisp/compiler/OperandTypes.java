@@ -261,12 +261,12 @@ public final class OperandTypes {
 
 	/**
 	 * The other character built-ins, fixed-typed {@code CHARACTER} like the comparisons:
-	 * {@code char-code}, the case folds and the character predicates. Last in the table,
-	 * after the array-shape accessors.
+	 * {@code char-code}, {@code char-int}, the case folds and the character predicates.
+	 * Last in the table, after the array-shape accessors.
 	 */
-	private static final List<String> CHARACTER_BUILTINS = List.of("CHAR-CODE", "CHAR-UPCASE", "CHAR-DOWNCASE",
-			"ALPHA-CHAR-P", "UPPER-CASE-P", "LOWER-CASE-P", "BOTH-CASE-P", "ALPHANUMERICP", "CHAR-NAME",
-			"GRAPHIC-CHAR-P", "STANDARD-CHAR-P");
+	private static final List<String> CHARACTER_BUILTINS = List.of("CHAR-CODE", "CHAR-INT", "CHAR-UPCASE",
+			"CHAR-DOWNCASE", "ALPHA-CHAR-P", "UPPER-CASE-P", "LOWER-CASE-P", "BOTH-CASE-P", "ALPHANUMERICP",
+			"CHAR-NAME", "GRAPHIC-CHAR-P", "STANDARD-CHAR-P");
 
 	/**
 	 * {@code digit-char-p}, funnel-typed: its character lands {@code CHARACTER}, its

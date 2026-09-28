@@ -94,6 +94,7 @@
 | `readtable-case` | `(readtable-case *readtable*)` | ライト版スタブ: 常に `:upcase` -- リーダーはエスケープされていないシンボル名を常に大文字化します。標準リードテーブルのモードです |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 (文字列でない値や整数でないインデックスは `type-error` を通知) |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
+| `char-int` | `(char-int #\A)` | `65` -- 文字を表す非負整数。実装固有の属性を持たないため、`char-code` と同じ値になります |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t`(大文字・小文字を区別しない比較の一群) |

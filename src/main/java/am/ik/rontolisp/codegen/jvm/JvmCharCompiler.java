@@ -236,6 +236,16 @@ final class JvmCharCompiler {
 		JvmEmitHelper.boxLong(ctx);
 	}
 
+	/**
+	 * {@code (char-int ch)}: the same code point {@code char-code} answers -- with no
+	 * implementation-defined attributes beyond it, char-int has nothing else to encode.
+	 */
+	static void compileCharInt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
+		ctx.emit(Opcode.I2L);
+		JvmEmitHelper.boxLong(ctx);
+	}
+
 	/** {@code (code-char n)}: the character with the given code point. */
 	static void compileCodeChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();

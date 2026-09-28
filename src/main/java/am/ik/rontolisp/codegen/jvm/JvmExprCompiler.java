@@ -1413,6 +1413,7 @@ final class JvmExprCompiler {
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
 			case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
 			case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
+			case LispNames.CHAR_INT -> JvmCharCompiler.compileCharInt(cons, ctx, className);
 			case LispNames.CODE_CHAR -> JvmCharCompiler.compileCodeChar(cons, ctx, className);
 			case LispNames.CHAR_UPCASE -> JvmCharCompiler.compileUpcase(cons, ctx, className);
 			case LispNames.CHAR_DOWNCASE -> JvmCharCompiler.compileDowncase(cons, ctx, className);
