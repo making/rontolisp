@@ -125,6 +125,26 @@ class JvmLispCompilerTest {
 			.isEqualTo(want);
 	}
 
+	// A run-time :element-type combined with :initial-contents cannot use the
+	// %make-array-et helper (it only carries :initial-element), so
+	// LispMacroExpander.lowerRuntimeElementTypeMakeArray spells the whole seven-arm
+	// dispatch INLINE, at codegen time -- after JvmLispCompiler.programUsesFloatArray's
+	// source-level scan has already decided ctx.usesFloatArray. With no OTHER literal
+	// float make-array in the program to force the gate on, the inline double-float arm
+	// fell to the general boxed path (LispFloatArray.prototypeFor is skipped whenever
+	// ctx.usesFloatArray is false), so the JVM printed a general array where the
+	// interpreter and both wasm backends print a packed one.
+	@Test
+	void compileAndRunMakeArrayWithARuntimeElementTypeAndInitialContentsPacksAFloatArray() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun et-of (x) x)
+						(print (make-array 2 :element-type (et-of 'double-float) :initial-contents '(1d0 2d0)))
+						(print (array-element-type (make-array 2 :element-type (et-of 'double-float) :initial-contents '(1d0 2d0))))
+						"""))
+			.isEqualTo("#d(1.0 2.0)\nDOUBLE-FLOAT");
+	}
+
 	@Test
 	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
 		// The pure-builtin fold renders in JAVA at compile time what the emitted class

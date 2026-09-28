@@ -5319,9 +5319,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	// True when the program can produce a packed float array: a #d(...) literal
-	// (LispFloatArray) or a (make-array ... :element-type 'double-float ...) form. Gates
-	// the _fv* dispatch helpers and their routing; when false the array op compilers call
-	// the general _array* helpers directly, keeping the default build byte-identical.
+	// (LispFloatArray), a (make-array ... :element-type 'double-float ...) form, or a
+	// (make-array ... :element-type <runtime designator> ...) form whose inline
+	// dispatch (LispMacroExpander.lowerRuntimeElementTypeMakeArray) can still reach one
+	// of its float arms -- a run-time designator combined with :initial-contents spells
+	// that dispatch inline, at codegen time, after this scan has already run. Gates the
+	// _fv* dispatch helpers and their routing; when false the
+	// array op compilers call the general _array* helpers directly, keeping the default
+	// build byte-identical.
 	private static boolean programUsesFloatArray(List<LispVal> program, ClosRegistry closRegistry) {
 		for (LispVal expr : program) {
 			if (usesFloatArray(expr, closRegistry)) {
@@ -5340,7 +5345,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return false;
 			}
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
-					&& makeArrayIsPackedFloat(cons, closRegistry)) {
+					&& (makeArrayIsPackedFloat(cons, closRegistry)
+							|| LispMacroExpander.runtimeElementTypeMakeArrayCanPackFloat(cons))) {
 				return true;
 			}
 			if (usesFloatArray(cons.car(), closRegistry)) {

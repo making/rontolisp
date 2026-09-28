@@ -36716,6 +36716,53 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether a {@code (make-array ...)} call's {@code :element-type} is a run-time
+	 * designator whose {@link #lowerRuntimeElementTypeMakeArray} dispatch can still reach
+	 * a packed float arm. SINGLE-FLOAT/DOUBLE-FLOAT/BFLOAT16 are among the
+	 * {@link am.ik.rontolisp.ArrayElementTypes#specializedCodes()} the inline dispatch --
+	 * or the {@code %make-array-et}/{@code %make-array-et-fp} helper -- spells
+	 * unconditionally, whatever the call's OTHER keywords ({@code :initial-element},
+	 * {@code :initial-contents}, ...): only {@code :fill-pointer} / {@code :adjustable}
+	 * rule every arm out (they degrade the whole dispatch to the general representation,
+	 * {@link #helperShapeIsFillPointer}), and {@code :displaced-to} rules the lowering
+	 * out entirely (a displaced view owns no storage, so {@code JvmArrayCompiler} never
+	 * reaches {@link #lowerRuntimeElementTypeMakeArray} for it). A literal designator is
+	 * excluded here -- the call-site recognizers that read it directly
+	 * ({@code JvmLispCompiler.makeArrayIsPackedFloat},
+	 * {@code JvmArrayCompiler.compileMake}) already see it.
+	 *
+	 * <p>
+	 * This is the packed-float RUNTIME-HELPER-GATE half of the fix for a run-time
+	 * designator combined with {@code :initial-contents}: that shape cannot use the
+	 * {@code %make-array-et} helper (it only carries {@code :initial-element}), so the
+	 * whole seven-arm dispatch is spelled INLINE, at codegen time -- after the
+	 * source-level scan that decides {@code ctx.usesFloatArray} has already run. Without
+	 * this predicate counting the site, the inline {@code double-float}/{@code
+	 * single-float} arm fell to the general boxed path.
+	 * @param makeArray the {@code make-array} call
+	 * @return whether a run-time designator here can still allocate a packed float array
+	 */
+	public static boolean runtimeElementTypeMakeArrayCanPackFloat(LispCons makeArray) {
+		List<LispVal> parts = makeArray.toList();
+		if (parts.size() < 2) {
+			return false;
+		}
+		LispVal elementType = null;
+		List<LispVal> others = new java.util.ArrayList<>();
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+				elementType = parts.get(i + 1);
+			}
+			else {
+				others.add(parts.get(i));
+				others.add(parts.get(i + 1));
+			}
+		}
+		return elementType != null && isRuntimeElementType(elementType) && !helperShapeIsFillPointer(others)
+				&& !findKeywordPair(others, LispNames.DISPLACED_TO_KEYWORD);
+	}
+
 	/** The member half of a possibly package-qualified symbol name. */
 	private static String memberName(String name) {
 		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
