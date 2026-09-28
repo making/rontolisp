@@ -174,16 +174,16 @@ MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
 | `id` | オブジェクトポインタ、`nil`、文字列 (`NSString` になる)、ベクタ (要素も同様に変換した `NSArray` になる) | `objc:objc-object-pointer` または `nil` |
 | `Class` | クラスポインタまたはクラス名 | `objc:objc-class` |
 | `SEL` | セレクタまたはその名前 | `objc:sel` |
-| `char *` | 文字列またはアドレス | 文字列 |
+| `char *` | 文字列、外部ポインタ、アドレス | 文字列 |
 | `BOOL` / `_Bool` | `t`、`nil`、整数 | `1` か `0` |
 | 整数 | 整数 (符号なし 64 ビットは 2^64-1 まで) | 整数 |
 | `float` / `double` | 実数 | 倍精度浮動小数点数 |
-| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)` | 倍精度のベクタ |
-| `NSRange` | `(location . length)` | コンス |
+| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)`、またはそれを指す外部ポインタ | 倍精度のベクタ |
+| `NSRange` | `(location . length)`、またはそれを指す外部ポインタ | コンス |
 | その他の構造体 | メモリ順に並べたフィールドのベクタ | フィールドのベクタ |
-| ポインタ | アドレス、`nil`、オブジェクトポインタ | アドレス |
+| ポインタ | 外部ポインタ、アドレス、`nil`、オブジェクトポインタ | 宣言された型を指す外部ポインタ |
 
-結果の `BOOL` は LispWorks と同じく `1` か `0` なので、条件判定には `objc:invoke-bool` を使います。結果の `NSString` はほかのオブジェクトと同じくポインタです。`objc:invoke-into` はさらに変換します。`'string` はそれを Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。
+結果の `BOOL` は LispWorks と同じく `1` か `0` なので、条件判定には `objc:invoke-bool` を使います。結果の `NSString` はほかのオブジェクトと同じくポインタです。`objc:invoke-into` はさらに変換します。`'string` はそれを Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。外部オブジェクトも同様です ([外部オブジェクト](#foreign-objects-the-fli-package))。
 
 ```console
 MY-APP> (invoke *s* "hasPrefix:" "hello")
@@ -240,6 +240,34 @@ NIL
 MY-APP> (objc:objectp "hello")
 NIL
 ```
+
+### 外部オブジェクト: `fli` パッケージ
+
+呼び出し元が所有するメモリを埋めるメソッド (`invoke-into` の構造体、書き込み先の `int *` や `BOOL *`) には外部オブジェクトを渡します。
+`fli:with-dynamic-foreign-objects` は本体の実行中だけ有効な、指定した型の外部オブジェクトを確保します。
+`fli:dereference` はその値を読み、`setf` で書きます。`fli:foreign-slot-value` は構造体のスロットを読み書きします
+(名前のリストで入れ子の構造体の中を指せます)。次はマニュアルそのままの形です。
+
+```console
+MY-APP> (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+          (invoke-into rect (invoke (invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
+                       "frame")
+          (fli:foreign-slot-value rect '(:size :width)))
+640.0
+MY-APP> (fli:with-dynamic-foreign-objects ((result-value :int))
+          (invoke (invoke "NSScanner" "scannerWithString:" "42 apples") "scanInt:" result-value)
+          (fli:dereference result-value))
+42
+MY-APP> (fli:size-of 'cocoa:ns-rect)
+32
+```
+
+外部オブジェクトはその型を取るところならどこにでも渡せます。ポインタとして渡すほか、構造体としても渡せ、その場合は内容がコピーされます。
+Objective-C が返すポインタ (`void *` の結果、コールバックの `BOOL *stop`) はすべて、宣言された型を指す外部ポインタです。
+そのためブロックは `(setf (fli:dereference stop) t)` で列挙を止められます。`fli:allocate-foreign-object` と
+`fli:free-foreign-object` は明示的に確保と解放をします。メモリは `--native` を含むどのターゲットでもプロセスのヒープです。
+集成体を指すポインタは Lisp の値になりません。参照するとシグナルします。`:copy-foreign-object` に `nil` を渡すとそれを指すポインタを、
+`t` を渡すとコピーを返します。外部ポインタは `ffi:` のポインタではありません。`fli:pointer-address` が両者の受け取るアドレスを返します。
 
 ### 所有権: ポインタは保持している参照だけを解放する
 
@@ -299,8 +327,9 @@ MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
           (:first :float)
           (:second :float))
 PAIR
-MY-APP> (define-objc-method ("pair" (:struct pair)) ((this my-object))
-          (vector 1.0 2.0))
+MY-APP> (define-objc-method ("pair" (:struct pair) result-pair) ((this my-object))
+          (setf (fli:foreign-slot-value result-pair :first) 1f0
+                (fli:foreign-slot-value result-pair :second) 2f0))
 "pair"
 MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 #(1.0 2.0)
@@ -308,7 +337,9 @@ MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 
 メソッドの引数と結果には、宣言で書けるどの型でも使えます。あらゆる幅の整数、`:float` / `:double`、
 構造体 (`invoke` がそれについて使う Lisp の値)、`t` / `nil` になる `objc:objc-bool` / `:boolean`、
-オブジェクト、クラス、セレクタです。オブジェクト引数は受け取るときに変換でき
+オブジェクト、クラス、セレクタ、ポインタ (宣言された型を指す外部ポインタ) です。構造体は Lisp の値で返すか、
+それを指す外部ポインタで返します (内容がコピーされます)。上の `result-pair` のようにキーワードでない結果スタイルを
+書くと、その変数に結果の型の外部オブジェクトが束縛され、本体がそれを埋めます。オブジェクト引数は受け取るときに変換でき
 (`(arg objc-object-pointer string)`、`array`、`(array string)`)、オブジェクトとして返した文字列やベクタは
 `NSString` / `NSArray` になります。Objective-C クラスを名付けず継承もしないクラスはミックスインで、
 そのメソッドは名付けるサブクラスそれぞれに入ります。メソッド本体のエラーは `objc: error in a callback: ...` と
@@ -390,12 +421,11 @@ MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-
 MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
                                         (:pointer objc-c++-bool)))
                                (lambda (word index stop)
-                                 (declare (ignore stop))
-                                 (format t "~a ~a~%" index (ns-string-to-string word))))
+                                 (format t "~a ~a~%" index (ns-string-to-string word))
+                                 (when (= index 1) (setf (fli:dereference stop) t))))
           (invoke *words* "enumerateObjectsUsingBlock:" each))
 0 pear
 1 fig
-2 apple
 NIL
 MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
 *ADD*
@@ -475,7 +505,7 @@ MY-APP> (handler-case
 
 ### バイト列: `objc:data` と `objc:bytes`
 
-メモリブロックは Cocoa ではありふれたものですが、それに対応する Lisp の値はありません。そこでこのパッケージはメモリブロックを `NSData` にします。`objc:data` は、パックバッファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ) のバイト列、または文字列の UTF-8 を持つ `NSMutableData` を返します。並びは `write-sequence` が書くものとまったく同じで、リトルエンディアンの行優先です。それ以外の値を渡すとシグナルします。あとは `[data bytes]` が `void *` 引数の求めるアドレスになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になります。`objc:bytes` は `NSData` の内容を新しい `(unsigned-byte 8)` ベクタとして読み戻します。
+メモリブロックは Cocoa ではありふれたものですが、それに対応する Lisp の値はありません。そこでこのパッケージはメモリブロックを `NSData` にします。`objc:data` は、パックバッファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ) のバイト列、または文字列の UTF-8 を持つ `NSMutableData` を返します。並びは `write-sequence` が書くものとまったく同じで、リトルエンディアンの行優先です。それ以外の値を渡すとシグナルします。あとは `[data bytes]` が `void *` 引数の求めるポインタになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になります。`objc:bytes` は `NSData` の内容を新しい `(unsigned-byte 8)` ベクタとして読み戻します。
 
 ```console
 MY-APP> (objc:bytes (objc:data (make-array 2 :element-type 'single-float
@@ -549,7 +579,7 @@ Lisp で定義したメソッドやブロックがメインスレッドで呼ば
 
 ### LispWorks との違い
 
-rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。上の表にある可変長引数メソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。LispWorks は Objective-C の例外でプロセスを終了させ、`NSError` の補助もありません。`objc:objc-exception`、`objc:ns-error`、`objc:invoke-with-error` はこのパッケージ独自のもので、`objc:on-main`、`objc:data`、`objc:bytes`、`objc:objectp` も同様です。
+`invoke` は構造体を外部メモリに書かず、Lisp の値 (ベクタかコンス) で返します。マニュアルのやり方は外部オブジェクトへの `objc:invoke-into` で、どちらも使えます。`fli` は LispWorks の外部言語インターフェースのうちマニュアルの例が使う部分 (`define-foreign-function`、外部オブジェクト、ポインタ) で、外部オブジェクトはスタックではなく `calloc` のメモリです。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のものです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。上の表にある可変長引数メソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。LispWorks は Objective-C の例外でプロセスを終了させ、`NSError` の補助もありません。`objc:objc-exception`、`objc:ns-error`、`objc:invoke-with-error` はこのパッケージ独自のもので、`objc:on-main`、`objc:data`、`objc:bytes`、`objc:objectp` も同様です。
 
 ## ネイティブバイナリ
 

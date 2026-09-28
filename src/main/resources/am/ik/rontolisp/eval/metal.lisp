@@ -353,7 +353,8 @@
     (when (> (length octets) (objc:invoke buffer "length"))
       (error "metal:upload: ~a bytes do not fit a buffer of ~a" (length octets)
              (objc:invoke buffer "length")))
-    (objc::%write-octets (objc:invoke buffer "contents") octets)
+    (objc::%write-octets (fli:pointer-address (objc:invoke buffer "contents"))
+                         octets)
     nil))
 
 ;; A block of foreign memory a uniform's bytes are staged in for the one send that
@@ -370,7 +371,7 @@
     (setq metal::*scratch*
      (objc:invoke "NSMutableData" "dataWithLength:" (max 256 (length octets))))
     (setq metal::*scratch-address*
-          (objc:invoke metal::*scratch* "mutableBytes")))
+          (fli:pointer-address (objc:invoke metal::*scratch* "mutableBytes"))))
   (objc::%write-octets metal::*scratch-address* octets)
   metal::*scratch-address*)
 

@@ -316,7 +316,7 @@ public final class ObjcLibrary {
 				return LispNames.OBJC_POINTER_TYPE.equals(name) || LispNames.OBJC_CLASS_TYPE.equals(name)
 						|| LispNames.OBJC_SEL_TYPE.equals(name) || STANDARD_OBJC_OBJECT.equals(name)
 						|| OBJC_BLOCK.equals(name) || LispNames.OBJC_EXCEPTION_TYPE.equals(name)
-						|| LispNames.NS_ERROR_TYPE.equals(name);
+						|| LispNames.NS_ERROR_TYPE.equals(name) || LispNames.FLI_POINTER_TYPE.equals(name);
 			}
 			if (val instanceof LispCons cons) {
 				if (mentionsType(cons.car())) {

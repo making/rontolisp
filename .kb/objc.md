@@ -3,8 +3,9 @@
 - **`objc`** binds the Objective-C runtime and AppKit through `java.lang.foreign` --
   `am.ik.objc`, a language-independent library beside `am.ik.gpu`; the analogue of `java:`
   ([java-interop.md](java-interop.md)) minus reflection. Its vocabulary is LispWorks 8.1's `OBJC` /
-  `COCOA` (*Objective-C and Cocoa Interface User Guide and Reference Manual*), plus this package's
-  own `on-main`, `data`, `bytes`, `objectp`, blocks, exceptions and `invoke-with-error`.
+  `COCOA` (*Objective-C and Cocoa Interface User Guide and Reference Manual*) and the part of its
+  `FLI` the manual's examples use, plus this package's own `on-main`, `data`, `bytes`, `objectp`,
+  blocks, exceptions and `invoke-with-error`.
 - **`appkit`** is a widget layer written in rontolisp over `objc` (`appkit.lisp`), shipped inside
   the interpreter like `linalg.lisp`; **`metal`** (`eval/metal.lisp` + `MetalLibrary`) and
   **`scene`** ([geom.md](geom.md)) ship the same way.
@@ -192,9 +193,57 @@ the LispWorks answers; `JvmObjcBaseCompilerTest` runs it compiled; `NativeObjcE2
 `ObjcNativeImageForeignConfigTest` names every selector the corpus, the shipped layers and the
 docs send. `ensure-objc-initialized`'s `:modules` are `SymbolLookup.libraryLookup` / `dlopen`.
 
-Not here yet, by design: the FLI forms of the manual (`fli:with-dynamic-foreign-objects`
-by-reference results and foreign structure objects) -- a structure is the vector / cons `invoke`
-answers, and `cocoa:set-ns-rect*` fills one.
+## FLI: foreign objects and pointers (2026-09-29)
+`fli:with-dynamic-foreign-objects`, `allocate-foreign-object`, `free-foreign-object`,
+`dereference` (+ `setf`), `foreign-slot-value` (+ `setf`), `size-of`, `pointerp`,
+`pointer-address`, `make-pointer`, `null-pointer-p`, `pointer-eq` -- in `objc.lisp` (the macro in
+`objc-macros.lisp`) over primitives that already existed: `calloc` / `free` through
+`%symbol-address` + `%call-function`, reads and writes through `%peek` / `%poke` by encoding. No
+new primitive and no new `rlobjc` import, so `--native` allocates in the runner's heap (never the
+module's linear memory) exactly as the interpreter and the JVM do.
+
+- **A foreign pointer is `fli::pointer`**, a defstruct of address, FLI type and the pointee's
+  encoding (what `%peek` / `%poke` take; the FLI type's own, else `%unparse` of the parsed
+  pointee for a structure the program never declared). Not a `structure-object`
+  (`FOREIGN_POINTER_STRUCT_TAGS`), not interned, not `eql` by address -- `fli:pointer-eq` is.
+  **Trap: rontolisp interns a defstruct's `:conc-name` accessors in the STRUCTURE NAME's package**,
+  so `(:conc-name objc::%fp-)` on `fli::pointer` defined `FLI::%FP-ADDRESS` and every
+  `objc::%fp-address` call was undefined; the accessors are `fli::%pointer-...`.
+- **Every pointer Objective-C hands Lisp is one**, typed by its declaration: an `invoke` / C
+  function result (`%result`'s `:pointer` arm -- it was an integer), a callback argument declared
+  `(:pointer T)` (`%convert-argument`), a dereferenced pointer. Everything that takes an address
+  also takes one (`%raw-address`, `:object`, `:cstring`), and a structure parameter takes one
+  and COPIES it (the manual's "otherwise it is assumed to be a foreign pointer ... and is copied"),
+  which is also what a method answering a structure may return. The byte primitives still take an
+  integer: `objc:data`, `objc:bytes`, `metal:upload` and `metal::%stage` unwrap with
+  `fli:pointer-address`.
+- `invoke-into` a foreign object pokes the result into it (a `char *` result as its address,
+  mode 2). A result variable (a non-keyword result style of `define-objc-method`) is a foreign
+  object of the result type, answered and freed when the body returns. A structure ARGUMENT of a
+  method or block still arrives as its Lisp value (vector / cons).
+- `cocoa:set-ns-*` fill a foreign object as well as a vector / cons; the four structures' slots
+  (`objc::*struct-slots*`) are `x y`, `width height`, `origin size`, `location length`, matched by
+  symbol name. `define-objc-struct` records its slots there.
+- **Layout is the C rule over named slots** (`objc::%fli-layout`): `fli:size-of` answers the
+  recorded LispWorks sizes (asserted directly by `theRecordedLispWorksAnswersHold`), and an ivar
+  of a declared structure type is sized by it. The hosts lay a PARSED structure out over its
+  flattened leaves, which differs for a nested structure with tail padding (`.todo/a79`).
+- Refused, never a crash: a null pointer, a `:void` pointee without `:type`, an aggregate
+  dereferenced without `:copy-foreign-object` (LispWorks' `:error` default; `nil` answers a
+  pointer, `t` a `calloc`'d copy), a Lisp string or vector stored where an object goes (it would
+  not outlive the store).
+- **Not `ffi:`'s pointer**: `ffi` is the interpreter's and the JVM's only (a Java
+  `LispForeignPointer`), while `fli` must run on `--native`, where no `ffi` exists; one value
+  would need a wasm-GC representation of a Java value. The bridge is the integer
+  (`fli:pointer-address`), which both accept.
+- `with-dynamic-foreign-objects` allocates on the heap (LispWorks: the stack) and frees on every
+  exit.
+
+Tests: the corpora -- the manual's 1.3.5 and 1.3.7 forms (`scanInt:` by reference in the base
+corpus, the literal `getValueInto:` defined in the class corpus), the 1.4 `pair` result variable,
+a block stopping through `BOOL *stop`, and every verb and refusal -- on the interpreter, a JVM
+class and `--native`. The native binary (`-Pnative`, 2026-09-29) printed the base corpus
+byte for byte, and ran the manual's forms, the `pair` result variable and the stopping block.
 
 ## Class definition (2026-09-28)
 `define-objc-class` / `-method` / `-class-method`, `current-super`, `standard-objc-object`,
@@ -303,8 +352,7 @@ method of an unregistered shape (the corpus's `sum:plus:`) is refused with the e
 `make-objc-block`, `free-objc-block`, `with-objc-block`, `call-objc-block`,
 `define-objc-block-type`, the type `objc-block`, `objc-block-pointer`, `objc-block-live-p`, and
 `fli:define-foreign-function`. LispWorks' `OBJC` has no block interface (its FLI makes blocks),
-so the block names are this package's own; `fli` is a built-in package carrying
-`define-foreign-function` alone (`.todo/a77` decides the rest of it).
+so the block names are this package's own; `fli` is a built-in package ("FLI" above).
 
 - **No implicit wrapping, decided**: a method's encoding says `@?` and never what the block
   takes (the extended `@?<...>` appears in protocol metadata only), so a Lisp function passed

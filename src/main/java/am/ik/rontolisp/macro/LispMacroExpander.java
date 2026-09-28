@@ -33187,13 +33187,14 @@ public final class LispMacroExpander {
 
 	/**
 	 * The defstructs that are foreign references, not {@code structure-object}s: the
-	 * {@code objc} package's three pointer types ({@code objc.lisp}), which LispWorks'
-	 * foreign pointers are not either.
+	 * {@code objc} package's three pointer types and {@code fli}'s pointer
+	 * ({@code objc.lisp}), which LispWorks' foreign pointers are not either.
 	 */
 	private static final Set<String> FOREIGN_POINTER_STRUCT_TAGS = Set.of(
 			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_POINTER_TYPE,
 			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_CLASS_TYPE,
-			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_SEL_TYPE);
+			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_SEL_TYPE,
+			LispLayout.STRUCT_TAG_PREFIX + LispNames.FLI_POINTER_TYPE);
 
 	/**
 	 * Builds the test for an instance of ANY registered class (conditions included): the

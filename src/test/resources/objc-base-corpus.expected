@@ -21,6 +21,10 @@ invoke-into cons: (4 . 1)
 NSValue round trip: #(1.0 2.0 3.0 4.0)
 NSPoint: #(5.0 6.0)
 NSSize: #(7.0 8.0)
+invoke-into a foreign ns-rect: (0.0 100.0 100.0)
+invoke-into a foreign ns-range: (6 5)
+a foreign ns-rect is an argument: #(9.0 8.0 7.0 6.0)
+scanInt: by reference: (1 42)
 description pointer: T
 description string: "hello world"
 array: 2
@@ -123,6 +127,26 @@ data length: 3
 bytes of any NSData: #(120 121 122)
 data refuses a list: "objc:data expects a packed float array, a packed (unsigned-byte 8|16|32) vector or a string, got (1 2 3)"
 bytes refuses a number: "objc:bytes expects an Objective-C object, got 42"
+size-of: (16 16 32 16 1 4 8 8 16 32 0)
+allocate-foreign-object: (T NIL (1.0 2.5 3.0))
+setf dereference: -4.0
+free-foreign-object: NIL
+:fill: (255 255 255 255)
+:type: (-2 254)
+:initial-element: 7
+setf foreign-slot-value: #(0.0 3.0 0.0 4.5)
+an aggregate is not a value: "fli:dereference: COCOA:NS-RECT is an aggregate; pass :copy-foreign-object nil for a pointer to it or t for a copy"
+an aggregate slot is not a value: "fli:foreign-slot-value: COCOA:NS-SIZE is an aggregate; pass :copy-foreign-object nil for a pointer to it or t for a copy"
+:copy-foreign-object nil: (T 4.5 T)
+:copy-foreign-object t: (0.0 4.5)
+a boolean: (T NIL)
+no such slot: "fli:foreign-slot-value: COCOA:NS-RECT has no slot :DEPTH; its slots are ORIGIN, SIZE"
+a pointer result: (T 98)
+make-pointer: (4096 NIL T NIL FLI::POINTER)
+a null pointer: "fli:dereference: #<Pointer to type :INT = #x...> is a null pointer"
+a :void pointer: "fli:dereference: a pointer to :void has nothing to read; give a :type"
+not a pointer: "fli:dereference: 42 is not a foreign pointer"
+a string store: "(setf fli:dereference): \"x\" would not outlive the write; store an object pointer"
 on-main: 11
 on-main propagates an error: "inside"
 on-main nested: :NESTED

@@ -1,7 +1,7 @@
 ;; The new objc base, headless: the manual's call-side examples (invoking, strings,
-;; memory management, the Foundation structures) written as the manual writes them --
-;; in a package that uses objc -- plus the conversions, the ownership rule, the value
-;; identity and the refusals around them. Every line prints something deterministic (no
+;; memory management, the Foundation structures, the FLI's foreign objects) written as
+;; the manual writes them -- in a package that uses objc -- plus the conversions, the
+;; ownership rule, the value identity and the refusals around them. Every line prints something deterministic (no
 ;; address), so the interpreter's output is what a JVM class and a --native executable
 ;; must print byte for byte (ObjcBaseTest, JvmObjcBaseCompilerTest, NativeObjcE2eTest).
 
@@ -60,6 +60,25 @@
 (show "NSValue round trip" (invoke (invoke "NSValue" "valueWithRect:" #(1 2 3 4)) "rectValue"))
 (show "NSPoint" (invoke (invoke "NSValue" "valueWithPoint:" #(5 6)) "pointValue"))
 (show "NSSize" (invoke (invoke "NSValue" "valueWithSize:" #(7 8)) "sizeValue"))
+(show "invoke-into a foreign ns-rect"
+      (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+        (objc:invoke-into rect *view* "frame")
+        (list (fli:foreign-slot-value rect '(:origin :x)) (fli:foreign-slot-value rect '(:size :width))
+              (fli:foreign-slot-value rect '(cocoa::size cocoa::height)))))
+(show "invoke-into a foreign ns-range"
+      (fli:with-dynamic-foreign-objects ((range cocoa:ns-range))
+        (invoke-into range *hello* "rangeOfString:" "world")
+        (list (fli:foreign-slot-value range :location) (fli:foreign-slot-value range :length))))
+(show "a foreign ns-rect is an argument"
+      (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+        (cocoa:set-ns-rect* rect 9 8 7 6)
+        (invoke (invoke "NSValue" "valueWithRect:" rect) "rectValue")))
+
+;;; 1.3.7 a value returned by reference
+(show "scanInt: by reference"
+      (let ((scanner (invoke "NSScanner" "scannerWithString:" "42 apples")))
+        (fli:with-dynamic-foreign-objects ((result-value :int))
+          (list (invoke scanner "scanInt:" result-value) (fli:dereference result-value)))))
 
 ;;; 1.3.6 a method that returns a string or array
 (show "description pointer" (typep (invoke *hello* "description") 'objc-object-pointer))
@@ -244,6 +263,52 @@
 (show "bytes of any NSData" (bytes (invoke "NSData" "dataWithData:" (data "xyz"))))
 (show "data refuses a list" (refused (lambda () (data '(1 2 3)))))
 (show "bytes refuses a number" (refused (lambda () (bytes 42))))
+
+;;; fli: foreign objects and pointers
+(show "size-of" (mapcar #'fli:size-of '(cocoa:ns-point cocoa:ns-size cocoa:ns-rect cocoa:ns-range :char :int
+                                         :double :pointer (:c-array :int 4) (:struct cocoa:ns-rect) :void)))
+(let ((p (fli:allocate-foreign-object :type :double :nelems 3 :initial-contents '(1 2.5 3))))
+  (show "allocate-foreign-object" (list (fli:pointerp p) (fli:null-pointer-p p)
+                                        (loop for i below 3 collect (fli:dereference p :index i))))
+  (setf (fli:dereference p :index 1) -4)
+  (show "setf dereference" (fli:dereference p :index 1))
+  (show "free-foreign-object" (fli:free-foreign-object p)))
+(let ((p (fli:allocate-foreign-object :type '(:unsigned :char) :nelems 4 :fill 255)))
+  (show ":fill" (loop for i below 4 collect (fli:dereference p :index i)))
+  (setf (fli:dereference p :index 1 :type :short) -2)
+  (show ":type" (list (fli:dereference p :index 1 :type :short) (fli:dereference p :index 2)))
+  (fli:free-foreign-object p))
+(let ((p (fli:allocate-foreign-object :type :int :initial-element 7)))
+  (show ":initial-element" (fli:dereference p))
+  (fli:free-foreign-object p))
+(fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect) (flag objc-c++-bool :initial-element t))
+  (setf (fli:foreign-slot-value rect '(:origin :y)) 3
+        (fli:foreign-slot-value rect '(:size :height)) 4.5d0)
+  (show "setf foreign-slot-value" (invoke (invoke "NSValue" "valueWithRect:" rect) "rectValue"))
+  (show "an aggregate is not a value" (refused (lambda () (fli:dereference rect))))
+  (show "an aggregate slot is not a value" (refused (lambda () (fli:foreign-slot-value rect :size))))
+  (let ((size (fli:foreign-slot-value rect :size :copy-foreign-object nil)))
+    (show ":copy-foreign-object nil" (list (fli:pointerp size) (fli:foreign-slot-value size :height)
+                                           (= (fli:pointer-address size) (+ (fli:pointer-address rect) 16)))))
+  (let ((copy (fli:dereference rect :copy-foreign-object t)))
+    (setf (fli:foreign-slot-value rect '(:origin :x)) 99)
+    (show ":copy-foreign-object t" (list (fli:foreign-slot-value copy '(:origin :x))
+                                         (fli:foreign-slot-value copy '(:size :height))))
+    (fli:free-foreign-object copy))
+  (show "a boolean" (list (fli:dereference flag) (progn (setf (fli:dereference flag) nil) (fli:dereference flag))))
+  (show "no such slot" (refused (lambda () (fli:foreign-slot-value rect :depth)))))
+(show "a pointer result" (let ((p (invoke (data "abc") "bytes")))
+                           (list (fli:pointerp p) (fli:dereference p :type '(:unsigned :char) :index 1))))
+(let ((p (fli:make-pointer :address 4096 :type :int)))
+  (show "make-pointer" (list (fli:pointer-address p) (fli:null-pointer-p p)
+                             (fli:pointer-eq p (fli:make-pointer :address 4096))
+                             (typep p 'structure-object) (type-of p))))
+(show "a null pointer" (refused (lambda () (fli:dereference (fli:make-pointer :address 0 :type :int)))))
+(show "a :void pointer" (refused (lambda () (fli:dereference (fli:make-pointer :address 4096)))))
+(show "not a pointer" (refused (lambda () (fli:dereference 42))))
+(show "a string store" (refused (lambda ()
+                                  (fli:with-dynamic-foreign-objects ((p objc-object-pointer))
+                                    (setf (fli:dereference p) "x")))))
 
 ;;; on-main
 (show "on-main" (on-main (lambda () (invoke *hello* "length"))))

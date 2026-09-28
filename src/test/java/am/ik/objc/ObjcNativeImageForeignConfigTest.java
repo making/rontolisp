@@ -408,6 +408,9 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSInvocation", "invocationWithMethodSignature:"),
 			cls("NSObject", "instanceMethodSignatureForSelector:"), inst("NSInvocation", "setSelector:"),
 			inst("NSInvocation", "selector"), inst("NSObject", "className"),
+			// The manual's value returned by reference (1.3.7), on a Foundation method:
+			// an int * the corpus allocates with fli:with-dynamic-foreign-objects.
+			cls("NSScanner", "scannerWithString:"), inst("NSScanner", "scanInt:"),
 			// The guide's blocks: a comparator and an enumerator Foundation calls, and a
 			// completion handler NSURLSession calls when a data task finishes.
 			inst("NSArray", "sortedArrayUsingComparator:"), inst("NSArray", "enumerateObjectsUsingBlock:"),

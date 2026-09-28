@@ -48,9 +48,15 @@
   (:first :float)
   (:second :float))
 
-(define-objc-method ("pair" (:struct pair))
+(define-objc-method ("pair" (:struct pair) result-pair)
     ((this my-object))
-  (vector 1.0 2.0))
+  (setf (fli:foreign-slot-value result-pair :first) 1f0
+        (fli:foreign-slot-value result-pair :second) 2f0))
+
+;; 1.3.7's getValueInto:, defined here so that the manual's call has a callee.
+(define-objc-method ("getValueInto:" :void)
+    ((self my-object) (result-value (:pointer :int)))
+  (setf (fli:dereference result-value) 42))
 
 (define-objc-class my-size-mixin ()
   ())
@@ -78,6 +84,16 @@
 (show "mixin MyOtherData" (invoke (alloc-init-object "MyOtherData") "size"))
 (show "unrelated through the mixin" (objc-class-name (invoke "MyData" "superclass")))
 (show "a structure result" (invoke (alloc-init-object "MyObject") "pair"))
+(show "a structure into a foreign object"
+      (fli:with-dynamic-foreign-objects ((pair (:struct pair)))
+        (invoke-into pair (alloc-init-object "MyObject") "pair")
+        (list (fli:size-of '(:struct pair)) (fli:foreign-slot-value pair :first)
+              (fli:foreign-slot-value pair :second))))
+(show "1.3.7 a value returned by reference"
+      (let ((object (alloc-init-object "MyObject")))
+        (fli:with-dynamic-foreign-objects ((result-value :int))
+          (objc:invoke object "getValueInto:" result-value)
+          (fli:dereference result-value))))
 (show "signature of a Lisp method"
       (multiple-value-list (objc-class-method-signature "MyObject" "areaOfWidth:height:")))
 (let ((object (make-instance 'my-object :slot1 :hello)))
@@ -121,6 +137,18 @@
 (define-objc-method ("rangeAfter:" cocoa:ns-range result-range) ((self shapes) (range cocoa:ns-range))
   (cocoa:set-ns-range* result-range (+ (car range) (cdr range)) 1))
 
+(define-objc-method ("swapped:" (:struct pair)) ((self shapes) (p (:struct pair)))
+  (vector (aref p 1) (aref p 0)))
+
+(define-objc-method ("tally" :int result-count) ((self shapes))
+  (setf (fli:dereference result-count) 7))
+
+(defvar *unit-rect* (fli:allocate-foreign-object :type 'cocoa:ns-rect))
+(cocoa:set-ns-rect* *unit-rect* 0 0 1 1)
+
+(define-objc-method ("unitRect" cocoa:ns-rect) ((self shapes))
+  *unit-rect*)
+
 (define-objc-method ("greeting:" objc-object-pointer) ((self shapes) (name objc-object-pointer string))
   (format nil "hello ~a" name))
 
@@ -162,6 +190,9 @@
 (show "BOOL argument" (list (invoke *shapes* "flag:" t) (invoke *shapes* "flag:" nil)))
 (show "structure argument and result" (invoke *shapes* "scaled:by:" #(1 2 3 4) 2d0))
 (show "result variable" (invoke *shapes* "rangeAfter:" '(3 . 4)))
+(show "a structure of floats both ways" (invoke *shapes* "swapped:" #(1 2)))
+(show "a scalar result variable" (invoke *shapes* "tally"))
+(show "a foreign structure answered is copied" (invoke *shapes* "unitRect"))
 (show "string style, string result" (invoke-into 'string *shapes* "greeting:" "world"))
 (show "array style, typedef result" (invoke *shapes* "count:" #("a" "b" "c")))
 (show "SEL argument" (invoke-into 'string *shapes* "selectorName:" "frame"))

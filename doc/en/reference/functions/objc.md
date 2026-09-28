@@ -68,7 +68,7 @@ function takes a block. The macros
 [`objc:define-objc-block-type`](../macros/objc-define-objc-block-type.md) and
 [`objc:with-objc-block`](../macros/objc-with-objc-block.md) name a signature and make a
 block for the extent of a body; C functions such as `dispatch_async` are declared with
-[`fli:define-foreign-function`](../macros/fli-define-foreign-function.md).
+[`fli:define-foreign-function`](../macros/fli-define-foreign-function.md); the [`fli`](fli.md) package also carries the foreign objects a method fills by reference.
 
 | Function | Example | Result |
 |----------|---------|--------|

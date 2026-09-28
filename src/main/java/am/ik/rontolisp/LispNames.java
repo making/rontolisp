@@ -7793,10 +7793,17 @@ public final class LispNames {
 
 	/**
 	 * The {@code fli} package name: the part of LispWorks' foreign language interface the
-	 * {@code objc} base's examples reach for ({@code define-foreign-function}),
-	 * implemented in {@code objc.lisp} over the same primitive layer. macOS only.
+	 * {@code objc} base's examples reach for ({@code define-foreign-function}, foreign
+	 * objects and pointers), implemented in {@code objc.lisp} over the same primitive
+	 * layer. macOS only.
 	 */
 	public static final String FLI_PKG = "FLI";
+
+	/**
+	 * {@code fli::pointer}: LispWorks' FLI pointer, a defstruct in {@code objc.lisp} that
+	 * is not a {@code structure-object}.
+	 */
+	public static final String FLI_POINTER_TYPE = FLI_PKG + "::POINTER";
 
 	/**
 	 * The {@code cocoa} package name: LispWorks' {@code COCOA} -- the four Foundation

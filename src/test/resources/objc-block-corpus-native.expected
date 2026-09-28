@@ -19,6 +19,7 @@ not a function: "objc:make-objc-block: 42 is not a function"
 arity: "objc:call-objc-block: the block takes 1 argument(s), got 0"
 an error inside: 0
 enumerateObjectsUsingBlock:: ((0 "pear" :MAIN) (1 "fig" :MAIN) (2 "apple" :MAIN))
+a block stops through its BOOL *: ("pear" "fig")
 sortedArrayUsingComparator:: #("apple" "fig" "pear")
 indexesOfObjectsPassingTest:: 2
 structures into a block: (("hello" (0 . 5)) ("block" (6 . 5)) ("world" (12 . 5)))

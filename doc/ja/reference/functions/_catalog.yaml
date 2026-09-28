@@ -856,6 +856,19 @@ categories:
       - { slug: cocoa-set-ns-range-star, name: "cocoa:set-ns-range*" }
       - { slug: cocoa-add-observer, name: "cocoa:add-observer" }
       - { slug: cocoa-remove-observer, name: "cocoa:remove-observer" }
+  - title: "fli パッケージ (外部オブジェクト)"
+    index_page: reference/functions/fli.md
+    functions:
+      - { slug: fli-allocate-foreign-object, name: "fli:allocate-foreign-object" }
+      - { slug: fli-free-foreign-object, name: "fli:free-foreign-object" }
+      - { slug: fli-dereference, name: "fli:dereference" }
+      - { slug: fli-foreign-slot-value, name: "fli:foreign-slot-value" }
+      - { slug: fli-size-of, name: "fli:size-of" }
+      - { slug: fli-pointerp, name: "fli:pointerp" }
+      - { slug: fli-pointer-address, name: "fli:pointer-address" }
+      - { slug: fli-make-pointer, name: "fli:make-pointer" }
+      - { slug: fli-null-pointer-p, name: "fli:null-pointer-p" }
+      - { slug: fli-pointer-eq, name: "fli:pointer-eq" }
   - title: "appkit パッケージ (Cocoa ウィジェット)"
     index_page: reference/functions/appkit.md
     functions:

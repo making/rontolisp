@@ -37,7 +37,7 @@ LispWorks 8.1 の Objective-C インターフェースの名前とラムダリ�
 
 ## ブロック
 
-Lisp の関数から作るブロックです。LispWorks の `OBJC` にはこのインターフェースがないため、このパッケージ独自の名前を使います。`objc:objc-block` は、ブロックを受け取るメソッドや C 関数にそのまま渡せます。マクロ [`objc:define-objc-block-type`](../macros/objc-define-objc-block-type.md) はシグネチャに名前を付け、[`objc:with-objc-block`](../macros/objc-with-objc-block.md) は本体の間だけ有効なブロックを作ります。`dispatch_async` などの C 関数は [`fli:define-foreign-function`](../macros/fli-define-foreign-function.md) で宣言します。
+Lisp の関数から作るブロックです。LispWorks の `OBJC` にはこのインターフェースがないため、このパッケージ独自の名前を使います。`objc:objc-block` は、ブロックを受け取るメソッドや C 関数にそのまま渡せます。マクロ [`objc:define-objc-block-type`](../macros/objc-define-objc-block-type.md) はシグネチャに名前を付け、[`objc:with-objc-block`](../macros/objc-with-objc-block.md) は本体の間だけ有効なブロックを作ります。`dispatch_async` などの C 関数は [`fli:define-foreign-function`](../macros/fli-define-foreign-function.md) で宣言します。メソッドが参照渡しで埋める外部オブジェクトも [`fli`](fli.md) パッケージにあります。
 
 | 関数 | 例 | 結果 |
 |------|-----|------|

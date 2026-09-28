@@ -141,10 +141,6 @@ class ObjcBaseTest {
 		for (LispVal entry : entries) {
 			List<LispVal> parts = ((LispCons) entry).toList();
 			String probe = parts.get(1).print();
-			// No foreign memory here: a structure's size is its leaves', every one of
-			// them eight bytes wide in these four.
-			probe = probe.replaceAll("\\(FLI:SIZE-OF (?:'|\\(QUOTE )(COCOA:NS-[A-Z]+)\\)?\\)",
-					"(* 8 (length (objc::%leaves (car (objc::%parse-type (objc::%type-encoding '$1) 0)))))");
 			probes.append("(prin1 ").append(probe).append(") (terpri)\n");
 		}
 		String[] answers = interpret(probes.toString()).split("\n");

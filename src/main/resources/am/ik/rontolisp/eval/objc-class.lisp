@@ -178,10 +178,10 @@
              "objc:define-objc-class: the runtime refused the class name ~a"
              objc-name))
           (dolist (ivar (objc::%lc-ivars record))
-            (let* ((types (objc::%type-encoding (second ivar)))
-                   (type (car (objc::%parse-type types 0))))
-              (unless (objc::%add-ivar cls (first ivar) (objc::%type-size type)
-                                       (objc::%type-alignment type) types)
+            (let ((types (objc::%type-encoding (second ivar)))
+                  (layout (objc::%fli-layout (second ivar))))
+              (unless (objc::%add-ivar cls (first ivar) (car layout)
+                                       (cdr layout) types)
                 (error "objc:define-objc-class: the runtime refused the instance variable ~s of ~a"
                        (first ivar) objc-name))))
           (dolist (protocol (objc::%lc-protocols record))
@@ -190,31 +190,6 @@
                     protocol objc-name)))
           (objc::%register-class cls)
           cls))))
-
-;; A scalar's size, and a struct's by C layout over its leaves.
-(defun objc::%leaf-size (leaf)
-  (case leaf
-    ((:bool :int8 :uint8) 1)
-    ((:int16 :uint16) 2)
-    ((:int32 :uint32 :float) 4)
-    (t 8)))
-
-(defun objc::%type-alignment (type)
-  (if (and (consp type) (eq (car type) :struct))
-      (let ((align 1))
-        (dolist (leaf (third type) align)
-          (setq align (max align (objc::%leaf-size leaf)))))
-      (objc::%leaf-size (if (consp type) :pointer type))))
-
-(defun objc::%type-size (type)
-  (if (and (consp type) (eq (car type) :struct))
-      (let ((offset 0) (align (objc::%type-alignment type)))
-        (dolist (leaf (third type))
-          (let ((size (objc::%leaf-size leaf)))
-            (setq offset (* size (ceiling offset size)))
-            (setq offset (+ offset size))))
-        (* align (ceiling offset align)))
-      (objc::%leaf-size (if (consp type) :pointer type))))
 
 ;;; --- methods ------------------------------------------------------------------------
 
@@ -295,37 +270,41 @@
         (if name (find-class name) (objc::%intern-class self)))
       (or (gethash self objc::*lisp-objects*) (objc::%borrow self))))
 
-;; A fresh structure for a method that fills its result through a variable.
-(defun objc::%fresh-struct (type)
-  (if (eq (objc::%struct-kind type) :ns-range)
-      (cons 0 0)
-      (make-array (length (third type)) :initial-element 0)))
-
+;; A method with a result variable (a non-keyword result style) fills a foreign object of
+;; its result type -- fli:foreign-slot-value, cocoa:set-ns-rect* -- which is answered and
+;; freed when the body returns.
 (defun objc::%run-method (def super self args)
-  (let ((type (objc::%declared-type (objc::%md-result-type def))))
-    (handler-case (let* ((struct
-                          (if (objc::%md-result-var-p def)
-                              (objc::%fresh-struct type)
-                              nil))
-                         (converted nil)
-                         (raws args))
-                    (dolist (spec (objc::%md-arg-specs def))
-                      (push (objc::%convert-argument spec (car raws)) converted)
-                      (setq raws (cdr raws)))
-                    (let ((answer
-                           (funcall (objc::%md-function def)
-                                    (objc::%make-super-ref self super)
-                                    (objc::%self-object self
-                                     (objc::%md-class-method-p def))
-                                    (if (objc::%md-class-method-p def)
-                                        (objc::%intern-class self)
-                                        (objc::%borrow self)) struct
-                                    (nreverse converted))))
-                      (objc::%method-answer def type
-                                            (if struct struct answer))))
+  (let ((type (objc::%declared-type (objc::%md-result-type def))) (struct nil))
+    (handler-case (unwind-protect (progn
+                                    (when (objc::%md-result-var-p def)
+                                      (setq struct
+                                            (fli:allocate-foreign-object
+                                             :type
+                                             (objc::%md-result-type def))))
+                                    (objc::%method-answer def type
+                                                          (objc::%call-method
+                                                           def super self args
+                                                           struct type)))
+                    (when struct (fli:free-foreign-object struct)))
       (error (condition)
         (format *error-output* "objc: error in a callback: ~a~%" condition)
         (objc::%zero-answer type)))))
+
+;; The body run on the converted arguments: its value, or what the result variable holds.
+(defun objc::%call-method (def super self args struct type)
+  (let ((converted nil) (raws args))
+    (dolist (spec (objc::%md-arg-specs def))
+      (push (objc::%convert-argument spec (car raws)) converted)
+      (setq raws (cdr raws)))
+    (let ((answer
+           (funcall (objc::%md-function def) (objc::%make-super-ref self super)
+                    (objc::%self-object self (objc::%md-class-method-p def))
+                    (if (objc::%md-class-method-p def)
+                        (objc::%intern-class self)
+                        (objc::%borrow self)) struct (nreverse converted))))
+      (cond ((null struct) answer)
+            ((and (consp type) (eq (car type) :struct)) struct)
+            (t (fli:dereference struct))))))
 
 ;; A method's value as the host takes it back.
 (defun objc::%method-answer (def type value)
@@ -560,9 +539,11 @@
     (write-string "}" out)
     (let ((encoding (get-output-stream-string out)))
       (setf (gethash name objc::*type-encodings*) encoding)
+      (setf (gethash name objc::*struct-slots*) slots)
       (setf (gethash foreign-name objc::*struct-names*) name)
       (when typedef-name
-        (setf (gethash typedef-name objc::*type-encodings*) encoding))
+        (setf (gethash typedef-name objc::*type-encodings*) encoding)
+        (setf (gethash typedef-name objc::*struct-slots*) slots))
       name)))
 
 (defun objc::%define-objc-typedef (name options type)

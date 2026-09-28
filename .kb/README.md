@@ -204,7 +204,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [tokenizers.md](tokenizers.md) -- the `tokenizer` package and its no-I/O invariant
 - [ffi.md](ffi.md) -- `ffi:`, the foreign primitives CFFI's `cffi-sys` backend is written over
 - [cffi.md](cffi.md) -- upstream CFFI running from its own source
-- [objc.md](objc.md) -- `objc:`/`appkit:`: a native macOS window through FFM
+- [objc.md](objc.md) -- `objc:`/`appkit:`: a native macOS window through FFM; `fli:` foreign objects and pointers
 
 ## Ecosystem and tooling
 

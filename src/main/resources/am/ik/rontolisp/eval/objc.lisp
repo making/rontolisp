@@ -58,6 +58,19 @@
   receiver
   class)
 
+;; LispWorks' FLI pointer: an address of foreign memory and the FLI type of what it points
+;; at. Every pointer-typed value Objective-C hands Lisp is one (an invoke result, a
+;; callback's argument, a dereferenced pointer), typed by the encoding's pointee, and
+;; fli:allocate-foreign-object makes one over calloc'd memory -- the host's, never a wasm
+;; module's linear memory. ENCODING is the pointee's, what %peek and %poke read and write
+;; it by. Not interned and not compared by address: fli:pointer-eq does that.
+(defstruct (fli::pointer
+            (:constructor objc::%make-foreign-pointer (address type encoding))
+            (:predicate fli:pointerp) (:conc-name fli::%pointer-) (:copier nil))
+  address
+  type
+  encoding)
+
 ;; The definition half (objc-class.lisp) plugs in here: a standard-objc-object or a Lisp
 ;; class that implements an Objective-C class stands for its pointer wherever one is
 ;; taken, and a pointer maps back to the Lisp object made for it. Nil while that half is
@@ -86,6 +99,24 @@
 
 (defvar objc::*struct-names* (make-hash-table :test 'equal))
 
+;; A structure type name -> its slots, ((slot-name fli-type) ...), what
+;; fli:foreign-slot-value and fli:size-of lay it out by: the four Foundation structures
+;; here, define-objc-struct's as they are defined. Slot names match by symbol name, so
+;; :width, cocoa::width and a user's width all name NSSize's.
+(defvar objc::*struct-slots* (make-hash-table :test 'equal))
+
+(setf (gethash 'cocoa:ns-point objc::*struct-slots*)
+      '((:x :double) (:y :double)))
+
+(setf (gethash 'cocoa:ns-size objc::*struct-slots*)
+      '((:width :double) (:height :double)))
+
+(setf (gethash 'cocoa:ns-rect objc::*struct-slots*)
+      '((:origin cocoa:ns-point) (:size cocoa:ns-size)))
+
+(setf (gethash 'cocoa:ns-range objc::*struct-slots*)
+      '((:location (:unsigned :long-long)) (:length (:unsigned :long-long))))
+
 ;; LispWorks' printed form of a foreign pointer. The address only: printing must never
 ;; be what touches a freed object (the message of a refused release prints the pointer).
 (defun objc::%print-pointer (type address stream)
@@ -99,6 +130,11 @@
 
 (defmethod print-object ((object objc:sel) stream)
   (objc::%print-pointer "OBJC:SEL" (objc::%sel-struct-address object) stream))
+
+(defmethod print-object ((pointer fli::pointer) stream)
+  (format stream "#<Pointer to type ~s = #x~16,'0x>"
+          (fli::%pointer-type pointer)
+          (objc::%unsigned (fli::%pointer-address pointer) 64)))
 
 (defmethod print-object ((object objc::autorelease-pool) stream)
   (format stream "#<autorelease-pool ~a>"
@@ -411,49 +447,151 @@
 
 ;; The inverse: an FLI type a list-form method names, as its encoding.
 (defun objc::%type-encoding (fli)
-  (cond
-   ((consp fli)
-    (let ((head (car fli)))
-      (cond
-       ((eq head :pointer)
-        (if (cdr fli)
-            (concatenate 'string "^" (objc::%type-encoding (second fli)))
-            "^v"))
-       ((and (member head '(:unsigned :signed)) (cdr fli))
-        (let ((base (objc::%type-encoding (second fli))))
-          (if (eq head :unsigned) (string-upcase base) base)))
-       ((eq head :boolean) "B")
-       ((and (eq head :struct) (symbolp (second fli)) (second fli))
-        (objc::%type-encoding (second fli)))
-       (t (error "objc: ~s is not an FLI type this interface can call" fli)))))
-   ((member fli '(:void)) "v")
-   ((member fli '(:char :byte :int8)) "c")
-   ((member fli '(:uint8)) "C")
-   ((member fli '(:short :int16)) "s")
-   ((member fli '(:uint16)) "S")
-   ((member fli '(:int :int32)) "i")
-   ((member fli '(:uint32)) "I")
-   ((member fli '(:long :long-long :int64 :intptr :intmax :ptrdiff-t :ssize-t))
-    "q")
-   ((member fli '(:uint64 :uintptr :size-t)) "Q")
-   ((member fli '(:float :single-float)) "f")
-   ((member fli '(:double :double-float)) "d")
-   ((member fli '(:boolean)) "B")
-   ((member fli '(:pointer)) "^v")
-   ((eq fli 'objc:objc-object-pointer) "@")
-   ((eq fli 'objc:objc-class) "#")
-   ((eq fli 'objc:sel) ":")
-   ((eq fli 'objc:objc-c-string) "*")
-   ((eq fli 'objc:objc-bool) "c")
-   ((eq fli 'objc:objc-c++-bool) "B")
-   ((eq fli 'objc:objc-at-question-mark) "@?")
-   ((eq fli 'objc:objc-unknown) "?")
-   ((eq fli 'cocoa:ns-rect) "{CGRect={CGPoint=dd}{CGSize=dd}}")
-   ((eq fli 'cocoa:ns-point) "{CGPoint=dd}")
-   ((eq fli 'cocoa:ns-size) "{CGSize=dd}")
-   ((eq fli 'cocoa:ns-range) "{_NSRange=QQ}")
-   ((gethash fli objc::*type-encodings*) (gethash fli objc::*type-encodings*))
-   (t (error "objc: ~s is not an FLI type this interface can call" fli))))
+  (or (objc::%encoding-or-nil fli)
+      (error "objc: ~s is not an FLI type this interface can call" fli)))
+
+;; An FLI type's encoding, or nil for one this interface does not know.
+(defun objc::%encoding-or-nil (fli)
+  (cond ((consp fli)
+         (let ((head (car fli)))
+           (cond ((eq head :pointer)
+                  (if (cdr fli)
+                      (let ((pointee (objc::%encoding-or-nil (second fli))))
+                        (and pointee (concatenate 'string "^" pointee)))
+                      "^v"))
+                 ((and (member head '(:unsigned :signed)) (cdr fli))
+                  (let ((base (objc::%encoding-or-nil (second fli))))
+                    (and base
+                         (if (eq head :unsigned) (string-upcase base) base))))
+                 ((eq head :boolean) "B")
+                 ((and (eq head :struct) (symbolp (second fli)) (second fli))
+                  (objc::%encoding-or-nil (second fli)))
+                 ((and (eq head :c-array) (cdr fli) (integerp (third fli)))
+                  (let ((element (objc::%encoding-or-nil (second fli))))
+                    (and element (format nil "[~a~a]" (third fli) element))))
+                 (t nil))))
+        ((member fli '(:void)) "v")
+        ((member fli '(:char :byte :int8)) "c")
+        ((member fli '(:uint8)) "C")
+        ((member fli '(:short :int16)) "s")
+        ((member fli '(:uint16)) "S")
+        ((member fli '(:int :int32)) "i")
+        ((member fli '(:uint32)) "I")
+        ((member fli
+                 '(:long :long-long :int64 :intptr :intmax :ptrdiff-t :ssize-t))
+         "q")
+        ((member fli '(:uint64 :uintptr :size-t)) "Q")
+        ((member fli '(:float :single-float)) "f")
+        ((member fli '(:double :double-float)) "d")
+        ((member fli '(:boolean)) "B")
+        ((member fli '(:pointer)) "^v")
+        ((eq fli 'objc:objc-object-pointer) "@")
+        ((eq fli 'objc:objc-class) "#")
+        ((eq fli 'objc:sel) ":")
+        ((eq fli 'objc:objc-c-string) "*")
+        ((eq fli 'objc:objc-bool) "c")
+        ((eq fli 'objc:objc-c++-bool) "B")
+        ((eq fli 'objc:objc-at-question-mark) "@?")
+        ((eq fli 'objc:objc-unknown) "?")
+        ((eq fli 'cocoa:ns-rect) "{CGRect={CGPoint=dd}{CGSize=dd}}")
+        ((eq fli 'cocoa:ns-point) "{CGPoint=dd}")
+        ((eq fli 'cocoa:ns-size) "{CGSize=dd}")
+        ((eq fli 'cocoa:ns-range) "{_NSRange=QQ}")
+        (t (gethash fli objc::*type-encodings*))))
+
+;; A parsed type spelled back as an encoding (a structure by its leaves, which is how
+;; every host lays one out), for a pointee whose FLI type has no encoding of its own.
+(defun objc::%unparse (type)
+  (if (consp type)
+      (case (car type)
+        (:pointer (concatenate 'string "^" (objc::%unparse (second type))))
+        (:struct
+         (let ((out (make-string-output-stream)))
+           (write-string "{" out)
+           (write-string (second type) out)
+           (write-string "=" out)
+           (dolist (leaf (third type)) (write-string (objc::%unparse leaf) out))
+           (write-string "}" out)
+           (get-output-stream-string out)))
+        (:array
+         (format nil "[~a~a]" (second type) (objc::%unparse (third type))))
+        (:union (format nil "(~a)" (second type)))
+        (t (format nil "b~a" (second type))))
+      (case type
+        (:void "v")
+        (:object "@")
+        (:class "#")
+        (:sel ":")
+        (:cstring "*")
+        (:block "@?")
+        (:bool "B")
+        (:int8 "c")
+        (:uint8 "C")
+        (:int16 "s")
+        (:uint16 "S")
+        (:int32 "i")
+        (:uint32 "I")
+        (:long "l")
+        (:ulong "L")
+        (:int64 "q")
+        (:uint64 "Q")
+        (:float "f")
+        (:double "d")
+        (t "?"))))
+
+;; A scalar's size, and a parsed type's by C layout over its leaves (the flattened
+;; layout every host uses for a structure it parsed).
+(defun objc::%leaf-size (leaf)
+  (case leaf
+    ((:bool :int8 :uint8) 1)
+    ((:int16 :uint16) 2)
+    ((:int32 :uint32 :float) 4)
+    (t 8)))
+
+(defun objc::%type-alignment (type)
+  (cond ((and (consp type) (eq (car type) :struct))
+         (let ((align 1))
+           (dolist (leaf (third type) align)
+             (setq align (max align (objc::%type-alignment leaf))))))
+        ((and (consp type) (eq (car type) :array))
+         (objc::%type-alignment (third type)))
+        (t (objc::%leaf-size (if (consp type) :pointer type)))))
+
+(defun objc::%type-size (type)
+  (cond ((and (consp type) (eq (car type) :struct))
+         (let ((offset 0) (align (objc::%type-alignment type)))
+           (dolist (leaf (third type))
+             (let ((a (objc::%type-alignment leaf)))
+               (setq offset (* a (ceiling offset a)))
+               (setq offset (+ offset (objc::%type-size leaf)))))
+           (* align (ceiling offset align))))
+        ((and (consp type) (eq (car type) :array))
+         (* (second type) (objc::%type-size (third type))))
+        ((eq type :void) 0)
+        (t (objc::%leaf-size (if (consp type) :pointer type)))))
+
+;; The named slots of a structure FLI type -- cocoa:ns-rect, (:struct name), or the name
+;; define-objc-struct gave one -- or nil.
+(defun objc::%struct-slots (fli)
+  (let ((name
+         (cond ((and (consp fli) (eq (car fli) :struct)) (second fli))
+               ((symbolp fli) fli)
+               (t nil))))
+    (and name (gethash name objc::*struct-slots*))))
+
+;; (size . alignment) of an FLI type, by the C rule: a structure with named slots slot by
+;; slot, anything else by its parsed encoding.
+(defun objc::%fli-layout (fli)
+  (let ((slots (objc::%struct-slots fli)))
+    (if slots
+        (let ((offset 0) (align 1))
+          (dolist (slot slots)
+            (let* ((layout (objc::%fli-layout (second slot))) (a (cdr layout)))
+              (setq offset (+ (* a (ceiling offset a)) (car layout)))
+              (setq align (max align a))))
+          (cons (* align (ceiling offset align)) align))
+        (let ((parsed (car (objc::%parse-type (objc::%type-encoding fli) 0))))
+          (cons (objc::%type-size parsed) (objc::%type-alignment parsed))))))
 
 ;; A variadic argument's encoding: C's default promotions (a float travels as a
 ;; double), and then every integer in a whole 64-bit slot -- a variadic argument takes
@@ -709,7 +847,11 @@
   (if (consp type)
       (case (car type)
         (:struct
-         (case (objc::%struct-kind type)
+         (case (if (fli:pointerp value) :foreign (objc::%struct-kind type))
+           ;; The manual: "otherwise it is assumed to be a foreign pointer to a
+           ;; cocoa:ns-rect and is copied" -- for every structure.
+           (:foreign (objc::%peek (objc::%foreign-address value name index)
+                                  (objc::%unparse type)))
            (:ns-rect (objc::%leaf-values value 4 name index
                                          "a vector #(x y width height)"))
            (:ns-point (objc::%leaf-values value 2 name index "a vector #(x y)"))
@@ -733,6 +875,7 @@
         (:object (cond ((null value) 0)
                        ((stringp value) value)
                        ((objc::%pointerp value) (objc::%pointer-address value))
+                       ((fli:pointerp value) (fli::%pointer-address value))
                        ((vectorp value)
                         (let ((array (objc::%ns-array value temps)))
                           (push array (car temps))
@@ -758,6 +901,7 @@
         (:cstring (cond ((null value) 0)
                         ((stringp value) value)
                         ((integerp value) (objc::%bits64 value name index))
+                        ((fli:pointerp value) (fli::%pointer-address value))
                         (t (objc::%arg-error name index "a string" value))))
         (:block
          (when (functionp value)
@@ -791,11 +935,20 @@
 (defun objc::%raw-address (value name index)
   (cond ((null value) 0)
         ((integerp value) (objc::%bits64 value name index))
+        ((fli:pointerp value)
+         (objc::%bits64 (fli::%pointer-address value) name index))
         ((objc::%pointerp value) (objc::%pointer-address value))
         ((objc::%selp value) (objc::%sel-struct-address value))
         ((objc::%block-address value))
-        (t (objc::%arg-error name index "a pointer (an integer or an object)"
-                             value))))
+        (t (objc::%arg-error name index
+            "a pointer (a foreign pointer, an integer or an object)" value))))
+
+;; The address of a foreign pointer whose memory is read, which must not be null.
+(defun objc::%foreign-address (pointer name index)
+  (let ((address (fli::%pointer-address pointer)))
+    (when (= address 0)
+      (error "objc:invoke: ~a: argument ~a is a null pointer" name (+ index 1)))
+    address))
 
 ;; The literal's address of a block made in Lisp, or nil for anything else.
 (defun objc::%block-address (value)
@@ -827,6 +980,9 @@
                    (if (eq (objc::%struct-kind type) :ns-range)
                        (cons (first leaves) (second leaves))
                        (coerce leaves 'simple-vector))))
+        (:pointer
+         (let ((pointee (second type)))
+           (objc::%foreign-pointer-to raw (objc::%fli-type pointee) pointee)))
         (t raw))
       (case type
         (:void nil)
@@ -920,7 +1076,8 @@
                (objc::%trace target name args))
              (let* ((temps (list nil))
                     (mode
-                     (if (and (eq return-type :cstring) (eq into :pointer))
+                     (if (and (eq return-type :cstring)
+                              (or (eq into :pointer) (fli:pointerp into)))
                          2
                          (if out (logior (svref plan 4) 4) (svref plan 4))))
                     (raw
@@ -1028,7 +1185,8 @@
            :object object
            :where (objc::%where name target))))
 
-;; calloc and free, for the NSError * slot invoke-with-error hands a method.
+;; calloc and free: the NSError * slot invoke-with-error hands a method, and every
+;; foreign object fli allocates. Host memory, on every target.
 (defvar objc::*calloc* nil)
 
 (defvar objc::*free* nil)
@@ -1038,17 +1196,30 @@
     (when (= address 0) (error "objc: ~a is missing" name))
     address))
 
+(defun objc::%calloc (count size)
+  (unless objc::*initialized* (objc::%ready))
+  (unless objc::*calloc*
+    (setq objc::*calloc* (objc::%c-function "calloc"))
+    (setq objc::*free* (objc::%c-function "free")))
+  (let ((address
+         (or (objc::%call-function objc::*calloc* "^vQQ" -1 (list count size) 0)
+             (objc::%checked "calloc" :function))))
+    (when (= address 0)
+      (error "objc: calloc could not allocate ~a byte(s)" (* count size)))
+    address))
+
+(defun objc::%free (address)
+  (or (objc::%call-function objc::*free* "v^v" -1 (list address) 0)
+      (objc::%checked "free" :function))
+  nil)
+
 (defun objc:invoke-with-error (class-or-object-pointer method &rest args)
   (let ((name (if (consp method) (first method) method)))
     (unless (and (stringp name) (>= (length name) 6)
                  (string= "error:" name :start2 (- (length name) 6)))
       (error "objc:invoke-with-error: ~s does not end in \"error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
              name))
-    (unless objc::*initialized* (objc::%ready))
-    (unless objc::*calloc*
-      (setq objc::*calloc* (objc::%c-function "calloc"))
-      (setq objc::*free* (objc::%c-function "free")))
-    (let ((slot (objc::%call-function objc::*calloc* "^vQQ" -1 (list 1 8) 0)))
+    (let ((slot (objc::%calloc 1 8)))
       (unwind-protect (let* ((result
                               (objc::%invoke class-or-object-pointer method
                                              (append args (list slot)) nil t))
@@ -1065,7 +1236,7 @@
                              :object written
                              :where (objc::%where name class-or-object-pointer))
                             result))
-        (objc::%call-function objc::*free* "v^v" -1 (list slot) 0)))))
+        (objc::%free slot)))))
 
 ;;; --- invoke-into ------------------------------------------------------------------
 
@@ -1116,7 +1287,14 @@
         (t value)))
 
 (defun objc::%into (into return-type value)
-  (cond ((eq return-type :object)
+  (cond ((fli:pointerp into)
+         ;; LispWorks: the result is copied into the foreign object.
+         (unless (eq return-type :void)
+           (objc::%poke (objc::%non-null into "objc:invoke-into")
+            (objc::%unparse return-type)
+            (objc::%raw-arg return-type value "objc:invoke-into" 0 (list nil))))
+         into)
+        ((eq return-type :object)
          (cond ((null value) nil)
                ((eq into 'string) (objc:ns-string-to-string value))
                ((eq into 'array) (objc::%array-elements value nil))
@@ -1178,6 +1356,8 @@
                     (objc::%array-elements pointer (second style)))
                    (t pointer))))
           ((eq style :foreign) raw)
+          ((and (consp (first spec)) (eq (car (first spec)) :pointer))
+           (objc::%foreign-pointer raw (or (second (first spec)) :void)))
           (t (objc::%result type raw)))))
 
 ;; What a callback that failed answers.
@@ -1284,6 +1464,201 @@
           (/= raw 0)
           (objc::%result (svref function 2) raw)))))
 
+;;; --- FLI: foreign objects ---------------------------------------------------------
+
+;; LispWorks' FLI, the part the Objective-C manual's examples use: foreign objects
+;; allocated in host memory (calloc / free through %call-function, so the same on every
+;; target), read and written through %peek / %poke by their encodings. A structure's slots
+;; are laid out by the C rule over its named slots (objc::*struct-slots*).
+
+;; A pointer to ADDRESS of an FLI type the program names.
+(defun objc::%foreign-pointer (address type)
+  (objc::%make-foreign-pointer address type (objc::%type-encoding type)))
+
+;; A pointer to ADDRESS whose pointee Objective-C described: its FLI type, and the
+;; encoding it is read by -- the type's own when it has one, else the parsed PARSED.
+(defun objc::%foreign-pointer-to (address type parsed)
+  (objc::%make-foreign-pointer address type
+   (or (objc::%encoding-or-nil type) (objc::%unparse parsed))))
+
+(defun objc::%check-pointer (pointer who)
+  (unless (fli:pointerp pointer)
+    (error "~a: ~s is not a foreign pointer" who pointer))
+  pointer)
+
+(defun objc::%non-null (pointer who)
+  (let ((address (fli::%pointer-address (objc::%check-pointer pointer who))))
+    (when (= address 0) (error "~a: ~s is a null pointer" who pointer))
+    address))
+
+(defun objc::%boolean-type-p (fli)
+  (or (eq fli 'objc:objc-bool) (eq fli 'objc:objc-c++-bool) (eq fli :boolean)
+      (and (consp fli) (eq (car fli) :boolean))))
+
+(defun fli:size-of (type-name) (car (objc::%fli-layout type-name)))
+
+(defun fli:allocate-foreign-object
+    (&key type pointer-type (nelems 1) initial-element initial-contents fill)
+  (let ((element
+         (or type
+             (and (consp pointer-type) (eq (car pointer-type) :pointer)
+                  (or (second pointer-type) :void))
+             (error
+              "fli:allocate-foreign-object: give a :type or a :pointer-type"))))
+    (unless (and (integerp nelems) (> nelems 0))
+      (error
+       "fli:allocate-foreign-object: :nelems must be a positive integer, got ~s"
+       nelems))
+    (let* ((size (fli:size-of element))
+           (pointer
+            (objc::%foreign-pointer (objc::%calloc nelems (max size 1))
+                                    element)))
+      (when (and fill (/= fill 0))
+        (objc::%write-octets (fli::%pointer-address pointer)
+                             (make-array (* nelems size)
+                                         :element-type '(unsigned-byte 8)
+                                         :initial-element fill)))
+      (cond (initial-contents
+             (let ((i 0))
+               (dolist (value (coerce initial-contents 'list))
+                 (when (>= i nelems)
+                   (error "fli:allocate-foreign-object: ~a initial elements for ~a element(s)"
+                          (length initial-contents) nelems))
+                 (setf (fli:dereference pointer :index i) value)
+                 (setq i (+ i 1)))))
+            (initial-element
+             (dotimes (i nelems)
+               (setf (fli:dereference pointer :index i) initial-element))))
+      pointer)))
+
+(defun fli:free-foreign-object (pointer)
+  (objc::%check-pointer pointer "fli:free-foreign-object")
+  (unless (= (fli::%pointer-address pointer) 0)
+    (objc::%free (fli::%pointer-address pointer)))
+  nil)
+
+;; (values address type encoding) of element INDEX of what POINTER points at, read as TYPE
+;; when one is given.
+(defun objc::%element (pointer index type who)
+  (let ((address (objc::%non-null pointer who)))
+    (if type
+        (values (+ address (* index (fli:size-of type))) type
+                (objc::%type-encoding type))
+        (values (+ address (* index (fli:size-of (fli::%pointer-type pointer))))
+                (fli::%pointer-type pointer)
+                (fli::%pointer-encoding pointer)))))
+
+;; The value of TYPE at ADDRESS. An aggregate is not a Lisp value here: COPY nil answers a
+;; pointer to it, t a copy in a fresh foreign object, :error (LispWorks' default) signals.
+(defun objc::%load (address type encoding copy who)
+  (let ((parsed (car (objc::%parse-type encoding 0))))
+    (cond ((eq parsed :void)
+           (error "~a: a pointer to :void has nothing to read; give a :type"
+                  who))
+          ((and (consp parsed) (member (car parsed) '(:struct :array :union)))
+           (cond
+            ((null copy) (objc::%make-foreign-pointer address type encoding))
+            ((eq copy :error)
+             (error "~a: ~s is an aggregate; pass :copy-foreign-object nil for a pointer to it or t for a copy"
+                    who type))
+            (t (let ((new (fli:allocate-foreign-object :type type))
+                     (size (fli:size-of type)))
+                 (objc::%write-octets (fli::%pointer-address new)
+                                      (objc::%read-octets address size))
+                 new))))
+          ((objc::%boolean-type-p type) (/= (objc::%peek address encoding) 0))
+          (t (objc::%result parsed (objc::%peek address encoding))))))
+
+;; Writes VALUE as TYPE at ADDRESS: a foreign pointer's memory for an aggregate, else
+;; what an argument of the type takes -- except what would not outlive the write (a Lisp
+;; string or vector made into an Objective-C object for the call only).
+(defun objc::%store (address type encoding value who)
+  (let ((parsed (car (objc::%parse-type encoding 0))))
+    (cond ((eq parsed :void)
+           (error "~a: a pointer to :void has nothing to write; give a :type"
+                  who))
+          ((and (fli:pointerp value) (consp parsed)
+                (member (car parsed) '(:struct :array :union)))
+           (objc::%write-octets address
+                                (objc::%read-octets (objc::%non-null value who)
+                                                    (fli:size-of type))))
+          ((and (member parsed '(:object :cstring))
+                (or (stringp value) (vectorp value)))
+           (error "~a: ~s would not outlive the write; store an object pointer"
+                  who value))
+          (t (objc::%poke address encoding
+                          (objc::%raw-arg parsed value who 0 (list nil)))))
+    value))
+
+(defun fli:dereference
+    (pointer &key (index 0) type (copy-foreign-object :error))
+  (multiple-value-bind (address element encoding)
+      (objc::%element pointer index type "fli:dereference")
+    (objc::%load address element encoding copy-foreign-object
+                 "fli:dereference")))
+
+(defun (setf fli:dereference) (value pointer &key (index 0) type)
+  (multiple-value-bind (address element encoding)
+      (objc::%element pointer index type "(setf fli:dereference)")
+    (objc::%store address element encoding value "(setf fli:dereference)")))
+
+;; (values address type) of the slot SLOT-NAME -- a symbol, or a list naming a slot of a
+;; slot -- of the structure POINTER points at (OBJECT-TYPE when given).
+(defun objc::%slot (pointer slot-name object-type who)
+  (let ((address (objc::%non-null pointer who))
+        (type (or object-type (fli::%pointer-type pointer))))
+    (dolist (name (if (listp slot-name) slot-name (list slot-name)))
+      (let ((slots (objc::%struct-slots type)) (offset 0) (found nil))
+        (unless slots
+          (error "~a: ~s is not a structure type with named slots" who type))
+        (dolist (slot slots)
+          (unless found
+            (let* ((layout (objc::%fli-layout (second slot))) (a (cdr layout)))
+              (setq offset (* a (ceiling offset a)))
+              (if (string= (string (first slot)) (string name))
+                  (setq found slot)
+                  (setq offset (+ offset (car layout)))))))
+        (unless found
+          (error "~a: ~s has no slot ~s; its slots are ~{~a~^, ~}" who type name
+                 (mapcar #'first slots)))
+        (setq address (+ address offset))
+        (setq type (second found))))
+    (values address type)))
+
+(defun fli:foreign-slot-value
+    (pointer slot-name &key type object-type (copy-foreign-object :error))
+  (multiple-value-bind (address slot-type)
+      (objc::%slot pointer slot-name object-type "fli:foreign-slot-value")
+    (let ((read-as (or type slot-type)))
+      (objc::%load address read-as (objc::%type-encoding read-as)
+                   copy-foreign-object "fli:foreign-slot-value"))))
+
+(defun (setf fli:foreign-slot-value)
+    (value pointer slot-name &key type object-type)
+  (multiple-value-bind (address slot-type) (objc::%slot pointer slot-name
+                                            object-type
+                                            "(setf fli:foreign-slot-value)")
+    (let ((write-as (or type slot-type)))
+      (objc::%store address write-as (objc::%type-encoding write-as) value
+                    "(setf fli:foreign-slot-value)"))))
+
+(defun fli:make-pointer (&key address type pointer-type)
+  (unless (integerp address)
+    (error "fli:make-pointer: :address must be an integer, got ~s" address))
+  (objc::%foreign-pointer address
+   (or type (and (consp pointer-type) (second pointer-type)) :void)))
+
+(defun fli:pointer-address (pointer)
+  (fli::%pointer-address (objc::%check-pointer pointer "fli:pointer-address")))
+
+(defun fli:null-pointer-p (pointer)
+  (= (fli::%pointer-address (objc::%check-pointer pointer "fli:null-pointer-p"))
+     0))
+
+(defun fli:pointer-eq (pointer1 pointer2)
+  (= (fli::%pointer-address (objc::%check-pointer pointer1 "fli:pointer-eq"))
+     (fli::%pointer-address (objc::%check-pointer pointer2 "fli:pointer-eq"))))
+
 ;;; --- the rest of OBJC -------------------------------------------------------------
 
 (defun objc:ensure-objc-initialized (&key modules)
@@ -1365,7 +1740,8 @@
     (let ((data
            (objc:invoke "NSMutableData" "dataWithLength:" (length octets))))
       (when (> (length octets) 0)
-        (objc::%write-octets (objc:invoke data "mutableBytes") octets))
+        (objc::%write-octets
+         (fli:pointer-address (objc:invoke data "mutableBytes")) octets))
       data)))
 
 ;; An NSData's contents as a fresh (unsigned-byte 8) vector.
@@ -1376,7 +1752,8 @@
     (let ((n (objc:invoke pointer "length")))
       (if (= n 0)
           (make-array 0 :element-type '(unsigned-byte 8))
-          (objc::%read-octets (objc:invoke pointer "bytes") n)))))
+          (objc::%read-octets
+           (fli:pointer-address (objc:invoke pointer "bytes")) n)))))
 
 ;; The Lisp object made for a pointer: a standard-objc-object for an instance of a class
 ;; defined in Lisp, the Lisp class for such a class, and nil for anything else.
@@ -1393,18 +1770,44 @@
 ;; NSNotFound, NSIntegerMax on a 64-bit process.
 (defconstant cocoa:ns-not-found 9223372036854775807)
 
-;; With no foreign memory, a Foundation structure is the value invoke answers for it: a
-;; vector for NSPoint, NSSize and NSRect, a cons for NSRange. These fill one.
+;; A Foundation structure is the value invoke answers for it -- a vector for NSPoint,
+;; NSSize and NSRect, a cons for NSRange -- or a foreign object holding one. These fill
+;; either.
 (defun objc::%fill (vector count values verb)
-  (unless (and (vectorp vector) (not (stringp vector))
-               (>= (length vector) count))
-    (error "cocoa:~a: ~s is not a vector of ~a elements" verb vector count))
-  (let ((i 0))
+  (if (fli:pointerp vector)
+      (objc::%fill-foreign vector values verb)
+      (progn
+        (unless (and (vectorp vector) (not (stringp vector))
+                     (>= (length vector) count))
+          (error "cocoa:~a: ~s is not a vector of ~a elements" verb vector
+                 count))
+        (let ((i 0))
+          (dolist (value values)
+            (unless (realp value)
+              (error "cocoa:~a: ~s is not a real" verb value))
+            (setf (aref vector i) value)
+            (setq i (+ i 1))))
+        vector)))
+
+;; The fields of a Foundation structure written into the foreign object POINTER, a
+;; structure of as many fields.
+(defun objc::%fill-foreign (pointer values verb)
+  (let* ((who (concatenate 'string "cocoa:" verb))
+         (address (objc::%non-null pointer who))
+         (parsed (car (objc::%parse-type (fli::%pointer-encoding pointer) 0))))
+    (unless (and (consp parsed) (eq (car parsed) :struct)
+                 (= (length (third parsed)) (length values)))
+      (error "~a: ~s does not point at a structure of ~a fields" who pointer
+             (length values)))
     (dolist (value values)
-      (unless (realp value) (error "cocoa:~a: ~s is not a real" verb value))
-      (setf (aref vector i) value)
-      (setq i (+ i 1))))
-  vector)
+      (unless (realp value) (error "~a: ~s is not a real" who value)))
+    (objc::%poke address (objc::%unparse parsed)
+                 (mapcar (lambda (leaf value)
+                           (if (member leaf '(:float :double))
+                               (float value 1d0)
+                               (objc::%bits64 value who 0))) (third parsed)
+                         values))
+    pointer))
 
 (defun cocoa:set-ns-point* (point x y)
   (objc::%fill point 2 (list x y) "set-ns-point*"))
@@ -1416,13 +1819,17 @@
   (objc::%fill rect 4 (list x y width height) "set-ns-rect*"))
 
 (defun cocoa:set-ns-range* (range location length)
-  (unless (consp range) (error "cocoa:set-ns-range*: ~s is not a cons" range))
   (unless (and (integerp location) (integerp length))
     (error
      "cocoa:set-ns-range*: the location and length are integers, got ~s and ~s"
      location length))
-  (setf (car range) location (cdr range) length)
-  range)
+  (cond ((fli:pointerp range)
+         (objc::%fill-foreign range (list location length) "set-ns-range*"))
+        ((consp range)
+         (setf (car range) location (cdr range) length)
+         range)
+        (t (error "cocoa:set-ns-range*: ~s is not a cons or a foreign pointer"
+                  range))))
 
 ;; The default notification center's observers: TARGET receives SELECTOR (a method taking
 ;; the NSNotification) for notifications of NAME from OBJECT; nil matches any.

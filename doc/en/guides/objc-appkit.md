@@ -225,20 +225,20 @@ by it. A string or a vector passed as an argument exists for the call only.
 | `id` | an object pointer, `nil`, a string (an `NSString`), a vector (an `NSArray`, elements converted alike) | an `objc:objc-object-pointer`, or `nil` |
 | `Class` | a class pointer or a class name | an `objc:objc-class` |
 | `SEL` | a selector or its name | an `objc:sel` |
-| `char *` | a string or an address | a string |
+| `char *` | a string, a foreign pointer or an address | a string |
 | `BOOL` / `_Bool` | `t`, `nil` or an integer | `1` or `0` |
 | an integer | an integer (an unsigned 64-bit one up to 2^64-1) | an integer |
 | `float` / `double` | a real | a double |
-| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)` | a vector of doubles |
-| `NSRange` | `(location . length)` | a cons |
-| any other structure | a vector of its fields in memory order | a vector of its fields |
-| a pointer | an address, `nil` or an object pointer | an address |
+| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)`, or a foreign pointer to one | a vector of doubles |
+| `NSRange` | `(location . length)`, or a foreign pointer to one | a cons |
+| any other structure | a vector of its fields in memory order, or a foreign pointer to one | a vector of its fields |
+| a pointer | a foreign pointer, an address, `nil` or an object pointer | a foreign pointer to the declared type |
 
 A `BOOL` result is `1` or `0`, as in LispWorks, so a test uses `objc:invoke-bool`. An
 `NSString` result is a pointer like any other object; `objc:invoke-into` converts
 further: `'string` turns it into a Lisp string, `'array` and `'(array string)` an
 `NSArray` into a vector, and a vector or a cons passed as the first argument receives a
-structure or an array's elements.
+structure or an array's elements, as a foreign object does ([Foreign objects](#foreign-objects-the-fli-package)).
 
 ```console
 MY-APP> (invoke *s* "hasPrefix:" "hello")
@@ -319,6 +319,37 @@ MY-APP> (objc:objectp "hello")
 NIL
 ```
 
+### Foreign objects: the `fli` package
+
+A method that fills memory its caller owns -- a structure through `invoke-into`, an
+`int *` or a `BOOL *` it writes -- takes a foreign object: `fli:with-dynamic-foreign-objects`
+allocates one of a type for the extent of a body, `fli:dereference` reads or `setf`s it,
+and `fli:foreign-slot-value` reads or `setf`s a slot of a structure (a list of names reaches
+into a nested one). These are the manual's own forms:
+
+```console
+MY-APP> (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+          (invoke-into rect (invoke (invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
+                       "frame")
+          (fli:foreign-slot-value rect '(:size :width)))
+640.0
+MY-APP> (fli:with-dynamic-foreign-objects ((result-value :int))
+          (invoke (invoke "NSScanner" "scannerWithString:" "42 apples") "scanInt:" result-value)
+          (fli:dereference result-value))
+42
+MY-APP> (fli:size-of 'cocoa:ns-rect)
+32
+```
+
+A foreign object is passed wherever its type goes: as a pointer, and as a structure, which
+is copied. Every pointer Objective-C hands back -- a `void *` result, a callback's
+`BOOL *stop` -- is a foreign pointer typed by its declaration, so a block stops an
+enumeration with `(setf (fli:dereference stop) t)`. `fli:allocate-foreign-object` and
+`fli:free-foreign-object` manage one explicitly. The memory is the process's heap on every
+target, `--native` included. A pointer to an aggregate is not a Lisp value: dereferencing
+one signals unless `:copy-foreign-object` asks for a pointer (`nil`) or a copy (`t`). A
+foreign pointer is not an `ffi:` pointer; `fli:pointer-address` gives the address both take.
+
 ### Ownership: a pointer releases only what it holds
 
 Every send runs on the main thread inside an autorelease pool of its own, so an
@@ -391,8 +422,9 @@ MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
           (:first :float)
           (:second :float))
 PAIR
-MY-APP> (define-objc-method ("pair" (:struct pair)) ((this my-object))
-          (vector 1.0 2.0))
+MY-APP> (define-objc-method ("pair" (:struct pair) result-pair) ((this my-object))
+          (setf (fli:foreign-slot-value result-pair :first) 1f0
+                (fli:foreign-slot-value result-pair :second) 2f0))
 "pair"
 MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 #(1.0 2.0)
@@ -400,7 +432,10 @@ MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 
 A method's arguments and result may be of any type the declarations name: integers of
 every width, `:float` / `:double`, structures (the Lisp value `invoke` uses for one),
-`objc:objc-bool` / `:boolean` as `t` / `nil`, objects, classes and selectors. An object
+`objc:objc-bool` / `:boolean` as `t` / `nil`, objects, classes, selectors and pointers (a
+foreign pointer to the declared type). A structure is answered as its Lisp value or as a
+foreign pointer to one, which is copied; a non-keyword result style, `result-pair` above,
+names a foreign object the body fills instead. An object
 argument can be converted on the way in (`(arg objc-object-pointer string)`, `array`,
 `(array string)`), and a string or a vector answered as an object becomes an `NSString` /
 `NSArray`. A class naming no Objective-C class and inheriting none is a mixin whose methods
@@ -498,12 +533,11 @@ MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-
 MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
                                         (:pointer objc-c++-bool)))
                                (lambda (word index stop)
-                                 (declare (ignore stop))
-                                 (format t "~a ~a~%" index (ns-string-to-string word))))
+                                 (format t "~a ~a~%" index (ns-string-to-string word))
+                                 (when (= index 1) (setf (fli:dereference stop) t))))
           (invoke *words* "enumerateObjectsUsingBlock:" each))
 0 pear
 1 fig
-2 apple
 NIL
 MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
 *ADD*
@@ -611,7 +645,7 @@ A block of memory is ordinary in Cocoa and has no Lisp value of its own, so the 
 makes one an `NSData`. `objc:data` answers an `NSMutableData` holding a packed buffer's
 bytes — a packed float array of any rank, a packed `(unsigned-byte 8|16|32)` vector, or a
 string's UTF-8 — laid out exactly as `write-sequence` would write them, little-endian and
-row-major; anything else signals. `[data bytes]` is then the address a `void *` parameter
+row-major; anything else signals. `[data bytes]` is then the pointer a `void *` parameter
 wants, `[data mutableBytes]` is writable scratch to hand a callee, and `objc:bytes` reads
 an `NSData`'s contents back as a fresh `(unsigned-byte 8)` vector.
 
@@ -705,17 +739,16 @@ REPL thread is not visible to it.
 
 ### Where it differs from LispWorks
 
-rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
-passes and answers for it (`cocoa:set-ns-rect*` fills a vector) and the manual's
-`fli:with-dynamic-foreign-objects` forms have no counterpart. LispWorks makes blocks with
-its foreign language interface, not `objc`; the names `objc:make-objc-block` and the rest
-are this package's own, and `fli` carries `define-foreign-function` alone. Calling
+`invoke` answers a structure as a Lisp value (a vector or a cons) rather than filling
+foreign memory; `objc:invoke-into` a foreign object is the manual's way, and both work.
+`fli` is the part of LispWorks' foreign language interface the manual's examples use --
+`define-foreign-function`, foreign objects and pointers -- and a foreign object is `calloc`
+memory, not the stack. LispWorks makes blocks with its foreign language interface, not
+`objc`; the names `objc:make-objc-block` and the rest are this package's own. Calling
 `objc:ensure-objc-initialized` first is optional: every function opens the runtime on
 its first use. A variadic method named in the table above (`stringWithFormat:`,
 `arrayWithObjects:` ...) also takes the string form, each extra argument typed by its
-value and a `nil` terminator appended. A method's structure result is answered as its
-Lisp value, or filled into the variable a non-keyword result style names; the manual's
-`fli:foreign-slot-value` over it has no counterpart. LispWorks lets an Objective-C
+value and a `nil` terminator appended. LispWorks lets an Objective-C
 exception end the process and has no `NSError` helper; `objc:objc-exception`,
 `objc:ns-error` and `objc:invoke-with-error` are this package's own, as are
 `objc:on-main`, `objc:data`, `objc:bytes` and `objc:objectp`.

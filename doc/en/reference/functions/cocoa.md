@@ -2,10 +2,12 @@
 
 The `cocoa` package is LispWorks 8.1's `COCOA`: the four Foundation structures
 `objc:invoke` converts, their setters, `cocoa:ns-not-found` and the notification observers. It is **macOS
-only** and **not part of Common Lisp**. With no foreign memory in rontolisp, a
-structure is the Lisp value `objc:invoke` passes and answers for it: a vector
-`#(x y)` for `NSPoint`, `#(width height)` for `NSSize`, `#(x y width height)` for
-`NSRect` (all doubles) and a cons `(location . length)` for `NSRange`. The
+only** and **not part of Common Lisp**. A structure is the Lisp value `objc:invoke`
+passes and answers for it -- a vector `#(x y)` for `NSPoint`, `#(width height)` for
+`NSSize`, `#(x y width height)` for `NSRect` (all doubles) and a cons
+`(location . length)` for `NSRange` -- or a foreign object of the type
+([`fli`](fli.md)), whose slots are `x` `y`, `width` `height`, `origin` `size` and
+`location` `length`. The setters fill either. The
 symbols `cocoa:ns-point`, `cocoa:ns-size`, `cocoa:ns-rect` and `cocoa:ns-range`
 name the structures in a list-form method's types and in
 `objc:objc-class-method-signature`'s answer (`(:struct cocoa:ns-range)`), and

@@ -100,6 +100,7 @@ categories:
       - { slug: objc-define-objc-block-type, name: "objc:define-objc-block-type" }
       - { slug: objc-with-objc-block, name: "objc:with-objc-block" }
       - { slug: fli-define-foreign-function, name: "fli:define-foreign-function" }
+      - { slug: fli-with-dynamic-foreign-objects, name: "fli:with-dynamic-foreign-objects" }
       - { slug: uiop-if-let, name: "uiop:if-let" }
       - { slug: uiop-when-let, name: "uiop:when-let" }
       - { slug: uiop-when-let-star, name: "uiop:when-let*" }

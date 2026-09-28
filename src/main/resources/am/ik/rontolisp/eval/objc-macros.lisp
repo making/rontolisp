@@ -152,3 +152,29 @@
                               ,module ,variadic-num-of-fixed
                               (list ,@(reverse forms))))
        ',lisp-name)))
+
+;; LispWorks' fli:with-dynamic-foreign-objects: each binding (var type &key nelems
+;; initial-element initial-contents fill) is a foreign object alive for the body --
+;; allocated before it and freed however it is left. LispWorks takes the memory from the
+;; stack; here it is the host's heap (objc.lisp's fli:allocate-foreign-object).
+(defmacro fli:with-dynamic-foreign-objects (bindings &body body)
+  (if (null bindings)
+      `(progn ,@body)
+      (let* ((binding (car bindings))
+             (var (first binding))
+             (options (cddr binding))
+             (keys nil))
+        (unless (and var (symbolp var) (consp (cdr binding)))
+          (error "fli:with-dynamic-foreign-objects: a binding is (var type &key ...), got ~s"
+                 binding))
+        (do ((rest options (cddr rest)))
+            ((null rest))
+          (unless (eq (car rest) :size-slot)
+            (push (car rest) keys)
+            (push (cadr rest) keys)))
+        `(let ((,var
+                (fli:allocate-foreign-object :type ',(second binding)
+                                             ,@(reverse keys))))
+           (unwind-protect (fli:with-dynamic-foreign-objects ,(cdr bindings)
+                             ,@body)
+             (fli:free-foreign-object ,var))))))

@@ -533,7 +533,9 @@ public final class PackageRegistry {
 	 * the {@code objc} base carries, implemented in {@code objc.lisp} and
 	 * {@code objc-macros.lisp}.
 	 */
-	private static final Set<String> FLI_NAMES = Set.of("DEFINE-FOREIGN-FUNCTION");
+	private static final Set<String> FLI_NAMES = Set.of("DEFINE-FOREIGN-FUNCTION", "WITH-DYNAMIC-FOREIGN-OBJECTS",
+			"ALLOCATE-FOREIGN-OBJECT", "FREE-FOREIGN-OBJECT", "DEREFERENCE", "FOREIGN-SLOT-VALUE", "SIZE-OF",
+			"POINTERP", "POINTER-ADDRESS", "MAKE-POINTER", "NULL-POINTER-P", "POINTER-EQ");
 
 	private static final List<String> FLI_NAME_LIST = sorted(FLI_NAMES);
 

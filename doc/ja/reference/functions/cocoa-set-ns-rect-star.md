@@ -2,7 +2,7 @@
 
 `(cocoa:set-ns-rect* rect x y width height)`
 
-`NSRect` (要素が四つ以上のベクタ) を `#(x y width height)` に設定して返します。 `objc` と並ぶ macOS 専用の `cocoa` パッケージの一部です。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
+`NSRect` (要素が四つ以上のベクタ、またはその型の外部オブジェクト) を `#(x y width height)` に設定して返します。 `objc` と並ぶ macOS 専用の `cocoa` パッケージの一部です。[macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
 
 ```console
 CL-USER> (objc:invoke (objc:invoke "NSValue" "valueWithRect:"

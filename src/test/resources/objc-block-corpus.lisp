@@ -109,6 +109,15 @@
     (invoke *words* "enumerateObjectsUsingBlock:" b))
   (show "enumerateObjectsUsingBlock:" (reverse seen)))
 
+(let ((seen nil))
+  (with-objc-block (b '(:void (objc-object-pointer (:unsigned :long-long)
+                               (:pointer objc-c++-bool)))
+                      (lambda (object index stop)
+                        (push (ns-string-to-string object) seen)
+                        (when (= index 1) (setf (fli:dereference stop) t))))
+    (invoke *words* "enumerateObjectsUsingBlock:" b))
+  (show "a block stops through its BOOL *" (reverse seen)))
+
 (with-objc-block (b '(:long-long (objc-object-pointer objc-object-pointer))
                     (lambda (x y)
                       (let ((a (ns-string-to-string x)) (b (ns-string-to-string y)))
