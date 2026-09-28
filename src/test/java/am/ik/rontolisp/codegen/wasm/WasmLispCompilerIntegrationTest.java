@@ -8249,9 +8249,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (make-array '(2 2 2) :initial-contents
 					(list (list (list 1 2) (list 3 4)) (list (list 5 6) (list 7 8)))))
 				""")).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
-		// A row shorter than the dimension, and a row the contents do not have: the
-		// cursor runs out and the read falls back to the elt call this fill always made,
-		// which signals past a proper list's end (it answered NIL, padding the array).
+		// A row shorter than the dimension, and a row the contents do not have, are
+		// shape mismatches the fill checks before it reads a row.
 		assertThat(compileAndRun(
 				"(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))"
 						+ " (error () :error)))"))
@@ -8259,6 +8258,93 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2 3)))"
 				+ " (error () :error)))"))
 			.isEqualTo(":ERROR");
+	}
+
+	@Test
+	void makeArrayInitialContentsChecksItsShape() throws Exception {
+		// CL requires the contents' shape to match the dimensions. The fill used to run
+		// to
+		// the contents' length (a short list padded with NIL, a long one overran into the
+		// store's bound check) and read each row with elt (a short row signalled elt's
+		// type-error); it now checks each level's length and signals the interpreter's
+		// simple-error text.
+		assertThat(compileAndRunPrelude(shapeError("(make-array 3 :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRunPrelude(shapeError("(make-array 2 :initial-contents (list 1 2 3))")))
+			.isEqualTo(shapeMessage(0, 3, 2));
+		assertThat(compileAndRunPrelude(
+				shapeError("(make-array 3 :element-type '(unsigned-byte 8) :initial-contents (vector 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRunPrelude(shapeError("(make-array 3 :element-type 'character :initial-contents \"ab\")")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(
+				compileAndRun(shapeError("(make-array '(3) :element-type 'character :initial-contents (list #\\a))")))
+			.isEqualTo(shapeMessage(0, 1, 3));
+		assertThat(compileAndRunPrelude(
+				shapeError("(make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))")))
+			.isEqualTo(shapeMessage(1, 2, 3));
+		assertThat(
+				compileAndRun(shapeError("(make-array '(2 3) :initial-contents (list (list 1 2 3) (list 4 5 6 7)))")))
+			.isEqualTo(shapeMessage(1, 4, 3));
+		assertThat(compileAndRunPrelude(shapeError("(make-array '(2 3) :initial-contents (list (list 1 2 3)))")))
+			.isEqualTo(shapeMessage(0, 1, 2));
+		assertThat(compileAndRunComponent(
+				shapeError("(make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))")))
+			.isEqualTo(shapeMessage(1, 2, 3));
+		assertThat(compileAndRunComponent(shapeError("(make-array 3 :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		// A list that runs out stores each remaining slot's own value back, which is of
+		// the element type whatever it is, so a packed array reports the shape too.
+		assertThat(compileAndRunPrelude(shapeError(
+				"(make-array '(2 3) :element-type '(unsigned-byte 8) :initial-contents (list (list 1 2 3) (list 4)))")))
+			.isEqualTo(shapeMessage(1, 1, 3));
+		assertThat(compileAndRunPrelude(
+				shapeError("(make-array 4 :element-type 'double-float :initial-contents (list 1d0 2d0))")))
+			.isEqualTo(shapeMessage(0, 2, 4));
+		assertThat(compileAndRunPrelude(shapeError("(make-array 5 :fill-pointer 1 :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 5));
+		assertThat(compileAndRunPrelude(shapeError("(let ((n 3)) (make-array n :initial-contents (list 1 2)))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		// A run-time :element-type fills once over its whole dispatch; the character arm
+		// keeps its string copy. #'adjust-array's wrapper is that shape.
+		assertThat(compileAndRunPrelude(
+				shapeError("(make-array 3 :element-type (identity '(unsigned-byte 8)) :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRunPrelude(
+				shapeError("(make-array 3 :element-type (identity 'character) :initial-contents \"ab\")")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRunPrelude(
+				"(print (make-array 2 :element-type (identity 'character) :initial-contents \"ab\"))"))
+			.isEqualTo("\"ab\"");
+		assertThat(compileAndRunPrelude("(print (= 3 (aref (make-array '(2 2) :element-type (identity 'double-float)"
+				+ " :initial-contents '((1d0 2d0) (3d0 4d0))) 1 0)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRunPrelude(
+				shapeError("(funcall #'adjust-array (make-array 2) 3 :initial-contents (list 7 8))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRunPrelude(
+				"(print (funcall #'adjust-array (make-array 2) 3 :initial-contents (list 7 8 9)))"))
+			.isEqualTo("#(7 8 9)");
+		// A fill pointer does not shorten the dimension the contents must match.
+		assertThat(compileAndRunPrelude("(print (make-array 5 :fill-pointer 2 :initial-contents (list 1 2 3 4 5)))"))
+			.isEqualTo("#(1 2)");
+		// A rank-0 array's contents are its one element, not a sequence.
+		assertThat(compileAndRunPrelude("(print (make-array '() :initial-contents 5))")).isEqualTo("#0A5");
+		// No handler anywhere: the check must not need a condition layout the program
+		// never asked for.
+		assertThat(compileAndRunPrelude("(print (make-array '(2 2) :initial-contents (list (list 1 2) (list 3 4))))"))
+			.isEqualTo("#2A((1 2) (3 4))");
+	}
+
+	private static String shapeError(String form) {
+		// A simple-error clause: a condition of any other type (elt's or a store's
+		// type-error) escapes it and fails the run.
+		return "(print (handler-case " + form + " (simple-error (e) (princ-to-string e))))";
+	}
+
+	private static String shapeMessage(int dimension, int length, int expected) {
+		return "\"MAKE-ARRAY :initial-contents dimension " + dimension + " has " + length + " elements, expected "
+				+ expected + "\"";
 	}
 
 	@Test

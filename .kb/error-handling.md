@@ -1819,9 +1819,8 @@ on wasm-GC even in EH mode.
   - **What moved with it**: the prelude `search`/`mismatch` fall back to `(elt seq i)` once their
     list cursor runs out (`.kb/seq-coerce-runtime.md`), so an invalid list bound that reaches that
     read now signals (`(search '(1 2 3) '(1 2 3) :start2 -1)` answered 0); the compiled `make-array`
-    rank >= 2 fill signals on a short row where it padded with `NIL` (the interpreter reports
-    `MAKE-ARRAY :initial-contents dimension ...`; the compiled fill's missing shape check is
-    `.todo/a68`).
+    rank >= 2 fill signalled on a short row where it padded with `NIL` -- until the fill checked
+    its shape (next entry).
   - **The walk counts DOWN** from the target, as `_nthcdr` does (cells passed = target -
     remaining; a negative or wide index is target -1, which only moves away from 0), and checks
     the found cell's consness once after the loop. Counting UP with an i31 counter compared
@@ -1833,6 +1832,51 @@ on wasm-GC even in EH mode.
   - Pinned by `eltOfAListOutsideItIsATypeErrorNamingItsLength` (`LispEvaluatorTest`,
     `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`) and two lines of `ci-spec.yaml`'s
     `out-of-range-subscripts-are-type-errors-naming-their-bound`.
+
+- **`make-array :initial-contents` whose shape does not match the dimensions** (closed 2026-09-28,
+  `.todo/a68`): the compiled fill (`LispMacroExpander.lowerInitialContentsMakeArray`) ran a rank-1
+  array to the contents' length -- a short list padded with `NIL`, a long one overran into the
+  store's bound check -- and a rank >= 2 row to its `elt` fallback; the character lowering returned
+  a string of the contents' length whatever the dimension. Each level now checks its length and
+  signals the interpreter's `Environment.fillInitialContents` text, `MAKE-ARRAY :initial-contents
+  dimension D has N elements, expected M`, as a plain `error` with a format control -- a
+  `simple-error` on all four backends. A literal rank-0 dims (`'()`/`nil`) now stores the contents
+  as the one element (`#0A5`) where it took the contents' `length`.
+  - **Why a plain `error` is safe here**: the lowering runs during code generation, after the
+    scans that decide which condition layouts a module carries; a `simple-error` needs none of
+    them. `(print 42)` is byte-identical and a make-array program with no handler compiles on
+    every backend.
+  - **One walk of a list, one report per level.** An outer level compares `length` up front (the
+    interpreter's order: contents wrong at two levels report the outer one). The leaf level --
+    the whole of a rank-1 fill -- streams its check on the cons cursor
+    (`buildInitialContentsLeafFill`): a non-list's length up front, a list that runs out leaves the
+    cursor `nil` (the remaining slots store back their own value, valid for any element type), one
+    with cells left over leaves it a cons; all three reach ONE `error` after the loop. The rank-1
+    fill thereby lost its `length` pre-walk. The store is spelled once over a three-way read: a
+    store per branch cost a 1000x1000 list fill 921 ms against 611 on wasm.
+  - **A run-time `:element-type` fills ONCE** (`lowerRuntimeElementTypeMakeArray` ->
+    `initialContentsFill`): the dispatch arms allocate and one fill follows, where every arm used
+    to carry its own copy. The check took `#'adjust-array`'s wrapper -- that shape, eight arms --
+    past HotSpot's 8000-bytecode limit (`JvmLibraryMethodSizeTest`: `ADJUST-ARRAY`=8491 over
+    ironclad); hoisted, a lone `#'adjust-array` program's method went 5,205 -> 3,223 bytecodes,
+    its class 50,860 -> 46,567 B and its P1 module 35,832 -> 30,953. The character arm keeps its
+    own string-copy spelling where `lowerCharacterInitialContentsMakeArray` serves it (rank 1, no
+    other keyword). The literal dims form, not the arm's variable, picks the fill's shape, so a
+    run-time designator over a literal `'(2 2)` now fills (every compiled backend failed it; the
+    JVM's degraded float representation there is `.todo/a70`).
+  - **Cost, measured 2026-09-28** (JDK 25, wasmtime 49; 20 fills of a 1000x1000 list and of a
+    1M-element list, inside a `defun`): wasm rank-1 684 -> 554 ms, rank-2 647 -> 655; JVM rank-1
+    ~215 -> ~155, rank-2 flat within noise. Size of one `defun` holding one site: rank-1 class
+    21,558 -> 24,674 B (of it ~1.4 KB the `_lispToDisplayString` trio the `~D` arguments pull in,
+    shared with any formatted `error`), P1 7,252 -> 6,421; rank-2 class 22,752 -> 26,830, P1
+    7,395 -> 7,711; character rank-1 +397 B class, +43 B P1. The same loops written as ONE
+    top-level form, every site inlined into it, measured +40% on the JVM; inside a `defun` the
+    difference vanished -- measure a JVM fill inside a function.
+  - Pinned by `compileAndRunMakeArrayInitialContentsChecksItsShape` (`JvmLispCompilerTest`) and
+    `makeArrayInitialContentsChecksItsShape` (`WasmLispCompilerIntegrationTest`, P1 and component).
+    A dims form whose RANK is only known at run time still takes the rank-1 fill and fails at its
+    first store (`.todo/a69`) -- `adjust-array` of a rank >= 2 array with `:initial-contents`
+    included, since its dims are a run-time list.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
@@ -2151,7 +2195,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
     255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
     registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,
-    a runtime element type, is ~8 KB), the case conversions ~3.5 KB, the fourteen comparisons
+    a runtime element type, is ~8 KB -- one fill instead of eight since 2026-09-28, "`make-array
+    :initial-contents` whose shape does not match"), the case conversions ~3.5 KB, the fourteen comparisons
     ~5 KB. `(print (sort (list 3 1 2) #'<))` 33,039 -> 33,256 / 23,156 -> 23,158. A program that
     takes none of them as a value is unchanged (`(print (+ 1 2))` 6,024 / 348).
 - **A DIRECT call of a native built-in outside the catalog** (2026-09-26). **Invariant: a built-in

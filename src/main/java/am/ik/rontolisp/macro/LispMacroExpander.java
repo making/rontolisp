@@ -35832,14 +35832,18 @@ public final class LispMacroExpander {
 	/**
 	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
 	 * backends to the equivalent allocation plus an element-wise fill: the inner
-	 * {@code make-array} keeps every other keyword. A rank-1 array (dims not a literal
-	 * multi-element list) fills with {@code %aset}, walking the contents with
-	 * {@code elt}; a literal rank >= 2 dims list fills with
-	 * {@link #lowerNestedInitialContentsMakeArray}, one nested {@code dotimes} per
-	 * dimension descending into {@code contents} with {@code elt} and writing each leaf
-	 * through {@code %row-major-aset} at its row-major flat index (this used to be
-	 * refused outright, out of step with the interpreter, which fills nested contents
-	 * natively). Returns {@code null} when the form has no {@code :initial-contents}.
+	 * {@code make-array} keeps every other keyword. Every level's length is checked
+	 * against its dimension and a mismatch signals the interpreter's report
+	 * ({@link #initialContentsShapeCheck}). A literal rank-0 dims list stores the
+	 * contents as the one element; a rank-1 array (dims not a literal multi-element list)
+	 * fills with {@code %aset} through {@link #buildInitialContentsLeafFill}; a literal
+	 * rank >= 2 dims list fills with {@link #buildNestedInitialContentsFillLevel}, one
+	 * nested {@code dotimes} per dimension descending into {@code contents} with a cursor
+	 * and writing each leaf through {@code %row-major-aset} at its row-major flat index
+	 * (this used to be refused outright, out of step with the interpreter, which fills
+	 * nested contents natively). {@link #lowerRuntimeElementTypeMakeArray} builds the
+	 * same fill ONCE over its whole element-type dispatch. Returns {@code null} when the
+	 * form has no {@code :initial-contents}.
 	 * @param cons the make-array expression
 	 * @return the lowering, or null
 	 */
@@ -35864,10 +35868,38 @@ public final class LispMacroExpander {
 		if (contents == null) {
 			return null;
 		}
-		if (parts.get(1) instanceof LispCons dims && dims.car() instanceof LispSymbol q
-				&& LispNames.QUOTE.equals(q.name()) && dims.cdr() instanceof LispCons dimList
-				&& dimList.car() instanceof LispCons literalDims && literalDims.cdr() instanceof LispCons) {
-			List<LispVal> dimVals = literalDims.toList();
+		LispVal dimsSpec = parts.get(1);
+		if (isLiteralDimensionSpec(dimsSpec)) {
+			return initialContentsFill(listToCons(inner), dimsSpec, dimsSpec, contents);
+		}
+		// A run-time dims form is evaluated once, into the variable the fill reads the
+		// dimension from, and the allocation takes the variable in its place.
+		LispSymbol dimsVar = new LispSymbol("__mk_dims");
+		inner.set(1, dimsVar);
+		return makeLet(dimsVar.name(), dimsSpec, initialContentsFill(listToCons(inner), dimsSpec, dimsVar, contents));
+	}
+
+	/**
+	 * Builds a compiled {@code make-array :initial-contents} fill over an allocation that
+	 * carries every other keyword: bind the array, bind the contents, fill, answer the
+	 * array. The literal shape of {@code dimsSpec} picks the fill: a multi-element list
+	 * the nested one ({@link #buildNestedInitialContentsFillLevel}), an empty one the
+	 * rank-0 store, anything else the rank-1 one, whose dimension is the literal or, for
+	 * a run-time dims form, read from {@code dimsValue}.
+	 * @param allocation the form allocating the array (evaluated first)
+	 * @param dimsSpec the call's dims form, read for its literal shape only
+	 * @param dimsValue a variable holding the dims value when {@code dimsSpec} is not
+	 * literal (read more than once)
+	 * @param contents the {@code :initial-contents} form (evaluated once, after the
+	 * allocation)
+	 * @return the allocation-plus-fill expression
+	 */
+	private static LispVal initialContentsFill(LispVal allocation, LispVal dimsSpec, LispVal dimsValue,
+			LispVal contents) {
+		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		LispSymbol contentsVar = new LispSymbol("__mk_c");
+		if (isLiteralMultiDimensionSpec(dimsSpec)) {
+			List<LispVal> dimVals = ((LispCons) ((LispCons) ((LispCons) dimsSpec).cdr()).car()).toList();
 			int[] sizes = new int[dimVals.size()];
 			for (int i = 0; i < dimVals.size(); i++) {
 				if (!(dimVals.get(i) instanceof LispInteger n)) {
@@ -35876,54 +35908,144 @@ public final class LispMacroExpander {
 				}
 				sizes[i] = (int) n.value();
 			}
-			return lowerNestedInitialContentsMakeArray(inner, contents, sizes);
+			int[] strides = new int[sizes.length];
+			strides[sizes.length - 1] = 1;
+			for (int d = sizes.length - 2; d >= 0; d--) {
+				strides[d] = strides[d + 1] * sizes[d + 1];
+			}
+			LispVal loop = buildNestedInitialContentsFillLevel(arrVar, contentsVar, sizes, strides, 0,
+					new java.util.ArrayList<>());
+			return makeLet(arrVar.name(), allocation, makeLet(contentsVar.name(), contents, loop));
 		}
-		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		if (isLiteralRankZeroDimensionSpec(dimsSpec)) {
+			// A rank-0 array's :initial-contents is its one element, not a sequence
+			// (CLHS 15.1.1), stored at the only row-major index there is.
+			return makeLet(arrVar.name(), allocation, makeProgn(
+					List.of(fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, new LispInteger(0), contents), arrVar)));
+		}
 		LispSymbol idxVar = new LispSymbol("__mk_i");
-		LispSymbol contentsVar = new LispSymbol("__mk_c");
-		LispSymbol lenVar = new LispSymbol("__mk_n");
-		LispSymbol curVar = new LispSymbol("__mk_cur");
-		// The contents can be ANY sequence (cl-ppcre passes a string), so the fill
-		// cannot simply walk them as a list -- but elt on a LIST is an nth walk from the
-		// head, which made this loop quadratic on every compiled backend (the
-		// interpreter never sees it; make-array is native there). A cons cursor beside
-		// the index serves the list case in O(1) and pins itself to a non-cons for every
-		// other representation, which keeps indexing with elt exactly as before.
-		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
-				listToCons(List.of(listToCons(
-						List.of(idxVar, new LispInteger(0), fmtCall(LispNames.ADD, idxVar, new LispInteger(1)))))),
-				listToCons(List.of(fmtCall(LispNames.GE, idxVar, lenVar), arrVar)),
-				listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar,
-						readElementAdvancing(curVar, contentsVar, idxVar)))));
-		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, makeLet(lenVar.name(),
-				callOf(LispNames.LENGTH, contentsVar), makeLet(curVar.name(), contentsVar, fill))));
+		LispVal fill = buildInitialContentsLeafFill(contentsVar, new LispSymbol("__mk_cur"), idxVar,
+				new LispSymbol("__mk_bad"), rankOneDimension(dimsSpec, dimsValue), 0,
+				read -> listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, read)),
+				callOf(LispNames.AREF, arrVar, idxVar));
+		return makeLet(arrVar.name(), allocation,
+				makeLet(contentsVar.name(), contents, makeProgn(List.of(fill, arrVar))));
+	}
+
+	// Whether a make-array dims form is literal -- an integer or a quoted list -- so its
+	// shape, and so the fill it needs, is known at compile time.
+	private static boolean isLiteralDimensionSpec(LispVal dimsExpr) {
+		return dimsExpr instanceof LispInteger || dimsExpr instanceof LispNil || dimsExpr instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name());
+	}
+
+	// The dimension a rank-1 fill's contents must match: the literal itself for an
+	// integer or a quoted one-element list, else read from the dims value -- an integer,
+	// or a list whose first element is the dimension. A fill pointer does not shorten it.
+	private static LispVal rankOneDimension(LispVal dimsSpec, LispVal dimsValue) {
+		if (dimsSpec instanceof LispInteger n) {
+			return n;
+		}
+		if (dimsSpec instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispCons dims && dims.car() instanceof LispInteger n
+				&& dims.cdr() instanceof LispNil) {
+			return n;
+		}
+		return makeIf(callOf(LispNames.CONSP, dimsValue), callOf(LispNames.CAR, dimsValue), dimsValue);
 	}
 
 	/**
-	 * Builds the rank >= 2 lowering for {@link #lowerInitialContentsMakeArray}: allocate
-	 * with {@code inner}, bind {@code contents} once, then descend it one dimension at a
-	 * time with nested {@code dotimes}/{@code elt} and store each leaf with
-	 * {@code %row-major-aset} at the row-major flat index computed from the
-	 * compile-time-known {@code sizes} (a running counter is unnecessary since the
-	 * strides -- and so every index -- are already constants).
-	 * @param inner the {@code (make-array dims other-keywords...)} call, contents
-	 * stripped
-	 * @param contents the {@code :initial-contents} form (any nested sequence, evaluated
-	 * once)
-	 * @param sizes the literal dimension sizes, most significant first
-	 * @return the let-wrapped allocation-plus-fill expression
+	 * Builds the innermost level of a compiled {@code make-array :initial-contents} fill:
+	 * {@code size} reads of {@code seq}, each handed to {@code store}, checking that
+	 * {@code seq} has exactly {@code size} elements.
+	 *
+	 * <p>
+	 * The contents can be ANY sequence (cl-ppcre passes a string), so a read cannot
+	 * simply walk a list -- but {@code elt} on a LIST is an nth walk from the head, which
+	 * made the fill quadratic on every compiled backend. A cons cursor beside the index
+	 * serves a list in O(1) and pins itself to a non-cons for every other representation,
+	 * which keeps indexing with {@code elt}. The shape check rides the same cursor so a
+	 * list is walked once: a non-list's (or an empty list's) length is compared up front,
+	 * a list that runs out leaves the cursor {@code nil} where a vector's stays the
+	 * vector (each remaining iteration stores back the slot's {@code current} value,
+	 * which has the array's element type whatever that is), and one with cells left over
+	 * leaves it a cons after the last read. All three reach ONE report, after the loop,
+	 * which alone takes the list's {@code length}: each {@code error} site costs code on
+	 * every backend. The store is spelled ONCE, over a three-way read: a store in each
+	 * branch cost a 1000x1000 list fill 921 ms against 611 on wasm (2026-09-28).
+	 *
+	 * <pre>
+	 * (let* ((cur seq) (bad (if (consp cur) nil (/= (length seq) size))))
+	 *   (if bad nil
+	 *       (dotimes (idx size)
+	 *         (store (if (consp cur) (prog1 (car cur) (setq cur (cdr cur)))
+	 *                    (if cur (elt seq idx) (progn (setq bad t) current))))))
+	 *   (if (if bad t (consp cur)) (error ...) nil))
+	 * </pre>
+	 * @param seq the variable holding this level's sequence
+	 * @param cur the cursor variable to bind
+	 * @param idx the index variable to bind
+	 * @param bad the variable to bind to whether the shape is wrong
+	 * @param size the form answering this level's dimension, evaluated more than once
+	 * @param dimension the axis number a report names
+	 * @param store builds the store into {@code idx}'s slot from the read form
+	 * @param current the form reading that slot's current value
+	 * @return the fill, answering nil
 	 */
-	private static LispVal lowerNestedInitialContentsMakeArray(List<LispVal> inner, LispVal contents, int[] sizes) {
-		LispSymbol arrVar = new LispSymbol("__mk_arr");
-		LispSymbol contentsVar = new LispSymbol("__mk_c");
-		int[] strides = new int[sizes.length];
-		strides[sizes.length - 1] = 1;
-		for (int d = sizes.length - 2; d >= 0; d--) {
-			strides[d] = strides[d + 1] * sizes[d + 1];
+	private static LispVal buildInitialContentsLeafFill(LispSymbol seq, LispSymbol cur, LispSymbol idx, LispSymbol bad,
+			LispVal size, int dimension, java.util.function.UnaryOperator<LispVal> store, LispVal current) {
+		LispVal wrongLength = makeIf(callOf(LispNames.CONSP, cur), LispNil.INSTANCE,
+				fmtCall(LispNames.NE, callOf(LispNames.LENGTH, seq), size));
+		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal take = listToCons(List.of(new LispSymbol(LispNames.PROG1), callOf(LispNames.CAR, cur), advance));
+		LispVal ranOut = makeProgn(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.SETQ), bad, LispTrue.INSTANCE)), current));
+		LispVal step = store
+			.apply(makeIf(callOf(LispNames.CONSP, cur), take, makeIf(cur, callOf(LispNames.ELT, seq, idx), ranOut)));
+		LispVal loop = makeIf(bad, LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(idx, size)), step)));
+		LispVal report = makeIf(makeIf(bad, LispTrue.INSTANCE, callOf(LispNames.CONSP, cur)),
+				initialContentsShapeError(callOf(LispNames.LENGTH, seq), size, dimension), LispNil.INSTANCE);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, seq)), listToCons(List.of(bad, wrongLength))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeProgn(List.of(loop, report))));
+	}
+
+	/**
+	 * The shape check of a compiled {@code make-array :initial-contents} fill:
+	 * {@code (if (/= length expected) (error ...))} with the interpreter's text
+	 * ({@code Environment.fillInitialContents}), so a level whose length differs from its
+	 * dimension signals the same simple-error on every backend instead of padding with
+	 * {@code NIL} or overrunning into a store's bound check. A plain {@code error} with a
+	 * format control, not a typed condition: the check is introduced during code
+	 * generation, after the scans that decide which condition layouts a module carries.
+	 * @param length the form answering the level's length
+	 * @param expected the form answering the dimension it must match
+	 * @param dimension the axis number the report names
+	 * @return the check form, answering nil when the shape matches
+	 */
+	private static LispVal initialContentsShapeCheck(LispVal length, LispVal expected, int dimension) {
+		return makeIf(fmtCall(LispNames.NE, length, expected), initialContentsShapeError(length, expected, dimension),
+				LispNil.INSTANCE);
+	}
+
+	// The report of initialContentsShapeCheck, for a site that already knows the shape
+	// is wrong.
+	private static LispVal initialContentsShapeError(LispVal length, LispVal expected, int dimension) {
+		return fmtCall(LispNames.ERROR, new LispString(
+				LispNames.MAKE_ARRAY + " :initial-contents dimension " + dimension + " has ~D elements, expected ~D"),
+				length, expected);
+	}
+
+	// Whether a make-array dims expression is a literal empty dimension list -- '() or
+	// nil -- which allocates a rank-0 array.
+	private static boolean isLiteralRankZeroDimensionSpec(LispVal dimsExpr) {
+		if (dimsExpr instanceof LispNil) {
+			return true;
 		}
-		LispVal loop = buildNestedInitialContentsFillLevel(arrVar, contentsVar, sizes, strides, 0,
-				new java.util.ArrayList<>());
-		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, loop));
+		return dimsExpr instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispNil && rest.cdr() instanceof LispNil;
 	}
 
 	// One dimension level of the nested-fill loop: (dotimes (idx size [arr]) body),
@@ -35942,8 +36064,7 @@ public final class LispMacroExpander {
 		LispSymbol curVar = new LispSymbol("__mk_cur" + level);
 		List<LispSymbol> withThisLevel = new java.util.ArrayList<>(idxVars);
 		withThisLevel.add(idxVar);
-		LispVal read = readElementAdvancing(curVar, seqExpr, idxVar);
-		LispVal body;
+		LispVal size = new LispInteger(sizes[level]);
 		if (level == sizes.length - 1) {
 			LispVal index = strides[0] == 1 ? withThisLevel.get(0)
 					: fmtCall(LispNames.MUL, withThisLevel.get(0), new LispInteger(strides[0]));
@@ -35952,16 +36073,23 @@ public final class LispMacroExpander {
 						: fmtCall(LispNames.MUL, withThisLevel.get(d), new LispInteger(strides[d]));
 				index = fmtCall(LispNames.ADD, index, term);
 			}
-			body = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, index, read);
+			LispVal flatIndex = index;
+			return buildInitialContentsLeafFill(seqExpr, curVar, idxVar, new LispSymbol("__mk_bad"), size, level,
+					read -> fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, flatIndex, read),
+					callOf(LispNames.ROW_MAJOR_AREF, arrVar, flatIndex));
 		}
-		else {
-			LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
-			body = makeLet(rowVar.name(), read,
-					buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
-		}
+		// An outer level's length is checked BEFORE any of its rows is read, as the
+		// interpreter does, so contents wrong at two levels report the outer one. The
+		// leaf level streams its check (buildInitialContentsLeafFill): nothing is checked
+		// after a leaf row, so the order is the same without a second walk of every row.
+		LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
+		LispVal body = makeLet(rowVar.name(), readElementAdvancing(curVar, seqExpr, idxVar),
+				buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
 		LispVal resultForm = (level == 0) ? arrVar : LispNil.INSTANCE;
-		LispVal spec = listToCons(List.of(idxVar, new LispInteger(sizes[level]), resultForm));
-		return makeLet(curVar.name(), seqExpr, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)));
+		LispVal spec = listToCons(List.of(idxVar, size, resultForm));
+		LispVal check = initialContentsShapeCheck(callOf(LispNames.LENGTH, seqExpr), size, level);
+		return makeLet(curVar.name(), seqExpr,
+				makeProgn(List.of(check, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)))));
 	}
 
 	/**
@@ -36291,11 +36419,34 @@ public final class LispMacroExpander {
 		// the representation is chosen and answers a CALL-TIME signal (WasmArrayCompiler
 		// for bfloat16), which is why spelling every width costs such a backend nothing
 		// until a program actually asks for one.
-		LispVal body = runtimeElementTypeArm(size, others, null);
+		//
+		// :initial-contents is filled ONCE, over the whole dispatch: the arms
+		// allocate and initialContentsFill follows, where each arm used to carry its
+		// own copy of the fill -- eight in #'adjust-array's wrapper, which took that
+		// method past HotSpot's 8000-bytecode HugeMethodLimit once the fill checked
+		// its shape. The character arm keeps its own spelling where the character
+		// lowering serves it (a fresh string copy: rank 1, no other keyword).
+		LispVal contents = findKeywordPair(others, LispNames.INITIAL_CONTENTS_KEYWORD)
+				? keywordValueOrNil(others, LispNames.INITIAL_CONTENTS_KEYWORD) : null;
+		List<LispVal> allocation = contents == null ? others
+				: withoutKeyword(others, LispNames.INITIAL_CONTENTS_KEYWORD);
+		boolean characterCopies = contents != null && allocation.isEmpty() && !isLiteralMultiDimensionSpec(parts.get(1))
+				&& !isLiteralRankZeroDimensionSpec(parts.get(1));
+		LispVal body = runtimeElementTypeArm(size, allocation, null);
 		int[] codes = ArrayElementTypes.specializedCodes();
 		for (int i = codes.length - 1; i >= 0; i--) {
+			if (characterCopies && codes[i] == ArrayElementTypes.CHARACTER) {
+				continue;
+			}
 			body = makeIf(runtimeElementTypeTest(et, codes[i]),
-					runtimeElementTypeArm(size, others, ArrayElementTypes.valueOf(codes[i])), body);
+					runtimeElementTypeArm(size, allocation, ArrayElementTypes.valueOf(codes[i])), body);
+		}
+		if (contents != null) {
+			body = initialContentsFill(body, parts.get(1), size, contents);
+		}
+		if (characterCopies) {
+			body = makeIf(runtimeElementTypeTest(et, ArrayElementTypes.CHARACTER),
+					runtimeElementTypeArm(size, others, ArrayElementTypes.valueOf(ArrayElementTypes.CHARACTER)), body);
 		}
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(size, parts.get(1))), listToCons(List.of(et, elementType))));
@@ -36341,6 +36492,17 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	private static List<LispVal> withoutKeyword(List<LispVal> pairs, String keyword) {
+		List<LispVal> kept = new java.util.ArrayList<>();
+		for (int i = 0; i + 1 < pairs.size(); i += 2) {
+			if (!(pairs.get(i) instanceof LispSymbol kw && keyword.equals(kw.name()))) {
+				kept.add(pairs.get(i));
+				kept.add(pairs.get(i + 1));
+			}
+		}
+		return kept;
 	}
 
 	private static LispVal keywordValueOrNil(List<LispVal> pairs, String keyword) {
@@ -36524,15 +36686,23 @@ public final class LispMacroExpander {
 		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(parts.get(1))) {
 			return null;
 		}
-		// (let* ((__mca_n n) (__mca_c c))
+		// (let* ((__mca_n n) (__mca_c c) (__mca_d dimension) (__mca_l length))
+		// (if (/= __mca_l __mca_d) (error ...))
 		// (if (stringp __mca_c) (subseq __mca_c 0) (coerce __mca_c 'string)))
 		LispSymbol nVar = new LispSymbol("__mca_n");
 		LispSymbol cVar = new LispSymbol("__mca_c");
+		LispSymbol dVar = new LispSymbol("__mca_d");
+		LispSymbol lVar = new LispSymbol("__mca_l");
 		LispVal copy = fmtCall(LispNames.SUBSEQ, cVar, new LispInteger(0));
 		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("STRING"));
-		LispVal body = makeIf(callOf(LispNames.STRINGP, cVar), copy, convert);
-		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(nVar, parts.get(1))), listToCons(List.of(cVar, contents))));
+		LispVal body = makeProgn(List.of(initialContentsShapeCheck(lVar, dVar, 0),
+				makeIf(callOf(LispNames.STRINGP, cVar), copy, convert)));
+		// The dims form is an integer or a one-element list here: a literal multi-element
+		// list was declined above.
+		LispVal dimension = makeIf(callOf(LispNames.CONSP, nVar), callOf(LispNames.CAR, nVar), nVar);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(nVar, parts.get(1))),
+				listToCons(List.of(cVar, contents)), listToCons(List.of(dVar, dimension)),
+				listToCons(List.of(lVar, callOf(LispNames.LENGTH, cVar)))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
 
