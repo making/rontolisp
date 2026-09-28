@@ -8429,6 +8429,30 @@ public final class Environment implements Scope {
 			}
 			return list;
 		}));
+		// %elt-cell: the cons holding a list's element at an index -- elt's list arm,
+		// read and setf place. One walk counts the cells it passes, so an index outside
+		// the list (past its end, negative, a bignum) reports the counted length as its
+		// bound without a second walk: ELT's (INTEGER 0 (length)) type-error.
+		env.defineFunction(LispNames.ELT_CELL, new LispFunction(LispNames.ELT_CELL, args -> {
+			requireArgCount(LispNames.ELT_CELL, args, 2);
+			LispVal index = args.get(1);
+			long target = subscriptValue(index);
+			LispVal list = args.get(0);
+			for (long k = 0;; k++) {
+				if (list instanceof LispCons cons) {
+					if (k == target) {
+						return cons;
+					}
+					list = cons.cdr();
+				}
+				else if (list instanceof LispNil) {
+					throw OperandTypeException.outOfRange(index, k, LispNames.ELT_CELL);
+				}
+				else {
+					throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.ELT_CELL);
+				}
+			}
+		}));
 		// endp: t for nil, nil for a cons, a type-error for anything else -- also
 		// dolist's, whose expansion checks the list's end once after its loop.
 		env.defineFunction(LispNames.ENDP, new LispFunction(LispNames.ENDP, args -> {

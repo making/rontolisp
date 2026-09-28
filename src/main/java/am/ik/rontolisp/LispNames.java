@@ -1378,10 +1378,19 @@ public final class LispNames {
 	public static final String ENDP = "ENDP";
 
 	/**
-	 * The {@code elt} built-in function (0-based element access; lists only, a synonym
-	 * for {@code nth} with reversed argument order, string indexing is not supported).
+	 * The {@code elt} built-in function (0-based element access into a list, a string or
+	 * a vector; an index outside the sequence is a {@code type-error}).
 	 */
 	public static final String ELT = "ELT";
+
+	/**
+	 * The {@code %elt-cell} internal: {@code (%elt-cell list index)} answers the cons
+	 * holding the list's element at {@code index} -- the list arm of an {@code elt} read
+	 * and of its {@code setf} place. An index outside {@code [0, length)} is
+	 * {@code ELT}'s {@code type-error} whose expected type is {@code (INTEGER 0
+	 * (length))}, counted by the same walk that would have found the cell.
+	 */
+	public static final String ELT_CELL = "%ELT-CELL";
 
 	/**
 	 * The {@code rassoc} built-in function (return the first pair whose cdr is

@@ -6495,7 +6495,8 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(2 NIL 4 2 NIL 1 1)");
 		// A bound the list does not reach, and a negative one: the cursor cannot answer
 		// either, so the read falls back to the elt call the body always made and the
-		// answer is the one it always gave. SequenceScanFast DECLINES all of these
+		// answer is the one it always gave -- or, where that elt indexes the list outside
+		// it (:start2 -1), ELT's type-error. SequenceScanFast DECLINES all of these
 		// (.kb/seq-coerce-runtime.md), which is why this body still has to own them.
 		assertThat(evalMulti(both + """
 				(list (both :end2-past (search '(1 2) '(1 2 3) :end2 99)
@@ -6506,15 +6507,17 @@ class LispEvaluatorTest {
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 99))
 				      (both :end1-past (search '(1 2 3) '(1 2 3) :start1 1 :end1 99)
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-				      (both :start2-negative (search '(1 2 3) '(1 2 3) :start2 -1)
-				            (funcall #'search '(1 2 3) '(1 2 3) :start2 -1))
 				      (both :start1-negative (search '(1 2 3) '(1 2 3) :start1 -1)
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 -1))
 				      (both :m-end1-past (mismatch '(1 2 3) '(1 2 3) :end1 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end1 99))
 				      (both :m-end2-past (mismatch '(1 2 3) '(1 2 3) :end2 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99)))
-				""").print()).isEqualTo("(0 NIL 0 NIL 0 NIL 3 3)");
+				""").print()).isEqualTo("(0 NIL 0 NIL NIL 3 3)");
+		assertThatThrownBy(() -> eval("(search '(1 2 3) '(1 2 3) :start2 -1)"))
+			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
+		assertThatThrownBy(() -> eval("(funcall #'search '(1 2 3) '(1 2 3) :start2 -1)"))
+			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
 		// The shapes the arm declines land in this body, so the cursor has to serve them.
 		assertThat(evalMulti("""
 				(list (funcall #'search '(3 4) '(1 2 3 4 5) :key #'identity)
@@ -19433,6 +19436,50 @@ class LispEvaluatorTest {
 				("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
 				("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
 				(7 "ay" 2.0 3)""");
+	}
+
+	@Test
+	void eltOfAListOutsideItIsATypeErrorNamingItsLength() {
+		// elt of a LIST outside it -- past its end, negative, a bignum -- is ELT's
+		// type-error naming the list's length as its bound, as an out-of-range aref
+		// subscript names its dimension (.kb/error-handling.md, "An out-of-range
+		// subscript is a type-error naming its bound"); so is a (setf elt) place's. A
+		// non-list met on the walk is ELT's LIST type-error. The twins are
+		// LispEvaluatorTest, JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// eltOfAListOutsideItIsATypeErrorNamingItsLength. It answered nil past the end,
+		// the first element for -1, and (setf (elt l -1) v) stored into the first cell.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *l* (list 1 2 3))
+				(print (list (elt *l* 0) (elt *l* 2) (funcall #'elt *l* 1)))
+				(print (te (lambda () (elt *l* 3))))
+				(print (te (lambda () (elt *l* -1))))
+				(print (te (lambda () (elt *l* (expt 2 70)))))
+				(print (te (lambda () (elt nil 0))))
+				(print (te (lambda () (funcall #'elt *l* 3))))
+				(print (te (lambda () (elt '(1 . 2) 1))))
+				(print (te (lambda () (elt *l* "x"))))
+				(print (te (lambda () (setf (elt *l* 3) 0))))
+				(print (te (lambda () (setf (elt *l* -1) 0))))
+				(setf (elt *l* 1) 20)
+				(print *l*)
+				""";
+		assertThat(printedLines(source)).isEqualTo(
+				"""
+						(1 3 2)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("ELT: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+						("ELT: The value 0 is not of type (INTEGER 0 (0))" 0 (INTEGER 0 (0)))
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value 2 is not of type LIST" 2 LIST)
+						("ELT: The value \\"x\\" is not of type INTEGER" "x" INTEGER)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						(1 20 3)""");
 	}
 
 	@Test

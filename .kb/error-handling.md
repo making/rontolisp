@@ -1789,40 +1789,50 @@ on wasm-GC even in EH mode.
   Pinned by `LispEvaluatorTest#functionValueArefAndArrayRowMajorIndexCheckRankAndBounds`,
   `JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds` and
   `WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds`.
-- **`elt` of a LIST past its end, or at a negative index, measured 2026-09-27**: unlike a
-  vector's `elt` (which already folds to `aref` and inherits the report above), the list arm is
-  `(nth idx seq)`, which answers `nil` past the end and reaches the list itself for a negative
-  index -- it never signals, unlike CL's `elt`. A Lisp-macro-level fix -- `LispMacroExpander`
-  expanding the list arm into a `do` that walks the list decrementing a copy of the index,
-  eagerly signalling `(error 'type-error ...)` when it runs out before reaching zero (the
-  steps-so-far being the list's own length, whether the index ran out because it was too large
-  or because it started negative) -- reads correctly on all four backends when `elt` is the
-  only thing in the program, but its blast radius is unbounded: `elt` is not a narrow operator
-  like `read-sequence` (whose few call sites are already `REFERENCE_GATED_FUNCTIONS`-gated) --
-  it is read by other library bodies the compiler injects UNCONDITIONALLY, invisible to
-  `mayCreateInstances`/`conditionNarrowing`/`WasmLispCompiler.usedLayoutTags`'s "scans the
-  source program, not the injected wrappers" blind spot (`BuiltinFunctionWrappers`'
-  `findFamily` wrapper for `#'find`/`#'find-if`/`#'find-if-not` reads its match with a bare
-  `(elt seq i)`, and unlike `AREF`/`ARRAY-ROW-MAJOR-INDEX` those three names are not
-  reference-gated -- their wrapper is spliced into EVERY compiled program). The eager signal
-  made even `(print 42)` -- a program naming neither `elt` nor `find` -- fail to compile on
-  wasm ("`%OBJ-NEW reached the compiler with no instance type emitted`": the gate that decides
-  whether a `type-error` layout exists never saw this site coming). Gating `elt` the same way
-  as `aref` only moves the hole: `LispPreludeLibrary`'s `sort`/`merge`/`search` bodies, the
-  `usocket`/`uiop-utility`/`tokenizers` library sources and `HostFetchLibrary`'s HTTP header
-  reader all read a general sequence with `(elt seq i)` too, each behind its OWN reachability
-  predicate that would need the same audit -- an unbounded, one-at-a-time discovery process
-  rather than a single fix. The architecture that does not have this hole is the one `aref`'s
-  own bound check already uses: a RAW host failure the interpreter/JVM/wasm each compile
-  directly (`Environment.subscriptValue`/`OperandTypeException.outOfRange`,
-  `JvmOperandTypeRuntime`'s `_oob`, `WasmOperandTypes`'s index arm), classified into a
-  `type-error` instance lazily -- only when a landing pad exists to catch it
-  (`rawFailureConditionClasses`) -- rather than an eager `(error ...)` every compiled site
-  carries whether it is ever reachable or not. Reproduced with a one-line
-  `System.err.println` at the `ELT` case in `WasmExprCompiler.compileOperator5` showing the
-  cons compiled from the `find` wrapper (`(ELT |seq| |i|)`) reaching the gate with no user
-  program anywhere near either operator. No code from this attempt was kept -- todo a59's plan
-  is rewritten around this measurement instead of forcing it through.
+- **`elt` of a LIST outside it** (closed 2026-09-28, `.todo/a59`): `(elt '(1 2) 5)` answered
+  `NIL` and `(elt '(1 2) -1)` `1` on all four backends -- the list arm was `(nth idx seq)` -- and
+  `(setf (elt l -1) v)` stored into the first cell. The list arm is now `(car (%elt-cell seq idx))`,
+  the `setf` place's `(rplaca (%elt-cell seq idx) v)`: ONE walk counting the cells it passes, so an
+  index it never meets (past the end, negative, a bignum) reaches nil having counted the length and
+  reports `ELT: The value I is not of type (INTEGER 0 (LEN))`, datum the index, expected type the
+  list -- the same report an `aref` subscript gives, through the same raw machinery: interpreter
+  `Environment`'s `%ELT-CELL` -> `OperandTypeException.outOfRange`; JVM `_eltCell`
+  (`JvmEltCellRuntimeBuilder`, a method for the `_nthcdr` OSR reason) -> `_opTypeErr(_oob(i,
+  len), "ELT", ...)`; wasm-GC `WasmEltCellCompiler`'s inline walk -> `_idx_in(i, len)` under the
+  operator register, which is the EH-mode landing when the module's table is `indexed()` and a trap
+  otherwise, exactly as a rank-1 `aref` outside EH mode. A non-list met on the walk is `ELT`'s
+  `LIST` type-error, a non-integer index its `INTEGER` one. `ELT` is a named operator (last in
+  `OperandTypes.operators()`, `%ELT-CELL` rewritten to it); a vector's `elt` still reports `AREF`,
+  a string's `CHAR`.
+  - **Why not a Lisp-level expansion** (measured 2026-09-27): `LispMacroExpander.expandElt`
+    expanding the list arm into a `do` that eagerly signals `(error 'type-error ...)` read correctly
+    in isolation but made even `(print 42)` fail on wasm (`%OBJ-NEW reached the compiler with no
+    instance type emitted`): `elt` is read by bodies the compiler injects unconditionally
+    (`BuiltinFunctionWrappers`' `findFamily` wrapper, spliced into every program) where
+    `mayCreateInstances`/`conditionNarrowing`/`WasmLispCompiler.usedLayoutTags` -- which scan the
+    source program -- cannot see the site. A raw host failure classified lazily needs no layout at
+    the site: the landing builds the instance-less payload when no class is baked.
+  - **The operator name follows the SPELLED program on wasm.** An `elt` only a backend lowering
+    introduces -- `make-array :initial-contents`'s rank >= 2 fill, whose rows are read with `elt` --
+    reports unnamed (`The value 2 is not of type (INTEGER 0 (2))`) in a module that never spells
+    `elt`, and traps where no table names an element access.
+  - **What moved with it**: the prelude `search`/`mismatch` fall back to `(elt seq i)` once their
+    list cursor runs out (`.kb/seq-coerce-runtime.md`), so an invalid list bound that reaches that
+    read now signals (`(search '(1 2 3) '(1 2 3) :start2 -1)` answered 0); the compiled `make-array`
+    rank >= 2 fill signals on a short row where it padded with `NIL` (the interpreter reports
+    `MAKE-ARRAY :initial-contents dimension ...`; the compiled fill's missing shape check is
+    `.todo/a68`).
+  - **The walk counts DOWN** from the target, as `_nthcdr` does (cells passed = target -
+    remaining; a negative or wide index is target -1, which only moves away from 0), and checks
+    the found cell's consness once after the loop. Counting UP with an i31 counter compared
+    against the target cost a 100M-iteration `(elt list (mod i 10))` loop +22% on the JVM and
+    +23% on wasm; counting down, +10% (757 -> 834 ms) and +7% (2167 -> 2312 ms) over the old
+    `(car (nthcdr ...))` (2026-09-28, JDK 25, wasmtime 49, pinned core). Size: `(print 42)`
+    byte-identical on both; one `elt` site +81 B wasm, +63 B class; with a `handler-case`
+    (the compound `_oob` arm travels) +145 B wasm, +377 B class.
+  - Pinned by `eltOfAListOutsideItIsATypeErrorNamingItsLength` (`LispEvaluatorTest`,
+    `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`) and two lines of `ci-spec.yaml`'s
+    `out-of-range-subscripts-are-type-errors-naming-their-bound`.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in

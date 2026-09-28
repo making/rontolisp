@@ -471,6 +471,10 @@ final class JvmAsm {
 		this.code.add(Opcode.IADD);
 	}
 
+	void isub() {
+		this.code.add(Opcode.ISUB);
+	}
+
 	void imul() {
 		this.code.add(Opcode.IMUL);
 	}

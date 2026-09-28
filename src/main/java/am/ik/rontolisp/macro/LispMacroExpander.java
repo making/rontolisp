@@ -3954,9 +3954,10 @@ public final class LispMacroExpander {
 				case LispNames.ELT -> {
 					// (setf (elt seq i) val): elt reads from lists, arrays AND strings,
 					// so
-					// the place dispatches at run time -- rplaca into the nthcdr cell of
-					// a
-					// list, the schar-set rebuild for a string, %aset for an array. The
+					// the place dispatches at run time -- rplaca into the %elt-cell cell
+					// of a
+					// list (an index outside it is ELT's type-error), the schar-set
+					// rebuild for a string, %aset for an array. The
 					// string arm is the same one (setf (aref s i) v) has above, and
 					// carries
 					// the same lite restriction: only a VARIABLE place can take it,
@@ -3972,7 +3973,7 @@ public final class LispMacroExpander {
 					boolean varPlace = stringsExist && placeParts.get(1) instanceof LispSymbol;
 					LispSymbol seqVar = varPlace ? (LispSymbol) placeParts.get(1) : new LispSymbol("__setf_seq");
 					LispVal listSet = listToCons(List.of(new LispSymbol(LispNames.RPLACA),
-							listToCons(List.of(new LispSymbol(LispNames.NTHCDR), idxVar, seqVar)), valVar));
+							callOf(LispNames.ELT_CELL, seqVar, idxVar), valVar));
 					LispVal arraySet = listToCons(List.of(new LispSymbol(LispNames.ASET), seqVar, idxVar, valVar));
 					// The string arm's subscript reports as the array arm's store does.
 					LispVal nonList = varPlace ? makeIf(callOf(LispNames.STRINGP, seqVar),
@@ -5967,7 +5968,7 @@ public final class LispMacroExpander {
 		}
 		LispVal endClause = listToCons(List.of(atEnd, LispNil.INSTANCE));
 		// The indexed read is spelled as its own two-way dispatch rather than (elt ...):
-		// the lenv arm implies "not a list", so elt's nth arm (an inlined list walk)
+		// the lenv arm implies "not a list", so elt's list arm (a %elt-cell walk)
 		// and its let scaffolding would be dead bytes at every position/find site --
 		// the site-size budget in
 		// WasmLispCompilerTest.aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions
@@ -15833,6 +15834,10 @@ public final class LispMacroExpander {
 
 	private static LispVal callOf(String op, LispVal arg) {
 		return listToCons(List.of(new LispSymbol(op), arg));
+	}
+
+	private static LispVal callOf(String op, LispVal first, LispVal second) {
+		return listToCons(List.of(new LispSymbol(op), first, second));
 	}
 
 	/**
@@ -28715,7 +28720,9 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (elt seq n) into a runtime dispatch on the sequence type: {@code char} for
-	 * a string, {@code nth} for a list.
+	 * a string, {@code (car (%elt-cell seq n))} for a list -- a walk that signals
+	 * {@code ELT}'s type-error for an index outside the list, where {@code nth} would
+	 * answer nil past its end.
 	 * @param cons the elt expression
 	 * @return the expanded expression
 	 */
@@ -28738,7 +28745,7 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(seq, parts.get(1))), listToCons(List.of(idx, parts.get(2)))));
 		LispVal stringCase = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
-		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
+		LispVal listCase = callOf(LispNames.CAR, callOf(LispNames.ELT_CELL, seq, idx));
 		// A non-string, non-list sequence is an array: read it with aref (nil counts as a
 		// list here, so listp -- not consp -- guards the list case). With no array in the
 		// program that arm cannot be taken, so the dispatch collapses to the list read.

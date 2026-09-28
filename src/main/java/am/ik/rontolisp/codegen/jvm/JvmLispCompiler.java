@@ -3704,6 +3704,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
 		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp, consShape,
 				thisClass);
+		// elt's list walk (%elt-cell), unconditional for the same reason: every elt and
+		// (setf elt) expansion reaches it, and so do the built-in wrappers and library
+		// bodies that read with (elt seq i). The class shaker drops it when unused.
+		final JvmEltCellRuntimeBuilder.EltCellMethod eltCellMethodBody = JvmEltCellRuntimeBuilder.build(cp, consShape,
+				thisClass);
 
 		// The &optional surplus-argument message (%arity-surplus-message). Emitted
 		// unconditionally like _nthcdr: its sites are the lambda-list prologue, which the
@@ -4656,6 +4661,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
 					nthcdrMethodBody.desc(), nthcdrMethodBody.maxStack(), nthcdrMethodBody.maxLocals(),
 					nthcdrMethodBody.code(), List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, eltCellMethodBody.name(),
+					eltCellMethodBody.desc(), eltCellMethodBody.maxStack(), eltCellMethodBody.maxLocals(),
+					eltCellMethodBody.code(), List.of());
 		}
 		{
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),

@@ -131,7 +131,7 @@ unchanged. Served only where identical answers are provable:
 
 ## The prelude bodies walk a list with a cursor, not with `elt`
 
-`(elt list i)` lowers to `(nth i list)`, an O(i) head walk, so a two-list
+`(elt list i)` lowers to `(car (%elt-cell list i))`, an O(i) head walk, so a two-list
 `search` was O(n^2*m) and a two-list `mismatch` O(n^2) on the three compile paths
 (which run the `defun`). Both bodies seed a cons cursor:
 
@@ -142,7 +142,10 @@ unchanged. Served only where identical answers are provable:
 - The `map-into` cursor shape (`LispMacroExpander.readElement`) with the advance
   folded into the read. A non-list operand pins a nil cursor and keeps indexing;
   a cursor run out (past an out-of-range bound, or onto a dotted tail) falls back
-  to the very `elt` call the body used to make, answer and error alike.
+  to the very `elt` call the body used to make, answer and error alike -- since
+  2026-09-28 (`.kb/error-handling.md`, "elt of a LIST outside it") a list index
+  outside the list is `ELT`'s type-error there, so `(search '(1 2 3) '(1 2 3)
+  :start2 -1)` signals where it answered 0.
 - `search` seeds the needle cursor once (its `start1`/`end1` window never moves)
   and advances the haystack cursor one `cdr` per OUTER position, both copied into
   the restarting inner walk.

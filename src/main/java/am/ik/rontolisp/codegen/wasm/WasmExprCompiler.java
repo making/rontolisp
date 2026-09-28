@@ -1903,6 +1903,7 @@ final class WasmExprCompiler {
 			case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
 			case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
 			case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
+			case LispNames.ELT_CELL -> WasmEltCellCompiler.compile(cons, ctx);
 			case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 			case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
 			case LispNames.SETF -> {

@@ -187,7 +187,8 @@ public final class OperandTypes {
 	 * ({@code BuiltinFunctionWrappers}). {@code notany}/{@code notevery} are
 	 * {@code (not (some ...))}/{@code (not (every ...))}, {@code copy-seq} is
 	 * {@code (subseq x 0)}. {@code %set-fill-pointer} is a {@code fill-pointer} place's
-	 * store and {@code %array-disp-target} {@code array-displacement}'s primary value.
+	 * store, {@code %array-disp-target} {@code array-displacement}'s primary value and
+	 * {@code %elt-cell} {@code elt}'s list arm.
 	 */
 	private static final Map<String, String> REWRITTEN = Map.ofEntries(Map.entry("1+", "+"), Map.entry("1-", "-"),
 			Map.entry("/=", "="), Map.entry("ZEROP", "="), Map.entry("PLUSP", ">"), Map.entry("MINUSP", "<"),
@@ -196,7 +197,8 @@ public final class OperandTypes {
 			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF),
 			Map.entry("%ROW-MAJOR-ASET", SETF_ROW_MAJOR_AREF), Map.entry("NOTANY", "SOME"),
 			Map.entry("NOTEVERY", "EVERY"), Map.entry("COPY-SEQ", "SUBSEQ"), Map.entry("%PUTHASH", SETF_GETHASH),
-			Map.entry("%SET-FILL-POINTER", SETF_FILL_POINTER), Map.entry("%ARRAY-DISP-TARGET", "ARRAY-DISPLACEMENT"));
+			Map.entry("%SET-FILL-POINTER", SETF_FILL_POINTER), Map.entry("%ARRAY-DISP-TARGET", "ARRAY-DISPLACEMENT"),
+			Map.entry("%ELT-CELL", "ELT"));
 
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
@@ -273,6 +275,13 @@ public final class OperandTypes {
 	 * radix {@code INTEGER}. After {@link #CHARACTER_BUILTINS}.
 	 */
 	private static final String DIGIT_CHAR_P = "DIGIT-CHAR-P";
+
+	/**
+	 * {@code elt}'s list arm ({@code %elt-cell}, reported as {@code ELT}), funnel-typed:
+	 * its index lands {@code INTEGER} -- {@code (INTEGER 0 (length))} when it is outside
+	 * the list -- and a non-list met on the walk {@code LIST}. Last in the table.
+	 */
+	private static final String ELT = "ELT";
 
 	/** The operators whose sites can land {@code CHARACTER}. */
 	private static final List<String> CHARACTER_OPERATORS_ALL = java.util.stream.Stream
@@ -351,6 +360,8 @@ public final class OperandTypes {
 		}
 		OPERATOR_TYPES.put(DIGIT_CHAR_P, FUNNEL_TYPE);
 		order.add(DIGIT_CHAR_P);
+		OPERATOR_TYPES.put(ELT, FUNNEL_TYPE);
+		order.add(ELT);
 		OPERATORS = List.copyOf(order);
 	}
 

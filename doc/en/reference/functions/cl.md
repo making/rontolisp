@@ -268,7 +268,7 @@ page.
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)` (cons the leading arguments onto the last one as the tail) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))` (prepend a `(key . value)` pair to an alist) |
 | `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil` (end-of-list test; any other value signals a `type-error`) |
-| `elt` | `(elt '(a b c) 1)` | `b` (0-based element access; lists only, no string indexing) |
+| `elt` | `(elt '(a b c) 1)` | `b` (0-based element access into a list, string or vector; an index outside it is a `type-error`) |
 | `rassoc` | `(rassoc 2 '((a . 1) (b . 2)))` | `(b . 2)` (first pair whose cdr matches the value, or nil; `eql` compare by default, optional `:test`/`:key` keywords) |
 | `rassoc-if` | `(rassoc-if #'oddp '((a . 2) (b . 3)))` | `(b . 3)` (first pair whose cdr satisfies the predicate, or nil; optional `:key`) |
 | `rassoc-if-not` | `(rassoc-if-not #'numberp '((a . 1) (b . c)))` | `(b . c)` (first pair whose cdr FAILS the predicate, or nil; optional `:key`) |

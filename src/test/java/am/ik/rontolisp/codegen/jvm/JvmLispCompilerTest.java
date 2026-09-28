@@ -1763,6 +1763,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void eltOfAListOutsideItIsATypeErrorNamingItsLength() throws Exception {
+		// elt of a LIST outside it -- past its end, negative, a bignum -- is ELT's
+		// type-error naming the list's length as its bound, as an out-of-range aref
+		// subscript names its dimension (.kb/error-handling.md, "An out-of-range
+		// subscript is a type-error naming its bound"); so is a (setf elt) place's. A
+		// non-list met on the walk is ELT's LIST type-error. The twins are
+		// LispEvaluatorTest, JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// eltOfAListOutsideItIsATypeErrorNamingItsLength. It answered nil past the end,
+		// the first element for -1, and (setf (elt l -1) v) stored into the first cell.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *l* (list 1 2 3))
+				(print (list (elt *l* 0) (elt *l* 2) (funcall #'elt *l* 1)))
+				(print (te (lambda () (elt *l* 3))))
+				(print (te (lambda () (elt *l* -1))))
+				(print (te (lambda () (elt *l* (expt 2 70)))))
+				(print (te (lambda () (elt nil 0))))
+				(print (te (lambda () (funcall #'elt *l* 3))))
+				(print (te (lambda () (elt '(1 . 2) 1))))
+				(print (te (lambda () (elt *l* "x"))))
+				(print (te (lambda () (setf (elt *l* 3) 0))))
+				(print (te (lambda () (setf (elt *l* -1) 0))))
+				(setf (elt *l* 1) 20)
+				(print *l*)
+				""")).isEqualTo(
+				"""
+						(1 3 2)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("ELT: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+						("ELT: The value 0 is not of type (INTEGER 0 (0))" 0 (INTEGER 0 (0)))
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value 2 is not of type LIST" 2 LIST)
+						("ELT: The value \\"x\\" is not of type INTEGER" "x" INTEGER)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						(1 20 3)""");
+	}
+
+	@Test
 	void outOfRangeSubscriptsAreTypeErrorsNamingTheirBound() throws Exception {
 		// A subscript outside its dimension is the access's type-error naming its bound:
 		// "OP: The value S is not of type (INTEGER 0 (D))", the datum the subscript and
@@ -9005,13 +9048,16 @@ class JvmLispCompilerTest {
 				(print (make-array '(2 2 2) :initial-contents
 					(list (list (list 1 2) (list 3 4)) (list (list 5 6) (list 7 8)))))
 				""")).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
-		// A row the contents do not have, and a row shorter than the dimension: the
+		// A row shorter than the dimension, and a row the contents do not have: the
 		// cursor runs out and the read falls back to the elt call this fill always made,
-		// which answers NIL past a proper list's end.
-		assertThat(compileAndRun("(print (make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6))))"))
-			.isEqualTo("#2A((1 2 NIL) (4 5 6))");
-		assertThat(compileAndRun("(print (make-array '(2 3) :initial-contents (list (list 1 2 3))))"))
-			.isEqualTo("#2A((1 2 3) (NIL NIL NIL))");
+		// which signals past a proper list's end (it answered NIL, padding the array).
+		assertThat(compileAndRun(
+				"(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))"
+						+ " (error () :error)))"))
+			.isEqualTo(":ERROR");
+		assertThat(compileAndRun("(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2 3)))"
+				+ " (error () :error)))"))
+			.isEqualTo(":ERROR");
 	}
 
 	@Test
@@ -18003,7 +18049,9 @@ class JvmLispCompilerTest {
 		// (elt seq i) -- an nth walk from the head, so O(n^2*m) for search and O(n^2)
 		// for mismatch. It reads a list through a cons cursor now; every answer here is
 		// the one the elt-indexed body gave, out-of-range and negative bounds included
-		// (the cursor cannot answer those, so the read falls back to the same elt call).
+		// (the cursor cannot answer those, so the read falls back to the same elt call --
+		// which signals ELT's type-error for a list index outside it, as :start2 -1
+		// reaches).
 		assertThat(compileAndRun("""
 				(print (search '(3 4) '(1 2 3 4 5)))
 				(print (search '(3 4) '(1 2 3 4 5) :start2 3))
@@ -18016,7 +18064,7 @@ class JvmLispCompilerTest {
 				(print (search '(1 2) '(1 2 3) :start2 99))
 				(print (search '(1 2 3) '(1 2 3) :start1 99))
 				(print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-				(print (search '(1 2 3) '(1 2 3) :start2 -1))
+				(print (handler-case (search '(1 2 3) '(1 2 3) :start2 -1) (type-error (e) (princ-to-string e))))
 				(print (search '(1 2 3) '(1 2 3) :start1 -1))
 				(print (handler-case (search '(1) '(1 2 . 3)) (type-error (e) (princ-to-string e))))
 				(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
@@ -18033,8 +18081,9 @@ class JvmLispCompilerTest {
 				               (search '(5 6) long :from-end t) (mismatch long long)
 				               (mismatch long (append (butlast long) (list 99))))))
 				""")).isEqualTo(
-				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n0\nNIL\n\"LENGTH: The value 3 is not of type SEQUENCE\"\n"
-						+ "2\n2\n3\n3\n0\nNIL\n2\n" + "(NIL 5 397 NIL 399)");
+				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n\"ELT: The value -1 is not of type (INTEGER 0 (3))\"\nNIL\n"
+						+ "\"LENGTH: The value 3 is not of type SEQUENCE\"\n" + "2\n2\n3\n3\n0\nNIL\n2\n"
+						+ "(NIL 5 397 NIL 399)");
 	}
 
 	@Test
