@@ -1533,7 +1533,7 @@ on wasm.
   class 188,098 unchanged, `examples/net/hello-clack.lisp` class 948,278 -> 949,038 (the `_ckChr`
   wrappers); `hello_world`, `pi_approx` byte-identical. 40M `char-code`/`upper-case-p`/
   `char-downcase` in EH mode: wasmtime 4.23 -> 4.20 s, JVM 0.33 -> 0.34 s.
-- `char-int` is not defined on any backend.
+- `char-int` is not defined on any backend (`.todo/a67`).
 - Pinned by `ci-spec.yaml`'s `character-built-ins-check-their-argument` and the
   `characterBuiltInsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest`).
