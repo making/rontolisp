@@ -3839,10 +3839,7 @@ public final class LispMacroExpander {
 					// (let ((%a array))
 					// (%row-major-aset %a (apply #'array-row-major-index %a
 					// (list* sub... tail-list)) val)).
-					String applied = placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
-							&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
-							&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym
-									? fnSym.name() : null;
+					String applied = setfApplyArrayPlaceFunction(placeParts);
 					if (!LispNames.AREF.equals(applied) && !LispNames.SVREF.equals(applied)) {
 						throw new UnsupportedOperationException(
 								"setf does not support place: APPLY (only (setf (apply #'aref ...)) is supported)");
@@ -4322,6 +4319,71 @@ public final class LispMacroExpander {
 	 */
 	public static String setfFunctionName(String placeName) {
 		return "%setf-" + placeName;
+	}
+
+	// Recognizes a (setf (apply #'aref array sub... tail-list) val) / #'svref place --
+	// the AREF/SVREF designator expandSetf's APPLY case requires -- and answers the
+	// applied name, or null when the place is not this shape (placeParts is the place's
+	// OWN parts: (apply #'name array sub...), so placeParts.get(0) is APPLY itself).
+	// Shared with usesSetfApplyArrayRowMajorIndex below so the two can never drift apart
+	// on what counts as this place (todo a66): expandSetf runs LAZILY, from
+	// JvmExprCompiler/WasmExprCompiler's SETF case, at actual codegen time -- after the
+	// REFERENCE_GATED_FUNCTIONS wrapper gate has already scanned the surface program for
+	// every #'name it needs to see, so the (function array-row-major-index) this case
+	// injects is invisible to that scan unless something else tells it to expect one.
+	private static @Nullable String setfApplyArrayPlaceFunction(List<LispVal> placeParts) {
+		return placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
+				&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
+				&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym ? fnSym.name()
+						: null;
+	}
+
+	/**
+	 * Whether the program contains a {@code (setf (apply #'aref ...) ...)} or
+	 * {@code (setf (apply #'svref ...) ...)} place -- the shape whose lazy expansion (see
+	 * {@link #setfApplyArrayPlaceFunction}) injects a {@code (function
+	 * array-row-major-index)} reference no scan of the SURFACE program can see. The
+	 * REFERENCE_GATED_FUNCTIONS wrapper gate in {@code Jvm/WasmLispCompiler} calls this
+	 * alongside its ordinary {@code (function name)} scan so the array-row-major-index
+	 * wrapper is injected whenever codegen is about to need it (todo a66), the same way
+	 * {@code usesRestartSystem}/{@code mayCreateInstances} already see their own lazy
+	 * Pass-2 products coming.
+	 * @param program the program to scan
+	 * @return {@code true} when such a place occurs anywhere in the program
+	 */
+	public static boolean usesSetfApplyArrayRowMajorIndex(List<? extends LispVal> program) {
+		for (LispVal form : program) {
+			if (usesSetfApplyArrayRowMajorIndex(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesSetfApplyArrayRowMajorIndex(LispVal expr) {
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.SETF.equals(head.name())) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispCons placeCons) {
+						List<LispVal> placeParts = placeCons.toList();
+						if (!placeParts.isEmpty() && placeParts.get(0) instanceof LispSymbol op
+								&& LispNames.APPLY.equals(op.name())) {
+							String applied = setfApplyArrayPlaceFunction(placeParts);
+							if (LispNames.AREF.equals(applied) || LispNames.SVREF.equals(applied)) {
+								return true;
+							}
+						}
+					}
+				}
+			}
+			if (usesSetfApplyArrayRowMajorIndex(cons.car())) {
+				return true;
+			}
+			x = cons.cdr();
+		}
+		return false;
 	}
 
 	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {

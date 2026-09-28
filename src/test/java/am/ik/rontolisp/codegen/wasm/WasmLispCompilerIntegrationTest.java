@@ -20671,6 +20671,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileFunctionValueArefBaresTheTypeErrorLayoutWithNoHandlerCase() throws Exception {
+		// #'aref/#'array-row-major-index as a function value (todo a58) construct a
+		// type-error instance in their shared fold's bound check -- but only through the
+		// wrapper, never through ordinary call position (whose own bound check is a
+		// separate bare backend trap). compileFunctionValueArefChecksRankAndBounds above
+		// never caught the layout-tag narrower (WasmLispCompiler#usedLayoutTags) missing
+		// this: its own program wraps every apply in a handler-case, which independently
+		// forces %class-TYPE-ERROR in (establishesLandingPad's arm). Without a landing
+		// pad, taking #'aref as a value used to compile a fold whose dead bound-check
+		// branch references a layout the narrower never baked -- "no layout was baked
+		// for instance type %class-TYPE-ERROR" -- on a program that never once
+		// mentions type-error (todo a66, found checking the wasm shape of that todo's
+		// setf-of-apply-aref fix below).
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				""")).isEqualTo("4");
+	}
+
+	@Test
+	void setfOfApplyArefIsTheRuntimeRankPlace() throws Exception {
+		// (setf (apply #'aref a subs) v) -- CLHS 5.1.2.5, what cffi's
+		// foreign-array-to-lisp spells for an array whose rank is a runtime value (the
+		// JVM twin: JvmFfiInteropCompilerTest#setfOfApplyArefIsTheRuntimeRankPlace, todo
+		// a66). This place's lazy expansion injects a (function array-row-major-index)
+		// reference the REFERENCE_GATED_FUNCTIONS wrapper gate's ordinary scan cannot
+		// see, since the expansion runs during codegen -- after the scan.
+		assertThat(compileAndRun("""
+				(let ((a (make-array '(2 3) :initial-element 0)))
+				  (setf (apply #'aref a (list 1 2)) 42)
+				  (setf (apply #'aref a 0 (list 1)) 7)
+				  (print (list (aref a 1 2) (aref a 0 1))))
+				""")).isEqualTo("(42 7)");
+	}
+
+	@Test
 	void compileRowMajorArefReadsAndWritesFlat() throws Exception {
 		assertThat(compileAndRun("""
 				(defparameter *m* (make-array (list 2 3) :initial-element 0))

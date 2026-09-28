@@ -3897,6 +3897,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// too.
 		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
 		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
+		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
+		// during codegen (WasmExprCompiler's SETF case), to a (function
+		// array-row-major-index) reference no scan of the surface program above can see
+		// coming -- the scan has to be told (todo a66), the JVM gate mirrored.
+		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		}
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
 			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
@@ -11872,6 +11879,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 				break;
 			}
+		}
+		// #'aref / #'array-row-major-index (todo a58) construct a type-error instance in
+		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
+		// never in ordinary call position -- whose own bound check is a separate bare
+		// backend trap -- so the bare symbol's presence TYPE_ERROR_SITES tests above is
+		// the wrong test for these two; take the same function-value reference the
+		// REFERENCE_GATED_FUNCTIONS wrapper gate itself keys on. (setf (apply #'aref
+		// ...) ...) / #'svref reaches the same fold through a (function
+		// array-row-major-index) reference injected lazily, after this scan, by the
+		// setf place's own expansion (todo a66) -- invisible to a plain symbol scan, so
+		// it needs its own check.
+		java.util.Set<String> arefFunctionValues = BuiltinFunctionWrappers.functionValueNames(program);
+		if (arefFunctionValues.contains(LispNames.AREF) || arefFunctionValues.contains(LispNames.ARRAY_ROW_MAJOR_INDEX)
+				|| LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		}
 		// A %program-error signal constructs its program-error instance during BODY
 		// compilation (lowerProgramError) -- after this scan, and only behind a handler
