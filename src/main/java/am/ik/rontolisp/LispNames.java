@@ -7562,11 +7562,11 @@ public final class LispNames {
 
 	/**
 	 * The {@code objc} package name: the Objective-C runtime through the foreign function
-	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}). The exact analogue of
-	 * {@code java} -- a package named after the foreign system with a handful of generic
-	 * verbs -- but reflection-free, so it runs in the native binary too. Interpreted, and
-	 * compiled to a JVM class (the binding travels in the class,
-	 * {@code codegen.jvm.JvmObjcRuntimeBuilder}); never to WASM. Does not use {@code cl}.
+	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}), with LispWorks 8.1's
+	 * {@code OBJC} vocabulary written in {@code objc.lisp} -- reflection-free, so it runs
+	 * in the native binary too. Interpreted, compiled to a JVM class (the binding travels
+	 * in the class, {@code codegen.jvm.JvmObjcRuntimeBuilder}) and to a {@code --native}
+	 * executable for macOS; never to any other WASM output. Does not use {@code cl}.
 	 */
 	public static final String OBJC_PKG = "OBJC";
 
@@ -7577,67 +7577,12 @@ public final class LispNames {
 	 */
 	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
 
-	/**
-	 * {@code objc:object} -- the type of an Objective-C object reference, on every
-	 * backend: what {@code type-of} answers for one, what {@code typep} and
-	 * {@code typecase} test and what {@code class-of} names ({@code .kb/objc.md}, "The
-	 * type").
-	 */
-	public static final String OBJC_OBJECT = "OBJECT";
-
-	/**
-	 * {@code objc:object}, qualified: the type name, and the name of the wrapper struct
-	 * of a {@code --native} program's {@code objc-native.lisp} (address + the handle
-	 * whose death releases the reference). That struct is no {@code structure-object}.
-	 * The wasm-GC backend compares an instance of it by its ADDRESS slot alone -- in
-	 * {@code eq}/{@code eql}, {@code equal} and every hash -- so two wrappers of one
-	 * object are one value, as the interpreter's record and the JVM's handle are
-	 * ({@code .kb/objc.md}, "--native").
-	 */
-	public static final String OBJC_OBJECT_TYPE = OBJC_PKG + ":" + OBJC_OBJECT;
-
-	/** {@code objc:class} -- a class by name: {@code (objc:class "NSWindow")}. */
-	public static final String OBJC_CLASS = "CLASS";
-
-	/**
-	 * {@code objc:send} -- sends a message, typed by the selector's own encoding:
-	 * {@code (objc:send receiver "setTitle:" "hello")}.
-	 */
-	public static final String OBJC_SEND = "SEND";
-
-	/**
-	 * {@code objc:define-class} -- registers a class whose methods are Lisp functions:
-	 * {@code (objc:define-class "Name" "NSObject" '(("invoke:" fn)) '("Protocol"))}.
-	 */
-	public static final String OBJC_DEFINE_CLASS = "DEFINE-CLASS";
-
 	/** {@code objc:on-main} -- runs a function on thread 0 and answers its value. */
 	public static final String OBJC_ON_MAIN = "ON-MAIN";
 
-	/** {@code objc:string} -- an {@code NSString} for a Lisp string. */
-	public static final String OBJC_STRING = "STRING";
-
 	/**
-	 * {@code objc:data} -- an {@code NSMutableData} for a packed buffer's bytes, the same
-	 * bytes {@code write-sequence} would write.
-	 */
-	public static final String OBJC_DATA = "DATA";
-
-	/**
-	 * {@code objc:bytes} -- an {@code NSData}'s contents as a packed
-	 * {@code (unsigned-byte 8)} vector.
-	 */
-	public static final String OBJC_BYTES = "BYTES";
-
-	/** {@code objc:address} -- an object's address, as an integer. */
-	public static final String OBJC_ADDRESS = "ADDRESS";
-
-	/** {@code objc:objectp} -- whether a value is an Objective-C object reference. */
-	public static final String OBJC_OBJECTP = "OBJECTP";
-
-	/**
-	 * {@code objc:with-autorelease-pool} -- the new base's pool macro, a built-in
-	 * expansion into {@link #OBJC_CALL_WITH_AUTORELEASE_POOL} over a lambda.
+	 * {@code objc:with-autorelease-pool} -- the pool macro, a built-in expansion into
+	 * {@link #OBJC_CALL_WITH_AUTORELEASE_POOL} over a lambda.
 	 */
 	public static final String OBJC_WITH_AUTORELEASE_POOL = "WITH-AUTORELEASE-POOL";
 
@@ -7650,10 +7595,10 @@ public final class LispNames {
 	public static final String OBJC_CALL_WITH_AUTORELEASE_POOL = OBJC_PKG + "::%CALL-WITH-AUTORELEASE-POOL";
 
 	/**
-	 * {@code objc:objc-object-pointer}, qualified: the new base's type of an Objective-C
-	 * object (a defstruct in {@code objc.lisp}); no {@code structure-object}. A
-	 * {@code --native} backend compares it by its address slot ({@code .kb/objc.md}, "The
-	 * new base: one representation").
+	 * {@code objc:objc-object-pointer}, qualified: the type of an Objective-C object (a
+	 * defstruct in {@code objc.lisp}); no {@code structure-object}. A {@code --native}
+	 * backend compares it by its address slot ({@code .kb/objc.md}, "One
+	 * representation").
 	 */
 	public static final String OBJC_POINTER_TYPE = OBJC_PKG + ":OBJC-OBJECT-POINTER";
 
@@ -7671,7 +7616,7 @@ public final class LispNames {
 	/** {@code objc:ns-error}: the failure {@code objc:invoke-with-error} signals. */
 	public static final String NS_ERROR_TYPE = OBJC_PKG + ":NS-ERROR";
 
-	// The new base's primitive layer (objc.lisp is written over these; each backend
+	// The primitive layer (objc.lisp is written over these; each backend
 	// supplies them: eval/ObjcPrimitives, codegen/jvm/JvmObjcPrimitivesTemplate,
 	// objc-native-primitives.lisp).
 
@@ -7814,8 +7759,29 @@ public final class LispNames {
 	 */
 	public static final String OBJC_SYMBOL_ADDRESS = OBJC_PKG + "::%SYMBOL-ADDRESS";
 
+	// The byte copies objc:data and objc:bytes are written over.
+
 	/**
-	 * The new base's primitives, as the compile path gates the shipped binding on them.
+	 * {@code (objc::%octets value)} -- a packed buffer's bytes (what
+	 * {@code write-sequence} writes for it) or a string's UTF-8, as a fresh
+	 * {@code (unsigned-byte 8)} vector; nil for any other value.
+	 */
+	public static final String OBJC_OCTETS = OBJC_PKG + "::%OCTETS";
+
+	/**
+	 * {@code (objc::%write-octets address octets)} -- copies an {@code (unsigned-byte 8)}
+	 * vector to foreign memory.
+	 */
+	public static final String OBJC_WRITE_OCTETS = OBJC_PKG + "::%WRITE-OCTETS";
+
+	/**
+	 * {@code (objc::%read-octets address length)} -- copies a block of foreign memory
+	 * into a fresh {@code (unsigned-byte 8)} vector.
+	 */
+	public static final String OBJC_READ_OCTETS = OBJC_PKG + "::%READ-OCTETS";
+
+	/**
+	 * The primitives, as the compile path gates the shipped binding on them.
 	 */
 	public static final java.util.List<String> OBJC_PRIMITIVES = java.util.List.of(OBJC_GET_CLASS,
 			OBJC_CLASS_NAME_INTERNAL, OBJC_OBJECT_CLASS, OBJC_CLASS_P, OBJC_REGISTER_SELECTOR,
@@ -7823,7 +7789,7 @@ public final class LispNames {
 			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE, OBJC_ALLOCATE_CLASS, OBJC_ADD_IVAR,
 			OBJC_REGISTER_CLASS, OBJC_ADD_METHOD, OBJC_ADD_PROTOCOL, OBJC_SUPERCLASS, OBJC_SEND_SUPER, OBJC_IVAR_OFFSET,
 			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE, OBJC_MAKE_BLOCK, OBJC_FREE_BLOCK, OBJC_CALL_FUNCTION,
-			OBJC_SYMBOL_ADDRESS, OBJC_RAISED);
+			OBJC_SYMBOL_ADDRESS, OBJC_RAISED, OBJC_OCTETS, OBJC_WRITE_OCTETS, OBJC_READ_OCTETS);
 
 	/**
 	 * The {@code fli} package name: the part of LispWorks' foreign language interface the

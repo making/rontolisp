@@ -23,7 +23,7 @@ import org.jspecify.annotations.Nullable;
  * {@code appkit:label}, {@code appkit:button} with a Lisp closure as its action,
  * {@code appkit:set-text} / {@code appkit:text}, {@code appkit:click},
  * {@code appkit:close}, {@code appkit:visible-p}, {@code appkit:wait} -- written in
- * rontolisp itself over the {@code objc:} verbs ({@code appkit.lisp} on the classpath)
+ * rontolisp itself over the {@code objc} package ({@code appkit.lisp} on the classpath)
  * and SHIPPED inside the interpreter, the {@code linalg} pattern: a user opens a bare
  * REPL and types {@code (appkit:window "hi")} with nothing required and nothing to copy.
  * That is the difference from {@code examples/jvm/swing.lisp}, a Lisp-level package a
@@ -37,8 +37,9 @@ import org.jspecify.annotations.Nullable;
  * ({@code LispEvaluator#resolveFunction});</li>
  * <li>the JVM compile path ({@code CompileFrontend}) calls {@link #process(List)} after
  * user-macro expansion: when the program references the {@code appkit} package, the
- * library definitions are prepended, and their {@code objc:send} calls gate the embedded
- * {@code am.ik.objc} blob on ({@code codegen.jvm.JvmObjcRuntimeBuilder}).</li>
+ * library definitions are prepended, and through the {@code objc.lisp} splice around them
+ * the embedded {@code am.ik.objc} blob is gated on
+ * ({@code codegen.jvm.JvmObjcRuntimeBuilder}).</li>
  * </ul>
  * The WASM backends have no foreign function API and never will, so
  * {@code CompileFrontend} refuses a {@code .wasm} output for a program that references
@@ -47,6 +48,8 @@ import org.jspecify.annotations.Nullable;
 public final class AppKitLibrary {
 
 	@Nullable private static volatile List<LispVal> forms;
+
+	@Nullable private static volatile List<LispVal> expandedForms;
 
 	private AppKitLibrary() {
 	}
@@ -65,6 +68,26 @@ public final class AppKitLibrary {
 				if (cached == null) {
 					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
 					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
+	 * Returns the library definitions with the {@code objc} defining macros expanded --
+	 * what the compile path splices ({@link ObjcLibrary#expandDefinitions}). Expanded
+	 * once and cached.
+	 * @return the expanded forms
+	 */
+	public static List<LispVal> expandedForms() {
+		List<LispVal> cached = expandedForms;
+		if (cached == null) {
+			synchronized (AppKitLibrary.class) {
+				cached = expandedForms;
+				if (cached == null) {
+					cached = ObjcLibrary.expandDefinitions(forms());
+					expandedForms = cached;
 				}
 			}
 		}
@@ -101,7 +124,7 @@ public final class AppKitLibrary {
 	 * effect -- or {@code null} when the program uses none of them. The compile path
 	 * refuses a {@code .wasm} output on this answer, naming the reference. All four are
 	 * one question because they are one refusal: every one of them bottoms out in
-	 * {@code objc:send}, which no WASM backend has an API for.
+	 * {@code objc:invoke}, which no WASM backend has an API for.
 	 * @param program the top-level forms
 	 * @return the symbol as written, or {@code null}
 	 */
@@ -177,7 +200,7 @@ public final class AppKitLibrary {
 	private static boolean exportedBy(String pkg, String name) {
 		String upper = name.toUpperCase(Locale.ROOT);
 		if (LispNames.OBJC_PKG.equals(pkg)) {
-			return OBJC_VERBS.contains(upper) || PackageRegistry.objcBaseNames().contains(upper);
+			return LispNames.OBJC_ON_MAIN.equals(upper) || PackageRegistry.objcBaseNames().contains(upper);
 		}
 		if (LispNames.COCOA_PKG.equals(pkg)) {
 			return PackageRegistry.cocoaNames().contains(upper);
@@ -233,7 +256,7 @@ public final class AppKitLibrary {
 		if (!walker.appkit) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		List<LispVal> out = new ArrayList<>(expandedForms());
 		out.addAll(program);
 		return out;
 	}
@@ -284,9 +307,5 @@ public final class AppKitLibrary {
 		}
 
 	}
-
-	private static final List<String> OBJC_VERBS = List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND,
-			LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS,
-			LispNames.OBJC_OBJECTP);
 
 }

@@ -311,7 +311,8 @@ class ShippedBridgeNativeImageE2eTest {
 	// window, so no hand is needed -- and nothing fires at all when thread 0 is never
 	// handed over, which is the hang the deadline turns into a failure. Built with NO
 	// configuration: the jar carries the objc_msgSend table and the two methods the
-	// bridge looks up by name, _apply (every callback) and _strv (the built title).
+	// primitive layer looks up by name, _apply (every callback) and _strv (the built
+	// title).
 	@Test
 	void anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit() throws Exception {
 		assumeTrue(System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac"), "objc: needs macOS");
@@ -324,9 +325,9 @@ class ShippedBridgeNativeImageE2eTest {
 				(defvar *ticks* 0)
 				(appkit:timer 0.1 (lambda ()
 				                    (setq *ticks* (+ *ticks* 1))
-				                    (cond ((<= *ticks* 3) (objc:send *button* "performClick:" nil) t)
-				                          (t (objc:send *window* "performClose:" nil) nil))))
-				(format t "title ~a~%" (objc:send (objc:send *window* "title") "UTF8String"))
+				                    (cond ((<= *ticks* 3) (objc:invoke *button* "performClick:" nil) t)
+				                          (t (objc:invoke *window* "performClose:" nil) nil))))
+				(format t "title ~a~%" (objc:invoke-into 'string *window* "title"))
 				(appkit:wait *window*)
 				(format t "clicks ~a~%" *clicks*)
 				""");

@@ -5,11 +5,11 @@ package am.ik.rontolisp.codegen.jvm;
  * interpreter's {@code LispForeignPointer}, and the one value the compiled value model
  * gains for the {@code ffi:} package: its own class rather than a plain {@code Long} so
  * that {@code ffi:pointerp} answers {@code nil} for {@code 42} and a type error at the
- * foreign boundary stays a type error. Unlike {@link JvmObjcHandle} it carries no class
- * name and no ownership: foreign memory is {@code malloc}'d and lives until
- * {@code ffi:free}, the contract every C binding expects. Two pointers to one address are
- * {@code equal} (the compiled {@code _equal} falls back to {@code equals} for a value
- * outside the Lisp representation), and address 0 is a legal value (C's {@code NULL}).
+ * foreign boundary stays a type error. It carries no ownership: foreign memory is
+ * {@code malloc}'d and lives until {@code ffi:free}, the contract every C binding
+ * expects. Two pointers to one address are {@code equal} (the compiled {@code _equal}
+ * falls back to {@code equals} for a value outside the Lisp representation), and address
+ * 0 is a legal value (C's {@code NULL}).
  *
  * <p>
  * Ships beside the program with {@link JvmFfiTemplate}, renamed after it by

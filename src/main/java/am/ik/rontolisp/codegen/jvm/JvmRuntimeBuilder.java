@@ -1205,8 +1205,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint,
+			@org.jspecify.annotations.Nullable BridgePrint ffiPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -1388,7 +1387,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint, javaPrint);
-		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
+		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
 		return code;
 	}
@@ -2052,8 +2051,7 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToDisplayStringMethod,
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint,
+			@org.jspecify.annotations.Nullable BridgePrint ffiPrint,
 			@org.jspecify.annotations.Nullable FuturePrint futurePrint,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
 			@org.jspecify.annotations.Nullable PackedIntPrint packedIntPrint,
@@ -2263,7 +2261,7 @@ final class JvmRuntimeBuilder {
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
 		emitHashTableBranch(code, hashPrint, javaPrint);
-		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
+		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
 		return code;
 	}
@@ -2489,14 +2487,14 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a wrapped {@code objc:} object as
-	 * {@code #<objc Class>} (interpreter parity) through the embedded bridge's print
-	 * hook, threaded into the two lisp-to-string builders only when the program uses
-	 * {@code objc:}. {@code initedField} is the {@code _objcInited} guard: the hook is
-	 * called only once {@code _objcInit} has defined the bridge class, so a print before
-	 * the first {@code objc:} call never resolves a class that does not exist yet.
+	 * Constant-pool references for printing a foreign value (an {@code ffi:} pointer as
+	 * {@code #<pointer #x...>}, interpreter parity) through an embedded bridge's print
+	 * hook, threaded into the two lisp-to-string builders only when the program uses the
+	 * bridge. {@code initedField} is its init guard: the hook is called only once the
+	 * init has defined the bridge class, so a print before the first bridge call never
+	 * resolves a class that does not exist yet.
 	 */
-	record ObjcPrint(FieldrefConstant initedField, MethodrefConstant print) {
+	record BridgePrint(FieldrefConstant initedField, MethodrefConstant print) {
 	}
 
 	/**
@@ -3406,7 +3404,7 @@ final class JvmRuntimeBuilder {
 	 * decimal digits.
 	 */
 	/** One guarded bridge print branch of {@link #emitDefaultTail}. */
-	private static void emitBridgePrintHook(List<Integer> code, @org.jspecify.annotations.Nullable ObjcPrint hook) {
+	private static void emitBridgePrintHook(List<Integer> code, @org.jspecify.annotations.Nullable BridgePrint hook) {
 		if (hook == null) {
 			return;
 		}
@@ -3430,12 +3428,10 @@ final class JvmRuntimeBuilder {
 
 	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint objcPrint,
-			@org.jspecify.annotations.Nullable ObjcPrint ffiPrint) {
-		// The objc: and ffi: print hooks share one shape: if (_xInited != 0)
+			@org.jspecify.annotations.Nullable BridgePrint ffiPrint) {
+		// The ffi: print hook: if (_ffiInited != 0)
 		// { String s = Bridge.print(val); if (s != null) return s; } -- ahead of the
-		// java: branch, which would otherwise claim the wrapper as a host object.
-		emitBridgePrintHook(code, objcPrint);
+		// java: branch, which would otherwise claim the pointer as a host object.
 		emitBridgePrintHook(code, ffiPrint);
 		if (javaPrint != null) {
 			List<Integer> toStringBranches = new ArrayList<>();

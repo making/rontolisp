@@ -17,17 +17,17 @@ import org.jspecify.annotations.Nullable;
  * ({@code cffi-sys}) is written over -- plain C through the foreign function API, with no
  * JNI, no bundled artifact, no dependency and no reflection, which is what lets it run in
  * the {@code rontolisp} native binary. The surface is a handful of generic verbs named
- * after the foreign system, the exact analogue of {@code objc:}: {@code ffi:open},
- * {@code ffi:symbol}, {@code ffi:call}, {@code ffi:callback}, {@code ffi:alloc},
- * {@code ffi:free}, {@code ffi:peek}, {@code ffi:poke}, {@code ffi:size},
- * {@code ffi:align}, {@code ffi:pointerp}, {@code ffi:address}, {@code ffi:errno}.
+ * after the foreign system: {@code ffi:open}, {@code ffi:symbol}, {@code ffi:call},
+ * {@code ffi:callback}, {@code ffi:alloc}, {@code ffi:free}, {@code ffi:peek},
+ * {@code ffi:poke}, {@code ffi:size}, {@code ffi:align}, {@code ffi:pointerp},
+ * {@code ffi:address}, {@code ffi:errno}.
  *
  * <p>
  * This class is the ONLY entry into {@link FfiBridge}, which holds the single reference
- * to {@code am.ik.ffi} -- the {@code ObjcInterop} / {@code ObjcBridge} shape, and for the
- * same reason: {@code src/web/java/.../Target_FfiInterop.java} substitutes these three
- * methods, and with them the whole binding leaves the browser playground's Web Image
- * build. Adding a public method here that touches the bridge breaks that cut.
+ * to {@code am.ik.ffi} -- the {@code ObjcInterop} / {@code ObjcPrimitives} shape, and for
+ * the same reason: {@code src/web/java/.../Target_FfiInterop.java} substitutes these
+ * three methods, and with them the whole binding leaves the browser playground's Web
+ * Image build. Adding a public method here that touches the bridge breaks that cut.
  *
  * <p>
  * Every failure is a SIGNAL, never a decline: a machine without native access, a library

@@ -1,24 +1,28 @@
 ;; The appkit package: a small Cocoa widget layer -- a window, a label, a button
 ;; whose action is a Lisp closure, a filled panel, a colour, a font, a click, a
 ;; repeating timer and a menu bar item -- written in rontolisp itself over the
-;; objc: verbs and shipped
-;; inside the interpreter (see AppKitLibrary.java): the interpreter loads these
-;; definitions lazily on the first use of an appkit: function, so a bare REPL can
-;; type (appkit:window "hi") with nothing required. Nothing here is a hand-written
-;; Java surface: every widget is objc:send over the selector the runtime describes,
-;; so anything this layer lacks is one objc:send away in user code.
+;; objc package and shipped inside the interpreter (see AppKitLibrary.java): the
+;; interpreter loads these definitions lazily on the first use of an appkit:
+;; function, so a bare REPL can type (appkit:window "hi") with nothing required.
+;; Nothing here is a hand-written Java surface: every widget is objc:invoke over
+;; the selector the runtime describes, so anything this layer lacks is one
+;; objc:invoke away in user code.
 ;;
 ;; Portability constraints honored here (like linalg.lisp): do loops always
 ;; declare at least one variable; parameters are never assigned with setq.
 ;;
-;; Threads: every objc:send hops to thread 0 on its own, so a widget is built
+;; Threads: every objc:invoke hops to thread 0 on its own, so a widget is built
 ;; inside ONE objc:on-main to pay the hop once rather than per selector. A
 ;; button's :on-click closure runs on thread 0, from inside AppKit's event loop.
 ;;
-;; Ownership: a window is created with releasedWhenClosed off, because the
-;; interpreter's wrapper owns a reference of its own and releases it when the
-;; Lisp value is collected (see ObjcBridge.java); closing the window with the red
-;; button therefore hides it and does not end the process or the REPL.
+;; Ownership: a window is created with releasedWhenClosed off, because the Lisp
+;; pointer owns a reference of its own and releases it when the value is
+;; collected (.kb/objc.md, "Ownership"); closing the window with the red button
+;; therefore hides it and does not end the process or the REPL.
+;;
+;; The classes below are defined with objc:define-objc-class. The compile path
+;; splices this file after user macros are expanded, so AppKitLibrary expands the
+;; defining macros here itself (ObjcLibrary.expandDefinitions).
 
 ;; The shared application object, activated once per process. setActivationPolicy:
 ;; 0 is NSApplicationActivationPolicyRegular, which is what lets a process with no
@@ -26,22 +30,13 @@
 ;; answer a click.
 (defvar appkit::*app* nil)
 
-;; The one target object every button sends its action to: an instance of a class
-;; defined at run time whose invoke: method is appkit::%invoke, which looks the
-;; button up in appkit::*actions* by address. Kept in a global because AppKit
-;; holds a target weakly.
-(defvar appkit::*action-target* nil)
-
-;; Button address -> the :on-click closure.
-(defvar appkit::*actions* (make-hash-table))
-
 (defun appkit::%app ()
   (or appkit::*app*
       (objc:on-main
        (lambda ()
-         (let ((app (objc:send "NSApplication" "sharedApplication")))
-           (objc:send app "setActivationPolicy:" 0)
-           (objc:send app "finishLaunching")
+         (let ((app (objc:invoke "NSApplication" "sharedApplication")))
+           (objc:invoke app "setActivationPolicy:" 0)
+           (objc:invoke app "finishLaunching")
            ;; Hand thread 0 to AppKit's OWN event loop. The run loop it is
            ;; parked in delivers events to the process but dequeues none of
            ;; them: without -[NSApplication run] the window draws and nothing
@@ -49,103 +44,106 @@
            ;; and the application never becomes active. run never returns, so no
            ;; thread that has to come back may call it; asking thread 0 to
            ;; perform it on its next run-loop cycle (waitUntilDone NO) starts it
-           ;; without blocking the caller, and every objc:send hop still works,
+           ;; without blocking the caller, and every send's hop still works,
            ;; because run drains the main queue like the loop it replaces.
-           (objc:send app
-                      "performSelectorOnMainThread:withObject:waitUntilDone:"
-                      "run" nil nil)
+           (objc:invoke app
+                        "performSelectorOnMainThread:withObject:waitUntilDone:"
+                        "run" nil nil)
            (setq appkit::*app* app)
            app)))))
 
-;; The IMP of -[RontoLispAppKitAction invoke:]: self is the target, sender the
-;; button.
-(defun appkit::%invoke (self sender)
-  (let ((handler (gethash (objc:address sender) appkit::*actions*)))
-    (when handler (funcall handler))
-    nil))
+;; The target a button or a menu item sends its action to: one per control, its
+;; closure in a slot. AppKit holds a target weakly; the Lisp object keeps it
+;; alive (make-instance's reference is never given up).
+(objc:define-objc-class appkit::action ()
+  ((handler :initarg :handler :initform nil :accessor appkit::%action-handler))
+  (:objc-class-name "RontoLispAppKitAction"))
 
-(defun appkit::%action-target ()
-  (or appkit::*action-target*
-      (let ((cls
-             (objc:define-class "RontoLispAppKitAction"
-               "NSObject"
-               (list (list "invoke:" #'appkit::%invoke)))))
-        (setq appkit::*action-target*
-              (objc:send (objc:send cls "alloc") "init"))
-        appkit::*action-target*)))
+(objc:define-objc-method ("invoke:" :void)
+  ((self appkit::action) (sender objc:objc-object-pointer))
+  (declare (ignore sender))
+  (let ((handler (appkit::%action-handler self)))
+    (when handler (funcall handler))))
 
-(defun appkit::%content-view (window) (objc:send window "contentView"))
+;; Wires a control's target/action to HANDLER, reusing the target it already has.
+(defun appkit::%set-action (control handler)
+  (let* ((current (objc:invoke control "target"))
+         (target (and current (objc:objc-object-from-pointer current))))
+    (if (typep target 'appkit::action)
+        (setf (appkit::%action-handler target) handler)
+        (progn
+          (objc:invoke control "setTarget:"
+                       (make-instance 'appkit::action :handler handler))
+          (objc:invoke control "setAction:" "invoke:"))))
+  control)
+
+(defun appkit::%content-view (window) (objc:invoke window "contentView"))
 
 ;;; --- colours and fonts ------------------------------------------------------
 
 ;; (appkit:color 90 200 250) -> an NSColor from 0-255 components; the optional
 ;; fourth argument is the alpha, 0.0 (clear) to 1.0 (opaque).
 (defun appkit:color (r g b &optional (alpha 1.0))
-  (objc:send "NSColor" "colorWithRed:green:blue:alpha:" (/ r 255.0) (/ g 255.0)
-             (/ b 255.0) (* 1.0 alpha)))
+  (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" (/ r 255.0)
+               (/ g 255.0) (/ b 255.0) (* 1.0 alpha)))
 
 ;; (appkit:font 19 :bold t) -> the system font at that size.
 (defun appkit:font (size &key bold)
-  (objc:send "NSFont" (if bold "boldSystemFontOfSize:" "systemFontOfSize:")
-             (* 1.0 size)))
+  (objc:invoke "NSFont" (if bold "boldSystemFontOfSize:" "systemFontOfSize:")
+               (* 1.0 size)))
 
-;; Font address -> the height one line of it needs, measured once per font by
-;; asking a throwaway field to size itself to its content. This is what lets
-;; appkit:label centre a string vertically in the rectangle it was given: an
-;; NSTextField draws its string at the TOP of its own frame, so a label handed a
-;; tall rectangle would otherwise hang from the ceiling.
+;; Font -> the height one line of it needs, measured once per font by asking a
+;; throwaway field to size itself to its content. This is what lets appkit:label
+;; centre a string vertically in the rectangle it was given: an NSTextField draws
+;; its string at the TOP of its own frame, so a label handed a tall rectangle
+;; would otherwise hang from the ceiling.
 (defvar appkit::*line-heights* (make-hash-table))
 
 (defun appkit::%line-height (fnt)
-  (let ((key (objc:address fnt)))
-    (or (gethash key appkit::*line-heights*)
-        (setf (gethash key appkit::*line-heights*)
-              (let ((probe (objc:send "NSTextField" "labelWithString:" "8gjM")))
-                (objc:send probe "setFont:" fnt)
-                (objc:send probe "sizeToFit")
-                (nth 3 (objc:send probe "frame")))))))
+  (or (gethash fnt appkit::*line-heights*)
+      (setf (gethash fnt appkit::*line-heights*)
+            (let ((probe (objc:invoke "NSTextField" "labelWithString:" "8gjM")))
+              (objc:invoke probe "setFont:" fnt)
+              (objc:invoke probe "sizeToFit")
+              (aref (objc:invoke probe "frame") 3)))))
 
 ;;; --- clicks -----------------------------------------------------------------
 ;;;
 ;;; AppKit delivers a click to the view under the pointer, and NSBox and
 ;;; NSTextField answer none, so a panel and a label are instances of subclasses
-;;; defined AT RUN TIME whose mouseDown: / rightMouseDown: are the Lisp functions
-;;; below. Both look the receiver up by address in one table, so a panel and the
-;;; label drawn over it can share a handler and the whole tile is live -- there
-;;; is no event forwarding to arrange.
+;;; defined here whose mouseDown: / rightMouseDown: run the handler the view's
+;;; Lisp object holds. A panel and the label drawn over it can share one handler,
+;;; so the whole tile is live -- there is no event forwarding to arrange.
 
-;; View address -> the (lambda (button) ...) registered for it.
-(defvar appkit::*clicks* (make-hash-table))
-
-(defvar appkit::*panel-class* nil)
-(defvar appkit::*label-class* nil)
+;; The mixin both clickable views inherit its two methods and its slot from.
+(objc:define-objc-class appkit::clickable ()
+  ((handler :initform nil :accessor appkit::%click-handler)))
 
 ;; 1 for a left click, 3 for a right click -- the java.awt.event button numbers,
 ;; so a handler written for a Swing front-end reads the same here.
 (defun appkit::%click (self button)
-  (let ((handler (gethash (objc:address self) appkit::*clicks*)))
-    (when handler (funcall handler button))
-    nil))
+  (let ((handler (appkit::%click-handler self)))
+    (when handler (funcall handler button))))
 
-(defun appkit::%left-click (self event) (appkit::%click self 1))
+(objc:define-objc-method ("mouseDown:" :void)
+  ((self appkit::clickable) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  (appkit::%click self 1))
 
-(defun appkit::%right-click (self event) (appkit::%click self 3))
+(objc:define-objc-method ("rightMouseDown:" :void)
+  ((self appkit::clickable) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  (appkit::%click self 3))
 
-(defun appkit::%clickable-class (name super)
-  (objc:define-class name
-    super
-    (list (list "mouseDown:" #'appkit::%left-click)
-          (list "rightMouseDown:" #'appkit::%right-click))))
+(objc:define-objc-class appkit::panel-view (appkit::clickable)
+  ()
+  (:objc-class-name "RontoLispAppKitPanel")
+  (:objc-superclass-name "NSBox"))
 
-(defun appkit::%panel-class ()
-  (or appkit::*panel-class*
-      (setq appkit::*panel-class*
-            (appkit::%clickable-class "RontoLispAppKitPanel" "NSBox"))))
-
-(defun appkit::%label-class ()
-  (or appkit::*label-class*
-      (setq appkit::*label-class*
-            (appkit::%clickable-class "RontoLispAppKitLabel" "NSTextField"))))
+(objc:define-objc-class appkit::label-view (appkit::clickable)
+  ()
+  (:objc-class-name "RontoLispAppKitLabel")
+  (:objc-superclass-name "NSTextField"))
 
 ;;; --- widgets ----------------------------------------------------------------
 
@@ -159,20 +157,20 @@
   (objc:on-main
    (lambda ()
      (let ((win
-            (objc:send (objc:send "NSWindow" "alloc")
-                       "initWithContentRect:styleMask:backing:defer:"
-                       (list 0 0 width height) 15 2 nil)))
-       (objc:send win "setReleasedWhenClosed:" nil)
-       (objc:send win "setTitle:" title)
+            (objc:invoke (objc:invoke "NSWindow" "alloc")
+                         "initWithContentRect:styleMask:backing:defer:"
+                         (vector 0 0 width height) 15 2 nil)))
+       (objc:invoke win "setReleasedWhenClosed:" nil)
+       (objc:invoke win "setTitle:" title)
        (when dark
-         (objc:send win "setAppearance:"
-                    (objc:send "NSAppearance" "appearanceNamed:"
-                               "NSAppearanceNameDarkAqua"))
-         (objc:send win "setTitlebarAppearsTransparent:" t))
-       (when background (objc:send win "setBackgroundColor:" background))
-       (objc:send win "center")
-       (objc:send win "makeKeyAndOrderFront:" nil)
-       (objc:send (appkit::%app) "activateIgnoringOtherApps:" t)
+         (objc:invoke win "setAppearance:"
+                      (objc:invoke "NSAppearance" "appearanceNamed:"
+                                   "NSAppearanceNameDarkAqua"))
+         (objc:invoke win "setTitlebarAppearsTransparent:" t))
+       (when background (objc:invoke win "setBackgroundColor:" background))
+       (objc:invoke win "center")
+       (objc:invoke win "makeKeyAndOrderFront:" nil)
+       (objc:invoke (appkit::%app) "activateIgnoringOtherApps:" t)
        win))))
 
 ;; (appkit:label win "text" :x 20 :y 20 :width 200 :height 24) -> an NSTextField
@@ -187,22 +185,22 @@
      (let* ((fnt (appkit:font size :bold bold))
             (line (appkit::%line-height fnt))
             (label
-             (objc:send (objc:send (appkit::%label-class) "alloc")
-                        "initWithFrame:"
-                        (list x (+ y (/ (- height line) 2.0)) width line))))
-       (objc:send label "setFont:" fnt)
-       (objc:send label "setEditable:" nil)
-       (objc:send label "setSelectable:" nil)
-       (objc:send label "setBezeled:" nil)
-       (objc:send label "setBordered:" nil)
-       (objc:send label "setDrawsBackground:" nil)
+             (objc:invoke (objc:invoke "RontoLispAppKitLabel" "alloc")
+                          "initWithFrame:"
+                          (vector x (+ y (/ (- height line) 2.0)) width line))))
+       (objc:invoke label "setFont:" fnt)
+       (objc:invoke label "setEditable:" nil)
+       (objc:invoke label "setSelectable:" nil)
+       (objc:invoke label "setBezeled:" nil)
+       (objc:invoke label "setBordered:" nil)
+       (objc:invoke label "setDrawsBackground:" nil)
        ;; NSTextAlignment: 0 left, 1 centre, 2 right (the iOS values, which is
        ;; what AppKit uses on Apple silicon).
-       (objc:send label "setAlignment:"
-                  (cond ((eq align :center) 1) ((eq align :right) 2) (t 0)))
-       (objc:send label "setStringValue:" text)
-       (when color (objc:send label "setTextColor:" color))
-       (objc:send (appkit::%content-view window) "addSubview:" label)
+       (objc:invoke label "setAlignment:"
+                    (cond ((eq align :center) 1) ((eq align :right) 2) (t 0)))
+       (objc:invoke label "setStringValue:" text)
+       (when color (objc:invoke label "setTextColor:" color))
+       (objc:invoke (appkit::%content-view window) "addSubview:" label)
        label))))
 
 ;; (appkit:panel win :x 20 :y 20 :width 96 :height 44 :fill c :radius 10) -> a
@@ -214,15 +212,15 @@
   (objc:on-main
    (lambda ()
      (let ((box
-            (objc:send (objc:send (appkit::%panel-class) "alloc")
-                       "initWithFrame:" (list x y width height))))
-       (objc:send box "setBoxType:" 4)
-       (objc:send box "setTitlePosition:" 0)
-       (objc:send box "setCornerRadius:" (* 1.0 radius))
-       (objc:send box "setBorderWidth:" (* 1.0 border))
-       (when fill (objc:send box "setFillColor:" fill))
-       (when border-color (objc:send box "setBorderColor:" border-color))
-       (objc:send (appkit::%content-view window) "addSubview:" box)
+            (objc:invoke (objc:invoke "RontoLispAppKitPanel" "alloc")
+                         "initWithFrame:" (vector x y width height))))
+       (objc:invoke box "setBoxType:" 4)
+       (objc:invoke box "setTitlePosition:" 0)
+       (objc:invoke box "setCornerRadius:" (* 1.0 radius))
+       (objc:invoke box "setBorderWidth:" (* 1.0 border))
+       (when fill (objc:invoke box "setFillColor:" fill))
+       (when border-color (objc:invoke box "setBorderColor:" border-color))
+       (objc:invoke (appkit::%content-view window) "addSubview:" box)
        box))))
 
 ;; (appkit:button win "title" :x 20 :y 20 :width 120 :height 32
@@ -233,27 +231,24 @@
   (objc:on-main
    (lambda ()
      (let ((button
-            (objc:send (objc:send "NSButton" "alloc") "initWithFrame:"
-                       (list x y width height))))
-       (objc:send button "setTitle:" title)
-       (objc:send button "setBezelStyle:" 1)
-       (when on-click
-         (setf (gethash (objc:address button) appkit::*actions*) on-click)
-         (objc:send button "setTarget:" (appkit::%action-target))
-         (objc:send button "setAction:" "invoke:"))
-       (objc:send (appkit::%content-view window) "addSubview:" button)
+            (objc:invoke (objc:invoke "NSButton" "alloc") "initWithFrame:"
+                         (vector x y width height))))
+       (objc:invoke button "setTitle:" title)
+       (objc:invoke button "setBezelStyle:" 1)
+       (when on-click (appkit::%set-action button on-click))
+       (objc:invoke (appkit::%content-view window) "addSubview:" button)
        button))))
 
-(defun appkit::%buttonp (view)
-  (objc:send view "isKindOfClass:" (objc:class "NSButton")))
+(defun appkit::%kind-p (object class-name)
+  (objc:invoke-bool object "isKindOfClass:" class-name))
 
-(defun appkit::%panelp (view)
-  (objc:send view "isKindOfClass:" (objc:class "NSBox")))
+(defun appkit::%buttonp (view) (appkit::%kind-p view "NSButton"))
+
+(defun appkit::%panelp (view) (appkit::%kind-p view "NSBox"))
 
 ;; A status item is not a view at all: the menu bar draws it through a button it
 ;; owns, which is why set-text and text ask about it before anything else.
-(defun appkit::%status-item-p (object)
-  (objc:send object "isKindOfClass:" (objc:class "NSStatusItem")))
+(defun appkit::%status-item-p (object) (appkit::%kind-p object "NSStatusItem"))
 
 ;; (appkit:on-click view (lambda (button) ...)): makes a panel or a label answer
 ;; a click, the handler taking the button number -- 1 for a left click, 3 for a
@@ -264,12 +259,12 @@
   (objc:on-main
    (lambda ()
      (if (appkit::%buttonp view)
-         (progn
-           (setf (gethash (objc:address view) appkit::*actions*)
-                 (lambda () (funcall handler 1)))
-           (objc:send view "setTarget:" (appkit::%action-target))
-           (objc:send view "setAction:" "invoke:"))
-         (setf (gethash (objc:address view) appkit::*clicks*) handler))
+         (appkit::%set-action view (lambda () (funcall handler 1)))
+         (let ((object (objc:objc-object-from-pointer view)))
+           (unless (typep object 'appkit::clickable)
+             (error "appkit:on-click: ~s is neither a button nor a panel or label of appkit"
+                    view))
+           (setf (appkit::%click-handler object) handler)))
      view)))
 
 ;; (appkit:set-text view "text"): a status item's or button's title, any other
@@ -278,9 +273,9 @@
   (objc:on-main
    (lambda ()
      (cond ((appkit::%status-item-p view)
-            (objc:send (objc:send view "button") "setTitle:" text))
-           ((appkit::%buttonp view) (objc:send view "setTitle:" text))
-           (t (objc:send view "setStringValue:" text)))
+            (objc:invoke (objc:invoke view "button") "setTitle:" text))
+           ((appkit::%buttonp view) (objc:invoke view "setTitle:" text))
+           (t (objc:invoke view "setStringValue:" text)))
      text)))
 
 ;; (appkit:set-color view color): a panel's fill colour, any other control's text
@@ -290,9 +285,9 @@
    (lambda ()
      (if (appkit::%panelp view)
          (progn
-           (objc:send view "setFillColor:" color)
-           (objc:send view "setNeedsDisplay:" t))
-         (objc:send view "setTextColor:" color))
+           (objc:invoke view "setFillColor:" color)
+           (objc:invoke view "setNeedsDisplay:" t))
+         (objc:invoke view "setTextColor:" color))
      color)))
 
 ;; (appkit:text view) -> the status item's or button's title, or the control's
@@ -300,42 +295,30 @@
 (defun appkit:text (view)
   (objc:on-main
    (lambda ()
-     (objc:send (if (appkit::%status-item-p view)
-                    (objc:send (objc:send view "button") "title")
-                    (objc:send view
-                     (if (appkit::%buttonp view) "title" "stringValue")))
-                "UTF8String"))))
+     (if (appkit::%status-item-p view)
+         (objc:invoke-into 'string (objc:invoke view "button") "title")
+         (objc:invoke-into 'string view
+          (if (appkit::%buttonp view) "title" "stringValue"))))))
 
 ;; (appkit:click button): performs the button's action as a user's click would --
 ;; the way a script drives a window without a human.
 (defun appkit:click (button)
   (objc:on-main
    (lambda ()
-     (objc:send button "performClick:" nil)
+     (objc:invoke button "performClick:" nil)
      nil)))
 
 ;;; --- a repeating timer ------------------------------------------------------
 
-;; Timer address -> the function it runs.
-(defvar appkit::*timers* (make-hash-table))
+;; The target of a timer: the function it runs, and a nil answer is what stops
+;; the clock. The timer retains its target.
+(objc:define-objc-class appkit::ticker ()
+  ((fn :initarg :fn :reader appkit::%ticker-fn))
+  (:objc-class-name "RontoLispAppKitTimer"))
 
-(defvar appkit::*timer-target* nil)
-
-;; The IMP of -[RontoLispAppKitTimer tick:]: run the timer's function, and let a
-;; nil answer be what stops the clock.
-(defun appkit::%tick (self timer)
-  (let ((handler (gethash (objc:address timer) appkit::*timers*)))
-    (unless (and handler (funcall handler)) (objc:send timer "invalidate")))
-  nil)
-
-(defun appkit::%timer-target ()
-  (or appkit::*timer-target*
-      (let ((cls
-             (objc:define-class "RontoLispAppKitTimer"
-               "NSObject"
-               (list (list "tick:" #'appkit::%tick)))))
-        (setq appkit::*timer-target* (objc:send (objc:send cls "alloc") "init"))
-        appkit::*timer-target*)))
+(objc:define-objc-method ("tick:" :void)
+  ((self appkit::ticker) (timer objc:objc-object-pointer))
+  (unless (funcall (appkit::%ticker-fn self)) (objc:invoke timer "invalidate")))
 
 ;; (appkit:timer 0.5 (lambda () ...)) -> a repeating NSTimer that calls the
 ;; function every SECONDS until it answers nil, which invalidates the timer. The
@@ -344,12 +327,9 @@
 (defun appkit:timer (seconds fn)
   (objc:on-main
    (lambda ()
-     (let ((timer
-            (objc:send "NSTimer"
-             "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"
-             (* 1.0 seconds) (appkit::%timer-target) "tick:" nil t)))
-       (setf (gethash (objc:address timer) appkit::*timers*) fn)
-       timer))))
+     (objc:invoke "NSTimer"
+      "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"
+      (* 1.0 seconds) (make-instance 'appkit::ticker :fn fn) "tick:" nil t))))
 
 ;;; --- the menu bar -----------------------------------------------------------
 
@@ -359,23 +339,20 @@
 ;; -> an NSMenu whose items are Lisp closures. An entry is (title handler) with
 ;; an optional key equivalent third, and the keyword :separator is a dividing
 ;; line. The handler takes no arguments and runs on thread 0, like a button's --
-;; a menu item is wired exactly as a button is, target/action into
-;; appkit::*actions* keyed by the item's address, so one table answers for every
-;; widget in the layer.
+;; a menu item is wired exactly as a button is, its target an appkit::action.
 (defun appkit:menu (items)
   (objc:on-main
    (lambda ()
-     (let ((menu (objc:send (objc:send "NSMenu" "alloc") "init")))
+     (let ((menu (objc:invoke (objc:invoke "NSMenu" "alloc") "init")))
        (dolist (entry items)
          (if (equal entry :separator)
-             (objc:send menu "addItem:"
-                        (objc:send "NSMenuItem" "separatorItem"))
+             (objc:invoke menu "addItem:"
+                          (objc:invoke "NSMenuItem" "separatorItem"))
              (let ((item
-                    (objc:send menu "addItemWithTitle:action:keyEquivalent:"
-                               (car entry) "invoke:" (or (nth 2 entry) ""))))
-               (setf (gethash (objc:address item) appkit::*actions*)
-                     (cadr entry))
-               (objc:send item "setTarget:" (appkit::%action-target)))))
+                    (objc:invoke menu "addItemWithTitle:action:keyEquivalent:"
+                                 (car entry) "invoke:" (or (nth 2 entry) ""))))
+               (objc:invoke item "setTarget:"
+                (make-instance 'appkit::action :handler (cadr entry))))))
        menu))))
 
 ;; (appkit:status-item "title" :menu (appkit:menu ...) :dock nil) -> an
@@ -390,12 +367,12 @@
   (appkit::%app)
   (objc:on-main
    (lambda ()
-     (unless dock (objc:send (appkit::%app) "setActivationPolicy:" 1))
+     (unless dock (objc:invoke (appkit::%app) "setActivationPolicy:" 1))
      (let ((item
-            (objc:send (objc:send "NSStatusBar" "systemStatusBar")
-                       "statusItemWithLength:" -1.0)))
-       (objc:send (objc:send item "button") "setTitle:" title)
-       (when menu (objc:send item "setMenu:" menu))
+            (objc:invoke (objc:invoke "NSStatusBar" "systemStatusBar")
+                         "statusItemWithLength:" -1.0)))
+       (objc:invoke (objc:invoke item "button") "setTitle:" title)
+       (when menu (objc:invoke item "setMenu:" menu))
        item))))
 
 ;; (appkit:quit): ends the application, the way Cmd-Q does. It is the only way
@@ -404,7 +381,7 @@
 (defun appkit:quit ()
   (objc:on-main
    (lambda ()
-     (objc:send (appkit::%app) "terminate:" nil)
+     (objc:invoke (appkit::%app) "terminate:" nil)
      nil)))
 
 ;;; --- the window's life ------------------------------------------------------
@@ -413,12 +390,12 @@
 (defun appkit:close (window)
   (objc:on-main
    (lambda ()
-     (objc:send window "close")
+     (objc:invoke window "close")
      nil)))
 
 ;; (appkit:visible-p window) -> whether the window is on screen.
 (defun appkit:visible-p (window)
-  (objc:on-main (lambda () (objc:send window "isVisible"))))
+  (objc:on-main (lambda () (objc:invoke-bool window "isVisible"))))
 
 ;; (appkit:wait window): blocks the calling thread until the window is closed --
 ;; what a script does after building its window, since the process ends when

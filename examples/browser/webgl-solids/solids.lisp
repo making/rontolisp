@@ -3,7 +3,8 @@
 ;;;; geom (.kb/geom.md) is backend-independent -- transforms, a scene graph,
 ;;;; boundary-represented solids, the CSG booleans -- and runs identically on
 ;;;; the interpreter, the JVM and both WASM backends. Its shipped RENDERER,
-;;;; scene.lisp, is macOS only, because it bottoms out in Metal through objc:.
+;;;; scene.lisp, is macOS only, because it bottoms out in Metal through
+;;;; objc:invoke.
 ;;;; This program is the other renderer: the same geom model, the same design,
 ;;;; drawn with WebGL2.
 ;;;;

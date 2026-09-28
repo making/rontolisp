@@ -32,6 +32,6 @@ guide](../../guides/solid-modeling.md) covers the model half.
 | `scene:refresh` | `(scene:refresh v)` | `nil`; draws exactly one frame |
 | `scene:animate` | `(scene:animate v hook)` | `nil`; draws at 60 fps, calling `hook` once before each frame |
 | `scene:wait` | `(scene:wait v)` | `nil`, once the viewer's window has been closed |
-| `scene:window-of` | `(scene:window-of v)` | the `NSWindow` -- the escape hatch to `appkit:` and raw `objc:send` |
+| `scene:window-of` | `(scene:window-of v)` | the `NSWindow` -- the escape hatch to `appkit:` and `objc:invoke` |
 | `scene:context-of` | `(scene:context-of v)` | the `metal:context` -- the escape hatch to the drawing surface |
 

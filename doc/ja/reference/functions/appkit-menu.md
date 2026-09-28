@@ -8,5 +8,5 @@
 CL-USER> (appkit:menu (list (list "Count" (lambda () (setq *n* (+ *n* 1))))
                      :separator
                      (list "Quit" #'appkit:quit "q")))
-#<objc NSMenu>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDAF1C640>
 ```

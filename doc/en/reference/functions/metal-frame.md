@@ -7,6 +7,6 @@ Draws one frame: takes the next drawable, clears it, calls `fn` with the render 
 ```console
 CL-USER> (metal:frame *ctx*
     (lambda (encoder)
-      (objc:send encoder "setRenderPipelineState:" *solid*)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
+      (objc:invoke encoder "setRenderPipelineState:" *solid*)
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
 ```

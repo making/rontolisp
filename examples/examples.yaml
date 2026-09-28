@@ -657,8 +657,8 @@ examples:
       macOS at all. The leg pins the whole JVM lowering of a window in one go --
       the literal (load "minesweeper-core.lisp"), the (require :board
       "../../macos/board.lisp") splice, the spliced appkit library with the
-      objc:define-class callbacks its clickable panels and labels are instances
-      of, and the embedded am.ik.objc blob.
+      objc:define-objc-class classes its clickable panels and labels are
+      instances of, and the embedded am.ik.objc blob.
 
   # --- macos: the objc package with no window in it ---------------------------
   - path: macos/objc-runtime.lisp
@@ -683,7 +683,7 @@ examples:
         - "NSString        length=11  doubleValue=0.0  uppercaseString=OBJECTIVE-C"
         - "<- NSString <- NSObject"
         - "-[NSString rangeOfString:]   returns {_NSRange=QQ}, takes @ : @"
-        - "so rangeOfString: answers    (10 1)"
+        - "so rangeOfString: answers    (10 . 1)"
         - "arrayWithObjects: built      Lisp, Smalltalk, Objective-C"
         - "one argument, one element    1"
         - "stringWithFormat: answers    the hand has 3 entries, 5.8% of the deck"
@@ -716,7 +716,7 @@ examples:
         - "Vision           loaded=T"
         - "ja -> これは日本語の文章です"
         - "fr -> cette phrase est en français"
-        - "\"i recieve mail\": first misspelling at (2 7)"
+        - "\"i recieve mail\": first misspelling at (2 . 7)"
         - "guesses: receive, relieve"
         - "date     September 1, 2026"
         - "phone    090-1234-5678"

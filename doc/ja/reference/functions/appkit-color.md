@@ -7,5 +7,5 @@
 ```console
 CL-USER> (defvar *amber* (appkit:color 255 176 74))
 CL-USER> (appkit:label *win* "007" :x 20 :y 20 :width 96 :height 44 :color *amber*)
-#<objc RontoLispAppKitLabel>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDF77C000>
 ```

@@ -40,15 +40,15 @@
                              (appkit:set-text *label*
                               (format nil "clicked ~a time(s)" *clicks*)))))
 
-;; Anything the widget layer lacks is one objc:send away: the window is an
+;; Anything the widget layer lacks is one objc:invoke away: the window is an
 ;; ordinary NSWindow. The light background pins the light appearance too, so the
 ;; label's default text colour stays dark when the system is in dark mode.
-(objc:send *window* "setAppearance:"
-           (objc:send "NSAppearance" "appearanceNamed:" "NSAppearanceNameAqua"))
-(objc:send *window* "setBackgroundColor:" (appkit:color 234 244 255))
+(objc:invoke *window* "setAppearance:"
+ (objc:invoke "NSAppearance" "appearanceNamed:" "NSAppearanceNameAqua"))
+(objc:invoke *window* "setBackgroundColor:" (appkit:color 234 244 255))
 
 (format t "window ~a is up; close it to exit~%"
-        (objc:send *window* "windowNumber"))
+        (objc:invoke *window* "windowNumber"))
 
 ;; A script's process ends when its last form returns, so wait for the close.
 (appkit:wait *window*)

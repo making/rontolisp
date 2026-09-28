@@ -10,5 +10,5 @@ Metal's enums are plain integers on the wire, and these are the members a drawin
 ```console
 CL-USER> (list metal:+point+ metal:+line+ metal:+triangle+ metal:+triangle-strip+)
 (0 1 3 4)
-CL-USER> (objc:send encoder "setCullMode:" metal:+cull-back+)
+CL-USER> (objc:invoke encoder "setCullMode:" metal:+cull-back+)
 ```

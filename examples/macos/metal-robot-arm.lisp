@@ -24,11 +24,12 @@
 ;;;; What is NOT the browser program's is the host boundary, and that is the
 ;;;; whole point of the pair. There the page owns WebGL2, two staging
 ;;;; Float32Arrays and the pointer gestures, and Lisp reaches them through 44
-;;;; imported functions. Here there is no host at all: `objc:send` IS the GPU
+;;;; imported functions. Here there is no host at all: `objc:invoke` IS the GPU
 ;;;; API, a packed single-float array IS the vertex buffer's bytes, and the
 ;;;; mouse arrives through an NSView subclass whose mouseDown: / mouseDragged: /
-;;;; scrollWheel: are Lisp closures -- objc:define-class, the same verb
-;;;; appkit.lisp uses to make an NSBox answer a click.
+;;;; scrollWheel: are written in Lisp -- objc:define-objc-class and
+;;;; objc:define-objc-method, the same pair appkit.lisp uses to make an NSBox
+;;;; answer a click.
 ;;;;
 ;;;; Run it (macOS, on any of the three backends that carry the binding):
 ;;;;
@@ -777,11 +778,12 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
 ;;; --- the window, and the mouse --------------------------------------------------
 ;;;
 ;;; The drawing surface is also the input surface: one NSView subclass defined at
-;;; run time, whose mouse methods are the Lisp closures below, installed as the
+;;; run time, whose mouse methods are the Lisp bodies below, installed as the
 ;;; window's content view before metal:attach puts the CAMetalLayer on it. That
-;;; is `objc:define-class`, the verb appkit.lisp uses to make an NSBox answer a
-;;; click -- an NSView answers all of these already, so the runtime reads each
-;;; method's type encoding off NSView and nothing here declares a signature.
+;;; is `objc:define-objc-class` with `objc:define-objc-method`, the pair
+;;; appkit.lisp uses to make an NSBox answer a click. Each method declares its
+;;; own signature -- a void result and one NSEvent argument, or a boolean one for
+;;; acceptsFirstMouse: -- which is the one NSView already gives each of them.
 ;;;
 ;;; The gesture is classified exactly as the browser page classifies it: a drag
 ;;; that has moved more than a few points orbits, and a press that has not,
@@ -805,10 +807,17 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
   ;; The event's position inside the drawing view, in points, y up. The content
   ;; view's frame origin is the window coordinate system's origin, so this
   ;; subtraction is the whole conversion.
-  (let ((p (objc:send event "locationInWindow")) (f (objc:send *view* "frame")))
-    (vec3 (- (first p) (first f)) (- (second p) (second f)) 0.0)))
+  (let ((p (objc:invoke event "locationInWindow"))
+        (f (objc:invoke *view* "frame")))
+    (vec3 (- (aref p 0) (aref f 0)) (- (aref p 1) (aref f 1)) 0.0)))
 
-(defun on-mouse-down (self event)
+(objc:define-objc-class arm-view ()
+  ()
+  (:objc-class-name "RontoLispMetalArmView")
+  (:objc-superclass-name "NSView"))
+
+(objc:define-objc-method ("mouseDown:" :void)
+  ((self arm-view) (event objc:objc-object-pointer))
   (let ((p (view-point event)))
     (setq *dragging* t)
     (setq *moved* 0.0)
@@ -816,7 +825,8 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
     (setq *last* p))
   nil)
 
-(defun on-mouse-dragged (self event)
+(objc:define-objc-method ("mouseDragged:" :void)
+  ((self arm-view) (event objc:objc-object-pointer))
   (when *dragging*
     (let* ((p (view-point event))
            (d (linalg:sub p *last*))
@@ -830,7 +840,9 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
         (orbit (/ dx (* 1.0 *height*)) (/ (- 0.0 dy) (* 1.0 *height*))))))
   nil)
 
-(defun on-mouse-up (self event)
+(objc:define-objc-method ("mouseUp:" :void)
+  ((self arm-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
   (when (and *dragging* (<= *moved* 4.0))
     ;; view points -> clip coordinates, both axes at once
     (setq *click*
@@ -840,26 +852,23 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
   (setq *dragging* nil)
   nil)
 
-(defun on-scroll (self event)
+(objc:define-objc-method ("scrollWheel:" :void)
+  ((self arm-view) (event objc:objc-object-pointer))
   ;; A trackpad reports pixels and a wheel reports lines, so the gain follows
   ;; hasPreciseScrollingDeltas -- the same distinction a browser draws between
   ;; deltaMode 0 and 1.
-  (let ((dy (objc:send event "scrollingDeltaY")))
+  (let ((dy (objc:invoke event "scrollingDeltaY")))
     (zoom
-     (* dy (if (objc:send event "hasPreciseScrollingDeltas") -0.004 -0.20))))
+     (* dy
+      (if (objc:invoke-bool event "hasPreciseScrollingDeltas") -0.004 -0.20))))
   nil)
 
 ;; Answering YES to acceptsFirstMouse: makes the click that ACTIVATES the window
 ;; count as a click in it too, which is what a drawing surface wants.
-(defun on-first-mouse (self event) t)
-
-(defvar *input-class*
-  (objc:define-class "RontoLispMetalArmView"
-    "NSView"
-    (list (list "mouseDown:" #'on-mouse-down)
-          (list "mouseDragged:" #'on-mouse-dragged)
-          (list "mouseUp:" #'on-mouse-up) (list "scrollWheel:" #'on-scroll)
-          (list "acceptsFirstMouse:" #'on-first-mouse))))
+(objc:define-objc-method ("acceptsFirstMouse:" :boolean)
+  ((self arm-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  t)
 
 (defvar *window*
   (appkit:window "Metal robot arm" :width *width* :height *height* :dark t))
@@ -868,9 +877,10 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
       (objc:on-main
        (lambda ()
          (let ((v
-                (objc:send (objc:send *input-class* "alloc") "initWithFrame:"
-                           (list 0.0 0.0 (* 1.0 *width*) (* 1.0 *height*)))))
-           (objc:send *window* "setContentView:" v)
+                (objc:invoke (objc:invoke "RontoLispMetalArmView" "alloc")
+                 "initWithFrame:"
+                 (vector 0.0 0.0 (* 1.0 *width*) (* 1.0 *height*)))))
+           (objc:invoke *window* "setContentView:" v)
            v))))
 
 (defvar *metal*
@@ -922,24 +932,24 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
     (emit-arm)
     (let ((verts (floor *w* 9)))
       (metal:upload mesh *vbuf*)
-      (objc:send encoder "setRenderPipelineState:" *solid*)
-      (objc:send encoder "setDepthStencilState:" *depth-write*)
-      (objc:send encoder "setVertexBuffer:offset:atIndex:" mesh 0 0)
+      (objc:invoke encoder "setRenderPipelineState:" *solid*)
+      (objc:invoke encoder "setDepthStencilState:" *depth-write*)
+      (objc:invoke encoder "setVertexBuffer:offset:atIndex:" mesh 0 0)
       (metal:uniform encoder 1 vp)
       (metal:uniform encoder 0 eye :stage :fragment)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-                 metal:+triangle+ 0 verts))
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                   metal:+triangle+ 0 verts))
     ;; glow pass: additive sprites that read depth but do not write it
     (setq *s* 0)
     (emit-glow tm)
     (let ((count (floor *s* 5)))
       (metal:upload sprites *sbuf*)
-      (objc:send encoder "setRenderPipelineState:" *glow*)
-      (objc:send encoder "setDepthStencilState:" *depth-read*)
-      (objc:send encoder "setVertexBuffer:offset:atIndex:" sprites 0 0)
+      (objc:invoke encoder "setRenderPipelineState:" *glow*)
+      (objc:invoke encoder "setDepthStencilState:" *depth-read*)
+      (objc:invoke encoder "setVertexBuffer:offset:atIndex:" sprites 0 0)
       (metal:uniform encoder 1 vp)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+point+
-                 0 count))))
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                   metal:+point+ 0 count))))
 
 (defun frame (encoder)
   (let ((tm (now)))
@@ -963,7 +973,7 @@ fragment float4 sprite_fragment(SpriteOut in [[stage_in]],
 (setq *sprite-buffers* (make-buffers (* +max-sprites+ 20)))
 
 (format t "device: ~a~%"
-        (objc:send (objc:send (metal:device *metal*) "name") "UTF8String"))
+        (objc:invoke-into 'string (metal:device *metal*) "name"))
 (format t "click to reach, drag to orbit, scroll to zoom~%")
 
 (metal:run *metal* #'frame)

@@ -6,5 +6,5 @@ Answers the system `NSFont` at that point size, bold when `:bold` is true. `appk
 
 ```console
 CL-USER> (defvar *heading* (appkit:font 19 :bold t))
-CL-USER> (objc:send *text-view* "setFont:" *heading*)
+CL-USER> (objc:invoke *text-view* "setFont:" *heading*)
 ```

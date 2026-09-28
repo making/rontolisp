@@ -484,7 +484,7 @@ public final class PackageRegistry {
 
 	/**
 	 * The functions exported by the {@code appkit} package (a Cocoa widget layer over the
-	 * {@code objc} verbs), implemented in {@code appkit.lisp} (see
+	 * {@code objc} package), implemented in {@code appkit.lisp} (see
 	 * {@code AppKitLibrary}). Plain strings, like {@code linalg}: they exist only as
 	 * Lisp-source defuns.
 	 */
@@ -495,11 +495,12 @@ public final class PackageRegistry {
 	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
 
 	/**
-	 * The names the new {@code objc} base exports: LispWorks 8.1's {@code OBJC} (the
-	 * functions, the macros, {@code standard-objc-object} and the type designators),
-	 * implemented in {@code objc.lisp}, {@code objc-class.lisp} and
-	 * {@code objc-macros.lisp} ({@code ObjcLibrary}). Beside the old verbs until those
-	 * are retired (.kb/objc.md, "Two bases, one package").
+	 * The names the {@code objc} package's library exports: LispWorks 8.1's {@code OBJC}
+	 * (the functions, the macros, {@code standard-objc-object} and the type designators)
+	 * plus this package's own {@code data}, {@code bytes}, {@code objectp} and the block
+	 * and exception names, implemented in {@code objc.lisp}, {@code objc-class.lisp},
+	 * {@code objc-block.lisp} and {@code objc-macros.lisp} ({@code ObjcLibrary}).
+	 * {@code on-main} is not among them: it is the primitive layer's.
 	 */
 	private static final Set<String> OBJC_BASE_NAMES = Set.of("ENSURE-OBJC-INITIALIZED", "INVOKE", "INVOKE-BOOL",
 			"INVOKE-INTO", "CAN-INVOKE-P", "ALLOC-INIT-OBJECT", "DESCRIPTION", "TRACE-INVOKE", "UNTRACE-INVOKE",
@@ -513,7 +514,8 @@ public final class PackageRegistry {
 			"DEFINE-OBJC-PROTOCOL", "DEFINE-OBJC-BLOCK-TYPE", "MAKE-OBJC-BLOCK", "FREE-OBJC-BLOCK", "WITH-OBJC-BLOCK",
 			"CALL-OBJC-BLOCK", "OBJC-BLOCK", "OBJC-BLOCK-POINTER", "OBJC-BLOCK-LIVE-P", "OBJC-EXCEPTION",
 			"OBJC-EXCEPTION-NAME", "OBJC-EXCEPTION-REASON", "OBJC-EXCEPTION-OBJECT", "NS-ERROR", "NS-ERROR-DOMAIN",
-			"NS-ERROR-CODE", "NS-ERROR-DESCRIPTION", "NS-ERROR-OBJECT", "INVOKE-WITH-ERROR");
+			"NS-ERROR-CODE", "NS-ERROR-DESCRIPTION", "NS-ERROR-OBJECT", "INVOKE-WITH-ERROR", "DATA", "BYTES",
+			"OBJECTP");
 
 	private static final List<String> OBJC_BASE_NAME_LIST = sorted(OBJC_BASE_NAMES);
 
@@ -980,15 +982,13 @@ public final class PackageRegistry {
 						LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_OBJECT,
 						LispNames.JAVA_WARN_ON_REFLECTION))));
 		// Objective-C through the foreign function API (no reflection, so it runs in the
-		// native binary too): the old verbs and the new, LispWorks-shaped base
-		// (objc.lisp) side by side until the old ones are retired. Does not use cl.
-		Set<String> objcNames = new HashSet<>(Set.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND,
-				LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA,
-				LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP, LispNames.OBJC_OBJECT));
-		objcNames.addAll(OBJC_BASE_NAMES);
+		// native binary too): LispWorks' OBJC vocabulary (objc.lisp) and the primitive
+		// on-main. Does not use cl.
+		Set<String> objcNames = new HashSet<>(OBJC_BASE_NAMES);
+		objcNames.add(LispNames.OBJC_ON_MAIN);
 		define(new LispPackage(LispNames.OBJC_PKG, List.of(), objcNames));
-		// LispWorks' COCOA: the Foundation structures beside the new objc base
-		// (objc.lisp). Does not use cl; every registered name is external.
+		// LispWorks' COCOA: the Foundation structures beside objc (objc.lisp). Does not
+		// use cl; every registered name is external.
 		define(new LispPackage(LispNames.COCOA_PKG, List.of(), new HashSet<>(COCOA_NAMES)));
 		// LispWorks' FLI, the part the objc base's C functions need
 		// (define-foreign-function,

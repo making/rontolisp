@@ -33,6 +33,6 @@
 | `scene:refresh` | `(scene:refresh v)` | `nil`。ちょうど 1 フレーム描画 |
 | `scene:animate` | `(scene:animate v hook)` | `nil`。60 fps で描画し、各フレーム前に `hook` を 1 回呼ぶ |
 | `scene:wait` | `(scene:wait v)` | ビューアのウィンドウが閉じられたら `nil` |
-| `scene:window-of` | `(scene:window-of v)` | `NSWindow`。`appkit:` や生の `objc:send` への抜け道 |
+| `scene:window-of` | `(scene:window-of v)` | `NSWindow`。`appkit:` や `objc:invoke` への抜け道 |
 | `scene:context-of` | `(scene:context-of v)` | `metal:context`。描画サーフェスへの抜け道 |
 

@@ -13,29 +13,24 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code objc-native.lisp}, the old {@code objc:} verbs of a {@code --native} output, and
- * {@code objc-native-primitives.lisp}, the new base's primitive layer in front of it:
- * together they define every name the interpreter binds, and the compile path splices
- * both exactly into a native program that reaches a macOS package. What they DO is pinned
- * by {@code e2e/NativeObjcE2eTest} against the interpreter.
+ * {@code objc-native-primitives.lisp}, the {@code objc} primitive layer of a
+ * {@code --native} output: it defines every primitive the interpreter binds, and the
+ * compile path splices it exactly into a native program that reaches a macOS package.
+ * What it DOES is pinned by {@code e2e/NativeObjcE2eTest} against the interpreter.
  */
 class ObjcNativeLibraryTest {
 
 	@Test
-	void theLibraryDefinesEveryObjcVerbAndTheSleepTheBackendRoutesTo() {
-		List<String> old = defined(ObjcNativeLibrary.forms());
-		assertThat(old.stream().filter(n -> n.startsWith("OBJC:") && !n.startsWith("OBJC::")))
-			.containsExactlyInAnyOrder("OBJC:" + LispNames.OBJC_CLASS, "OBJC:" + LispNames.OBJC_SEND,
-					"OBJC:" + LispNames.OBJC_DEFINE_CLASS, "OBJC:" + LispNames.OBJC_STRING,
-					"OBJC:" + LispNames.OBJC_DATA, "OBJC:" + LispNames.OBJC_BYTES, "OBJC:" + LispNames.OBJC_ADDRESS,
-					"OBJC:" + LispNames.OBJC_OBJECTP);
-		// The primitive layer: what objc.lisp is written over (the imports define the
-		// rest), on-main, and the sleep every sleep of such a program compiles to.
-		List<String> primitives = new ArrayList<>(defined(ObjcNativeLibrary.primitiveForms()));
-		primitives.addAll(imported(ObjcNativeLibrary.primitiveForms()));
+	void theLibraryDefinesEveryPrimitiveAndTheSleepTheBackendRoutesTo() {
+		// What objc.lisp is written over (the imports define the rest), on-main, and the
+		// sleep every sleep of such a program compiles to -- and no exported name but
+		// on-main: the vocabulary is objc.lisp's.
+		List<String> primitives = new ArrayList<>(defined(ObjcNativeLibrary.forms()));
+		primitives.addAll(imported(ObjcNativeLibrary.forms()));
 		assertThat(primitives).contains(LispNames.OBJC_SLEEP_INTERNAL, "OBJC:" + LispNames.OBJC_ON_MAIN)
 			.containsAll(LispNames.OBJC_PRIMITIVES);
-		assertThat(old).doesNotContain(LispNames.OBJC_SLEEP_INTERNAL, "OBJC:" + LispNames.OBJC_ON_MAIN);
+		assertThat(primitives.stream().filter(n -> n.startsWith("OBJC:") && !n.startsWith("OBJC::")))
+			.containsExactly("OBJC:" + LispNames.OBJC_ON_MAIN);
 	}
 
 	private static List<String> defined(List<LispVal> forms) {
@@ -67,9 +62,9 @@ class ObjcNativeLibraryTest {
 	void theLibraryIsSplicedOnlyIntoANativeProgramThatReachesAMacOsPackage() {
 		List<LispVal> plain = read("(print 1)");
 		assertThat(ObjcNativeLibrary.process(plain, true)).isSameAs(plain);
-		List<LispVal> objc = read("(objc:send \"NSString\" \"string\")");
+		List<LispVal> objc = read("(objc:invoke \"NSString\" \"string\")");
 		assertThat(ObjcNativeLibrary.process(objc, false)).isSameAs(objc);
-		int spliced = ObjcNativeLibrary.primitiveForms().size() + ObjcNativeLibrary.forms().size();
+		int spliced = ObjcNativeLibrary.forms().size();
 		assertThat(ObjcNativeLibrary.process(objc, true)).hasSize(spliced + 1).endsWith(objc.getFirst());
 		// An appkit: program reaches it too: the widget layer is written over objc:.
 		assertThat(ObjcNativeLibrary.process(read("(in-package appkit) (window \"t\")"), true)).hasSize(spliced + 2);

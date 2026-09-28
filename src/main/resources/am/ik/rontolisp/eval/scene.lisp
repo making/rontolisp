@@ -31,10 +31,13 @@
 ;; solid that moves needs no re-upload.
 ;;
 ;; A viewer is a CLOS instance rather than a set of globals, so two windows can
-;; exist in one image. AppKit's callbacks are process-wide, so the input class is
-;; defined once and every callback finds its viewer by the ADDRESS of the view
-;; that received the event -- appkit::*actions* keyed by widget address is the
-;; precedent (.kb/objc.md, "Where the line goes").
+;; exist in one image. The view that receives the events is an instance of an
+;; NSView subclass defined here, whose Lisp object holds its viewer: every
+;; callback finds the viewer through the view that received the event.
+;;
+;; The classes are defined with objc:define-objc-class. The compile path splices
+;; this file after user macros are expanded, so SceneLibrary expands the defining
+;; macros here itself (ObjcLibrary.expandDefinitions).
 ;;
 ;; Portability constraints honored here (like linalg.lisp): do loops always
 ;; declare at least one variable; parameters are never assigned with setq.
@@ -94,14 +97,6 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
 }
 ")
 
-;; View address -> the viewer that view belongs to. The one table every callback
-;; goes through, so two viewers orbit independently.
-(defvar scene::*views* (make-hash-table))
-
-(defvar scene::*input-class* nil)
-
-(defvar scene::*observer* nil)
-
 (defvar scene::*identity4* nil)
 
 ;; --- the viewer ---------------------------------------------------------------
@@ -139,52 +134,59 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
    (click-hook :initform nil :accessor scene::%click-hook)
    (frame-hook :initform nil :accessor scene::%frame-hook)))
 
-;; The one NSView subclass, defined once per process: its five selectors are
-;; declared by NSView, so the encodings are read off the superclass and every one
-;; of them lands on a supported callback shape (.kb/objc.md).
-(defun scene::%input-class ()
-  (when (null scene::*input-class*)
-    (setq scene::*input-class*
-          (objc:define-class "RontoLispSceneView"
-            "NSView"
-            (list (list "mouseDown:" #'scene::%on-mouse-down)
-                  (list "mouseDragged:" #'scene::%on-mouse-dragged)
-                  (list "mouseUp:" #'scene::%on-mouse-up)
-                  (list "scrollWheel:" #'scene::%on-scroll)
-                  (list "acceptsFirstMouse:" #'scene::%on-first-mouse)))))
-  scene::*input-class*)
+;; The NSView subclass a viewer's window shows: its five selectors are declared
+;; by NSView, and its Lisp object holds the viewer the events drive, so two
+;; viewers orbit independently. It also observes its own frame changes.
+(objc:define-objc-class scene::input-view ()
+  ((viewer :initform nil :accessor scene::%view-viewer))
+  (:objc-class-name "RontoLispSceneView")
+  (:objc-superclass-name "NSView"))
 
-;; The one notification observer, likewise: NSView posts its frame changes to it
-;; and it forwards them to the viewer that owns the view.
-(defun scene::%observer ()
-  (when (null scene::*observer*)
-    (let ((cls
-           (objc:define-class "RontoLispSceneObserver"
-             "NSObject"
-             (list (list "frameChanged:" #'scene::%on-frame-changed)))))
-      (setq scene::*observer* (objc:send (objc:send cls "alloc") "init"))))
-  scene::*observer*)
+(objc:define-objc-method ("mouseDown:" :void)
+  ((self scene::input-view) (event objc:objc-object-pointer))
+  (scene::%on-mouse-down (scene::%view-viewer self) event))
 
-(defun scene::%viewer-for (view) (gethash (objc:address view) scene::*views*))
+(objc:define-objc-method ("mouseDragged:" :void)
+  ((self scene::input-view) (event objc:objc-object-pointer))
+  (scene::%on-mouse-dragged (scene::%view-viewer self) event))
+
+(objc:define-objc-method ("mouseUp:" :void)
+  ((self scene::input-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  (scene::%on-mouse-up (scene::%view-viewer self)))
+
+(objc:define-objc-method ("scrollWheel:" :void)
+  ((self scene::input-view) (event objc:objc-object-pointer))
+  (scene::%on-scroll (scene::%view-viewer self) event))
+
+(objc:define-objc-method ("acceptsFirstMouse:" :boolean)
+  ((self scene::input-view) (event objc:objc-object-pointer))
+  (declare (ignore self event))
+  t)
+
+(objc:define-objc-method ("frameChanged:" :void)
+  ((self scene::input-view) (note objc:objc-object-pointer))
+  (declare (ignore note))
+  (scene::%on-frame-changed (scene::%view-viewer self)))
 
 (defun scene::%make-view (window width height)
   (objc:on-main
    (lambda ()
      (let ((view
-            (objc:send (objc:send (scene::%input-class) "alloc")
-                       "initWithFrame:"
-                       (list 0.0 0.0 (float width 1.0) (float height 1.0)))))
-       (objc:send window "setContentView:" view)
+            (objc:invoke (objc:invoke "RontoLispSceneView" "alloc")
+             "initWithFrame:"
+             (vector 0.0 0.0 (float width 1.0) (float height 1.0)))))
+       (objc:invoke window "setContentView:" view)
        ;; without this NSView posts nothing and a resize is invisible
-       (objc:send view "setPostsFrameChangedNotifications:" t)
+       (objc:invoke view "setPostsFrameChangedNotifications:" t)
        view))))
 
 (defun scene::%watch-resize (view)
   (objc:on-main
    (lambda ()
-     (objc:send (objc:send "NSNotificationCenter" "defaultCenter")
-                "addObserver:selector:name:object:" (scene::%observer)
-                "frameChanged:" "NSViewFrameDidChangeNotification" view)))
+     (cocoa:add-observer view "frameChanged:"
+                         :name "NSViewFrameDidChangeNotification"
+                         :object view)))
   nil)
 
 ;; Everything a viewer is that does not depend on WHERE it draws: two pipelines
@@ -221,7 +223,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                         :scale scene::+backing-scale+
                         :depth t))
          (v (scene::%viewer-over ctx win view width height)))
-    (setf (gethash (objc:address view) scene::*views*) v)
+    (setf (scene::%view-viewer (objc:objc-object-from-pointer view)) v)
     (scene::%watch-resize view)
     v))
 
@@ -551,19 +553,18 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
 ;; --- input ---------------------------------------------------------------------
 
 (defun scene::%view-point (event)
-  (let ((p (objc:send event "locationInWindow")))
-    (geom:vec3 (first p) (second p) 0.0)))
+  (let ((p (objc:invoke event "locationInWindow")))
+    (geom:vec3 (aref p 0) (aref p 1) 0.0)))
 
-(defun scene::%on-mouse-down (self event)
-  (let ((v (scene::%viewer-for self)))
-    (when v
-      (setf (scene::%dragging v) t)
-      ;; 131072 is NSEventModifierFlagShift
-      (setf (scene::%panning v)
-            (> (logand (objc:send event "modifierFlags") 131072) 0))
-      (setf (scene::%moved v) 0.0)
-      (setf (scene::%down-point v) (scene::%view-point event))
-      (setf (scene::%last-point v) (scene::%view-point event))))
+(defun scene::%on-mouse-down (v event)
+  (when v
+    (setf (scene::%dragging v) t)
+    ;; 131072 is NSEventModifierFlagShift
+    (setf (scene::%panning v)
+          (> (logand (objc:invoke event "modifierFlags") 131072) 0))
+    (setf (scene::%moved v) 0.0)
+    (setf (scene::%down-point v) (scene::%view-point event))
+    (setf (scene::%last-point v) (scene::%view-point event)))
   nil)
 
 ;; A drag arrives as a delta in VIEW coordinates, and AppKit's view coordinates
@@ -590,79 +591,71 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                                  (* dy (scene::%distance v) 0.0016)))))
   nil)
 
-(defun scene::%on-mouse-dragged (self event)
-  (let ((v (scene::%viewer-for self)))
-    (when (and v (scene::%dragging v))
-      (let* ((p (scene::%view-point event))
-             (d (linalg:sub p (scene::%last-point v)))
-             (dx (aref d 0))
-             (dy (aref d 1)))
-        (setf (scene::%last-point v) p)
-        (setf (scene::%moved v) (+ (scene::%moved v) (abs dx) (abs dy)))
-        (if (scene::%panning v) (scene::%pan v dx dy) (scene::%orbit v dx dy))
-        ;; A camera change has to be SHOWN. The mutators below do not redraw --
-        ;; a loop adding sixty solids must not draw sixty frames, and the REPL
-        ;; step after them is scene:refresh -- but a drag is the one place where
-        ;; the change and the frame are the same gesture, so a viewer that is
-        ;; not animating still orbits.
-        (scene:refresh v))))
+(defun scene::%on-mouse-dragged (v event)
+  (when (and v (scene::%dragging v))
+    (let* ((p (scene::%view-point event))
+           (d (linalg:sub p (scene::%last-point v)))
+           (dx (aref d 0))
+           (dy (aref d 1)))
+      (setf (scene::%last-point v) p)
+      (setf (scene::%moved v) (+ (scene::%moved v) (abs dx) (abs dy)))
+      (if (scene::%panning v) (scene::%pan v dx dy) (scene::%orbit v dx dy))
+      ;; A camera change has to be SHOWN. The mutators below do not redraw --
+      ;; a loop adding sixty solids must not draw sixty frames, and the REPL
+      ;; step after them is scene:refresh -- but a drag is the one place where
+      ;; the change and the frame are the same gesture, so a viewer that is
+      ;; not animating still orbits.
+      (scene:refresh v)))
   nil)
 
 ;; The release is where a gesture is classified: a press that has travelled no
 ;; more than a few points is a click, and the orbit it also performed over those
 ;; few points is invisible -- which is why the deadzone is here rather than in
 ;; the drag arm, where it would make a slow orbit start with a jump.
-(defun scene::%on-mouse-up (self event)
-  event
-  (let ((v (scene::%viewer-for self)))
-    (when v
-      (let ((hook (scene::%click-hook v)) (p (scene::%down-point v)))
-        (setf (scene::%dragging v) nil)
-        (when (and hook p (not (scene::%panning v)) (<= (scene::%moved v) 4.0))
-          (funcall hook (scene::%click-point v (aref p 0) (aref p 1)))
-          ;; The hook is a program's change and the click is the gesture that
-          ;; asked for it, so the frame belongs with it -- an idle viewer would
-          ;; otherwise answer a click with nothing on screen.
-          (scene:refresh v)))))
-  nil)
-
-(defun scene::%on-scroll (self event)
-  (let ((v (scene::%viewer-for self)))
-    (when v
-      (let* ((dy (objc:send event "scrollingDeltaY"))
-             (k (if (objc:send event "hasPreciseScrollingDeltas") -0.004 -0.20))
-             (d (* (scene::%distance v) (+ 1.0 (* dy k)))))
-        ;; The clamp exists to stop the scroll reaching zero (a degenerate
-        ;; frustum and a dead orbit) or overflowing, not to say how big a world
-        ;; is -- the old 10 .. 200000 window was a unit, and a model measured in
-        ;; metres started outside it.
-        (setf (scene::%distance v)
-              (cond ((< d 1.0e-6) 1.0e-6) ((> d 1.0e9) 1.0e9) (t d)))
+(defun scene::%on-mouse-up (v)
+  (when v
+    (let ((hook (scene::%click-hook v)) (p (scene::%down-point v)))
+      (setf (scene::%dragging v) nil)
+      (when (and hook p (not (scene::%panning v)) (<= (scene::%moved v) 4.0))
+        (funcall hook (scene::%click-point v (aref p 0) (aref p 1)))
+        ;; The hook is a program's change and the click is the gesture that
+        ;; asked for it, so the frame belongs with it -- an idle viewer would
+        ;; otherwise answer a click with nothing on screen.
         (scene:refresh v))))
   nil)
 
-(defun scene::%on-first-mouse (self event)
-  self
-  event
-  t)
+(defun scene::%on-scroll (v event)
+  (when v
+    (let* ((dy (objc:invoke event "scrollingDeltaY"))
+           (k
+            (if (objc:invoke-bool event "hasPreciseScrollingDeltas")
+                -0.004
+                -0.20))
+           (d (* (scene::%distance v) (+ 1.0 (* dy k)))))
+      ;; The clamp exists to stop the scroll reaching zero (a degenerate
+      ;; frustum and a dead orbit) or overflowing, not to say how big a world
+      ;; is -- the old 10 .. 200000 window was a unit, and a model measured in
+      ;; metres started outside it.
+      (setf (scene::%distance v)
+            (cond ((< d 1.0e-6) 1.0e-6) ((> d 1.0e9) 1.0e9) (t d)))
+      (scene:refresh v)))
+  nil)
 
 ;; The window was resized: the CAMetalLayer's frame and drawable size have to
 ;; follow the view, and the projection's aspect with them. Redrawn immediately,
 ;; because a viewer that is not animating would otherwise show the old frame
 ;; stretched until something else asked for one.
-(defun scene::%on-frame-changed (self note)
-  self
-  (let ((v (scene::%viewer-for (objc:send note "object"))))
-    (when v
-      (let* ((box (objc:send (scene::%view v) "frame"))
-             (w (third box))
-             (h (fourth box)))
-        (when (and (> w 1.0) (> h 1.0)
-                   (or (/= w (scene::%width v)) (/= h (scene::%height v))))
-          (setf (scene::%width v) (float w 1.0))
-          (setf (scene::%height v) (float h 1.0))
-          (metal:resize (scene:context-of v) w h)
-          (scene:refresh v)))))
+(defun scene::%on-frame-changed (v)
+  (when v
+    (let* ((box (objc:invoke (scene::%view v) "frame"))
+           (w (aref box 2))
+           (h (aref box 3)))
+      (when (and (> w 1.0) (> h 1.0)
+                 (or (/= w (scene::%width v)) (/= h (scene::%height v))))
+        (setf (scene::%width v) (float w 1.0))
+        (setf (scene::%height v) (float h 1.0))
+        (metal:resize (scene:context-of v) w h)
+        (scene:refresh v))))
   nil)
 
 ;; --- a frame -------------------------------------------------------------------
@@ -672,20 +665,20 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
 ;; were first drawn and have not moved since.
 
 (defun scene::%draw-lines (v encoder vp buffer count model tint)
-  (objc:send encoder "setRenderPipelineState:" (scene::%line-pipeline v))
-  (objc:send encoder "setVertexBuffer:offset:atIndex:" buffer 0 0)
+  (objc:invoke encoder "setRenderPipelineState:" (scene::%line-pipeline v))
+  (objc:invoke encoder "setVertexBuffer:offset:atIndex:" buffer 0 0)
   (metal:uniform encoder 1 vp)
   (metal:uniform encoder 2 model)
   (metal:uniform encoder 1 tint :stage :fragment)
-  (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+line+ 0
-             count))
+  (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+line+ 0
+               count))
 
 ;; One triad: three draws of two vertices out of the unit axes buffer, under the
 ;; model matrix the caller chose.
 (defun scene::%draw-axes (v encoder vp model)
-  (objc:send encoder "setRenderPipelineState:" (scene::%line-pipeline v))
-  (objc:send encoder "setVertexBuffer:offset:atIndex:" (scene::%axes-buffer v) 0
-             0)
+  (objc:invoke encoder "setRenderPipelineState:" (scene::%line-pipeline v))
+  (objc:invoke encoder "setVertexBuffer:offset:atIndex:" (scene::%axes-buffer v)
+               0 0)
   (metal:uniform encoder 1 vp)
   (metal:uniform encoder 2 model)
   (dolist (row
@@ -693,8 +686,8 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
                  (list 2 (geom:vec3 0.30 1.0 0.40))
                  (list 4 (geom:vec3 0.38 0.55 1.0))))
     (metal:uniform encoder 1 (scene::%float4 (second row) 1.0) :stage :fragment)
-    (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+line+
-               (first row) 2)))
+    (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+line+
+                 (first row) 2)))
 
 (defun scene::%render (v encoder)
   (when (scene::%frame-hook v) (funcall (scene::%frame-hook v)))
@@ -702,7 +695,7 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
   (let ((vp (linalg:transpose (scene::%view-projection v)))
         (eye (scene::%float4 (scene::%eye v) 0.0))
         (mode (scene::%axes-mode v)))
-    (objc:send encoder "setDepthStencilState:" (scene::%depth v))
+    (objc:invoke encoder "setDepthStencilState:" (scene::%depth v))
     ;; geom winds a facet counter-clockwise seen from OUTSIDE in a right-handed
     ;; world, and Metal decides facing in CLIP space (y up), not in the y-down
     ;; framebuffer -- so an outward face arrives counter-clockwise and that is
@@ -711,9 +704,9 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
     ;; geom's volume integral rests on: a facet wound the wrong way is invisible
     ;; here and subtracts there. Cull mode is a triangle rule, so the line
     ;; pipelines below are unaffected.
-    (objc:send encoder "setFrontFacingWinding:"
-               metal:+winding-counter-clockwise+)
-    (objc:send encoder "setCullMode:" metal:+cull-back+)
+    (objc:invoke encoder "setFrontFacingWinding:"
+                 metal:+winding-counter-clockwise+)
+    (objc:invoke encoder "setCullMode:" metal:+cull-back+)
     ;; the ground grid, in world coordinates
     (when (> (scene::%grid-points v) 0)
       (scene::%draw-lines v encoder vp (scene::%grid-buffer v)
@@ -727,16 +720,17 @@ fragment float4 line_fragment(constant float4 &tint [[buffer(1)]]) {
       (let ((bufs (scene::%gpu-buffers v s)) (model (scene::%model-matrix s)))
         (when (or (eq (scene::%shading v) :solid)
                   (eq (scene::%shading v) :both))
-          (objc:send encoder "setRenderPipelineState:"
-                     (scene::%solid-pipeline v))
-          (objc:send encoder "setVertexBuffer:offset:atIndex:" (first bufs) 0 0)
+          (objc:invoke encoder "setRenderPipelineState:"
+                       (scene::%solid-pipeline v))
+          (objc:invoke encoder "setVertexBuffer:offset:atIndex:" (first bufs) 0
+                       0)
           (metal:uniform encoder 1 vp)
           (metal:uniform encoder 2 model)
           (metal:uniform encoder 0 eye :stage :fragment)
           (metal:uniform encoder 1 (scene::%float4 (geom:color-of s) 1.0)
                          :stage :fragment)
-          (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-                     metal:+triangle+ 0 (second bufs)))
+          (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                       metal:+triangle+ 0 (second bufs)))
         (when (or (eq (scene::%shading v) :wireframe)
                   (eq (scene::%shading v) :both))
           (scene::%draw-lines v encoder vp (third bufs) (fourth bufs) model

@@ -3,7 +3,7 @@
 ;;;; The AppKit twin of examples/browser/webgl-triangle: one colored triangle,
 ;;;; and nothing more than it takes to draw one. The browser version reaches a
 ;;;; WebGL context through ten imported host functions; this one reaches Metal
-;;;; through `objc:send`, because Metal is an Objective-C API and the `objc`
+;;;; through `objc:invoke`, because Metal is an Objective-C API and the `objc`
 ;;;; package is a generic binding to Objective-C -- no host, no shim, no
 ;;;; dependency.
 ;;;;
@@ -24,8 +24,9 @@
 ;;; --- the shaders --------------------------------------------------------------
 ;;; Metal Shading Language, compiled by the Metal compiler inside this process
 ;;; when metal:library runs. A syntax error here is an ordinary Lisp condition
-;;; carrying the compiler's message: the :error out-parameter of
-;;; newLibraryWithSource:options:error: is what makes that possible.
+;;; carrying the compiler's message: an objc:ns-error, which
+;;; objc:invoke-with-error makes out of the NSError that
+;;; newLibraryWithSource:options:error: writes.
 
 (defvar *shaders*
   "
@@ -64,7 +65,7 @@ fragment float4 fragment_main(VertexOut in [[stage_in]]) {
                   "fragment_main"))
 
 (format t "device: ~a~%"
-        (objc:send (objc:send (metal:device *metal*) "name") "UTF8String"))
+        (objc:invoke-into 'string (metal:device *metal*) "name"))
 
 ;;; --- one frame ----------------------------------------------------------------
 ;;; Nothing changes between frames, so a single frame is the whole program: the
@@ -72,8 +73,8 @@ fragment float4 fragment_main(VertexOut in [[stage_in]]) {
 
 (metal:frame *metal*
              (lambda (encoder)
-               (objc:send encoder "setRenderPipelineState:" *pipeline*)
-               (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-                          metal:+triangle+ 0 3)))
+               (objc:invoke encoder "setRenderPipelineState:" *pipeline*)
+               (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                            metal:+triangle+ 0 3)))
 
 (appkit:wait *window*)

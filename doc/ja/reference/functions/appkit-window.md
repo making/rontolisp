@@ -9,5 +9,5 @@ CL-USER> (defvar *win* (appkit:window "hello" :width 420 :height 200))
 CL-USER> (appkit:visible-p *win*)
 T
 CL-USER> (appkit:window "night" :background (appkit:color 26 29 38) :dark t)
-#<objc NSWindow>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDAE11E00>
 ```

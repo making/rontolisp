@@ -9,5 +9,5 @@ CL-USER> (defvar *tile*
     (appkit:panel *win* :x 20 :y 20 :width 34 :height 34
                   :fill (appkit:color 104 116 146) :radius 7))
 CL-USER> (appkit:set-color *tile* (appkit:color 230 233 241))
-#<objc _NSTaggedPointerColor>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #xBFB816536A239467>
 ```

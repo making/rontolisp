@@ -200,26 +200,13 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 	}
 
 	/**
-	 * The foreign-call shape of this encoding.
+	 * The foreign-call shape of this encoding. A variadic call's variadic arguments are
+	 * part of the encoding the caller spells ({@code objc.lisp} appends them), so this is
+	 * the whole shape; the linker option saying where they start is the caller's.
 	 * @return the descriptor a downcall or upcall stub needs
 	 */
 	public FunctionDescriptor descriptor() {
-		return descriptor(List.of());
-	}
-
-	/**
-	 * The foreign-call shape of this encoding with a variadic argument list appended --
-	 * what a {@linkplain VariadicSelectors variadic selector} is really called through,
-	 * since the encoding describes only the fixed half.
-	 * @param tail the layouts of the variadic arguments, in order
-	 * @return the descriptor, whose first variadic argument is at
-	 * {@link #argumentTypes()}{@code .size()}
-	 */
-	public FunctionDescriptor descriptor(List<MemoryLayout> tail) {
-		List<MemoryLayout> args = new ArrayList<>(this.argumentTypes.size() + tail.size());
-		this.argumentTypes.forEach(type -> args.add(type.argumentLayout()));
-		args.addAll(tail);
-		MemoryLayout[] all = args.toArray(MemoryLayout[]::new);
+		MemoryLayout[] all = this.argumentTypes.stream().map(Type::argumentLayout).toArray(MemoryLayout[]::new);
 		MemoryLayout ret = this.returnType.layout();
 		return ret == null ? FunctionDescriptor.ofVoid(all) : FunctionDescriptor.of(ret, all);
 	}

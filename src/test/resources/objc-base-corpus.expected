@@ -30,6 +30,8 @@ vector result: (T NIL)
 variadic list form: "The integer 42"
 variadic known selector: "x and 42 and 1.5"
 nil-terminated: 3
+nil-terminated, one element: 1
+format, no argument: "plain"
 can-invoke-p: T
 can-invoke-p class: T
 can-invoke-p missing: NIL
@@ -96,4 +98,31 @@ set-ns-rect*: #(1 2 3 4)
 set-ns-range*: (6 . 5)
 a filled rect is an argument: #(9.0 8.0 7.0 6.0)
 ns-not-found: 9223372036854775807
+same object: (T T T T)
+other object: (NIL NIL NIL NIL)
+classes: (T NIL)
+sequence functions: (T 1 2 T T)
+eq table: (2 :SECOND :OTHER)
+eql table: (2 :SECOND :OTHER)
+equal table: (2 :SECOND :OTHER)
+equalp table: (2 :SECOND :OTHER)
+a method specializer: (:POINTER :POINTER :OTHER)
+subtypep: (NIL T)
+class-of: (OBJC-OBJECT-POINTER T)
+computed typep: NIL
+objectp: (T T NIL NIL)
+data of a string: #(104 101 121)
+data of octets: #(1 2 255)
+data of single floats: #(0 0 128 63 0 0 32 192 0 0 0 0 0 0 64 64)
+data of double floats: #(0 0 0 0 0 0 240 63)
+data of (unsigned-byte 16): #(1 0 255 255)
+data of (unsigned-byte 32): #(120 86 52 18)
+an empty data: #()
+data is an NSMutableData: T
+data length: 3
+bytes of any NSData: #(120 121 122)
+data refuses a list: "objc:data expects a packed float array, a packed (unsigned-byte 8|16|32) vector or a string, got (1 2 3)"
+bytes refuses a number: "objc:bytes expects an Objective-C object, got 42"
 on-main: 11
+on-main propagates an error: "inside"
+on-main nested: :NESTED

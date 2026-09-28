@@ -785,7 +785,7 @@ public final class ClosRegistry {
 	 */
 	public static final List<String> BUILTIN_CLASS_NAMES = List.of("T", "NULL", "BOOLEAN", "INTEGER", "RATIO", "FLOAT",
 			"COMPLEX", "STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS", "ARRAY", "VECTOR",
-			"BIT-VECTOR", "QUANTIZED-MATRIX", LispNames.OBJC_OBJECT_TYPE);
+			"BIT-VECTOR", "QUANTIZED-MATRIX");
 
 	/**
 	 * Names {@code find-class} resolves to a memoized slot-less metaobject but that are

@@ -149,7 +149,7 @@
                 t))
 
 (format t "life window ~a is open; close it to stop the simulation~%"
-        (objc:send *win* "windowNumber"))
+        (objc:invoke *win* "windowNumber"))
 
 ;; A script's process ends when its last form returns, so wait for the close.
 (appkit:wait *win*)

@@ -17,7 +17,8 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.eval.AppKitLibrary;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -199,10 +200,11 @@ class JvmSizedMainTest {
 		// A program that reaches objc: -- raw, or through the spliced appkit layer --
 		// runs on the worker like any other, and its main first asks the program's own
 		// MainThread whether thread 0 must be handed to the run loop (.kb/objc.md).
-		for (List<LispVal> program : List.of(LispReader.readAllFromString("(print (objc:class \"NSObject\"))"),
-				AppKitLibrary.process(LispReader.readAllFromString("""
-						(appkit:wait (appkit:window "t" :width 10 :height 10))
-						""")))) {
+		for (List<LispVal> program : List.of(
+				CompileFrontendAccess.corpus("(print (objc:coerce-to-objc-class \"NSObject\"))", Features.JVM, false,
+						false),
+				CompileFrontendAccess.corpus("(appkit:wait (appkit:window \"t\" :width 10 :height 10))", Features.JVM,
+						false, false))) {
 			byte[] bytes = new JvmLispCompiler("SizedObjc").compile(program);
 			ClassModel model = ClassFile.of().parse(bytes);
 			assertThat(methodNames(model)).contains("main", JvmSizedMainBuilder.BODY_METHOD,
@@ -252,7 +254,7 @@ class JvmSizedMainTest {
 
 	private Result runAppKitInChildJvm(String appkitCode, String className, String... jvmOptionsThenArgs)
 			throws Exception {
-		return runInChildJvm(AppKitLibrary.process(LispReader.readAllFromString(appkitCode)), className,
+		return runInChildJvm(CompileFrontendAccess.corpus(appkitCode, Features.JVM, false, false), className,
 				jvmOptionsThenArgs);
 	}
 

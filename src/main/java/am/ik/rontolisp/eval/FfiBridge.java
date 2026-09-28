@@ -28,7 +28,7 @@ import org.jspecify.annotations.Nullable;
  * The thin layer between {@link FfiInterop} and {@code am.ik.ffi}: the {@code ffi:}
  * function bodies, the marshalling of a Lisp value to the binding's Java-typed protocol
  * and back, and the ONE reference to the library that the Web Image substitution has to
- * be able to cut. Reached only through {@link FfiInterop} -- the {@code ObjcBridge}
+ * be able to cut. Reached only through {@link FfiInterop} -- the {@code ObjcPrimitives}
  * shape, minus the main-thread hop: C has no thread-0 rule, so every verb runs on the
  * caller's thread.
  *

@@ -8,7 +8,7 @@
 CL-USER> (defvar *item*
     (appkit:status-item "λ" :dock nil
                         :menu (appkit:menu (list (list "Quit" #'appkit:quit "q")))))
-#<objc NSStatusItem>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDECEDC00>
 CL-USER> (appkit:set-text *item* "λ 42")
 "λ 42"
 ```

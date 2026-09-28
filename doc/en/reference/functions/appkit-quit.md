@@ -6,5 +6,5 @@ Ends the application, the way Cmd-Q does. It is the way out of a program whose w
 
 ```console
 CL-USER> (appkit:menu (list (list "Quit" #'appkit:quit "q")))
-#<objc NSMenu>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDAF1C9C0>
 ```

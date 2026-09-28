@@ -2,17 +2,15 @@
 
 `(objc:objectp value)`
 
-Whether the value is an Objective-C object reference (an object or a class). Works on every machine. Part of the macOS-only `objc` package -- the interpreter (`java -jar`, or the `rontolisp` native binary) and a compiled `.class` / `.jar`, never a `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
-
-The type of such a reference is `objc:object` wherever the package runs: `type-of` answers it, and `typep`, `typecase` and a `defmethod` specializer accept it. It is no `structure-object`.
+Whether the value is an `objc:objc-object-pointer` -- an object or a class (`objc:objc-class` is a subtype). A selector, a string, and an `objc:standard-objc-object` (whose pointer `objc:objc-object-pointer` answers) are not. It touches no runtime, so it works on every machine. Not in LispWorks' interface. Part of the macOS-only `objc` package -- the interpreter (`java -jar`, or the `rontolisp` native binary), a compiled `.class` / `.jar` and a `--native` executable for macOS on Apple silicon, never a `.wasm`. See the [macOS GUI guide](../../guides/objc-appkit.md).
 
 ```console
-CL-USER> (objc:objectp (objc:string "x"))
+CL-USER> (objc:objectp (objc:string-to-ns-string "x"))
 T
+CL-USER> (objc:objectp (objc:coerce-to-objc-class "NSString"))
+T
+CL-USER> (objc:objectp (objc:coerce-to-selector "length"))
+NIL
 CL-USER> (objc:objectp "x")
 NIL
-CL-USER> (type-of (objc:string "x"))
-OBJC:OBJECT
-CL-USER> (typep (objc:string "x") 'objc:object)
-T
 ```

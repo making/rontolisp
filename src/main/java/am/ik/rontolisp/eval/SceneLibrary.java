@@ -51,6 +51,8 @@ public final class SceneLibrary {
 
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> expandedForms;
+
 	private SceneLibrary() {
 	}
 
@@ -68,6 +70,26 @@ public final class SceneLibrary {
 				if (cached == null) {
 					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
 					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
+	 * Returns the library definitions with the {@code objc} defining macros expanded --
+	 * what the compile path splices ({@link ObjcLibrary#expandDefinitions}). Expanded
+	 * once and cached.
+	 * @return the expanded forms
+	 */
+	public static List<LispVal> expandedForms() {
+		List<LispVal> cached = expandedForms;
+		if (cached == null) {
+			synchronized (SceneLibrary.class) {
+				cached = expandedForms;
+				if (cached == null) {
+					cached = ObjcLibrary.expandDefinitions(forms());
+					expandedForms = cached;
 				}
 			}
 		}
@@ -114,7 +136,7 @@ public final class SceneLibrary {
 		if (!walker.found) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		List<LispVal> out = new ArrayList<>(expandedForms());
 		out.addAll(program);
 		return out;
 	}

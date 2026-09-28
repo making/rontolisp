@@ -668,10 +668,6 @@ final class JvmExprCompiler {
 				JvmObjcPrimitivesCompiler.compile(sym.name(), cons, ctx, className);
 				return;
 			}
-			if (qn != null && LispNames.OBJC_PKG.equals(qn.pkg()) && JvmObjcInteropCompiler.handles(qn.member())) {
-				JvmObjcInteropCompiler.compile(qn.member(), cons, ctx, className);
-				return;
-			}
 			if (qn != null && LispNames.FFI_PKG.equals(qn.pkg()) && JvmFfiInteropCompiler.handles(qn.member())) {
 				JvmFfiInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
@@ -1360,11 +1356,10 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
 			case LispNames.SCALE_FLOAT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
-			case LispNames.CLASS_OF -> JvmExprCompiler.compileExpr(
-					LispMacroExpander.expandClassOf(cons, ctx.usesHashTables, ctx.objcOps != null), ctx, className);
-			case LispNames.CLASS_DESIGNATOR_INTERNAL -> JvmExprCompiler.compileExpr(
-					LispMacroExpander.expandClassDesignator(cons, ctx.usesHashTables, ctx.objcOps != null), ctx,
-					className);
+			case LispNames.CLASS_OF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.usesHashTables), ctx, className);
+			case LispNames.CLASS_DESIGNATOR_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandClassDesignator(cons, ctx.usesHashTables), ctx, className);
 			case LispNames.CLASS_SLOT_DEFS_INTERNAL -> JvmExprCompiler
 				.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
 			case LispNames.SLOT_BOUNDP ->

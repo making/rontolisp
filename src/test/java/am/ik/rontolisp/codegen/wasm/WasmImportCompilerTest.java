@@ -136,7 +136,8 @@ class WasmImportCompilerTest {
 
 	@Test
 	void parsesS64AndExternAndKeepsExternAnImportOnlyType() {
-		// :s64 crosses the whole i64 (a 64-bit host address, objc-native.lisp); :extern
+		// :s64 crosses the whole i64 (a 64-bit host address,
+		// objc-native-primitives.lisp); :extern
 		// is an opaque host reference boxed in a one-field struct, which only an IMPORT
 		// can hand the module.
 		WasmImportCompiler.Decl decl = parse("(rontolisp:wasm-import 'own :params '(:s64) :returns :extern)");

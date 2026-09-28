@@ -19,10 +19,8 @@ import am.ik.jvm.Opcode;
 /**
  * Builds the {@code objc:} runtime for the generated {@code .class}: the
  * {@link JvmGpuRuntimeBuilder} mechanism -- a CLOSURE of shipped classes rather than one
- * flat template -- over {@code am.ik.objc}, plus the classes the call sites add:
- * {@link JvmObjcTemplate} (the old verbs' bridge), {@link JvmObjcHandle} (their value)
- * and {@link JvmObjcPrimitivesTemplate} (the new base's primitive layer, which
- * {@code objc.lisp} compiled into the program calls).
+ * flat template -- over {@code am.ik.objc}, plus {@link JvmObjcPrimitivesTemplate} (the
+ * primitive layer, which {@code objc.lisp} compiled into the program calls).
  *
  * <p>
  * Why the whole library travels: the parts of the binding that were expensive to get
@@ -30,16 +28,16 @@ import am.ik.jvm.Opcode;
  * to thread 0 with its re-entrancy rule, the closed set of upcall shapes bound from
  * CONSTANT {@code findStatic}s, the run-loop pump -- are exactly the parts a hand-kept
  * copy would fork. So every class file of {@code am.ik.objc} is renamed by one prefix
- * rule ({@code am/ik/objc/} -> {@code <Program>}{@value #OBJC_SUFFIX}), the bridge and
- * the handle are renamed the same way, and the compiled backend runs the very bytes the
+ * rule ({@code am/ik/objc/} -> {@code <Program>}{@value #OBJC_SUFFIX}), the primitive
+ * layer is renamed the same way, and the compiled backend runs the very bytes the
  * interpreter runs. The renamed files are shipped BESIDE the program
  * ({@link ObjcRuntime#classFiles()}, joined into
  * {@link JvmLispCompiler#runtimeClassFiles()}) -- never defined at run time, which a
  * GraalVM native image refuses ({@code .kb/template-class-embedding.md}) -- and named
  * after it, because {@code bind} keeps that program's {@code _apply}. The classes make
- * UPCALLS into the compiled program: a method of {@code objc:define-class} runs on thread
- * 0 through {@code _apply}, handed over by {@code bind(Class)} like the {@code java:}
- * bridge's.
+ * UPCALLS into the compiled program: a method {@code objc:define-objc-method} defined, a
+ * block's function and an {@code objc:on-main} body run through {@code _apply}, handed
+ * over by {@code bind(Class)} like the {@code java:} bridge's.
  *
  * <p>
  * The emitted {@code private static void _objcInit()} binds the callback on first use
@@ -55,31 +53,13 @@ final class JvmObjcRuntimeBuilder {
 	static final String OBJC_SUFFIX = "$Objc";
 
 	/**
-	 * Appended to the generated program's internal name to name the bridge
-	 * ({@link JvmObjcTemplate}).
-	 */
-	static final String BRIDGE_SUFFIX = "$ObjcBridge";
-
-	/**
-	 * Appended to the generated program's internal name to name the value class
-	 * ({@link JvmObjcHandle}).
-	 */
-	static final String HANDLE_SUFFIX = "$ObjcObject";
-
-	/**
-	 * Appended to the generated program's internal name to name the new base's primitive
-	 * layer ({@link JvmObjcPrimitivesTemplate}).
+	 * Appended to the generated program's internal name to name the primitive layer
+	 * ({@link JvmObjcPrimitivesTemplate}).
 	 */
 	static final String PRIMITIVES_SUFFIX = "$ObjcPrimitives";
 
-	/** The bridge's internal (constant-pool) class name before renaming. */
-	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcTemplate";
-
 	/** The primitive layer's internal (constant-pool) class name before renaming. */
 	private static final String PRIMITIVES_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcPrimitivesTemplate";
-
-	/** The handle's internal (constant-pool) class name before renaming. */
-	private static final String HANDLE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcHandle";
 
 	/** The package prefix of the embedded library, before renaming. */
 	private static final String OBJC_INTERNAL_PREFIX = "am/ik/objc/";
@@ -87,8 +67,8 @@ final class JvmObjcRuntimeBuilder {
 	/**
 	 * Every class file of {@code am.ik.objc}, nested and anonymous classes included --
 	 * there is no way to enumerate a package from the classpath (let alone from inside a
-	 * native image), so the list is written down and {@code JvmObjcInteropCompilerTest}
-	 * pins it against what the build actually produced. {@code package-info} carries only
+	 * native image), so the list is written down and {@code JvmObjcBaseCompilerTest} pins
+	 * it against what the build actually produced. {@code package-info} carries only
 	 * annotations and is left behind.
 	 *
 	 * <p>
@@ -98,12 +78,10 @@ final class JvmObjcRuntimeBuilder {
 	 * first. Shipped as files, every class is on disk before any of them loads.
 	 */
 	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "ObjcRaised", "ObjcCatch",
-			"ObjcCatch$Asm", "ObjcCatch$Bytes", "MainThread", "MainThread$Slot", "ObjcClasses", "ObjcClasses$Bound",
-			"ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec", "VariadicSelectors", "ObjcBlocks",
-			"ObjcBlocks$Body", "ObjcBlocks$Entry", "ObjcMethods", "ObjcMethods$Body", "ObjcMethods$Target",
-			"ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent", "ObjcRuntime$Signature",
-			"ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind", "TypeEncoding$Parser",
-			"TypeEncoding$Type");
+			"ObjcCatch$Asm", "ObjcCatch$Bytes", "MainThread", "MainThread$Slot", "ObjcBlocks", "ObjcBlocks$Body",
+			"ObjcBlocks$Entry", "ObjcMethods", "ObjcMethods$Body", "ObjcMethods$Target", "ObjcRuntime", "ObjcRuntime$1",
+			"ObjcRuntime$Signature", "ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind",
+			"TypeEncoding$Parser", "TypeEncoding$Type");
 
 	/**
 	 * The directory a program's copy of the {@code objc:} foreign registration travels in
@@ -114,33 +92,29 @@ final class JvmObjcRuntimeBuilder {
 	/**
 	 * rontolisp's own {@code objc:} foreign registration, which its binary reads and a
 	 * compiled program carries verbatim: the runtime's C downcalls, the closed
-	 * {@code objc_msgSend} table and the IMP upcalls.
+	 * {@code objc_msgSend} table and the method and block upcalls.
 	 */
 	private static final String NATIVE_IMAGE_FOREIGN_RESOURCE = "META-INF/native-image/am.ik.rontolisp/"
 			+ NATIVE_IMAGE_FOREIGN + "/reachability-metadata.json";
 
 	/**
-	 * The directory a program's registration of the bridge's reflective lookups travels
-	 * in -- the one file written per program rather than copied.
+	 * The directory a program's registration of the primitive layer's reflective lookups
+	 * travels in -- the one file written per program rather than copied.
 	 */
 	private static final String NATIVE_IMAGE_BRIDGE = "rontolisp-objc-bridge";
 
 	/** The emitted init helper method name. */
 	static final String INIT_METHOD = "_objcInit";
 
-	/** The {@code ops} key of the print hook's method reference. */
-	static final String PRINT = "print";
-
 	private JvmObjcRuntimeBuilder() {
 	}
 
 	/**
 	 * The ready-to-emit {@code _objcInit} method, its guard field, and the constant-pool
-	 * references the {@code objc:} call-site compiler needs ({@code ops} keys:
-	 * {@code init}, {@code class}, {@code send}, {@code define-class}, {@code string},
-	 * {@code data}, {@code bytes}, {@code address}, {@code objectp}, {@value #PRINT}).
-	 * The class files that travel beside the program, and their native-image
-	 * registration, are keyed by their paths within an output tree.
+	 * references the primitive call-site compiler needs ({@code ops} keys: {@code init},
+	 * and each primitive's qualified name). The class files that travel beside the
+	 * program, and their native-image registration, are keyed by their paths within an
+	 * output tree.
 	 */
 	record ObjcRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, FieldrefConstant initedField,
@@ -148,25 +122,7 @@ final class JvmObjcRuntimeBuilder {
 	}
 
 	/**
-	 * The internal name of a program's bridge class.
-	 * @param programInternalName the generated class's internal (slash-separated) name
-	 * @return the bridge's internal name, in the program's own package
-	 */
-	static String bridgeName(String programInternalName) {
-		return programInternalName + BRIDGE_SUFFIX;
-	}
-
-	/**
-	 * The internal name of a program's value class.
-	 * @param programInternalName the generated class's internal (slash-separated) name
-	 * @return the handle's internal name, in the program's own package
-	 */
-	static String handleName(String programInternalName) {
-		return programInternalName + HANDLE_SUFFIX;
-	}
-
-	/**
-	 * The internal name of a program's copy of the new base's primitive layer.
+	 * The internal name of a program's copy of the primitive layer.
 	 * @param programInternalName the generated class's internal (slash-separated) name
 	 * @return its internal name, in the program's own package
 	 */
@@ -212,7 +168,7 @@ final class JvmObjcRuntimeBuilder {
 	}
 
 	/**
-	 * The registration of the two program methods {@link JvmObjcTemplate}'s
+	 * The registration of the two program methods {@link JvmObjcPrimitivesTemplate}'s
 	 * {@code bind(Class)} finds by name: {@code _apply}, which every callback runs
 	 * through, and {@code _strv}, which renders every string the program built. In an
 	 * image without it the lookup of {@code _apply} fails ({@code objc: no _apply
@@ -238,7 +194,7 @@ final class JvmObjcRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the {@code _objcInit} method body, registers the bridge references and
+	 * Builds the {@code _objcInit} method body, registers the primitive references and
 	 * renames the class files that travel beside the program.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
@@ -247,21 +203,15 @@ final class JvmObjcRuntimeBuilder {
 	 * @return the runtime pieces
 	 */
 	static ObjcRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
-		String bridgeName = bridgeName(programInternalName);
-		String handleName = handleName(programInternalName);
 		String primitivesName = primitivesName(programInternalName);
 		String objcPrefix = objcPrefix(programInternalName);
 		Map<String, byte[]> classFiles = new LinkedHashMap<>();
 		for (String name : OBJC_CLASSES) {
-			classFiles.put(objcPrefix + name + ".class", rename(loadResource(OBJC_INTERNAL_PREFIX + name + ".class"),
-					bridgeName, handleName, primitivesName, objcPrefix));
+			classFiles.put(objcPrefix + name + ".class",
+					rename(loadResource(OBJC_INTERNAL_PREFIX + name + ".class"), primitivesName, objcPrefix));
 		}
-		classFiles.put(handleName + ".class", rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName,
-				handleName, primitivesName, objcPrefix));
-		classFiles.put(bridgeName + ".class", rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName,
-				handleName, primitivesName, objcPrefix));
-		classFiles.put(primitivesName + ".class", rename(loadResource(PRIMITIVES_INTERNAL_NAME + ".class"), bridgeName,
-				handleName, primitivesName, objcPrefix));
+		classFiles.put(primitivesName + ".class",
+				rename(loadResource(PRIMITIVES_INTERNAL_NAME + ".class"), primitivesName, objcPrefix));
 		// What an image built from the output needs to serve the classes above: the
 		// foreign shapes they bind, and the two program methods bind(Class) finds by
 		// name. Without them the image refuses every send and runs no callback.
@@ -274,33 +224,11 @@ final class JvmObjcRuntimeBuilder {
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
 		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		MethodrefConstant bind = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
-		String oneArgDesc = "(Ljava/lang/Object;)Ljava/lang/Object;";
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
 		Utf8Constant initDesc = cp.addUtf8("()V");
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
-		ops.put("class",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcClass"), cp.addUtf8(oneArgDesc))));
-		ops.put("send", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcSend"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put("define-class", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcDefineClass"), cp
-			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put("string",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcString"), cp.addUtf8(oneArgDesc))));
-		ops.put("data",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcData"), cp.addUtf8(oneArgDesc))));
-		ops.put("bytes",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcBytes"), cp.addUtf8(oneArgDesc))));
-		ops.put("address",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcAddress"), cp.addUtf8(oneArgDesc))));
-		ops.put("objectp",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcObjectp"), cp.addUtf8(oneArgDesc))));
-		ops.put(PRINT, cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("objcPrint"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))));
-		// The new base's primitive layer, keyed by the qualified Lisp name it compiles.
+		// The primitive layer, keyed by the qualified Lisp name it compiles.
 		ClassConstant primitivesClass = cp.addClass(cp.addUtf8(primitivesName));
 		MethodrefConstant bindPrimitives = cp.addMethodref(primitivesClass,
 				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
@@ -320,12 +248,8 @@ final class JvmObjcRuntimeBuilder {
 		int guardPos = code.size();
 		code.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(code, 0);
-		// <Program>$ObjcBridge.bind(<Program>.class) -- the bridge loads from the
-		// program's own class loader like any other class beside it.
-		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, bind.index());
-		// <Program>$ObjcPrimitives.bind(<Program>.class)
+		// <Program>$ObjcPrimitives.bind(<Program>.class) -- it loads from the program's
+		// own class loader like any other class beside it.
 		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
 		code.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(code, bindPrimitives.index());
@@ -342,17 +266,13 @@ final class JvmObjcRuntimeBuilder {
 
 	/**
 	 * Renames one class file out of its own package and out of {@code am.ik.objc}, after
-	 * the generated program. All three renames run over every file: the bridge names the
-	 * handle and the library, the library names itself, and a name that is not in a given
-	 * file simply does not match. The library's rename is a PREFIX rule, so a nested
-	 * class ({@code am/ik/objc/ObjcClasses$Spec}) follows its outer one without being
-	 * listed.
+	 * the generated program. Both renames run over every file: the primitive layer names
+	 * the library, the library names itself, and a name that is not in a given file
+	 * simply does not match. The library's rename is a PREFIX rule, so a nested class
+	 * ({@code am/ik/objc/ObjcMethods$Body}) follows its outer one without being listed.
 	 */
-	private static byte[] rename(byte[] classFile, String bridgeName, String handleName, String primitivesName,
-			String objcPrefix) {
-		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, TEMPLATE_INTERNAL_NAME, bridgeName);
-		renamed = JvmJavaRuntimeBuilder.renameClass(renamed, HANDLE_INTERNAL_NAME, handleName);
-		renamed = JvmJavaRuntimeBuilder.renameClass(renamed, PRIMITIVES_INTERNAL_NAME, primitivesName);
+	private static byte[] rename(byte[] classFile, String primitivesName, String objcPrefix) {
+		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, PRIMITIVES_INTERNAL_NAME, primitivesName);
 		return JvmJavaRuntimeBuilder.renameClass(renamed, OBJC_INTERNAL_PREFIX, objcPrefix);
 	}
 

@@ -27,14 +27,14 @@ import org.jspecify.annotations.Nullable;
  * {@code AppKit.framework} (which pulls Foundation in) through
  * {@link SymbolLookup#libraryLookup}, with no JNI, no bundled artifact and no dependency
  * -- the same shape as {@code am.ik.gpu.MetalDriver}, generalized from a hand-written
- * table of selector shapes to a {@linkplain #send generic send} whose shape is read back
- * from the runtime.
+ * table of selector shapes to a {@linkplain #sendRaw raw send} whose shape the caller
+ * hands over as the method's type encoding.
  *
  * <h2>One {@code objc_msgSend} handle per shape, derived from the encoding</h2>
  *
  * Apple's arm64 rule is that {@code objc_msgSend} must be called through a prototype
- * matching the selector, never as the variadic it is declared as. {@link #send} asks the
- * runtime for the selector's type encoding ({@link TypeEncoding}), turns it into a
+ * matching the selector, never as the variadic it is declared as. {@link #sendRaw} parses
+ * the encoding it is given ({@link TypeEncoding}), turns it into a
  * {@link FunctionDescriptor}, and binds -- once per distinct shape -- a downcall handle
  * for it. A native image builds a downcall stub only for a shape registered at build time
  * and refuses any other, so the registered set is a CLOSED table
@@ -44,15 +44,16 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The encoding is complete for every method except a VARIADIC one, which it spells
- * exactly like its fixed-arity twin. Those are a known set of names
- * ({@link VariadicSelectors}) and {@link #send} calls them through a variadic shape
- * instead.
+ * exactly like its fixed-arity twin. The caller says where the variadic arguments start
+ * ({@code objc.lisp}'s table of such selectors, or a list-form method's
+ * {@code :variadic-num-of-fixed}), and the call is bound with
+ * {@link Linker.Option#firstVariadicArg}.
  *
  * <h2>Threads</h2>
  *
  * This class is a plain binding and runs on whichever thread calls it. AppKit demands
- * thread 0, and the policy that every send hops there lives in the caller
- * ({@link MainThread}); a {@link #retain} or a {@link #release} is safe anywhere.
+ * thread 0, and {@link #sendRawOnMain} hops there ({@link MainThread}); a {@link #retain}
+ * or a {@link #release} is safe anywhere.
  *
  * <h2>Absent is not broken</h2>
  *
@@ -62,7 +63,7 @@ import org.jspecify.annotations.Nullable;
  * to tell.
  *
  * @see TypeEncoding
- * @see ObjcClasses
+ * @see ObjcMethods
  * @see MainThread
  */
 public final class ObjcRuntime {
@@ -109,11 +110,7 @@ public final class ObjcRuntime {
 
 	private final MethodHandle objcGetProtocol;
 
-	private final MethodHandle protocolGetMethodDescription;
-
 	private final MethodHandle objcAllocateClassPair;
-
-	private final MethodHandle classAddMethod;
 
 	private final MethodHandle classAddProtocol;
 
@@ -198,11 +195,7 @@ public final class ObjcRuntime {
 		this.objcRetain = handle(objc, "objc_retain", FunctionDescriptor.of(P, P));
 		this.objcRelease = handle(objc, "objc_release", FunctionDescriptor.ofVoid(P));
 		this.objcGetProtocol = handle(objc, "objc_getProtocol", FunctionDescriptor.of(P, P));
-		// struct objc_method_description { SEL name; const char *types; }, by value.
-		this.protocolGetMethodDescription = handle(objc, "protocol_getMethodDescription",
-				FunctionDescriptor.of(MemoryLayout.structLayout(P, P), P, P, B, B));
 		this.objcAllocateClassPair = handle(objc, "objc_allocateClassPair", FunctionDescriptor.of(P, P, P, L));
-		this.classAddMethod = handle(objc, "class_addMethod", FunctionDescriptor.of(B, P, P, P, P));
 		this.classAddProtocol = handle(objc, "class_addProtocol", FunctionDescriptor.of(B, P, P));
 		this.objcRegisterClassPair = handle(objc, "objc_registerClassPair", FunctionDescriptor.ofVoid(P));
 		this.classAddIvar = handle(objc, "class_addIvar", FunctionDescriptor.of(B, P, P, L, ValueLayout.JAVA_BYTE, P));
@@ -508,87 +501,8 @@ public final class ObjcRuntime {
 		}
 	}
 
-	/**
-	 * The name of an object's class -- what a printer shows.
-	 * @param object the receiver
-	 * @return the class name
-	 */
-	public String className(MemorySegment object) {
-		try {
-			MemorySegment name = (MemorySegment) this.classGetName.invokeExact(classOf(object));
-			return cString(name);
-		}
-		catch (Throwable ex) {
-			throw new ObjcException("class_getName failed", ex);
-		}
-	}
-
 	private static String cString(MemorySegment chars) {
 		return chars.address() == 0 ? "" : chars.reinterpret(Long.MAX_VALUE).getString(0);
-	}
-
-	// --- encodings ------------------------------------------------------------------
-
-	/**
-	 * The type encoding of the method a receiver runs for a selector -- an instance
-	 * method of its class, which for a class receiver means a class method.
-	 * @param receiver the object or class
-	 * @param selector the selector name
-	 * @return the encoding
-	 * @throws ObjcException when the receiver does not respond to the selector
-	 */
-	public TypeEncoding encoding(MemorySegment receiver, String selector) {
-		String raw = rawEncoding(classOf(receiver), selector);
-		if (raw == null) {
-			throw new ObjcException(className(receiver) + " does not respond to " + selector);
-		}
-		return TypeEncoding.parse(raw);
-	}
-
-	/**
-	 * The raw type encoding of a class's instance method, or {@code null}.
-	 * @param cls the class
-	 * @param selector the selector name
-	 * @return the encoding string or {@code null} when the class has no such method
-	 */
-	public @Nullable String rawEncoding(MemorySegment cls, String selector) {
-		try {
-			MemorySegment method = (MemorySegment) this.classGetInstanceMethod.invokeExact(cls, selector(selector));
-			if (method.address() == 0) {
-				return null;
-			}
-			MemorySegment types = (MemorySegment) this.methodGetTypeEncoding.invokeExact(method);
-			return types.address() == 0 ? null : cString(types);
-		}
-		catch (Throwable ex) {
-			throw new ObjcException("method_getTypeEncoding failed for " + selector, ex);
-		}
-	}
-
-	/**
-	 * The raw type encoding a protocol declares for an instance method, required or
-	 * optional, or {@code null}.
-	 * @param protocol the protocol name, e.g. {@code NSWindowDelegate}
-	 * @param selector the selector name
-	 * @return the encoding string, or {@code null} when the protocol does not declare it
-	 * @throws ObjcException when there is no such protocol
-	 */
-	public @Nullable String protocolEncoding(String protocol, String selector) {
-		MemorySegment proto = protocol(protocol);
-		try (Arena arena = Arena.ofConfined()) {
-			for (boolean required : new boolean[] { true, false }) {
-				MemorySegment description = (MemorySegment) this.protocolGetMethodDescription
-					.invokeExact((SegmentAllocator) arena, proto, selector(selector), required, true);
-				MemorySegment types = description.get(P, 8);
-				if (types.address() != 0) {
-					return cString(types);
-				}
-			}
-			return null;
-		}
-		catch (Throwable ex) {
-			throw new ObjcException("protocol_getMethodDescription failed for " + selector, ex);
-		}
 	}
 
 	/**
@@ -613,167 +527,7 @@ public final class ObjcRuntime {
 		}
 	}
 
-	// --- send -----------------------------------------------------------------------
-
-	/**
-	 * What a {@link #send} answered, with the kind the receiver declared for it -- the
-	 * caller needs the kind to tell an object it should retain from a raw pointer it must
-	 * not.
-	 *
-	 * @param value the marshalled value ({@code null} for {@code void}, nil and NULL)
-	 * @param type the declared return type
-	 */
-	public record Sent(@Nullable Object value, Type type) {
-
-		/**
-		 * Whether the answer is the Cocoa failure value -- nil, {@code NO}, or zero. It
-		 * is the RESULT, never the error slot, that says a call failed (Foundation's own
-		 * rule), so this is what {@link #checkError} gates on.
-		 * @return {@code true} when the call reported failure
-		 */
-		public boolean failed() {
-			return this.value == null || Boolean.FALSE.equals(this.value) || (this.value instanceof Long n && n == 0L);
-		}
-	}
-
-	/**
-	 * A pointer-sized out-parameter slot. Pass one to {@link #send} in place of a
-	 * {@code ^@} argument and the binding allocates the slot, passes its address, and
-	 * fills {@link #value()} with whatever the callee wrote -- the {@code NSError **} of
-	 * every {@code ...error:} selector in Cocoa, which the caller could otherwise neither
-	 * supply nor read.
-	 *
-	 * <p>
-	 * What the callee writes is AUTORELEASED, so a caller that keeps it must retain it
-	 * before the hop's pool drains, exactly as for any other object a send answers.
-	 */
-	public static final class Out {
-
-		private @Nullable MemorySegment value;
-
-		/**
-		 * What the callee wrote into the slot.
-		 * @return the object, or {@code null} when the slot was left NULL
-		 */
-		public @Nullable MemorySegment value() {
-			return this.value;
-		}
-
-	}
-
-	/**
-	 * Sends a message, marshalling each argument by the selector's declared type:
-	 * <ul>
-	 * <li>an object, class or pointer parameter takes a {@link MemorySegment}
-	 * ({@code null} for nil) -- an object parameter also takes a {@link String}, sent as
-	 * an autoreleased {@code NSString}, and a class parameter a class name;</li>
-	 * <li>a selector parameter takes the selector name;</li>
-	 * <li>a C-string parameter takes a {@link String};</li>
-	 * <li>{@code BOOL} takes a {@link Boolean}; an integer or floating kind a
-	 * {@link Number};</li>
-	 * <li>a struct takes a {@code Number[]} of its scalar leaves in memory order.</li>
-	 * </ul>
-	 * and answers the result the same way: a {@link MemorySegment} for an object, class
-	 * or pointer ({@code null} for nil), a {@link String} for a selector or C string, a
-	 * {@link Boolean}, a {@link Long} for any integer, a {@link Double} for any float, a
-	 * {@code Number[]} for a struct, and {@code null} for void.
-	 * <p>
-	 * A {@linkplain VariadicSelectors variadic selector} takes arguments PAST its
-	 * declared arity: each one travels as a variadic argument whose carrier its own value
-	 * picks, a nil terminator is appended, and the call is bound with
-	 * {@link Linker.Option#firstVariadicArg} -- without which the callee reads its
-	 * {@code va_list} off a stack slot nobody wrote and the process dies.
-	 * @param receiver the object or class
-	 * @param selector the selector name
-	 * @param args the selector's own arguments (not the receiver, not the selector)
-	 * @return the marshalled result and its declared type
-	 * @throws ObjcException when the receiver does not respond, the arity is wrong, an
-	 * argument does not fit its parameter, or the shape has no stub in this binary
-	 */
-	public Sent send(MemorySegment receiver, String selector, @Nullable Object... args) {
-		TypeEncoding encoding = encoding(receiver, selector);
-		List<Type> params = encoding.argumentTypes();
-		int declared = params.size() - 2;
-		// The encoding does not say a method is variadic -- arrayWithObjects: is declared
-		// byte for byte what arrayWithObject: is -- so the known set is a table of names.
-		boolean variadic = VariadicSelectors.isVariadic(selector);
-		if (variadic ? args.length < declared : args.length != declared) {
-			throw new ObjcException(selector + " takes " + (variadic ? "at least " : "") + declared
-					+ " argument(s), got " + args.length);
-		}
-		try (Arena arena = Arena.ofConfined()) {
-			List<Object> all = new ArrayList<>(args.length + 4);
-			Type ret = encoding.returnType();
-			if (ret.isStruct()) {
-				all.add((SegmentAllocator) arena);
-			}
-			all.add(receiver);
-			all.add(selector(selector));
-			List<Out> outs = List.of();
-			List<MemorySegment> slots = List.of();
-			for (int i = 0; i < declared; i++) {
-				if (args[i] instanceof Out out) {
-					Type param = params.get(i + 2);
-					if (param.kind() != Kind.POINTER) {
-						throw new ObjcException(selector + ": argument " + (i + 1) + " is declared "
-								+ param.kind().name().toLowerCase(Locale.ROOT) + ", not a pointer, so it takes no"
-								+ " out slot");
-					}
-					MemorySegment slot = arena.allocate(ValueLayout.ADDRESS);
-					slot.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-					all.add(slot);
-					if (outs.isEmpty()) {
-						outs = new ArrayList<>(1);
-						slots = new ArrayList<>(1);
-					}
-					outs.add(out);
-					slots.add(slot);
-				}
-				else {
-					all.add(marshal(params.get(i + 2), args[i], arena, selector, i));
-				}
-			}
-			Signature signature;
-			if (variadic) {
-				List<MemoryLayout> tail = new ArrayList<>(args.length - declared + 1);
-				for (int i = declared; i < args.length; i++) {
-					tail.add(variadicArgument(all, args[i], arena, selector, i));
-				}
-				// The terminator the nil-terminated constructors need and the format
-				// family never reads.
-				all.add(MemorySegment.NULL);
-				tail.add(ValueLayout.ADDRESS);
-				signature = new Signature(encoding.descriptor(tail), params.size());
-			}
-			else {
-				signature = new Signature(encoding.descriptor(), -1);
-			}
-			MethodHandle handle = this.sends.computeIfAbsent(signature,
-					s -> downcall(catching(target(encoding), s), s, selector));
-			Object raw;
-			try {
-				raw = handle.invokeWithArguments(all);
-			}
-			catch (Throwable ex) {
-				throw new ObjcException(selector + " failed: " + ex, ex);
-			}
-			long thrown = ObjcCatch.takeRaised();
-			if (thrown != -1) {
-				String description = describeRaised(thrown);
-				if (thrown != 0) {
-					release(MemorySegment.ofAddress(thrown));
-				}
-				throw new ObjcException(selector + " raised " + description);
-			}
-			for (int i = 0; i < outs.size(); i++) {
-				MemorySegment written = slots.get(i).get(ValueLayout.ADDRESS, 0);
-				outs.get(i).value = written.address() == 0 ? null : written;
-			}
-			return new Sent(unmarshal(ret, raw), ret);
-		}
-	}
-
-	// --- the new base's raw send ----------------------------------------------------
+	// --- the send -------------------------------------------------------------------
 
 	/**
 	 * {@link #sendRaw} mode bit: retain an object result before the hop's pool drains.
@@ -810,38 +564,6 @@ public final class ObjcRuntime {
 		}
 	}
 
-	/**
-	 * What was thrown, as the old base's message says it: the exception's name and
-	 * reason, or the thrown object's class.
-	 */
-	private String describeRaised(long thrown) {
-		if (thrown == 0) {
-			return "nil";
-		}
-		try {
-			long nsException = classOrNullAddress("NSException");
-			Object kind = sendRaw(thrown, selector("isKindOfClass:").address(), "B24@0:8#16", -1,
-					new @Nullable Object[] { nsException }, 0);
-			if (!(kind instanceof Long k) || k == 0) {
-				return "an instance of " + nameOfClass(classOfAddress(thrown));
-			}
-			String name = utf8(sendRaw(thrown, selector("name").address(), "@16@0:8", -1, new Object[0], 0));
-			String reason = utf8(sendRaw(thrown, selector("reason").address(), "@16@0:8", -1, new Object[0], 0));
-			return name + (reason == null ? "" : ": " + reason);
-		}
-		catch (ObjcException ex) {
-			return "an Objective-C exception";
-		}
-	}
-
-	private @Nullable String utf8(@Nullable Object string) {
-		if (!(string instanceof Long address) || address == 0) {
-			return null;
-		}
-		Object text = sendRaw(address, selector("UTF8String").address(), "*16@0:8", -1, new Object[0], 0);
-		return text instanceof String s ? s : null;
-	}
-
 	/** Parsed encodings by spelling: a frame loop sends the same few shapes. */
 	private final Map<String, TypeEncoding> encodings = new ConcurrentHashMap<>();
 
@@ -862,8 +584,8 @@ public final class ObjcRuntime {
 	}
 
 	/**
-	 * The new base's send: the whole call described by the caller, nothing looked up and
-	 * nothing converted but what only the host can do. Each argument is RAW -- a
+	 * The primitive layer's send: the whole call described by the caller, nothing looked
+	 * up and nothing converted but what only the host can do. Each argument is RAW -- a
 	 * {@link Number} for an integral, boolean or address kind (a {@code BOOL} is nonzero
 	 * for YES), a {@link Number} for a floating kind, a {@code Number[]} of a struct's
 	 * leaves in memory order -- except that a {@link String} is accepted where the
@@ -1210,7 +932,7 @@ public final class ObjcRuntime {
 	}
 
 	/**
-	 * The instance-method encoding of a class, by addresses: what the new base's
+	 * The instance-method encoding of a class, by addresses: what {@code objc.lisp}'s
 	 * signature lookup reads (a class's metaclass answers its class methods).
 	 * @param cls the class's address
 	 * @param selector the {@code SEL}'s address
@@ -1300,101 +1022,6 @@ public final class ObjcRuntime {
 		Type ret = encoding.returnType();
 		return ret.isStruct() && ret.argumentLayout().byteSize() > 16
 				&& System.getProperty("os.arch", "").toLowerCase(Locale.ROOT).matches("x86_64|amd64");
-	}
-
-	private Object marshal(Type type, @Nullable Object arg, Arena arena, String selector, int index) {
-		Kind kind = type.kind();
-		try {
-			return switch (kind) {
-				case OBJECT -> switch (arg) {
-					case null -> MemorySegment.NULL;
-					case MemorySegment seg -> seg;
-					case String s -> nsString(s, arena);
-					default -> throw mismatch(selector, index, "an object", arg);
-				};
-				case CLASS -> switch (arg) {
-					case null -> MemorySegment.NULL;
-					case MemorySegment seg -> seg;
-					case String s -> objcClass(s);
-					default -> throw mismatch(selector, index, "a class", arg);
-				};
-				case POINTER -> switch (arg) {
-					case null -> MemorySegment.NULL;
-					case MemorySegment seg -> seg;
-					case Number n -> MemorySegment.ofAddress(n.longValue());
-					default -> throw mismatch(selector, index, "a pointer", arg);
-				};
-				case SELECTOR -> switch (arg) {
-					case null -> MemorySegment.NULL;
-					case MemorySegment seg -> seg;
-					case String s -> selector(s);
-					default -> throw mismatch(selector, index, "a selector name", arg);
-				};
-				case CSTRING -> switch (arg) {
-					case null -> MemorySegment.NULL;
-					case MemorySegment seg -> seg;
-					case String s -> arena.allocateFrom(s);
-					default -> throw mismatch(selector, index, "a string", arg);
-				};
-				case BOOL -> switch (arg) {
-					case null -> Boolean.FALSE;
-					case Boolean b -> b;
-					default -> throw mismatch(selector, index, "a boolean", arg);
-				};
-				case INT8 -> scalar(arg, selector, index, "an integer").byteValue();
-				case INT16 -> scalar(arg, selector, index, "an integer").shortValue();
-				case INT32 -> scalar(arg, selector, index, "an integer").intValue();
-				case INT64 -> scalar(arg, selector, index, "an integer").longValue();
-				case FLOAT -> scalar(arg, selector, index, "a number").floatValue();
-				case DOUBLE -> scalar(arg, selector, index, "a number").doubleValue();
-				case STRUCT -> {
-					if (!(arg instanceof Number[] leaves) || leaves.length != type.leaves().size()) {
-						throw mismatch(selector, index, "a struct of " + type.leaves().size() + " numbers", arg);
-					}
-					yield struct(type, leaves, arena);
-				}
-				case VOID -> throw new ObjcException(selector + ": a void parameter");
-			};
-		}
-		catch (ObjcException ex) {
-			throw ex;
-		}
-	}
-
-	/**
-	 * Marshals one argument past a variadic selector's declared arity, where the encoding
-	 * says nothing and the VALUE decides the shape: an object, string or pointer travels
-	 * as {@code void*}, a floating value as a {@code double} and any other number as a
-	 * 64-bit integer -- the three carriers a {@code va_arg} of {@code %@}, {@code %f} and
-	 * {@code %ld} reads back.
-	 * @param all the argument list being built, which the marshalled value is added to
-	 * @return the layout to register for it
-	 */
-	private MemoryLayout variadicArgument(List<Object> all, @Nullable Object arg, Arena arena, String selector,
-			int index) {
-		Object value = switch (arg) {
-			case null -> MemorySegment.NULL;
-			case MemorySegment seg -> seg;
-			case String s -> nsString(s, arena);
-			case Double d -> d;
-			case Float f -> (double) f;
-			case Number n -> n.longValue();
-			default -> throw new ObjcException(selector + ": argument " + (index + 1)
-					+ " is past the declared arity, so it is a variadic argument, which takes an object, a "
-					+ "string, an integer or a float, got " + arg.getClass().getSimpleName());
-		};
-		all.add(value);
-		if (value instanceof Double) {
-			return ValueLayout.JAVA_DOUBLE;
-		}
-		return value instanceof Long ? ValueLayout.JAVA_LONG : ValueLayout.ADDRESS;
-	}
-
-	private static Number scalar(@Nullable Object arg, String selector, int index, String expected) {
-		if (arg instanceof Number n) {
-			return n;
-		}
-		throw mismatch(selector, index, expected, arg);
 	}
 
 	private static ObjcException mismatch(String selector, int index, String expected, @Nullable Object arg) {
@@ -1510,82 +1137,12 @@ public final class ObjcRuntime {
 	 * @return the string object
 	 */
 	public MemorySegment nsString(String value, Arena arena) {
-		Sent sent = send(objcClass("NSString"), "stringWithUTF8String:", (Object) arena.allocateFrom(value));
-		if (!(sent.value() instanceof MemorySegment string)) {
+		Object string = sendRaw(objcClass("NSString").address(), selector("stringWithUTF8String:").address(),
+				"@24@0:8r*16", -1, new @Nullable Object[] { arena.allocateFrom(value).address() }, 0);
+		if (!(string instanceof Long address) || address == 0) {
 			throw new ObjcException("stringWithUTF8String: answered nil");
 		}
-		return string;
-	}
-
-	/**
-	 * The text of an {@code NSString}.
-	 * @param string the string object
-	 * @return its UTF-8 contents
-	 */
-	public String string(MemorySegment string) {
-		Object chars = send(string, "UTF8String").value();
-		return chars == null ? "" : (String) chars;
-	}
-
-	/**
-	 * An autoreleased {@code NSMutableData} holding a COPY of the given bytes, staged in
-	 * the given arena. Mutable rather than an {@code NSData} so one object serves both
-	 * directions: {@code bytes} hands the block to a {@code ^v} parameter, and
-	 * {@code mutableBytes} is writable scratch a callee can fill.
-	 * @param bytes the contents
-	 * @param arena where the staging copy lives for the duration of the call
-	 * @return the data object
-	 */
-	public MemorySegment nsData(byte[] bytes, Arena arena) {
-		MemorySegment source = bytes.length == 0 ? MemorySegment.NULL
-				: arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
-		Sent sent = send(objcClass("NSMutableData"), "dataWithBytes:length:", source, (long) bytes.length);
-		if (!(sent.value() instanceof MemorySegment data)) {
-			throw new ObjcException("dataWithBytes:length: answered nil");
-		}
-		return data;
-	}
-
-	/**
-	 * The bytes of an {@code NSData}, copied out.
-	 * @param data the data object
-	 * @return its contents
-	 */
-	public byte[] dataBytes(MemorySegment data) {
-		Object length = send(data, "length").value();
-		if (!(length instanceof Long size)) {
-			throw new ObjcException("length answered no integer; the receiver is not an NSData");
-		}
-		if (size == 0) {
-			return new byte[0];
-		}
-		Object pointer = send(data, "bytes").value();
-		if (!(pointer instanceof MemorySegment block) || block.address() == 0) {
-			throw new ObjcException("bytes answered NULL for a data of " + size + " byte(s)");
-		}
-		return block.reinterpret(size).toArray(ValueLayout.JAVA_BYTE);
-	}
-
-	/**
-	 * The {@code ...error:} convention: when the call reported failure AND filled the out
-	 * slot, raise what the {@code NSError} says. Nothing else in this binding answers a
-	 * bare nil for a failure, and neither does a selector asked for its error.
-	 * @param out the slot that was passed
-	 * @param sent what the call answered
-	 * @param selector the selector, for the message
-	 * @throws ObjcException when the call failed and named a reason
-	 */
-	public void checkError(Out out, Sent sent, String selector) {
-		MemorySegment error = out.value();
-		if (error == null || !sent.failed()) {
-			return;
-		}
-		Object description = send(error, "localizedDescription").value();
-		Object domain = send(error, "domain").value();
-		Object code = send(error, "code").value();
-		String reason = description instanceof MemorySegment text ? string(text) : "no reason given";
-		String where = domain instanceof MemorySegment name ? " [" + string(name) + " " + code + "]" : "";
-		throw new ObjcException(selector + ": " + reason + where);
+		return MemorySegment.ofAddress(address);
 	}
 
 	/**
@@ -1652,7 +1209,7 @@ public final class ObjcRuntime {
 		}
 	}
 
-	// --- class building (for ObjcClasses) -------------------------------------------
+	// --- class building ---------------------------------------------------------------
 
 	@Nullable MemorySegment allocateClassPair(MemorySegment superclass, String name) {
 		try {
@@ -1662,16 +1219,6 @@ public final class ObjcRuntime {
 		}
 		catch (Throwable ex) {
 			throw new ObjcException("objc_allocateClassPair failed for " + name, ex);
-		}
-	}
-
-	boolean addMethod(MemorySegment cls, String selector, MemorySegment imp, String types) {
-		try {
-			return (boolean) this.classAddMethod.invokeExact(cls, selector(selector), imp,
-					Arena.global().allocateFrom(types));
-		}
-		catch (Throwable ex) {
-			throw new ObjcException("class_addMethod failed for " + selector, ex);
 		}
 	}
 
@@ -1693,14 +1240,15 @@ public final class ObjcRuntime {
 		}
 	}
 
-	// --- the new base's class definition (by addresses) -------------------------------
+	// --- class definition, by addresses
+	// -------------------------------------------------
 
 	/**
-	 * The instance variable every class the new base defines carries: how a later
-	 * definition in the same process -- another interpreter, a compiled program with its
-	 * own copy of this class, a re-evaluated form -- recognizes a class it may reuse,
-	 * since the runtime cannot remove one. A subclass inherits it; a class Lisp did not
-	 * define never has it.
+	 * The instance variable every class {@code objc-class.lisp} defines carries: how a
+	 * later definition in the same process -- another interpreter, a compiled program
+	 * with its own copy of this class, a re-evaluated form -- recognizes a class it may
+	 * reuse, since the runtime cannot remove one. A subclass inherits it; a class Lisp
+	 * did not define never has it.
 	 */
 	public static final String DEFINED_MARKER = "rontolispDefinedClass";
 
@@ -1901,6 +1449,40 @@ public final class ObjcRuntime {
 				write(type.kind(), at, value);
 			}
 		}
+	}
+
+	/**
+	 * Copies bytes to foreign memory.
+	 * @param address where they go
+	 * @param bytes the bytes
+	 */
+	public static void writeBytes(long address, byte[] bytes) {
+		if (bytes.length == 0) {
+			return;
+		}
+		if (address == 0) {
+			throw new ObjcException("cannot write " + bytes.length + " byte(s) to NULL");
+		}
+		MemorySegment.ofAddress(address).reinterpret(bytes.length).copyFrom(MemorySegment.ofArray(bytes));
+	}
+
+	/**
+	 * Copies a block of foreign memory out.
+	 * @param address where it starts
+	 * @param length how many bytes
+	 * @return a fresh copy
+	 */
+	public static byte[] readBytes(long address, long length) {
+		if (length <= 0) {
+			return new byte[0];
+		}
+		if (address == 0) {
+			throw new ObjcException("cannot read " + length + " byte(s) from NULL");
+		}
+		if (length > Integer.MAX_VALUE - 8) {
+			throw new ObjcException("a block of " + length + " bytes does not fit in a vector");
+		}
+		return MemorySegment.ofAddress(address).reinterpret(length).toArray(ValueLayout.JAVA_BYTE);
 	}
 
 	private static Object read(Kind kind, MemorySegment at) {

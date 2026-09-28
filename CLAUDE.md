@@ -72,7 +72,7 @@ nothing at all (`.kb/gpu.md`); the interpreter reaches it
 through `eval/LinalgGpu` -> `eval/LinalgGpuKernels`, and the JVM backend EMBEDS its class
 files in the compiled output (`codegen/jvm/JvmGpuRuntimeBuilder`) -- so a class added to
 that package must be added to the list that travels. `am.ik.objc` is the Objective-C runtime and
-AppKit through FFM (`.kb/objc.md`), reached from `eval/ObjcInterop` -> `eval/ObjcBridge` only,
+AppKit through FFM (`.kb/objc.md`), reached from `eval/ObjcInterop` -> `eval/ObjcPrimitives` only,
 so `-Pweb` substitutes the one entry class; the JVM backend EMBEDS it the same way as `am.ik.gpu`
 (`codegen/jvm/JvmObjcRuntimeBuilder`, whose class list must follow the package, in an order the
 verifier accepts); the `appkit` widget layer is `appkit.lisp`, the `metal` drawing surface
@@ -80,8 +80,8 @@ verifier accepts); the `appkit` widget layer is `appkit.lisp`, the `metal` drawi
 on the compile path by `AppKitLibrary` / `MetalLibrary` / `SceneLibrary`'s `process` (in dependency
 order, `.kb/geom.md`). None of the four compiles to a `.wasm` -- `AppKitLibrary.firstObjcReference`
 answers for all of them and `CompileFrontend` refuses by the reference -- but a `--native` output
-for `macos-aarch64` takes them: `ObjcNativeLibrary` splices the verbs over the `rlobjc` imports the
-runner stub answers, and the module runs on thread 0 (`.kb/objc.md`, "--native").
+for `macos-aarch64` takes them: `ObjcNativeLibrary` splices the primitive layer over the `rlobjc`
+imports the runner stub answers, and the module runs on thread 0 (`.kb/objc.md`, "--native").
 
 Package dependency direction (no cycles allowed):
 

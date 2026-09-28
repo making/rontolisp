@@ -111,32 +111,6 @@ pub struct Encoding {
     pub args: Vec<Type>,
 }
 
-impl Encoding {
-    /// The shape as the JVM binding names it in a message (`TypeEncoding.spelling`):
-    /// `void*(void*,void*)`.
-    pub fn spelling(&self) -> String {
-        fn spell(ty: &Type) -> String {
-            match ty.kind {
-                Kind::Struct => {
-                    let leaves: Vec<String> = ty.leaves.iter().map(|k| spell(&Type::of(*k))).collect();
-                    format!("struct({})", leaves.join(","))
-                }
-                Kind::Void => "void".into(),
-                Kind::Bool => "jboolean".into(),
-                Kind::Int8 => "jbyte".into(),
-                Kind::Int16 => "jshort".into(),
-                Kind::Int32 => "jint".into(),
-                Kind::Int64 => "jlong".into(),
-                Kind::Float => "jfloat".into(),
-                Kind::Double => "jdouble".into(),
-                _ => "void*".into(),
-            }
-        }
-        let args: Vec<String> = self.args.iter().map(spell).collect();
-        format!("{}({})", spell(&self.ret), args.join(","))
-    }
-}
-
 pub fn parse(encoding: &str) -> Result<Encoding, String> {
     let mut parser = Parser {
         source: encoding.as_bytes(),

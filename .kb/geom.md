@@ -54,8 +54,8 @@ program that calls none. Nothing else here may do I/O.
 - **`:frame` is a keyword, not a positional flag**; `:local` is the default.
 - **float32 everywhere**: every array is `:element-type 'single-float`, the literal spelled at each
   `make-array` so all four backends pick `float[]` (TYPE_F32ARR) statically. A packed single-float
-  array IS a GPU vertex buffer's bytes, so `geom:mesh` -> `objc:data` -> `setVertexBytes:` needs no
-  conversion (`objc.md`, "Metal").
+  array IS a GPU vertex buffer's bytes, so `geom:mesh` -> `metal:buffer` / `metal:uniform` (the
+  bytes `objc:data` would hold) needs no conversion (`objc.md`, "Metal").
 
 ## The winding convention
 
@@ -314,7 +314,7 @@ default is `1.0`, every other measurement a fraction of the length.
 ## The renderer: `metal` and `scene`
 
 `eval/metal.lisp` + `eval/MetalLibrary` and `eval/scene.lisp` + `eval/SceneLibrary`, wired as geom
-is, with three differences: they are **macOS-only** (both bottom out in `objc:send`, so
+is, with three differences: they are **macOS-only** (both bottom out in `objc:invoke`, so
 `CompileFrontend` refuses a `.wasm` output naming the reference --
 `AppKitLibrary.firstObjcReference` answers for all four macOS packages, which is why it lives
 there); **the splice chain runs innermost first** (`SceneLibrary` before `MetalLibrary` before
@@ -329,12 +329,12 @@ the vertex function takes `vp` and `model` as SEPARATE uniforms and transforms t
 too, so a moving solid needs no re-upload; lines go through a second pipeline with `metal:+line+`
 (`MTLPrimitiveTypeLine` = 1).
 
-- **The callbacks are keyed by VIEW, not by an `*active*` global.** AppKit's callbacks are
-  process-wide, so one `objc:define-class "RontoLispSceneView"` serves every viewer and
-  `scene::*views*` maps `(objc:address view)` -> viewer (`appkit::*actions*` is the precedent).
-- **Resize follows the window**: the view posts `NSViewFrameDidChangeNotification` to one shared
-  observer -- **`setPostsFrameChangedNotifications:` is not optional**, without it NSView posts
-  nothing.
+- **The callbacks find their viewer through the VIEW, not an `*active*` global.** One
+  `objc:define-objc-class` (`scene::input-view`, `RontoLispSceneView`) serves every viewer, and
+  each view's Lisp object holds its viewer in a slot, so two viewers orbit independently.
+- **Resize follows the window**: the view observes its own `NSViewFrameDidChangeNotification`
+  (`cocoa:add-observer`, the method `frameChanged:`) -- **`setPostsFrameChangedNotifications:` is
+  not optional**, without it NSView posts nothing.
 - **The camera gestures redraw themselves and the mutators do not.** `scene::%on-mouse-dragged` /
   `%on-scroll` / `%on-frame-changed` call `scene:refresh`; `add`/`camera`/`grid`/`shading`/`axes`
   do not.
@@ -353,8 +353,8 @@ too, so a moving solid needs no re-upload; lines go through a second pipeline wi
 path** -- `metal:offscreen` builds a `metal:context` whose `target` slot holds a shared-storage BGRA8
 texture instead of a `CAMetalLayer`, and `metal:frame` asks that slot once per frame, so ONE encoding
 path serves both (an offscreen frame is `waitUntilCompleted`'d instead of presented).
-`metal:pixels` reads it back with `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an `objc:data`
-block -- `width*height*4` bytes, BGRA, row 0 at the top, deliberately NOT converted to RGBA.
+`metal:pixels` reads it back with `getBytes:bytesPerRow:fromRegion:mipmapLevel:` into an
+`NSMutableData` (`objc:bytes`) -- `width*height*4` bytes, BGRA, row 0 at the top, deliberately NOT converted to RGBA.
 `SceneOffscreenRenderTest` (macOS-gated) asserts colour, depth ordering, culling, `scene:fit` framing
 from four angles, byte-identical repeat frames and the arrow/triad pixel shapes, writing each frame
 to `target/scene-frames/*.png` (the PNG writer is `javax.imageio` in the TEST, not a rung of

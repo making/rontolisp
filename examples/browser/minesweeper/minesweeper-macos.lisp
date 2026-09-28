@@ -320,7 +320,7 @@
 (reset)
 
 (format t "minesweeper window ~a is open; close it to quit~%"
-        (objc:send *win* "windowNumber"))
+        (objc:invoke *win* "windowNumber"))
 
 ;; A script's process ends when its last form returns, so wait for the close.
 (appkit:wait *win*)

@@ -13,7 +13,7 @@
 //! always goes on the stack in an 8-byte slot, never in a register.
 //!
 //! `rl_objc_call` is also where an Objective-C exception raised inside the call stops
-//! (`.kb/objc.md`, "The new base: exceptions and NSError"): its call site is covered by
+//! (`.kb/objc.md`, "Exceptions and NSError"): its call site is covered by
 //! an LSDA whose one handler catches `OBJC_EHTYPE_id` -- `@catch (id)` -- under
 //! `__objc_personality_v0`, so the unwinder never reaches the host's or the module's
 //! frames above it. The landing pad hands the exception to [`rl_objc_caught`], which

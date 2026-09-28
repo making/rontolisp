@@ -21,11 +21,11 @@
 ;;; The clock in the title: Foundation formats it, Lisp asks for it.
 
 (defun now (format)
-  (let ((formatter (objc:send (objc:send "NSDateFormatter" "alloc") "init")))
-    (objc:send formatter "setDateFormat:" (objc:string format))
-    (objc:send
-     (objc:send formatter "stringFromDate:" (objc:send "NSDate" "date"))
-     "UTF8String")))
+  (let ((formatter
+         (objc:invoke (objc:invoke "NSDateFormatter" "alloc") "init")))
+    (objc:invoke formatter "setDateFormat:" format)
+    (objc:invoke-into 'string formatter "stringFromDate:"
+                      (objc:invoke "NSDate" "date"))))
 
 ;;; The state is a Lisp variable, and the menu is what reads it.
 

@@ -3,7 +3,7 @@
 ;; make (their macros are objc-macros.lisp), current-super, the instance variables,
 ;; objc-object-copied / objc-object-destroyed, define-objc-struct / -typedef / -protocol.
 ;; Written once and run on every target over the primitive layer, like objc.lisp
-;; (.kb/objc.md, "The new base: class definition"); spliced only into a program that
+;; (.kb/objc.md, "Class definition"); spliced only into a program that
 ;; defines something, so a program that only calls carries none of it.
 ;;
 ;; A method's body is a Lisp function the host calls with the receiver's address and the

@@ -10,5 +10,5 @@ Metal の列挙はワイヤ上では単なる整数で、ここにあるのは�
 ```console
 CL-USER> (list metal:+point+ metal:+line+ metal:+triangle+ metal:+triangle-strip+)
 (0 1 3 4)
-CL-USER> (objc:send encoder "setCullMode:" metal:+cull-back+)
+CL-USER> (objc:invoke encoder "setCullMode:" metal:+cull-back+)
 ```

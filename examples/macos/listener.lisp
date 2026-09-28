@@ -4,19 +4,20 @@
 ;;;;
 ;;;; A text view for the transcript, a text field whose Return key is a Lisp
 ;;;; closure, and `eval` on what it reads. Nothing here is an application: no nib,
-;;;; no bundle, no Objective-C source file. The text field's action is an
-;;;; Objective-C class defined AT RUN TIME whose method is a Lisp lambda
-;;;; (objc:define-class), which is the whole of Clozure's bridge trick, and the
-;;;; evaluator is the interpreter that is reading this file.
+;;;; no bundle, no Objective-C source file. The text field's target is an
+;;;; Objective-C class defined AT RUN TIME whose method body is Lisp
+;;;; (objc:define-objc-class and objc:define-objc-method), which is the whole of
+;;;; Clozure's bridge trick, and the evaluator is the interpreter that is reading
+;;;; this file.
 ;;;;
 ;;;; Type into the window and press Return:
 ;;;;
 ;;;;   (+ 1 2)                                       ; => 3
 ;;;;   (defun sq (x) (* x x))                        ; then (sq 12)
 ;;;;   (dotimes (i 3) (print i))                     ; printed output is captured
-;;;;   (objc:send (objc:string "hi") "uppercaseString")
+;;;;   (objc:invoke-into 'string (objc:string-to-ns-string "hi") "uppercaseString")
 ;;;;   (appkit:window "a second window")             ; the app extends itself
-;;;;   (objc:send *window* "setTitle:" "renamed from inside")
+;;;;   (objc:invoke *window* "setTitle:" "renamed from inside")
 ;;;;
 ;;;; macOS only, on the interpreter -- under `java -jar` AND in the `rontolisp`
 ;;;; native binary, which is what `java:` interop cannot do -- and compiled to a
@@ -30,7 +31,7 @@
 
 (defvar *window* (appkit:window "rontolisp listener" :width 720 :height 520))
 
-(defvar *font* (objc:send "NSFont" "userFixedPitchFontOfSize:" 13.0))
+(defvar *font* (objc:invoke "NSFont" "userFixedPitchFontOfSize:" 13.0))
 
 ;;; --- the transcript ---------------------------------------------------------
 ;;;
@@ -45,29 +46,30 @@
   (objc:on-main
    (lambda ()
      (let ((scroll
-            (objc:send (objc:send "NSScrollView" "alloc") "initWithFrame:"
-                       (list 16 64 688 436)))
+            (objc:invoke (objc:invoke "NSScrollView" "alloc") "initWithFrame:"
+                         (vector 16 64 688 436)))
            (view
-            (objc:send (objc:send "NSTextView" "alloc") "initWithFrame:"
-                       (list 0 0 688 436))))
-       (objc:send view "setEditable:" nil)
-       (objc:send view "setFont:" *font*)
-       (objc:send view "setTextContainerInset:" (list 8.0 8.0))
+            (objc:invoke (objc:invoke "NSTextView" "alloc") "initWithFrame:"
+                         (vector 0 0 688 436))))
+       (objc:invoke view "setEditable:" nil)
+       (objc:invoke view "setFont:" *font*)
+       (objc:invoke view "setTextContainerInset:" (vector 8.0 8.0))
        ;; Grow with the text, not with the window's width: the text view tracks
        ;; the scroll view's width and is unbounded downwards.
-       (objc:send view "setVerticallyResizable:" t)
-       (objc:send view "setHorizontallyResizable:" nil)
-       (objc:send view "setMinSize:" (list 0.0 0.0))
-       (objc:send view "setMaxSize:" (list 1.0e7 1.0e7))
-       (objc:send view "setAutoresizingMask:" 2)
-       (objc:send (objc:send view "textContainer") "setWidthTracksTextView:" t)
-       (objc:send scroll "setHasVerticalScroller:" t)
+       (objc:invoke view "setVerticallyResizable:" t)
+       (objc:invoke view "setHorizontallyResizable:" nil)
+       (objc:invoke view "setMinSize:" (vector 0.0 0.0))
+       (objc:invoke view "setMaxSize:" (vector 1.0e7 1.0e7))
+       (objc:invoke view "setAutoresizingMask:" 2)
+       (objc:invoke (objc:invoke view "textContainer") "setWidthTracksTextView:"
+                    t)
+       (objc:invoke scroll "setHasVerticalScroller:" t)
        ;; 18 = NSViewWidthSizable | NSViewHeightSizable: the transcript takes up
        ;; whatever the window is resized to.
-       (objc:send scroll "setAutoresizingMask:" 18)
-       (objc:send scroll "setBorderType:" 2)
-       (objc:send scroll "setDocumentView:" view)
-       (objc:send (objc:send *window* "contentView") "addSubview:" scroll)
+       (objc:invoke scroll "setAutoresizingMask:" 18)
+       (objc:invoke scroll "setBorderType:" 2)
+       (objc:invoke scroll "setDocumentView:" view)
+       (objc:invoke (objc:invoke *window* "contentView") "addSubview:" scroll)
        view))))
 
 (defun say (line)
@@ -75,8 +77,8 @@
         (concatenate 'string *transcript-text* line (string #\Newline)))
   (objc:on-main
    (lambda ()
-     (objc:send *transcript* "setString:" *transcript-text*)
-     (objc:send *transcript* "scrollToEndOfDocument:" nil)
+     (objc:invoke *transcript* "setString:" *transcript-text*)
+     (objc:invoke *transcript* "scrollToEndOfDocument:" nil)
      nil)))
 
 ;;; --- the evaluator ----------------------------------------------------------
@@ -115,22 +117,23 @@
 ;;; --- the prompt -------------------------------------------------------------
 ;;;
 ;;; An editable NSTextField. Its Return key is its ACTION, which AppKit sends to
-;;; a target object -- so the target is a class defined at run time whose
-;;; invoke: is the closure below. The Eval button hands its click to the same
-;;; closure through appkit:button, which arranges the same thing for itself.
+;;; a target object -- so the target is an instance of a class defined at run
+;;; time whose invoke: method calls submit below. The Eval button hands its click
+;;; to the same function through appkit:button, which arranges the same thing for
+;;; itself.
 
 (defvar *input*
   (objc:on-main
    (lambda ()
      (let ((field
-            (objc:send (objc:send "NSTextField" "alloc") "initWithFrame:"
-                       (list 16 20 560 28))))
-       (objc:send field "setFont:" *font*)
-       (objc:send field "setPlaceholderString:" "a form, then Return")
+            (objc:invoke (objc:invoke "NSTextField" "alloc") "initWithFrame:"
+                         (vector 16 20 560 28))))
+       (objc:invoke field "setFont:" *font*)
+       (objc:invoke field "setPlaceholderString:" "a form, then Return")
        ;; 34 = NSViewWidthSizable | NSViewMaxYMargin: pinned to the bottom edge,
        ;; as wide as the window.
-       (objc:send field "setAutoresizingMask:" 34)
-       (objc:send (objc:send *window* "contentView") "addSubview:" field)
+       (objc:invoke field "setAutoresizingMask:" 34)
+       (objc:invoke (objc:invoke *window* "contentView") "addSubview:" field)
        field))))
 
 (defun submit ()
@@ -140,22 +143,23 @@
       (say (concatenate 'string "> " text))
       (evaluate text))))
 
-(defvar *prompt-class*
-  (objc:define-class "RontoLispListenerPrompt"
-    "NSObject"
-    (list
-     (list "invoke:"
-           (lambda (self sender)
-             (submit)
-             nil)))))
+(objc:define-objc-class prompt-target ()
+  ()
+  (:objc-class-name "RontoLispListenerPrompt"))
 
-(defvar *prompt-target* (objc:send (objc:send *prompt-class* "alloc") "init"))
+(objc:define-objc-method ("invoke:" :void)
+  ((self prompt-target) (sender objc:objc-object-pointer))
+  (declare (ignore sender))
+  (submit))
+
+;; AppKit holds a control's target weakly; this variable is what keeps it alive.
+(defvar *prompt-target* (make-instance 'prompt-target))
 
 (objc:on-main
  (lambda ()
-   (objc:send *input* "setTarget:" *prompt-target*)
-   (objc:send *input* "setAction:" "invoke:")
-   (objc:send *window* "makeFirstResponder:" *input*)
+   (objc:invoke *input* "setTarget:" *prompt-target*)
+   (objc:invoke *input* "setAction:" "invoke:")
+   (objc:invoke *window* "makeFirstResponder:" *input*)
    nil))
 
 (defvar *eval-button*
@@ -169,7 +173,7 @@
 ;; 33 = NSViewMinXMargin | NSViewMaxYMargin: pinned to the bottom-right corner.
 (objc:on-main
  (lambda ()
-   (objc:send *eval-button* "setAutoresizingMask:" 33)
+   (objc:invoke *eval-button* "setAutoresizingMask:" 33)
    nil))
 
 ;;; --- the banner -------------------------------------------------------------

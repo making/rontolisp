@@ -6,7 +6,7 @@
 
 ```console
 CL-USER> (appkit:set-color *tile* (appkit:color 214 69 65))
-#<objc _NSTaggedPointerColor>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #xBFA0400B6A239467>
 CL-USER> (appkit:set-color *label* (appkit:color 25 60 210))
-#<objc _NSTaggedPointerColor>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #xBFC7FCC2EA239467>
 ```

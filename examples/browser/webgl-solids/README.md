@@ -6,7 +6,7 @@ eight primitive constructors and the CSG booleans. It reaches for nothing but `l
 it runs identically on the interpreter, the JVM and both WASM backends — see the
 [solid modeling guide](../../../doc/en/guides/solid-modeling.md).
 
-Its shipped *renderer*, `scene`, is macOS only: it bottoms out in Metal through `objc:`.
+Its shipped *renderer*, `scene`, is macOS only: it bottoms out in Metal through `objc:invoke`.
 This page is the other renderer. Same model, same design, same measurements — Metal there
 and WebGL here — which is what the modelling package being backend-independent buys.
 

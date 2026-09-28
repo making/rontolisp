@@ -2,7 +2,7 @@
 ;;;;
 ;;;; The AppKit twin of examples/browser/webgl-cube, and the full-pipeline
 ;;;; version of metal-triangle.lisp: a vertex buffer, a per-frame uniform, back
-;;;; face culling and an animation loop, all through `objc:send` into Metal.
+;;;; face culling and an animation loop, all through `objc:invoke` into Metal.
 ;;;;
 ;;;; Two things carry the numbers to the GPU, and both are `objc:data`:
 ;;;;
@@ -165,19 +165,18 @@ fragment float4 fragment_main(VertexOut in [[stage_in]]) {
                                                (rotation-x (* 0.6 *angle*))))))
 
 (format t "device: ~a, ~a vertices~%"
-        (objc:send (objc:send (metal:device *metal*) "name") "UTF8String")
-        *vertex-count*)
+        (objc:invoke-into 'string (metal:device *metal*) "name") *vertex-count*)
 
 (metal:run *metal*
            (lambda (encoder)
-             (objc:send encoder "setRenderPipelineState:" *pipeline*)
-             (objc:send encoder "setCullMode:" metal:+cull-back+)
-             (objc:send encoder "setFrontFacingWinding:"
-                        metal:+winding-counter-clockwise+)
-             (objc:send encoder "setVertexBuffer:offset:atIndex:" *mesh* 0 0)
+             (objc:invoke encoder "setRenderPipelineState:" *pipeline*)
+             (objc:invoke encoder "setCullMode:" metal:+cull-back+)
+             (objc:invoke encoder "setFrontFacingWinding:"
+                          metal:+winding-counter-clockwise+)
+             (objc:invoke encoder "setVertexBuffer:offset:atIndex:" *mesh* 0 0)
              (metal:uniform encoder 1 (linalg:transpose (mvp)))
-             (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-                        metal:+triangle+ 0 *vertex-count*)
+             (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                          metal:+triangle+ 0 *vertex-count*)
              (incf *angle* 0.02)))
 
 (appkit:wait *window*)

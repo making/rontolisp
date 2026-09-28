@@ -1,12 +1,12 @@
-;; The new objc base's primitive layer on a --native output: the objc::% functions
-;; objc.lisp is written over (see .kb/objc.md, "The new base"), here over the rlobjc
-;; p_* imports the runner answers (rontolisp-native/runner/src/objc/prim.rs). The
-;; interpreter's twin is eval/ObjcPrimitives.java and a JVM class's is
+;; The objc primitive layer on a --native output: the objc::% functions objc.lisp is
+;; written over (see .kb/objc.md), here over the rlobjc p_* imports the runner answers
+;; (rontolisp-native/runner/src/objc/prim.rs). The interpreter's twin is
+;; eval/ObjcPrimitives.java and a JVM class's is
 ;; codegen/jvm/JvmObjcPrimitivesTemplate.java; none of them decides a rule.
 ;;
-;; Also what both bases share on this target: objc:on-main, a plain call because the
-;; module runs on thread 0, and objc::%sleep, which every sleep of such a program
-;; compiles to -- thread 0's event loop for that long.
+;; Also objc:on-main, a plain call because the module runs on thread 0, and
+;; objc::%sleep, which every sleep of such a program compiles to -- thread 0's event
+;; loop for that long.
 ;;
 ;; No interning: a wasm-GC module has no weak reference, and a table keeping every
 ;; pointer would keep every reference. The backend compares an objc-object-pointer by
@@ -219,6 +219,17 @@
                        :params '(:string)
                        :returns :s64)
 
+;; The byte copies objc:data and objc:bytes are written over.
+(rontolisp:wasm-import 'objc::%p-write-bytes
+                       :from "rlobjc"
+                       :as "p_write_bytes"
+                       :params '(:s64 :bytes))
+(rontolisp:wasm-import 'objc::%p-read-bytes
+                       :from "rlobjc"
+                       :as "p_read_bytes"
+                       :params '(:s64)
+                       :returns :bytes)
+
 (defun objc::%class-p (address) (/= (objc::%p-class-p address) 0))
 
 (defun objc::%method-types (cls sel)
@@ -365,6 +376,42 @@
 (defun objc::%call-function (function types fixed args mode)
   (dolist (arg args) (objc::%p-push arg))
   (objc::%p-answer (objc::%p-call-function function types fixed mode)))
+
+;; The bytes objc:data sends: what write-sequence writes for a packed buffer --
+;; little-endian, row-major, the elements only (eval/PackedBuffer) -- or a string's
+;; UTF-8; nil for any other value. Laid out here: a wasm-GC array is no block of memory
+;; the host could read.
+(defun objc::%little-endian (array width bits-of)
+  (let* ((n (array-total-size array))
+         (out (make-array (* n width) :element-type '(unsigned-byte 8)))
+         (k 0))
+    (dotimes (i n out)
+      (let ((bits (funcall bits-of (row-major-aref array i))))
+        (dotimes (b width)
+          (setf (aref out k) (ldb (byte 8 (* 8 b)) bits))
+          (setq k (+ k 1)))))))
+
+(defun objc::%octets (value)
+  (cond ((stringp value) (rontolisp:string-to-octets value))
+        ((typep value '(vector (unsigned-byte 8))) (copy-seq value))
+        ((typep value '(array single-float))
+         (objc::%little-endian value 4 (lambda (x) (%ieee754-single-bits x))))
+        ((typep value '(array double-float))
+         (objc::%little-endian value 8 (lambda (x) (%ieee754-double-bits x))))
+        ((typep value '(vector (unsigned-byte 16)))
+         (objc::%little-endian value 2 (lambda (x) x)))
+        ((typep value '(vector (unsigned-byte 32)))
+         (objc::%little-endian value 4 (lambda (x) x)))
+        (t nil)))
+
+(defun objc::%write-octets (address octets)
+  (objc::%p-write-bytes address octets)
+  nil)
+
+(defun objc::%read-octets (address length)
+  (let ((buffer (make-array length :element-type '(unsigned-byte 8))))
+    (objc::%p-read-bytes address buffer)
+    buffer))
 
 (rontolisp:wasm-export 'objc::%p-method
                        :as "rlobjc_method"

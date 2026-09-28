@@ -1,7 +1,5 @@
 package am.ik.rontolisp.eval;
 
-import java.util.List;
-
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.PackageRegistry;
@@ -12,18 +10,17 @@ import com.oracle.svm.core.annotate.TargetClass;
  * Web Image substitution for {@link ObjcInterop}, the counterpart of
  * {@link Target_LinalgGpu}. The browser playground has no foreign function API, no
  * {@code libobjc} and no AppKit. {@link ObjcInterop#available()},
- * {@link ObjcInterop#description()}, {@link ObjcInterop#register},
- * {@link ObjcInterop#registerPrimitives},
+ * {@link ObjcInterop#description()}, {@link ObjcInterop#registerPrimitives},
  * {@link ObjcInterop#mainThreadHandOverRequired()} and
  * {@link ObjcInterop#parkMainThread()} are the only entry points into
- * {@code ObjcBridge} and {@code ObjcPrimitives} (the holders of the {@code am.ik.objc}
- * references), so substituting all six makes those classes -- and the whole binding -- unreachable. Adding
- * a public method to {@code ObjcInterop} that touches the bridge breaks that, and only
- * the Pages workflow's Web Image build would catch it.
+ * {@code ObjcPrimitives} (the holder of the {@code am.ik.objc} references), so
+ * substituting all five makes that class -- and the whole binding -- unreachable. Adding
+ * a public method to {@code ObjcInterop} that touches the primitives breaks that, and
+ * only the Pages workflow's Web Image build would catch it.
  *
  * <p>
- * The {@code objc:} verbs are still defined, so a program that reaches one fails at the
- * call with the truthful reason rather than with an undefined function.
+ * The primitives are still defined, so a program that reaches one fails at the call with
+ * the truthful reason rather than with an undefined function.
  */
 @TargetClass(ObjcInterop.class)
 final class Target_ObjcInterop {
@@ -36,14 +33,6 @@ final class Target_ObjcInterop {
 	@Substitute
 	static String description() {
 		return "no foreign function API in the browser playground";
-	}
-
-	@Substitute
-	static void register(Environment globalEnv, ObjcCaller caller) {
-		for (String member : List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
-				LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP)) {
-			ObjcTargetSupport.unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, member));
-		}
 	}
 
 	@Substitute

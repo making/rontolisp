@@ -95,25 +95,19 @@ class TypeEncodingTest {
 	}
 
 	@Test
-	void aVariadicSelectorIsTheOneEncodingThatDoesNotDescribeItsCall() {
+	void aVariadicCallIsSpelledWholeByItsCaller() {
 		// +[NSArray arrayWithObjects:] and +[NSArray arrayWithObject:] are declared byte
 		// for byte the same, so the encoding cannot tell them apart and the difference
-		// -- a stack slot against a register -- is the whole call. The variadic half is
-		// appended from the TABLE of known names, never read out of the encoding.
-		TypeEncoding encoding = TypeEncoding.parse("@24@0:8@16");
-		assertThat(TypeEncoding.spelling(encoding.descriptor())).isEqualTo("void*(void*,void*,void*)");
-		assertThat(TypeEncoding.spelling(encoding.descriptor(
-				List.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_DOUBLE, ValueLayout.ADDRESS))))
+		// -- a stack slot against a register -- is the whole call. objc.lisp appends the
+		// variadic arguments' types to the encoding it hands over (from its table of such
+		// selectors, or a list-form method's :variadic-num-of-fixed), so the descriptor
+		// is the whole shape.
+		TypeEncoding declared = TypeEncoding.parse("@24@0:8@16");
+		assertThat(TypeEncoding.spelling(declared.descriptor())).isEqualTo("void*(void*,void*,void*)");
+		assertThat(declared.argumentTypes()).hasSize(3);
+		TypeEncoding called = TypeEncoding.parse("@24@0:8@16@qd@");
+		assertThat(TypeEncoding.spelling(called.descriptor()))
 			.isEqualTo("void*(void*,void*,void*,void*,jlong,jdouble,void*)");
-		assertThat(encoding.argumentTypes()).hasSize(3);
-		assertThat(VariadicSelectors.isVariadic("arrayWithObjects:")).isTrue();
-		assertThat(VariadicSelectors.isVariadic("arrayWithObject:")).isFalse();
-		// The fixed-arity way to build an array of any size takes a real C array and a
-		// count, and must never be given the variadic treatment.
-		assertThat(VariadicSelectors.isVariadic("arrayWithObjects:count:")).isFalse();
-		assertThat(VariadicSelectors.all()).contains("stringWithFormat:", "dictionaryWithObjectsAndKeys:",
-				"appendFormat:", "raise:format:");
-		assertThat(VariadicSelectors.all()).allSatisfy(selector -> assertThat(selector).endsWith(":"));
 	}
 
 	@Test

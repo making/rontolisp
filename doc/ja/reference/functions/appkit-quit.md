@@ -6,5 +6,5 @@ Cmd-Q と同じようにアプリケーションを終了します。インタ�
 
 ```console
 CL-USER> (appkit:menu (list (list "Quit" #'appkit:quit "q")))
-#<objc NSMenu>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDAF1C9C0>
 ```

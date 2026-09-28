@@ -43,8 +43,8 @@ class ShippedBridgeClassFilesTest {
 					List.of("$BlasBridge")),
 			new Bridge("--gpu", "(print (linalg:matmul #d((1.0)) #d((2.0))))", false, false, true,
 					List.of("$GpuBridge", "$GpuGpu", "$GpuCudaDriver", "$GpuMetalGemm")),
-			new Bridge("objc:", "(print (objc:objectp 1))", false, false, false,
-					List.of("$ObjcBridge", "$ObjcObject", "$ObjcObjcRuntime", "$ObjcObjcException")),
+			new Bridge("objc:", "(print (objc:invoke \"NSObject\" \"new\"))", false, false, false,
+					List.of("$ObjcPrimitives", "$ObjcObjcRuntime", "$ObjcObjcException")),
 			new Bridge("ffi:", "(print (ffi:pointerp 1))", false, false, false,
 					List.of("$FfiBridge", "$FfiPointer", "$FfiFfiRuntime", "$FfiFfiException")));
 

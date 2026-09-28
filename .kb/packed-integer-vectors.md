@@ -32,7 +32,7 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   (`JvmJavaDirectSites._jseq`, the bridge's `packedElements`); the packed-int print branch runs
   ahead of the matrix's. No format code may be 8. A door that forgets reads a header as data
   without a word -- pinned by `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
-  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcTemplate`, `JvmGpuTemplate`)
+  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcPrimitivesTemplate`, `JvmGpuTemplate`)
   spells the 8 itself.
 - wasm-GC: the BARE `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR`, `(array (mut i8|i16|i32))`,
   types 57-59 in ONE rec group (keeping i32 structurally distinct from `TYPE_LIMBS` under GC

@@ -1,7 +1,7 @@
-//! The new `objc` base's primitive layer on a `--native` output: the `rlobjc` `p_*`
-//! imports `objc-native-primitives.lisp` declares, which `objc.lisp` -- the whole
-//! vocabulary, the same file every target runs -- is written over (`.kb/objc.md`, "The
-//! new base"). Nothing here decides a rule: every conversion and every ownership decision
+//! The `objc` primitive layer on a `--native` output: the `rlobjc` `p_*` imports
+//! `objc-native-primitives.lisp` declares, which `objc.lisp` -- the whole vocabulary,
+//! the same file every target runs -- is written over (`.kb/objc.md`, "The primitive
+//! layer"). Nothing here decides a rule: every conversion and every ownership decision
 //! is Lisp's. What the host does is what only the host can: look the runtime up, make one
 //! call by an encoding the caller hands over, and count the references a pointer value
 //! holds, releasing the collector's share when the value dies.
@@ -22,8 +22,8 @@ use wasmtime_wasi::p1::WasiP1Ctx;
 use super::call::{Call, Leaf, Raised, read_leaf};
 use super::encoding::{self, Kind};
 use super::{
-    Api, Entered, MODULE, PENDING, api, cstring, is_application, memory_string, release_pending, return_string, text,
-    with,
+    Api, Entered, MODULE, PENDING, api, cstring, is_application, memory_slice, memory_string, release_pending,
+    return_bytes, return_string, text, with,
 };
 
 /// One argument as the library pushed it: raw, marshalled by the encoding at the send.
@@ -350,7 +350,7 @@ pub(super) fn answer(api: &Api, ty: &encoding::Type, leaves: &[Leaf], mode: i32)
 /// The references a pointer value holds, as the host data of the `externref` the value
 /// keeps (`p_new_handle`): [collector's, explicit retains, a pool's]. When the value dies
 /// wasmtime's collector drops this, which queues the collector's share for release on
-/// thread 0 (`release_pending`), as the old base's `Owned` does for its one reference.
+/// thread 0 (`release_pending`).
 struct Handle {
     object: usize,
     counts: [AtomicI64; 3],
@@ -464,10 +464,10 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
                 kind::NIL
             } else if starts_application(api, receiver as usize, sel as usize) {
                 // -[NSApplication run] never returns, and thread 0 is the module's: the
-                // host owns the loop instead (`pump`), as for the old base.
+                // host owns the loop instead (`pump`).
                 prim(|p| p.args.clear());
                 with(|s| s.app_started = true);
-                let _ = api.send(receiver as usize, "activateIgnoringOtherApps:", vec![super::Arg::True]);
+                let _ = api.msg(receiver as usize, "activateIgnoringOtherApps:", &[Leaf::Int(1)]);
                 kind::NIL
             } else {
                 api.with_pool(|| send(api, receiver as usize, 0, sel as usize, &types, fixed, mode))
@@ -551,6 +551,42 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             // SAFETY: as for p_peek.
             unsafe { poke(address as usize, &ty, &leaves) };
             Ok(kind::NIL)
+        },
+    )?;
+    // `%p-write-bytes`: the module's `len` bytes at `ptr` (a `:bytes` argument) copied to
+    // the foreign address, which holds at least that many.
+    linker.func_wrap(
+        MODULE,
+        "p_write_bytes",
+        |mut caller: Caller<'_, WasiP1Ctx>, address: i64, ptr: i32, len: i32| -> wasmtime::Result<()> {
+            let bytes = memory_slice(&mut caller, ptr, len)?;
+            if bytes.is_empty() {
+                return Ok(());
+            }
+            if address == 0 {
+                wasmtime::bail!("objc: a write of {} byte(s) to a null address", bytes.len());
+            }
+            // SAFETY: foreign memory of at least `len` bytes the library addresses, which
+            // cannot overlap the module's linear memory.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), address as usize as *mut u8, bytes.len()) };
+            Ok(())
+        },
+    )?;
+    // `%p-read-bytes`: `cap` bytes at the foreign address copied into the buffer the library
+    // allocated (a `:bytes` result, arriving as `ptr` and `cap`); answers `cap`.
+    linker.func_wrap(
+        MODULE,
+        "p_read_bytes",
+        |mut caller: Caller<'_, WasiP1Ctx>, address: i64, ptr: i32, cap: i32| -> wasmtime::Result<i32> {
+            if cap <= 0 {
+                return Ok(0);
+            }
+            if address == 0 {
+                wasmtime::bail!("objc: a read of {cap} byte(s) from a null address");
+            }
+            // SAFETY: foreign memory of at least `cap` bytes the library addresses.
+            let bytes = unsafe { std::slice::from_raw_parts(address as usize as *const u8, cap as usize) };
+            return_bytes(&mut caller, bytes, ptr, cap)
         },
     )?;
     linker.func_wrap(MODULE, "p_result_int", || prim(|p| p.answer.int))?;

@@ -1,10 +1,10 @@
 # objc パッケージの関数
 
-`objc` パッケージは Foreign Function API で Objective-C ランタイムと AppKit をバインドします。リフレクションを使わないため、`java:` と違って `java -jar` だけでなく**ネイティブバイナリ**でも動作します。**macOS 専用**で (インタプリタ、コンパイル済み `.class` / `.jar`、Apple silicon の macOS 向け `--native` 実行ファイルで動作し、`.wasm` では使えません)、**Common Lisp の一部ではありません**。関数は `objc:` 修飾子付きで参照します。各名前は個別のページにリンクしています。変換、スレッド、所有権、ネイティブバイナリの形テーブルについては [macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
+`objc` パッケージは Foreign Function API で Objective-C ランタイムと AppKit をバインドします。リフレクションを使わないため、`java:` と違って `java -jar` だけでなく**ネイティブバイナリ**でも動作します。**macOS 専用**で (インタプリタ、コンパイル済み `.class` / `.jar`、Apple silicon の macOS 向け `--native` 実行ファイルで動作し、`.wasm` では使えません)、**Common Lisp の一部ではありません**。関数は `objc:` 修飾子付きで参照するか、LispWorks のコードと同じくパッケージを use します。語彙は LispWorks 8.1 の Objective-C インターフェースで、それにブロック、Objective-C 自身が報告するものを表すコンディション、独自の 4 つの関数が加わります。各名前は個別のページにリンクしています。変換、スレッド、所有権、ネイティブバイナリの形テーブルについては [macOS GUI ガイド](../../guides/objc-appkit.md)を参照してください。
 
 ## LispWorks のインターフェース
 
-LispWorks 8.1 の Objective-C インターフェースの名前とラムダリストをそのまま持つため、そのマニュアルに沿って書いたコードがここで動きます。型もこのパッケージが名付けます。`objc:objc-object-pointer` (すべてのオブジェクト)、`objc:objc-class` (クラス。オブジェクトポインタでもある)、`objc:sel` (セレクタ) は、以下の関数が返す値の型です。`objc:objc-bool`、`objc:objc-c++-bool`、`objc:objc-c-string`、`objc:objc-at-question-mark`、`objc:objc-unknown` は、リスト形式のメソッドと `objc:objc-class-method-signature` が使う型指定子です。マクロ [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md) は本体を自動解放プールの中で評価します。下の `objc:on-main` はパッケージの両方の部分で共有されます。クラスはマクロ [`objc:define-objc-class`](../macros/objc-define-objc-class.md)、[`objc:define-objc-method`](../macros/objc-define-objc-method.md)、[`objc:define-objc-class-method`](../macros/objc-define-objc-class-method.md)、[`objc:current-super`](../macros/objc-current-super.md)、[`objc:define-objc-struct`](../macros/objc-define-objc-struct.md)、[`objc:define-objc-typedef`](../macros/objc-define-objc-typedef.md)、[`objc:define-objc-protocol`](../macros/objc-define-objc-protocol.md) で定義し、そのインスタンスは `objc:standard-objc-object` です。
+LispWorks 8.1 の Objective-C インターフェースの名前とラムダリストをそのまま持つため、そのマニュアルに沿って書いたコードがここで動きます。型もこのパッケージが名付けます。`objc:objc-object-pointer` (すべてのオブジェクト)、`objc:objc-class` (クラス。オブジェクトポインタでもある)、`objc:sel` (セレクタ) は、以下の関数が返す値の型です。`objc:objc-bool`、`objc:objc-c++-bool`、`objc:objc-c-string`、`objc:objc-at-question-mark`、`objc:objc-unknown` は、リスト形式のメソッドと `objc:objc-class-method-signature` が使う型指定子です。マクロ [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md) は本体を自動解放プールの中で評価します。クラスはマクロ [`objc:define-objc-class`](../macros/objc-define-objc-class.md)、[`objc:define-objc-method`](../macros/objc-define-objc-method.md)、[`objc:define-objc-class-method`](../macros/objc-define-objc-class-method.md)、[`objc:current-super`](../macros/objc-current-super.md)、[`objc:define-objc-struct`](../macros/objc-define-objc-struct.md)、[`objc:define-objc-typedef`](../macros/objc-define-objc-typedef.md)、[`objc:define-objc-protocol`](../macros/objc-define-objc-protocol.md) で定義し、そのインスタンスは `objc:standard-objc-object` です。
 
 | 関数 | 例 | 結果 |
 |------|-----|------|
@@ -62,19 +62,13 @@ Objective-C 自身が報告する失敗です。LispWorks の `OBJC` はこれ�
 | [`objc:ns-error-description`](objc-ns-error-description.md) | `(objc:ns-error-description e)` | ローカライズされた説明 |
 | [`objc:ns-error-object`](objc-ns-error-object.md) | `(objc:ns-error-object e)` | `NSError` |
 
-## 最初の動詞
+## このパッケージ独自の関数
 
-`appkit`、`metal`、`scene` の各層が土台にしている、パッケージ本来の動詞です。これらの層が LispWorks のインターフェースに移るまで残ります。
+LispWorks の `OBJC` にない関数です。Lisp をメインスレッドで実行する関数、メモリブロックを受け渡す関数、Objective-C のオブジェクトをほかの値と見分ける関数があります。
 
 | 関数 | 例 | 結果 |
 |------|-----|------|
-| `objc:class` | `(objc:class "NSWindow")` | クラス (`#<objc NSWindow>`) |
-| `objc:send` | `(objc:send (objc:string "hi") "length")` | セレクタの宣言型に従ってマーシャリングされた結果 |
-| `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | メソッドが Lisp 関数であるクラス |
-| `objc:on-main` | `(objc:on-main (lambda () ...))` | メインスレッドで計算された関数の値 |
-| `objc:string` | `(objc:string "hi")` | `NSString` |
-| `objc:data` | `(objc:data buffer)` | バッファのバイト列を持つ `NSMutableData` |
-| `objc:bytes` | `(objc:bytes data)` | `NSData` のバイト列 (パックされた `(unsigned-byte 8)` ベクタ) |
-| `objc:address` | `(objc:address obj)` | オブジェクトのアドレス (整数) |
-| `objc:objectp` | `(objc:objectp x)` | Objective-C オブジェクトなら `t` |
-
+| [`objc:on-main`](objc-on-main.md) | `(objc:on-main (lambda () ...))` | メインスレッドで計算された関数の値 |
+| [`objc:data`](objc-data.md) | `(objc:data buffer)` | バッファのバイト列を持つ `NSMutableData` |
+| [`objc:bytes`](objc-bytes.md) | `(objc:bytes data)` | `NSData` の内容 (新しい `(unsigned-byte 8)` ベクタ) |
+| [`objc:objectp`](objc-objectp.md) | `(objc:objectp x)` | オブジェクトポインタ (クラスを含む) なら `t` |

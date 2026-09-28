@@ -3,14 +3,14 @@
 ;; commit, plus the shader, pipeline and buffer helpers every Metal program
 ;; writes identically -- or on no window at all (metal:offscreen /
 ;; metal:pixels), which is the same surface drawing into a texture the CPU can
-;; read. Written in rontolisp itself over the objc: verbs and
+;; read. Written in rontolisp itself over the objc package and
 ;; shipped inside the interpreter (see MetalLibrary.java): the interpreter loads
 ;; these definitions lazily on the first use of a metal: function, so a bare REPL
 ;; can draw with nothing required and nothing to copy.
 ;;
 ;; The macOS counterpart of examples/browser/webgl-common/gl.lisp: that file
 ;; imports a WebGL context from the page, this one builds a Metal one from the
-;; objc: package. Metal is almost entirely an Objective-C API, so objc:send
+;; objc: package. Metal is almost entirely an Objective-C API, so objc:invoke
 ;; reaches all of it -- there is no C entry point to bind and no library to ship.
 ;; The one C function Metal appears to need, MTLCreateSystemDefaultDevice(), is
 ;; avoidable: CAMetalLayer's preferredDevice is a PROPERTY and answers the same
@@ -24,7 +24,7 @@
 ;; Portability constraints honored here (like linalg.lisp): do loops always
 ;; declare at least one variable; parameters are never assigned with setq.
 ;;
-;; Threads: every objc:send hops to thread 0 on its own, so a sequence of them is
+;; Threads: every objc:invoke hops to thread 0 on its own, so a sequence of them is
 ;; wrapped in ONE objc:on-main to pay the hop once rather than per selector
 ;; (.kb/objc.md).
 
@@ -111,24 +111,24 @@
 ;; into it must declare.
 (defun metal::%depth-texture (dev width height)
   (let ((desc
-         (objc:send (objc:class "MTLTextureDescriptor")
-                    "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
-                    metal::+depth32-float+ (floor width) (floor height) nil)))
-    (objc:send desc "setStorageMode:" metal::+storage-private+)
-    (objc:send desc "setUsage:" metal::+usage-render-target+)
-    (objc:send dev "newTextureWithDescriptor:" desc)))
+         (objc:invoke "MTLTextureDescriptor"
+          "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
+          metal::+depth32-float+ (floor width) (floor height) nil)))
+    (objc:invoke desc "setStorageMode:" metal::+storage-private+)
+    (objc:invoke desc "setUsage:" metal::+usage-render-target+)
+    (objc:invoke dev "newTextureWithDescriptor:" desc)))
 
 ;; The colour attachment an offscreen context draws into: the layer's pixel
 ;; format, so the pipelines are the SAME pipelines a window gets, and SHARED
 ;; storage, so the CPU can read the pixels back without a blit.
 (defun metal::%color-texture (dev width height)
   (let ((desc
-         (objc:send (objc:class "MTLTextureDescriptor")
-                    "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
-                    metal::+bgra8-unorm+ (floor width) (floor height) nil)))
-    (objc:send desc "setStorageMode:" metal::+storage-shared+)
-    (objc:send desc "setUsage:" metal::+usage-render-target+)
-    (objc:send dev "newTextureWithDescriptor:" desc)))
+         (objc:invoke "MTLTextureDescriptor"
+          "texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
+          metal::+bgra8-unorm+ (floor width) (floor height) nil)))
+    (objc:invoke desc "setStorageMode:" metal::+storage-shared+)
+    (objc:invoke desc "setUsage:" metal::+usage-render-target+)
+    (objc:invoke dev "newTextureWithDescriptor:" desc)))
 
 ;; Replaces WINDOW's content view backing with a CAMetalLayer and answers the
 ;; context every other function here takes. CLEAR is the (r g b a) the frame
@@ -139,25 +139,25 @@
 (defun metal:attach (window &key (clear '(0.05 0.06 0.09 1.0)) (scale 2) depth)
   (objc:on-main
    (lambda ()
-     (let* ((view (objc:send window "contentView"))
-            (bounds (objc:send view "frame"))
-            (width (third bounds))
-            (height (fourth bounds))
-            (lyr (objc:send (objc:class "CAMetalLayer") "layer"))
-            (dev (objc:send lyr "preferredDevice")))
+     (let* ((view (objc:invoke window "contentView"))
+            (bounds (objc:invoke view "frame"))
+            (width (aref bounds 2))
+            (height (aref bounds 3))
+            (lyr (objc:invoke "CAMetalLayer" "layer"))
+            (dev (objc:invoke lyr "preferredDevice")))
        (unless dev (error "metal: this machine has no Metal device"))
-       (objc:send lyr "setDevice:" dev)
-       (objc:send lyr "setPixelFormat:" metal::+bgra8-unorm+)
-       (objc:send lyr "setFramebufferOnly:" t)
-       (objc:send lyr "setFrame:" (list 0.0 0.0 width height))
-       (objc:send lyr "setDrawableSize:"
-                  (list (* scale width) (* scale height)))
-       (objc:send view "setLayer:" lyr)
-       (objc:send view "setWantsLayer:" t)
+       (objc:invoke lyr "setDevice:" dev)
+       (objc:invoke lyr "setPixelFormat:" metal::+bgra8-unorm+)
+       (objc:invoke lyr "setFramebufferOnly:" t)
+       (objc:invoke lyr "setFrame:" (vector 0.0 0.0 width height))
+       (objc:invoke lyr "setDrawableSize:"
+                    (vector (* scale width) (* scale height)))
+       (objc:invoke view "setLayer:" lyr)
+       (objc:invoke view "setWantsLayer:" t)
        (make-instance 'metal:context
                       :device dev
                       :layer lyr
-                      :queue (objc:send dev "newCommandQueue")
+                      :queue (objc:invoke dev "newCommandQueue")
                       :clear clear
                       :scale scale
                       :depth-wanted (if depth t nil)
@@ -181,13 +181,13 @@
    (lambda ()
      (let* ((w (floor width))
             (h (floor height))
-            (lyr (objc:send (objc:class "CAMetalLayer") "layer"))
-            (dev (objc:send lyr "preferredDevice")))
+            (lyr (objc:invoke "CAMetalLayer" "layer"))
+            (dev (objc:invoke lyr "preferredDevice")))
        (unless dev (error "metal: this machine has no Metal device"))
        (make-instance 'metal:context
                       :device dev
                       :layer nil
-                      :queue (objc:send dev "newCommandQueue")
+                      :queue (objc:invoke dev "newCommandQueue")
                       :clear clear
                       :scale 1
                       :depth-wanted (if depth t nil)
@@ -206,16 +206,12 @@
     (let* ((size (metal::%target-size ctx))
            (w (first size))
            (h (second size))
-           (store
-            (objc:data
-             (make-array (* w h 4)
-                         :element-type '(unsigned-byte 8)
-                         :initial-element 0))))
+           (store (objc:invoke "NSMutableData" "dataWithLength:" (* w h 4))))
       (objc:on-main
        (lambda ()
-         (objc:send tex "getBytes:bytesPerRow:fromRegion:mipmapLevel:"
-                    (objc:send store "mutableBytes") (* w 4) (list 0 0 0 w h 1)
-                    0)))
+         (objc:invoke tex "getBytes:bytesPerRow:fromRegion:mipmapLevel:"
+                      (objc:invoke store "mutableBytes") (* w 4)
+                      (vector 0 0 0 w h 1) 0)))
       (objc:bytes store))))
 
 ;; The colour a frame starts from, as an (r g b a) list. A viewer changes it
@@ -241,8 +237,8 @@
        ;; drawable, and it is rebuilt at the new size
        (if lyr
            (progn
-             (objc:send lyr "setFrame:" (list 0.0 0.0 w h))
-             (objc:send lyr "setDrawableSize:" (list (* s w) (* s h))))
+             (objc:invoke lyr "setFrame:" (vector 0.0 0.0 w h))
+             (objc:invoke lyr "setDrawableSize:" (vector (* s w) (* s h))))
            (progn
              (setf (metal::%target ctx)
                    (metal::%color-texture (metal:device ctx) (* s w) (* s h)))
@@ -255,13 +251,13 @@
 
 ;; --- shaders -----------------------------------------------------------------
 
-;; Compiles Metal Shading Language SOURCE at run time. The :error marker is what
-;; makes a bad shader readable: without it the selector answers a bare nil, and
-;; with it the binding raises the compiler's own diagnostics, line and caret
-;; included.
+;; Compiles Metal Shading Language SOURCE at run time. invoke-with-error is what
+;; makes a bad shader readable: without the NSError the selector answers a bare
+;; nil, and with it the failure is an objc:ns-error carrying the compiler's own
+;; diagnostics, line and caret included.
 (defun metal:library (ctx source)
-  (objc:send (metal:device ctx) "newLibraryWithSource:options:error:"
-             (objc:string source) nil :error))
+  (objc:invoke-with-error (metal:device ctx)
+                          "newLibraryWithSource:options:error:" source nil))
 
 ;; A render pipeline over the two named functions of LIB, drawing into the
 ;; layer's pixel format.
@@ -269,33 +265,33 @@
   (objc:on-main
    (lambda ()
      (let* ((desc
-             (objc:send
-              (objc:send (objc:class "MTLRenderPipelineDescriptor") "alloc")
-              "init"))
+             (objc:invoke (objc:invoke "MTLRenderPipelineDescriptor" "alloc")
+                          "init"))
             (color
-             (objc:send (objc:send desc "colorAttachments")
-                        "objectAtIndexedSubscript:" 0)))
-       (objc:send desc "setVertexFunction:"
-        (objc:send lib "newFunctionWithName:" (objc:string vertex-name)))
-       (objc:send desc "setFragmentFunction:"
-        (objc:send lib "newFunctionWithName:" (objc:string fragment-name)))
-       (objc:send color "setPixelFormat:" metal::+bgra8-unorm+)
+             (objc:invoke (objc:invoke desc "colorAttachments")
+                          "objectAtIndexedSubscript:" 0)))
+       (objc:invoke desc "setVertexFunction:"
+                    (objc:invoke lib "newFunctionWithName:" vertex-name))
+       (objc:invoke desc "setFragmentFunction:"
+                    (objc:invoke lib "newFunctionWithName:" fragment-name))
+       (objc:invoke color "setPixelFormat:" metal::+bgra8-unorm+)
        (when blend
-         (objc:send color "setBlendingEnabled:" t)
-         (objc:send color "setRgbBlendOperation:" metal::+blend-add+)
-         (objc:send color "setAlphaBlendOperation:" metal::+blend-add+)
-         (objc:send color "setSourceRGBBlendFactor:" metal::+factor-one+)
-         (objc:send color "setSourceAlphaBlendFactor:" metal::+factor-one+)
-         (objc:send color "setDestinationRGBBlendFactor:" metal::+factor-one+)
-         (objc:send color "setDestinationAlphaBlendFactor:"
-                    metal::+factor-one+))
+         (objc:invoke color "setBlendingEnabled:" t)
+         (objc:invoke color "setRgbBlendOperation:" metal::+blend-add+)
+         (objc:invoke color "setAlphaBlendOperation:" metal::+blend-add+)
+         (objc:invoke color "setSourceRGBBlendFactor:" metal::+factor-one+)
+         (objc:invoke color "setSourceAlphaBlendFactor:" metal::+factor-one+)
+         (objc:invoke color "setDestinationRGBBlendFactor:" metal::+factor-one+)
+         (objc:invoke color "setDestinationAlphaBlendFactor:"
+                      metal::+factor-one+))
        ;; a pipeline's attachment formats must match the pass it draws into, so
        ;; the depth format follows the context and is not the caller's
        (when (metal::%depth-wanted ctx)
-         (objc:send desc "setDepthAttachmentPixelFormat:"
-                    metal::+depth32-float+))
-       (objc:send (metal:device ctx)
-                  "newRenderPipelineStateWithDescriptor:error:" desc :error)))))
+         (objc:invoke desc "setDepthAttachmentPixelFormat:"
+                      metal::+depth32-float+))
+       (objc:invoke-with-error (metal:device ctx)
+                               "newRenderPipelineStateWithDescriptor:error:"
+                               desc)))))
 
 ;; How a pipeline uses the depth attachment. :writes nil is the glow pass: it
 ;; READS the depth the solid pass wrote, so a sprite behind the arm is hidden,
@@ -304,20 +300,22 @@
   (objc:on-main
    (lambda ()
      (let ((desc
-            (objc:send
-             (objc:send (objc:class "MTLDepthStencilDescriptor") "alloc")
-             "init")))
-       (objc:send desc "setDepthCompareFunction:" compare)
-       (objc:send desc "setDepthWriteEnabled:" writes)
-       (objc:send (metal:device ctx) "newDepthStencilStateWithDescriptor:"
-                  desc)))))
+            (objc:invoke (objc:invoke "MTLDepthStencilDescriptor" "alloc")
+                         "init")))
+       (objc:invoke desc "setDepthCompareFunction:" compare)
+       (objc:invoke desc "setDepthWriteEnabled:" writes)
+       (objc:invoke (metal:device ctx) "newDepthStencilStateWithDescriptor:"
+                    desc)))))
 
 ;; --- getting numbers onto the GPU --------------------------------------------
 ;;
 ;; objc:data turns a packed buffer into an NSData holding exactly the bytes
 ;; write-sequence would write -- little-endian float32 for a packed single-float
 ;; array -- which is the layout a Metal buffer wants. A geom:mesh IS such an
-;; array, so a solid reaches the GPU with no conversion at all.
+;; array, so a solid reaches the GPU with no conversion at all. The per-frame
+;; paths (upload, uniform) skip the NSData and copy the same bytes straight into
+;; foreign memory through the byte primitive objc:data is written over
+;; (objc::%octets, objc::%write-octets): one send a call instead of five.
 
 ;; A packed single-float array of a list of numbers.
 (defun metal:floats (values)
@@ -333,35 +331,60 @@
 ;; An MTLBuffer holding VALUES (a list, or a packed single-float array already).
 (defun metal:buffer (ctx values)
   (let ((data (objc:data (if (listp values) (metal:floats values) values))))
-    (objc:send (metal:device ctx) "newBufferWithBytes:length:options:"
-               (objc:send data "bytes") (objc:send data "length") 0)))
+    (objc:invoke (metal:device ctx) "newBufferWithBytes:length:options:"
+                 (objc:invoke data "bytes") (objc:invoke data "length") 0)))
 
 ;; An MTLBuffer of BYTES bytes in shared storage, whose contents the CPU
 ;; rewrites -- what metal:buffer is not. A program that re-tessellates its
 ;; geometry every frame allocates once here and copies per frame; the buffers it
 ;; keeps in flight are its own business (see metal-robot-arm.lisp).
 (defun metal:shared-buffer (ctx bytes)
-  (objc:send (metal:device ctx) "newBufferWithLength:options:" bytes 0))
+  (objc:invoke (metal:device ctx) "newBufferWithLength:options:" bytes 0))
+
+;; The bytes of VALUES (a list, or a packed buffer already), as objc:data lays
+;; them out.
+(defun metal::%octets (values)
+  (objc::%octets (if (listp values) (metal:floats values) values)))
 
 ;; Copies VALUES into BUFFER, which must be one of the above and at least as
-;; long. NSData's getBytes:length: is the memcpy: objc:data lays the numbers out
-;; and `contents` is where they land.
+;; long: the bytes land at its `contents`.
 (defun metal:upload (buffer values)
-  (let ((data (objc:data (if (listp values) (metal:floats values) values))))
-    (objc:send data "getBytes:length:" (objc:send buffer "contents")
-               (objc:send data "length"))))
+  (let ((octets (metal::%octets values)))
+    (when (> (length octets) (objc:invoke buffer "length"))
+      (error "metal:upload: ~a bytes do not fit a buffer of ~a" (length octets)
+             (objc:invoke buffer "length")))
+    (objc::%write-octets (objc:invoke buffer "contents") octets)
+    nil))
+
+;; A block of foreign memory a uniform's bytes are staged in for the one send that
+;; copies them (setVertexBytes: and setFragmentBytes: copy what they are given).
+;; Only ever used inside a frame, which runs on thread 0, so one block serves
+;; every uniform; it grows to the largest one asked for.
+(defvar metal::*scratch* nil)
+
+(defvar metal::*scratch-address* 0)
+
+(defun metal::%stage (octets)
+  (when (or (null metal::*scratch*)
+            (> (length octets) (objc:invoke metal::*scratch* "length")))
+    (setq metal::*scratch*
+     (objc:invoke "NSMutableData" "dataWithLength:" (max 256 (length octets))))
+    (setq metal::*scratch-address*
+          (objc:invoke metal::*scratch* "mutableBytes")))
+  (objc::%write-octets metal::*scratch-address* octets)
+  metal::*scratch-address*)
 
 ;; Sets VALUES as the STAGE's bytes at buffer INDEX -- a per-frame uniform small
 ;; enough that Metal wants it inline rather than in a buffer. The vertex and
 ;; fragment stages number their buffers independently, so index 0 of one is not
 ;; index 0 of the other.
 (defun metal:uniform (encoder index values &key (stage :vertex))
-  (let ((data (objc:data (if (listp values) (metal:floats values) values))))
-    (objc:send encoder
-               (if (eq stage :fragment)
-                   "setFragmentBytes:length:atIndex:"
-                   "setVertexBytes:length:atIndex:") (objc:send data "bytes")
-               (objc:send data "length") index)))
+  (let ((octets (metal::%octets values)))
+    (objc:invoke encoder
+                 (if (eq stage :fragment)
+                     "setFragmentBytes:length:atIndex:"
+                     "setVertexBytes:length:atIndex:") (metal::%stage octets)
+                 (length octets) index)))
 
 ;; --- a frame -----------------------------------------------------------------
 
@@ -381,32 +404,32 @@
    (lambda ()
      (let* ((offscreen (metal::%target ctx))
             (drawable
-             (if offscreen nil (objc:send (metal:layer ctx) "nextDrawable")))
+             (if offscreen nil (objc:invoke (metal:layer ctx) "nextDrawable")))
             (texture
              (if offscreen
                  offscreen
-                 (if drawable (objc:send drawable "texture") nil))))
+                 (if drawable (objc:invoke drawable "texture") nil))))
        (when texture
          (let* ((pass
-                 (objc:send (objc:class "MTLRenderPassDescriptor")
-                            "renderPassDescriptor"))
+                 (objc:invoke "MTLRenderPassDescriptor" "renderPassDescriptor"))
                 (color
-                 (objc:send (objc:send pass "colorAttachments")
-                            "objectAtIndexedSubscript:" 0))
-                (commands (objc:send (metal:queue ctx) "commandBuffer")))
-           (objc:send color "setTexture:" texture)
-           (objc:send color "setLoadAction:" metal::+load-clear+)
-           (objc:send color "setStoreAction:" metal::+store-store+)
-           (objc:send color "setClearColor:" (metal::%clear ctx))
+                 (objc:invoke (objc:invoke pass "colorAttachments")
+                              "objectAtIndexedSubscript:" 0))
+                (commands (objc:invoke (metal:queue ctx) "commandBuffer")))
+           (objc:invoke color "setTexture:" texture)
+           (objc:invoke color "setLoadAction:" metal::+load-clear+)
+           (objc:invoke color "setStoreAction:" metal::+store-store+)
+           (objc:invoke color "setClearColor:"
+                        (coerce (metal::%clear ctx) 'simple-vector))
            (let ((zbuf (metal::%depth ctx)))
              (when zbuf
-               (let ((z (objc:send pass "depthAttachment")))
-                 (objc:send z "setTexture:" zbuf)
-                 (objc:send z "setLoadAction:" metal::+load-clear+)
-                 (objc:send z "setClearDepth:" 1.0)
+               (let ((z (objc:invoke pass "depthAttachment")))
+                 (objc:invoke z "setTexture:" zbuf)
+                 (objc:invoke z "setLoadAction:" metal::+load-clear+)
+                 (objc:invoke z "setClearDepth:" 1.0)
                  ;; nothing reads the depth after the frame, so it never leaves
                  ;; tile memory
-                 (objc:send z "setStoreAction:" metal::+store-dont-care+))))
+                 (objc:invoke z "setStoreAction:" metal::+store-dont-care+))))
            ;; The frame is closed out even when FN signals. An encoder released
            ;; without endEncoding is a Metal ASSERTION, and an assertion is an
            ;; abort() -- it kills the process from under the callback guard that
@@ -415,14 +438,15 @@
            ;; drawn and commits; a half-drawn frame is a picture, an aborted
            ;; process is not.
            (let ((encoder
-                  (objc:send commands "renderCommandEncoderWithDescriptor:"
-                             pass)))
+                  (objc:invoke commands "renderCommandEncoderWithDescriptor:"
+                               pass)))
              (unwind-protect (funcall fn encoder)
-               (objc:send encoder "endEncoding")
-               (when drawable (objc:send commands "presentDrawable:" drawable))
-               (objc:send commands "commit")
+               (objc:invoke encoder "endEncoding")
+               (when drawable
+                 (objc:invoke commands "presentDrawable:" drawable))
+               (objc:invoke commands "commit")
                (unless drawable
-                 (objc:send commands "waitUntilCompleted"))))))))))
+                 (objc:invoke commands "waitUntilCompleted"))))))))))
 
 ;; Draws FN on a timer. The clock is appkit:timer, an NSTimer on thread 0, so the
 ;; frame runs where AppKit and Metal both want it.

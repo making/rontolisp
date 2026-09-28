@@ -68,13 +68,15 @@ class AppKitLibraryTest {
 
 	@Test
 	void theFirstInteropReferenceIsFoundQualifiedOrInPackage() {
-		assertThat(AppKitLibrary.firstObjcReference(read("(print 1) (defun f () (objc:send x \"y\"))")))
-			.isEqualTo("OBJC:SEND");
+		assertThat(AppKitLibrary.firstObjcReference(read("(print 1) (defun f () (objc:invoke x \"y\"))")))
+			.isEqualTo("OBJC:INVOKE");
 		assertThat(AppKitLibrary.firstObjcReference(read("(appkit:window \"t\")"))).isEqualTo("APPKIT:WINDOW");
 		assertThat(AppKitLibrary.firstObjcReference(read("(in-package appkit) (window \"t\")")))
 			.isEqualTo("APPKIT:WINDOW");
-		assertThat(AppKitLibrary.firstObjcReference(read("(in-package objc) (send x \"y\")"))).isEqualTo("OBJC:SEND");
-		assertThat(AppKitLibrary.firstObjcReference(read("(in-package cl-user) (defun send () 1) (print 'window)")))
+		assertThat(AppKitLibrary.firstObjcReference(read("(in-package objc) (invoke x \"y\")")))
+			.isEqualTo("OBJC:INVOKE");
+		assertThat(AppKitLibrary.firstObjcReference(read("(in-package objc) (on-main f)"))).isEqualTo("OBJC:ON-MAIN");
+		assertThat(AppKitLibrary.firstObjcReference(read("(in-package cl-user) (defun invoke () 1) (print 'window)")))
 			.isNull();
 		assertThat(AppKitLibrary.firstObjcReference(read("(java:static \"java.lang.Math\" \"max\" 1 2)"))).isNull();
 	}
@@ -95,9 +97,9 @@ class AppKitLibraryTest {
 			assertThatThrownBy(() -> compile(loader, output)).isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("Cannot compile: APPKIT:WINDOW");
 		}
-		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
+		Files.writeString(source, "(objc:invoke \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
 		assertThatThrownBy(() -> compile(source, "-o", dir.resolve("prog.wasm").toString()))
-			.hasMessageContaining("Cannot compile: OBJC:SEND");
+			.hasMessageContaining("Cannot compile: OBJC:INVOKE");
 		// The JVM backend ships the binding beside the class: both programs compile,
 		// the appkit one with the widget layer spliced in, to a class and to a jar whose
 		// manifest enables native access for a plain java -jar.
@@ -105,15 +107,31 @@ class AppKitLibraryTest {
 		Path prog = dir.resolve("Prog.class");
 		compile(loader, "-o", prog.toString());
 		String bytes = Files.readString(prog, StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains("Prog$ObjcBridge").contains("APPKIT$colonWINDOW");
-		assertThat(dir.resolve("Prog$ObjcBridge.class")).exists();
+		assertThat(bytes).contains("Prog$ObjcPrimitives").contains("APPKIT$colonWINDOW");
+		assertThat(dir.resolve("Prog$ObjcPrimitives.class")).exists();
 		Path jar = dir.resolve("prog.jar");
 		compile(source, "-o", jar.toString(), "--class-name", "Prog");
 		assertThat(Files.size(jar)).isGreaterThan(0);
-		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
+		Files.writeString(source, "(objc:invoke \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
 		compile(source, "-o", prog.toString());
-		assertThat(Files.readString(prog, StandardCharsets.ISO_8859_1)).contains("Prog$ObjcBridge")
+		assertThat(Files.readString(prog, StandardCharsets.ISO_8859_1)).contains("Prog$ObjcPrimitives")
 			.doesNotContain("APPKIT$colon");
+	}
+
+	@Test
+	void theCompilePathSplicesTheClassDefinitionsExpanded() {
+		// The compile path expands user macros BEFORE it splices libraries, so the
+		// define-objc-class / define-objc-method forms of appkit.lisp are expanded when
+		// it is spliced (ObjcLibrary.expandDefinitions): no defining macro survives, the
+		// calls they expand to remain.
+		String expanded = AppKitLibrary.expandedForms().toString();
+		assertThat(AppKitLibrary.forms().toString()).contains("OBJC:DEFINE-OBJC-CLASS");
+		assertThat(expanded).doesNotContain("OBJC:DEFINE-OBJC-CLASS")
+			.doesNotContain("OBJC:DEFINE-OBJC-METHOD")
+			.contains("OBJC::%DEFINE-OBJC-CLASS")
+			.contains("OBJC::%DEFINE-OBJC-METHOD");
+		String scene = SceneLibrary.expandedForms().toString();
+		assertThat(scene).doesNotContain("OBJC:DEFINE-OBJC-METHOD").contains("OBJC::%DEFINE-OBJC-METHOD");
 	}
 
 	@Test
@@ -122,11 +140,11 @@ class AppKitLibraryTest {
 		// reference -- even one AFTER an objc: reference, which the first-reference
 		// walk stops at -- prepends the definitions.
 		assertThat(AppKitLibrary.process(read("(print 1)"))).hasSize(1);
-		assertThat(AppKitLibrary.process(read("(objc:send x \"y\")"))).hasSize(1);
-		assertThat(AppKitLibrary.process(read("(objc:send x \"y\") (appkit:window \"t\")")))
-			.hasSize(AppKitLibrary.forms().size() + 2);
+		assertThat(AppKitLibrary.process(read("(objc:invoke x \"y\")"))).hasSize(1);
+		assertThat(AppKitLibrary.process(read("(objc:invoke x \"y\") (appkit:window \"t\")")))
+			.hasSize(AppKitLibrary.expandedForms().size() + 2);
 		assertThat(AppKitLibrary.process(read("(in-package appkit) (window \"t\")")))
-			.hasSize(AppKitLibrary.forms().size() + 2);
+			.hasSize(AppKitLibrary.expandedForms().size() + 2);
 		assertThat(AppKitLibrary.process(read("(in-package cl-user) (print 'window)"))).hasSize(2);
 	}
 

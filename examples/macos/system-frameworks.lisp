@@ -12,8 +12,9 @@
 ;;;; Image and read back out of it by Vision, and the two strings are compared. The
 ;;;; round trip leaves the process only to reach the frameworks.
 ;;;;
-;;;; It prints to the terminal and ends by itself. macOS only, on the interpreter and
-;;;; compiled to a JVM class or jar; never as WASM.
+;;;; It prints to the terminal and ends by itself. macOS only, on the interpreter,
+;;;; compiled to a JVM class or jar, and as a --native executable on Apple silicon;
+;;;; never as WASM.
 ;;;;
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/macos/system-frameworks.lisp
 ;;;;   ./target/rontolisp examples/macos/system-frameworks.lisp
@@ -21,26 +22,28 @@
 ;;;;     --class-name SystemFrameworks && java SystemFrameworks
 ;;;;   ./target/rontolisp examples/macos/system-frameworks.lisp -o system-frameworks.jar && \
 ;;;;     java -jar system-frameworks.jar
+;;;;   ./target/rontolisp examples/macos/system-frameworks.lisp --native -o system-frameworks && \
+;;;;     ./system-frameworks
 
-(defun utf8 (nsstring) (objc:send nsstring "UTF8String"))
-
-(defun nsstr (text) (objc:string text))
+;;; A Lisp string passed where a method takes an object becomes an NSString, so no
+;;; call below converts one by hand; an NSString that comes back is an object, and
+;;; `objc:invoke-into 'string` is the send that answers it as Lisp text.
 
 ;;; 1. A dependency is a message
 ;;;
 ;;; Vision, NaturalLanguage and Core Image are not linked into this process: no Lisp
 ;;; program links anything. `load` maps the framework and registers its classes with the
-;;; runtime, and from the next line on `(objc:send "VNRecognizeTextRequest" ...)` names a
-;;; class that did not exist a moment ago. This is the whole of dependency management
+;;; runtime, and from the next line on `(objc:invoke "VNRecognizeTextRequest" ...)` names
+;;; a class that did not exist a moment ago. This is the whole of dependency management
 ;;; here -- there is no manifest, no classpath and no download.
 
 (format t "== 1. a dependency is a message ==~%")
 
 (defun load-framework (name)
   (let ((bundle
-         (objc:send "NSBundle" "bundleWithPath:"
-          (nsstr (format nil "/System/Library/Frameworks/~a.framework" name)))))
-    (if (and bundle (objc:send bundle "load")) t nil)))
+         (objc:invoke "NSBundle" "bundleWithPath:"
+          (format nil "/System/Library/Frameworks/~a.framework" name))))
+    (if (and bundle (objc:invoke-bool bundle "load")) t nil)))
 
 (dolist (name '("Vision" "NaturalLanguage" "CoreImage"))
   (format t "~16a loaded=~a~%" name (load-framework name)))
@@ -53,9 +56,8 @@
 (format t "~%== 2. the language of a string ==~%")
 
 (defun dominant-language (text)
-  (utf8
-   (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
-              (nsstr text))))
+  (objc:invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
+                    text))
 
 (dolist (text
          '("これは日本語の文章です" "this sentence is in english"
@@ -65,22 +67,23 @@
 ;;; 3. Spelling, from the same checker the text fields use
 ;;;
 ;;; `checkSpellingOfString:startingAt:` answers an NSRange -- a C struct, which the
-;;; binding flattens to a Lisp list, because the selector's own type encoding says so
-;;; and nothing here declared it.
+;;; binding answers as the cons (location . length), because the selector's own type
+;;; encoding says so and nothing here declared it. The same cons goes back in as an
+;;; NSRange argument.
 
 (format t "~%== 3. spelling ==~%")
 
-(defvar *checker* (objc:send "NSSpellChecker" "sharedSpellChecker"))
+(defvar *checker* (objc:invoke "NSSpellChecker" "sharedSpellChecker"))
 
 (defun misspelling (text)
-  (objc:send *checker* "checkSpellingOfString:startingAt:" (nsstr text) 0))
+  (objc:invoke *checker* "checkSpellingOfString:startingAt:" text 0))
 
 (defun guesses (text range)
   (let ((array
-         (objc:send *checker*
+         (objc:invoke *checker*
           "guessesForWordRange:inString:language:inSpellDocumentWithTag:" range
-          (nsstr text) (nsstr "en") 0)))
-    (utf8 (objc:send array "componentsJoinedByString:" (nsstr ", ")))))
+          text "en" 0)))
+    (objc:invoke-into 'string array "componentsJoinedByString:" ", ")))
 
 (defvar *typo* "i recieve mail")
 (defvar *range* (misspelling *typo*))
@@ -93,7 +96,8 @@
 ;;; NSDataDetector is the machinery behind the blue underlines in Mail. The mask is a
 ;;; plain integer, the matches are an NSArray, and each match carries the range it
 ;;; found -- so a Lisp program gets dates, links and phone numbers out of free text
-;;; with no regular expression of its own.
+;;; with no regular expression of its own. The constructor reports a bad mask through
+;;; an NSError, which `objc:invoke-with-error` turns into an objc:ns-error condition.
 
 (format t "~%== 4. dates, links and numbers in free text ==~%")
 
@@ -102,21 +106,21 @@
         (cons 2048 "phone")))
 
 (defun detector ()
-  (objc:send "NSDataDetector" "dataDetectorWithTypes:error:"
-             (reduce #'+ (mapcar #'car *checking-types*)) nil))
+  (objc:invoke-with-error "NSDataDetector" "dataDetectorWithTypes:error:"
+                          (reduce #'+ (mapcar #'car *checking-types*))))
 
 (defun detect (text)
-  (let* ((string (nsstr text))
+  (let* ((string (objc:string-to-ns-string text))
          (matches
-          (objc:send (detector) "matchesInString:options:range:" string 0
-                     (list 0 (objc:send string "length")))))
-    (dotimes (i (objc:send matches "count"))
-      (let* ((match (objc:send matches "objectAtIndex:" i))
-             (range (objc:send match "range"))
+          (objc:invoke (detector) "matchesInString:options:range:" string 0
+                       (cons 0 (objc:invoke string "length")))))
+    (dotimes (i (objc:invoke matches "count"))
+      (let* ((match (objc:invoke matches "objectAtIndex:" i))
+             (range (objc:invoke match "range"))
              (kind
-              (cdr (assoc (objc:send match "resultType") *checking-types*))))
+              (cdr (assoc (objc:invoke match "resultType") *checking-types*))))
         (format t "~8a ~a~%" kind
-                (utf8 (objc:send string "substringWithRange:" range)))))))
+         (objc:invoke-into 'string string "substringWithRange:" range))))))
 
 (detect
  "Ship it on September 1, 2026, read https://ik.am, or call 090-1234-5678.")
@@ -129,16 +133,16 @@
 (format t "~%== 5. one number, two calendars ==~%")
 
 (defun formatted (seconds locale style)
-  (let ((formatter (objc:send (objc:send "NSDateFormatter" "alloc") "init")))
-    (objc:send formatter "setLocale:"
-               (objc:send (objc:send "NSLocale" "alloc")
-                          "initWithLocaleIdentifier:" (nsstr locale)))
-    (objc:send formatter "setTimeZone:"
-     (objc:send "NSTimeZone" "timeZoneWithName:" (nsstr "Asia/Tokyo")))
-    (objc:send formatter "setDateStyle:" style)
-    (utf8
-     (objc:send formatter "stringFromDate:"
-      (objc:send "NSDate" "dateWithTimeIntervalSince1970:" seconds)))))
+  (let ((formatter
+         (objc:invoke (objc:invoke "NSDateFormatter" "alloc") "init")))
+    (objc:invoke formatter "setLocale:"
+                 (objc:invoke (objc:invoke "NSLocale" "alloc")
+                              "initWithLocaleIdentifier:" locale))
+    (objc:invoke formatter "setTimeZone:"
+                 (objc:invoke "NSTimeZone" "timeZoneWithName:" "Asia/Tokyo"))
+    (objc:invoke formatter "setDateStyle:" style)
+    (objc:invoke-into 'string formatter "stringFromDate:"
+     (objc:invoke "NSDate" "dateWithTimeIntervalSince1970:" seconds))))
 
 (defvar *new-year* 1767225600.0) ; seconds since the epoch, and nothing more
 
@@ -159,47 +163,53 @@
 
 (format t "~%== 6. text -> image -> text ==~%")
 
-(defun filter (name) (objc:send "CIFilter" "filterWithName:" (nsstr name)))
+(defun filter (name) (objc:invoke "CIFilter" "filterWithName:" name))
 
 (defun rendered-text (text)
   (let ((generator (filter "CIAttributedTextImageGenerator"))
         (attributed
-         (objc:send (objc:send "NSAttributedString" "alloc") "initWithString:"
-                    (nsstr text))))
-    (objc:send generator "setValue:forKey:" attributed "inputText")
-    (objc:send generator "setValue:forKey:"
-               (objc:send "NSNumber" "numberWithDouble:" 6.0)
-               "inputScaleFactor")
-    (objc:send generator "outputImage")))
+         (objc:invoke (objc:invoke "NSAttributedString" "alloc")
+                      "initWithString:" text)))
+    (objc:invoke generator "setValue:forKey:" attributed "inputText")
+    (objc:invoke generator "setValue:forKey:"
+                 (objc:invoke "NSNumber" "numberWithDouble:" 6.0)
+                 "inputScaleFactor")
+    (objc:invoke generator "outputImage")))
 
+;; A CGRect is a vector #(x y width height), both as the answer of extent and as the
+;; argument of imageByCroppingToRect:.
 (defun over-white (image)
   (let ((white (filter "CIConstantColorGenerator"))
         (composite (filter "CISourceOverCompositing")))
-    (objc:send white "setValue:forKey:"
-               (objc:send "CIColor" "colorWithRed:green:blue:" 1.0 1.0 1.0)
-               "inputColor")
-    (objc:send composite "setValue:forKey:" image "inputImage")
-    (objc:send composite "setValue:forKey:"
-               (objc:send (objc:send white "outputImage")
-                          "imageByCroppingToRect:" (objc:send image "extent"))
-               "inputBackgroundImage")
-    (objc:send composite "outputImage")))
+    (objc:invoke white "setValue:forKey:"
+                 (objc:invoke "CIColor" "colorWithRed:green:blue:" 1.0 1.0 1.0)
+                 "inputColor")
+    (objc:invoke composite "setValue:forKey:" image "inputImage")
+    (objc:invoke composite "setValue:forKey:"
+                 (objc:invoke (objc:invoke white "outputImage")
+                              "imageByCroppingToRect:"
+                              (objc:invoke image "extent"))
+                 "inputBackgroundImage")
+    (objc:invoke composite "outputImage")))
 
+;; A Lisp vector passed where an object goes becomes an NSArray, which is what
+;; performRequests:error: takes.
 (defun recognized-text (image)
   (let ((handler
-         (objc:send (objc:send "VNImageRequestHandler" "alloc")
-                    "initWithCIImage:options:" image
-                    (objc:send "NSDictionary" "dictionary")))
+         (objc:invoke (objc:invoke "VNImageRequestHandler" "alloc")
+                      "initWithCIImage:options:" image
+                      (objc:invoke "NSDictionary" "dictionary")))
         (request
-         (objc:send (objc:send "VNRecognizeTextRequest" "alloc") "init")))
-    (objc:send handler "performRequests:error:"
-               (objc:send "NSArray" "arrayWithObject:" request) nil)
-    (let ((results (objc:send request "results")) (lines nil))
-      (dotimes (i (objc:send results "count"))
+         (objc:invoke (objc:invoke "VNRecognizeTextRequest" "alloc") "init")))
+    (objc:invoke-with-error handler "performRequests:error:" (vector request))
+    (let ((results (objc:invoke request "results")) (lines nil))
+      (dotimes (i (objc:invoke results "count"))
         (let ((candidate
-               (objc:send (objc:send (objc:send results "objectAtIndex:" i)
-                                     "topCandidates:" 1) "objectAtIndex:" 0)))
-          (setq lines (cons (utf8 (objc:send candidate "string")) lines))))
+               (objc:invoke (objc:invoke
+                             (objc:invoke results "objectAtIndex:" i)
+                             "topCandidates:" 1) "objectAtIndex:" 0)))
+          (setq lines
+                (cons (objc:invoke-into 'string candidate "string") lines))))
       (reverse lines))))
 
 (defvar *written* "rontolisp")
@@ -207,7 +217,7 @@
 (defvar *read-back* (recognized-text *image*))
 
 (format t "wrote     ~s~%" *written*)
-(format t "image     ~a points~%" (objc:send *image* "extent"))
+(format t "image     ~a points~%" (objc:invoke *image* "extent"))
 (format t "read back ~s~%" (car *read-back*))
 (format t "round trip ~a~%" (equal *written* (car *read-back*)))
 
@@ -221,31 +231,33 @@
 
 (defun speak-to-file (text path)
   (let ((synthesizer
-         (objc:send (objc:send "NSSpeechSynthesizer" "alloc") "init")))
-    (objc:send synthesizer "startSpeakingString:toURL:" (nsstr text)
-               (objc:send "NSURL" "fileURLWithPath:" (nsstr path)))
+         (objc:invoke (objc:invoke "NSSpeechSynthesizer" "alloc") "init")))
+    (objc:invoke synthesizer "startSpeakingString:toURL:" text
+                 (objc:invoke "NSURL" "fileURLWithPath:" path))
     (do ()
-        ((not (objc:send synthesizer "isSpeaking")) path)
+        ((not (objc:invoke-bool synthesizer "isSpeaking")) path)
       (sleep 0.05))))
 
 (defun file-size (path)
   (let ((attributes
-         (objc:send (objc:send "NSFileManager" "defaultManager")
-                    "attributesOfItemAtPath:error:" (nsstr path) nil)))
-    (objc:send (objc:send attributes "objectForKey:" (nsstr "NSFileSize"))
-               "doubleValue")))
+         (objc:invoke-with-error (objc:invoke "NSFileManager" "defaultManager")
+                                 "attributesOfItemAtPath:error:" path)))
+    (objc:invoke (objc:invoke attributes "objectForKey:" "NSFileSize")
+                 "doubleValue")))
 
 (defun temporary-file (name)
-  (utf8
-   (objc:send (objc:send (objc:send (objc:send "NSFileManager" "defaultManager")
-                                    "temporaryDirectory")
-                         "URLByAppendingPathComponent:" (nsstr name)) "path")))
+  (objc:invoke-into 'string
+                    (objc:invoke (objc:invoke
+                                  (objc:invoke "NSFileManager" "defaultManager")
+                                  "temporaryDirectory")
+                                 "URLByAppendingPathComponent:" name) "path"))
 
 (defvar *aiff*
   (speak-to-file (car *read-back*) (temporary-file "rontolisp-speech.aiff")))
 
 (format t "spoke ~s into ~a~%" (car *read-back*)
-        (utf8 (objc:send (nsstr *aiff*) "lastPathComponent")))
+        (objc:invoke-into 'string (objc:string-to-ns-string *aiff*)
+                          "lastPathComponent"))
 (format t "the file has audio in it: ~a~%" (> (file-size *aiff*) 0))
 
 (format t "~%nothing was installed, and no window was opened~%")

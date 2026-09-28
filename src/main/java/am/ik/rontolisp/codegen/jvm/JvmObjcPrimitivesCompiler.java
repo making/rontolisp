@@ -65,6 +65,9 @@ final class JvmObjcPrimitivesCompiler {
 			Map.entry(LispNames.OBJC_CALL_FUNCTION, new Object[] { 5, "callFunction" }),
 			Map.entry(LispNames.OBJC_SYMBOL_ADDRESS, new Object[] { 1, "symbolAddress" }),
 			Map.entry(LispNames.OBJC_RAISED, new Object[] { 0, "raised" }),
+			Map.entry(LispNames.OBJC_OCTETS, new Object[] { 1, "octets" }),
+			Map.entry(LispNames.OBJC_WRITE_OCTETS, new Object[] { 2, "writeOctets" }),
+			Map.entry(LispNames.OBJC_READ_OCTETS, new Object[] { 2, "readOctets" }),
 			Map.entry(ON_MAIN, new Object[] { 1, "onMain" }));
 
 	/**

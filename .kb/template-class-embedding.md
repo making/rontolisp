@@ -15,8 +15,8 @@ part can run at COMPILE time; pin the rename with
 `JvmLispCompiler.bridgeClassFiles` -> `runtimeClassFiles()` (beside `-o X.class`, inside
 `.jar`/`.war`, the Maven plugin's `target/classes`, the playground's jar). Every bridge is named after
 the program, in its package (the entry points are package-private): `<Program>$JavaBridge`,
-`$GeomBridge`, `$SimdBridge`, `$BlasBridge`, `$GpuBridge` + `$Gpu<Class>`, `$ObjcBridge` +
-`$ObjcObject` + `$Objc<Class>`, `$FfiBridge` + `$FfiPointer` + `$Ffi<Class>`. Named after the
+`$GeomBridge`, `$SimdBridge`, `$BlasBridge`, `$GpuBridge` + `$Gpu<Class>`, `$ObjcPrimitives` +
+`$Objc<Class>`, `$FfiBridge` + `$FfiPointer` + `$Ffi<Class>`. Named after the
 program because `bind` state and the libraries' statics are per program, and two versions never
 share a file. `ShippedBridgeClassFilesTest` pins all seven, the absence of `defineClass`/`Base64` in
 the class, no pre-rename name left in a shipped file, and no collision with every bridge in one

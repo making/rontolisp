@@ -1,5 +1,5 @@
 //! Classes a `--native` program defines on the new `objc` base (`objc-class.lisp`,
-//! `.kb/objc.md`, "The new base: class definition"): the class-building imports, and the
+//! `.kb/objc.md`, "Class definition"): the class-building imports, and the
 //! one IMP every method a program defines runs through, whatever its shape.
 //!
 //! A method's IMP comes from `imp_implementationWithBlock` over a GLOBAL block whose
@@ -15,7 +15,7 @@
 //! the arguments through `p_cb_count` / `p_cb_arg` (which answer like a send, so
 //! `p_result_*` fetch them) and pushes its answer with the `p_arg_*` imports. It arrives
 //! INSIDE a host call -- a send that made Objective-C call the method, or `pump` -- and
-//! re-enters through that call's `Caller`, like the old base's callbacks.
+//! re-enters through that call's `Caller`.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -33,7 +33,7 @@ use super::{Api, CALLER, Id, MODULE, api, cstring, memory_string, return_string,
 /// The module's export a defined method runs through: `(method-index, self) -> i32`.
 pub const METHOD_EXPORT: &str = "rlobjc_method";
 
-/// The instance variable every class the new base defines carries, so a later
+/// The instance variable every class `objc-class.lisp` defines carries, so a later
 /// definition of the same name in this process is recognized as one it may reuse
 /// (`ObjcRuntime.DEFINED_MARKER`, the same name).
 const DEFINED_MARKER: &str = "rontolispDefinedClass";

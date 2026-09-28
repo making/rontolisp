@@ -6,7 +6,11 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import am.ik.objc.ObjcBlocks;
@@ -439,6 +443,101 @@ final class JvmObjcPrimitivesTemplate {
 		catch (ObjcException ex) {
 			throw fail(ex);
 		}
+	}
+
+	// --- the byte copies objc:data and objc:bytes are written over --------------------
+
+	/**
+	 * {@code (objc::%octets value)}: the bytes of a packed buffer, little-endian and
+	 * row-major -- a packed float array is a {@code float[]} / {@code double[]} of any
+	 * rank, a packed {@code (unsigned-byte 8)} vector a {@code byte[]{8, e0, ...}}, a
+	 * packed {@code (unsigned-byte 16|32)} vector a {@code long[]{width, e0, ...}} -- or
+	 * a string's UTF-8, as a compiled octet vector; nil for any other value. The
+	 * interpreter's {@code eval/PackedBuffer} decides the same against its own
+	 * representation.
+	 */
+	static @Nullable Object octets(@Nullable Object value) {
+		byte[] bytes = bufferBytes(value);
+		return bytes == null ? null : octetVector(bytes);
+	}
+
+	/** {@code (objc::%write-octets address octets)}. */
+	static @Nullable Object writeOctets(@Nullable Object at, @Nullable Object octets) {
+		if (!(octets instanceof byte[] vector) || vector.length < 1 || vector[0] != 8) {
+			throw new RuntimeException("objc: expected an (unsigned-byte 8) vector, got " + octets);
+		}
+		try {
+			ObjcRuntime.writeBytes(address(at), Arrays.copyOfRange(vector, 1, vector.length));
+			return null;
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%read-octets address length)}. */
+	static Object readOctets(@Nullable Object at, @Nullable Object length) {
+		try {
+			return octetVector(ObjcRuntime.readBytes(address(at), address(length)));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/**
+	 * The compiled packed {@code (unsigned-byte 8)} vector: {@code byte[]{8, e0, ...}},
+	 * the width in slot 0 ({@code JvmIntArrayRuntimeBuilder.OCTET_TAG}; this class
+	 * travels alone, so the number is spelled here).
+	 */
+	private static byte[] octetVector(byte[] bytes) {
+		byte[] vector = new byte[bytes.length + 1];
+		vector[0] = 8;
+		System.arraycopy(bytes, 0, vector, 1, bytes.length);
+		return vector;
+	}
+
+	private static byte @Nullable [] bufferBytes(@Nullable Object buffer) {
+		Object v = rendered(buffer);
+		if (v instanceof String s && !s.isEmpty() && s.charAt(0) == '"') {
+			return s.substring(1, s.length() - 1).getBytes(StandardCharsets.UTF_8);
+		}
+		// A packed float array carries its dimension header IN the array --
+		// [rank, dim_0..dim_{rank-1}, e_0...] -- so the elements start at 1 + rank
+		// (JvmFloatArrayRuntimeBuilder). Only the elements go on the wire, which is what
+		// the interpreter's LispSingleFloatArray.data() is.
+		if (buffer instanceof float[] singles) {
+			int from = 1 + (int) singles[0];
+			ByteBuffer bytes = ByteBuffer.allocate((singles.length - from) * 4).order(ByteOrder.LITTLE_ENDIAN);
+			bytes.asFloatBuffer().put(singles, from, singles.length - from);
+			return bytes.array();
+		}
+		if (buffer instanceof double[] doubles) {
+			int from = 1 + (int) doubles[0];
+			ByteBuffer bytes = ByteBuffer.allocate((doubles.length - from) * 8).order(ByteOrder.LITTLE_ENDIAN);
+			bytes.asDoubleBuffer().put(doubles, from, doubles.length - from);
+			return bytes.array();
+		}
+		if (buffer instanceof byte[] octets && octets.length >= 1 && octets[0] == 8) {
+			return Arrays.copyOfRange(octets, 1, octets.length);
+		}
+		if (buffer instanceof long[] vector && vector.length >= 1) {
+			int width = (int) vector[0] / 8;
+			ByteBuffer bytes = ByteBuffer.allocate((vector.length - 1) * width).order(ByteOrder.LITTLE_ENDIAN);
+			for (int i = 1; i < vector.length; i++) {
+				if (width == 1) {
+					bytes.put((byte) vector[i]);
+				}
+				else if (width == 2) {
+					bytes.putShort((short) vector[i]);
+				}
+				else {
+					bytes.putInt((int) vector[i]);
+				}
+			}
+			return bytes.array();
+		}
+		return null;
 	}
 
 	/** {@code (objc:on-main function)}. */

@@ -665,9 +665,10 @@ final class CompileFrontend {
 		// TorchLibrary runs BEFORE LinalgLibrary so the linalg: references inside the
 		// spliced torch definitions pull the linalg library in too, and GeomLibrary
 		// (solid modeling over the same kernels) sits beside it for the same reason.
-		// AppKitLibrary splices appkit.lisp (the widget layer over the objc: verbs) the
-		// same way, so a JVM class compiled from an appkit: program carries the widgets
-		// and, through their objc:send, gates the embedded binding on.
+		// AppKitLibrary splices appkit.lisp (the widget layer over objc) the same way,
+		// its objc defining macros expanded, so a JVM class compiled from an appkit:
+		// program carries the widgets and, through objc.lisp's primitive calls, gates
+		// the embedded binding on.
 		// The macOS three run in DEPENDENCY order, innermost first: SceneLibrary (the
 		// 3-D viewer) before MetalLibrary (the drawing surface it is written over)
 		// before GeomLibrary/LinalgLibrary (the model and the kernels both reach for)
@@ -689,8 +690,8 @@ final class CompileFrontend {
 		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
 		// the
 		// string comparisons the helpers are written over.
-		// ObjcLibrary (the new objc base and cocoa, objc.lisp) right OUTSIDE
-		// AppKitLibrary: a library written over the new base is seen too. Its defining
+		// ObjcLibrary (objc and cocoa, objc.lisp) right OUTSIDE AppKitLibrary: a library
+		// written over objc is seen too. Its defining
 		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
 		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
 		// before any library is spliced.
@@ -699,8 +700,8 @@ final class CompileFrontend {
 				.process(CheckpointLibrary.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
 					.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features,
 							input.standards())))))))))))));
-		// ObjcNativeLibrary right OUTSIDE AppKitLibrary: the objc: verbs of a --native
-		// output, needed by the objc: references the macOS splices above introduce.
+		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
+		// output, needed by the primitive calls the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
 				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)), features)))));

@@ -106,295 +106,34 @@ CL-USER> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height
                                 :size 19 :align :center :bold t))
 CL-USER> (appkit:on-click *tile*
     (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
-#<objc RontoLispAppKitPanel>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E34E7600>
 CL-USER> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
-#<objc __NSCFTimer>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E346ED00>
 ```
 
 Every widget is a plain Objective-C object, so anything the layer lacks is one
-`objc:send` away:
+`objc:invoke` away:
 
 ```console
-CL-USER> (objc:send *win* "setBackgroundColor:"
-    (objc:send "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
-CL-USER> (objc:send *win* "frame")
-(690.0 676.0 420.0 228.0)
+CL-USER> (objc:invoke *win* "setBackgroundColor:"
+    (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
+NIL
+CL-USER> (objc:invoke *win* "frame")
+#(690.0 676.0 420.0 228.0)
 ```
 
 ## The objc package
 
-`objc` is the exact analogue of `java`: a package named after the foreign system,
-with a handful of generic verbs.
-
-| Function | Purpose |
-|----------|---------|
-| `objc:class` | `(objc:class "NSWindow")` — a class by name |
-| `objc:send` | `(objc:send receiver "selector:with:" arg1 arg2)` — sends a message; the receiver is an object, a class, or a class name as a string |
-| `objc:define-class` | `(objc:define-class "Name" "NSObject" methods &optional protocols)` — a class whose methods are Lisp functions |
-| `objc:on-main` | `(objc:on-main (lambda () ...))` — runs the function on the main thread and answers its value |
-| `objc:string` | `(objc:string "text")` — an `NSString` |
-| `objc:data` | `(objc:data buffer)` — an `NSMutableData` holding a packed buffer's bytes |
-| `objc:bytes` | `(objc:bytes data)` — an `NSData`'s bytes as a packed `(unsigned-byte 8)` vector |
-| `objc:address` | `(objc:address object)` — the object's address, an integer |
-| `objc:objectp` | `(objc:objectp x)` — whether `x` is an Objective-C object |
-
-```console
-CL-USER> (objc:send (objc:string "hello world") "length")
-11
-CL-USER> (objc:send (objc:send (objc:string "hello") "uppercaseString") "UTF8String")
-"HELLO"
-CL-USER> (objc:send (objc:string "hello world") "rangeOfString:" "world")
-(6 5)
-CL-USER> (objc:send "NSNumber" "numberWithDouble:" 2.5)
-#<objc __NSCFNumber>
-```
-
-### The runtime is something you can ask
-
-Everything Objective-C settles at the moment it happens is also readable at that moment:
-whether a receiver answers to a name, which class it really is, what types a method
-declares, what sits under a key.
-
-```console
-CL-USER> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
-T
-CL-USER> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
-"NSTaggedPointerString"
-CL-USER> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
-"B"
-CL-USER> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
-5.0
-```
-
-The second line catches a class cluster in the act — `objc:string` asked for an `NSString`
-and got a private subclass chosen for the value. `examples/macos/objc-runtime.lisp` is this
-whole side of the package in one runnable file: selectors carried around as strings and
-guarded by `respondsToSelector:`, class hierarchies walked, a method's own type encoding
-read back, key-value coding and a sort by a text key, a class defined at run time whose
-`isEqual:` is a Lisp closure that `containsObject:` calls, and an `NSNotificationCenter`
-observer. It opens no window.
-
-### AppKit is not the boundary
-
-Every framework on the machine speaks the Objective-C runtime, and one that is not linked
-into this process is a single message away: `NSBundle` maps it and registers its classes,
-so from the next form on the class name resolves.
-
-```console
-CL-USER> (objc:send (objc:send "NSBundle" "bundleWithPath:"
-    (objc:string "/System/Library/Frameworks/NaturalLanguage.framework")) "load")
-T
-CL-USER> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
-    (objc:string "これは日本語の文章です")) "UTF8String")
-"ja"
-```
-
-That is the whole of dependency management here: no manifest, no classpath, no download.
-`examples/macos/system-frameworks.lisp` is the surface it opens, in one runnable file —
-Vision, NaturalLanguage, Core Image and the speech synthesizer, none of them wrapped for
-Lisp by anybody first. Its centre is a round trip: a Lisp string is drawn into an image by
-Core Image and read back out of it by Vision, and `equal` decides whether the machine read
-what it was given. It opens no window either, and it is silent, because the speech is
-synthesized to an AIFF file instead of the speakers.
-
-### Typed by the selector's own encoding
-
-`objc:send` never guesses a signature. The Objective-C runtime describes every
-method completely (`method_getTypeEncoding` answers, for example,
-`@68@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16Q48Q56B64` for
-`initWithContentRect:styleMask:backing:defer:`), and each argument and the result
-are marshalled by that declaration:
-
-| Declared type | Lisp argument | Lisp result |
-|---------------|---------------|-------------|
-| object (`@`) | an object, `nil`, or a string (sent as an `NSString`) | an object, or `nil` |
-| class (`#`) | an object or a class name | an object |
-| selector (`:`) | the selector name as a string | the name |
-| C string (`*`) | a string | a string |
-| `BOOL` | `t` / `nil` | `t` / `nil` |
-| integer kinds | an integer | an integer |
-| `float` / `double` | a number | a float |
-| struct (`{...}`) | a list of numbers, the struct's scalar fields in order (`(x y w h)` for an `NSRect`) | a list of numbers |
-| any other pointer (`^`) | an object, an integer address, or `nil` | an integer address |
-
-A selector the receiver does not respond to, a wrong argument count, or an argument
-that does not fit its declared type is an `error`, never a crash. The answer of a
-`performSelector...` message is discarded (its type is the target method's, which the
-binding cannot see). Blocks, unions and bitfields are outside this first cut: a
-selector that takes one is refused by name.
-
-### The one declaration that is not the whole call
-
-A VARIADIC selector is the exception the runtime does not mark.
-`+[NSArray arrayWithObjects:]` and `+[NSArray arrayWithObject:]` are both declared
-`@@:@`, byte for byte, and nothing distinguishes them — yet on Apple silicon that
-difference is the whole call, since a variadic argument travels on the stack where a
-fixed one travels in a register.
-
-So the family is known by name instead: the nil-terminated constructors
-(`arrayWithObjects:`, `initWithObjects:`, `setWithObjects:`, `orderedSetWithObjects:`,
-`dictionaryWithObjectsAndKeys:`, `initWithObjectsAndKeys:`) and the format-string one
-(`stringWithFormat:`, `initWithFormat:`, `localizedStringWithFormat:`,
-`stringByAppendingFormat:`, `appendFormat:`, `predicateWithFormat:`, `raise:format:`).
-Each of them takes as many arguments as you give it past its declared arity — an object,
-a string, an integer or a float — and the `nil` terminator is the binding's own, never
-yours.
-
-```console
-CL-USER> (objc:send (objc:send "NSArray" "arrayWithObjects:"
-                      (objc:string "a") (objc:string "b") (objc:string "c")) "count")
-3
-CL-USER> (objc:send (objc:send "NSString" "stringWithFormat:"
-                      (objc:string "%@ has %ld items, %.1f%% full")
-                      (objc:string "cache") 3 62.5) "UTF8String")
-"cache has 3 items, 62.5% full"
-```
-
-`arrayWithObjects:count:` is deliberately not one of them: it takes a real array and a
-count, and is the fixed-arity way to build a collection of any size. A variadic method
-your own program declares is outside the table too, and there is no way for the binding
-to see it coming.
-
-### Bytes, and the `:error` out-parameter
-
-Two things a generic message send cannot express on its own are a block of MEMORY and an
-out-parameter, and both are ordinary in Cocoa. `objc:data` covers the first: it answers an
-`NSMutableData` holding a packed buffer's bytes — a packed float array of any rank, a
-packed `(unsigned-byte 8|16|32)` vector, or a string's UTF-8 — laid out exactly as
-`write-sequence` would write them, little-endian and row-major. `[data bytes]` is then the
-address a `void *` parameter wants, `[data mutableBytes]` is writable scratch to hand a
-callee, and `objc:bytes` reads the block back.
-
-The second is the `...error:` convention: pass the keyword `:error` where the
-`NSError **` goes, and the binding allocates the slot, passes it, and — when the call
-reports failure and the slot was filled — signals with what the error says, instead of
-answering the bare `nil` the selector returns.
-
-```console
-CL-USER> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
-#(0 0 128 63 0 0 0 64)
-CL-USER> (handler-case
-      (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:" (objc:data "nope") 0 :error)
-    (error (e) (princ-to-string e)))
-"objc:send: JSONObjectWithData:options:error:: The data couldn’t be read because it isn’t in the correct format. [NSCocoaErrorDomain 3840]"
-```
-
-Together they are what puts the GPU in reach: Metal is an Objective-C API almost
-end to end, so `objc:send` drives it with nothing added.
-
-### The `metal` package
-
-The boilerplate every Metal program writes identically — the `CAMetalLayer` on the
-window's content view, the device, the command queue, the render pass, the drawable,
-present and commit, plus the shader, pipeline and buffer helpers — is the built-in
-**`metal`** package, shipped inside the interpreter and loaded on first use like
-`appkit`. What it deliberately does NOT carry is the shader source, the geometry and
-the draw calls: those are the program.
-
-```console
-CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
-CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
-CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
-CL-USER> (metal:run *ctx*
-    (lambda (encoder)
-      (objc:send encoder "setRenderPipelineState:" *pipe*)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
-#<objc __NSCFTimer>
-```
-
-The one C function Metal appears to need, `MTLCreateSystemDefaultDevice()`, is
-avoidable: `CAMetalLayer`'s `preferredDevice` is a property and answers the same
-device, which is the fact the whole package stands on. Shaders are compiled from Lisp
-strings at run time, and a shader that does not compile signals with the Metal
-compiler's own diagnostics, caret and all. `metal:buffer` copies numbers to the GPU
-once; `metal:shared-buffer` plus `metal:upload` is for geometry rewritten every frame;
-`metal:uniform` sets the small per-frame values Metal wants inline. A packed
-single-float array IS a buffer's bytes, so a `linalg` matrix and a `geom:mesh` reach
-the GPU with no conversion at all. The [function reference](../reference/functions/metal.md)
-lists the whole surface.
-
-`metal` stands on its own — `examples/macos/metal-triangle.lisp`
-draws the WebGL hello world, `examples/macos/metal-cube.lisp` a spinning, shaded cube, and
-`examples/macos/metal-robot-arm.lisp` a robot arm that solves its own inverse kinematics and
-reaches for wherever you click, and `examples/macos/metal-pagoda-garden.lisp` a voxel garden --
-a five-storey pagoda over a koi pond under falling cherry blossom, and a night that comes on
-when you click -- whose thirteen thousand voxels are ONE cube drawn thirteen thousand times,
-the vertex function dividing `vertex_id` by 36 to find which voxel it is on. All four use
-`metal` directly and none of them uses `geom` or `scene`. (OpenGL
-is the opposite and stays out of reach: `glClear` and friends are plain C functions, which
-`objc_msgSend` does not reach.)
-
-`objc:define-class` is what carries the mouse there: the drawing surface is an `NSView`
-subclass defined at run time whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp
-closures, the same verb the widget layer uses to make an `NSBox` answer a click.
-
-The rung above `metal` is the **`scene`** package: a 3-D viewer for `geom` solids, with
-the camera, the grid and the frame loop already written, so a modelled machine is three
-lines from a window. See the [Solid Modeling guide](solid-modeling.md#seeing-it-the-scene-viewer).
-
-### Threads: everything happens on the main thread
-
-AppKit belongs to the process's first thread, and every `objc:send` hops there by
-itself — synchronously, so its value comes back to the caller. A widget built from
-several sends pays the hop once when wrapped in `objc:on-main`, which is what the
-`appkit` functions do. A function already running on the main thread (a button's
-handler) runs its sends inline, so a callback may call back into the GUI freely.
-
-The first `appkit:` call also hands thread 0 to AppKit's own event loop
-(`-[NSApplication run]`, started there without blocking anyone). That is what makes a
-window answer a click at all, and it is why the process takes focus and appears in the
-app switcher. It is the `appkit` layer that starts it, not `objc`, which stays the
-generic binding: a window built from raw `objc:send` in a program that never calls an
-`appkit:` function draws and responds to nothing, so build it with `appkit:window`.
-
-A callback runs with the interpreter's *global* dynamic bindings — a `let` binding of
-a special variable on the REPL thread is not visible to it — and an error it does not
-handle is printed as `objc: error in a callback: ...` rather than signalled: there is
-no Lisp frame above an AppKit event to signal to.
-
-### A class defined at run time
-
-`objc:define-class` registers a class whose methods are Lisp functions; each method
-receives the receiver first and then its own arguments:
-
-```console
-CL-USER> (defvar *target-class*
-    (objc:define-class "MyTarget" "NSObject"
-      (list (list "invoke:" (lambda (self sender)
-                              (format t "clicked ~a~%" sender))))))
-CL-USER> (defvar *target* (objc:send (objc:send *target-class* "alloc") "init"))
-CL-USER> (objc:send button "setTarget:" *target*)
-CL-USER> (objc:send button "setAction:" "invoke:")
-```
-
-The method's type comes from the superclass when it declares the selector, from an
-adopted protocol otherwise (`(objc:define-class "Delegate" "NSObject" methods
-'("NSWindowDelegate"))` types `windowShouldClose:` as `BOOL`), and defaults to a
-target/action shape — no result, one object argument per colon. The shapes a method
-can have are a closed set: no arguments; one or two object arguments; one object
-argument answering `BOOL`, an object, or an integer. Re-evaluating a definition
-rebinds the class's methods rather than failing, so a REPL can iterate on a handler.
-
-### Ownership
-
-An `objc:` value owns one reference to its object — taken over from an `alloc` /
-`new` / `copy` / `mutableCopy` / `retain` result, retained for everything else — and
-releases it on the main thread when the Lisp value is collected. So a window or a
-string you hold is valid for as long as you hold it, and there is nothing to free by
-hand. The one rule: a window you make with `objc:` directly must have
-`(objc:send win "setReleasedWhenClosed:" nil)`, as `appkit:window` does, or
-closing it releases a reference the Lisp value still holds.
-
-## The LispWorks interface
-
-Beside the verbs above, `objc` carries the call half of LispWorks 8.1's Objective-C
-interface -- `objc:invoke`, `objc:invoke-bool`, `objc:invoke-into`,
-`objc:retain` / `objc:release` / `objc:autorelease`, the autorelease pools, the
-class and selector coercions -- with LispWorks' names and lambda lists, and the
-`cocoa` package its Foundation structures. Code written against the LispWorks
-manual's invoking, string and memory-management sections runs unchanged in a package
-that uses `objc`, on the interpreter, a compiled class and a `--native` executable
-alike. The [function reference](../reference/functions/objc.md) lists every name.
+`objc` is LispWorks 8.1's Objective-C interface: `objc:invoke`, `objc:invoke-bool`,
+`objc:invoke-into`, `objc:retain` / `objc:release` / `objc:autorelease`, the
+autorelease pools, the class and selector coercions and the class-defining macros, with
+LispWorks' names and lambda lists, and the `cocoa` package its Foundation structures.
+Code written against the LispWorks manual runs unchanged in a package that uses `objc`,
+on the interpreter, a compiled class and a `--native` executable alike. Beside the
+manual's names the package has blocks, conditions for what Objective-C reports itself,
+and four verbs of its own: `objc:on-main`, `objc:data`, `objc:bytes` and
+`objc:objectp`. The [function reference](../reference/functions/objc.md) lists every
+name.
 
 ```console
 CL-USER> (defpackage :my-app (:use :cl :objc))
@@ -416,13 +155,70 @@ MY-APP> (invoke-into 'string "NSString"
 "The integer 42"
 ```
 
+The receiver of `invoke` is an object pointer, a class pointer, or a string naming a
+class, which sends a class method; a string is never an `NSString` receiver, so an
+instance method of a string goes to `objc:string-to-ns-string`'s answer.
+
+### The runtime is something you can ask
+
+Everything Objective-C settles at the moment it happens is also readable at that moment:
+whether a receiver answers to a name, which class it really is, what types a method
+declares, what sits under a key.
+
+```console
+MY-APP> (invoke-bool *s* "respondsToSelector:" "uppercaseString")
+T
+MY-APP> (objc-class-name (invoke (string-to-ns-string "hi") "class"))
+"NSTaggedPointerString"
+MY-APP> (objc-class-method-signature "NSString" "hasPrefix:")
+(OBJC-OBJECT-POINTER SEL OBJC-OBJECT-POINTER)
+OBJC-C++-BOOL
+"B24@0:8@16"
+MY-APP> (invoke (invoke *s* "valueForKey:" "length") "doubleValue")
+11.0
+```
+
+The second line catches a class cluster in the act — `string-to-ns-string` asked for an
+`NSString` and got a private subclass chosen for the value. The third answers a method's
+argument types (the receiver and the selector first), its result type and the encoding
+the runtime holds for it. `examples/macos/objc-runtime.lisp` is this whole side of the
+package in one runnable file: selectors carried around as strings and guarded by
+`respondsToSelector:`, class hierarchies walked, a method's own type encoding read back,
+key-value coding and a sort by a text key, a class defined in Lisp whose `isEqual:`
+`containsObject:` calls, and an `NSNotificationCenter` observer. It opens no window.
+
+### AppKit is not the boundary
+
+Every framework on the machine speaks the Objective-C runtime, and one that is not linked
+into this process is a single message away: `NSBundle` maps it and registers its classes,
+so from the next form on the class name resolves.
+
+```console
+MY-APP> (invoke-bool (invoke "NSBundle" "bundleWithPath:"
+                             "/System/Library/Frameworks/NaturalLanguage.framework")
+                     "load")
+T
+MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
+                     "これは日本語の文章です")
+"ja"
+```
+
+That is the whole of dependency management here: no manifest, no classpath, no download.
+`objc:ensure-objc-initialized` with `:modules` does the same from the path of a framework
+binary or a dylib. `examples/macos/system-frameworks.lisp` is the surface it opens, in one
+runnable file — Vision, NaturalLanguage, Core Image and the speech synthesizer, none of them
+wrapped for Lisp by anybody first. Its centre is a round trip: a Lisp string is drawn into an
+image by Core Image and read back out of it by Vision, and `equal` decides whether the
+machine read what it was given. It opens no window either, and it is silent, because the
+speech is synthesized to an AIFF file instead of the speakers.
+
 ### Conversion by the declared type
 
-`objc:invoke` reads the method's type encoding from the runtime (a list-form method
-states the types itself) and converts each argument and the result by it. A string
-or a vector passed as an argument exists for the call only; a method the receiver
-does not have signals `No method ... for object ..., class ...` before anything is
-sent, with the class the runtime answers for the receiver.
+`objc:invoke` never guesses a signature. The runtime describes every method
+completely — `initWithContentRect:styleMask:backing:defer:` is
+`@68@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16Q48Q56B64` — and `invoke` reads that encoding
+(a list-form method states the types itself) and converts each argument and the result
+by it. A string or a vector passed as an argument exists for the call only.
 
 | Declared type | An argument may be | The result is |
 |---------------|--------------------|---------------|
@@ -438,9 +234,90 @@ sent, with the class the runtime answers for the receiver.
 | any other structure | a vector of its fields in memory order | a vector of its fields |
 | a pointer | an address, `nil` or an object pointer | an address |
 
-`objc:invoke-into` converts further: `'string` turns an `NSString` result into a Lisp
-string, `'array` and `'(array string)` an `NSArray` into a vector, and a vector or a
-cons passed as the first argument receives a structure or an array's elements.
+A `BOOL` result is `1` or `0`, as in LispWorks, so a test uses `objc:invoke-bool`. An
+`NSString` result is a pointer like any other object; `objc:invoke-into` converts
+further: `'string` turns it into a Lisp string, `'array` and `'(array string)` an
+`NSArray` into a vector, and a vector or a cons passed as the first argument receives a
+structure or an array's elements.
+
+```console
+MY-APP> (invoke *s* "hasPrefix:" "hello")
+1
+MY-APP> (invoke-into 'string *s* "substringWithRange:" (cons 0 5))
+"hello"
+MY-APP> (invoke (invoke "NSValue" "valueWithRect:" #(10 20 300 200)) "rectValue")
+#(10.0 20.0 300.0 200.0)
+MY-APP> (invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
+#("x" "y")
+```
+
+A method the receiver does not have, a wrong argument count, or an argument that does
+not fit its declared type is an `error` before anything is sent, never a crash; the
+missing method names the class the runtime answers for the receiver:
+
+```console
+MY-APP> (invoke *s* "frobnicate")
+Error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
+MY-APP> (invoke *s* "length" 3)
+Error: objc:invoke: length takes 0 argument(s), got 1
+```
+
+The answer of a `performSelector...` message is discarded (its type is the target
+method's, which the encoding does not show). A block parameter takes a block, never a bare
+function ([Blocks](#blocks) below); a union or a bitfield parameter is refused by name.
+
+### The one declaration that is not the whole call
+
+A VARIADIC method is the exception the runtime does not mark.
+`+[NSArray arrayWithObjects:]` and `+[NSArray arrayWithObject:]` are both declared
+`@@:@`, byte for byte, and nothing distinguishes them — yet on Apple silicon that
+difference is the whole call, since a variadic argument travels on the stack where a
+fixed one travels in a register.
+
+So the family is known by name instead: the nil-terminated constructors
+(`arrayWithObjects:`, `initWithObjects:`, `setWithObjects:`, `orderedSetWithObjects:`,
+`dictionaryWithObjectsAndKeys:`, `initWithObjectsAndKeys:`) and the format-string one
+(`stringWithFormat:`, `initWithFormat:`, `localizedStringWithFormat:`,
+`stringByAppendingFormat:`, `appendFormat:`, `predicateWithFormat:`, `raise:format:`).
+Called by name, each of them takes as many arguments as you give it past its declared
+arity, each typed by its value — an object, a string, an integer or a float — and the
+`nil` terminator is the binding's own, never yours.
+
+```console
+MY-APP> (invoke (invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
+3
+MY-APP> (invoke-into 'string "NSString" "stringWithFormat:"
+                     "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
+"cache has 3 items, 62.5% full"
+```
+
+Any other variadic method, one your own program declares included, is called with the
+list form and its `:variadic-num-of-fixed`, as `stringWithFormat:` is in the first
+example above. `arrayWithObjects:count:` is not variadic at all: it takes a real array
+and a count, and is the fixed-arity way to build a collection of any size.
+
+### Values
+
+An object answers an `objc:objc-object-pointer`, a class an `objc:objc-class` (also an
+object pointer) and a selector an `objc:sel`. None of them is a `structure-object`, and
+two answers for one object are `eq`, `eql`, `equal` and `equalp`, so either finds the
+other in any hash table. A pointer prints as LispWorks prints one,
+`#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>`: its address, never anything
+read from the object. `objc:objectp` is true for every object pointer, classes included,
+and false for anything else, a selector among them:
+
+```console
+MY-APP> (eq (invoke *s* "self") *s*)
+T
+MY-APP> (objc:objectp *s*)
+T
+MY-APP> (objc:objectp (coerce-to-objc-class "NSString"))
+T
+MY-APP> (objc:objectp (coerce-to-selector "length"))
+NIL
+MY-APP> (objc:objectp "hello")
+NIL
+```
 
 ### Ownership: a pointer releases only what it holds
 
@@ -448,11 +325,13 @@ Every send runs on the main thread inside an autorelease pool of its own, so an
 object the send autoreleased is gone when it returns unless the pointer value took
 a reference first -- which it does for every object result, taking over the one an
 `alloc` / `new` / `copy` / `mutableCopy` / `init` method hands back. The value
-releases what it still holds when the collector frees it. `objc:retain` adds a
-reference the program must release; `objc:release` and `objc:autorelease` give up
-one the pointer holds and signal when it holds none, so code that releases what it
-owns, as the manual prescribes, never releases twice what the collector would
-release once. `(objc:invoke p "release")` goes through the same count.
+releases what it still holds when the collector frees it, on the main thread. So a
+window or a string you hold is valid for as long as you hold it, and there is nothing
+to free by hand. `objc:retain` adds a reference the program must release;
+`objc:release` and `objc:autorelease` give up one the pointer holds and signal when it
+holds none, so code that releases what it owns, as the manual prescribes, never
+releases twice what the collector would release once. `(objc:invoke p "release")` goes
+through the same count.
 
 ```console
 MY-APP> (defvar *o* (alloc-init-object "NSObject"))
@@ -464,7 +343,7 @@ NIL
 MY-APP> (release *o*)
 NIL
 MY-APP> (release *o*)
-error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+Error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
 MY-APP> (with-autorelease-pool ()
           (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
 "pooled"
@@ -473,14 +352,9 @@ MY-APP> (with-autorelease-pool ()
 The pools are kept in Lisp: a real `NSAutoreleasePool` could not span two sends,
 each of which pushes and pops its own on the main thread.
 
-### Values
-
-An object answers an `objc:objc-object-pointer`, a class an `objc:objc-class` (also an
-object pointer) and a selector an `objc:sel`. None of them is a `structure-object`,
-and two answers for one object are `eq`, `eql`, `equal` and `equalp`, so either finds
-the other in any hash table. A pointer prints as LispWorks prints one,
-`#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>`: its address, never
-anything read from the object.
+One rule concerns windows: a window made with `objc:invoke` directly must be sent
+`setReleasedWhenClosed:` with `nil`, as `appkit:window` does, or closing it releases a
+reference the pointer still holds.
 
 ### Defining classes
 
@@ -530,8 +404,11 @@ every width, `:float` / `:double`, structures (the Lisp value `invoke` uses for 
 argument can be converted on the way in (`(arg objc-object-pointer string)`, `array`,
 `(array string)`), and a string or a vector answered as an object becomes an `NSString` /
 `NSArray`. A class naming no Objective-C class and inheriting none is a mixin whose methods
-go to every subclass that names one. An error in a method body is printed and the method
-answers zero; it never unwinds into the Objective-C frame that called it.
+go to every subclass that names one. An error in a method body is printed as
+`objc: error in a callback: ...` and the method answers zero; it never unwinds into the
+Objective-C frame that called it, since there is no Lisp frame above it to signal to.
+Re-evaluating a `define-objc-method` rebinds the method, so a REPL can iterate on a
+handler.
 
 An instance is an `objc:standard-objc-object`. `make-instance` allocates and initializes the
 Objective-C object (`init`, or the `:init-function` it is given), and an object
@@ -540,8 +417,41 @@ either back; `objc:objc-object-var-value` reads the instance variables
 `(:objc-instance-vars ...)` declared. The Lisp object lives until the Objective-C object's
 reference count reaches zero -- the reference `make-instance` took is the program's to
 `objc:release` -- and then `objc:objc-object-destroyed` runs, inside `dealloc`; a copy made
-through `copy` gets `objc:objc-object-copied`. A method is how an object observes
-notifications:
+through `copy` gets `objc:objc-object-copied`.
+
+Such a class is how Cocoa calls back into Lisp. A button sends its action to a target;
+here the target is an instance, and the action a Lisp method:
+
+```console
+MY-APP> (define-objc-class my-target ()
+          ((clicks :initform 0 :accessor clicks))
+          (:objc-class-name "MyTarget"))
+MY-TARGET
+MY-APP> (define-objc-method ("clicked:" :void) ((self my-target) (sender objc-object-pointer))
+          (incf (clicks self))
+          (format t "clicked ~a~%" (invoke-into 'string sender "title")))
+"clicked:"
+MY-APP> (defvar *target* (make-instance 'my-target))
+*TARGET*
+MY-APP> (defvar *window* (appkit:window "target" :width 200 :height 80))
+*WINDOW*
+MY-APP> (defvar *go* (appkit:button *window* "Go"))
+*GO*
+MY-APP> (invoke *go* "setTarget:" *target*)
+NIL
+MY-APP> (invoke *go* "setAction:" "clicked:")
+NIL
+MY-APP> (appkit:click *go*)
+clicked Go
+NIL
+MY-APP> (clicks *target*)
+1
+```
+
+AppKit holds a target weakly; `*target*` is what keeps it alive. The `appkit` widgets are
+built exactly this way, and so is the drawing surface of `metal` programs and `scene`: an
+`NSView` subclass whose `mouseDown:` / `mouseDragged:` / `scrollWheel:` are Lisp
+methods. A method is also how an object observes notifications:
 
 ```console
 MY-APP> (define-objc-class watcher ()
@@ -695,6 +605,104 @@ MY-APP> (handler-case
 ("NSCocoaErrorDomain" 260)
 ```
 
+### Bytes: `objc:data` and `objc:bytes`
+
+A block of memory is ordinary in Cocoa and has no Lisp value of its own, so the package
+makes one an `NSData`. `objc:data` answers an `NSMutableData` holding a packed buffer's
+bytes — a packed float array of any rank, a packed `(unsigned-byte 8|16|32)` vector, or a
+string's UTF-8 — laid out exactly as `write-sequence` would write them, little-endian and
+row-major; anything else signals. `[data bytes]` is then the address a `void *` parameter
+wants, `[data mutableBytes]` is writable scratch to hand a callee, and `objc:bytes` reads
+an `NSData`'s contents back as a fresh `(unsigned-byte 8)` vector.
+
+```console
+MY-APP> (objc:bytes (objc:data (make-array 2 :element-type 'single-float
+                                            :initial-contents '(1.0 2.0))))
+#(0 0 128 63 0 0 0 64)
+MY-APP> (objc:bytes (invoke *s* "dataUsingEncoding:" 4))
+#(104 101 108 108 111 32 119 111 114 108 100)
+MY-APP> (handler-case
+            (invoke-with-error "NSJSONSerialization" "JSONObjectWithData:options:error:"
+                               (objc:data "nope") 0)
+          (ns-error (e) (ns-error-description e)))
+"The data couldn’t be read because it isn’t in the correct format."
+```
+
+Bytes and `invoke-with-error` together are what puts the GPU in reach: Metal is an
+Objective-C API almost end to end, so `objc:invoke` drives it with nothing added.
+
+### The `metal` package
+
+The boilerplate every Metal program writes identically — the `CAMetalLayer` on the
+window's content view, the device, the command queue, the render pass, the drawable,
+present and commit, plus the shader, pipeline and buffer helpers — is the built-in
+**`metal`** package, shipped inside the interpreter and loaded on first use like
+`appkit`. What it deliberately does NOT carry is the shader source, the geometry and
+the draw calls: those are the program.
+
+```console
+CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
+CL-USER> (metal:run *ctx*
+    (lambda (encoder)
+      (objc:invoke encoder "setRenderPipelineState:" *pipe*)
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BBF47A7C0>
+```
+
+The one C function Metal appears to need, `MTLCreateSystemDefaultDevice()`, is
+avoidable: `CAMetalLayer`'s `preferredDevice` is a property and answers the same
+device, which is the fact the whole package stands on. Shaders are compiled from Lisp
+strings at run time, and a shader that does not compile signals `objc:ns-error` whose
+description is the Metal compiler's own diagnostics, caret and all. `metal:buffer`
+copies numbers to the GPU once; `metal:shared-buffer` plus `metal:upload` is for
+geometry rewritten every frame; `metal:uniform` sets the small per-frame values Metal
+wants inline. A packed single-float array IS a buffer's bytes, so a `linalg` matrix and
+a `geom:mesh` reach the GPU with no conversion at all. The
+[function reference](../reference/functions/metal.md) lists the whole surface.
+
+`metal` stands on its own — `examples/macos/metal-triangle.lisp`
+draws the WebGL hello world, `examples/macos/metal-cube.lisp` a spinning, shaded cube, and
+`examples/macos/metal-robot-arm.lisp` a robot arm that solves its own inverse kinematics and
+reaches for wherever you click, and `examples/macos/metal-pagoda-garden.lisp` a voxel garden --
+a five-storey pagoda over a koi pond under falling cherry blossom, and a night that comes on
+when you click -- whose thirteen thousand voxels are ONE cube drawn thirteen thousand times,
+the vertex function dividing `vertex_id` by 36 to find which voxel it is on. All four use
+`metal` directly and none of them uses `geom` or `scene`. (OpenGL
+is the opposite and stays out of reach: `glClear` and friends are plain C functions, which
+`objc_msgSend` does not reach.)
+
+The rung above `metal` is the **`scene`** package: a 3-D viewer for `geom` solids, with
+the camera, the grid and the frame loop already written, so a modelled machine is three
+lines from a window. See the [Solid Modeling guide](solid-modeling.md#seeing-it-the-scene-viewer).
+
+### Threads: everything happens on the main thread
+
+AppKit belongs to the process's first thread, and every `objc:invoke` hops there by
+itself — synchronously, so its value comes back to the caller. A widget built from
+several sends pays the hop once when wrapped in `objc:on-main`, which is what the
+`appkit` functions do; `objc:on-main` calls a function there and answers its value, and
+an error the function signals is signalled again to the caller. A function already
+running on the main thread (a button's handler) runs its sends inline, so a callback may
+call back into the GUI freely.
+
+```console
+MY-APP> (objc:on-main (lambda () (+ 1 2)))
+3
+```
+
+The first `appkit:` call also hands thread 0 to AppKit's own event loop
+(`-[NSApplication run]`, started there without blocking anyone). That is what makes a
+window answer a click at all, and it is why the process takes focus and appears in the
+app switcher. It is the `appkit` layer that starts it, not `objc`, which stays the
+generic binding: a window built from raw `objc:invoke` in a program that never calls an
+`appkit:` function draws and responds to nothing, so build it with `appkit:window`.
+
+A method or a block defined in Lisp and called on the main thread runs with the
+interpreter's *global* dynamic bindings — a `let` binding of a special variable on the
+REPL thread is not visible to it.
+
 ### Where it differs from LispWorks
 
 rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
@@ -703,25 +711,25 @@ passes and answers for it (`cocoa:set-ns-rect*` fills a vector) and the manual's
 its foreign language interface, not `objc`; the names `objc:make-objc-block` and the rest
 are this package's own, and `fli` carries `define-foreign-function` alone. Calling
 `objc:ensure-objc-initialized` first is optional: every function opens the runtime on
-its first use. A variadic method named in the runtime's table of them
-(`stringWithFormat:`, `arrayWithObjects:` ...) also takes the string form, each extra
-argument typed by its value and a `nil` terminator appended. A method's structure
-result is answered as its Lisp value, or filled into the variable a non-keyword result
-style names; the manual's `fli:foreign-slot-value` over it has no counterpart.
-LispWorks lets an Objective-C exception end the process and has no `NSError` helper;
-`objc:objc-exception`, `objc:ns-error` and `objc:invoke-with-error` are this package's
-own.
+its first use. A variadic method named in the table above (`stringWithFormat:`,
+`arrayWithObjects:` ...) also takes the string form, each extra argument typed by its
+value and a `nil` terminator appended. A method's structure result is answered as its
+Lisp value, or filled into the variable a non-keyword result style names; the manual's
+`fli:foreign-slot-value` over it has no counterpart. LispWorks lets an Objective-C
+exception end the process and has no `NSError` helper; `objc:objc-exception`,
+`objc:ns-error` and `objc:invoke-with-error` are this package's own, as are
+`objc:on-main`, `objc:data`, `objc:bytes` and `objc:objectp`.
 
 ## The native binary
 
 The `rontolisp` binary serves a fixed table of `objc_msgSend` shapes, registered when
-the binary is built — every shape the `appkit` layer sends, plus the sixty most
-common shapes across the core AppKit and Foundation classes, which reach nine of
-every ten methods they declare. A selector outside the table signals with the exact
-entry to add:
+the binary is built — every shape the `appkit`, `metal` and `scene` layers send, plus
+the sixty most common shapes across the core AppKit and Foundation classes, which reach
+nine of every ten methods they declare. A method outside the table signals with the
+exact entry to add:
 
 ```text
-objc:send: someRareSelector: the shape void(void*,void*,jshort) has no foreign-call stub
+objc: someRareSelector:: the shape void(void*,void*,jshort) has no foreign-call stub
 in this binary; register it under foreign.downcalls in reachability-metadata.json and rebuild
 ```
 
@@ -729,12 +737,13 @@ The JVM registers nothing ahead of time and binds any shape, so `java -jar` is t
 place to find out what a program sends before a binary is built for it.
 
 A method defined with `objc:define-objc-method` is an upcall of its own shape, and those are
-registered the same way: the binary serves the shapes of the class examples above and of
-the three methods every class defined in Lisp gets, and refuses a definition of any other
-shape with the entry to add under `foreign.upcalls`. A block is such an upcall too: the
-binary serves the shapes of the blocks above (and of a comparator, a work item and a
-completion handler of three objects) and refuses a block of any other shape when it is
-made. `java -jar` and a `--native` executable take any shape.
+registered the same way: the binary serves the shapes of the class examples above, of the
+methods the `appkit`, `metal` and `scene` layers define and of the three methods every class
+defined in Lisp gets, and refuses a definition of any other shape with the entry to add under
+`foreign.upcalls`. A block is such an upcall too: the binary serves the shapes of the blocks
+above (and of a comparator, a work item and a completion handler of three objects) and
+refuses a block of any other shape when it is made. `java -jar` and a `--native` executable
+take any shape.
 
 A variadic call is its own registration, so the binary serves a bounded grid of those
 too: up to eleven arguments past the declared ones — the binding's own `nil` terminator
@@ -753,13 +762,13 @@ $ rontolisp examples/macos/counter.lisp -o counter.jar
 $ java -jar counter.jar
 ```
 
-The class carries the `appkit` widgets it uses, and the whole binding (`am.ik.objc`,
-renamed after the class) is written beside it as `Counter$Objc*.class` files, or into
-the jar; with those files it needs nothing else but a JVM with `java.lang.foreign` —
-the one the compiler ran on, or newer. A bare `.class` run without
-`--enable-native-access=ALL-UNNAMED` prints the JDK's restricted-method warning once
-and works; a `.jar` enables native access in its manifest. The `rontolisp` binary
-compiles such a program too. A `.wasm` output is refused —
+The class carries the `objc` package and the `appkit` widgets it uses, and the whole
+binding (`am.ik.objc`, renamed after the class) is written beside it as
+`Counter$Objc*.class` files, or into the jar; with those files it needs nothing else but
+a JVM with `java.lang.foreign` — the one the compiler ran on, or newer. A bare `.class`
+run without `--enable-native-access=ALL-UNNAMED` prints the JDK's restricted-method
+warning once and works; a `.jar` enables native access in its manifest. The `rontolisp`
+binary compiles such a program too. A `.wasm` output is refused —
 `Cannot compile: appkit:window ...` — and always will be: there is no foreign function
 API and no AppKit on that side.
 
@@ -783,18 +792,17 @@ $ ./counter
 
 The executable's runner is the binding: it calls the Objective-C runtime itself, so
 every selector the runtime describes can be sent — there is no fixed table of shapes
-as in the `rontolisp` binary — and a send costs a fraction of a microsecond. The
+as in the `rontolisp` binary — and a send costs about a microsecond. The
 program runs on the process's first thread, the one AppKit wants, so
 `objc:on-main` is a plain call and there is no hop; while the program waits in
 `sleep` (as `appkit:wait` does) the window handles its events and runs its timers,
 and a button's closure runs inside that wait. A program that reads standard input
 leaves the window unresponsive until the read returns.
 
-Ownership is the same as everywhere else: one reference per Lisp value, released
-once the value is garbage. The one difference: two values wrapping the same object
-are not `equal` here, where the interpreter compares them by address — compare
-`objc:address` values instead, as the `appkit` layer does. A `bfloat16` array or a
-quantized matrix is not accepted by `objc:data` in an executable.
+Values follow the same rules as everywhere else: a pointer holds its references and
+releases them once it is garbage, and two answers for one object are `eq`, compared by
+address. A `bfloat16` array or a quantized matrix is not accepted by `objc:data` in an
+executable.
 
 ## Limitations
 
@@ -803,12 +811,12 @@ quantized matrix is not accepted by `objc:data` in an executable.
   `objc:` / `appkit:` reference is a compile error on every other WASM output.
 - A process without an application bundle gets no Dock icon or menu bar; there is no
   Cmd-Q, and closing the last window does not quit — the REPL is the process.
-- `objc:define-class`'s callback shapes are the closed set above; `objc:define-objc-method`
-  takes any shape (in the `rontolisp` binary, the registered ones), and so does a block.
+- In the `rontolisp` binary a message, a method defined in Lisp and a block each take
+  only the shapes the binary registered; `java -jar` and a `--native` executable take any.
 - A `--native` executable runs a block another thread calls only if the block answers
   nothing, and then at the program's next `sleep`.
-- The variadic selectors served are the table above. One a program declares itself is
-  not in it, and the runtime gives the binding no way to tell.
+- A variadic method outside the table above is called with the list form; the runtime
+  gives the binding no way to tell one from its fixed-arity twin.
 - Apple silicon. On an Intel Mac a struct wider than two registers is returned
   through `objc_msgSend_stret`, which the binding selects but has not been exercised,
   and an Objective-C exception inside a call still ends the process.

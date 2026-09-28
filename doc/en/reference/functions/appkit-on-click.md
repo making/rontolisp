@@ -8,5 +8,5 @@ Makes a panel or a label answer a click: `handler` is called with the button num
 CL-USER> (appkit:on-click *tile*
     (lambda (button)
       (appkit:set-text *label* (if (= button 3) "flagged" "opened"))))
-#<objc RontoLispAppKitPanel>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDF51F900>
 ```

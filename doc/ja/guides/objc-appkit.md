@@ -16,7 +16,7 @@ CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
                 (appkit:set-text *label* (format nil "clicked ~a time(s)" *n*))))
 ```
 
-ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL はあなたのものです — ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別です — し、ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
+ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL は使えます。ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別だからです。ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
 
 もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、`examples/macos/life-macos.lisp` はその中でライフゲームを走らせます。どちらも以下のウィジェットだけでできています。2 つが共有しているのはその上のボード、つまり両者がたまたま欲しがったクリック可能なタイルのグリッドを持つ小さな `board` パッケージ `examples/macos/board.lisp` です。これはボードゲームのポリシーであり、だからこそサンプルのままです。
 
@@ -71,235 +71,24 @@ CL-USER> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height
                                 :size 19 :align :center :bold t))
 CL-USER> (appkit:on-click *tile*
     (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
-#<objc RontoLispAppKitPanel>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E34E7600>
 CL-USER> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
-#<objc __NSCFTimer>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E346ED00>
 ```
 
-すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:send` 一つ分の距離にあります:
+すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:invoke` を 1 回呼べば手に入ります:
 
 ```console
-CL-USER> (objc:send *win* "setBackgroundColor:"
-    (objc:send "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
-CL-USER> (objc:send *win* "frame")
-(690.0 676.0 420.0 228.0)
+CL-USER> (objc:invoke *win* "setBackgroundColor:"
+    (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
+NIL
+CL-USER> (objc:invoke *win* "frame")
+#(690.0 676.0 420.0 228.0)
 ```
 
 ## objc パッケージ
 
-`objc` は `java` とちょうど対になるもので、外部システムの名前を冠したパッケージに少数の汎用的な動詞があります。
-
-| 関数 | 用途 |
-|------|------|
-| `objc:class` | `(objc:class "NSWindow")` — 名前でクラスを得る |
-| `objc:send` | `(objc:send receiver "selector:with:" arg1 arg2)` — メッセージを送る。receiver はオブジェクト、クラス、またはクラス名の文字列 |
-| `objc:define-class` | `(objc:define-class "Name" "NSObject" methods &optional protocols)` — メソッドが Lisp 関数であるクラス |
-| `objc:on-main` | `(objc:on-main (lambda () ...))` — 関数をメインスレッドで実行してその値を返す |
-| `objc:string` | `(objc:string "text")` — `NSString` |
-| `objc:data` | `(objc:data buffer)` — パックバッファのバイト列を持つ `NSMutableData` |
-| `objc:bytes` | `(objc:bytes data)` — `NSData` のバイト列をパックされた `(unsigned-byte 8)` ベクタとして |
-| `objc:address` | `(objc:address object)` — オブジェクトのアドレス (整数) |
-| `objc:objectp` | `(objc:objectp x)` — `x` が Objective-C オブジェクトかどうか |
-
-```console
-CL-USER> (objc:send (objc:string "hello world") "length")
-11
-CL-USER> (objc:send (objc:send (objc:string "hello") "uppercaseString") "UTF8String")
-"HELLO"
-CL-USER> (objc:send (objc:string "hello world") "rangeOfString:" "world")
-(6 5)
-CL-USER> (objc:send "NSNumber" "numberWithDouble:" 2.5)
-#<objc __NSCFNumber>
-```
-
-### ランタイムは問い合わせられる対象
-
-Objective-C が実行のその瞬間に決めることは、その瞬間に読み出せます。レシーバがある名前に
-応えるか、実際のクラスは何か、メソッドがどんな型を宣言しているか、あるキーの下に何がある
-か。
-
-```console
-CL-USER> (objc:send (objc:string "hi") "respondsToSelector:" "uppercaseString")
-T
-CL-USER> (objc:send (objc:send (objc:send (objc:string "hi") "class") "description") "UTF8String")
-"NSTaggedPointerString"
-CL-USER> (objc:send (objc:send (objc:string "hi") "methodSignatureForSelector:" "hasPrefix:") "methodReturnType")
-"B"
-CL-USER> (objc:send (objc:send (objc:string "hello") "valueForKey:" "length") "doubleValue")
-5.0
-```
-
-2 行目はクラスクラスタを現行犯で捉えたものです。`objc:string` は `NSString` を求め、値に
-応じて選ばれた非公開のサブクラスが返っています。`examples/macos/objc-runtime.lisp` は、この
-側面のパッケージ全体を 1 つの実行可能なファイルにまとめたものです。文字列として持ち回り
-`respondsToSelector:` で守るセレクタ、辿るクラス階層、読み出すメソッド自身の型エンコーディ
-ング、キー値コーディングと文字列キーによるソート、`containsObject:` が呼び出す `isEqual:` が
-Lisp のクロージャである実行時定義クラス、そして `NSNotificationCenter` のオブザーバ。ウィン
-ドウは開きません。
-
-### 境界は AppKit ではない
-
-このマシン上のあらゆるフレームワークが Objective-C ランタイムを話します。プロセスにリンク
-されていないフレームワークもメッセージ 1 つ分の距離にあり、`NSBundle` がそれをマップして
-クラスを登録するので、次のフォームからはそのクラス名が解決します。
-
-```console
-CL-USER> (objc:send (objc:send "NSBundle" "bundleWithPath:"
-    (objc:string "/System/Library/Frameworks/NaturalLanguage.framework")) "load")
-T
-CL-USER> (objc:send (objc:send "NLLanguageRecognizer" "dominantLanguageForString:"
-    (objc:string "これは日本語の文章です")) "UTF8String")
-"ja"
-```
-
-ここでの依存管理はこれで全部です。マニフェストもクラスパスもダウンロードもありません。
-`examples/macos/system-frameworks.lisp` はそうして開かれる面を 1 つの実行可能なファイルに
-したものです。Vision、NaturalLanguage、Core Image、そして音声合成 — どれも誰かが先に Lisp
-向けにラップしたものではありません。中心にあるのは往復です。Lisp の文字列を Core Image が
-画像に描き、それを Vision が読み戻し、機械が与えられたとおりに読んだかどうかを `equal` が
-判定します。こちらもウィンドウを開かず、そして無音です。音声はスピーカーではなく AIFF
-ファイルに合成されるためです。
-
-### セレクタ自身のエンコーディングで型付け
-
-`objc:send` はシグネチャを推測しません。Objective-C ランタイムはすべてのメソッドを完全に記述しており (`method_getTypeEncoding` は例えば `initWithContentRect:styleMask:backing:defer:` に対して `@68@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16Q48Q56B64` を返します)、各引数と結果はその宣言に従ってマーシャリングされます:
-
-| 宣言された型 | Lisp の引数 | Lisp の結果 |
-|--------------|-------------|-------------|
-| オブジェクト (`@`) | オブジェクト、`nil`、または文字列 (`NSString` として送られる) | オブジェクトまたは `nil` |
-| クラス (`#`) | オブジェクトまたはクラス名 | オブジェクト |
-| セレクタ (`:`) | セレクタ名の文字列 | 名前 |
-| C 文字列 (`*`) | 文字列 | 文字列 |
-| `BOOL` | `t` / `nil` | `t` / `nil` |
-| 整数各種 | 整数 | 整数 |
-| `float` / `double` | 数 | 浮動小数点数 |
-| 構造体 (`{...}`) | 数のリスト (構造体のスカラーフィールドを順に。`NSRect` なら `(x y w h)`) | 数のリスト |
-| その他のポインタ (`^`) | オブジェクト、整数アドレス、または `nil` | 整数アドレス |
-
-receiver が応答しないセレクタ、引数の個数違い、宣言型に合わない引数はクラッシュではなく `error` になります。`performSelector...` メッセージの答えは捨てられます (その型はターゲットメソッドのもので、バインディングからは見えません)。ブロック、共用体、ビットフィールドはこの第一段階の範囲外で、それらを取るセレクタは名前を挙げて拒否されます。
-
-### 宣言が呼び出しのすべてではない唯一のケース
-
-ランタイムが印を付けてくれないのが可変長引数 (variadic) のセレクタです。
-`+[NSArray arrayWithObjects:]` と `+[NSArray arrayWithObject:]` はどちらも `@@:@` とバイト単位で同一に宣言されており、両者を区別する情報はどこにもありません。しかし Apple シリコンではこの違いが呼び出しそのものです。可変長引数はスタックで渡され、固定引数はレジスタで渡されるからです。
-
-そこでこの一群は名前で知られています。nil 終端のコンストラクタ (`arrayWithObjects:`、`initWithObjects:`、`setWithObjects:`、`orderedSetWithObjects:`、`dictionaryWithObjectsAndKeys:`、`initWithObjectsAndKeys:`) と、書式文字列の一族 (`stringWithFormat:`、`initWithFormat:`、`localizedStringWithFormat:`、`stringByAppendingFormat:`、`appendFormat:`、`predicateWithFormat:`、`raise:format:`) です。いずれも宣言された引数の個数を超えていくつでも引数を取り (オブジェクト、文字列、整数、浮動小数点数)、`nil` 終端子はバインディングが付けます。呼び出し側が書くものではありません。
-
-```console
-CL-USER> (objc:send (objc:send "NSArray" "arrayWithObjects:"
-                      (objc:string "a") (objc:string "b") (objc:string "c")) "count")
-3
-CL-USER> (objc:send (objc:send "NSString" "stringWithFormat:"
-                      (objc:string "%@ has %ld items, %.1f%% full")
-                      (objc:string "cache") 3 62.5) "UTF8String")
-"cache has 3 items, 62.5% full"
-```
-
-`arrayWithObjects:count:` は意図的にこの一族に含めていません。本物の配列と個数を取る、任意サイズのコレクションを作る固定引数の方法だからです。プログラム自身が宣言した可変長引数メソッドも表の外であり、それをバインディングが予見する手段はありません。
-
-### バイト列と `:error` 出力引数
-
-汎用のメッセージ送信だけでは表現できないものが 2 つあります。メモリブロックと出力引数で
-すが、どちらも Cocoa ではありふれたものです。1 つ目を担うのが `objc:data` です。パックバッ
-ファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ、文字列
-の UTF-8) のバイト列を持つ `NSMutableData` を返します。並びは `write-sequence` が書くもの
-とまったく同じで、リトルエンディアンの行優先です。あとは `[data bytes]` が `void *` 引数の
-求めるアドレスになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になり、
-`objc:bytes` がブロックを読み戻します。
-
-2 つ目は `...error:` の慣習です。`NSError **` の位置にキーワード `:error` を渡すと、バイン
-ディングがスロットを確保して渡し、呼び出しが失敗を報告しスロットが埋まっていたときには、
-セレクタが返す素の `nil` の代わりに、そのエラーの内容でシグナルします。
-
-```console
-CL-USER> (objc:bytes (objc:data (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
-#(0 0 128 63 0 0 0 64)
-CL-USER> (handler-case
-      (objc:send "NSJSONSerialization" "JSONObjectWithData:options:error:" (objc:data "nope") 0 :error)
-    (error (e) (princ-to-string e)))
-"objc:send: JSONObjectWithData:options:error:: The data couldn’t be read because it isn’t in the correct format. [NSCocoaErrorDomain 3840]"
-```
-
-この 2 つが GPU を射程に入れます。Metal はほぼ全面が Objective-C の API なので、`objc:send`
-だけで何も足さずに駆動できます。
-
-### `metal` パッケージ
-
-どの Metal プログラムも同じように書く定型 — ウィンドウのコンテンツビュー上の
-`CAMetalLayer`、デバイス、コマンドキュー、レンダーパス、ドローアブル、present と commit、
-そしてシェーダ・パイプライン・バッファのヘルパ — が組み込みの **`metal`** パッケージです。
-`appkit` と同じくインタプリタに同梱され、初回使用時に読み込まれます。意図的に含めていない
-のはシェーダのソース、形状、描画コールです。それらはプログラム側のものです。
-
-```console
-CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
-CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
-CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
-CL-USER> (metal:run *ctx*
-    (lambda (encoder)
-      (objc:send encoder "setRenderPipelineState:" *pipe*)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
-#<objc __NSCFTimer>
-```
-
-Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDefaultDevice()` は回避できま
-す。`CAMetalLayer` の `preferredDevice` はプロパティで同じデバイスを返すからで、パッケージ
-全体はその事実の上に立っています。シェーダは Lisp の文字列から実行時にコンパイルされ、コン
-パイルに失敗したシェーダは Metal コンパイラ自身の診断 (キャレット付き) で送出します。
-`metal:buffer` は数値を一度だけ GPU にコピーし、毎フレーム書き直す形状には
-`metal:shared-buffer` と `metal:upload`、Metal がインラインで受け取りたがる小さな値には
-`metal:uniform` を使います。パックド単精度配列はバッファのバイト列そのものなので、`linalg`
-の行列も `geom:mesh` も一切変換なしに GPU へ届きます。全体は
-[関数リファレンス](../reference/functions/metal.md)にあります。
-
-`metal` は単独で成立します。`examples/macos/metal-triangle.lisp` は WebGL の hello world
-を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、
-`examples/macos/metal-robot-arm.lisp` は自分で逆運動学を解いてクリックした先へ手を伸ばすロ
-ボットアームを、`examples/macos/metal-pagoda-garden.lisp` はボクセルの庭 — 鯉の池の上に立つ
-五重塔、舞い散る桜、クリックで訪れる夜 — を描きます。その 1 万 3 千個のボクセルは 1 個の立方
-体を 1 万 3 千回描いたもので、頂点関数が `vertex_id` を 36 で割ってどのボクセルの上にいるかを
-求めます。4 本とも `metal` を直接使っており、`geom` も `scene` も使っていません (OpenGL は逆で、
-射程外のままです。`glClear` などは素の C 関数であり、`objc_msgSend` は届きません)。
-
-そこにマウスを運ぶのが `objc:define-class` です。描画面は実行時に定義した `NSView` のサブク
-ラスで、その `mouseDown:` / `mouseDragged:` / `scrollWheel:` は Lisp のクロージャ — ウィ
-ジェット層が `NSBox` にクリックを答えさせるのと同じ動詞です。
-
-`metal` の 1 つ上の段が **`scene`** パッケージです。`geom` ソリッドの 3D ビューアで、カメラ・
-グリッド・フレームループがすでに書かれているので、モデル化した機械はウィンドウまで 3 行です。
-[ソリッドモデリングガイド](solid-modeling.md#seeing-it-the-scene-viewer)を参照してください。
-
-### スレッド: すべてはメインスレッドで起きる
-
-AppKit はプロセスの最初のスレッドのものであり、すべての `objc:send` は自分でそこへ移動します — 同期的に、なので値は呼び出し側に返ってきます。複数の send から成るウィジェットは `objc:on-main` で包むと移動を 1 回だけ払うことになり、`appkit` の関数はそうしています。すでにメインスレッド上で動いている関数 (ボタンのハンドラ) は send をインラインで実行するので、コールバックから自由に GUI を呼び戻せます。
-
-最初の `appkit:` 呼び出しは、スレッド 0 を AppKit 自身のイベントループ (`-[NSApplication run]`。誰もブロックせずにそこで開始します) に渡します。ウィンドウがそもそもクリックに応答するのはこれによるもので、プロセスがフォーカスを取りアプリケーションスイッチャに現れるのもこのためです。開始するのは `appkit` 層であり、汎用バインディングである `objc` ではありません。したがって `appkit:` 関数を一度も呼ばないプログラムが生の `objc:send` だけで作ったウィンドウは、描画はされても何にも反応しません。ウィンドウは `appkit:window` で作ってください。
-
-コールバックはインタプリタの *グローバル* な動的束縛で動きます — REPL スレッドでの special 変数の `let` 束縛はそこから見えません — し、ハンドルされなかったエラーはシグナルではなく `objc: error in a callback: ...` として表示されます。AppKit のイベントの上にシグナル先となる Lisp のフレームは存在しないためです。
-
-### 実行時に定義するクラス
-
-`objc:define-class` はメソッドが Lisp 関数であるクラスを登録します。各メソッドは最初に receiver、続いて自身の引数を受け取ります:
-
-```console
-CL-USER> (defvar *target-class*
-    (objc:define-class "MyTarget" "NSObject"
-      (list (list "invoke:" (lambda (self sender)
-                              (format t "clicked ~a~%" sender))))))
-CL-USER> (defvar *target* (objc:send (objc:send *target-class* "alloc") "init"))
-CL-USER> (objc:send button "setTarget:" *target*)
-CL-USER> (objc:send button "setAction:" "invoke:")
-```
-
-メソッドの型は、スーパークラスがそのセレクタを宣言していればそこから、そうでなければ採用したプロトコルから取られ (`(objc:define-class "Delegate" "NSObject" methods '("NSWindowDelegate"))` は `windowShouldClose:` を `BOOL` として型付けします)、どちらにもなければ target/action の形 — 結果なし、コロンごとに 1 つのオブジェクト引数 — がデフォルトになります。メソッドが取れる形は閉じた集合です: 引数なし、オブジェクト引数 1 つまたは 2 つ、オブジェクト引数 1 つで `BOOL`・オブジェクト・整数のいずれかを返す。定義を再評価すると失敗せずクラスのメソッドが束縛し直されるので、REPL でハンドラを反復できます。
-
-### 所有権
-
-`objc:` の値はオブジェクトへの参照を 1 つ所有します — `alloc` / `new` / `copy` / `mutableCopy` / `retain` の結果からは引き継ぎ、それ以外は retain して — そして Lisp の値が回収されたときにメインスレッド上で解放します。つまり保持しているウィンドウや文字列は保持している限り有効で、手で解放するものはありません。唯一の規則: `objc:` で直接作るウィンドウには `appkit:window` がしているように `(objc:send win "setReleasedWhenClosed:" nil)` が必要です。さもないと閉じたときに Lisp の値がまだ持っている参照が解放されます。
-
-## LispWorks のインターフェース
-
-上の動詞と並んで、`objc` は LispWorks 8.1 の Objective-C インターフェースのうち呼び出し側 (`objc:invoke`、`objc:invoke-bool`、`objc:invoke-into`、`objc:retain` / `objc:release` / `objc:autorelease`、自動解放プール、クラスとセレクタの変換) を、LispWorks の名前とラムダリストのまま持ちます。その Foundation 構造体は `cocoa` パッケージが持ちます。LispWorks のマニュアルの呼び出し・文字列・メモリ管理の節に沿って書いたコードは、`objc` を use するパッケージの中で、インタプリタ、コンパイル済みクラス、`--native` 実行ファイルのどれでもそのまま動きます。すべての名前は[関数リファレンス](../reference/functions/objc.md)にあります。
+`objc` は LispWorks 8.1 の Objective-C インターフェースです。`objc:invoke`、`objc:invoke-bool`、`objc:invoke-into`、`objc:retain` / `objc:release` / `objc:autorelease`、自動解放プール、クラスとセレクタの変換、クラスを定義するマクロを LispWorks の名前とラムダリストのまま持ち、その Foundation 構造体は `cocoa` パッケージが持ちます。LispWorks のマニュアルに沿って書いたコードは、`objc` を use するパッケージの中で、インタプリタ、コンパイル済みクラス、`--native` 実行ファイルのどれでもそのまま動きます。マニュアルの名前に加えて、このパッケージはブロック、Objective-C 自身が報告するものを表すコンディション、そして独自の 4 つの関数 `objc:on-main`、`objc:data`、`objc:bytes`、`objc:objectp` を持ちます。すべての名前は[関数リファレンス](../reference/functions/objc.md)にあります。
 
 ```console
 CL-USER> (defpackage :my-app (:use :cl :objc))
@@ -321,9 +110,64 @@ MY-APP> (invoke-into 'string "NSString"
 "The integer 42"
 ```
 
+`invoke` のレシーバは、オブジェクトポインタ、クラスポインタ、またはクラス名の文字列です。クラス名の文字列に送るとクラスメソッドの呼び出しになります。文字列が `NSString` のレシーバになることはないので、文字列のインスタンスメソッドは `objc:string-to-ns-string` が返す値に送ります。
+
+### ランタイムは問い合わせられる対象
+
+Objective-C が実行のその瞬間に決めることは、その瞬間に読み出せます。レシーバがある名前に
+応えるか、実際のクラスは何か、メソッドがどんな型を宣言しているか、あるキーの下に何がある
+か。
+
+```console
+MY-APP> (invoke-bool *s* "respondsToSelector:" "uppercaseString")
+T
+MY-APP> (objc-class-name (invoke (string-to-ns-string "hi") "class"))
+"NSTaggedPointerString"
+MY-APP> (objc-class-method-signature "NSString" "hasPrefix:")
+(OBJC-OBJECT-POINTER SEL OBJC-OBJECT-POINTER)
+OBJC-C++-BOOL
+"B24@0:8@16"
+MY-APP> (invoke (invoke *s* "valueForKey:" "length") "doubleValue")
+11.0
+```
+
+2 行目はクラスクラスタを現行犯で捉えたものです。`string-to-ns-string` は `NSString` を
+求め、値に応じて選ばれた非公開のサブクラスが返っています。3 行目は、メソッドの引数の型
+(先頭はレシーバとセレクタ)、結果の型、ランタイムが保持するエンコーディングを返します。
+`examples/macos/objc-runtime.lisp` は、この側面のパッケージ全体を 1 つの実行可能なファイル
+にまとめたものです。文字列として持ち回り `respondsToSelector:` で守るセレクタ、辿るクラス
+階層、読み出すメソッド自身の型エンコーディング、キー値コーディングと文字列キーによるソート、
+`containsObject:` が呼び出す `isEqual:` を Lisp で定義したクラス、そして
+`NSNotificationCenter` のオブザーバ。ウィンドウは開きません。
+
+### 境界は AppKit ではない
+
+このマシン上のあらゆるフレームワークが Objective-C ランタイムを話します。プロセスにリンク
+されていないフレームワークもメッセージ 1 つで使えるようになります。`NSBundle` がそれをマップ
+してクラスを登録するので、次のフォームからはそのクラス名が解決します。
+
+```console
+MY-APP> (invoke-bool (invoke "NSBundle" "bundleWithPath:"
+                             "/System/Library/Frameworks/NaturalLanguage.framework")
+                     "load")
+T
+MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
+                     "これは日本語の文章です")
+"ja"
+```
+
+ここでの依存管理はこれで全部です。マニフェストもクラスパスもダウンロードもありません。
+`:modules` を付けた `objc:ensure-objc-initialized` も、フレームワークのバイナリや dylib
+のパスから同じことをします。`examples/macos/system-frameworks.lisp` はそうして開かれる面を
+1 つの実行可能なファイルにしたものです。Vision、NaturalLanguage、Core Image、そして音声合成
+— どれも誰かが先に Lisp 向けにラップしたものではありません。中心にあるのは往復です。Lisp
+の文字列を Core Image が画像に描き、それを Vision が読み戻し、機械が与えられたとおりに読んだ
+かどうかを `equal` が判定します。こちらもウィンドウを開かず、そして無音です。音声はスピー
+カーではなく AIFF ファイルに合成されるためです。
+
 ### 宣言型による変換
 
-`objc:invoke` はメソッドの型エンコーディングをランタイムから読み (リスト形式のメソッドは型を自分で述べます)、それに従って各引数と結果を変換します。引数として渡した文字列やベクタは呼び出しの間だけ存在します。レシーバにないメソッドは、何も送る前に `No method ... for object ..., class ...` をシグナルします。クラスはランタイムがレシーバについて答えるものです。
+`objc:invoke` はシグネチャを推測しません。ランタイムはすべてのメソッドを完全に記述しており (`initWithContentRect:styleMask:backing:defer:` なら `@68@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16Q48Q56B64`)、`invoke` はそのエンコーディングを読んで (リスト形式のメソッドは型を自分で述べます)、それに従って各引数と結果を変換します。引数として渡した文字列やベクタは呼び出しの間だけ存在します。
 
 | 宣言型 | 引数として渡せるもの | 結果 |
 |--------|----------------------|------|
@@ -339,11 +183,67 @@ MY-APP> (invoke-into 'string "NSString"
 | その他の構造体 | メモリ順に並べたフィールドのベクタ | フィールドのベクタ |
 | ポインタ | アドレス、`nil`、オブジェクトポインタ | アドレス |
 
-`objc:invoke-into` はさらに変換します。`'string` は結果の `NSString` を Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。
+結果の `BOOL` は LispWorks と同じく `1` か `0` なので、条件判定には `objc:invoke-bool` を使います。結果の `NSString` はほかのオブジェクトと同じくポインタです。`objc:invoke-into` はさらに変換します。`'string` はそれを Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。
+
+```console
+MY-APP> (invoke *s* "hasPrefix:" "hello")
+1
+MY-APP> (invoke-into 'string *s* "substringWithRange:" (cons 0 5))
+"hello"
+MY-APP> (invoke (invoke "NSValue" "valueWithRect:" #(10 20 300 200)) "rectValue")
+#(10.0 20.0 300.0 200.0)
+MY-APP> (invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
+#("x" "y")
+```
+
+レシーバにないメソッド、引数の個数違い、宣言型に合わない引数は、何かを送る前に `error` になり、クラッシュにはなりません。メソッドがない場合のメッセージには、ランタイムがレシーバについて答えるクラスが入ります:
+
+```console
+MY-APP> (invoke *s* "frobnicate")
+Error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
+MY-APP> (invoke *s* "length" 3)
+Error: objc:invoke: length takes 0 argument(s), got 1
+```
+
+`performSelector...` メッセージの答えは捨てられます (その型はターゲットメソッドのもので、エンコーディングには現れません)。ブロックの引数にはブロックを渡します。素の関数は受け付けません (後述の[ブロック](#blocks))。共用体やビットフィールドの引数は、名前を挙げて拒否されます。
+
+### 宣言が呼び出しのすべてではない唯一のケース
+
+ランタイムが印を付けてくれないのが可変長引数 (variadic) のメソッドです。
+`+[NSArray arrayWithObjects:]` と `+[NSArray arrayWithObject:]` はどちらも `@@:@` とバイト単位で同一に宣言されており、両者を区別する情報はどこにもありません。しかし Apple シリコンではこの違いが呼び出しそのものです。可変長引数はスタックで渡され、固定引数はレジスタで渡されるからです。
+
+そこでこの一群は名前で識別します。nil 終端のコンストラクタ (`arrayWithObjects:`、`initWithObjects:`、`setWithObjects:`、`orderedSetWithObjects:`、`dictionaryWithObjectsAndKeys:`、`initWithObjectsAndKeys:`) と、書式文字列の一族 (`stringWithFormat:`、`initWithFormat:`、`localizedStringWithFormat:`、`stringByAppendingFormat:`、`appendFormat:`、`predicateWithFormat:`、`raise:format:`) です。名前で呼ぶと、いずれも宣言された引数の個数を超えていくつでも引数を取り、それぞれの型は値 (オブジェクト、文字列、整数、浮動小数点数) から決まります。`nil` 終端子はバインディングが付けます。呼び出し側が書くものではありません。
+
+```console
+MY-APP> (invoke (invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
+3
+MY-APP> (invoke-into 'string "NSString" "stringWithFormat:"
+                     "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
+"cache has 3 items, 62.5% full"
+```
+
+それ以外の可変長引数メソッドは、プログラム自身が宣言したものも含めて、上の最初の例の `stringWithFormat:` のようにリスト形式と `:variadic-num-of-fixed` で呼びます。`arrayWithObjects:count:` はそもそも可変長引数ではありません。本物の配列と個数を取る、任意サイズのコレクションを作る固定引数の方法です。
+
+### 値
+
+オブジェクトは `objc:objc-object-pointer`、クラスは `objc:objc-class` (オブジェクトポインタでもある)、セレクタは `objc:sel` として返ります。どれも `structure-object` ではありません。一つのオブジェクトに対する二つの答えは `eq`、`eql`、`equal`、`equalp` のいずれでも等しく、どのハッシュテーブルでも互いに見つかります。ポインタは LispWorks と同じく `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>` と表示します。表示するのはアドレスだけで、オブジェクトからは何も読みません。`objc:objectp` はクラスを含むすべてのオブジェクトポインタについて真で、セレクタを含むそれ以外のものについては偽です:
+
+```console
+MY-APP> (eq (invoke *s* "self") *s*)
+T
+MY-APP> (objc:objectp *s*)
+T
+MY-APP> (objc:objectp (coerce-to-objc-class "NSString"))
+T
+MY-APP> (objc:objectp (coerce-to-selector "length"))
+NIL
+MY-APP> (objc:objectp "hello")
+NIL
+```
 
 ### 所有権: ポインタは保持している参照だけを解放する
 
-すべての送信はメインスレッド上で専用の自動解放プールの中で行われるため、送信が autorelease したオブジェクトは、ポインタ値が先に参照を取らない限り送信から戻った時点で消えています。ポインタ値はオブジェクトの結果すべてについて参照を取り、`alloc` / `new` / `copy` / `mutableCopy` / `init` のメソッドが返す参照はそのまま引き取ります。ポインタ値は、コレクタに回収されるときにまだ保持している参照を解放します。`objc:retain` はプログラムが解放すべき参照を加えます。`objc:release` と `objc:autorelease` はポインタが保持する参照を一つ手放し、保持していなければシグナルします。そのため、マニュアルの規則どおり所有するものを解放するコードが、コレクタの解放と二重に解放することはありません。`(objc:invoke p "release")` も同じ計数を通ります。
+すべての送信はメインスレッド上で専用の自動解放プールの中で行われるため、送信が autorelease したオブジェクトは、ポインタ値が先に参照を取らない限り送信から戻った時点で消えています。ポインタ値はオブジェクトの結果すべてについて参照を取り、`alloc` / `new` / `copy` / `mutableCopy` / `init` のメソッドが返す参照はそのまま引き取ります。ポインタ値は、コレクタに回収されるときにまだ保持している参照をメインスレッド上で解放します。つまり保持しているウィンドウや文字列は保持している限り有効で、手で解放するものはありません。`objc:retain` はプログラムが解放すべき参照を加えます。`objc:release` と `objc:autorelease` はポインタが保持する参照を一つ手放し、保持していなければシグナルします。そのため、マニュアルの規則どおり所有するものを解放するコードが、コレクタの解放と二重に解放することはありません。`(objc:invoke p "release")` も同じ計数を通ります。
 
 ```console
 MY-APP> (defvar *o* (alloc-init-object "NSObject"))
@@ -355,7 +255,7 @@ NIL
 MY-APP> (release *o*)
 NIL
 MY-APP> (release *o*)
-error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+Error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
 MY-APP> (with-autorelease-pool ()
           (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
 "pooled"
@@ -363,9 +263,7 @@ MY-APP> (with-autorelease-pool ()
 
 プールは Lisp 側で管理します。各送信がメインスレッドで自分のプールを積んで降ろすため、本物の `NSAutoreleasePool` は二つの送信にまたがれません。
 
-### 値
-
-オブジェクトは `objc:objc-object-pointer`、クラスは `objc:objc-class` (オブジェクトポインタでもある)、セレクタは `objc:sel` として返ります。どれも `structure-object` ではありません。一つのオブジェクトに対する二つの答えは `eq`、`eql`、`equal`、`equalp` のいずれでも等しく、どのハッシュテーブルでも互いに見つかります。ポインタは LispWorks と同じく `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>` と表示します。表示するのはアドレスだけで、オブジェクトからは何も読みません。
+ウィンドウには規則が一つあります。`objc:invoke` で直接作ったウィンドウには、`appkit:window` がしているように `setReleasedWhenClosed:` に `nil` を送っておく必要があります。さもないと、閉じたときにポインタがまだ保持している参照が解放されます。
 
 ### クラスの定義
 
@@ -413,8 +311,10 @@ MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 オブジェクト、クラス、セレクタです。オブジェクト引数は受け取るときに変換でき
 (`(arg objc-object-pointer string)`、`array`、`(array string)`)、オブジェクトとして返した文字列やベクタは
 `NSString` / `NSArray` になります。Objective-C クラスを名付けず継承もしないクラスはミックスインで、
-そのメソッドは名付けるサブクラスそれぞれに入ります。メソッド本体のエラーは表示され、メソッドはゼロを返します。
-呼び出した Objective-C のフレームまで巻き戻ることはありません。
+そのメソッドは名付けるサブクラスそれぞれに入ります。メソッド本体のエラーは `objc: error in a callback: ...` と
+表示され、メソッドはゼロを返します。呼び出した Objective-C のフレームまで巻き戻ることはありません。
+その上にシグナル先となる Lisp のフレームがないためです。`define-objc-method` を評価し直すとメソッドが
+束縛し直されるので、REPL でハンドラを書き直しながら試せます。
 
 インスタンスは `objc:standard-objc-object` です。`make-instance` は Objective-C オブジェクトを確保して初期化し
 (`init`、または渡した `:init-function`)、Objective-C 側が確保したオブジェクトにも Lisp オブジェクトが作られます。
@@ -422,7 +322,37 @@ MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 `(:objc-instance-vars ...)` で宣言したインスタンス変数を読みます。Lisp オブジェクトは Objective-C オブジェクトの
 参照カウントが 0 になるまで生き続けます (`make-instance` が取った参照はプログラムが `objc:release` するものです)。
 0 になると `dealloc` の中で `objc:objc-object-destroyed` が実行され、`copy` で作った複製には
-`objc:objc-object-copied` が呼ばれます。通知の監視もメソッドで行います。
+`objc:objc-object-copied` が呼ばれます。
+
+Cocoa から Lisp を呼び出すのは、こうしたクラスです。ボタンはアクションをターゲットに送ります。次の例では、ターゲットがインスタンスで、アクションが Lisp のメソッドです:
+
+```console
+MY-APP> (define-objc-class my-target ()
+          ((clicks :initform 0 :accessor clicks))
+          (:objc-class-name "MyTarget"))
+MY-TARGET
+MY-APP> (define-objc-method ("clicked:" :void) ((self my-target) (sender objc-object-pointer))
+          (incf (clicks self))
+          (format t "clicked ~a~%" (invoke-into 'string sender "title")))
+"clicked:"
+MY-APP> (defvar *target* (make-instance 'my-target))
+*TARGET*
+MY-APP> (defvar *window* (appkit:window "target" :width 200 :height 80))
+*WINDOW*
+MY-APP> (defvar *go* (appkit:button *window* "Go"))
+*GO*
+MY-APP> (invoke *go* "setTarget:" *target*)
+NIL
+MY-APP> (invoke *go* "setAction:" "clicked:")
+NIL
+MY-APP> (appkit:click *go*)
+clicked Go
+NIL
+MY-APP> (clicks *target*)
+1
+```
+
+AppKit はターゲットを弱参照で保持するので、ターゲットを生かしておくのは `*target*` です。`appkit` のウィジェットはまさにこの方法で作られており、`metal` のプログラムや `scene` の描画面も同じです。描画面は `NSView` のサブクラスで、その `mouseDown:` / `mouseDragged:` / `scrollWheel:` が Lisp のメソッドです。通知の監視もメソッドで行います:
 
 ```console
 MY-APP> (define-objc-class watcher ()
@@ -543,22 +473,96 @@ MY-APP> (handler-case
 ("NSCocoaErrorDomain" 260)
 ```
 
+### バイト列: `objc:data` と `objc:bytes`
+
+メモリブロックは Cocoa ではありふれたものですが、それに対応する Lisp の値はありません。そこでこのパッケージはメモリブロックを `NSData` にします。`objc:data` は、パックバッファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ) のバイト列、または文字列の UTF-8 を持つ `NSMutableData` を返します。並びは `write-sequence` が書くものとまったく同じで、リトルエンディアンの行優先です。それ以外の値を渡すとシグナルします。あとは `[data bytes]` が `void *` 引数の求めるアドレスになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になります。`objc:bytes` は `NSData` の内容を新しい `(unsigned-byte 8)` ベクタとして読み戻します。
+
+```console
+MY-APP> (objc:bytes (objc:data (make-array 2 :element-type 'single-float
+                                            :initial-contents '(1.0 2.0))))
+#(0 0 128 63 0 0 0 64)
+MY-APP> (objc:bytes (invoke *s* "dataUsingEncoding:" 4))
+#(104 101 108 108 111 32 119 111 114 108 100)
+MY-APP> (handler-case
+            (invoke-with-error "NSJSONSerialization" "JSONObjectWithData:options:error:"
+                               (objc:data "nope") 0)
+          (ns-error (e) (ns-error-description e)))
+"The data couldn’t be read because it isn’t in the correct format."
+```
+
+バイト列と `invoke-with-error` がそろうと GPU に手が届きます。Metal はほぼ全面が Objective-C の API なので、`objc:invoke` だけで何も足さずに駆動できます。
+
+### `metal` パッケージ
+
+どの Metal プログラムも同じように書く定型 — ウィンドウのコンテンツビュー上の
+`CAMetalLayer`、デバイス、コマンドキュー、レンダーパス、ドローアブル、present と commit、
+そしてシェーダ・パイプライン・バッファのヘルパ — が組み込みの **`metal`** パッケージです。
+`appkit` と同じくインタプリタに同梱され、初回使用時に読み込まれます。意図的に含めていない
+のはシェーダのソース、形状、描画コールです。それらはプログラム側のものです。
+
+```console
+CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
+CL-USER> (metal:run *ctx*
+    (lambda (encoder)
+      (objc:invoke encoder "setRenderPipelineState:" *pipe*)
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BBF47A7C0>
+```
+
+Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDefaultDevice()` は回避できま
+す。`CAMetalLayer` の `preferredDevice` はプロパティで同じデバイスを返すからで、パッケージ
+全体はその事実の上に立っています。シェーダは Lisp の文字列から実行時にコンパイルされ、コン
+パイルに失敗したシェーダは `objc:ns-error` をシグナルします。その説明は Metal コンパイラ自身の
+診断 (キャレット付き) です。`metal:buffer` は数値を一度だけ GPU にコピーし、毎フレーム書き直す
+形状には `metal:shared-buffer` と `metal:upload`、Metal がインラインで受け取りたがる小さな値には
+`metal:uniform` を使います。パックド単精度配列はバッファのバイト列そのものなので、`linalg`
+の行列も `geom:mesh` も一切変換なしに GPU へ届きます。全体は
+[関数リファレンス](../reference/functions/metal.md)にあります。
+
+`metal` は単独で成立します。`examples/macos/metal-triangle.lisp` は WebGL の hello world
+を、`examples/macos/metal-cube.lisp` は陰影付きの回転する立方体を、
+`examples/macos/metal-robot-arm.lisp` は自分で逆運動学を解いてクリックした先へ手を伸ばすロ
+ボットアームを、`examples/macos/metal-pagoda-garden.lisp` はボクセルの庭 — 鯉の池の上に立つ
+五重塔、舞い散る桜、クリックで訪れる夜 — を描きます。その 1 万 3 千個のボクセルは 1 個の立方
+体を 1 万 3 千回描いたもので、頂点関数が `vertex_id` を 36 で割ってどのボクセルの上にいるかを
+求めます。4 本とも `metal` を直接使っており、`geom` も `scene` も使っていません (OpenGL は逆で、
+射程外のままです。`glClear` などは素の C 関数であり、`objc_msgSend` は届きません)。
+
+`metal` の 1 つ上の段が **`scene`** パッケージです。`geom` ソリッドの 3D ビューアで、カメラ・
+グリッド・フレームループがすでに書かれているので、モデル化した機械はウィンドウまで 3 行です。
+[ソリッドモデリングガイド](solid-modeling.md#seeing-it-the-scene-viewer)を参照してください。
+
+### スレッド: すべてはメインスレッドで起きる
+
+AppKit はプロセスの最初のスレッドのものであり、すべての `objc:invoke` は自分でそこへ移動します。移動は同期的なので、値は呼び出し側に返ってきます。複数の送信から成るウィジェットは `objc:on-main` で包むと移動が 1 回で済み、`appkit` の関数はそうしています。`objc:on-main` は関数をメインスレッドで呼んでその値を返し、関数がシグナルしたエラーは呼び出し側で改めてシグナルします。すでにメインスレッド上で動いている関数 (ボタンのハンドラ) は送信をインラインで実行するので、コールバックから自由に GUI を呼び戻せます。
+
+```console
+MY-APP> (objc:on-main (lambda () (+ 1 2)))
+3
+```
+
+最初の `appkit:` 呼び出しは、スレッド 0 を AppKit 自身のイベントループ (`-[NSApplication run]`。誰もブロックせずにそこで開始します) に渡します。ウィンドウがそもそもクリックに応答するのはこれによるもので、プロセスがフォーカスを取りアプリケーションスイッチャに現れるのもこのためです。開始するのは `appkit` 層であり、汎用バインディングである `objc` ではありません。したがって `appkit:` 関数を一度も呼ばないプログラムが生の `objc:invoke` だけで作ったウィンドウは、描画はされても何にも反応しません。ウィンドウは `appkit:window` で作ってください。
+
+Lisp で定義したメソッドやブロックがメインスレッドで呼ばれるとき、それはインタプリタの *グローバル* な動的束縛で動きます。REPL スレッドでの special 変数の `let` 束縛はそこから見えません。
+
 ### LispWorks との違い
 
-rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。LispWorks は Objective-C の例外でプロセスを終了させ、`NSError` の補助もありません。`objc:objc-exception`、`objc:ns-error`、`objc:invoke-with-error` はこのパッケージ独自のものです。
+rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。上の表にある可変長引数メソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。LispWorks は Objective-C の例外でプロセスを終了させ、`NSError` の補助もありません。`objc:objc-exception`、`objc:ns-error`、`objc:invoke-with-error` はこのパッケージ独自のもので、`objc:on-main`、`objc:data`、`objc:bytes`、`objc:objectp` も同様です。
 
 ## ネイティブバイナリ
 
-`rontolisp` バイナリはビルド時に登録された `objc_msgSend` の形の固定テーブルを提供します — `appkit` 層が送るすべての形に加え、AppKit と Foundation の中核クラスで最も多い 60 の形で、それらが宣言するメソッドの 10 のうち 9 に届きます。テーブルにないセレクタは追加すべきエントリをそのまま示してシグナルします:
+`rontolisp` バイナリはビルド時に登録された `objc_msgSend` の形の固定テーブルを提供します — `appkit`、`metal`、`scene` の各層が送るすべての形に加え、AppKit と Foundation の中核クラスで最も多い 60 の形で、それらが宣言するメソッドの 10 のうち 9 に届きます。テーブルにないメソッドは追加すべきエントリをそのまま示してシグナルします:
 
 ```text
-objc:send: someRareSelector: the shape void(void*,void*,jshort) has no foreign-call stub
+objc: someRareSelector:: the shape void(void*,void*,jshort) has no foreign-call stub
 in this binary; register it under foreign.downcalls in reachability-metadata.json and rebuild
 ```
 
 JVM は事前に何も登録せずどんな形でもバインドするので、バイナリを作る前にプログラムが何を送るかを知る場所は `java -jar` です。
 
-`objc:define-objc-method` で定義したメソッドはそれぞれの形のアップコールで、同じように登録します。バイナリは上のクラスの例の形と、Lisp で定義したどのクラスにも入る三つのメソッドの形を扱い、それ以外の形の定義は `foreign.upcalls` に追加すべきエントリを示して拒否します。ブロックも同じくアップコールです。バイナリは上のブロックの形 (と、比較関数、処理の単位、三つのオブジェクトを取る完了ハンドラの形) を扱い、それ以外の形のブロックは作る時点で拒否します。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
+`objc:define-objc-method` で定義したメソッドはそれぞれの形のアップコールで、同じように登録します。バイナリは上のクラスの例の形、`appkit`、`metal`、`scene` の各層が定義するメソッドの形、Lisp で定義したどのクラスにも入る三つのメソッドの形を扱い、それ以外の形の定義は `foreign.upcalls` に追加すべきエントリを示して拒否します。ブロックも同じくアップコールです。バイナリは上のブロックの形 (と、比較関数、処理の単位、三つのオブジェクトを取る完了ハンドラの形) を扱い、それ以外の形のブロックは作る時点で拒否します。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
 
 可変長引数の呼び出しは別個の登録になるため、バイナリはその有界なグリッドも提供します。宣言された引数を超えて 11 個まで (バインディングが付ける `nil` 終端子を含めて 12 個)、うち先頭 3 個までは数、残りはオブジェクトです。これより長い、あるいは数がこれより多いリストは同じようにシグナルします。
 
@@ -573,7 +577,7 @@ $ rontolisp examples/macos/counter.lisp -o counter.jar
 $ java -jar counter.jar
 ```
 
-クラスは使用する `appkit` ウィジェットを抱え、バインディング全体 (`am.ik.objc`、クラス名に合わせてリネーム済み) は `Counter$Objc*.class` ファイルとしてクラスの隣 (または jar の中) に書き出されます。それらのファイルがあれば、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
+クラスは `objc` パッケージと使用する `appkit` ウィジェットを抱え、バインディング全体 (`am.ik.objc`、クラス名に合わせてリネーム済み) は `Counter$Objc*.class` ファイルとしてクラスの隣 (または jar の中) に書き出されます。それらのファイルがあれば、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
 
 jar は設定なしで GraalVM ネイティブイメージにもビルドできます (`native-image -jar counter.jar`)。バインディングが必要とするネイティブイメージ用メタデータ、つまり `rontolisp` バイナリが扱うのと同じメッセージ形状の表を jar 自身が持っています (前述の[ネイティブバイナリ](#the-native-binary))。イメージではプログラムの `main` がプロセスの最初のスレッドで始まるので、`rontolisp` バイナリと同じく、`main` 自身がそのスレッドをイベントループに渡し、プログラムを別のスレッドで実行します。
 
@@ -586,15 +590,15 @@ $ rontolisp examples/macos/counter.lisp --native -o counter
 $ ./counter
 ```
 
-実行ファイルのランナー自身がバインディングです。ランナーが Objective-C ランタイムを直接呼ぶので、ランタイムが記述するセレクタはどれでも送れます — `rontolisp` バイナリのような固定の形の表はありません — し、送信 1 回は 1 マイクロ秒に満たない時間です。プログラムは AppKit が求めるプロセスの最初のスレッドで動くので、`objc:on-main` はただの呼び出しで、スレッドの移動はありません。プログラムが `sleep` で待つ間 (`appkit:wait` がそうします) ウィンドウはイベントを処理してタイマーを動かし、ボタンのクロージャはその待ちの中で実行されます。標準入力を読むプログラムでは、読み込みが返るまでウィンドウが応答しません。
+実行ファイルのランナー自身がバインディングです。ランナーが Objective-C ランタイムを直接呼ぶので、ランタイムが記述するセレクタはどれでも送れます — `rontolisp` バイナリのような固定の形の表はありません — し、送信 1 回はおよそ 1 マイクロ秒です。プログラムは AppKit が求めるプロセスの最初のスレッドで動くので、`objc:on-main` はただの呼び出しで、スレッドの移動はありません。プログラムが `sleep` で待つ間 (`appkit:wait` がそうします) ウィンドウはイベントを処理してタイマーを動かし、ボタンのクロージャはその待ちの中で実行されます。標準入力を読むプログラムでは、読み込みが返るまでウィンドウが応答しません。
 
-所有権はほかと同じです: Lisp の値 1 つにつき参照 1 つで、値がガベージになると解放されます。違いは 1 つだけで、同じオブジェクトを包む 2 つの値はここでは `equal` になりません (インタプリタはアドレスで比べます)。`appkit` 層がそうしているように、`objc:address` の値を比べてください。実行ファイルでは `objc:data` は `bfloat16` 配列と量子化行列を受け付けません。
+値の規則はほかと同じです。ポインタは自分の参照を保持し、ガベージになるとそれを解放します。一つのオブジェクトに対する二つの答えは、アドレスで比較されて `eq` になります。実行ファイルでは `objc:data` は `bfloat16` 配列と量子化行列を受け付けません。
 
 ## 制限
 
 - macOS のみ: インタプリタ (`java -jar`、または `rontolisp` バイナリ)、コンパイル済み `.class` / `.jar`、Apple シリコン向けの `--native` 実行ファイル。`.wasm` は不可で、`objc:` / `appkit:` の参照はそれ以外のすべての WASM 出力でコンパイルエラーです。
 - アプリケーションバンドルのないプロセスには Dock アイコンもメニューバーもありません。Cmd-Q はなく、最後のウィンドウを閉じても終了しません — REPL がプロセスです。
-- `objc:define-class` のコールバックの形は上の閉じた集合です。`objc:define-objc-method` はどんな形でも受け付けます (`rontolisp` バイナリでは登録済みの形)。ブロックも同じです。
+- `rontolisp` バイナリでは、メッセージ、Lisp で定義したメソッド、ブロックのいずれも、バイナリが登録した形しか受け付けません。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
 - `--native` 実行ファイルが別のスレッドから呼ばれたブロックを実行するのは、そのブロックが何も返さない場合だけで、実行はプログラムの次の `sleep` の時点です。
-- 扱える可変長引数セレクタは上の表のものです。プログラム自身が宣言したものは含まれず、ランタイムにはそれを判別する手段がありません。
+- 上の表にない可変長引数メソッドはリスト形式で呼びます。ランタイムには、それを固定引数の同形のメソッドと区別する手段がありません。
 - Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。また、呼び出しの中の Objective-C の例外は今もプロセスを終了させます。

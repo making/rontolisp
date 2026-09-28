@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * An {@code NSException} raised inside a send is the condition
  * {@code objc:objc-exception}, and {@code objc:invoke-with-error} signals
  * {@code objc:ns-error} for a method that fails through its {@code NSError **}, on the
- * interpreter (.kb/objc.md, "The new base: exceptions and NSError"). The corpus
+ * interpreter (.kb/objc.md, "Exceptions and NSError"). The corpus
  * ({@code objc-exception-corpus.lisp}) is what a JVM class and a {@code --native}
  * executable print byte for byte too.
  */

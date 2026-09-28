@@ -9,5 +9,5 @@ CL-USER> (defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width
 CL-USER> (appkit:text *label*)
 "no clicks yet"
 CL-USER> (appkit:label *win* "3" :x 20 :y 20 :width 34 :height 34 :size 19 :align :center :bold t)
-#<objc RontoLispAppKitLabel>
+#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BDF77CA80>
 ```

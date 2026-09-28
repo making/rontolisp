@@ -20,26 +20,26 @@ class ObjcLibraryTest {
 	}
 
 	@Test
-	void theNamesThatLoadItAreTheNewBasesAndCocoas() {
+	void theNamesThatLoadItAreObjcsAndCocoas() {
 		assertThat(ObjcLibrary.definesName("OBJC:INVOKE")).isTrue();
 		assertThat(ObjcLibrary.definesName("OBJC:WITH-AUTORELEASE-POOL")).isTrue();
 		assertThat(ObjcLibrary.definesName("COCOA:NS-NOT-FOUND")).isTrue();
 		assertThat(ObjcLibrary.definesName("OBJC::%INVOKE")).isTrue();
-		// The old verbs and the backend's primitives are not the library's.
-		assertThat(ObjcLibrary.definesName("OBJC:SEND")).isFalse();
+		assertThat(ObjcLibrary.definesName("OBJC:DATA")).isTrue();
+		// The backend's primitives are not the library's.
 		assertThat(ObjcLibrary.definesName("OBJC:ON-MAIN")).isFalse();
 		assertThat(ObjcLibrary.definesName("OBJC::%SEND")).isFalse();
 		assertThat(ObjcLibrary.definesName("INVOKE")).isFalse();
 		assertThat(ObjcLibrary.mentionsType(read("(typep x 'objc:objc-object-pointer)").getFirst())).isTrue();
-		assertThat(ObjcLibrary.mentionsType(read("(typep x 'objc:object)").getFirst())).isFalse();
+		assertThat(ObjcLibrary.mentionsType(read("(typep x 'integer)").getFirst())).isFalse();
 	}
 
 	@Test
 	void aProgramThatReferencesItGetsItSpliced() {
 		List<LispVal> plain = read("(print 1)");
 		assertThat(ObjcLibrary.process(plain)).isSameAs(plain);
-		List<LispVal> old = read("(objc:send \"NSString\" \"string\")");
-		assertThat(ObjcLibrary.process(old)).isSameAs(old);
+		List<LispVal> onMain = read("(objc:on-main (lambda () 1))");
+		assertThat(ObjcLibrary.process(onMain)).isSameAs(onMain);
 		List<LispVal> invoking = read("(objc:invoke \"NSObject\" \"new\")");
 		assertThat(ObjcLibrary.process(invoking)).hasSize(ObjcLibrary.forms().size() + 1).endsWith(invoking.getFirst());
 		assertThat(ObjcLibrary.references(read("(cocoa:set-ns-range* (cons 0 0) 1 2)"))).isTrue();

@@ -7,6 +7,6 @@ Replaces the window's content view backing with a `CAMetalLayer` and answers the
 ```console
 CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
 CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
-CL-USER> (objc:send (objc:send (metal:device *ctx*) "name") "UTF8String")
+CL-USER> (objc:invoke-into 'string (metal:device *ctx*) "name")
 "Apple M4 Max"
 ```

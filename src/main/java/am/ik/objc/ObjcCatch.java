@@ -24,10 +24,10 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * An Objective-C exception raised inside a call stops at the call: every
- * {@code objc_msgSend}, super send and C function the new base makes goes through a
+ * {@code objc_msgSend}, super send and C function {@code objc.lisp} makes goes through a
  * CATCHING TRAMPOLINE, a few AArch64 instructions this class writes at run time that
- * forward the call unchanged and hold an {@code @catch (id)} around it (.kb/objc.md, "The
- * new base: exceptions and NSError").
+ * forward the call unchanged and hold an {@code @catch (id)} around it (.kb/objc.md,
+ * "Exceptions and NSError").
  *
  * <p>
  * Why machine code: the C++ unwinder {@code objc_exception_throw} starts searches the

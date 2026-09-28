@@ -78,8 +78,9 @@ class SceneLibraryTest {
 		List<LispVal> unrelated = read("(print 1)");
 		assertThat(SceneLibrary.process(unrelated)).isSameAs(unrelated);
 		assertThat(SceneLibrary.process(read("(metal:attach w)"))).hasSize(1);
-		assertThat(SceneLibrary.process(read("(scene:viewer)"))).hasSize(SceneLibrary.forms().size() + 1);
-		assertThat(SceneLibrary.process(read("(in-package scene) (viewer)"))).hasSize(SceneLibrary.forms().size() + 2);
+		assertThat(SceneLibrary.process(read("(scene:viewer)"))).hasSize(SceneLibrary.expandedForms().size() + 1);
+		assertThat(SceneLibrary.process(read("(in-package scene) (viewer)")))
+			.hasSize(SceneLibrary.expandedForms().size() + 2);
 	}
 
 	@Test
@@ -96,7 +97,7 @@ class SceneLibraryTest {
 			.contains("METAL$colonATTACH")
 			.contains("GEOM$colonBOX")
 			.contains("APPKIT$colonWINDOW")
-			.contains("Prog$ObjcBridge");
+			.contains("Prog$ObjcPrimitives");
 	}
 
 	@Test

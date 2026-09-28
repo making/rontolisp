@@ -41,8 +41,8 @@ import org.jspecify.annotations.Nullable;
  * ({@code LispEvaluator#resolveFunction});</li>
  * <li>the compile path ({@code CompileFrontend}) calls {@link #process(List)} BEFORE
  * {@code AppKitLibrary.process}, so the {@code appkit:timer} reference inside the spliced
- * {@code metal:run} pulls the widget layer in too, and their {@code objc:send} calls gate
- * the embedded {@code am.ik.objc} blob on
+ * {@code metal:run} pulls the widget layer in too, and through the {@code objc.lisp}
+ * splice around them the embedded {@code am.ik.objc} blob is gated on
  * ({@code codegen.jvm.JvmObjcRuntimeBuilder}).</li>
  * </ul>
  * The WASM backends have no foreign function API, so {@code CompileFrontend} refuses a

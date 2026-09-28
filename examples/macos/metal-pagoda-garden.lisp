@@ -5,7 +5,7 @@
 ;;;; elaborate, detailed voxel art scene of a pagoda in a beautiful garden with
 ;;;; trees, including some cherry blossoms -- impressive, varied, colourful --
 ;;;; use whatever libraries, one HTML file I can paste into Chrome". There is no
-;;;; page here and no library to pull in: `objc:send` IS the graphics API
+;;;; page here and no library to pull in: `objc:invoke` IS the graphics API
 ;;;; (the built-in `metal` package), a packed single-float array IS the buffer's
 ;;;; bytes, and the
 ;;;; scene itself -- every voxel of it -- is built by the Lisp below.
@@ -1402,7 +1402,7 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
 ;;; --- the window, and the mouse ------------------------------------------------
 ;;;
 ;;; The drawing surface is also the input surface: one NSView subclass defined at
-;;; run time whose mouse methods are the Lisp closures below, installed as the
+;;; run time whose mouse methods are the Lisp bodies below, installed as the
 ;;; window's content view before metal:attach puts the CAMetalLayer on it.
 ;;; A drag that has moved orbits the camera; a press that has not, released,
 ;;; turns the hour.
@@ -1417,16 +1417,24 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
 (defvar *view* nil)
 
 (defun view-point (event)
-  (let ((p (objc:send event "locationInWindow")) (f (objc:send *view* "frame")))
-    (vec3 (- (first p) (first f)) (- (second p) (second f)) 0.0)))
+  (let ((p (objc:invoke event "locationInWindow"))
+        (f (objc:invoke *view* "frame")))
+    (vec3 (- (aref p 0) (aref f 0)) (- (aref p 1) (aref f 1)) 0.0)))
 
-(defun on-mouse-down (self event)
+(objc:define-objc-class pagoda-view ()
+  ()
+  (:objc-class-name "RontoLispPagodaView")
+  (:objc-superclass-name "NSView"))
+
+(objc:define-objc-method ("mouseDown:" :void)
+  ((self pagoda-view) (event objc:objc-object-pointer))
   (setq *dragging* t)
   (setq *moved* 0.0)
   (setq *last* (view-point event))
   nil)
 
-(defun on-mouse-dragged (self event)
+(objc:define-objc-method ("mouseDragged:" :void)
+  ((self pagoda-view) (event objc:objc-object-pointer))
   (when *dragging*
     (let* ((p (view-point event))
            (d (linalg:sub p *last*))
@@ -1438,25 +1446,25 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
         (orbit (/ dx (* 1.0 *height*)) (/ (- 0.0 dy) (* 1.0 *height*))))))
   nil)
 
-(defun on-mouse-up (self event)
+(objc:define-objc-method ("mouseUp:" :void)
+  ((self pagoda-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
   (when (and *dragging* (<= *moved* 4.0)) (setq *click* t))
   (setq *dragging* nil)
   nil)
 
-(defun on-scroll (self event)
-  (let ((dy (objc:send event "scrollingDeltaY")))
-    (zoom (* dy (if (objc:send event "hasPreciseScrollingDeltas") -0.20 -3.0))))
+(objc:define-objc-method ("scrollWheel:" :void)
+  ((self pagoda-view) (event objc:objc-object-pointer))
+  (let ((dy (objc:invoke event "scrollingDeltaY")))
+    (zoom
+     (* dy
+        (if (objc:invoke-bool event "hasPreciseScrollingDeltas") -0.20 -3.0))))
   nil)
 
-(defun on-first-mouse (self event) t)
-
-(defvar *input-class*
-  (objc:define-class "RontoLispPagodaView"
-    "NSView"
-    (list (list "mouseDown:" #'on-mouse-down)
-          (list "mouseDragged:" #'on-mouse-dragged)
-          (list "mouseUp:" #'on-mouse-up) (list "scrollWheel:" #'on-scroll)
-          (list "acceptsFirstMouse:" #'on-first-mouse))))
+(objc:define-objc-method ("acceptsFirstMouse:" :boolean)
+  ((self pagoda-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  t)
 
 ;;; --- go -----------------------------------------------------------------------
 
@@ -1469,9 +1477,10 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
       (objc:on-main
        (lambda ()
          (let ((v
-                (objc:send (objc:send *input-class* "alloc") "initWithFrame:"
-                           (list 0.0 0.0 (* 1.0 *width*) (* 1.0 *height*)))))
-           (objc:send *window* "setContentView:" v)
+                (objc:invoke (objc:invoke "RontoLispPagodaView" "alloc")
+                 "initWithFrame:"
+                 (vector 0.0 0.0 (* 1.0 *width*) (* 1.0 *height*)))))
+           (objc:invoke *window* "setContentView:" v)
            v))))
 
 (defvar *metal*
@@ -1508,23 +1517,23 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
         (dyn (nth *slot* *dyn-buffers*))
         (spr (nth *slot* *sprite-buffers*)))
     ;; the sky, from three generated vertices and the Scene uniform alone
-    (objc:send encoder "setCullMode:" metal:+cull-none+)
-    (objc:send encoder "setRenderPipelineState:" *sky*)
-    (objc:send encoder "setDepthStencilState:" *depth-off*)
+    (objc:invoke encoder "setCullMode:" metal:+cull-none+)
+    (objc:invoke encoder "setRenderPipelineState:" *sky*)
+    (objc:invoke encoder "setDepthStencilState:" *depth-off*)
     (metal:uniform encoder 0 *scene* :stage :fragment)
-    (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-               metal:+triangle+ 0 3)
+    (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                 metal:+triangle+ 0 3)
     ;; the garden, lit and depth-tested
-    (objc:send encoder "setCullMode:" metal:+cull-back+)
-    (objc:send encoder "setFrontFacingWinding:"
-               metal:+winding-counter-clockwise+)
-    (objc:send encoder "setRenderPipelineState:" *solid*)
-    (objc:send encoder "setDepthStencilState:" *depth-write*)
+    (objc:invoke encoder "setCullMode:" metal:+cull-back+)
+    (objc:invoke encoder "setFrontFacingWinding:"
+                 metal:+winding-counter-clockwise+)
+    (objc:invoke encoder "setRenderPipelineState:" *solid*)
+    (objc:invoke encoder "setDepthStencilState:" *depth-write*)
     (metal:uniform encoder 1 vp)
     (metal:uniform encoder 0 *scene* :stage :fragment)
-    (objc:send encoder "setVertexBuffer:offset:atIndex:" *static-buffer* 0 0)
-    (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-               metal:+triangle+ 0 (* 36 *static-count*))
+    (objc:invoke encoder "setVertexBuffer:offset:atIndex:" *static-buffer* 0 0)
+    (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                 metal:+triangle+ 0 (* 36 *static-count*))
     ;; the water, the lilies, the koi, the petals and the flames
     (target *dyn* (* +max-dyn+ +vox-floats+))
     (emit-water tm)
@@ -1534,21 +1543,21 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
     (emit-flames tm)
     (let ((n (voxels)))
       (metal:upload dyn *dyn*)
-      (objc:send encoder "setVertexBuffer:offset:atIndex:" dyn 0 0)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:"
-                 metal:+triangle+ 0 (* 36 n)))
+      (objc:invoke encoder "setVertexBuffer:offset:atIndex:" dyn 0 0)
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                   metal:+triangle+ 0 (* 36 n)))
     ;; the glow: additive, reading the depth the garden wrote
     (setq *sw* 0)
     (emit-glow tm)
     (let ((n (floor *sw* 5)))
       (metal:upload spr *sbuf*)
-      (objc:send encoder "setCullMode:" metal:+cull-none+)
-      (objc:send encoder "setRenderPipelineState:" *glow*)
-      (objc:send encoder "setDepthStencilState:" *depth-read*)
-      (objc:send encoder "setVertexBuffer:offset:atIndex:" spr 0 0)
+      (objc:invoke encoder "setCullMode:" metal:+cull-none+)
+      (objc:invoke encoder "setRenderPipelineState:" *glow*)
+      (objc:invoke encoder "setDepthStencilState:" *depth-read*)
+      (objc:invoke encoder "setVertexBuffer:offset:atIndex:" spr 0 0)
       (metal:uniform encoder 1 vp)
-      (objc:send encoder "drawPrimitives:vertexStart:vertexCount:" metal:+point+
-                 0 n))))
+      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                   metal:+point+ 0 n))))
 
 (defun frame (encoder)
   (let* ((tm (now))
@@ -1572,7 +1581,7 @@ fragment float4 glow_fragment(SpriteOut in [[stage_in]], float2 uv [[point_coord
 (setq *sprite-buffers* (make-buffers (* +max-sprites+ 20)))
 
 (format t "device: ~a~%"
-        (objc:send (objc:send (metal:device *metal*) "name") "UTF8String"))
+        (objc:invoke-into 'string (metal:device *metal*) "name"))
 (format t "~a voxels in the garden, ~a of them moving~%" *static-count*
         +max-dyn+)
 (format t "drag to orbit, scroll to zoom, click for night~%")

@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import am.ik.objc.MainThread;
 import am.ik.objc.ObjcBlocks;
 import am.ik.objc.ObjcException;
 import am.ik.objc.ObjcMethods;
@@ -18,6 +19,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispNames;
@@ -30,7 +32,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The interpreter's primitive layer of the new {@code objc} base: the {@code objc::%}
- * functions {@code objc.lisp} is written over (.kb/objc.md, "The new base"), plus
+ * functions {@code objc.lisp} is written over (.kb/objc.md, "The primitive layer"), plus
  * {@code objc:on-main}. Nothing here decides a rule -- which argument converts to what,
  * who owns a reference, when a pool drains -- that is all in {@code objc.lisp}, run
  * unchanged on every target; this class only moves raw values between the interpreter's
@@ -45,6 +47,22 @@ import org.jspecify.annotations.Nullable;
 final class ObjcPrimitives {
 
 	private ObjcPrimitives() {
+	}
+
+	static boolean available() {
+		return ObjcRuntime.available();
+	}
+
+	static String description() {
+		return ObjcRuntime.description();
+	}
+
+	static boolean mainThreadHandOverRequired() {
+		return MainThread.handOverRequired();
+	}
+
+	static void parkMainThread() {
+		MainThread.get().runLoop();
 	}
 
 	static void register(Environment globalEnv, BiFunction<LispVal, List<LispVal>, LispVal> apply) {
@@ -236,6 +254,36 @@ final class ObjcPrimitives {
 		});
 		define(globalEnv, LispNames.OBJC_SYMBOL_ADDRESS, 1,
 				args -> integer(ObjcRuntime.get().symbolAddress(string(args.get(0)))));
+		define(globalEnv, LispNames.OBJC_OCTETS, 1, args -> {
+			byte[] bytes = octets(args.get(0));
+			return bytes == null ? LispNil.INSTANCE : LispIntVector.wrapOctets(bytes);
+		});
+		define(globalEnv, LispNames.OBJC_WRITE_OCTETS, 2, args -> {
+			if (!(args.get(1) instanceof LispIntVector vector) || vector.width() != 8) {
+				throw new LispEvalException("objc: expected an (unsigned-byte 8) vector, got " + args.get(1).print());
+			}
+			byte[] bytes = java.util.Arrays.copyOf(vector.octets(), vector.length());
+			ObjcRuntime.writeBytes(address(args.get(0)), bytes);
+			return LispNil.INSTANCE;
+		});
+		define(globalEnv, LispNames.OBJC_READ_OCTETS, 2,
+				args -> LispIntVector.wrapOctets(ObjcRuntime.readBytes(address(args.get(0)), address(args.get(1)))));
+	}
+
+	/**
+	 * The bytes {@code objc:data} sends: a packed buffer's, exactly as
+	 * {@code write-sequence} would write them ({@link PackedBuffer}), or a string's UTF-8
+	 * ones; {@code null} for any other value.
+	 */
+	private static byte @Nullable [] octets(LispVal value) {
+		PackedBuffer buffer = PackedBuffer.of(value);
+		if (buffer != null) {
+			return buffer.bytes();
+		}
+		if (value instanceof LispString text) {
+			return text.value().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		}
+		return null;
 	}
 
 	// Every primitive signals a plain error starting with objc: -- the runtime's own

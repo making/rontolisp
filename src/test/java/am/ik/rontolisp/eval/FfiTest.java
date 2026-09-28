@@ -278,7 +278,7 @@ class FfiTest {
 		assertThat(FfiInterop.firstFfiReference(read("(in-package ffi) (open \"libm.so.6\")"))).isEqualTo("FFI:OPEN");
 		assertThat(FfiInterop.firstFfiReference(read("(in-package cl-user) (defun size (x) x) (print 'call)")))
 			.isNull();
-		assertThat(FfiInterop.firstFfiReference(read("(objc:send x \"y\")"))).isNull();
+		assertThat(FfiInterop.firstFfiReference(read("(objc:invoke x \"y\")"))).isNull();
 	}
 
 	@Test

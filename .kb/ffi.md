@@ -84,7 +84,7 @@ ordinary call path and leaves `cffi-libffi` unloadable forever. A returned struc
   (`Linker.Option.firstVariadicArg`); without the option the call is silently wrong on
   AArch64/Apple. It contributes no layout and may appear once.
 - **An upcall never throws**: the one dispatcher (`FfiRuntime.dispatch`, bound with a CONSTANT
-  `findStatic` -- the `ObjcClasses` rule) catches everything, prints `ffi: error in a callback: ...`
+  `findStatic` -- the `ObjcMethods` rule) catches everything, prints `ffi: error in a callback: ...`
   and answers zero of the declared type; unwinding into the native frame above an upcall ends the
   process. Stub lifetime is `Arena.global()`. `:string` and struct types are refused in callback
   shapes (take a `:pointer`).

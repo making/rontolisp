@@ -22,8 +22,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * and the rest ({@code objc-block.lisp}) -- and {@code fli:define-foreign-function} on
  * the interpreter. The corpus ({@code objc-block-corpus.lisp}) is what a JVM class prints
  * byte for byte too; a {@code --native} executable prints its own expected file, which
- * differs exactly where a block arrives on another thread (.kb/objc.md, "The new base:
- * blocks").
+ * differs exactly where a block arrives on another thread (.kb/objc.md, "Blocks and C
+ * functions").
  */
 class ObjcBlockTest {
 

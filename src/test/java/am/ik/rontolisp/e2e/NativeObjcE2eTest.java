@@ -34,12 +34,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * An {@code objc:} program as a {@code --native} executable (.kb/objc.md, "--native"):
- * the headless corpus prints byte for byte what the interpreter prints -- sends of every
- * result kind, a class whose methods are Lisp closures, a callback that signals, the
- * {@code :error} slot, the argument refusals -- and {@code sleep} turns thread 0's event
- * loop, so a timer's closure runs while the program waits, as does a fetch's wait once
- * the application started. No window is opened (CI has no display); a window is verified
- * by hand with {@code examples/macos/counter.lisp}.
+ * the headless corpora print byte for byte what the interpreter prints -- sends of every
+ * result kind, classes whose methods are Lisp functions, blocks, exceptions, the argument
+ * refusals -- and {@code sleep} turns thread 0's event loop, so a timer's closure runs
+ * while the program waits, as does a fetch's wait once the application started. No window
+ * is opened (CI has no display); a window is verified by hand with
+ * {@code examples/macos/counter.lisp}.
  *
  * <p>
  * macOS on Apple silicon only, where the runner answers the {@code rlobjc} imports; the
@@ -58,21 +58,6 @@ class NativeObjcE2eTest {
 
 	@TempDir
 	Path tempDir;
-
-	@Test
-	void theHeadlessCorpusPrintsWhatTheInterpreterPrints() throws Exception {
-		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
-		String source;
-		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-native-corpus.lisp")) {
-			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
-		}
-		Run actual = nativeOutput(source);
-		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
-		assertThat(actual.stdout()).isEqualTo(interpret(source));
-		// A method that signals is contained: printed, answered as nil, and the program
-		// goes on.
-		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: boom inside\n");
-	}
 
 	@Test
 	void theExceptionCorpusPrintsWhatTheInterpreterPrints() throws Exception {
@@ -95,9 +80,11 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
-	void theNewBasesCorpusPrintsWhatTheInterpreterPrints() throws Exception {
-		// objc.lisp over the p_* imports: the same conversions, ownership and value
-		// identity as the interpreter's primitives (eval/ObjcBaseTest pins the output).
+	void theCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// objc.lisp over the p_* imports: the same conversions, ownership, value
+		// identity and byte copies as the interpreter's primitives (eval/ObjcBaseTest
+		// pins
+		// the output).
 		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
 		String source;
 		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-base-corpus.lisp")) {
@@ -179,7 +166,7 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
-	void theNewBaseReleasesWhatADeadPointerHeld() throws Exception {
+	void aPointerThatDiesReleasesWhatItHeld() throws Exception {
 		// A pointer value's collector share rides on the externref p_new_handle hands
 		// out: when values die, their references are released, so 300,000 answers of one
 		// object leave a small count outstanding rather than 300,000.
@@ -233,26 +220,26 @@ class NativeObjcE2eTest {
 		try {
 			Run run = nativeOutput(
 					"""
-							(defvar *app* (objc:send "NSApplication" "sharedApplication"))
-							(objc:send *app* "setActivationPolicy:" 2)
-							(objc:send *app* "finishLaunching")
-							(objc:send *app* "performSelectorOnMainThread:withObject:waitUntilDone:" "run" nil nil)
+							(defvar *app* (objc:invoke "NSApplication" "sharedApplication"))
+							(objc:invoke *app* "setActivationPolicy:" 2)
+							(objc:invoke *app* "finishLaunching")
+							(objc:invoke *app* "performSelectorOnMainThread:withObject:waitUntilDone:" "run" nil nil)
 							(defvar *ticks* 0)
 							(defvar *fetching* nil)
 							(appkit:timer 0.02 (lambda () (when *fetching* (setq *ticks* (+ *ticks* 1))) t))
 							(sleep 0.1)
 							(setq *fetching* t)
-							(objc:send *app* "postEvent:atStart:"
-							           (objc:send "NSEvent"
-							                      "otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"
-							                      15 (list 0.0d0 0.0d0) 0 0.0d0 0 nil 0 0 0)
-							           nil)
+							(objc:invoke *app* "postEvent:atStart:"
+							             (objc:invoke "NSEvent"
+							                          "otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"
+							                          15 #(0.0d0 0.0d0) 0 0.0d0 0 nil 0 0 0)
+							             nil)
 							(let ((reply (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/slow"))))
 							  (setq *fetching* nil)
 							  (format t "~a~%%" (getf reply :status)))
 							(format t "~a~%%" (> *ticks* 5))
-							(format t "~a~%%" (null (objc:send *app* "nextEventMatchingMask:untilDate:inMode:dequeue:"
-							                                   (ash 1 15) nil "kCFRunLoopDefaultMode" nil)))
+							(format t "~a~%%" (null (objc:invoke *app* "nextEventMatchingMask:untilDate:inMode:dequeue:"
+							                                     (ash 1 15) nil "kCFRunLoopDefaultMode" nil)))
 							"""
 						.formatted(origin.getAddress().getPort()));
 			assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
@@ -261,22 +248,6 @@ class NativeObjcE2eTest {
 		finally {
 			origin.stop(0);
 		}
-	}
-
-	@Test
-	void aWrapperThatDiesReleasesTheReferenceItOwned() throws Exception {
-		// Every "self" answer is a wrapper owning one retain. The wrappers die, the
-		// collector drops their externrefs' host data, and the host releases: the count
-		// stays far below the number of wrappers made (it would be 300002 if nothing
-		// were released).
-		Run run = nativeOutput("""
-				(defvar *o* (objc:send (objc:send "NSObject" "alloc") "init"))
-				(dotimes (i 300000) (objc:send *o* "self"))
-				(objc:send *o* "hash")
-				(format t "~a~%" (< (objc:send *o* "retainCount") 150000))
-				""");
-		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
-		assertThat(run.stdout()).isEqualTo("T\n");
 	}
 
 	@Test
@@ -313,10 +284,12 @@ class NativeObjcE2eTest {
 		// The catch is outside the native frame the callback runs under: the interpreter
 		// prints the escaping throw and answers nil, and so does the executable.
 		String source = """
-				(let* ((cls (objc:define-class "NativeE2eNlx" "NSObject"
-				              (list (list "jump:" (lambda (self x) (throw 'out 42))))))
-				       (obj (objc:send (objc:send cls "alloc") "init")))
-				  (print (catch 'out (objc:send obj "performSelector:withObject:" "jump:" nil) :fell-through))
+				(objc:define-objc-class nlx-target () () (:objc-class-name "NativeE2eNlx"))
+				(objc:define-objc-method ("jump:" :void) ((self nlx-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (throw 'out 42))
+				(let ((obj (make-instance 'nlx-target)))
+				  (print (catch 'out (objc:invoke obj "performSelector:withObject:" "jump:" nil) :fell-through))
 				  (print :after))
 				""";
 		Run run = nativeOutput(source);
@@ -328,11 +301,12 @@ class NativeObjcE2eTest {
 	@Test
 	void anExitInsideACallbackEndsTheProcessWithItsCode() throws Exception {
 		Run run = nativeOutput("""
-				(let* ((cls (objc:define-class "NativeE2eExit" "NSObject"
-				              (list (list "bye:" (lambda (self x) (format t "bye~%") (finish-output) (uiop:quit 7))))))
-				       (obj (objc:send (objc:send cls "alloc") "init")))
-				  (objc:send obj "performSelector:withObject:" "bye:" nil)
-				  (format t "not reached~%"))
+				(objc:define-objc-class exit-target () () (:objc-class-name "NativeE2eExit"))
+				(objc:define-objc-method ("bye:" :void) ((self exit-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (format t "bye~%") (finish-output) (uiop:quit 7))
+				(objc:invoke (make-instance 'exit-target) "performSelector:withObject:" "bye:" nil)
+				(format t "not reached~%")
 				""");
 		assertThat(run.stdout()).isEqualTo("bye\n");
 		assertThat(run.exit()).as("stderr: %s", run.stderr()).isEqualTo(7);

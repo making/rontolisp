@@ -21,21 +21,21 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The new {@code objc} base and the {@code cocoa} package: LispWorks 8.1's Objective-C
- * and Cocoa interface vocabulary ({@code objc:invoke}, {@code objc:invoke-into},
+ * The {@code objc} and {@code cocoa} packages: LispWorks 8.1's Objective-C and Cocoa
+ * interface vocabulary ({@code objc:invoke}, {@code objc:invoke-into},
  * {@code objc:retain}, {@code cocoa:set-ns-rect*}, ...), written once in rontolisp
  * ({@code objc.lisp} on the classpath) over the per-backend primitive layer
- * ({@code objc::%send} and friends; .kb/objc.md, "The new base").
+ * ({@code objc::%send} and friends; .kb/objc.md, "The primitive layer").
  *
  * <p>
  * Consumers, the {@link AppKitLibrary} pair:
  * <ul>
  * <li>the interpreter evaluates {@link #forms()} into the global environment the first
- * time a new-base {@code objc:} name or any {@code cocoa:} name is resolved
+ * time an {@code objc:} name or any {@code cocoa:} name is resolved
  * ({@link #definesName}), or a form mentions one of its types
  * ({@link #mentionsType});</li>
  * <li>the compile path ({@code CompileFrontend}) calls {@link #process(List)} right
- * OUTSIDE {@code AppKitLibrary.process}, so a library written over the new base is seen
+ * OUTSIDE {@code AppKitLibrary.process}, so a library written over {@code objc} is seen
  * too; the spliced {@code objc::%} calls gate the embedded binding on a JVM class, and
  * {@link ObjcNativeLibrary} supplies them to a {@code --native} executable.</li>
  * </ul>
@@ -163,9 +163,9 @@ public final class ObjcLibrary {
 	}
 
 	/**
-	 * Whether a symbol name is one the library defines or exports: a new-base
-	 * {@code objc:} external, an {@code objc::%} helper of the library, or any
-	 * {@code cocoa:} or {@code fli:} name.
+	 * Whether a symbol name is one the library defines or exports: an {@code objc:}
+	 * external, an {@code objc::%} helper of the library, or any {@code cocoa:} or
+	 * {@code fli:} name.
 	 * @param symbolName the canonical symbol name
 	 * @return {@code true} when resolving it needs the library
 	 */
@@ -331,8 +331,8 @@ public final class ObjcLibrary {
 
 	/**
 	 * The compile-path pre-pass: prepends the library when the program references it (a
-	 * new-base {@code objc:} name or a {@code cocoa:} name anywhere, or a bare exported
-	 * name while {@code (in-package objc)} / {@code (in-package cocoa)} is in effect).
+	 * {@code objc:} name or a {@code cocoa:} name anywhere, or a bare exported name while
+	 * {@code (in-package objc)} / {@code (in-package cocoa)} is in effect).
 	 * @param program the top-level forms
 	 * @return the program with the library spliced in when used
 	 */
@@ -365,6 +365,20 @@ public final class ObjcLibrary {
 		List<LispVal> out = new ArrayList<>(macroForms());
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * A shipped library's forms with the defining macros ({@code define-objc-class} and
+	 * the rest) expanded. The compile path expands user macros BEFORE it splices the
+	 * libraries, so a library spliced after that expansion ({@code appkit.lisp},
+	 * {@code scene.lisp}) that defines Objective-C classes has its definitions expanded
+	 * here, by the same expander a program's go through. The interpreter evaluates the
+	 * library's own forms and expands the macros natively.
+	 * @param forms the library's forms
+	 * @return the forms, the macros expanded (unchanged when none is named)
+	 */
+	public static List<LispVal> expandDefinitions(List<LispVal> forms) {
+		return List.copyOf(UserMacroExpander.expand(withMacros(forms)));
 	}
 
 	/**

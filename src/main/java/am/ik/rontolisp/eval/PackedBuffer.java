@@ -30,9 +30,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * {@code objc:data} / {@code objc:bytes} hand the same bytes to Objective-C
- * ({@link ObjcBridge}), so the two operators share this one definition of what a packed
- * buffer's bytes are: what {@code write-sequence} writes from a {@code #f} matrix is
- * byte-for-byte what {@code objc:data} puts in an {@code NSData}.
+ * ({@link ObjcPrimitives}' {@code objc::%octets}), so the two operators share this one
+ * definition of what a packed buffer's bytes are: what {@code write-sequence} writes from
+ * a {@code #f} matrix is byte-for-byte what {@code objc:data} puts in an {@code NSData}.
  *
  * @param value the buffer
  * @param width one element's byte width

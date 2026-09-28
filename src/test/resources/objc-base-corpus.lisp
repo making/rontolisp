@@ -84,6 +84,8 @@
 (show "variadic known selector"
       (invoke-into 'string "NSString" "stringWithFormat:" "%@ and %ld and %.1f" "x" 42 1.5d0))
 (show "nil-terminated" (invoke (invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count"))
+(show "nil-terminated, one element" (invoke (invoke "NSArray" "arrayWithObjects:" "only") "count"))
+(show "format, no argument" (invoke-into 'string "NSString" "stringWithFormat:" "plain"))
 
 ;;; 1.3.10 whether a method exists
 (show "can-invoke-p" (can-invoke-p *view* "frame"))
@@ -193,5 +195,57 @@
       (invoke (invoke "NSValue" "valueWithRect:" (cocoa:set-ns-rect* (make-array 4) 9 8 7 6)) "rectValue"))
 (show "ns-not-found" cocoa:ns-not-found)
 
+;;; identity across every comparison and hash-table test (a --native pointer is a value
+;;; per answer, compared by its address)
+(let* ((w (alloc-init-object "NSObject"))
+       (s (invoke w "self"))
+       (other (alloc-init-object "NSObject")))
+  (show "same object" (list (eq s w) (eql s w) (equal s w) (equalp s w)))
+  (show "other object" (list (eq other w) (eql other w) (equal other w) (equalp other w)))
+  (show "classes" (list (eq (coerce-to-objc-class "NSObject") (coerce-to-objc-class "NSObject"))
+                        (equal (coerce-to-objc-class "NSObject") (coerce-to-objc-class "NSString"))))
+  (show "sequence functions"
+        (list (if (member s (list other w)) t nil) (position s (list other w))
+              (cdr (assoc s (list (cons other 1) (cons w 2))))
+              (= (sxhash s) (sxhash w))
+              (equal (list 1 s) (list 1 w))))
+  (dolist (test (list 'eq 'eql 'equal 'equalp))
+    (let ((h (make-hash-table :test test)))
+      (setf (gethash w h) :first)
+      (setf (gethash s h) :second)
+      (setf (gethash other h) :other)
+      (show (format nil "~(~a~) table" test)
+            (list (hash-table-count h) (gethash w h) (gethash (invoke other "self") h))))))
+(defgeneric corpus-kind (x))
+(defmethod corpus-kind ((x objc-object-pointer)) :pointer)
+(defmethod corpus-kind ((x t)) :other)
+(show "a method specializer"
+      (list (corpus-kind *hello*) (corpus-kind (coerce-to-objc-class "NSObject")) (corpus-kind 1)))
+(show "subtypep" (list (subtypep 'objc-object-pointer 'structure-object)
+                       (subtypep 'objc-class 'objc-object-pointer)))
+(show "class-of" (list (class-name (class-of *hello*)) (eq (class-of *hello*) (find-class 'objc-object-pointer))))
+(show "computed typep" (let ((ty 'structure-object)) (typep *hello* ty)))
+(show "objectp" (list (objectp *hello*) (objectp (coerce-to-objc-class "NSObject")) (objectp 42) (objectp nil)))
+
+;;; bytes: data and bytes
+(show "data of a string" (bytes (data "hey")))
+(show "data of octets"
+      (bytes (data (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 255)))))
+(show "data of single floats"
+      (bytes (data (make-array '(2 2) :element-type 'single-float :initial-contents '((1.0 -2.5) (0.0 3.0))))))
+(show "data of double floats" (bytes (data (make-array 1 :element-type 'double-float :initial-contents '(1d0)))))
+(show "data of (unsigned-byte 16)"
+      (bytes (data (make-array 2 :element-type '(unsigned-byte 16) :initial-contents '(1 65535)))))
+(show "data of (unsigned-byte 32)"
+      (bytes (data (make-array 1 :element-type '(unsigned-byte 32) :initial-contents '(305419896)))))
+(show "an empty data" (bytes (data "")))
+(show "data is an NSMutableData" (invoke-bool (data "x") "isKindOfClass:" "NSMutableData"))
+(show "data length" (invoke (data "abc") "length"))
+(show "bytes of any NSData" (bytes (invoke "NSData" "dataWithData:" (data "xyz"))))
+(show "data refuses a list" (refused (lambda () (data '(1 2 3)))))
+(show "bytes refuses a number" (refused (lambda () (bytes 42))))
+
 ;;; on-main
 (show "on-main" (on-main (lambda () (invoke *hello* "length"))))
+(show "on-main propagates an error" (refused (lambda () (on-main (lambda () (error "inside"))))))
+(show "on-main nested" (on-main (lambda () (on-main (lambda () :nested)))))

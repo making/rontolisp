@@ -82,7 +82,7 @@ class MetalLibraryTest {
 	void theCompilePathSplicesTheLibraryExactlyWhenMetalIsReferenced() {
 		List<LispVal> unrelated = read("(print 1)");
 		assertThat(MetalLibrary.process(unrelated)).isSameAs(unrelated);
-		assertThat(MetalLibrary.process(read("(objc:send x \"y\")"))).hasSize(1);
+		assertThat(MetalLibrary.process(read("(objc:invoke x \"y\")"))).hasSize(1);
 		assertThat(MetalLibrary.process(read("(metal:attach w)"))).hasSize(MetalLibrary.forms().size() + 1);
 		assertThat(MetalLibrary.process(read("(in-package metal) (attach w)")))
 			.hasSize(MetalLibrary.forms().size() + 2);
@@ -113,7 +113,7 @@ class MetalLibraryTest {
 		Path prog = dir.resolve("Prog.class");
 		compile(source, "-o", prog.toString());
 		String bytes = Files.readString(prog, StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains("Prog$ObjcBridge").contains("METAL$colonATTACH");
+		assertThat(bytes).contains("Prog$ObjcPrimitives").contains("METAL$colonATTACH");
 	}
 
 	private static List<String> definitionNames(List<LispVal> forms) {

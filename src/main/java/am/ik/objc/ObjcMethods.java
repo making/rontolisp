@@ -17,8 +17,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Methods defined at run time whose bodies are host-language functions, of ANY shape the
- * encoding describes -- the new base's class definition ({@code objc-class.lisp},
- * .kb/objc.md, "The new base: class definition").
+ * encoding describes -- the {@code objc} package's class definition
+ * ({@code objc-class.lisp}, .kb/objc.md, "Class definition").
  *
  * <p>
  * {@link #imp} makes one FFM upcall stub PER METHOD: the stub is the generic
@@ -29,7 +29,7 @@ import org.jspecify.annotations.Nullable;
  * the subclass's and recurse.
  *
  * <p>
- * The raw protocol is the new base's, in both directions: an argument arrives as a
+ * The raw protocol is the primitive layer's, in both directions: an argument arrives as a
  * {@link Long} for every integral, boolean or address kind (an object RETAINED for the
  * value the body makes of it), a {@link Double} for a floating kind, a {@code Number[]}
  * of a struct's leaves, a {@link String} for a C string; the body answers the same way,

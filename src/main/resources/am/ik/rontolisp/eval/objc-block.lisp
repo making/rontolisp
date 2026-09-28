@@ -3,7 +3,7 @@
 ;; call-objc-block, define-objc-block-type (the macros are objc-macros.lisp). LispWorks'
 ;; OBJC has no block interface (its FLI does), so the names are this package's own.
 ;; Written once and run on every target over the primitive layer, like objc.lisp
-;; (.kb/objc.md, "The new base: blocks"); spliced only into a program that names a block,
+;; (.kb/objc.md, "Blocks and C functions"); spliced only into a program that names a block,
 ;; so a program that only calls carries none of it.
 ;;
 ;; A block's body is a Lisp function the host calls with the raw arguments

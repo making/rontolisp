@@ -156,9 +156,9 @@ public enum BoundaryType {
 	 * never looks into, boxed in a one-field struct so it can live in a Lisp value. The
 	 * host learns when the module lets go of it: wasmtime's collector drops the
 	 * reference's host data when the reference dies, which is the finalizer a wasm-GC
-	 * module otherwise lacks ({@code objc-native.lisp} releases an Objective-C object
-	 * through it, {@code .kb/objc.md}). {@code rontolisp:wasm-import} on a wasm-GC core
-	 * module only; no WIT spelling.
+	 * module otherwise lacks ({@code objc-native-primitives.lisp} releases an Objective-C
+	 * object through it, {@code .kb/objc.md}). {@code rontolisp:wasm-import} on a wasm-GC
+	 * core module only; no WIT spelling.
 	 */
 	EXTERN(":EXTERN", null);
 

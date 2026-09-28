@@ -12,8 +12,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The references a Lisp pointer value holds on one Objective-C object -- the HANDLE of
- * the new base's {@code objc-object-pointer} (.kb/objc.md, "The new base: ownership") --
- * and the table that makes one pointer value per address.
+ * {@code objc.lisp}'s {@code objc-object-pointer} (.kb/objc.md, "Ownership") -- and the
+ * table that makes one pointer value per address.
  *
  * <p>
  * Three counts, kept here rather than in the Lisp value because a value's slots are part

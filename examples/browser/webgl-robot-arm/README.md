@@ -69,9 +69,10 @@ gestures forwarded as exported-function calls, and the HUD — no kinematics, no
 matrices, no rendering logic of its own.
 
 [`examples/macos/metal-robot-arm.lisp`](../../macos/metal-robot-arm.lisp) is the
-same program with the host boundary removed: Metal through `objc:send`, a packed
+same program with the host boundary removed: Metal through `objc:invoke`, a packed
 single-float array *as* the vertex buffer's bytes, and the mouse through an
-`NSView` subclass whose `mouseDown:` / `scrollWheel:` are Lisp closures.
+`NSView` subclass whose `mouseDown:` / `scrollWheel:` are methods written in Lisp
+(`objc:define-objc-class` and `objc:define-objc-method`).
 
 ## What's in here
 

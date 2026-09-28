@@ -1,5 +1,5 @@
 //! Blocks a `--native` program makes from Lisp functions (`objc-block.lisp`,
-//! `.kb/objc.md`, "The new base: blocks"), the calls of C functions and of blocks
+//! `.kb/objc.md`, "Blocks and C functions"), the calls of C functions and of blocks
 //! through an address, and `dlsym` for `fli:define-foreign-function`.
 //!
 //! A block is the Blocks ABI's literal: `isa = &_NSConcreteStackBlock`, the flags

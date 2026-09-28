@@ -1,16 +1,34 @@
 package am.ik.objc;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SegmentAllocator;
+import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.NativeImageDowncalls;
+import am.ik.rontolisp.eval.AppKitLibrary;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ObjcLibrary;
+import am.ik.rontolisp.eval.SceneLibrary;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -29,8 +47,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * Three layers. The runtime's own downcalls and the callback stubs are pinned on EVERY
  * machine, against a lookup that finds every name (the handles are made, never invoked).
  * The {@code objc_msgSend} shapes are derived from the runtime's type encodings, so the
- * selectors {@code appkit.lisp} and the documented examples send are resolved on a Mac
- * and checked against the file there.
+ * selectors the shipped layers and the documented examples send are resolved on a Mac and
+ * checked against the file there; the method shapes the shipped layers define are read
+ * off their {@code define-objc-method} forms.
  *
  * <p>
  * Every layer is checked against the {@code objc:} file ALONE
@@ -51,15 +70,62 @@ class ObjcNativeImageForeignConfigTest {
 	}
 
 	@Test
-	void everyCallbackShapeIsRegisteredAsAnUpcall() {
+	void everyCallbackShapeTheShippedLayersDefineIsRegisteredAsAnUpcall() {
+		// The pump's trampoline, the three methods every root class defined in Lisp gets
+		// (+allocWithZone:, -copyWithZone:, -dealloc), and every method appkit.lisp and
+		// scene.lisp define: the binary refuses a method of any other shape at
+		// definition,
+		// which would take the widget layer down on the native binary.
 		MainThread pump = new MainThread(NativeImageDowncalls.EVERYTHING, NativeImageDowncalls.EVERYTHING);
 		Set<FunctionDescriptor> shapes = new LinkedHashSet<>(pump.upcallSignatures());
-		shapes.addAll(ObjcClasses.allCallbackShapes());
-		assertThat(shapes).hasSize(7);
+		shapes.add(ObjcMethods.shape("@@:^v"));
+		shapes.add(ObjcMethods.shape("v@:"));
+		List<String> methods = new ArrayList<>();
+		methods.addAll(definedMethodEncodings(AppKitLibrary.forms()));
+		methods.addAll(definedMethodEncodings(SceneLibrary.forms()));
+		assertThat(methods).as("the shipped layers define methods").isNotEmpty();
+		for (String types : methods) {
+			shapes.add(ObjcMethods.shape(types));
+		}
 		assertThat(NativeImageDowncalls.missingUpcalls(NativeImageDowncalls.OBJC, shapes))
 			.as("callback shapes with no foreign.upcalls entry -- the binary cannot build the stub, so a class "
 					+ "defined at run time has no method body")
 			.isEmpty();
+	}
+
+	/**
+	 * The encodings of the {@code (objc:define-objc-method (name result) ((self class)
+	 * (arg type) ...) ...)} forms of a library, as {@code objc-class.lisp} spells them. A
+	 * type this table does not know fails the test: a new one needs its encoding here
+	 * and, when it makes a new shape, an entry in the file.
+	 */
+	private static List<String> definedMethodEncodings(List<LispVal> forms) {
+		List<String> encodings = new ArrayList<>();
+		for (LispVal form : forms) {
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+					|| !"OBJC:DEFINE-OBJC-METHOD".equals(op.name())) {
+				continue;
+			}
+			List<LispVal> parts = cons.toList();
+			List<LispVal> nameSpec = ((LispCons) parts.get(1)).toList();
+			StringBuilder types = new StringBuilder(encodingOf(nameSpec.get(1))).append("@:");
+			List<LispVal> lambdaList = ((LispCons) parts.get(2)).toList();
+			for (LispVal argument : lambdaList.subList(1, lambdaList.size())) {
+				types.append(encodingOf(((LispCons) argument).toList().get(1)));
+			}
+			encodings.add(types.toString());
+		}
+		return encodings;
+	}
+
+	private static String encodingOf(LispVal type) {
+		String name = type instanceof LispSymbol symbol ? symbol.name() : type.print();
+		return switch (name) {
+			case ":VOID" -> "v";
+			case ":BOOLEAN" -> "B";
+			case "OBJC:OBJC-OBJECT-POINTER" -> "@";
+			default -> throw new AssertionError("a method type this test has no encoding for: " + name);
+		};
 	}
 
 	/**
@@ -214,7 +280,7 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSWindow", "makeFirstResponder:"),
 			// examples/macos/system-frameworks.lisp: the frameworks BESIDE AppKit, each
 			// mapped into the process at run time -- text recognition, natural language,
-			// Core Image and speech, reached through the bare objc: verbs
+			// Core Image and speech, reached through objc:invoke
 			cls("NSBundle", "bundleWithPath:"), inst("NSBundle", "load"),
 			cls("NLLanguageRecognizer", "dominantLanguageForString:"), cls("NSSpellChecker", "sharedSpellChecker"),
 			inst("NSSpellChecker", "checkSpellingOfString:startingAt:"),
@@ -242,16 +308,22 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSURL", "fileURLWithPath:"), inst("NSURL", "URLByAppendingPathComponent:"), inst("NSURL", "path"),
 			cls("NSFileManager", "defaultManager"), inst("NSFileManager", "temporaryDirectory"),
 			inst("NSFileManager", "attributesOfItemAtPath:error:"),
-			// the binding's own bytes and errors: objc:data / objc:bytes and the
-			// :error out slot send these, so a program that never spells them still
-			// needs them served
-			cls("NSMutableData", "dataWithBytes:length:"), inst("NSData", "length"), inst("NSData", "bytes"),
+			// objc.lisp's own bytes and errors: objc:data / objc:bytes and
+			// invoke-with-error's ns-error send these, so a program that never spells
+			// them still needs them served
+			cls("NSMutableData", "dataWithLength:"), inst("NSData", "length"), inst("NSData", "bytes"),
 			inst("NSMutableData", "mutableBytes"), inst("NSError", "localizedDescription"), inst("NSError", "domain"),
 			inst("NSError", "code"), cls("NSJSONSerialization", "JSONObjectWithData:options:error:"),
+			// objc:objc-exception's name and reason, and cocoa:remove-observer
+			inst("NSException", "name"), inst("NSException", "reason"),
+			// the guide's bytes example: an NSData the string's encoding answers
+			inst("NSString", "dataUsingEncoding:"), inst("NSNotificationCenter", "removeObserver:name:object:"),
+			// appkit.lisp: a control's current target, which a second on-click reuses
+			inst("NSButton", "target"), inst("NSMenuItem", "target"),
 			// The shipped metal package (eval/metal.lisp) + metal-triangle.lisp +
 			// metal-cube.lisp: a
 			// Metal surface on the window's content view. Metal is an Objective-C API,
-			// so objc:send reaches all of it; the objects are PROTOCOL-typed
+			// so objc:invoke reaches all of it; the objects are PROTOCOL-typed
 			// (id<MTLDevice> and friends), which is where the proto rows come in.
 			cls("CAMetalLayer", "layer"), inst("CAMetalLayer", "preferredDevice"), inst("CAMetalLayer", "setDevice:"),
 			inst("CAMetalLayer", "setPixelFormat:"), inst("CAMetalLayer", "setFramebufferOnly:"),
@@ -306,7 +378,7 @@ class ObjcNativeImageForeignConfigTest {
 			inst("MTLRenderPassDepthAttachmentDescriptor", "setLoadAction:"),
 			inst("MTLRenderPassDepthAttachmentDescriptor", "setStoreAction:"),
 			inst("MTLRenderPassDepthAttachmentDescriptor", "setClearDepth:"), proto("MTLBuffer", "contents"),
-			inst("NSData", "getBytes:length:"), proto("MTLRenderCommandEncoder", "setFragmentBytes:length:atIndex:"),
+			proto("MTLBuffer", "length"), proto("MTLRenderCommandEncoder", "setFragmentBytes:length:atIndex:"),
 			proto("MTLRenderCommandEncoder", "setDepthStencilState:"),
 			// metal:offscreen / metal:pixels: a frame with no window at all --
 			// drawn into a shared-storage texture, waited for rather than
@@ -315,16 +387,16 @@ class ObjcNativeImageForeignConfigTest {
 			proto("MTLCommandBuffer", "waitUntilCompleted"),
 			proto("MTLTexture", "getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
 			// The shipped scene package (eval/scene.lisp): the window's content view is
-			// an NSView subclass whose mouse and scroll selectors are Lisp closures, and
+			// an NSView subclass whose mouse and scroll methods are defined in Lisp, and
 			// a resize arrives as an NSViewFrameDidChangeNotification.
 			inst("NSWindow", "setContentView:"), cls("NSView", "alloc"), inst("NSView", "initWithFrame:"),
 			inst("NSView", "setPostsFrameChangedNotifications:"), inst("NSEvent", "locationInWindow"),
 			inst("NSEvent", "modifierFlags"), inst("NSEvent", "scrollingDeltaY"),
 			inst("NSEvent", "hasPreciseScrollingDeltas"),
-			// The new base (objc.lisp): what its own verbs send -- retain / release /
-			// autorelease / retainCount, the NSArray a vector argument becomes, the
-			// NSString a string becomes -- and what the manual's call-side examples and
-			// the objc-base corpus send (doc/en/guides/objc-appkit.md).
+			// objc.lisp: what its own functions send -- retain / release / autorelease /
+			// retainCount, the NSArray a vector argument becomes, the NSString a string
+			// becomes -- and what the manual's call-side examples and the objc-base
+			// corpus send (doc/en/guides/objc-appkit.md).
 			inst("NSObject", "retain"), inst("NSObject", "release"), inst("NSObject", "autorelease"),
 			inst("NSObject", "retainCount"), cls("NSObject", "new"), inst("NSObject", "self"),
 			cls("NSMutableArray", "arrayWithCapacity:"), inst("NSScrollView", "frame"), inst("NSView", "setHidden:"),
@@ -364,8 +436,7 @@ class ObjcNativeImageForeignConfigTest {
 	 * A selector declared by a PROTOCOL, not a class: every Metal object a program holds
 	 * is an {@code id<MTLDevice>} / {@code id<MTLCommandBuffer>} whose concrete class is
 	 * private and machine-specific, and the protocol is where its encoding is written
-	 * down -- which is also where {@link ObjcRuntime#send} finds it at run time when the
-	 * concrete class declares nothing.
+	 * down; the private class implements it with the same encoding.
 	 */
 	private static String[] proto(String name, String selector) {
 		return new String[] { name, selector, "protocol" };
@@ -377,11 +448,13 @@ class ObjcNativeImageForeignConfigTest {
 		assumeTrue(ObjcRuntime.available(), ObjcRuntime.description());
 		ObjcRuntime runtime = ObjcRuntime.get();
 		for (String framework : FRAMEWORKS) {
-			MemorySegment bundle = (MemorySegment) runtime
-				.send(runtime.objcClass("NSBundle"), "bundleWithPath:",
-						"/System/Library/Frameworks/" + framework + ".framework")
-				.value();
-			assumeTrue(bundle != null && Boolean.TRUE.equals(runtime.send(bundle, "load").value()),
+			Object bundle = runtime.sendRawOnMain(runtime.classOrNullAddress("NSBundle"),
+					runtime.selector("bundleWithPath:").address(), "@24@0:8@16", -1,
+					new Object[] { "/System/Library/Frameworks/" + framework + ".framework" }, 0);
+			assumeTrue(bundle instanceof Long address && address != 0
+					&& Long.valueOf(1)
+						.equals(runtime.sendRawOnMain(address, runtime.selector("load").address(), "B16@0:8", -1,
+								new Object[0], 0)),
 					framework + ".framework did not load on this machine");
 		}
 		Set<FunctionDescriptor> shapes = new LinkedHashSet<>();
@@ -389,14 +462,15 @@ class ObjcNativeImageForeignConfigTest {
 		for (String[] row : SENT) {
 			String raw;
 			if ("protocol".equals(row[2])) {
-				raw = runtime.protocolEncoding(row[0], row[1]);
+				raw = protocolEncoding(runtime, row[0], row[1]);
 			}
 			else {
-				MemorySegment cls = runtime.objcClass(row[0]);
-				MemorySegment owner = "class".equals(row[2]) ? runtime.classOf(cls) : cls;
-				raw = runtime.rawEncoding(owner, row[1]);
-				MemorySegment internal = "instance".equals(row[2]) ? runtime.classOrNull(row[0] + "Internal") : null;
-				if (raw == null && internal != null) {
+				long cls = runtime.classOrNullAddress(row[0]);
+				assertThat(cls).as("the class %s", row[0]).isNotZero();
+				long owner = "class".equals(row[2]) ? runtime.classOfAddress(cls) : cls;
+				raw = runtime.methodTypes(owner, runtime.selector(row[1]).address());
+				long internal = "instance".equals(row[2]) ? runtime.classOrNullAddress(row[0] + "Internal") : 0;
+				if (raw == null && internal != 0) {
 					// Metal's descriptor classes are abstract in public: alloc answers a
 					// private "...Internal" subclass and THAT is where the properties are
 					// declared, which is exactly what the runtime resolves against at
@@ -405,7 +479,7 @@ class ObjcNativeImageForeignConfigTest {
 					// row exact; if Apple ever renames it the row stops resolving and
 					// this
 					// test says so, which is the failure we want.
-					raw = runtime.rawEncoding(internal, row[1]);
+					raw = runtime.methodTypes(internal, runtime.selector(row[1]).address());
 				}
 			}
 			if (raw == null) {
@@ -421,13 +495,45 @@ class ObjcNativeImageForeignConfigTest {
 			.isEmpty();
 	}
 
+	/**
+	 * The encoding a protocol declares for an instance method, required or optional, or
+	 * {@code null}: {@code protocol_getMethodDescription}, bound here -- the binding
+	 * itself never asks a protocol for an encoding, so nothing in it registers the shape.
+	 */
+	private static @Nullable String protocolEncoding(ObjcRuntime runtime, String protocol, String selector) {
+		SymbolLookup objc = SymbolLookup.libraryLookup(ObjcRuntime.LIB_OBJC, Arena.global());
+		Linker linker = Linker.nativeLinker();
+		MethodHandle getProtocol = linker.downcallHandle(objc.find("objc_getProtocol").orElseThrow(),
+				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+		// struct objc_method_description { SEL name; const char *types; }, by value.
+		MethodHandle describe = linker.downcallHandle(objc.find("protocol_getMethodDescription").orElseThrow(),
+				FunctionDescriptor.of(MemoryLayout.structLayout(ValueLayout.ADDRESS, ValueLayout.ADDRESS),
+						ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_BOOLEAN, ValueLayout.JAVA_BOOLEAN));
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment proto = (MemorySegment) getProtocol.invokeExact(arena.allocateFrom(protocol));
+			assertThat(proto.address()).as("the protocol %s", protocol).isNotZero();
+			for (boolean required : new boolean[] { true, false }) {
+				MemorySegment description = (MemorySegment) describe.invokeExact((SegmentAllocator) arena, proto,
+						runtime.selector(selector), required, true);
+				MemorySegment types = description.get(ValueLayout.ADDRESS, 8);
+				if (types.address() != 0) {
+					return types.reinterpret(Long.MAX_VALUE).getString(0);
+				}
+			}
+			return null;
+		}
+		catch (Throwable ex) {
+			throw new AssertionError("protocol_getMethodDescription failed for " + selector, ex);
+		}
+	}
+
 	// --- the variadic grid ------------------------------------------------------------
 
 	/**
-	 * The three fixed halves every selector in {@link VariadicSelectors} is sent through:
-	 * an object-returning one-argument class method ({@code arrayWithObjects:},
-	 * {@code stringWithFormat:} and most of the rest), the same shape returning void
-	 * ({@code appendFormat:}) and the two-argument void one
+	 * The three fixed halves every selector of {@code objc::*variadic-selectors*}
+	 * ({@code objc.lisp}) is sent through: an object-returning one-argument class method
+	 * ({@code arrayWithObjects:}, {@code stringWithFormat:} and most of the rest), the
+	 * same shape returning void ({@code appendFormat:}) and the two-argument void one
 	 * ({@code +[NSException raise:format:]}). Their variadic split is the fixed argument
 	 * count, receiver and selector included.
 	 */
@@ -436,7 +542,7 @@ class ObjcNativeImageForeignConfigTest {
 			FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS), FunctionDescriptor
 				.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
-	/** The carriers {@code ObjcRuntime} picks a variadic argument's layout from. */
+	/** The carriers {@code objc.lisp} picks a variadic argument's type from. */
 	private static final List<MemoryLayout> CARRIERS = List.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
 			ValueLayout.JAVA_DOUBLE);
 
@@ -450,9 +556,9 @@ class ObjcNativeImageForeignConfigTest {
 
 	/**
 	 * The grid the file registers, in its generation order: each base crossed with every
-	 * variadic tail. The LAST variadic argument is always {@code void*}, because the
-	 * binding appends the nil terminator itself -- which is what keeps this finite enough
-	 * to be worth writing down.
+	 * variadic tail. The LAST variadic argument is always {@code void*}, because
+	 * {@code objc.lisp} appends the nil terminator itself -- which is what keeps this
+	 * finite enough to be worth writing down.
 	 * @return the shape and the index its variadic list starts at
 	 */
 	private static List<Object[]> variadicGrid() {
@@ -520,8 +626,8 @@ class ObjcNativeImageForeignConfigTest {
 	/**
 	 * Every selector in the table, resolved against this macOS: each one exists, and its
 	 * DECLARED half is one of the three bases the grid is built on -- the encoding is
-	 * what {@link ObjcRuntime#send} appends the variadic list to, so a selector whose
-	 * fixed half is something else would be sent through a shape nothing registered.
+	 * what {@code objc.lisp} appends the variadic list to, so a selector whose fixed half
+	 * is something else would be sent through a shape nothing registered.
 	 */
 	@Test
 	@EnabledOnOs(OS.MAC)
@@ -531,9 +637,9 @@ class ObjcNativeImageForeignConfigTest {
 		List<String> unresolved = new ArrayList<>();
 		List<String> offGrid = new ArrayList<>();
 		for (String[] row : VARIADIC_OWNERS) {
-			MemorySegment cls = runtime.objcClass(row[0]);
-			MemorySegment owner = "class".equals(row[2]) ? runtime.classOf(cls) : cls;
-			String raw = runtime.rawEncoding(owner, row[1]);
+			long cls = runtime.classOrNullAddress(row[0]);
+			long owner = "class".equals(row[2]) ? runtime.classOfAddress(cls) : cls;
+			String raw = runtime.methodTypes(owner, runtime.selector(row[1]).address());
 			if (raw == null) {
 				unresolved.add(row[0] + " " + row[1]);
 				continue;
@@ -546,7 +652,21 @@ class ObjcNativeImageForeignConfigTest {
 		assertThat(offGrid).as("variadic selectors whose fixed half is outside the registered grid").isEmpty();
 		assertThat(VARIADIC_OWNERS.stream().map(row -> row[1]))
 			.as("a selector in the table with no owner here is one this test never resolved")
-			.containsExactlyInAnyOrderElementsOf(VariadicSelectors.all());
+			.containsExactlyInAnyOrderElementsOf(variadicSelectors());
+	}
+
+	/** {@code objc::*variadic-selectors*}, read off {@code objc.lisp}. */
+	private static List<String> variadicSelectors() {
+		for (LispVal form : ObjcLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && "DEFVAR".equals(op.name())
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& "OBJC::*VARIADIC-SELECTORS*".equals(name.name()) && rest.cdr() instanceof LispCons value
+					&& value.car() instanceof LispCons quote && quote.cdr() instanceof LispCons quoted
+					&& quoted.car() instanceof LispCons list) {
+				return list.toList().stream().map(v -> ((LispString) v).value()).toList();
+			}
+		}
+		throw new AssertionError("objc.lisp defines no objc::*variadic-selectors*");
 	}
 
 	/**
@@ -570,11 +690,14 @@ class ObjcNativeImageForeignConfigTest {
 	void aVariadicSendBindsAShapeTheBinaryServes() {
 		assumeTrue(ObjcRuntime.available(), ObjcRuntime.description());
 		ObjcRuntime runtime = ObjcRuntime.get();
-		runtime.mainThread().sync(() -> {
-			runtime.send(runtime.objcClass("NSArray"), "arrayWithObjects:", "a", "b", "c");
-			runtime.send(runtime.objcClass("NSString"), "stringWithFormat:", "%@ %ld %.2f", "x", 42L, 2.5d);
-			return null;
-		});
+		LispEvaluator evaluator = new LispEvaluator(
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString("""
+				(objc:invoke "NSArray" "arrayWithObjects:" "a" "b" "c")
+				(objc:invoke "NSString" "stringWithFormat:" "%@ %ld %.2f" "x" 42 2.5d0)
+				""")) {
+			evaluator.eval(form);
+		}
 		for (ObjcRuntime.Signature signature : runtime.variadicSignatures()) {
 			assertThat(NativeImageDowncalls.missingVariadic(NativeImageDowncalls.OBJC, Set.of(signature.descriptor()),
 					signature.firstVariadicArg()))

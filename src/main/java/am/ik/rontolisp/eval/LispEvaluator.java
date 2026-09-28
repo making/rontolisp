@@ -31,7 +31,6 @@ import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispJavaObject;
-import am.ik.rontolisp.LispObjcObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
 import am.ik.rontolisp.macro.FormatRenderer;
@@ -3678,14 +3677,13 @@ public final class LispEvaluator {
 		return apply(primary != null ? primary : function, args, env);
 	}
 
-	// Registers the interpreter side of the `objc` package (eval/ObjcInterop over
-	// am.ik.objc, the foreign-function binding to the Objective-C runtime). Registered
-	// here beside java: for the same reason -- a callback (a button's action) applies a
-	// user function and so needs the evaluator's apply. Unlike java: it needs no
-	// reflection, so it works in the native binary; every compiler refuses it
-	// (CompileFrontend).
+	// Registers the interpreter's primitive layer of the `objc` package (eval/ObjcInterop
+	// over am.ik.objc, the foreign-function binding to the Objective-C runtime; the
+	// vocabulary is objc.lisp, loaded on first use). Registered here beside java: for the
+	// same reason -- a callback (a button's action) applies a user function and so needs
+	// the evaluator's apply. Unlike java: it needs no reflection, so it works in the
+	// native binary.
 	private void registerObjc() {
-		ObjcInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
 		ObjcInterop.registerPrimitives(this.globalEnv,
 				(function, callArgs) -> apply(function, callArgs, this.globalEnv));
 	}
@@ -3944,8 +3942,6 @@ public final class LispEvaluator {
 			case LispCons ignored -> "cons";
 			case LispHashTable ignored -> "hash-table";
 			case am.ik.rontolisp.LispQuantizedMatrix ignored -> "quantized-matrix";
-			// Its own named type on every backend (.kb/objc.md, "The type").
-			case LispObjcObject ignored -> LispNames.OBJC_OBJECT_TYPE;
 			case LispFunction ignored -> "function";
 			default -> "t";
 		};

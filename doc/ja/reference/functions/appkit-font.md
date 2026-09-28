@@ -6,5 +6,5 @@
 
 ```console
 CL-USER> (defvar *heading* (appkit:font 19 :bold t))
-CL-USER> (objc:send *text-view* "setFont:" *heading*)
+CL-USER> (objc:invoke *text-view* "setFont:" *heading*)
 ```

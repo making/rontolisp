@@ -19,8 +19,8 @@ import am.ik.objc.TypeEncoding.Type;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Blocks whose bodies are host-language functions (the new base's
- * {@code objc:make-objc-block}, .kb/objc.md, "Blocks").
+ * Blocks whose bodies are host-language functions ({@code objc:make-objc-block},
+ * .kb/objc.md, "Blocks").
  *
  * <p>
  * A block is the Blocks ABI's literal in native memory:

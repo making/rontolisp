@@ -1476,12 +1476,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			javaSites.report(program, this.warnJavaReflection);
 		}
 
-		// objc: runtime: emitted only when the program uses one of the seven objc: verbs
-		// (an appkit: program does, through the spliced appkit.lisp). It ships the whole
-		// am.ik.objc library plus the bridge and the handle beside the class, renamed
-		// after it (JvmObjcRuntimeBuilder), and forces the eval runtime: a method of
-		// objc:define-class and the body of objc:on-main are applied through _apply from
-		// an upcall on thread 0.
+		// objc: runtime: emitted only when the program calls the objc primitive layer
+		// (the
+		// spliced objc.lisp does, and an appkit: program through it). It ships the whole
+		// am.ik.objc library plus the primitive layer beside the class, renamed after it
+		// (JvmObjcRuntimeBuilder), and forces the eval runtime: a method, a block and the
+		// body of objc:on-main are applied through _apply from an upcall.
 		boolean usesObjc = programUsesAnyObjcOp(program);
 		final JvmObjcRuntimeBuilder.@Nullable ObjcRuntime objcRuntime = usesObjc
 				? JvmObjcRuntimeBuilder.build(cp, thisClass, this.className) : null;
@@ -3292,20 +3292,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		else {
 			javaPrint = null;
 		}
-		// A wrapped objc: object prints as #<objc Class> (interpreter parity), through
-		// the bridge's print hook -- emitted AHEAD of the java: branch, which would
-		// otherwise print the wrapper as a host object; guarded by the init field, so
-		// the printer never names the bridge class before _objcInit defined it.
-		final JvmRuntimeBuilder.@Nullable ObjcPrint objcPrint = objcRuntime != null
-				? new JvmRuntimeBuilder.ObjcPrint(objcRuntime.initedField(),
-						Objects.requireNonNull(objcRuntime.ops().get(JvmObjcRuntimeBuilder.PRINT)))
-				: null;
-
 		// A foreign pointer prints as #<pointer #x...> (interpreter parity) through the
-		// ffi bridge's print hook, the same arrangement (and the same record type) as
-		// objcPrint above; guarded by _ffiInited for the same reason.
-		final JvmRuntimeBuilder.@Nullable ObjcPrint ffiPrint = ffiRuntime != null
-				? new JvmRuntimeBuilder.ObjcPrint(ffiRuntime.initedField(),
+		// ffi bridge's print hook -- emitted AHEAD of the java: branch, which would
+		// otherwise print the pointer as a host object; guarded by _ffiInited, so the
+		// printer never names the bridge class before _ffiInit defined it.
+		final JvmRuntimeBuilder.@Nullable BridgePrint ffiPrint = ffiRuntime != null
+				? new JvmRuntimeBuilder.BridgePrint(ffiRuntime.initedField(),
 						Objects.requireNonNull(ffiRuntime.ops().get(JvmFfiRuntimeBuilder.PRINT)))
 				: null;
 
@@ -3453,8 +3445,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToStringMethod, nilStr, funcPrint, ratioArrayClass, stringConcat, slashStr, charBoxClass,
-				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, objcPrint,
-				ffiPrint, futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint, prin1Complex);
+				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, ffiPrint,
+				futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint, prin1Complex);
 		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass, renderGuard, quoteAbbrev);
@@ -3462,8 +3454,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcPrint, stringCharAt, stringLength, stringSubstring,
 				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
-				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, objcPrint, ffiPrint,
-				futurePrint, packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
+				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, ffiPrint, futurePrint,
+				packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
@@ -5188,17 +5180,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// True when the program references any of the seven objc: verbs, so the shipped
-	// am.ik.objc copy (and the eval runtime its callbacks need) is emitted. A program
-	// that uses appkit: qualifies through the spliced appkit.lisp, whose widgets are
-	// objc:send.
+	// True when the program calls the objc primitive layer (objc.lisp's calls, and
+	// objc:on-main), so the shipped am.ik.objc copy (and the eval runtime its callbacks
+	// need) is emitted. A program that uses appkit: qualifies through the spliced
+	// appkit.lisp and objc.lisp.
 	private static boolean programUsesAnyObjcOp(List<LispVal> program) {
-		for (String member : JvmObjcInteropCompiler.members()) {
-			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.OBJC_PKG, member))) {
-				return true;
-			}
-		}
-		// The new base's primitive layer (objc.lisp's calls, and objc:on-main).
 		for (String name : JvmObjcPrimitivesCompiler.names()) {
 			if (programUsesSymbol(program, name)) {
 				return true;

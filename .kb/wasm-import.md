@@ -184,8 +184,8 @@ An import-only boundary type (`BoundaryType.EXTERN`; every export parser refuses
 extra callable types, so `fixedTypeCount()` grows by one only in a module that names it and every
 other module is byte-identical. A parameter unboxes with `ref.cast` + `struct.get` (nil traps). What
 it is FOR: wasmtime drops an `externref`'s host data when the collector finds it dead, the only
-finalizer a wasm-GC module can have -- `objc-native.lisp` releases an Objective-C object through it
-([objc.md](objc.md), "--native").
+finalizer a wasm-GC module can have -- `objc-native-primitives.lisp`'s `p_new_handle` hands out the
+externref whose death releases an Objective-C pointer's references ([objc.md](objc.md), "--native").
 
 ## Directives inside a user `defpackage`
 Unlike ordinary quoted data, the quoted NAME argument of both directives IS package-resolved

@@ -163,7 +163,7 @@ entry.
   socket write, `_makeStringInputStream`; also `JvmLoadCompiler`,
   `JvmSocketRuntimeBuilder.emitStripQuotes`, `JvmFetchRuntimeBuilder` (threaded `strvRef`),
   `JvmErrorCompiler.compileThrowRuntimeException`, `JvmWarnCompiler`.
-- `ffi:` / `objc:` / `java:` -- `JvmFfiTemplate.lispString`, `JvmObjcTemplate.lispString`,
+- `ffi:` / `objc:` / `java:` -- `JvmFfiTemplate.lispString`, `JvmObjcPrimitivesTemplate.rendered`,
   `JavaBridgeTemplate.lispString` AND `marshal` (every ARGUMENT position). The ffi/objc hooks bind
   `_strv` REFLECTIVELY (`strvMethod`, looked up beside `_apply` in `bind`; absent exactly when the
   program has no array runtime, which is exactly when no charvec can exist), because `_strv` is the

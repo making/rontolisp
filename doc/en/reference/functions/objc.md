@@ -5,7 +5,9 @@ function API — no reflection, so unlike `java:` it works in the **native
 binary** as well as under `java -jar`. It is **macOS only** -- the interpreter, a
 compiled `.class` / `.jar` and a `--native` executable for macOS on Apple silicon,
 never a `.wasm` -- and **not part of Common Lisp**; reference its functions with
-the `objc:` qualifier. Each name below links to its own page; the
+the `objc:` qualifier, or use the package as LispWorks code does. Its vocabulary is
+LispWorks 8.1's Objective-C interface, plus blocks, conditions for what Objective-C
+reports itself and four verbs of its own. Each name below links to its own page; the
 [macOS GUI guide](../../guides/objc-appkit.md) covers conversion, threads,
 ownership and the native binary's shape table.
 
@@ -19,8 +21,7 @@ functions answer, and `objc:objc-bool`, `objc:objc-c++-bool`,
 `objc:objc-c-string`, `objc:objc-at-question-mark` and `objc:objc-unknown` are
 the type designators a list-form method and `objc:objc-class-method-signature`
 use. The macro [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md)
-evaluates its body inside an autorelease pool; `objc:on-main` (below) is shared
-by both halves of the package. Classes are defined with the macros
+evaluates its body inside an autorelease pool. Classes are defined with the macros
 [`objc:define-objc-class`](../macros/objc-define-objc-class.md),
 [`objc:define-objc-method`](../macros/objc-define-objc-method.md),
 [`objc:define-objc-class-method`](../macros/objc-define-objc-class-method.md),
@@ -96,20 +97,14 @@ from the innermost `objc:invoke`, C function or block call, and
 | [`objc:ns-error-description`](objc-ns-error-description.md) | `(objc:ns-error-description e)` | the localized description |
 | [`objc:ns-error-object`](objc-ns-error-object.md) | `(objc:ns-error-object e)` | the `NSError` |
 
-## The first verbs
+## This package's own
 
-The package's original verbs, which the `appkit`, `metal` and `scene` layers are
-written over. They stay until those layers move to the LispWorks interface.
+Verbs LispWorks' `OBJC` does not have: running Lisp on the main thread, moving a block
+of memory across, and telling an Objective-C object from any other value.
 
 | Function | Example | Result |
 |----------|---------|--------|
-| `objc:class` | `(objc:class "NSWindow")` | a class (`#<objc NSWindow>`) |
-| `objc:send` | `(objc:send (objc:string "hi") "length")` | the result, marshalled by the selector's declared type |
-| `objc:define-class` | `(objc:define-class "Target" "NSObject" (list (list "invoke:" fn)))` | a class whose methods are Lisp functions |
-| `objc:on-main` | `(objc:on-main (lambda () ...))` | the function's value, computed on the main thread |
-| `objc:string` | `(objc:string "hi")` | an `NSString` |
-| `objc:data` | `(objc:data buffer)` | an `NSMutableData` holding the buffer's bytes |
-| `objc:bytes` | `(objc:bytes data)` | an `NSData`'s bytes as a packed `(unsigned-byte 8)` vector |
-| `objc:address` | `(objc:address obj)` | the object's address, an integer |
-| `objc:objectp` | `(objc:objectp x)` | `t` for an Objective-C object |
-
+| [`objc:on-main`](objc-on-main.md) | `(objc:on-main (lambda () ...))` | the function's value, computed on the main thread |
+| [`objc:data`](objc-data.md) | `(objc:data buffer)` | an `NSMutableData` holding the buffer's bytes |
+| [`objc:bytes`](objc-bytes.md) | `(objc:bytes data)` | an `NSData`'s contents as a fresh `(unsigned-byte 8)` vector |
+| [`objc:objectp`](objc-objectp.md) | `(objc:objectp x)` | `t` for an object pointer, classes included |

@@ -18,9 +18,8 @@ import org.jspecify.annotations.Nullable;
  * {@code String} starting with {@code :} = keyword, {@code Long} / {@code Double} /
  * {@code BigInteger} numbers, an exact {@code Object[]} pair = cons cell, a
  * {@link JvmFfiHandle} = a raw C pointer). It is the compiled sibling of
- * {@code eval/FfiBridge} and, like {@link JvmObjcTemplate} beside
- * {@code eval/ObjcBridge}, a hand-kept twin of it -- the marshalling, the type designator
- * parse and every error message are the interpreter's; KEEP THE TWO IN SYNC.
+ * {@code eval/FfiBridge} and a hand-kept twin of it -- the marshalling, the type
+ * designator parse and every error message are the interpreter's; KEEP THE TWO IN SYNC.
  *
  * <p>
  * Unlike the marshalling, the binding is NOT copied: {@code am.ik.ffi} itself travels in
@@ -33,17 +32,18 @@ import org.jspecify.annotations.Nullable;
  *
  * {@code ffi:callback}'s Lisp function is applied from an upcall through the generated
  * program's {@code _apply(Object, Object)} eval-runtime method handed over by
- * {@link #bind(Class)} from the emitted {@code _ffiInit} -- the {@link JvmObjcTemplate}
- * arrangement, minus the thread hop: C has no thread-0 rule, so the callback runs on
- * whatever thread the native caller holds. An error the function does not handle is
- * printed ({@code ffi: error in a callback: ...}) and the callback answers zero, never
- * thrown -- unwinding into the native frame above an upcall ends the process.
+ * {@link #bind(Class)} from the emitted {@code _ffiInit} -- the
+ * {@link JvmObjcPrimitivesTemplate} arrangement, minus the thread hop: C has no thread-0
+ * rule, so the callback runs on whatever thread the native caller holds. An error the
+ * function does not handle is printed ({@code ffi: error in a callback: ...}) and the
+ * callback answers zero, never thrown -- unwinding into the native frame above an upcall
+ * ends the process.
  *
  * <p>
- * Design constraints (as for {@link JvmObjcTemplate}): no nested classes or records, no
- * switch over an enum (javac lowers one through a synthetic {@code $1} class file the
- * builder does not ship; lambdas are fine), and no reference to any class that is not
- * either the JDK's or shipped with it.
+ * Design constraints (as for {@link JvmObjcPrimitivesTemplate}): no nested classes or
+ * records, no switch over an enum (javac lowers one through a synthetic {@code $1} class
+ * file the builder does not ship; lambdas are fine), and no reference to any class that
+ * is not either the JDK's or shipped with it.
  */
 final class JvmFfiTemplate {
 

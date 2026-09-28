@@ -1,17 +1,18 @@
-;; The objc: and cocoa: packages on the new base: LispWorks 8.1's Objective-C and Cocoa
-;; interface vocabulary (invoke, invoke-bool, invoke-into, retain / release, the
-;; autorelease pools, the selector and class coercions, cocoa:ns-rect ...), written ONCE
-;; here and run on every target (see ObjcLibrary.java and .kb/objc.md, "The new base").
-;; The interpreter loads it on the first use of a new-base name; the compile path
-;; splices it into a JVM class or a --native executable.
+;; The objc: and cocoa: packages: LispWorks 8.1's Objective-C and Cocoa interface
+;; vocabulary (invoke, invoke-bool, invoke-into, retain / release, the autorelease
+;; pools, the selector and class coercions, cocoa:ns-rect ...) plus this package's own
+;; data / bytes / objectp, written ONCE here and run on every target (see
+;; ObjcLibrary.java and .kb/objc.md). The interpreter loads it on the first use of an
+;; objc: name; the compile path splices it into a JVM class or a --native executable.
 ;;
 ;; Everything a target contributes is the primitive layer under objc::% -- the runtime
 ;; queries (%get-class, %class-name, %object-class, %class-p, %register-selector,
 ;; %selector-name, %method-types), the one call (%send: receiver, SEL, the encoding,
-;; the variadic split, RAW arguments, a mode), the ownership handle (%new-handle, %refs) and
-;; the table of live pointers (%interned, %intern) and the exception a call raised
-;; (%raised). Every conversion between a Lisp
-;; value and an Objective-C one, and every ownership rule, is in this file.
+;; the variadic split, RAW arguments, a mode), the ownership handle (%new-handle,
+;; %refs), the table of live pointers (%interned, %intern), the exception a call raised
+;; (%raised) and the byte copies (%octets, %write-octets, %read-octets). Every
+;; conversion between a Lisp value and an Objective-C one, and every ownership rule, is
+;; in this file.
 ;;
 ;; Portability constraints honored here (like appkit.lisp): do loops always declare
 ;; at least one variable; parameters are never assigned with setq.
@@ -888,7 +889,10 @@
                   (return-type (svref plan 1))
                   (params (svref plan 2))
                   (declared (length params)))
-             (when (and (not listed) (> (length args) declared)
+             ;; Even with no argument past the declared ones: the nil terminator is
+             ;; what a one-element arrayWithObjects: needs, and a format callee never
+             ;; reads it.
+             (when (and (not listed) (>= (length args) declared)
                     (member name objc::*variadic-selectors* :test #'string=))
                (let ((extra (nthcdr declared args)) (spelled types))
                  (dolist (value extra)
@@ -957,7 +961,7 @@
 ;;; --- what Objective-C reports itself: exceptions and NSError ------------------------
 
 ;; An Objective-C exception raised inside a send or a C call and caught there by the host
-;; (.kb/objc.md, "The new base: exceptions and NSError"). The call answered nothing; the
+;; (.kb/objc.md, "Exceptions and NSError"). The call answered nothing; the
 ;; object is the thrown one, whose reference the condition holds.
 (define-condition objc:objc-exception (error)
   ((name :initarg :name :reader objc:objc-exception-name)
@@ -1343,6 +1347,36 @@
   (or (objc::%as-pointer object-or-class)
       (error "objc:objc-object-pointer: ~s is not an Objective-C object"
              object-or-class)))
+
+(defun objc:objectp (value) (if (objc::%pointerp value) t nil))
+
+;;; --- bytes: objc:data and objc:bytes ---------------------------------------------
+
+;; An NSMutableData holding a packed buffer's bytes -- exactly what write-sequence writes
+;; for it (little-endian, row-major, the elements only) -- or a string's UTF-8. Mutable,
+;; so one value serves a const void * parameter (bytes) and writable scratch
+;; (mutableBytes). The layout is the primitive's (objc::%octets), since what a packed
+;; buffer is differs per value representation.
+(defun objc:data (value)
+  (let ((octets (objc::%octets value)))
+    (unless octets
+      (error "objc:data expects a packed float array, a packed (unsigned-byte 8|16|32) vector or a string, got ~s"
+             value))
+    (let ((data
+           (objc:invoke "NSMutableData" "dataWithLength:" (length octets))))
+      (when (> (length octets) 0)
+        (objc::%write-octets (objc:invoke data "mutableBytes") octets))
+      data)))
+
+;; An NSData's contents as a fresh (unsigned-byte 8) vector.
+(defun objc:bytes (data)
+  (let ((pointer (objc::%as-pointer data)))
+    (unless (and pointer (not (objc::%classp pointer)))
+      (error "objc:bytes expects an Objective-C object, got ~s" data))
+    (let ((n (objc:invoke pointer "length")))
+      (if (= n 0)
+          (make-array 0 :element-type '(unsigned-byte 8))
+          (objc::%read-octets (objc:invoke pointer "bytes") n)))))
 
 ;; The Lisp object made for a pointer: a standard-objc-object for an instance of a class
 ;; defined in Lisp, the Lisp class for such a class, and nil for anything else.

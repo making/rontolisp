@@ -5,8 +5,8 @@ package am.ik.rontolisp;
  */
 public sealed interface LispVal permits LispInteger, LispBigInteger, LispRatio, LispDouble, LispComplex, LispSymbol,
 		LispString, LispChar, LispCons, LispNil, LispTrue, LispFunction, LispLambda, LispHashTable, LispArray,
-		LispFloatArray, LispIntVector, LispJavaObject, LispObjcObject, LispForeignPointer, LispFuture, LispThread,
-		LispStream, LispInstance, LispStructLiteral, LispQuantizedMatrix {
+		LispFloatArray, LispIntVector, LispJavaObject, LispForeignPointer, LispFuture, LispThread, LispStream,
+		LispInstance, LispStructLiteral, LispQuantizedMatrix {
 
 	/**
 	 * Return the printed representation of this value.
