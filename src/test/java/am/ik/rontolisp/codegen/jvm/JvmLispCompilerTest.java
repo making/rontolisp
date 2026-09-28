@@ -1894,6 +1894,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#fillPointerSurfaceRefusesAVectorWithoutOne.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.FillPointerVectorFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.FillPointerVectorFixture.EXPECTED);
+	}
+
+	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
 		// The list consumers beyond the first set name their operator as the first set
 		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
@@ -2371,10 +2380,11 @@ class JvmLispCompilerTest {
 		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
 		// (listConsumersNameTheOperator), and so does an access's array argument
 		// (sequenceAndAccessorOperatorsNameTheirWrongTypeArgument), an array-shape
-		// accessor's included; a string handed a fill-pointer accessor is still a bare
-		// cast.
+		// accessor's included, and a string handed a fill-pointer accessor
+		// (fillPointerSurfaceRefusesAVectorWithoutOne).
 		assertThat(compileAndRun("(print (handler-case (fill-pointer \"abc\") (type-error (e) (princ-to-string e))))"))
-			.isEqualTo("\"the value is not of the expected type\"");
+			.isEqualTo(
+					"\"FILL-POINTER: The value \\\"abc\\\" is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))\"");
 		assertThat(compileAndRun("(print (handler-case (fill-pointer 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"FILL-POINTER: The value 5 is not of type ARRAY\"");
 		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
@@ -21202,7 +21212,8 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.rootCause()
-			.hasMessageContaining("packed integer vector");
+			.hasMessageContaining(
+					"VECTOR-PUSH: The value #(0 0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
 	}
 
 	@Test

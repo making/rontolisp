@@ -1169,10 +1169,10 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries, a vector with no
-  fill pointer handed the fill-pointer surface -- and everything outside EH mode. (The array
-  argument of an access and of an array-shape accessor is named since 2026-09-27: "A sequence,
-  array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
+- **What still traps on wasm-GC**: division by zero, the limb-tier boundaries -- and everything
+  outside EH mode. (The array argument of an access and of an array-shape accessor is named since
+  2026-09-27, a vector without a fill pointer handed the fill-pointer surface since 2026-09-28: "A
+  sequence, array or hash-table operand of the wrong kind".) (A list walk over a non-list is named since
   2026-09-26: "A wrong-type argument names its operator".)
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
   same `_dbl`/`_as_f64`, and reports under `(SETF AREF)` since 972. Pinned by `JvmFloatArrayTest`'s
@@ -1634,9 +1634,8 @@ datum-less cast failure on the JVM and a trap on wasm.
   the general shape cannot tell from a non-array. The lite `array-element-type` expansion (no
   typed or packed array; now also a `java:` program without the array runtime) is `(if (stringp
   v) 'character (if (%arrayp v) t (%operand-type-error v 'array-element-type 'array)))`. wasm, EH
-  mode only: `_arr_check_rank(x, ANY_RANK | id << 8)` at each site, over the operand on the stack
-  where the site casts it straight away (`WasmArrayCompiler.emitArrayCheckOnStack`, no temp) or its
-  slot. `adjust-array` is checked by the shared expansion (`LispMacroExpander.checkedArrayOf`,
+  mode only: `_arr_check_rank(x, ANY_RANK | id << 8)` at each predicate's site over its slot; the
+  fill-pointer surface's five sites call `_fp_hdr` instead (next bullet). `adjust-array` is checked by the shared expansion (`LispMacroExpander.checkedArrayOf`,
   an `arrayp` test ahead of every internal reader; `#'adjust-array`'s wrapper rebinds its array
   through it before its fill-pointer default reads it).
 - **A symbol is no array** (2026-09-27): a symbol shares the string representation on both
@@ -1646,11 +1645,51 @@ datum-less cast failure on the JVM and a trap on wasm.
   `_arrayCheckRank` and `_aset1`'s check test the frame as `stringp` does
   (`JvmArrayRuntimeBuilder.emitStringTest`); wasm's EH `_arr_check_rank` lands `ARRAY` for an
   unframed string struct (a non-EH module keeps its bytes).
-- **Not covered**: a vector with no fill pointer handed the fill-pointer surface (`(fill-pointer
-  "abc")`, `(vector-pop (vector 1))`): a simple-error interpreted (`FILL-POINTER: string has no
-  fill pointer`, `vector-pop: vector has no fill pointer`), lowercase texts or a datum-less cast
-  failure on the JVM, a trap on wasm; SBCL signals a `type-error` whose expected type is `(AND
-  VECTOR (NOT SIMPLE-ARRAY))` (`.todo/a65`).
+- **A vector without a fill pointer** (2026-09-28, `.todo/a65`; it was a simple-error
+  interpreted -- `FILL-POINTER: string has no fill pointer`, `vector-pop: vector has no fill
+  pointer`, `... not applicable to a packed float array` -- lowercase texts or a datum-less cast
+  failure on the JVM, a trap on wasm): `fill-pointer`, `(setf fill-pointer)`, `vector-push`,
+  `vector-push-extend` and `vector-pop` handed an ARRAY that has none (a string literal, a simple,
+  packed, adjustable or rank-2 array) report `OP: The value X is not of type (AND VECTOR
+  (SATISFIES ARRAY-HAS-FILL-POINTER-P))`, the expected type the LIST
+  (`OperandTypes.FILL_POINTER_VECTOR_TYPE`) -- SBCL's run-time check's type; its compile-time
+  derivation says `(AND VECTOR (NOT SIMPLE-ARRAY))`, which an adjustable vector without a fill
+  pointer satisfies. A value that is no array at all keeps `ARRAY`, checked first, as every
+  array-shape accessor (and the `java:` host guard) reports it; SBCL reports the compound type
+  there too -- both are CL type-errors, and the split keeps one check per layer. The neighbours:
+  a stored fill pointer that is no integer in `[0, dimension]` -- a wrong-type one included -- is
+  `(SETF FILL-POINTER): The value V is not of type (INTEGER 0 dim)` (`OperandTypes.fillPointerType`,
+  inclusive: SBCL's), checked after the vector; an empty pop the simple-error
+  `OperandTypes.VECTOR_POP_EMPTY` (CLHS: "an error of type error"); `vector-push-extend` checks
+  its vector before its extension. Interpreter: `Environment.fillPointerVector` ahead of each
+  built-in, `OperandTypeException.notOfType` carrying the type as a Lisp list (it generalizes the
+  out-of-range subscript's `(INTEGER 0 (d))`, now built the same way). JVM: a named `_ckFp` at
+  each site (`JvmArrayRuntimeBuilder.CK_FILL_POINTER`, replacing `_ckArr` and the packed guards
+  there): an `ArrayList` whose header slot 1 is set answers, anything else goes through `_ckArr`
+  (the `ARRAY` report) and then throws `_teOf(x, type)` (`JvmOperandTypeRuntime.TE_OF`: the type
+  printed by `_lispToString` and recorded as the object, kept verbatim by `_opTypeErr`'s compound
+  arm). The helpers behind it read the fill pointer unchecked; `_setFillPointer` is invoked
+  through the wrapper and throws `_teOf(v, (INTEGER 0 cap))`. wasm, EH mode only (a non-EH module
+  keeps its cast, its trap and its bytes): `_fp_hdr(x, id)` (`FUNC_FP_HDR`,
+  `WasmOperandTypes.buildFillPointerCheckBody`) answers the header of a cell whose header car is
+  the dims array (a hash table shares the cell box) and whose meta car is an i31 -- that test
+  FIRST, so the hot path makes one call; `_arr_check_rank` only on the refusal path (as the first
+  version called it up front, an EH push/pop loop cost +15%) -- and lands through
+  `_type_err_of(culprit, type)` (`FUNC_TYPE_ERR_OF`, `buildCompoundLandingBody`), a landing for any
+  compound type the caller builds: `OP: ` from the register's row, then the value and the type
+  printed by `_prin1_to_str`, the type object in `expected-type`. Its symbols are interned with
+  the other operand texts (`Texts.compoundNames`); the second reader of the operator table blob.
+  `%set-fill-pointer` builds `(INTEGER 0 cap)` at its site; the empty pop throws the text as a
+  message payload (`WasmErrorCompiler.emitThrowPayload`). Cost, measured 2026-09-28 (wasmtime 49,
+  JDK 25): `hello_world`, `pi_approx`, `dom_reactor` byte-identical on wasm and the JVM, zlib P1
+  130,172 -> 130,105, size level 99,987 -> 99,920, component 133,809 -> 133,815 (data-segment
+  layout: zlib reaches no fill-pointer site), JVM class byte-identical; a push/pop program 14,487
+  -> 14,867 wasm, 24,385 -> 24,660 class. A `vector-push-extend`/`vector-pop` loop (200k x40, 4
+  pinned cores, 5-6 interleaved runs): wasm EH 843-990 ms before, 829-865 after; JVM 716-781 before,
+  728-777 after -- noise. Pinned by `FillPointerVectorFixture` through
+  `fillPointerSurfaceRefusesAVectorWithoutOne` (`LispEvaluatorTest`,
+  `WasmLispCompilerIntegrationTest`) and `compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne`
+  (`JvmLispCompilerTest`), and `ci-spec.yaml`'s `fill-pointer-surface-refuses-a-vector-without-one`.
 - **Cost, measured 2026-09-27** (wasmtime 49, JDK 25; zlib spells none of the operators, so this is
   the internal uses -- the `class-of`/`typep` expansions' `array-element-type`, the library's
   `vector-push-extend` -- and the string-frame tests): zlib P1 129,608 -> 129,704, unoptimized

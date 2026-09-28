@@ -387,10 +387,18 @@ final class WasmOperandTypes {
 	 * interned as the names themselves: a symbol's identity is its entry, so these are
 	 * the entries a quoted {@code 'number} in the program shares, and {@code eq} holds
 	 * between the two
+	 * @param typeInfix {@code " is not of type "}, before a compound type's printed text
+	 * ({@link #buildCompoundLandingBody})
+	 * @param compoundNames the symbols the compound types spell
+	 * ({@link OperandTypes#FILL_POINTER_VECTOR_TYPE},
+	 * {@link OperandTypes#fillPointerType}), by name: the entries a quoted
+	 * {@code 'vector} shares, as {@code typeNames}
 	 */
 	record Texts(WasmLispCompiler.StringTable.StringEntry valuePrefix,
 			java.util.List<WasmLispCompiler.StringTable.StringEntry> suffixes,
-			java.util.@Nullable List<WasmLispCompiler.StringTable.StringEntry> typeNames) {
+			java.util.@Nullable List<WasmLispCompiler.StringTable.StringEntry> typeNames,
+			WasmLispCompiler.StringTable.StringEntry typeInfix,
+			java.util.Map<String, WasmLispCompiler.StringTable.StringEntry> compoundNames) {
 
 		/**
 		 * Interns the texts.
@@ -399,11 +407,57 @@ final class WasmOperandTypes {
 		 * @return the texts
 		 */
 		static Texts intern(WasmLispCompiler.StringTable table, boolean typeError) {
+			java.util.Map<String, WasmLispCompiler.StringTable.StringEntry> compoundNames = new java.util.TreeMap<>();
+			for (String name : compoundSymbols(OperandTypes.FILL_POINTER_VECTOR_TYPE, new java.util.ArrayList<>())) {
+				compoundNames.put(name, table.addBodyString(name));
+			}
+			compoundNames.put(OperandTypes.INTEGER_TYPE, table.addBodyString(OperandTypes.INTEGER_TYPE));
 			return new Texts(table.addBodyString("\"" + OperandTypes.VALUE_PREFIX + "\""),
 					TYPES.stream()
 						.map(type -> table.addBodyString("\"" + OperandTypes.TYPE_INFIX + type + "\""))
 						.toList(),
-					typeError ? TYPES.stream().map(table::addBodyString).toList() : null);
+					typeError ? TYPES.stream().map(table::addBodyString).toList() : null,
+					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + "\""), java.util.Map.copyOf(compoundNames));
+		}
+
+		private static java.util.List<String> compoundSymbols(Object type, java.util.List<String> into) {
+			if (type instanceof java.util.List<?> list) {
+				for (Object element : list) {
+					compoundSymbols(java.util.Objects.requireNonNull(element), into);
+				}
+			}
+			else if (type instanceof String name) {
+				into.add(name);
+			}
+			return into;
+		}
+
+		/**
+		 * Emits the construction of a compound type as the Lisp value it spells: a symbol
+		 * name is its interned entry, a {@code Long} a fixnum, a list a chain of conses.
+		 * @param w the writer
+		 * @param type the type, as {@link OperandTypes#FILL_POINTER_VECTOR_TYPE} spells
+		 * one
+		 * @param identityHash whether a cons carries the identity-hash field
+		 */
+		void emitType(WasmWriter w, Object type, boolean identityHash) {
+			if (type instanceof java.util.List<?> list) {
+				for (Object element : list) {
+					emitType(w, java.util.Objects.requireNonNull(element), identityHash);
+				}
+				w.write(Instruction.REF_NULL);
+				w.writeHeapType(Type.EQ.code());
+				for (int i = 0; i < list.size(); i++) {
+					WasmEmitHelper.emitNewCons(w, identityHash);
+				}
+			}
+			else if (type instanceof Long n) {
+				i32Const(w, Math.toIntExact(n));
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			else {
+				strBuild(w, java.util.Objects.requireNonNull(this.compoundNames.get((String) type)));
+			}
 		}
 
 	}
@@ -629,6 +683,194 @@ final class WasmOperandTypes {
 		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _type_err_of(culprit, type) -> (ref null eq)}, the landing of an
+	 * operand that is not of a COMPOUND type -- a list such as {@code (AND VECTOR
+	 * (SATISFIES ARRAY-HAS-FILL-POINTER-P))} the caller builds and hands over: the report
+	 * {@code OP: The value X is not of type T}, {@code T} the type as {@code prin1}
+	 * prints it and {@code OP} the operator the register names (read and cleared as
+	 * {@code _type_err} does), thrown as a {@code type-error} whose {@code expected-type}
+	 * is the type object -- or, with no class baked, as the instance-less payload. Never
+	 * returns. A bare {@code unreachable} outside EH mode.
+	 * @param texts the interned texts, non-null in EH mode
+	 * @param operators the operator table
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param typeError the type-error shape, or null for the instance-less payload
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @return the function body
+	 */
+	static byte[] buildCompoundLandingBody(@Nullable Texts texts, Operators operators, int operatorGlobal,
+			@Nullable TypeErrorShape typeError, boolean identityHash) {
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		if (texts == null || operatorGlobal < 0) {
+			w.write(0); // no extra locals
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// params: the culprit, the type; extra locals: $code (i32) the register's id,
+		// $row (i32) its table row; with a type-error to build, $msg and $slots
+		w.writeUnsignedLeb128(typeError == null ? 1 : 2);
+		w.writeUnsignedLeb128(2);
+		w.write(Type.I32);
+		if (typeError != null) {
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(CODE_LOCAL);
+		setRegister(w, operatorGlobal, 0);
+		getLocal(w, CODE_LOCAL);
+		i32Const(w, ROW);
+		w.write(Instruction.I32_MUL);
+		i32Const(w, operators.base());
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(ROW_LOCAL);
+		if (typeError == null) {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+		getLocal(w, CODE_LOCAL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		strBuild(w, texts.valuePrefix());
+		w.write(Instruction.ELSE);
+		loadRow(w, 0);
+		i32Const(w, operators.base());
+		w.write(Instruction.I32_ADD);
+		loadRow(w, 4);
+		call(w, WasmLispCompiler.FUNC_STR_BUILD);
+		strBuild(w, texts.valuePrefix());
+		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		w.write(Instruction.END);
+		getLocal(w, 0);
+		call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		strBuild(w, texts.typeInfix());
+		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		getLocal(w, 1);
+		call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
+		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		if (typeError == null) {
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(MSG_LOCAL);
+			WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), SLOTS_LOCAL, MSG_LOCAL, java.util.Map
+				.of(typeError.datumSlot(), () -> getLocal(w, 0), typeError.expectedTypeSlot(), () -> getLocal(w, 1)));
+		}
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _fp_hdr(value, id) -> header}, the fill-pointer surface's operand
+	 * check, EH mode only: a general vector whose header carries a fill pointer (an i31
+	 * meta car) answers that header; a value that is no array at all is the operator's
+	 * {@code ARRAY} type-error ({@code _arr_check_rank} under {@code id}, as every
+	 * array-shape accessor's), and any other array -- a string without a fill pointer, a
+	 * packed array, a rank-2 or simple vector -- the operator's
+	 * {@code (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))} one
+	 * ({@link #buildCompoundLandingBody}). {@code id} is the operator's i31 row. A bare
+	 * {@code unreachable} outside EH mode, where nothing calls it.
+	 * @param texts the interned texts, non-null in EH mode
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param identityHash whether a cons carries the identity-hash field
+	 * @return the function body
+	 */
+	static byte[] buildFillPointerCheckBody(@Nullable Texts texts, int operatorGlobal, boolean identityHash) {
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		if (texts == null || operatorGlobal < 0) {
+			w.write(0); // no extra locals
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// params: the value, the i31 id; extra local $header ((ref null eq))
+		w.writeUnsignedLeb128(1);
+		w.writeUnsignedLeb128(1);
+		w.writeRefType(true, Type.EQ.code());
+		// The answer first: a cell whose header is (dims . ((fp . ...) . data)) -- a
+		// hash table shares the cell box, its header car an i31 count -- with an i31 fp.
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 2);
+		consGet(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 2);
+		consGet(w, 1);
+		consGet(w, 0);
+		consGet(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 2);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// The refusal: _arr_check_rank(value, ANY_RANK | id << 8) lands ARRAY for a
+		// value that is no array; any array left is the compound type's.
+		getLocal(w, 0);
+		getLocal(w, 1);
+		i31Get(w);
+		i32Const(w, 8);
+		w.write(Instruction.I32_SHL);
+		i32Const(w, WasmArrayRuntimeBuilder.ANY_RANK);
+		w.write(Instruction.I32_OR);
+		call(w, WasmLispCompiler.FUNC_ARR_CHECK_RANK);
+		w.write(Instruction.DROP);
+		getLocal(w, 1);
+		i31Get(w);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		getLocal(w, 0);
+		texts.emitType(w, OperandTypes.FILL_POINTER_VECTOR_TYPE, identityHash);
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR_OF);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	private static void i31Get(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+	}
+
+	private static void consGet(WasmWriter w, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(field);
 	}
 
 	/**

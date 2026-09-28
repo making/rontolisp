@@ -2,7 +2,7 @@
 
 `(vector-push value vector)`
 
-Stores `value` at the fill pointer of a vector created with [`make-array`](make-array.md) `:fill-pointer`, increments the fill pointer and returns the index the value was stored at, or nil (leaving the vector untouched) when the vector is already full. Use [`vector-push-extend`](vector-push-extend.md) to grow the vector instead. Signals an error when the vector has no fill pointer.
+Stores `value` at the fill pointer of a vector created with [`make-array`](make-array.md) `:fill-pointer`, increments the fill pointer and returns the index the value was stored at, or nil (leaving the vector untouched) when the vector is already full. Use [`vector-push-extend`](vector-push-extend.md) to grow the vector instead. A vector without a fill pointer signals a `type-error` ([`fill-pointer`](fill-pointer.md)).
 
 ```lisp
 (defparameter *v* (make-array 2 :fill-pointer 0))

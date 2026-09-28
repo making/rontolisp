@@ -18473,6 +18473,23 @@ cases:
       ("ARRAY-DISPLACEMENT: The value 5 is not of type ARRAY" 5 ARRAY)
       ("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
       (2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)
+  - name: fill-pointer-surface-refuses-a-vector-without-one
+    source: |
+      (defun ci-fp (thunk)
+        (handler-case (list :value (funcall thunk))
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-fp-string* "abc")
+      (defvar *ci-fp-vector* (make-array 2 :fill-pointer 0))
+      (print (ci-fp (lambda () (fill-pointer *ci-fp-string*))))
+      (print (ci-fp (lambda () (vector-pop (make-array 2 :element-type 'double-float)))))
+      (print (ci-fp (lambda () (setf (fill-pointer *ci-fp-vector*) 3))))
+      (print (ci-fp (lambda () (vector-pop *ci-fp-vector*))))
+    expected: |
+      ("FILL-POINTER: The value \"abc\" is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))" "abc" (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)))
+      ("VECTOR-POP: The value #d(0.0 0.0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))" #d(0.0 0.0) (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)))
+      ("(SETF FILL-POINTER): The value 3 is not of type (INTEGER 0 2)" 3 (INTEGER 0 2))
+      (:NOT-A-TYPE-ERROR "VECTOR-POP: there is nothing left to pop")
   - name: list-consumers-beyond-the-first-set-name-the-operator
     source: |
       (defun ci-lcb (thunk)

@@ -25929,6 +25929,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void fillPointerSurfaceRefusesAVectorWithoutOne() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#fillPointerSurfaceRefusesAVectorWithoutOne. EH mode (the
+		// program's handler-case): each refusal lands as a condition rather than a trap.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.FillPointerVectorFixture.SOURCE, am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(am.ik.rontolisp.FillPointerVectorFixture.EXPECTED);
+	}
+
+	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
 		// The list consumers beyond the first set name their operator as the first set
 		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),

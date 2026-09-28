@@ -147,6 +147,29 @@ public final class OperandTypes {
 	/** The text of an out-of-range subscript's expected type after the dimension. */
 	public static final String INDEX_TYPE_SUFFIX = "))";
 
+	/**
+	 * The type the fill-pointer surface ({@code fill-pointer} and its {@code setf},
+	 * {@code vector-push}, {@code vector-push-extend}, {@code vector-pop}) requires of an
+	 * ARRAY it reads, as nested lists of symbol names: {@code (AND VECTOR (SATISFIES
+	 * ARRAY-HAS-FILL-POINTER-P))}, the expected type SBCL's run-time check carries. A
+	 * value that is no array at all reports {@code ARRAY} first, as every array accessor
+	 * does ({@link #typeText} spells it).
+	 */
+	public static final List<Object> FILL_POINTER_VECTOR_TYPE = List.of("AND", "VECTOR",
+			List.of("SATISFIES", "ARRAY-HAS-FILL-POINTER-P"));
+
+	/**
+	 * What {@code vector-pop} of a vector whose fill pointer is 0 signals: a
+	 * {@code simple-error} (CLHS: "an error of type error"), not a {@code type-error} --
+	 * the vector is of the type the operator requires. One text for every backend.
+	 */
+	public static final String VECTOR_POP_EMPTY = "VECTOR-POP: there is nothing left to pop";
+
+	/**
+	 * The symbol name that opens a fill pointer's range type, {@link #fillPointerType}.
+	 */
+	public static final String INTEGER_TYPE = "INTEGER";
+
 	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
 	public static final String FUNNEL_TYPE = "";
 
@@ -454,6 +477,35 @@ public final class OperandTypes {
 	 */
 	public static String indexType(long dimension) {
 		return INDEX_TYPE_PREFIX + dimension + INDEX_TYPE_SUFFIX;
+	}
+
+	/**
+	 * The type a fill pointer stored into a vector of {@code dimension} elements is not
+	 * of when it falls outside the vector: {@code (INTEGER 0 dimension)} -- the range is
+	 * inclusive, a fill pointer may equal the dimension. Nested lists like
+	 * {@link #FILL_POINTER_VECTOR_TYPE}, the bounds as {@code Long}s.
+	 * @param dimension the vector's dimension
+	 * @return the type
+	 */
+	public static List<Object> fillPointerType(long dimension) {
+		return List.of(INTEGER_TYPE, 0L, dimension);
+	}
+
+	/**
+	 * A compound type's printed text: a string is a symbol's name, a number itself, a
+	 * list its elements in parentheses -- {@code (INTEGER 0 3)}.
+	 * @param type a type as {@link #FILL_POINTER_VECTOR_TYPE} spells one
+	 * @return the text
+	 */
+	public static String typeText(Object type) {
+		if (type instanceof List<?> list) {
+			StringBuilder text = new StringBuilder("(");
+			for (int i = 0; i < list.size(); i++) {
+				text.append(i == 0 ? "" : " ").append(typeText(list.get(i)));
+			}
+			return text.append(')').toString();
+		}
+		return String.valueOf(type);
 	}
 
 	/**

@@ -1473,42 +1473,24 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.FILL_POINTER, new LispFunction(LispNames.FILL_POINTER, args -> {
 			requireArgCount(LispNames.FILL_POINTER, args, 1);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.FILL_POINTER + ": string has no fill pointer");
-				}
-				return new LispInteger(str.fillPointer());
-			}
-			LispArray array = requireGeneralArray(LispNames.FILL_POINTER, args.get(0));
-			if (!array.hasFillPointer()) {
-				throw new LispEvalException(LispNames.FILL_POINTER + ": array has no fill pointer");
-			}
-			return new LispInteger(array.fillPointer());
+			LispVal vector = fillPointerVector(LispNames.FILL_POINTER, args.get(0));
+			return new LispInteger(
+					vector instanceof LispString str ? str.fillPointer() : ((LispArray) vector).fillPointer());
 		}));
 		env.defineFunction(LispNames.SET_FILL_POINTER, new LispFunction(LispNames.SET_FILL_POINTER, args -> {
 			requireArgCount(LispNames.SET_FILL_POINTER, args, 2);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.SET_FILL_POINTER + ": string has no fill pointer");
-				}
-				try {
-					str.setFillPointer((int) asLong(args.get(1)));
-				}
-				catch (IllegalArgumentException ex) {
-					throw new LispEvalException(LispNames.SET_FILL_POINTER + ": " + ex.getMessage());
-				}
-				return args.get(1);
+			LispVal vector = fillPointerVector(LispNames.SET_FILL_POINTER, args.get(0));
+			// Any value but an integer in [0, dimension] is not of type (INTEGER 0
+			// dimension), a wrong-type one included, as SBCL's run-time check reports.
+			long dimension = vector instanceof LispString str ? str.capacity() : ((LispArray) vector).dimensions()[0];
+			if (!(args.get(1) instanceof LispInteger n) || n.value() < 0 || n.value() > dimension) {
+				throw OperandTypeException.notOfType(args.get(1), OperandTypes.fillPointerType(dimension));
 			}
-			LispArray array = requireGeneralArray(LispNames.SET_FILL_POINTER, args.get(0));
-			if (!array.hasFillPointer()) {
-				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": array has no fill pointer");
+			if (vector instanceof LispString str) {
+				str.setFillPointer((int) n.value());
 			}
-			int value = (int) asLong(args.get(1));
-			try {
-				array.setFillPointer(value);
-			}
-			catch (IndexOutOfBoundsException ex) {
-				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": " + ex.getMessage());
+			else {
+				((LispArray) vector).setFillPointer((int) n.value());
 			}
 			return args.get(1);
 		}));
@@ -1564,56 +1546,46 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.VECTOR_PUSH, new LispFunction(LispNames.VECTOR_PUSH, args -> {
 			requireArgCount(LispNames.VECTOR_PUSH, args, 2);
-			if (args.get(1) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.VECTOR_PUSH + ": string has no fill pointer");
-				}
+			LispVal vector = fillPointerVector(LispNames.VECTOR_PUSH, args.get(1));
+			if (vector instanceof LispString str) {
 				if (str.fillPointer() >= str.capacity()) {
 					return LispNil.INSTANCE;
 				}
 				return new LispInteger(str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint(),
 						ArrayGrowth.NO_EXTENSION));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH, args.get(1));
-			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
+			int index = vectorPush(LispNames.VECTOR_PUSH, (LispArray) vector, args.get(0));
 			return index < 0 ? LispNil.INSTANCE : new LispInteger(index);
 		}));
 		env.defineFunction(LispNames.VECTOR_POP, new LispFunction(LispNames.VECTOR_POP, args -> {
 			requireArgCount(LispNames.VECTOR_POP, args, 1);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() <= 0) {
-					throw new LispEvalException(LispNames.VECTOR_POP + ": string is empty or has no fill pointer");
+			LispVal vector = fillPointerVector(LispNames.VECTOR_POP, args.get(0));
+			if (vector instanceof LispString str) {
+				if (str.fillPointer() == 0) {
+					throw new LispEvalException(OperandTypes.VECTOR_POP_EMPTY);
 				}
 				str.setFillPointer(str.fillPointer() - 1);
 				return new LispChar(str.charAt(str.fillPointer()));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_POP, args.get(0));
-			try {
-				return array.vectorPop();
+			LispArray array = (LispArray) vector;
+			if (array.fillPointer() == 0) {
+				throw new LispEvalException(OperandTypes.VECTOR_POP_EMPTY);
 			}
-			catch (IllegalStateException ex) {
-				throw new LispEvalException(String.valueOf(ex.getMessage()));
-			}
+			return array.vectorPop();
 		}));
 		env.defineFunction(LispNames.VECTOR_PUSH_EXTEND, new LispFunction(LispNames.VECTOR_PUSH_EXTEND, args -> {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + " expects 2 or 3 arguments");
 			}
+			// The vector before the extension, the order the compiled sites check them
+			// in.
+			LispVal vector = fillPointerVector(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
 			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : ArrayGrowth.NO_EXTENSION;
-			if (args.get(1) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + ": string has no fill pointer");
-				}
+			if (vector instanceof LispString str) {
 				return new LispInteger(str
 					.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint(), extension));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
-			try {
-				return new LispInteger(array.vectorPushExtend(args.get(0), extension));
-			}
-			catch (IllegalStateException ex) {
-				throw new LispEvalException(String.valueOf(ex.getMessage()));
-			}
+			return new LispInteger(((LispArray) vector).vectorPushExtend(args.get(0), extension));
 		}));
 		env.defineFunction(LispNames.ADJUST_ARRAY, new LispFunction(LispNames.ADJUST_ARRAY, args -> {
 			if (args.size() < 2) {
@@ -2089,6 +2061,28 @@ public final class Environment implements Scope {
 	private static LispArray requireArray(String fn, LispVal val) {
 		if (val instanceof LispArray array) {
 			return array;
+		}
+		throw accessorTypeError(fn, val, OperandTypes.Kind.ARRAY);
+	}
+
+	/**
+	 * The vector the fill-pointer surface reads: a string or a general vector that has a
+	 * fill pointer answers itself. Any other array is not of type {@code (AND VECTOR
+	 * (SATISFIES ARRAY-HAS-FILL-POINTER-P))} and a value that is no array at all not of
+	 * type {@code ARRAY} -- the first unnamed, for the built-in seam to name, as the
+	 * compiled checks report it.
+	 * @param fn the operator's name
+	 * @param val the operand
+	 * @return the operand, a {@link LispString} or a {@link LispArray}
+	 */
+	private static LispVal fillPointerVector(String fn, LispVal val) {
+		if (val instanceof LispString str ? str.fillPointer() >= 0
+				: val instanceof LispArray array && array.hasFillPointer()) {
+			return val;
+		}
+		if (val instanceof LispString || val instanceof LispArray || val instanceof LispFloatArray
+				|| val instanceof LispIntVector) {
+			throw OperandTypeException.notOfType(val, OperandTypes.FILL_POINTER_VECTOR_TYPE);
 		}
 		throw accessorTypeError(fn, val, OperandTypes.Kind.ARRAY);
 	}

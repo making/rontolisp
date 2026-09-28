@@ -150,6 +150,18 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String CK_ARRAY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
+	/**
+	 * {@code _ckFp(Object) -> Object}: the fill-pointer surface's operand check
+	 * ({@code fill-pointer} and its {@code setf}, {@code vector-push},
+	 * {@code vector-push-extend}, {@code vector-pop}). A general vector or character
+	 * vector (an {@code ArrayList}) whose header carries a fill pointer answers itself;
+	 * any other array throws {@code _teOf}'s unnamed report of {@code (AND VECTOR
+	 * (SATISFIES ARRAY-HAS-FILL-POINTER-P))} and a value that is no array at all
+	 * {@link #CK_ARRAY}'s {@code ARRAY} one, for the operator's wrapper to name. The
+	 * helpers behind it read the fill pointer unchecked.
+	 */
+	static final String CK_FILL_POINTER = "_ckFp";
+
 	static final String FILL_POINTER = "_fillPointer";
 
 	static final String FILL_POINTER_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -333,7 +345,7 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -801,52 +813,82 @@ final class JvmArrayRuntimeBuilder {
 		ck.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(CK_ARRAY), cp.addUtf8(CK_ARRAY_DESC), 2, 1, ck.finish()));
 
-		// _fillPointer(arr): the fill pointer (a Long), or an error when the array has
-		// none. Locals: 0 = arr, 1 = header.
+		// _ckFp(x): x when it is a general vector with a fill pointer, else the unnamed
+		// report of (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) -- after _ckArr,
+		// which throws the ARRAY one for a value that is no array at all. Locals: 0 = x.
+		MethodrefConstant teOf = JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_OF,
+				JvmOperandTypeRuntime.TE_OF_DESC);
+		JvmAsm cfp = new JvmAsm();
+		int cfpRefuse = cfp.label();
+		cfp.aload(0);
+		cfp.instanceOf(arrayListClass);
+		cfp.branch(Opcode.IFEQ, cfpRefuse);
+		emitLoadHeader(cfp, arrayListClass, objectArrayClass, alGet, 0);
+		cfp.iconst(1);
+		cfp.aaload();
+		cfp.branch(Opcode.IFNULL, cfpRefuse);
+		cfp.aload(0);
+		cfp.areturn();
+		cfp.bind(cfpRefuse);
+		cfp.aload(0);
+		cfp.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, CK_ARRAY, CK_ARRAY_DESC));
+		cfp.pop();
+		cfp.aload(0);
+		emitTypeValue(cfp, cp, objectClass, longValueOf, OperandTypes.FILL_POINTER_VECTOR_TYPE);
+		cfp.invokestatic(teOf);
+		cfp.op(Opcode.ATHROW);
+		methods.add(new ArrayMethod(cp.addUtf8(CK_FILL_POINTER), cp.addUtf8(CK_ARRAY_DESC), 24, 1, cfp.finish()));
+
+		// _fillPointer(arr): the fill pointer (a Long); _ckFp at the site has checked the
+		// array carries one. Locals: 0 = arr.
 		JvmAsm fpm = new JvmAsm();
 		emitLoadHeader(fpm, arrayListClass, objectArrayClass, alGet, 0);
-		fpm.astore(1);
-		int fpPresent = fpm.label();
-		fpm.aload(1);
-		fpm.iconst(1);
-		fpm.aaload();
-		fpm.branch(Opcode.IFNONNULL, fpPresent);
-		emitThrow(fpm, rtExClass, rtExInit, cp.addString("fill-pointer: array has no fill pointer"));
-		fpm.bind(fpPresent);
-		fpm.aload(1);
 		fpm.iconst(1);
 		fpm.aaload();
 		fpm.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), 3, 2, fpm.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), 3, 1, fpm.finish()));
 
-		// _setFillPointer(arr, value): range-checked fill-pointer store; returns value.
-		// Locals: 0 = arr, 1 = value, 2 = header, 3 = v (int), 4 = cap (int).
+		// _setFillPointer(arr, value): the store behind _ckFp; returns value. A value
+		// that
+		// is no integer in [0, dimension] is the unnamed report of (INTEGER 0
+		// dimension), for the (SETF FILL-POINTER) wrapper to name. Locals: 0 = arr,
+		// 1 = value, 2 = header, 3 = cap (int), 4-5 = v (long).
 		JvmAsm sfp = new JvmAsm();
 		emitLoadHeader(sfp, arrayListClass, objectArrayClass, alGet, 0);
 		sfp.astore(2);
-		int sfpPresent = sfp.label();
-		sfp.aload(2);
-		sfp.iconst(1);
-		sfp.aaload();
-		sfp.branch(Opcode.IFNONNULL, sfpPresent);
-		emitThrow(sfp, rtExClass, rtExInit, cp.addString("%set-fill-pointer: array has no fill pointer"));
-		sfp.bind(sfpPresent);
-		sfp.aload(1);
-		sfp.checkcast(longClass);
-		sfp.invokevirtual(longIntValue);
-		sfp.istore(3);
 		emitLoadDim0(sfp, longClass, objectArrayClass, longIntValue, 2);
-		sfp.istore(4);
+		sfp.istore(3);
 		int sfpBad = sfp.label();
 		int sfpOk = sfp.label();
-		sfp.iload(3);
+		sfp.aload(1);
+		sfp.instanceOf(longClass);
+		sfp.branch(Opcode.IFEQ, sfpBad);
+		sfp.aload(1);
+		sfp.checkcast(longClass);
+		sfp.invokevirtual(longLongValue);
+		sfp.lstore(4);
+		sfp.lload(4);
+		sfp.op(Opcode.LCONST_0);
+		sfp.op(Opcode.LCMP);
 		sfp.branch(Opcode.IFLT, sfpBad);
+		sfp.lload(4);
 		sfp.iload(3);
-		sfp.iload(4);
-		sfp.branch(Opcode.IF_ICMPGT, sfpBad);
+		sfp.i2l();
+		sfp.op(Opcode.LCMP);
+		sfp.branch(Opcode.IFGT, sfpBad);
 		sfp.branch(Opcode.GOTO, sfpOk);
 		sfp.bind(sfpBad);
-		emitThrow(sfp, rtExClass, rtExInit, cp.addString("%set-fill-pointer: fill pointer out of range"));
+		sfp.aload(1);
+		emitList(sfp, objectClass, List.of(() -> sfp.ldcString(cp.addString(OperandTypes.INTEGER_TYPE)), () -> {
+			sfp.op(Opcode.LCONST_0);
+			sfp.invokestatic(longValueOf);
+		}, () -> {
+			sfp.iload(3);
+			sfp.i2l();
+			sfp.invokestatic(longValueOf);
+		}));
+		sfp.invokestatic(teOf);
+		sfp.op(Opcode.ATHROW);
 		sfp.bind(sfpOk);
 		sfp.aload(2);
 		sfp.iconst(1);
@@ -855,7 +897,7 @@ final class JvmArrayRuntimeBuilder {
 		sfp.aload(1);
 		sfp.areturn();
 		methods
-			.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), 3, 5, sfp.finish()));
+			.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), 12, 6, sfp.finish()));
 
 		// _arrayHasFillPointer(arr): "t" when the header carries a fill pointer, else
 		// nil (null). Locals: 0 = arr.
@@ -877,8 +919,7 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm vp = new JvmAsm();
 		emitLoadHeader(vp, arrayListClass, objectArrayClass, alGet, 1);
 		vp.astore(2);
-		emitRequireFillPointer(vp, longClass, longIntValue, rtExClass, rtExInit,
-				cp.addString("vector-push: vector has no fill pointer"), 2);
+		emitLoadFillPointer(vp, longClass, longIntValue, 2);
 		vp.istore(3);
 		emitLoadDim0(vp, longClass, objectArrayClass, longIntValue, 2);
 		vp.istore(4);
@@ -897,13 +938,12 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm vpop = new JvmAsm();
 		emitLoadHeader(vpop, arrayListClass, objectArrayClass, alGet, 0);
 		vpop.astore(1);
-		emitRequireFillPointer(vpop, longClass, longIntValue, rtExClass, rtExInit,
-				cp.addString("vector-pop: vector has no fill pointer"), 1);
+		emitLoadFillPointer(vpop, longClass, longIntValue, 1);
 		vpop.istore(2);
 		int vpopOk = vpop.label();
 		vpop.iload(2);
 		vpop.branch(Opcode.IFNE, vpopOk);
-		emitThrow(vpop, rtExClass, rtExInit, cp.addString("vector-pop: empty vector"));
+		emitThrow(vpop, rtExClass, rtExInit, cp.addString(OperandTypes.VECTOR_POP_EMPTY));
 		vpop.bind(vpopOk);
 		vpop.aload(1);
 		vpop.iconst(1);
@@ -929,8 +969,7 @@ final class JvmArrayRuntimeBuilder {
 		JvmAsm vpe = new JvmAsm();
 		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
 		vpe.astore(3);
-		emitRequireFillPointer(vpe, longClass, longIntValue, rtExClass, rtExInit,
-				cp.addString("vector-push-extend: vector has no fill pointer"), 3);
+		emitLoadFillPointer(vpe, longClass, longIntValue, 3);
 		vpe.istore(4);
 		emitLoadDim0(vpe, longClass, objectArrayClass, longIntValue, 3);
 		vpe.istore(5);
@@ -3448,23 +3487,56 @@ final class JvmArrayRuntimeBuilder {
 		a.areturn();
 	}
 
-	// Requires a fill pointer on the header in headerSlot (throws with message when
-	// absent) and pushes its int value.
-	private static void emitRequireFillPointer(JvmAsm a, ClassConstant longClass, MethodrefConstant longIntValue,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, am.ik.jvm.ConstantPool.StringConstant message,
+	// Pushes the int fill pointer of the header in headerSlot, which _ckFp at the site
+	// has
+	// checked carries one.
+	private static void emitLoadFillPointer(JvmAsm a, ClassConstant longClass, MethodrefConstant longIntValue,
 			int headerSlot) {
-		int present = a.label();
-		a.aload(headerSlot);
-		a.iconst(1);
-		a.aaload();
-		a.branch(Opcode.IFNONNULL, present);
-		emitThrow(a, rtExClass, rtExInit, message);
-		a.bind(present);
 		a.aload(headerSlot);
 		a.iconst(1);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
+	}
+
+	// Pushes a type spelled as nested lists of symbol names and Longs
+	// (OperandTypes.FILL_POINTER_VECTOR_TYPE) as the Lisp value it spells: a String is a
+	// symbol, a list a chain of Object[2] conses.
+	private static void emitTypeValue(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
+			MethodrefConstant longValueOf, Object type) {
+		if (type instanceof List<?> list) {
+			List<Runnable> elements = new java.util.ArrayList<>();
+			for (Object element : list) {
+				Object nonNull = java.util.Objects.requireNonNull(element);
+				elements.add(() -> emitTypeValue(a, cp, objectClass, longValueOf, nonNull));
+			}
+			emitList(a, objectClass, elements);
+		}
+		else if (type instanceof Long n) {
+			a.ldc2Long(cp.addLong(n));
+			a.invokestatic(longValueOf);
+		}
+		else {
+			a.ldcString(cp.addString((String) type));
+		}
+	}
+
+	// Pushes a proper list of what each element pushes: {e0, {e1, ... null}}.
+	private static void emitList(JvmAsm a, ClassConstant objectClass, List<Runnable> elements) {
+		for (Runnable element : elements) {
+			a.iconst(2);
+			a.anewarray(objectClass);
+			a.dup();
+			a.iconst(0);
+			element.run();
+			a.aastore();
+			a.dup();
+			a.iconst(1);
+		}
+		a.aconstNull();
+		for (int i = 0; i < elements.size(); i++) {
+			a.aastore();
+		}
 	}
 
 	// new RuntimeException(message); athrow.

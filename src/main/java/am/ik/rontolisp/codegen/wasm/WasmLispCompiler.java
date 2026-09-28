@@ -2049,6 +2049,24 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and shaken when no site checks.
 	static final int FUNC_CHR_CODE = FUNC_IDX_REF + 1;
 
+	// _type_err_of ((ref null eq) culprit, (ref null eq) type) -> (ref null eq): the
+	// landing of an operand that is not of a COMPOUND type the caller builds -- the
+	// fill-pointer surface's (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)), a fill
+	// pointer's (INTEGER 0 dim) -- under the operator register, EH mode only
+	// (WasmOperandTypes.buildCompoundLandingBody). Never returns. Reuses the binary
+	// callable signature (TYPE_CALLABLE_BASE + 1); appended after the last fixed helper
+	// so no index above shifts, and shaken when nothing lands through it.
+	static final int FUNC_TYPE_ERR_OF = FUNC_CHR_CODE + 1;
+
+	// _fp_hdr ((ref null eq) value, (ref null eq) operator id as an i31) -> (ref null
+	// eq): the fill-pointer surface's operand check, EH mode only
+	// (WasmOperandTypes.buildFillPointerCheckBody): a general vector with a fill pointer
+	// answers its header; a non-array is the operator's ARRAY type-error, any other
+	// array its (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) one. Reuses the binary
+	// callable signature (TYPE_CALLABLE_BASE + 1); appended after the last fixed helper
+	// so no index above shifts, and shaken when no site checks.
+	static final int FUNC_FP_HDR = FUNC_TYPE_ERR_OF + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2079,7 +2097,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_CHR_CODE + 1;
+	static final int FUNC_VEC_BASE = FUNC_FP_HDR + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2095,9 +2113,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
-	// (_idx_in, _idx_bound, _idx_ref) and the character check (_chr_code) -- plus, under
-	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_CHR_CODE + 1;
+	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
+	// landing (_type_err_of) and the fill-pointer check (_fp_hdr) -- plus, under --simd,
+	// the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_FP_HDR + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7236,6 +7255,11 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_IDX_REF)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _chr_code (value, op) -> i32
 													// (FUNC_CHR_CODE)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _type_err_of (culprit,
+															// type) -> value
+															// (FUNC_TYPE_ERR_OF)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _fp_hdr (value, op) ->
+															// header (FUNC_FP_HDR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8218,6 +8242,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					.buildIndexRefBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
 				// the character check body (FUNC_CHR_CODE): shaken with its sites.
 				code.addFunction(WasmCharCompiler.buildCodeCheckBody(ehMode ? operandOpGlobalIndex : -1));
+				// the compound landing body (FUNC_TYPE_ERR_OF), the operator table's
+				// other reader: shaken when nothing lands through it.
+				if (operandOperators.base() >= 0) {
+					stringTable.readBlob(operandOperators.base(), FUNC_TYPE_ERR_OF);
+				}
+				code.addFunction(WasmOperandTypes.buildCompoundLandingBody(operandTexts, operandOperators,
+						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
+				// the fill-pointer check body (FUNC_FP_HDR): shaken with its sites.
+				code.addFunction(WasmOperandTypes.buildFillPointerCheckBody(operandTexts, operandOpGlobalIndex,
+						this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

@@ -19569,6 +19569,18 @@ class LispEvaluatorTest {
 			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
 	}
 
+	// The fill-pointer surface handed an array without a fill pointer: a type-error whose
+	// expected type is (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)); a fill pointer
+	// set out of range a type-error (INTEGER 0 dim); an empty pop a simple-error. The
+	// twins are
+	// JvmLispCompilerTest#compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne
+	// and WasmLispCompilerIntegrationTest#fillPointerSurfaceRefusesAVectorWithoutOne.
+	@Test
+	void fillPointerSurfaceRefusesAVectorWithoutOne() {
+		assertThat(printedLines(am.ik.rontolisp.FillPointerVectorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FillPointerVectorFixture.EXPECTED);
+	}
+
 	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() {
 		// The list consumers beyond the first set name their operator as the first set
@@ -21565,7 +21577,8 @@ class LispEvaluatorTest {
 	@Test
 	void fillPointerOnNonFillPointerVectorSignals() {
 		assertThatThrownBy(() -> eval("(fill-pointer (make-array 3))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("no fill pointer");
+			.hasMessageContaining(
+					"FILL-POINTER: The value #(NIL NIL NIL) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
 	}
 
 	@Test
@@ -24199,7 +24212,8 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)"))
 			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
-			.hasMessageContaining("packed integer vector");
+			.hasMessageContaining(
+					"VECTOR-PUSH: The value #(0 0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
 	}
 
 	@Test

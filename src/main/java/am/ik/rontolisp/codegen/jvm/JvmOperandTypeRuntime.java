@@ -47,6 +47,17 @@ final class JvmOperandTypeRuntime {
 
 	static final String TE_RAW_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/RuntimeException;";
 
+	/**
+	 * A compound type's exception builder, {@code _teOf(x, type)}: the unnamed
+	 * {@code The value X is not of type T}, {@code T} the printed type object (a list
+	 * such as {@code (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))}), recorded under
+	 * a pad with that object as the expected type. {@code _opTypeErr} keeps both under
+	 * any operator, as it keeps an out-of-range subscript's.
+	 */
+	static final String TE_OF = "_teOf";
+
+	static final String TE_OF_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/RuntimeException;";
+
 	/** The wrappers' renamer. */
 	static final String OP_TYPE_ERR = "_opTypeErr";
 
@@ -301,6 +312,31 @@ final class JvmOperandTypeRuntime {
 		}
 		c.add(Opcode.ARETURN);
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_RAW), cp.addUtf8(TE_RAW_DESC), c, 6, 3,
+				List.of()));
+
+		// _teOf(Object x, Object type): new RuntimeException("The value " + prin1(x) +
+		// " is not of type " + prin1(type)), recorded under a pad with the type object.
+		List<Integer> t = new ArrayList<>();
+		t.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(t, rte.index());
+		t.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(t, valuePrefix.index());
+		t.add(Opcode.ALOAD_0);
+		invoke(t, Opcode.INVOKESTATIC, lispToString);
+		invoke(t, Opcode.INVOKEVIRTUAL, concat);
+		JvmRuntimeBuilder.emitLdc(t, typeInfix.index());
+		invoke(t, Opcode.INVOKEVIRTUAL, concat);
+		t.add(Opcode.ALOAD_1);
+		invoke(t, Opcode.INVOKESTATIC, lispToString);
+		invoke(t, Opcode.INVOKEVIRTUAL, concat);
+		invoke(t, Opcode.INVOKESPECIAL, rteInit);
+		if (records != null) {
+			t.add(Opcode.ASTORE_2);
+			records.emit(t, 2, () -> t.add(Opcode.ALOAD_0), () -> t.add(Opcode.ALOAD_1));
+			t.add(Opcode.ALOAD_2);
+		}
+		t.add(Opcode.ARETURN);
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_OF), cp.addUtf8(TE_OF_DESC), t, 6, 3,
 				List.of()));
 
 		// _oob(Object datum, int dim): new RuntimeException("The value " + prin1(datum)

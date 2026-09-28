@@ -309,12 +309,20 @@ final class JvmArrayCompiler {
 	}
 
 	static void compileFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileUnary(cons, ctx, className, LispNames.FILL_POINTER, JvmArrayRuntimeBuilder.FILL_POINTER,
-				JvmArrayRuntimeBuilder.FILL_POINTER_DESC, true);
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("fill-pointer expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.FILL_POINTER);
+		emitFillPointerVectorCheck(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.FILL_POINTER, JvmArrayRuntimeBuilder.FILL_POINTER_DESC);
 	}
 
 	static void compileSetFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		// (%set-fill-pointer array value): the setf target of (fill-pointer array).
+		// (%set-fill-pointer array value): the setf target of (fill-pointer array). The
+		// store runs under the operator's wrapper: a value outside [0, dimension] is its
+		// type-error.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 3) {
 			throw new UnsupportedOperationException(
@@ -322,10 +330,9 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.SET_FILL_POINTER);
-		emitArrayOperandCheck(ctx, className);
-		emitRequireGeneralIfPacked(ctx, className);
+		emitFillPointerVectorCheck(ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
+		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
 				JvmArrayRuntimeBuilder.SET_FILL_POINTER_DESC);
 	}
 
@@ -354,14 +361,19 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH);
-		emitArrayOperandCheck(ctx, className);
-		emitRequireGeneralIfPacked(ctx, className);
+		emitFillPointerVectorCheck(ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH, JvmArrayRuntimeBuilder.VECTOR_PUSH_DESC);
 	}
 
 	static void compileVectorPop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compileUnary(cons, ctx, className, LispNames.VECTOR_POP, JvmArrayRuntimeBuilder.VECTOR_POP,
-				JvmArrayRuntimeBuilder.VECTOR_POP_DESC, true);
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("vector-pop expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_POP);
+		emitFillPointerVectorCheck(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_POP, JvmArrayRuntimeBuilder.VECTOR_POP_DESC);
 	}
 
 	static void compileVectorPushExtend(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -374,8 +386,7 @@ final class JvmArrayCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH_EXTEND);
-		emitArrayOperandCheck(ctx, className);
-		emitRequireGeneralIfPacked(ctx, className);
+		emitFillPointerVectorCheck(ctx, className);
 		if (args.size() == 4) {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		}
@@ -439,6 +450,20 @@ final class JvmArrayCompiler {
 	 */
 	private static void emitArrayOperandCheck(JvmLispCompiler.Ctx ctx, String className) {
 		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.CK_ARRAY, JvmArrayRuntimeBuilder.CK_ARRAY_DESC);
+	}
+
+	/**
+	 * Runs the vector operand on the stack through {@code _ckFp} under the innermost
+	 * operator's wrapper: a vector with a fill pointer answers itself, any other array is
+	 * that operator's {@code (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))}
+	 * type-error and anything else its {@code ARRAY} one
+	 * ({@code JvmArrayRuntimeBuilder.CK_FILL_POINTER}) -- a packed array included, which
+	 * has none. After the {@code java:} guard, as {@link #emitArrayOperandCheck}.
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param className the generated class
+	 */
+	private static void emitFillPointerVectorCheck(JvmLispCompiler.Ctx ctx, String className) {
+		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.CK_FILL_POINTER, JvmArrayRuntimeBuilder.CK_ARRAY_DESC);
 	}
 
 	// Compiles the keyword's value expression, or pushes null (nil) when the keyword is
