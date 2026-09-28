@@ -166,9 +166,102 @@ names every selector the corpus and the docs send; the new shapes were `jboolean
 (`object_isClass`) and `void*(void*,void*,jint)` (`numberWithInt:`). `ensure-objc-initialized`'s
 `:modules` are `SymbolLookup.libraryLookup` / `dlopen`.
 
-Not here yet, by design: class definition, blocks, `NSException` as a condition, and the FLI forms
-of the manual (`fli:with-dynamic-foreign-objects` by-reference results and foreign structure
-objects) -- a structure is the vector / cons `invoke` answers, and `cocoa:set-ns-rect*` fills one.
+Not here yet, by design: blocks, `NSException` as a condition, and the FLI forms of the manual
+(`fli:with-dynamic-foreign-objects` by-reference results and foreign structure objects) -- a
+structure is the vector / cons `invoke` answers, and `cocoa:set-ns-rect*` fills one.
+
+## The new base: class definition (2026-09-28)
+`define-objc-class` / `-method` / `-class-method`, `current-super`, `standard-objc-object`,
+`objc-object-var-value`, `objc-object-copied` / `-destroyed`, `define-objc-struct` / `-typedef` /
+`-protocol`, `cocoa:add-observer` / `remove-observer`. Two more files beside `objc.lisp`:
+
+- `objc-macros.lisp` -- the defining macros, pure `cl`, each expanding into a call of
+  `objc-class.lisp` with its types QUOTED (conversion is decided at run time, per call). **The
+  compile path expands user macros BEFORE it splices libraries**, so `ObjcLibrary.withMacros`
+  puts these `defmacro`s in front of `UserMacroExpander` (which drops them); the interpreter
+  evaluates them with the library and loads it when a call names one (`definesMacro`, checked
+  just before the user-macro lookup). The macro-time evaluator also runs the expansion's
+  `defclass`, so `mentionsType` counts `objc:standard-objc-object` and that evaluator loads the
+  library too. A method body becomes `(lambda (%current-super object pointer result args) ...)`
+  -- ONE argument list, since a wasm lambda takes at most ten parameters; `current-super` is a
+  macro expanding to that variable.
+- `objc-class.lisp` -- everything else, spliced only when the expanded program names one of its
+  definitions or `standard-objc-object` (`referencesClassHalf`): a program that only calls
+  carries no CLOS init protocol. It plugs into `objc.lisp` through three hook variables
+  (`*object-pointer-hook*`, `*pointer-object-hook*`, `*registered-pointer-hook*`) and
+  `*realize-hook*`, so `objc.lisp` never names it. **A defun there must not reuse a primitive's
+  name** -- a helper once called `%method-types` replaced the primitive (`ObjcClassTest`).
+
+The primitive layer grows by eleven (`LispNames.OBJC_PRIMITIVES`): `%allocate-class`,
+`%add-ivar`, `%register-class`, `%add-method`, `%add-protocol`, `%superclass`, `%send-super`,
+`%ivar-offset`, `%ivar-types`, `%peek`, `%poke`.
+
+- **`%add-method` (cls sel types function flags)**: the host installs an IMP that calls
+  `function` with the receiver's address and the RAW arguments (the `%send` answer conventions;
+  an object argument arrives RETAINED, which `%wrap-object` takes over) and marshals its raw
+  answer by the encoding; flags 1 retains an object answer, 3 retains and autoreleases it (ARC's
+  families decide which, `%result-flags`). Root methods pass 0: `+allocWithZone:` answers the
+  super call's +1 as it is.
+- **One IMP per METHOD, never per shape**: a super send runs the superclass's IMP for a receiver
+  whose class defines the same selector, so a (receiver class, selector) lookup -- the old
+  base's -- would find the subclass's body and recurse.
+- JVM / interpreter: `am.ik.objc.ObjcMethods` binds `dispatch(Object, Object[])` once (a
+  CONSTANT `findStatic`) and adapts it per method with `insertArguments` / `asCollector` /
+  `asType` to the encoding's `FunctionDescriptor` -- ANY shape under `java`, struct arguments
+  and results included. **The native binary serves the upcall shapes in the `rontolisp-objc`
+  metadata and refuses any other at definition** (`ObjcRuntime.upcall`'s message names the
+  entry); run-time handle combinators work in the image (verified 2026-09-28, GraalVM 25.0.3).
+  Registered: the old six, and the guide's class examples (`jint(void*,void*,jint,jint)`,
+  `jint(void*,void*)`, `struct(jfloat,jfloat)(void*,void*)`), pinned in both directions by
+  `ObjcNativeImageForeignConfigTest#everyShapeTheDocumentedClassExamplesUseIsRegistered`. Decided
+  over a generated grid: exact integer widths are part of an upcall's shape (a 32-bit argument's
+  upper register half is garbage on arm64), so a grid over widths, floats and structs has no
+  useful bound.
+- `--native`: `runner/src/objc/class.rs`. The IMP is `imp_implementationWithBlock` over a GLOBAL
+  block whose invoke is the assembly `rl_objc_block_imp`: libobjc's trampoline puts the block in
+  x0 and the receiver in x1 and leaves x2-x7, d0-d7, x8 and the stack as the caller laid them, so
+  one entry saves them all and `Reader` takes each argument back by `call.rs`'s classification in
+  reverse (HFA in d registers, struct > 16 B by reference, stack at natural alignment); the answer
+  is written to x0/x1, d0-d3 or through x8. The block carries the method's index. The module's
+  export `rlobjc_method(index, self)` reads the arguments with `p_cb_count` / `p_cb_arg` (answered
+  like a send, fetched with `p_result_*`) and pushes its answer with `p_arg_*`; the pending
+  arguments of the send in progress are saved around it. Stub size (`release-runner`,
+  2026-09-28): 1,915,072 -> 1,915,200 B; the code landed in the `__TEXT` segment's page slack.
+- **A class the process defined is marked, not remembered**: every class pair gets the ivar
+  `rontolispDefinedClass`, so a later definition of the same name -- another interpreter in the
+  JVM, a compiled program's renamed copy of `am.ik.objc`, a re-evaluated form -- reuses it
+  (replacing methods) while a class Lisp did not define is refused. A host-side table would not
+  cross those copies; the runtime cannot remove a class.
+- **Definitions wait for the runtime** (the manual allows the macros before
+  `ensure-objc-initialized`): `%ready` -- `ensure-objc-initialized`, or the first `invoke` /
+  class lookup -- realizes the queued classes in definition order and installs each recorded
+  method on its class and on every subclass of a mixin ancestor.
+
+### `standard-objc-object`, ownership, and `objc-object-destroyed`
+- The instance has one slot, `objc::%objc-pointer%` (slots are matched by base name, so the name
+  avoids a user's). `+allocWithZone:` (a root method, installed on the root of each Lisp-defined
+  hierarchy only) makes or ADOPTS the Lisp object: `make-instance`'s `initialize-instance :around`
+  sets the global `*adopting*` (a global value, not a binding -- the method runs on thread 0),
+  sends `alloc`, then `init` or the `:init-function`, and keeps the final pointer; an object
+  Objective-C allocated gets `(make-instance class :%objc-pointer address)`.
+- `*lisp-objects*` (address -> instance) is STRONG, LispWorks' rule: the Lisp object lives until
+  the reference count reaches zero, when `-dealloc` runs `objc-object-destroyed`, removes the
+  entry and sends `dealloc` to super. The reference `make-instance` took (the `init` answer's
+  `gc`) is the program's to `objc:release`. **The `Cleaner` cannot run first**: the pointer value
+  is reachable from the registered instance until `-dealloc`, and after it the value holds no
+  reference (the count reached zero), so the collector releases nothing.
+- **A registered object has one pointer value on every target**: `%live-pointer` asks the
+  intern table, then `*registered-pointer-hook*` (the instance's slot), so on `--native` too an
+  answer for such an object adds its count to the ONE value `release` later gives up.
+- A method's receiver is BORROWED (`%borrow`: the live value, or one holding nothing), never
+  retained -- `-dealloc` runs on a receiver no one may retain.
+
+Tests: `ObjcClassTest` (the corpus `objc-class-corpus.lisp` against `.expected`, the macros on a
+machine with no runtime, no primitive redefined), `JvmObjcBaseCompilerTest` (the corpus compiled;
+a calling-only program carries no class half), `NativeObjcE2eTest` (the corpus as `--native`),
+`ObjcLibraryTest`. The native binary (`-Pnative`, 2026-09-28): the manual's examples, ivars,
+lifecycle and observers print the corpus's lines; a method of an unregistered shape (the
+corpus's `sum:plus:`) is refused with the entry to add.
 
 ## The one architectural fact: AppKit belongs to thread 0
 The thread the kernel started the process on (`pthread_main_np()` answers 1) is the only one that
@@ -568,7 +661,8 @@ and `eval/ObjcPrimitives` (new base), reached only via `eval/ObjcInterop`'s six 
 
 ## Open items
 - No MAIN menu (a process with no bundle sets none), so no Cmd-Q on a windowed program.
-- Callback shapes with struct or integer arguments, and block-taking selectors.
+- `objc:define-class`'s callback shapes (the old base) stay the closed six; block-taking
+  selectors are not served.
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
   the runtime offers no way to recognise another.
 - x86_64: `objc_msgSend_stret` (struct returns wider than 16 bytes) has not been exercised.

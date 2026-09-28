@@ -237,6 +237,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-class\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-macros\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GeomLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/geom\\.lisp"

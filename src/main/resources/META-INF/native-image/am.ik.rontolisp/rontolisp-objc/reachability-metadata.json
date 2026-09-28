@@ -60,7 +60,18 @@
     "The upcalls are the objc: package's: one entry per",
     "callback shape -- MainThread's trampoline (void(void*)) and ObjcClasses' closed set of IMPs",
     "(a class defined at run time gets a method body that is an upcall stub). An upcall stub, like",
-    "a downcall stub, exists in the binary only for a registered shape."
+    "a downcall stub, exists in the binary only for a registered shape.",
+    "",
+    "The new base's class definition (objc-class.lisp over am.ik.objc.ObjcMethods) makes an upcall",
+    "stub of ANY shape a method declares under java; the binary serves the registered ones and",
+    "refuses any other at definition, naming the entry to add. Registered beyond the six: the",
+    "shapes of the manual's section 1.4 examples the guide documents -- areaOfWidth:height:",
+    "(jint(void*,void*,jint,jint)), size (jint(void*,void*)) and the pair structure answer",
+    "(struct(jfloat,jfloat)(void*,void*)) -- each also a downcall (the send that reaches it, and",
+    "its super send), beside the root methods' +allocWithZone: / -copyWithZone: (void*(void*,",
+    "void*,void*)) and -dealloc (void(void*,void*)), which the six already cover. The two runtime",
+    "downcalls class_addIvar (jboolean(void*,void*,jlong,jbyte,void*)) and ivar_getOffset",
+    "(jlong(void*)) sit right before the variadic grid."
   ],
   "foreign": {
     "downcalls": [
@@ -420,6 +431,10 @@
         "returnType": "void",
         "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong,jlong,jlong,jlong,jlong)", "jlong"]
       },
+      { "returnType": "jboolean", "parameterTypes": ["void*", "void*", "jlong", "jbyte", "void*"] },
+      { "returnType": "jlong", "parameterTypes": ["void*"] },
+      { "returnType": "jint", "parameterTypes": ["void*", "void*", "jint", "jint"] },
+      { "returnType": "struct(jfloat,jfloat)", "parameterTypes": ["void*", "void*"] },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
@@ -593,6 +608,18 @@
       {
         "returnType": "jlong",
         "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "struct(jfloat,jfloat)",
+        "parameterTypes": ["void*", "void*"]
       }
     ]
   }

@@ -482,6 +482,86 @@ the other in any hash table. A pointer prints as LispWorks prints one,
 `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>`: its address, never
 anything read from the object.
 
+### Defining classes
+
+`objc:define-objc-class` defines a CLOS class that implements an Objective-C class, and
+`objc:define-objc-method` / `objc:define-objc-class-method` give it methods whose bodies
+are Lisp. The manual's section 1.4 examples run unchanged -- a method over two
+`(:unsigned :int)`, a subclass whose method sends to `(current-super)`, a method
+answering a structure `objc:define-objc-struct` declared:
+
+```console
+MY-APP> (define-objc-class my-object ()
+          ((slot1 :initarg :slot1 :initform nil))
+          (:objc-class-name "MyObject"))
+MY-OBJECT
+MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+            ((self my-object)
+             (width (:unsigned :int))
+             (height (:unsigned :int)))
+          (* width height))
+"areaOfWidth:height:"
+MY-APP> (define-objc-class my-special-object (my-object)
+          ()
+          (:objc-class-name "MySpecialObject"))
+MY-SPECIAL-OBJECT
+MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+            ((self my-special-object)
+             (width (:unsigned :int))
+             (height (:unsigned :int)))
+          (* 4 (invoke (current-super) "areaOfWidth:height:" width height)))
+"areaOfWidth:height:"
+MY-APP> (invoke (alloc-init-object "MySpecialObject") "areaOfWidth:height:" 6 7)
+168
+MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
+          (:first :float)
+          (:second :float))
+PAIR
+MY-APP> (define-objc-method ("pair" (:struct pair)) ((this my-object))
+          (vector 1.0 2.0))
+"pair"
+MY-APP> (invoke (alloc-init-object "MyObject") "pair")
+#(1.0 2.0)
+```
+
+A method's arguments and result may be of any type the declarations name: integers of
+every width, `:float` / `:double`, structures (the Lisp value `invoke` uses for one),
+`objc:objc-bool` / `:boolean` as `t` / `nil`, objects, classes and selectors. An object
+argument can be converted on the way in (`(arg objc-object-pointer string)`, `array`,
+`(array string)`), and a string or a vector answered as an object becomes an `NSString` /
+`NSArray`. A class naming no Objective-C class and inheriting none is a mixin whose methods
+go to every subclass that names one. An error in a method body is printed and the method
+answers zero; it never unwinds into the Objective-C frame that called it.
+
+An instance is an `objc:standard-objc-object`. `make-instance` allocates and initializes the
+Objective-C object (`init`, or the `:init-function` it is given), and an object
+Objective-C allocates gets its Lisp object as well, so `objc:objc-object-from-pointer` maps
+either back; `objc:objc-object-var-value` reads the instance variables
+`(:objc-instance-vars ...)` declared. The Lisp object lives until the Objective-C object's
+reference count reaches zero -- the reference `make-instance` took is the program's to
+`objc:release` -- and then `objc:objc-object-destroyed` runs, inside `dealloc`; a copy made
+through `copy` gets `objc:objc-object-copied`. A method is how an object observes
+notifications:
+
+```console
+MY-APP> (define-objc-class watcher ()
+          ((seen :initform nil :accessor seen))
+          (:objc-class-name "Watcher"))
+WATCHER
+MY-APP> (define-objc-method ("noticed:" :void) ((self watcher) (note objc-object-pointer))
+          (push (invoke-into 'string note "name") (seen self)))
+"noticed:"
+MY-APP> (defvar *w* (make-instance 'watcher))
+*W*
+MY-APP> (cocoa:add-observer *w* "noticed:" :name "Ping")
+NIL
+MY-APP> (invoke (invoke "NSNotificationCenter" "defaultCenter")
+                "postNotificationName:object:" "Ping" nil)
+NIL
+MY-APP> (seen *w*)
+("Ping")
+```
+
 ### Where it differs from LispWorks
 
 rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
@@ -490,8 +570,9 @@ passes and answers for it (`cocoa:set-ns-rect*` fills a vector) and the manual's
 `objc:ensure-objc-initialized` first is optional: every function opens the runtime on
 its first use. A variadic method named in the runtime's table of them
 (`stringWithFormat:`, `arrayWithObjects:` ...) also takes the string form, each extra
-argument typed by its value and a `nil` terminator appended. Defining classes in Lisp
-is not part of this interface yet; `objc:define-class` above does it.
+argument typed by its value and a `nil` terminator appended. A method's structure
+result is answered as its Lisp value, or filled into the variable a non-keyword result
+style names; the manual's `fli:foreign-slot-value` over it has no counterpart.
 
 ## The native binary
 
@@ -508,6 +589,12 @@ in this binary; register it under foreign.downcalls in reachability-metadata.jso
 
 The JVM registers nothing ahead of time and binds any shape, so `java -jar` is the
 place to find out what a program sends before a binary is built for it.
+
+A method defined with `objc:define-objc-method` is an upcall of its own shape, and those are
+registered the same way: the binary serves the shapes of the class examples above and of
+the three methods every class defined in Lisp gets, and refuses a definition of any other
+shape with the entry to add under `foreign.upcalls`. `java -jar` and a `--native`
+executable take any shape.
 
 A variadic call is its own registration, so the binary serves a bounded grid of those
 too: up to eleven arguments past the declared ones — the binding's own `nil` terminator
@@ -576,8 +663,9 @@ quantized matrix is not accepted by `objc:data` in an executable.
   `objc:` / `appkit:` reference is a compile error on every other WASM output.
 - A process without an application bundle gets no Dock icon or menu bar; there is no
   Cmd-Q, and closing the last window does not quit — the REPL is the process.
-- Callback shapes are the closed set above; a delegate method with a struct or
-  integer argument, or a block-taking selector, needs a rung this cut does not have.
+- `objc:define-class`'s callback shapes are the closed set above; `objc:define-objc-method`
+  takes any shape (in the `rontolisp` binary, the registered ones). A block-taking selector
+  is not served yet.
 - The variadic selectors served are the table above. One a program declares itself is
   not in it, and the runtime gives the binding no way to tell.
 - Apple silicon. On an Intel Mac a struct wider than two registers is returned

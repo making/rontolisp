@@ -60,4 +60,26 @@ class ObjcLibraryTest {
 		assertThat(ObjcLibrary.references(read("(defpackage :app (:use :cl)) (invoke 1 2)"))).isFalse();
 	}
 
+	@Test
+	void theDefiningMacrosGoInFrontOfMacroExpansionAndTheClassHalfOnlyWhereUsed() {
+		assertThat(ObjcLibrary.definesMacro("OBJC:DEFINE-OBJC-CLASS")).isTrue();
+		assertThat(ObjcLibrary.definesMacro("OBJC:CURRENT-SUPER")).isTrue();
+		assertThat(ObjcLibrary.definesMacro("OBJC:INVOKE")).isFalse();
+		assertThat(ObjcLibrary.definesName("OBJC:DEFINE-OBJC-METHOD")).isTrue();
+		assertThat(ObjcLibrary.definesName("OBJC::%DEFINE-OBJC-CLASS")).isTrue();
+		assertThat(ObjcLibrary.mentionsType(read("(defclass a (objc:standard-objc-object) ())").getFirst())).isTrue();
+		List<LispVal> plain = read("(print 1)");
+		assertThat(ObjcLibrary.withMacros(plain)).isSameAs(plain);
+		List<LispVal> defining = read("(objc:define-objc-class a () () (:objc-class-name \"A\"))");
+		assertThat(ObjcLibrary.withMacros(defining)).hasSize(ObjcLibrary.macroForms().size() + 1);
+		// After expansion: a program that defines gets the class half, one that only
+		// calls carries none of it.
+		List<LispVal> expanded = read("(objc::%define-objc-class 'a nil \"A\" nil nil nil)");
+		assertThat(ObjcLibrary.process(expanded))
+			.hasSize(ObjcLibrary.forms().size() + ObjcLibrary.classForms().size() + 1);
+		List<LispVal> invoking = read("(objc:invoke \"NSObject\" \"new\")");
+		assertThat(ObjcLibrary.referencesClassHalf(invoking)).isFalse();
+		assertThat(ObjcLibrary.referencesClassHalf(read("(typep x 'objc:standard-objc-object)"))).isTrue();
+	}
+
 }

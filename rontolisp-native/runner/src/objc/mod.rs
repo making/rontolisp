@@ -22,6 +22,7 @@
 //! makes none starts exactly as before.
 
 mod call;
+mod class;
 mod encoding;
 mod prim;
 
@@ -48,6 +49,9 @@ type Id = usize;
 /// The Objective-C runtime and the few C functions around it, resolved once.
 struct Api {
     msg_send: usize,
+    msg_send_super: usize,
+    /// `&_NSConcreteGlobalBlock`: the isa of the block a defined method's IMP is made from.
+    global_block: usize,
     get_class: unsafe extern "C" fn(*const c_char) -> Id,
     sel_register_name: unsafe extern "C" fn(*const c_char) -> Id,
     sel_get_name: unsafe extern "C" fn(Id) -> *const c_char,
@@ -66,6 +70,13 @@ struct Api {
     protocol_get_method_description: unsafe extern "C" fn(Id, Id, bool, bool) -> MethodDescription,
     retain: unsafe extern "C" fn(Id) -> Id,
     release: unsafe extern "C" fn(Id),
+    autorelease: unsafe extern "C" fn(Id) -> Id,
+    class_add_ivar: unsafe extern "C" fn(Id, *const c_char, usize, u8, *const c_char) -> bool,
+    class_replace_method: unsafe extern "C" fn(Id, Id, usize, *const c_char) -> usize,
+    class_get_instance_variable: unsafe extern "C" fn(Id, *const c_char) -> Id,
+    ivar_get_offset: unsafe extern "C" fn(Id) -> isize,
+    ivar_get_type_encoding: unsafe extern "C" fn(Id) -> *const c_char,
+    imp_implementation_with_block: unsafe extern "C" fn(*const c_void) -> usize,
     pool_push: unsafe extern "C" fn() -> Id,
     pool_pop: unsafe extern "C" fn(Id),
     run_loop_run_in_mode: unsafe extern "C" fn(Id, f64, u8) -> i32,
@@ -125,6 +136,8 @@ fn open() -> Result<Api, String> {
         }
         Ok(Api {
             msg_send: sym(c"objc_msgSend")? as usize,
+            msg_send_super: sym(c"objc_msgSendSuper")? as usize,
+            global_block: sym(c"_NSConcreteGlobalBlock")? as usize,
             get_class: f!(c"objc_getClass"),
             sel_register_name: f!(c"sel_registerName"),
             sel_get_name: f!(c"sel_getName"),
@@ -143,6 +156,13 @@ fn open() -> Result<Api, String> {
             protocol_get_method_description: f!(c"protocol_getMethodDescription"),
             retain: f!(c"objc_retain"),
             release: f!(c"objc_release"),
+            autorelease: f!(c"objc_autorelease"),
+            class_add_ivar: f!(c"class_addIvar"),
+            class_replace_method: f!(c"class_replaceMethod"),
+            class_get_instance_variable: f!(c"class_getInstanceVariable"),
+            ivar_get_offset: f!(c"ivar_getOffset"),
+            ivar_get_type_encoding: f!(c"ivar_getTypeEncoding"),
+            imp_implementation_with_block: f!(c"imp_implementationWithBlock"),
             pool_push: f!(c"objc_autoreleasePoolPush"),
             pool_pop: f!(c"objc_autoreleasePoolPop"),
             run_loop_run_in_mode: f!(c"CFRunLoopRunInMode"),
@@ -493,6 +513,10 @@ struct Bound {
 /// The module's `rlobjc_callback(closure-id, self, arg1, arg2, argc) -> i64`.
 type Callback = TypedFunc<(i32, i64, i64, i64, i32), i64>;
 
+/// The module's `rlobjc_method(method-id, self) -> i32`: a method the new base defined,
+/// its arguments in [`class`]'s frame.
+type MethodCallback = TypedFunc<(i32, i64), i32>;
+
 #[derive(Default)]
 struct State {
     args: Vec<Arg>,
@@ -505,6 +529,7 @@ struct State {
     /// `appkit::%app` asked for `-[NSApplication run]`: `pump` dispatches events.
     app_started: bool,
     callback: Option<Callback>,
+    method: Option<MethodCallback>,
 }
 
 thread_local! {
@@ -1264,6 +1289,7 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
         Ok(())
     })?;
     prim::add_to_linker(linker)?;
+    class::add_to_linker(linker)?;
     linker.func_wrap(
         MODULE,
         "pump",
@@ -1279,6 +1305,10 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
 
 /// Finds the module's callback export once it is instantiated.
 pub fn bind(instance: &Instance, store: &mut Store<WasiP1Ctx>) -> wasmtime::Result<()> {
+    if instance.get_export(&mut *store, class::METHOD_EXPORT).is_some() {
+        let method = instance.get_typed_func::<(i32, i64), i32>(&mut *store, class::METHOD_EXPORT)?;
+        with(|s| s.method = Some(method));
+    }
     // A module that defines no Objective-C class exports no callback.
     if instance.get_export(&mut *store, CALLBACK_EXPORT).is_none() {
         return Ok(());

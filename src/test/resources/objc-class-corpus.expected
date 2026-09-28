@@ -1,0 +1,58 @@
+ensure-objc-initialized: NIL
+areaOfWidth:height:: 42
+current-super: 168
+:objc-superclass-name: 12
+superclass: "MyObject"
+class pointer identity: T
+mixin MyData: 42
+mixin MyOtherData: 42
+unrelated through the mixin: "NSObject"
+a structure result: #(1.0 2.0)
+signature of a Lisp method: ((OBJC-OBJECT-POINTER SEL (:UNSIGNED :INT) (:UNSIGNED :INT)) (:UNSIGNED :INT) "I@:II")
+make-instance: :HELLO
+objc-object-from-pointer: T
+an instance is a receiver: 6
+its class: "MyObject"
+one pointer per object: T
+retain-count: 2
+release: NIL
+from-pointer of a class: T
+from-pointer of a foreign object: NIL
+Objective-C allocated, Lisp object made: T
+its slots are initialized: NIL
+double and float: 3.75
+long long: -12345678901
+BOOL result: (1 0)
+BOOL argument: (7 3)
+structure argument and result: #(2.0 4.0 6.0 8.0)
+result variable: (7 . 1)
+string style, string result: "hello world"
+array style, typedef result: 3
+SEL argument: "frame"
+Class argument: "NSString"
+object argument: ("5")
+arguments on the stack: 55.0
+integers on the stack: 65555
+super description: "shapes of RontoLispCorpusShapes"
+a class method, super: "the class RontoLispCorpusShapes"
+the encoding recorded: "d@:df"
+a failing method answers zero: 0
+an ivar starts zero: 0
+ivar round trip: 17
+a method reads and writes it: (18 19)
+double ivar: 0.25
+object ivar: "counted"
+unknown ivar: "objc:objc-object-var-value: RontoLispCorpusCounter has no instance variable \"nope\""
+an init method: 5
+init-function: #(0.0 0.0 30.0 40.0)
+a copy is its own Lisp object: (T NIL)
+objc-object-copied copied the slots: :ORIGINAL
+the :after method ran: T
+destroyed when released: (:COPY)
+destroyed in order: (:ORIGINAL :COPY)
+observer: ("RontoLispCorpusPing")
+removed observer: 1
+a protocol adopted: "RontoLispCorpusConforming"
+a selector's arity: "objc:define-objc-method: \"a:b:\" takes 2 argument(s) but 1 are declared"
+a class Lisp did not define: "objc:define-objc-class: the Objective-C class NSObject already exists and was not defined by this process"
+a mixin has no Objective-C class: "MY-SIZE-MIXIN does not implement an Objective-C class"

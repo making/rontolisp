@@ -89,6 +89,22 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void theClassCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// objc-class.lisp over class.rs: methods of every shape through one IMP, super
+		// sends, instance variables, the lifecycle generics (eval/ObjcClassTest pins the
+		// output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-class-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(interpret(source));
+		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: no 9\n");
+	}
+
+	@Test
 	void theNewBaseReleasesWhatADeadPointerHeld() throws Exception {
 		// A pointer value's collector share rides on the externref p_new_handle hands
 		// out: when values die, their references are released, so 300,000 answers of one

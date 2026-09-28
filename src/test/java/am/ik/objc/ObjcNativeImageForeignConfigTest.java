@@ -63,6 +63,38 @@ class ObjcNativeImageForeignConfigTest {
 	}
 
 	/**
+	 * The encodings of the methods the guide's class-definition examples define (the
+	 * manual's section 1.4: {@code areaOfWidth:height:}, {@code size}, the {@code pair}
+	 * structure answer, an observer's notification method) and of the three methods every
+	 * root class defined in Lisp gets. Each is an upcall (the method's IMP) and a
+	 * downcall (the send that reaches it, and its super send).
+	 */
+	private static final List<String> DOCUMENTED_METHODS = List.of("I24@0:8I16I20", "I16@0:8", "{_Pair=ff}16@0:8",
+			"v24@0:8@16", "@24@0:8^v16", "v16@0:8");
+
+	/** The notification center's selectors the observer example sends. */
+	private static final List<String> DOCUMENTED_SENDS = List.of("v48@0:8@16:24@32@40", "v40@0:8@16@24@32",
+			"v32@0:8@16@24");
+
+	@Test
+	void everyShapeTheDocumentedClassExamplesUseIsRegistered() {
+		Set<FunctionDescriptor> methods = new LinkedHashSet<>();
+		for (String types : DOCUMENTED_METHODS) {
+			methods.add(ObjcMethods.shape(types));
+		}
+		Set<FunctionDescriptor> sends = new LinkedHashSet<>(methods);
+		for (String types : DOCUMENTED_SENDS) {
+			sends.add(TypeEncoding.parse(types).descriptor());
+		}
+		assertThat(NativeImageDowncalls.missingUpcalls(NativeImageDowncalls.OBJC, methods))
+			.as("method shapes the guide defines with no foreign.upcalls entry -- the binary refuses the definition")
+			.isEmpty();
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.OBJC, sends, Set.of()))
+			.as("send shapes the guide's class examples use with no foreign.downcalls entry")
+			.isEmpty();
+	}
+
+	/**
 	 * Every selector the shipped layers and the documented examples send: a class, a
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
 	 * {@code metal.lisp}, {@code scene.lisp}, {@code doc/en/guides/objc-appkit.md}, the

@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.objc.ObjcException;
+import am.ik.objc.ObjcMethods;
 import am.ik.objc.ObjcReference;
 import am.ik.objc.ObjcRuntime;
 import org.jspecify.annotations.Nullable;
@@ -217,6 +218,140 @@ final class JvmObjcPrimitivesTemplate {
 		}
 	}
 
+	// --- the class-definition half -------------------------------------------------
+
+	/** {@code (objc::%allocate-class superclass name)}. */
+	static Object allocateClass(@Nullable Object superclass, @Nullable Object name) {
+		try {
+			return ObjcRuntime.get().allocateClass(address(superclass), string(name));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%add-ivar class name size alignment types)}. */
+	static @Nullable Object addIvar(@Nullable Object cls, @Nullable Object name, @Nullable Object size,
+			@Nullable Object alignment, @Nullable Object types) {
+		try {
+			return ObjcRuntime.get()
+				.addIvar(address(cls), string(name), address(size), address(alignment), string(types)) ? "T" : null;
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%register-class class)}. */
+	static Object registerClass(@Nullable Object cls) {
+		try {
+			ObjcRuntime.get().registerClass(address(cls));
+			return "T";
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%add-method class sel types function flags)}. */
+	static Object addMethod(@Nullable Object cls, @Nullable Object sel, @Nullable Object types,
+			@Nullable Object function, @Nullable Object flags) {
+		try {
+			ObjcMethods.add(ObjcRuntime.get(), address(cls), address(sel), string(types), (self, raw) -> {
+				Object args = null;
+				for (int i = raw.length - 1; i >= 0; i--) {
+					args = new Object[] { fromRaw(raw[i]), args };
+				}
+				Object list = new Object[] { self, new Object[] { args, null } };
+				return toRaw(applyCallable(function, list));
+			}, (int) address(flags));
+			return "T";
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%add-protocol class name)}. */
+	static @Nullable Object addProtocol(@Nullable Object cls, @Nullable Object name) {
+		try {
+			return ObjcRuntime.get().addProtocol(address(cls), string(name)) ? "T" : null;
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%superclass class)}. */
+	static Object superclass(@Nullable Object cls) {
+		try {
+			return ObjcRuntime.get().superclassAddress(address(cls));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%send-super receiver class sel types fixed args mode)}. */
+	static @Nullable Object sendSuper(@Nullable Object receiver, @Nullable Object cls, @Nullable Object sel,
+			@Nullable Object types, @Nullable Object fixed, @Nullable Object args, @Nullable Object mode) {
+		List<@Nullable Object> raw = elements(args);
+		@Nullable Object[] operands = new @Nullable Object[raw.size()];
+		for (int i = 0; i < operands.length; i++) {
+			operands[i] = toRaw(raw.get(i));
+		}
+		try {
+			return fromRaw(ObjcRuntime.get()
+				.sendRawOnMain(address(receiver), address(cls), address(sel), string(types), (int) address(fixed),
+						operands, (int) address(mode)));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%ivar-offset class name)}. */
+	static Object ivarOffset(@Nullable Object cls, @Nullable Object name) {
+		try {
+			return ObjcRuntime.get().ivarOffset(address(cls), string(name));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%ivar-types class name)}. */
+	static @Nullable Object ivarTypes(@Nullable Object cls, @Nullable Object name) {
+		try {
+			String types = ObjcRuntime.get().ivarTypes(address(cls), string(name));
+			return types == null ? null : quote(types);
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%peek address types)}. */
+	static @Nullable Object peek(@Nullable Object at, @Nullable Object types) {
+		try {
+			return fromRaw(ObjcRuntime.get().peek(address(at), string(types)));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%poke address types raw)}. */
+	static @Nullable Object poke(@Nullable Object at, @Nullable Object types, @Nullable Object raw) {
+		try {
+			ObjcRuntime.get().poke(address(at), string(types), toRaw(raw));
+			return null;
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
 	/** {@code (objc:on-main function)}. */
 	static @Nullable Object onMain(@Nullable Object function) {
 		try {
@@ -228,12 +363,16 @@ final class JvmObjcPrimitivesTemplate {
 	}
 
 	private static @Nullable Object applyCallable(@Nullable Object callable) {
+		return applyCallable(callable, null);
+	}
+
+	private static @Nullable Object applyCallable(@Nullable Object callable, @Nullable Object argList) {
 		Method apply = applyMethod;
 		if (apply == null) {
 			throw new RuntimeException("objc: the program is not bound");
 		}
 		try {
-			return apply.invoke(null, callable, null);
+			return apply.invoke(null, callable, argList);
 		}
 		catch (InvocationTargetException ex) {
 			// A Lisp error (or a non-local exit) propagates unchanged: MainThread.sync

@@ -127,6 +127,72 @@
                        :as "p_pump"
                        :params '(:float))
 
+;; The class-definition half (objc-class.lisp is written over these too; the host side
+;; is rontolisp-native/runner/src/objc/class.rs).
+(rontolisp:wasm-import 'objc::%allocate-class
+                       :from "rlobjc"
+                       :as "p_allocate_class"
+                       :params '(:s64 :string)
+                       :returns :s64)
+(rontolisp:wasm-import 'objc::%p-add-ivar
+                       :from "rlobjc"
+                       :as "p_add_ivar"
+                       :params '(:s64 :string :s64 :s64 :string)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-register-class
+                       :from "rlobjc"
+                       :as "p_register_class"
+                       :params '(:s64))
+(rontolisp:wasm-import 'objc::%p-add-method
+                       :from "rlobjc"
+                       :as "p_add_method"
+                       :params '(:s64 :s64 :string :s32 :s32)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-add-protocol
+                       :from "rlobjc"
+                       :as "p_add_protocol"
+                       :params '(:s64 :string)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%superclass
+                       :from "rlobjc"
+                       :as "p_superclass"
+                       :params '(:s64)
+                       :returns :s64)
+(rontolisp:wasm-import 'objc::%p-send-super
+                       :from "rlobjc"
+                       :as "p_send_super"
+                       :params '(:s64 :s64 :s64 :string :s32 :s32)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%ivar-offset
+                       :from "rlobjc"
+                       :as "p_ivar_offset"
+                       :params '(:s64 :string)
+                       :returns :s64)
+(rontolisp:wasm-import 'objc::%p-ivar-types
+                       :from "rlobjc"
+                       :as "p_ivar_types"
+                       :params '(:s64 :string)
+                       :returns :string)
+(rontolisp:wasm-import 'objc::%p-peek
+                       :from "rlobjc"
+                       :as "p_peek"
+                       :params '(:s64 :string)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-poke
+                       :from "rlobjc"
+                       :as "p_poke"
+                       :params '(:s64 :string)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-cb-count
+                       :from "rlobjc"
+                       :as "p_cb_count"
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-cb-arg
+                       :from "rlobjc"
+                       :as "p_cb_arg"
+                       :params '(:s32)
+                       :returns :s32)
+
 (defun objc::%class-p (address) (/= (objc::%p-class-p address) 0))
 
 (defun objc::%method-types (cls sel)
@@ -171,14 +237,69 @@
 
 (defun objc::%send (receiver sel types fixed args mode)
   (dolist (arg args) (objc::%p-push arg))
-  (let ((kind (objc::%p-send receiver sel types fixed mode)))
-    (case kind
-      (0 nil)
-      (1 (objc::%p-result-int))
-      (2 (objc::%p-result-float))
-      (3 (objc::%p-result-string))
-      (4 (objc::%p-leaves))
-      (t (error "objc: ~a" (objc::%p-error))))))
+  (objc::%p-answer (objc::%p-send receiver sel types fixed mode)))
+
+(defun objc::%send-super (receiver class sel types fixed args mode)
+  (dolist (arg args) (objc::%p-push arg))
+  (objc::%p-answer (objc::%p-send-super receiver class sel types fixed mode)))
+
+;; The value of the last answer the host made, by its kind.
+(defun objc::%p-answer (kind)
+  (case kind
+    (0 nil)
+    (1 (objc::%p-result-int))
+    (2 (objc::%p-result-float))
+    (3 (objc::%p-result-string))
+    (4 (objc::%p-leaves))
+    (t (error "objc: ~a" (objc::%p-error)))))
+
+(defun objc::%add-ivar (cls name size alignment types)
+  (/= (objc::%p-add-ivar cls name size alignment types) 0))
+
+(defun objc::%register-class (cls)
+  (objc::%p-register-class cls)
+  t)
+
+(defun objc::%add-protocol (cls name) (/= (objc::%p-add-protocol cls name) 0))
+
+(defun objc::%ivar-types (cls name)
+  (let ((types (objc::%p-ivar-types cls name)))
+    (if (= (length types) 0) nil types)))
+
+(defun objc::%peek (address types)
+  (objc::%p-answer (objc::%p-peek address types)))
+
+(defun objc::%poke (address types raw)
+  (objc::%p-push raw)
+  (objc::%p-answer (objc::%p-poke address types))
+  nil)
+
+;; Method index -> the function a defined method runs: (lambda (self raw-args) raw).
+(defvar objc::*methods* (make-hash-table))
+
+(defvar objc::*method-count* 0)
+
+(defun objc::%add-method (cls sel types function flags)
+  (let ((index objc::*method-count*))
+    (setf (gethash index objc::*methods*) function)
+    (setq objc::*method-count* (+ index 1))
+    (when (= (objc::%p-add-method cls sel types index flags) 0)
+      (error "objc: ~a" (objc::%p-error)))
+    t))
+
+(defun objc::%p-method (index self)
+  (let ((args nil))
+    (dotimes (i (objc::%p-cb-count))
+      (push (objc::%p-answer (objc::%p-cb-arg i)) args))
+    (let ((answer
+           (funcall (gethash index objc::*methods*) self (nreverse args))))
+      (when answer (objc::%p-push answer)))
+    1))
+
+(rontolisp:wasm-export 'objc::%p-method
+                       :as "rlobjc_method"
+                       :params '(:s32 :s64)
+                       :returns :s32)
 
 (defun objc:on-main (function) (funcall function))
 

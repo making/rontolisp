@@ -119,11 +119,27 @@ public final class ObjcRuntime {
 
 	private final MethodHandle objcRegisterClassPair;
 
+	private final MethodHandle classAddIvar;
+
+	private final MethodHandle classReplaceMethod;
+
+	private final MethodHandle classGetInstanceVariable;
+
+	private final MethodHandle ivarGetOffset;
+
+	private final MethodHandle ivarGetTypeEncoding;
+
+	private final MethodHandle objcAutorelease;
+
 	private final MethodHandle poolPush;
 
 	private final MethodHandle poolPop;
 
 	private final MemorySegment msgSend;
+
+	private final MemorySegment msgSendSuper;
+
+	private final @Nullable MemorySegment msgSendSuperStret;
 
 	private final @Nullable MemorySegment msgSendStret;
 
@@ -133,6 +149,8 @@ public final class ObjcRuntime {
 	private final Set<FunctionDescriptor> signatures = new LinkedHashSet<>();
 
 	private final Map<Signature, MethodHandle> sends = new ConcurrentHashMap<>();
+
+	private final Map<Signature, MethodHandle> superSends = new ConcurrentHashMap<>();
 
 	// Both caches are load-bearing rather than an optimization: the C strings they are
 	// built from live in the global arena forever.
@@ -168,12 +186,23 @@ public final class ObjcRuntime {
 		this.classAddMethod = handle(objc, "class_addMethod", FunctionDescriptor.of(B, P, P, P, P));
 		this.classAddProtocol = handle(objc, "class_addProtocol", FunctionDescriptor.of(B, P, P));
 		this.objcRegisterClassPair = handle(objc, "objc_registerClassPair", FunctionDescriptor.ofVoid(P));
+		this.classAddIvar = handle(objc, "class_addIvar", FunctionDescriptor.of(B, P, P, L, ValueLayout.JAVA_BYTE, P));
+		this.classReplaceMethod = handle(objc, "class_replaceMethod", FunctionDescriptor.of(P, P, P, P, P));
+		this.classGetInstanceVariable = handle(objc, "class_getInstanceVariable", FunctionDescriptor.of(P, P, P));
+		this.ivarGetOffset = handle(objc, "ivar_getOffset", FunctionDescriptor.of(L, P));
+		this.ivarGetTypeEncoding = handle(objc, "ivar_getTypeEncoding", FunctionDescriptor.of(P, P));
+		this.objcAutorelease = handle(objc, "objc_autorelease", FunctionDescriptor.of(P, P));
 		this.poolPush = handle(objc, "objc_autoreleasePoolPush", FunctionDescriptor.of(P));
 		this.poolPop = handle(objc, "objc_autoreleasePoolPop", FunctionDescriptor.ofVoid(P));
 		this.msgSend = objc.find("objc_msgSend").orElseThrow(() -> new ObjcException("objc_msgSend is missing"));
 		// x86_64 returns a struct wider than two registers through a hidden pointer and a
 		// different entry point; arm64 has one objc_msgSend for everything.
 		this.msgSendStret = objc.find("objc_msgSend_stret").orElse(null);
+		// A super send takes a struct objc_super { receiver, class to start the lookup
+		// in } where a send takes the receiver; the _stret twin exists on x86_64 only.
+		this.msgSendSuper = objc.find("objc_msgSendSuper")
+			.orElseThrow(() -> new ObjcException("objc_msgSendSuper is missing"));
+		this.msgSendSuperStret = objc.find("objc_msgSendSuper_stret").orElse(null);
 		// AppKit is opened for its CLASSES, which objc_getClass finds only once the
 		// framework's images are loaded; no symbol of it is called.
 		appkit.find("NSApplicationMain");
@@ -243,6 +272,11 @@ public final class ObjcRuntime {
 		Set<FunctionDescriptor> all = new LinkedHashSet<>(this.signatures);
 		all.addAll(this.mainThread.signatures());
 		for (Signature signature : this.sends.keySet()) {
+			if (!signature.isVariadic()) {
+				all.add(signature.descriptor());
+			}
+		}
+		for (Signature signature : this.superSends.keySet()) {
 			if (!signature.isVariadic()) {
 				all.add(signature.descriptor());
 			}
@@ -753,6 +787,24 @@ public final class ObjcRuntime {
 	 */
 	public @Nullable Object sendRaw(long receiver, long selector, String types, int fixed, @Nullable Object[] args,
 			int mode) {
+		return sendRaw(receiver, 0, selector, types, fixed, args, mode);
+	}
+
+	/**
+	 * {@link #sendRaw}, or with a nonzero {@code superclass} the SUPER send
+	 * ({@code objc_msgSendSuper}): the method is looked up from {@code superclass}, the
+	 * class a method's {@code super} names, and runs on {@code receiver}.
+	 * @param receiver the receiver's address
+	 * @param superclass the class the lookup starts in, or 0 for an ordinary send
+	 * @param selector the {@code SEL}'s address
+	 * @param types the encoding
+	 * @param fixed the fixed-argument count of a variadic call, else -1
+	 * @param args the raw arguments
+	 * @param mode the mode bits
+	 * @return the raw answer
+	 */
+	public @Nullable Object sendRaw(long receiver, long superclass, long selector, String types, int fixed,
+			@Nullable Object[] args, int mode) {
 		TypeEncoding encoding = parsed(types);
 		List<Type> params = encoding.argumentTypes();
 		if (params.size() < 2) {
@@ -772,13 +824,27 @@ public final class ObjcRuntime {
 			if (ret.isStruct()) {
 				all.add((SegmentAllocator) arena);
 			}
-			all.add(MemorySegment.ofAddress(receiver));
+			if (superclass != 0) {
+				// struct objc_super { id receiver; Class super_class; }, alive for the
+				// call.
+				MemorySegment sup = arena.allocate(P, 2);
+				sup.setAtIndex(P, 0, MemorySegment.ofAddress(receiver));
+				sup.setAtIndex(P, 1, MemorySegment.ofAddress(superclass));
+				all.add(sup);
+			}
+			else {
+				all.add(MemorySegment.ofAddress(receiver));
+			}
 			all.add(MemorySegment.ofAddress(selector));
 			for (int i = 0; i < declared; i++) {
 				all.add(marshalRaw(params.get(i + 2), args[i], arena, name, i));
 			}
 			Signature signature = new Signature(encoding.descriptor(), fixed < 0 ? -1 : fixed + 2);
-			MethodHandle handle = this.sends.computeIfAbsent(signature, s -> downcall(target(encoding), s, name));
+			// The same shape through objc_msgSendSuper is a different entry point, so a
+			// different handle.
+			MethodHandle handle = superclass != 0
+					? this.superSends.computeIfAbsent(signature, s -> downcall(superTarget(encoding), s, name))
+					: this.sends.computeIfAbsent(signature, s -> downcall(target(encoding), s, name));
 			Object raw;
 			try {
 				raw = handle.invokeWithArguments(all);
@@ -804,10 +870,27 @@ public final class ObjcRuntime {
 	 */
 	public @Nullable Object sendRawOnMain(long receiver, long selector, String types, int fixed,
 			@Nullable Object[] args, int mode) {
+		return sendRawOnMain(receiver, 0, selector, types, fixed, args, mode);
+	}
+
+	/**
+	 * {@link #sendRaw(long, long, long, String, int, Object[], int)} on thread 0 inside
+	 * an autorelease pool of its own.
+	 * @param receiver the receiver's address
+	 * @param superclass the class a super send's lookup starts in, or 0
+	 * @param selector the {@code SEL}'s address
+	 * @param types the encoding
+	 * @param fixed the fixed-argument count of a variadic call, else -1
+	 * @param args the raw arguments
+	 * @param mode the mode bits
+	 * @return the raw answer
+	 */
+	public @Nullable Object sendRawOnMain(long receiver, long superclass, long selector, String types, int fixed,
+			@Nullable Object[] args, int mode) {
 		return this.mainThread.sync(() -> {
 			MemorySegment pool = autoreleasePoolPush();
 			try {
-				return sendRaw(receiver, selector, types, fixed, args, mode);
+				return sendRaw(receiver, superclass, selector, types, fixed, args, mode);
 			}
 			finally {
 				autoreleasePoolPop(pool);
@@ -956,12 +1039,27 @@ public final class ObjcRuntime {
 	}
 
 	private MemorySegment target(TypeEncoding encoding) {
-		Type ret = encoding.returnType();
-		if (this.msgSendStret != null && ret.isStruct() && ret.argumentLayout().byteSize() > 16
-				&& System.getProperty("os.arch", "").toLowerCase(Locale.ROOT).matches("x86_64|amd64")) {
+		if (this.msgSendStret != null && returnsThroughMemory(encoding)) {
 			return this.msgSendStret;
 		}
 		return this.msgSend;
+	}
+
+	private MemorySegment superTarget(TypeEncoding encoding) {
+		if (this.msgSendSuperStret != null && returnsThroughMemory(encoding)) {
+			return this.msgSendSuperStret;
+		}
+		return this.msgSendSuper;
+	}
+
+	/**
+	 * x86_64 returns a struct wider than two registers through a hidden pointer and a
+	 * different entry point; arm64 has one entry point for everything.
+	 */
+	private static boolean returnsThroughMemory(TypeEncoding encoding) {
+		Type ret = encoding.returnType();
+		return ret.isStruct() && ret.argumentLayout().byteSize() > 16
+				&& System.getProperty("os.arch", "").toLowerCase(Locale.ROOT).matches("x86_64|amd64");
 	}
 
 	private Object marshal(Type type, @Nullable Object arg, Arena arena, String selector, int index) {
@@ -1065,7 +1163,18 @@ public final class ObjcRuntime {
 	}
 
 	private static MemorySegment struct(Type type, Number[] leaves, Arena arena) {
-		MemorySegment out = arena.allocate(type.layout());
+		MemorySegment out = arena.allocate(type.argumentLayout());
+		fill(type, leaves, out);
+		return out;
+	}
+
+	/**
+	 * Writes a struct's leaves, in memory order, into a segment of its layout.
+	 * @param type the struct type
+	 * @param leaves one number per leaf
+	 * @param out the segment
+	 */
+	static void fill(Type type, Number[] leaves, MemorySegment out) {
 		long offset = 0;
 		List<Kind> kinds = type.leaves();
 		for (int i = 0; i < kinds.size(); i++) {
@@ -1085,7 +1194,6 @@ public final class ObjcRuntime {
 			}
 			offset += layout.byteSize();
 		}
-		return out;
 	}
 
 	private @Nullable Object unmarshal(Type type, @Nullable Object raw) {
@@ -1104,31 +1212,38 @@ public final class ObjcRuntime {
 			case INT64 -> raw;
 			case FLOAT -> (double) (Float) raw;
 			case DOUBLE -> raw;
-			case STRUCT -> {
-				MemorySegment seg = (MemorySegment) raw;
-				List<Kind> kinds = type.leaves();
-				Number[] leaves = new Number[kinds.size()];
-				long offset = 0;
-				for (int i = 0; i < kinds.size(); i++) {
-					Kind leaf = kinds.get(i);
-					MemoryLayout layout = leaf.scalarLayout();
-					long align = layout.byteAlignment();
-					offset += (align - offset % align) % align;
-					leaves[i] = switch (leaf) {
-						case DOUBLE -> seg.get(ValueLayout.JAVA_DOUBLE, offset);
-						case FLOAT -> (double) seg.get(ValueLayout.JAVA_FLOAT, offset);
-						case INT64 -> seg.get(L, offset);
-						case INT32 -> (long) seg.get(ValueLayout.JAVA_INT, offset);
-						case INT16 -> (long) seg.get(ValueLayout.JAVA_SHORT, offset);
-						case INT8 -> (long) seg.get(ValueLayout.JAVA_BYTE, offset);
-						case BOOL -> seg.get(B, offset) ? 1L : 0L;
-						default -> seg.get(P, offset).address();
-					};
-					offset += layout.byteSize();
-				}
-				yield leaves;
-			}
+			case STRUCT -> leaves(type, (MemorySegment) raw);
 		};
+	}
+
+	/**
+	 * Reads a struct's leaves, in memory order, out of a segment of its layout.
+	 * @param type the struct type
+	 * @param seg the segment
+	 * @return one number per leaf
+	 */
+	static Number[] leaves(Type type, MemorySegment seg) {
+		List<Kind> kinds = type.leaves();
+		Number[] leaves = new Number[kinds.size()];
+		long offset = 0;
+		for (int i = 0; i < kinds.size(); i++) {
+			Kind leaf = kinds.get(i);
+			MemoryLayout layout = leaf.scalarLayout();
+			long align = layout.byteAlignment();
+			offset += (align - offset % align) % align;
+			leaves[i] = switch (leaf) {
+				case DOUBLE -> seg.get(ValueLayout.JAVA_DOUBLE, offset);
+				case FLOAT -> (double) seg.get(ValueLayout.JAVA_FLOAT, offset);
+				case INT64 -> seg.get(L, offset);
+				case INT32 -> (long) seg.get(ValueLayout.JAVA_INT, offset);
+				case INT16 -> (long) seg.get(ValueLayout.JAVA_SHORT, offset);
+				case INT8 -> (long) seg.get(ValueLayout.JAVA_BYTE, offset);
+				case BOOL -> seg.get(B, offset) ? 1L : 0L;
+				default -> seg.get(P, offset).address();
+			};
+			offset += layout.byteSize();
+		}
+		return leaves;
 	}
 
 	/**
@@ -1335,6 +1450,242 @@ public final class ObjcRuntime {
 		}
 		catch (Throwable ex) {
 			throw new ObjcException("objc_registerClassPair failed", ex);
+		}
+	}
+
+	// --- the new base's class definition (by addresses) -------------------------------
+
+	/**
+	 * The instance variable every class the new base defines carries: how a later
+	 * definition in the same process -- another interpreter, a compiled program with its
+	 * own copy of this class, a re-evaluated form -- recognizes a class it may reuse,
+	 * since the runtime cannot remove one. A subclass inherits it; a class Lisp did not
+	 * define never has it.
+	 */
+	public static final String DEFINED_MARKER = "rontolispDefinedClass";
+
+	/**
+	 * Allocates a class pair, by addresses -- or answers the class of that name a
+	 * definition in this process made before, which is then registered already.
+	 * @param superclass the superclass's address
+	 * @param name the new class's name
+	 * @return the class's address, or 0 when the name belongs to a class no definition
+	 * made (or the runtime refuses it)
+	 */
+	public long allocateClass(long superclass, String name) {
+		MemorySegment existing = classOrNull(name);
+		if (existing != null) {
+			return ivarOffset(existing.address(), DEFINED_MARKER) >= 0 ? existing.address() : 0;
+		}
+		MemorySegment cls = allocateClassPair(MemorySegment.ofAddress(superclass), name);
+		if (cls == null) {
+			return 0;
+		}
+		addIvar(cls.address(), DEFINED_MARKER, 1, 1, "c");
+		return cls.address();
+	}
+
+	/**
+	 * Adds an instance variable to a class pair not yet registered.
+	 * @param cls the class's address
+	 * @param name the variable's name
+	 * @param size its size in bytes
+	 * @param alignment its alignment in bytes (a power of two)
+	 * @param types its type encoding
+	 * @return whether the runtime added it
+	 */
+	public boolean addIvar(long cls, String name, long size, long alignment, String types) {
+		byte log2 = (byte) (63 - Long.numberOfLeadingZeros(Math.max(1, alignment)));
+		try {
+			return (boolean) this.classAddIvar.invokeExact(MemorySegment.ofAddress(cls),
+					Arena.global().allocateFrom(name), size, log2, Arena.global().allocateFrom(types));
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("class_addIvar failed for " + name, ex);
+		}
+	}
+
+	/**
+	 * Registers a class pair, by address.
+	 * @param cls the class's address
+	 */
+	public void registerClass(long cls) {
+		registerClassPair(MemorySegment.ofAddress(cls));
+	}
+
+	/**
+	 * Adds a method to a class, or replaces the one the class itself defines.
+	 * @param cls the class's (or, for a class method, the metaclass's) address
+	 * @param selector the {@code SEL}'s address
+	 * @param imp the implementation
+	 * @param types the method's encoding
+	 */
+	public void putMethod(long cls, long selector, MemorySegment imp, String types) {
+		// The runtime keeps the encoding's bytes: they live in the global arena.
+		MemorySegment encoding = Arena.global().allocateFrom(types);
+		try {
+			// class_replaceMethod adds a method the class lacks, and replaces the one it
+			// has -- never a superclass's.
+			MemorySegment previous = (MemorySegment) this.classReplaceMethod.invokeExact(MemorySegment.ofAddress(cls),
+					MemorySegment.ofAddress(selector), imp, encoding);
+			if (previous == null) {
+				throw new ObjcException("class_replaceMethod answered nothing");
+			}
+		}
+		catch (ObjcException ex) {
+			throw ex;
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("class_replaceMethod failed", ex);
+		}
+	}
+
+	/**
+	 * Adopts a protocol, by name.
+	 * @param cls the class's address
+	 * @param name the protocol's name
+	 * @return false when no protocol of that name is loaded
+	 */
+	public boolean addProtocol(long cls, String name) {
+		MemorySegment proto;
+		try {
+			proto = protocol(name);
+		}
+		catch (ObjcException ex) {
+			return false;
+		}
+		addProtocol(MemorySegment.ofAddress(cls), proto);
+		return true;
+	}
+
+	/**
+	 * The superclass of a class, by address.
+	 * @param cls the class's address
+	 * @return the superclass's address, 0 at a root
+	 */
+	public long superclassAddress(long cls) {
+		MemorySegment sup = superclassOf(MemorySegment.ofAddress(cls));
+		return sup == null ? 0 : sup.address();
+	}
+
+	/**
+	 * An instance variable's offset, searched up the superclass chain.
+	 * @param cls the class's address
+	 * @param name the variable's name
+	 * @return the offset, or -1 when the class has no such variable
+	 */
+	public long ivarOffset(long cls, String name) {
+		try {
+			MemorySegment ivar = (MemorySegment) this.classGetInstanceVariable.invokeExact(MemorySegment.ofAddress(cls),
+					Arena.global().allocateFrom(name));
+			return ivar.address() == 0 ? -1 : (long) this.ivarGetOffset.invokeExact(ivar);
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("class_getInstanceVariable failed for " + name, ex);
+		}
+	}
+
+	/**
+	 * An instance variable's type encoding.
+	 * @param cls the class's address
+	 * @param name the variable's name
+	 * @return the encoding, or {@code null} when the class has no such variable
+	 */
+	public @Nullable String ivarTypes(long cls, String name) {
+		try {
+			MemorySegment ivar = (MemorySegment) this.classGetInstanceVariable.invokeExact(MemorySegment.ofAddress(cls),
+					Arena.global().allocateFrom(name));
+			if (ivar.address() == 0) {
+				return null;
+			}
+			MemorySegment types = (MemorySegment) this.ivarGetTypeEncoding.invokeExact(ivar);
+			return types.address() == 0 ? null : cString(types);
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("ivar_getTypeEncoding failed for " + name, ex);
+		}
+	}
+
+	/**
+	 * Autoreleases an object into the innermost pool of the calling thread.
+	 * @param object the object
+	 */
+	public void autorelease(MemorySegment object) {
+		try {
+			MemorySegment ignored = (MemorySegment) this.objcAutorelease.invokeExact(object);
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("objc_autorelease failed", ex);
+		}
+	}
+
+	/**
+	 * Reads one value of a type from memory, raw as {@link #sendRaw} answers it; an
+	 * object read is RETAINED for the value the caller makes of it.
+	 * @param address where the value lives
+	 * @param types the value's encoding (one type)
+	 * @return the raw value
+	 */
+	public @Nullable Object peek(long address, String types) {
+		Type type = parsed(types).returnType();
+		MemorySegment at = MemorySegment.ofAddress(address).reinterpret(Math.max(1, type.argumentLayout().byteSize()));
+		return switch (type.kind()) {
+			case STRUCT -> unmarshal(type, at);
+			case OBJECT -> {
+				MemorySegment object = at.get(P, 0);
+				if (object.address() != 0) {
+					retain(object);
+				}
+				yield object.address();
+			}
+			default -> unmarshalRaw(type, read(type.kind(), at), 0);
+		};
+	}
+
+	/**
+	 * Writes one raw value of a type to memory ({@link #sendRaw}'s argument conventions;
+	 * a string only where the type is an object, as an autoreleased {@code NSString}).
+	 * @param address where the value goes
+	 * @param types the value's encoding (one type)
+	 * @param raw the raw value
+	 */
+	public void poke(long address, String types, @Nullable Object raw) {
+		Type type = parsed(types).returnType();
+		MemorySegment at = MemorySegment.ofAddress(address).reinterpret(Math.max(1, type.argumentLayout().byteSize()));
+		try (Arena arena = Arena.ofConfined()) {
+			Object value = marshalRaw(type, raw, arena, "a memory write", 0);
+			if (value instanceof MemorySegment seg && type.kind() == Kind.STRUCT) {
+				at.copyFrom(seg);
+			}
+			else {
+				write(type.kind(), at, value);
+			}
+		}
+	}
+
+	private static Object read(Kind kind, MemorySegment at) {
+		return switch (kind) {
+			case BOOL -> at.get(B, 0);
+			case INT8 -> at.get(ValueLayout.JAVA_BYTE, 0);
+			case INT16 -> at.get(ValueLayout.JAVA_SHORT, 0);
+			case INT32 -> at.get(ValueLayout.JAVA_INT, 0);
+			case INT64 -> at.get(L, 0);
+			case FLOAT -> at.get(ValueLayout.JAVA_FLOAT, 0);
+			case DOUBLE -> at.get(ValueLayout.JAVA_DOUBLE, 0);
+			default -> at.get(P, 0);
+		};
+	}
+
+	private static void write(Kind kind, MemorySegment at, Object value) {
+		switch (kind) {
+			case BOOL -> at.set(B, 0, (Boolean) value);
+			case INT8 -> at.set(ValueLayout.JAVA_BYTE, 0, (Byte) value);
+			case INT16 -> at.set(ValueLayout.JAVA_SHORT, 0, (Short) value);
+			case INT32 -> at.set(ValueLayout.JAVA_INT, 0, (Integer) value);
+			case INT64 -> at.set(L, 0, (Long) value);
+			case FLOAT -> at.set(ValueLayout.JAVA_FLOAT, 0, (Float) value);
+			case DOUBLE -> at.set(ValueLayout.JAVA_DOUBLE, 0, (Double) value);
+			default -> at.set(P, 0, (MemorySegment) value);
 		}
 	}
 

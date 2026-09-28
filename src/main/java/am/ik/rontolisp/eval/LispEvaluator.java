@@ -4736,7 +4736,7 @@ public final class LispEvaluator {
 				return;
 			}
 			this.objcLibraryLoaded = true;
-			for (LispVal form : ObjcLibrary.forms()) {
+			for (LispVal form : ObjcLibrary.allForms()) {
 				eval(form, this.globalEnv);
 			}
 		}
@@ -7115,6 +7115,12 @@ public final class LispEvaluator {
 						// argument forms bound) and evaluate the expansion. Checked after
 						// the built-in operators, so a
 						// user macro can never shadow them.
+						// The objc defining macros live in a lazily loaded library: load
+						// it
+						// before asking whether the call is a macro.
+						if (!this.objcLibraryLoaded && ObjcLibrary.definesMacro(sym.name())) {
+							ensureObjcLoaded();
+						}
 						if (this.userMacros.containsKey(sym.name())) {
 							next = expandUserMacro(cons);
 							break dispatch;

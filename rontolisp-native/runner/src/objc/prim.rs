@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use wasmtime::{Caller, ExternRef, Linker, Rooted};
 use wasmtime_wasi::p1::WasiP1Ctx;
 
-use super::call::{Call, Leaf};
+use super::call::{Call, Leaf, read_leaf};
 use super::encoding::{self, Kind};
 use super::{
     Api, Entered, MODULE, PENDING, api, cstring, is_application, memory_string, release_pending, return_string, text,
@@ -28,7 +28,7 @@ use super::{
 
 /// One argument as the library pushed it: raw, marshalled by the encoding at the send.
 #[derive(Clone, Debug)]
-enum Raw {
+pub(super) enum Raw {
     Int(i64),
     Float(f64),
     Str(String),
@@ -112,6 +112,32 @@ fn fail(message: String) -> i32 {
     kind::FAILED
 }
 
+/// The reason the last import failed, for `p_error`.
+pub(super) fn set_error(message: String) {
+    prim(|p| p.error = message);
+}
+
+/// What the library pushed since the last send: the answer of a method it ran.
+pub(super) fn take_args() -> Vec<Raw> {
+    prim(|p| {
+        p.pending = None;
+        std::mem::take(&mut p.args)
+    })
+}
+
+/// Saves the arguments pushed for a send in progress, around a method the send made
+/// Objective-C call: that method's own sends push and take their own.
+pub(super) fn save_args() -> (Vec<Raw>, Option<(usize, Vec<Leaf>)>) {
+    prim(|p| (std::mem::take(&mut p.args), p.pending.take()))
+}
+
+pub(super) fn restore_args(saved: (Vec<Raw>, Option<(usize, Vec<Leaf>)>)) {
+    prim(|p| {
+        p.args = saved.0;
+        p.pending = saved.1;
+    })
+}
+
 fn parsed(types: &str) -> Result<Rc<encoding::Encoding>, String> {
     if let Some(e) = PARSED.with(|c| c.borrow().get(types).cloned()) {
         return Ok(e);
@@ -132,7 +158,7 @@ fn leaf_of(raw: &Raw) -> Option<Leaf> {
 /// The call itself, inside the caller's pool: the encoding describes every argument, the
 /// variadic ones included; `fixed` is the number of fixed method arguments of a variadic
 /// call, else negative.
-fn send(api: &Api, receiver: usize, sel: usize, types: &str, fixed: i32, mode: i32) -> i32 {
+fn send(api: &Api, receiver: usize, superclass: usize, sel: usize, types: &str, fixed: i32, mode: i32) -> i32 {
     let args = prim(|p| std::mem::take(&mut p.args));
     let name = text(unsafe { (api.sel_get_name)(sel) });
     let encoding = match parsed(types) {
@@ -147,8 +173,18 @@ fn send(api: &Api, receiver: usize, sel: usize, types: &str, fixed: i32, mode: i
         return fail(format!("{name} takes {declared} argument(s), got {}", args.len()));
     }
     let fixed = if fixed < 0 { declared } else { fixed as usize };
-    let mut call = Call::new(api.msg_send, &encoding.ret);
-    call.push(&encoding.args[0], &[Leaf::Int(receiver as i64)]);
+    // A super send passes struct objc_super { receiver, class the lookup starts in }
+    // where a send passes the receiver.
+    let sup = [receiver, superclass];
+    let mut call = if superclass != 0 {
+        let mut call = Call::new(api.msg_send_super, &encoding.ret);
+        call.push(&encoding.args[0], &[Leaf::Int(sup.as_ptr() as i64)]);
+        call
+    } else {
+        let mut call = Call::new(api.msg_send, &encoding.ret);
+        call.push(&encoding.args[0], &[Leaf::Int(receiver as i64)]);
+        call
+    };
     call.push(&encoding.args[1], &[Leaf::Int(sel as i64)]);
     // Storage an argument points into, alive past the call.
     let mut strings: Vec<CString> = Vec::new();
@@ -190,11 +226,18 @@ fn send(api: &Api, receiver: usize, sel: usize, types: &str, fixed: i32, mode: i
     // SAFETY: the shape is the caller's encoding, laid out by the convention.
     let leaves = unsafe { call.invoke() };
     drop(strings);
+    let _ = sup;
+    answer(api, &encoding.ret, &leaves, mode)
+}
+
+/// Makes a value of a type the answer the `p_result_*` imports fetch, and answers its
+/// result kind: what a send answers, a memory read, a method's argument.
+pub(super) fn answer(api: &Api, ty: &encoding::Type, leaves: &[Leaf], mode: i32) -> i32 {
     let first = leaves.first().copied();
-    match (encoding.ret.kind, first) {
+    match (ty.kind, first) {
         (Kind::Void, _) | (_, None) => kind::NIL,
         (Kind::Struct, _) => {
-            prim(|p| p.answer.leaves = leaves.clone());
+            prim(|p| p.answer.leaves = leaves.to_vec());
             kind::LEAVES
         }
         (Kind::CString, Some(Leaf::Int(p))) if mode & RAW_CSTRING == 0 => {
@@ -347,12 +390,79 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
                 let _ = api.send(receiver as usize, "activateIgnoringOtherApps:", vec![super::Arg::True]);
                 kind::NIL
             } else {
-                api.with_pool(|| send(api, receiver as usize, sel as usize, &types, fixed, mode))
+                api.with_pool(|| send(api, receiver as usize, 0, sel as usize, &types, fixed, mode))
             };
             if entered.outermost() {
                 release_pending(api);
             }
             Ok(answer)
+        },
+    )?;
+    linker.func_wrap(
+        MODULE,
+        "p_send_super",
+        |mut caller: Caller<'_, WasiP1Ctx>,
+         receiver: i64,
+         superclass: i64,
+         sel: i64,
+         types_p: i32,
+         types_n: i32,
+         fixed: i32,
+         mode: i32|
+         -> wasmtime::Result<i32> {
+            let types = memory_string(&mut caller, types_p, types_n)?;
+            let api = runtime()?;
+            let entered = Entered::new(&mut caller);
+            let answer = api.with_pool(|| {
+                send(api, receiver as usize, superclass as usize, sel as usize, &types, fixed, mode)
+            });
+            if entered.outermost() {
+                release_pending(api);
+            }
+            Ok(answer)
+        },
+    )?;
+    linker.func_wrap(
+        MODULE,
+        "p_peek",
+        |mut caller: Caller<'_, WasiP1Ctx>, address: i64, types_p: i32, types_n: i32| -> wasmtime::Result<i32> {
+            let types = memory_string(&mut caller, types_p, types_n)?;
+            let api = runtime()?;
+            let ty = match parsed(&types) {
+                Ok(e) => e.ret.clone(),
+                Err(e) => return Ok(fail(e)),
+            };
+            // SAFETY: the address of a value of this type the library computed (an
+            // instance variable of a live object).
+            let leaves = unsafe { peek(address as usize, &ty) };
+            // An object read is retained for the value the library makes of it.
+            Ok(answer(api, &ty, &leaves, RETAIN_RESULT))
+        },
+    )?;
+    linker.func_wrap(
+        MODULE,
+        "p_poke",
+        |mut caller: Caller<'_, WasiP1Ctx>, address: i64, types_p: i32, types_n: i32| -> wasmtime::Result<i32> {
+            let types = memory_string(&mut caller, types_p, types_n)?;
+            let ty = match parsed(&types) {
+                Ok(e) => e.ret.clone(),
+                Err(e) => return Ok(fail(e)),
+            };
+            let leaves = match take_args().first() {
+                Some(Raw::Leaves(l)) if ty.kind == Kind::Struct && l.len() == ty.leaves.len() => l.clone(),
+                Some(raw) if ty.kind != Kind::Struct && leaf_of(raw).is_some() => {
+                    vec![leaf_of(raw).unwrap_or(Leaf::Int(0))]
+                }
+                other => {
+                    return Ok(fail(format!(
+                        "a memory write of type {types} cannot take {}",
+                        other.map(Raw::describe).unwrap_or("nothing")
+                    )));
+                }
+            };
+            // SAFETY: as for p_peek.
+            unsafe { poke(address as usize, &ty, &leaves) };
+            Ok(kind::NIL)
         },
     )?;
     linker.func_wrap(MODULE, "p_result_int", || prim(|p| p.answer.int))?;
@@ -468,4 +578,47 @@ fn starts_application(api: &Api, receiver: usize, sel: usize) -> bool {
     };
     // SAFETY: the selector argument the library resolved.
     text(unsafe { (api.sel_get_name)(action as usize) }) == "run" && is_application(api, receiver)
+}
+
+/// The leaves of a value of a type in memory.
+///
+/// # Safety
+/// `address` holds a value of `ty`.
+unsafe fn peek(address: usize, ty: &encoding::Type) -> Vec<Leaf> {
+    if ty.kind == Kind::Struct {
+        let (offsets, _, _) = ty.layout();
+        return ty
+            .leaves
+            .iter()
+            .zip(offsets)
+            .map(|(k, o)| {
+                // SAFETY: inside the value, per the caller.
+                let bytes = unsafe { std::slice::from_raw_parts((address + o) as *const u8, k.size()) };
+                read_leaf(*k, false, bytes)
+            })
+            .collect();
+    }
+    // SAFETY: the value, per the caller.
+    let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, ty.kind.size()) };
+    vec![read_leaf(ty.kind, ty.unsigned, bytes)]
+}
+
+/// Writes a value of a type to memory, from its leaves.
+///
+/// # Safety
+/// `address` holds a value of `ty`.
+unsafe fn poke(address: usize, ty: &encoding::Type, leaves: &[Leaf]) {
+    let write = |at: usize, kind: Kind, leaf: Leaf| {
+        let bits = leaf.bits(kind).to_le_bytes();
+        // SAFETY: inside the value, per the caller.
+        unsafe { std::ptr::copy_nonoverlapping(bits.as_ptr(), at as *mut u8, kind.size()) };
+    };
+    if ty.kind == Kind::Struct {
+        let (offsets, _, _) = ty.layout();
+        for ((k, o), leaf) in ty.leaves.iter().zip(offsets).zip(leaves) {
+            write(address + o, *k, *leaf);
+        }
+    } else if let Some(leaf) = leaves.first() {
+        write(address, ty.kind, *leaf);
+    }
 }

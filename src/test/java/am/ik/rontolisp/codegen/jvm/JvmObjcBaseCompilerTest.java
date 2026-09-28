@@ -107,6 +107,24 @@ class JvmObjcBaseCompilerTest {
 	}
 
 	@Test
+	void aProgramThatOnlyCallsCarriesNoClassDefinition() {
+		String calling = new String(compile("(print (objc:invoke \"NSObject\" \"new\"))"), StandardCharsets.ISO_8859_1);
+		assertThat(calling).doesNotContain("STANDARD-OBJC-OBJECT");
+		String defining = new String(compile("""
+				(objc:define-objc-class probe () () (:objc-class-name "RontoLispProbe"))
+				(objc:define-objc-method ("size" :int) ((self probe)) 42)
+				"""), StandardCharsets.ISO_8859_1);
+		assertThat(defining).contains("STANDARD-OBJC-OBJECT");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void theClassCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		assertThat(run(compile(resource("objc-class-corpus.lisp")))).isEqualTo(resource("objc-class-corpus.expected"));
+	}
+
+	@Test
 	@EnabledOnOs(OS.MAC)
 	void theCorpusPrintsWhatTheInterpreterPrints() throws Exception {
 		assumeTrue(ObjcInterop.available(), ObjcInterop.description());

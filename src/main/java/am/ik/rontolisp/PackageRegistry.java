@@ -495,10 +495,11 @@ public final class PackageRegistry {
 	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
 
 	/**
-	 * The names the new {@code objc} base exports: LispWorks 8.1's {@code OBJC} call half
-	 * (the functions, the {@code with-autorelease-pool} macro, and the type designators),
-	 * implemented in {@code objc.lisp} ({@code ObjcLibrary}). Beside the old verbs until
-	 * those are retired (.kb/objc.md, "Two bases, one package").
+	 * The names the new {@code objc} base exports: LispWorks 8.1's {@code OBJC} (the
+	 * functions, the macros, {@code standard-objc-object} and the type designators),
+	 * implemented in {@code objc.lisp}, {@code objc-class.lisp} and
+	 * {@code objc-macros.lisp} ({@code ObjcLibrary}). Beside the old verbs until those
+	 * are retired (.kb/objc.md, "Two bases, one package").
 	 */
 	private static final Set<String> OBJC_BASE_NAMES = Set.of("ENSURE-OBJC-INITIALIZED", "INVOKE", "INVOKE-BOOL",
 			"INVOKE-INTO", "CAN-INVOKE-P", "ALLOC-INIT-OBJECT", "DESCRIPTION", "TRACE-INVOKE", "UNTRACE-INVOKE",
@@ -506,16 +507,19 @@ public final class PackageRegistry {
 			"OBJC-CLASS-METHOD-SIGNATURE", "RETAIN", "RELEASE", "AUTORELEASE", "RETAIN-COUNT", "MAKE-AUTORELEASE-POOL",
 			LispNames.OBJC_WITH_AUTORELEASE_POOL, "NS-STRING-TO-STRING", "STRING-TO-NS-STRING", "OBJC-OBJECT-POINTER",
 			"OBJC-OBJECT-FROM-POINTER", "OBJC-CLASS", "SEL", "OBJC-BOOL", "OBJC-C++-BOOL", "OBJC-C-STRING",
-			"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN");
+			"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN", "DEFINE-OBJC-CLASS", "DEFINE-OBJC-METHOD",
+			"DEFINE-OBJC-CLASS-METHOD", "CURRENT-SUPER", "STANDARD-OBJC-OBJECT", "OBJC-OBJECT-VAR-VALUE",
+			"OBJC-OBJECT-COPIED", "OBJC-OBJECT-DESTROYED", "DEFINE-OBJC-STRUCT", "DEFINE-OBJC-TYPEDEF",
+			"DEFINE-OBJC-PROTOCOL");
 
 	private static final List<String> OBJC_BASE_NAME_LIST = sorted(OBJC_BASE_NAMES);
 
 	/**
-	 * The names the {@code cocoa} package exports (LispWorks 8.1's {@code COCOA}, less
-	 * the observers, which come with class definition), implemented in {@code objc.lisp}.
+	 * The names the {@code cocoa} package exports (LispWorks 8.1's {@code COCOA}),
+	 * implemented in {@code objc.lisp}.
 	 */
 	private static final Set<String> COCOA_NAMES = Set.of("NS-POINT", "NS-SIZE", "NS-RECT", "NS-RANGE", "SET-NS-POINT*",
-			"SET-NS-SIZE*", "SET-NS-RECT*", "SET-NS-RANGE*", "NS-NOT-FOUND");
+			"SET-NS-SIZE*", "SET-NS-RECT*", "SET-NS-RANGE*", "NS-NOT-FOUND", "ADD-OBSERVER", "REMOVE-OBSERVER");
 
 	private static final List<String> COCOA_NAME_LIST = sorted(COCOA_NAMES);
 

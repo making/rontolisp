@@ -20,7 +20,15 @@ functions answer, and `objc:objc-bool`, `objc:objc-c++-bool`,
 the type designators a list-form method and `objc:objc-class-method-signature`
 use. The macro [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md)
 evaluates its body inside an autorelease pool; `objc:on-main` (below) is shared
-by both halves of the package.
+by both halves of the package. Classes are defined with the macros
+[`objc:define-objc-class`](../macros/objc-define-objc-class.md),
+[`objc:define-objc-method`](../macros/objc-define-objc-method.md),
+[`objc:define-objc-class-method`](../macros/objc-define-objc-class-method.md),
+[`objc:current-super`](../macros/objc-current-super.md),
+[`objc:define-objc-struct`](../macros/objc-define-objc-struct.md),
+[`objc:define-objc-typedef`](../macros/objc-define-objc-typedef.md) and
+[`objc:define-objc-protocol`](../macros/objc-define-objc-protocol.md); an instance of
+such a class is an `objc:standard-objc-object`.
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -46,7 +54,10 @@ by both halves of the package.
 | [`objc:ns-string-to-string`](objc-ns-string-to-string.md) | `(objc:ns-string-to-string s)` | a Lisp string |
 | [`objc:string-to-ns-string`](objc-string-to-ns-string.md) | `(objc:string-to-ns-string "hi")` | an `NSString` the program owns |
 | [`objc:objc-object-pointer`](objc-objc-object-pointer.md) | `(objc:objc-object-pointer p)` | the object's pointer |
-| [`objc:objc-object-from-pointer`](objc-objc-object-from-pointer.md) | `(objc:objc-object-from-pointer p)` | the associated Lisp object (`nil`) |
+| [`objc:objc-object-from-pointer`](objc-objc-object-from-pointer.md) | `(objc:objc-object-from-pointer p)` | the associated Lisp object, or `nil` |
+| [`objc:objc-object-var-value`](objc-objc-object-var-value.md) | `(objc:objc-object-var-value obj "count")` | an instance variable's value; `setf`-able |
+| [`objc:objc-object-copied`](objc-objc-object-copied.md) | `(defmethod objc:objc-object-copied :after ((old c) (new c)) ...)` | called when an instance is copied |
+| [`objc:objc-object-destroyed`](objc-objc-object-destroyed.md) | `(defmethod objc:objc-object-destroyed :after ((o c)) ...)` | called when an instance is deallocated |
 
 ## The first verbs
 

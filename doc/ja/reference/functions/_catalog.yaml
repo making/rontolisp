@@ -836,6 +836,9 @@ categories:
       - { slug: objc-string-to-ns-string, name: "objc:string-to-ns-string" }
       - { slug: objc-objc-object-pointer, name: "objc:objc-object-pointer" }
       - { slug: objc-objc-object-from-pointer, name: "objc:objc-object-from-pointer" }
+      - { slug: objc-objc-object-var-value, name: "objc:objc-object-var-value" }
+      - { slug: objc-objc-object-copied, name: "objc:objc-object-copied" }
+      - { slug: objc-objc-object-destroyed, name: "objc:objc-object-destroyed" }
   - title: "cocoa パッケージ (Foundation の構造体)"
     index_page: reference/functions/cocoa.md
     functions:
@@ -843,6 +846,8 @@ categories:
       - { slug: cocoa-set-ns-size-star, name: "cocoa:set-ns-size*" }
       - { slug: cocoa-set-ns-rect-star, name: "cocoa:set-ns-rect*" }
       - { slug: cocoa-set-ns-range-star, name: "cocoa:set-ns-range*" }
+      - { slug: cocoa-add-observer, name: "cocoa:add-observer" }
+      - { slug: cocoa-remove-observer, name: "cocoa:remove-observer" }
   - title: "appkit パッケージ (Cocoa ウィジェット)"
     index_page: reference/functions/appkit.md
     functions:

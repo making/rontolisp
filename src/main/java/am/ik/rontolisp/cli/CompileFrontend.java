@@ -690,11 +690,15 @@ final class CompileFrontend {
 		// the
 		// string comparisons the helpers are written over.
 		// ObjcLibrary (the new objc base and cocoa, objc.lisp) right OUTSIDE
-		// AppKitLibrary: a library written over the new base is seen too.
-		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(
-				GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
-					.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(SchemeLibrary
-						.process(UserMacroExpander.expand(loaded), features, input.standards())))))))))))));
+		// AppKitLibrary: a library written over the new base is seen too. Its defining
+		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
+		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
+		// before any library is spliced.
+		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary
+			.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary
+				.process(CheckpointLibrary.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
+					.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features,
+							input.standards())))))))))))));
 		// ObjcNativeLibrary right OUTSIDE AppKitLibrary: the objc: verbs of a --native
 		// output, needed by the objc: references the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary

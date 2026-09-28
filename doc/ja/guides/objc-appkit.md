@@ -367,9 +367,85 @@ MY-APP> (with-autorelease-pool ()
 
 オブジェクトは `objc:objc-object-pointer`、クラスは `objc:objc-class` (オブジェクトポインタでもある)、セレクタは `objc:sel` として返ります。どれも `structure-object` ではありません。一つのオブジェクトに対する二つの答えは `eq`、`eql`、`equal`、`equalp` のいずれでも等しく、どのハッシュテーブルでも互いに見つかります。ポインタは LispWorks と同じく `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>` と表示します。表示するのはアドレスだけで、オブジェクトからは何も読みません。
 
+### クラスの定義
+
+`objc:define-objc-class` は Objective-C クラスを実装する CLOS クラスを定義し、
+`objc:define-objc-method` / `objc:define-objc-class-method` は本体を Lisp で書いたメソッドを与えます。
+マニュアルの 1.4 節の例はそのまま動きます。`(:unsigned :int)` を二つ取るメソッド、
+`(current-super)` に送るメソッドを持つサブクラス、`objc:define-objc-struct` で宣言した構造体を返すメソッドです。
+
+```console
+MY-APP> (define-objc-class my-object ()
+          ((slot1 :initarg :slot1 :initform nil))
+          (:objc-class-name "MyObject"))
+MY-OBJECT
+MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+            ((self my-object)
+             (width (:unsigned :int))
+             (height (:unsigned :int)))
+          (* width height))
+"areaOfWidth:height:"
+MY-APP> (define-objc-class my-special-object (my-object)
+          ()
+          (:objc-class-name "MySpecialObject"))
+MY-SPECIAL-OBJECT
+MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+            ((self my-special-object)
+             (width (:unsigned :int))
+             (height (:unsigned :int)))
+          (* 4 (invoke (current-super) "areaOfWidth:height:" width height)))
+"areaOfWidth:height:"
+MY-APP> (invoke (alloc-init-object "MySpecialObject") "areaOfWidth:height:" 6 7)
+168
+MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
+          (:first :float)
+          (:second :float))
+PAIR
+MY-APP> (define-objc-method ("pair" (:struct pair)) ((this my-object))
+          (vector 1.0 2.0))
+"pair"
+MY-APP> (invoke (alloc-init-object "MyObject") "pair")
+#(1.0 2.0)
+```
+
+メソッドの引数と結果には、宣言で書けるどの型でも使えます。あらゆる幅の整数、`:float` / `:double`、
+構造体 (`invoke` がそれについて使う Lisp の値)、`t` / `nil` になる `objc:objc-bool` / `:boolean`、
+オブジェクト、クラス、セレクタです。オブジェクト引数は受け取るときに変換でき
+(`(arg objc-object-pointer string)`、`array`、`(array string)`)、オブジェクトとして返した文字列やベクタは
+`NSString` / `NSArray` になります。Objective-C クラスを名付けず継承もしないクラスはミックスインで、
+そのメソッドは名付けるサブクラスそれぞれに入ります。メソッド本体のエラーは表示され、メソッドはゼロを返します。
+呼び出した Objective-C のフレームまで巻き戻ることはありません。
+
+インスタンスは `objc:standard-objc-object` です。`make-instance` は Objective-C オブジェクトを確保して初期化し
+(`init`、または渡した `:init-function`)、Objective-C 側が確保したオブジェクトにも Lisp オブジェクトが作られます。
+そのためどちらも `objc:objc-object-from-pointer` で逆にたどれます。`objc:objc-object-var-value` は
+`(:objc-instance-vars ...)` で宣言したインスタンス変数を読みます。Lisp オブジェクトは Objective-C オブジェクトの
+参照カウントが 0 になるまで生き続けます (`make-instance` が取った参照はプログラムが `objc:release` するものです)。
+0 になると `dealloc` の中で `objc:objc-object-destroyed` が実行され、`copy` で作った複製には
+`objc:objc-object-copied` が呼ばれます。通知の監視もメソッドで行います。
+
+```console
+MY-APP> (define-objc-class watcher ()
+          ((seen :initform nil :accessor seen))
+          (:objc-class-name "Watcher"))
+WATCHER
+MY-APP> (define-objc-method ("noticed:" :void) ((self watcher) (note objc-object-pointer))
+          (push (invoke-into 'string note "name") (seen self)))
+"noticed:"
+MY-APP> (defvar *w* (make-instance 'watcher))
+*W*
+MY-APP> (cocoa:add-observer *w* "noticed:" :name "Ping")
+NIL
+MY-APP> (invoke (invoke "NSNotificationCenter" "defaultCenter")
+                "postNotificationName:object:" "Ping" nil)
+NIL
+MY-APP> (seen *w*)
+("Ping")
+```
+
 ### LispWorks との違い
 
-rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。Lisp でのクラス定義はまだこのインターフェースにありません。上の `objc:define-class` が担います。
+rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。
 
 ## ネイティブバイナリ
 
@@ -381,6 +457,8 @@ in this binary; register it under foreign.downcalls in reachability-metadata.jso
 ```
 
 JVM は事前に何も登録せずどんな形でもバインドするので、バイナリを作る前にプログラムが何を送るかを知る場所は `java -jar` です。
+
+`objc:define-objc-method` で定義したメソッドはそれぞれの形のアップコールで、同じように登録します。バイナリは上のクラスの例の形と、Lisp で定義したどのクラスにも入る三つのメソッドの形を扱い、それ以外の形の定義は `foreign.upcalls` に追加すべきエントリを示して拒否します。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
 
 可変長引数の呼び出しは別個の登録になるため、バイナリはその有界なグリッドも提供します。宣言された引数を超えて 11 個まで (バインディングが付ける `nil` 終端子を含めて 12 個)、うち先頭 3 個までは数、残りはオブジェクトです。これより長い、あるいは数がこれより多いリストは同じようにシグナルします。
 
@@ -416,6 +494,6 @@ $ ./counter
 
 - macOS のみ: インタプリタ (`java -jar`、または `rontolisp` バイナリ)、コンパイル済み `.class` / `.jar`、Apple シリコン向けの `--native` 実行ファイル。`.wasm` は不可で、`objc:` / `appkit:` の参照はそれ以外のすべての WASM 出力でコンパイルエラーです。
 - アプリケーションバンドルのないプロセスには Dock アイコンもメニューバーもありません。Cmd-Q はなく、最後のウィンドウを閉じても終了しません — REPL がプロセスです。
-- コールバックの形は上の閉じた集合です。構造体や整数の引数を持つデリゲートメソッド、ブロックを取るセレクタは、この段階にはない段を必要とします。
+- `objc:define-class` のコールバックの形は上の閉じた集合です。`objc:define-objc-method` はどんな形でも受け付けます (`rontolisp` バイナリでは登録済みの形)。ブロックを取るセレクタはまだ扱いません。
 - 扱える可変長引数セレクタは上の表のものです。プログラム自身が宣言したものは含まれず、ランタイムにはそれを判別する手段がありません。
 - Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。

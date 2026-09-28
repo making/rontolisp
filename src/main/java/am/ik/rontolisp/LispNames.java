@@ -7719,13 +7719,70 @@ public final class LispNames {
 	/** {@code (objc::%initialize)} -- opens the runtime, or signals why it cannot. */
 	public static final String OBJC_INITIALIZE = OBJC_PKG + "::%INITIALIZE";
 
+	// The class-definition half of the primitive layer (objc-class.lisp is written over
+	// these as well).
+
+	/**
+	 * {@code (objc::%allocate-class superclass name)} -- a new class pair's address, 0
+	 * when the runtime refuses the name.
+	 */
+	public static final String OBJC_ALLOCATE_CLASS = OBJC_PKG + "::%ALLOCATE-CLASS";
+
+	/**
+	 * {@code (objc::%add-ivar class name size alignment types)} -- adds an instance
+	 * variable to a class not yet registered; nil when the runtime refuses it.
+	 */
+	public static final String OBJC_ADD_IVAR = OBJC_PKG + "::%ADD-IVAR";
+
+	/** {@code (objc::%register-class class)} -- registers a class pair. */
+	public static final String OBJC_REGISTER_CLASS = OBJC_PKG + "::%REGISTER-CLASS";
+
+	/**
+	 * {@code (objc::%add-method class sel types function flags)} -- installs (or
+	 * replaces) a method whose body is a Lisp function of the receiver's address and the
+	 * raw arguments.
+	 */
+	public static final String OBJC_ADD_METHOD = OBJC_PKG + "::%ADD-METHOD";
+
+	/**
+	 * {@code (objc::%add-protocol class name)} -- adopts a protocol; nil when there is
+	 * none of that name.
+	 */
+	public static final String OBJC_ADD_PROTOCOL = OBJC_PKG + "::%ADD-PROTOCOL";
+
+	/** {@code (objc::%superclass class)} -- a class's superclass, 0 at a root. */
+	public static final String OBJC_SUPERCLASS = OBJC_PKG + "::%SUPERCLASS";
+
+	/**
+	 * {@code (objc::%send-super receiver class sel types fixed args mode)} -- the one
+	 * call, looked up from {@code class} ({@code objc_msgSendSuper}).
+	 */
+	public static final String OBJC_SEND_SUPER = OBJC_PKG + "::%SEND-SUPER";
+
+	/**
+	 * {@code (objc::%ivar-offset class name)} -- an instance variable's offset, -1 when
+	 * there is none.
+	 */
+	public static final String OBJC_IVAR_OFFSET = OBJC_PKG + "::%IVAR-OFFSET";
+
+	/** {@code (objc::%ivar-types class name)} -- an instance variable's encoding. */
+	public static final String OBJC_IVAR_TYPES = OBJC_PKG + "::%IVAR-TYPES";
+
+	/** {@code (objc::%peek address types)} -- reads one value of a type, raw. */
+	public static final String OBJC_PEEK = OBJC_PKG + "::%PEEK";
+
+	/** {@code (objc::%poke address types raw)} -- writes one raw value of a type. */
+	public static final String OBJC_POKE = OBJC_PKG + "::%POKE";
+
 	/**
 	 * The new base's primitives, as the compile path gates the shipped binding on them.
 	 */
 	public static final java.util.List<String> OBJC_PRIMITIVES = java.util.List.of(OBJC_GET_CLASS,
 			OBJC_CLASS_NAME_INTERNAL, OBJC_OBJECT_CLASS, OBJC_CLASS_P, OBJC_REGISTER_SELECTOR,
 			OBJC_SELECTOR_NAME_INTERNAL, OBJC_METHOD_TYPES, OBJC_SEND_INTERNAL, OBJC_NEW_HANDLE, OBJC_REFS,
-			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE);
+			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE, OBJC_ALLOCATE_CLASS, OBJC_ADD_IVAR,
+			OBJC_REGISTER_CLASS, OBJC_ADD_METHOD, OBJC_ADD_PROTOCOL, OBJC_SUPERCLASS, OBJC_SEND_SUPER, OBJC_IVAR_OFFSET,
+			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE);
 
 	/**
 	 * The {@code cocoa} package name: LispWorks' {@code COCOA} -- the four Foundation

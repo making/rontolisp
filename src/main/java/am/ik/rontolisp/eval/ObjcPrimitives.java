@@ -9,6 +9,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import am.ik.objc.ObjcException;
+import am.ik.objc.ObjcMethods;
 import am.ik.objc.ObjcReference;
 import am.ik.objc.ObjcRuntime;
 import am.ik.rontolisp.LispBigInteger;
@@ -102,6 +103,7 @@ final class ObjcPrimitives {
 			ObjcRuntime.get();
 			return LispTrue.INSTANCE;
 		});
+		registerClassDefinition(globalEnv, apply);
 		String onMain = PackageRegistry.qualify(LispNames.OBJC_PKG, LispNames.OBJC_ON_MAIN);
 		globalEnv.defineFunction(onMain, new LispFunction(onMain, args -> {
 			if (args.size() != 1) {
@@ -116,6 +118,62 @@ final class ObjcPrimitives {
 				throw new LispEvalException("objc:on-main: " + ex.getMessage());
 			}
 		}));
+	}
+
+	/**
+	 * The class-definition half: the primitives {@code objc-class.lisp} is written over.
+	 */
+	private static void registerClassDefinition(Environment globalEnv,
+			BiFunction<LispVal, List<LispVal>, LispVal> apply) {
+		define(globalEnv, LispNames.OBJC_ALLOCATE_CLASS, 2,
+				args -> integer(ObjcRuntime.get().allocateClass(address(args.get(0)), string(args.get(1)))));
+		define(globalEnv, LispNames.OBJC_ADD_IVAR, 5,
+				args -> ObjcRuntime.get()
+					.addIvar(address(args.get(0)), string(args.get(1)), address(args.get(2)), address(args.get(3)),
+							string(args.get(4))) ? LispTrue.INSTANCE : LispNil.INSTANCE);
+		define(globalEnv, LispNames.OBJC_REGISTER_CLASS, 1, args -> {
+			ObjcRuntime.get().registerClass(address(args.get(0)));
+			return LispTrue.INSTANCE;
+		});
+		define(globalEnv, LispNames.OBJC_ADD_METHOD, 5, args -> {
+			LispVal function = args.get(3);
+			ObjcMethods.add(ObjcRuntime.get(), address(args.get(0)), address(args.get(1)), string(args.get(2)),
+					(self, raw) -> {
+						LispVal list = LispNil.INSTANCE;
+						for (int i = raw.length - 1; i >= 0; i--) {
+							list = new LispCons(fromRaw(raw[i]), list);
+						}
+						return toRaw(apply.apply(function, List.of(integer(self), list)));
+					}, (int) address(args.get(4)));
+			return LispTrue.INSTANCE;
+		});
+		define(globalEnv, LispNames.OBJC_ADD_PROTOCOL, 2,
+				args -> ObjcRuntime.get().addProtocol(address(args.get(0)), string(args.get(1))) ? LispTrue.INSTANCE
+						: LispNil.INSTANCE);
+		define(globalEnv, LispNames.OBJC_SUPERCLASS, 1,
+				args -> integer(ObjcRuntime.get().superclassAddress(address(args.get(0)))));
+		define(globalEnv, LispNames.OBJC_SEND_SUPER, 7, args -> {
+			List<LispVal> raw = list(args.get(5));
+			@Nullable Object[] operands = new @Nullable Object[raw.size()];
+			for (int i = 0; i < operands.length; i++) {
+				operands[i] = toRaw(raw.get(i));
+			}
+			return fromRaw(ObjcRuntime.get()
+				.sendRawOnMain(address(args.get(0)), address(args.get(1)), address(args.get(2)), string(args.get(3)),
+						(int) address(args.get(4)), operands, (int) address(args.get(6))));
+		});
+		define(globalEnv, LispNames.OBJC_IVAR_OFFSET, 2,
+				args -> integer(ObjcRuntime.get().ivarOffset(address(args.get(0)), string(args.get(1)))));
+		define(globalEnv, LispNames.OBJC_IVAR_TYPES, 2, args -> {
+			String types = ObjcRuntime.get().ivarTypes(address(args.get(0)), string(args.get(1)));
+			return types == null ? LispNil.INSTANCE : new LispString(types);
+		});
+		define(globalEnv, LispNames.OBJC_PEEK, 2,
+				args -> fromRaw(ObjcRuntime.get().peek(address(args.get(0)), string(args.get(1)))));
+		define(globalEnv, LispNames.OBJC_POKE, 3, args -> {
+			ObjcRuntime.get().poke(address(args.get(0)), string(args.get(1)), toRaw(args.get(2)));
+			return LispNil.INSTANCE;
+		});
 	}
 
 	// Every primitive signals a plain error starting with objc: -- the runtime's own

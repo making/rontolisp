@@ -90,6 +90,13 @@ categories:
       - { slug: usocket-with-macros, name: "usocket:with-client-socket usocket:with-connected-socket usocket:with-server-socket usocket:with-socket-listener" }
       - { slug: torch-no-grad, name: "torch:no-grad" }
       - { slug: objc-with-autorelease-pool, name: "objc:with-autorelease-pool" }
+      - { slug: objc-define-objc-class, name: "objc:define-objc-class" }
+      - { slug: objc-define-objc-method, name: "objc:define-objc-method" }
+      - { slug: objc-define-objc-class-method, name: "objc:define-objc-class-method" }
+      - { slug: objc-current-super, name: "objc:current-super" }
+      - { slug: objc-define-objc-struct, name: "objc:define-objc-struct" }
+      - { slug: objc-define-objc-typedef, name: "objc:define-objc-typedef" }
+      - { slug: objc-define-objc-protocol, name: "objc:define-objc-protocol" }
       - { slug: uiop-if-let, name: "uiop:if-let" }
       - { slug: uiop-when-let, name: "uiop:when-let" }
       - { slug: uiop-when-let-star, name: "uiop:when-let*" }

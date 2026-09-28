@@ -83,7 +83,7 @@ pub enum Leaf {
 }
 
 impl Leaf {
-    fn bits(self, kind: Kind) -> u64 {
+    pub fn bits(self, kind: Kind) -> u64 {
         match (self, kind) {
             (Leaf::Float(f), Kind::Float) => (f as f32).to_bits() as u64,
             (Leaf::Float(f), Kind::Double) => f.to_bits(),
@@ -301,7 +301,7 @@ impl Call {
     }
 }
 
-fn read_leaf(kind: Kind, unsigned: bool, bytes: &[u8]) -> Leaf {
+pub fn read_leaf(kind: Kind, unsigned: bool, bytes: &[u8]) -> Leaf {
     let mut buf = [0u8; 8];
     buf[..bytes.len()].copy_from_slice(bytes);
     let raw = u64::from_le_bytes(buf);

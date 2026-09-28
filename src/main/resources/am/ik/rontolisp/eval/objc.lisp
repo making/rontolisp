@@ -47,6 +47,38 @@
                                    (:conc-name objc::%pool-) (:copier nil))
   (pointers nil))
 
+;; What objc:current-super answers inside a method defined in Lisp: the receiver's address
+;; and the class a send to it starts its lookup in (the defining class's superclass).
+(defstruct (objc::super-ref
+            (:constructor objc::%make-super-ref (receiver class))
+            (:predicate objc::%super-ref-p) (:conc-name objc::%super-)
+            (:copier nil))
+  receiver
+  class)
+
+;; The definition half (objc-class.lisp) plugs in here: a standard-objc-object or a Lisp
+;; class that implements an Objective-C class stands for its pointer wherever one is
+;; taken, and a pointer maps back to the Lisp object made for it. Nil while that half is
+;; not loaded, so a program that only calls pays nothing.
+(defvar objc::*object-pointer-hook* nil)
+
+(defvar objc::*pointer-object-hook* nil)
+
+;; The pointer of the Lisp object registered for an address: one value per such object
+;; even where pointers are not interned (--native), so its references are counted once.
+(defvar objc::*registered-pointer-hook* nil)
+
+;; Run once the runtime is up: realizes the classes defined before that.
+(defvar objc::*realize-hook* nil)
+
+(defvar objc::*initialized* nil)
+
+;; define-objc-struct and define-objc-typedef: a type name -> its encoding, and a
+;; structure's foreign name -> its type name.
+(defvar objc::*type-encodings* (make-hash-table :test 'equal))
+
+(defvar objc::*struct-names* (make-hash-table :test 'equal))
+
 ;; LispWorks' printed form of a foreign pointer. The address only: printing must never
 ;; be what touches a freed object (the message of a refused release prints the pointer).
 (defun objc::%print-pointer (type address stream)
@@ -96,12 +128,18 @@
       (or (gethash address objc::*selectors-by-address*)
           (objc::%intern-sel address (objc::%selector-name address)))))
 
+;; The one live value for an address, if there is one.
+(defun objc::%live-pointer (address)
+  (or (objc::%interned address)
+      (and objc::*registered-pointer-hook*
+           (funcall objc::*registered-pointer-hook* address))))
+
 ;; The value for an object address this program now holds ONE reference to (retained in
 ;; the hop, or handed over by the alloc/new/copy family).
 (defun objc::%wrap-object (address)
   (cond ((= address 0) nil)
         ((objc::%class-p address) (objc::%intern-class address))
-        (t (let ((existing (objc::%interned address)))
+        (t (let ((existing (objc::%live-pointer address)))
              (if existing
                  (progn
                    (objc::%refs (objc::%pointer-handle existing) 0 1)
@@ -110,19 +148,46 @@
                                 (objc::%make-pointer address
                                  (objc::%new-handle address 1))))))))
 
+;; A value standing for a pointer: the pointer itself, else whatever the definition half
+;; maps it to (a standard-objc-object's pointer, a Lisp class's Objective-C class), else nil.
+(defun objc::%as-pointer (value)
+  (cond ((objc::%pointerp value) value)
+   (objc::*object-pointer-hook* (funcall objc::*object-pointer-hook* value))
+   (t nil)))
+
+;; A pointer value that holds no reference: the live one for the address when there is
+;; one, else a fresh one with nothing to release -- what a method's receiver is.
+(defun objc::%borrow (address)
+  (cond ((= address 0) nil)
+        ((objc::%class-p address) (objc::%intern-class address))
+        (t (or (objc::%live-pointer address)
+               (objc::%intern address
+                (objc::%make-pointer address (objc::%new-handle address 0)))))))
+
+;; The runtime is up, and every class defined before that exists.
+(defun objc::%ready ()
+  (unless objc::*initialized*
+    (objc::%initialize)
+    (setq objc::*initialized* t)
+    (when objc::*realize-hook* (funcall objc::*realize-hook*))))
+
 ;;; --- classes and selectors --------------------------------------------------------
 
 (defun objc:coerce-to-objc-class (class)
   (cond ((objc::%classp class) class)
         ((stringp class)
          (or (gethash class objc::*classes-by-name*)
-             (let ((address (objc::%get-class class)))
+             (let ((address
+                    (progn
+                      (objc::%ready)
+                      (objc::%get-class class))))
                (when (= address 0)
                  (error
                   "objc:coerce-to-objc-class: no Objective-C class named ~a"
                   class))
                (setf (gethash class objc::*classes-by-name*)
                      (objc::%intern-class address)))))
+        ((objc::%classp (objc::%as-pointer class)) (objc::%as-pointer class))
         (t (error
             "objc:coerce-to-objc-class: ~s is neither a class name nor a class"
             class))))
@@ -289,12 +354,14 @@
       (case (car type)
         (:pointer (let ((pointee (objc::%fli-type (second type))))
                     (if (eq pointee :void) :pointer (list :pointer pointee))))
-        (:struct (list :struct (case (objc::%struct-kind type)
-                                 (:ns-rect 'cocoa:ns-rect)
-                                 (:ns-point 'cocoa:ns-point)
-                                 (:ns-size 'cocoa:ns-size)
-                                 (:ns-range 'cocoa:ns-range)
-                                 (t (second type)))))
+        (:struct
+         (list :struct (case (objc::%struct-kind type)
+                         (:ns-rect 'cocoa:ns-rect)
+                         (:ns-point 'cocoa:ns-point)
+                         (:ns-size 'cocoa:ns-size)
+                         (:ns-range 'cocoa:ns-range)
+                         (t (or (gethash (second type) objc::*struct-names*)
+                                (second type))))))
         (:array (list :c-array (objc::%fli-type (third type)) (second type)))
         (:union (list :union (second type)))
         (t (list :bitfield (second type))))
@@ -322,49 +389,49 @@
 
 ;; The inverse: an FLI type a list-form method names, as its encoding.
 (defun objc::%type-encoding (fli)
-  (cond ((consp fli)
-         (let ((head (car fli)))
-           (cond ((eq head :pointer)
-                  (if (cdr fli)
-                      (concatenate 'string "^"
-                                   (objc::%type-encoding (second fli)))
-                      "^v"))
-                 ((and (member head '(:unsigned :signed)) (cdr fli))
-                  (let ((base (objc::%type-encoding (second fli))))
-                    (if (eq head :unsigned) (string-upcase base) base)))
-                 ((eq head :boolean) "B")
-                 ((and (eq head :struct) (symbolp (second fli)) (second fli))
-                  (objc::%type-encoding (second fli)))
-                 (t (error "objc: ~s is not an FLI type this interface can call"
-                           fli)))))
-        ((member fli '(:void)) "v")
-        ((member fli '(:char :byte :int8)) "c")
-        ((member fli '(:uint8)) "C")
-        ((member fli '(:short :int16)) "s")
-        ((member fli '(:uint16)) "S")
-        ((member fli '(:int :int32)) "i")
-        ((member fli '(:uint32)) "I")
-        ((member fli
-                 '(:long :long-long :int64 :intptr :intmax :ptrdiff-t :ssize-t))
-         "q")
-        ((member fli '(:uint64 :uintptr :size-t)) "Q")
-        ((member fli '(:float :single-float)) "f")
-        ((member fli '(:double :double-float)) "d")
-        ((member fli '(:boolean)) "B")
-        ((member fli '(:pointer)) "^v")
-        ((eq fli 'objc:objc-object-pointer) "@")
-        ((eq fli 'objc:objc-class) "#")
-        ((eq fli 'objc:sel) ":")
-        ((eq fli 'objc:objc-c-string) "*")
-        ((eq fli 'objc:objc-bool) "c")
-        ((eq fli 'objc:objc-c++-bool) "B")
-        ((eq fli 'objc:objc-at-question-mark) "@?")
-        ((eq fli 'objc:objc-unknown) "?")
-        ((eq fli 'cocoa:ns-rect) "{CGRect={CGPoint=dd}{CGSize=dd}}")
-        ((eq fli 'cocoa:ns-point) "{CGPoint=dd}")
-        ((eq fli 'cocoa:ns-size) "{CGSize=dd}")
-        ((eq fli 'cocoa:ns-range) "{_NSRange=QQ}")
-        (t (error "objc: ~s is not an FLI type this interface can call" fli))))
+  (cond
+   ((consp fli)
+    (let ((head (car fli)))
+      (cond
+       ((eq head :pointer)
+        (if (cdr fli)
+            (concatenate 'string "^" (objc::%type-encoding (second fli)))
+            "^v"))
+       ((and (member head '(:unsigned :signed)) (cdr fli))
+        (let ((base (objc::%type-encoding (second fli))))
+          (if (eq head :unsigned) (string-upcase base) base)))
+       ((eq head :boolean) "B")
+       ((and (eq head :struct) (symbolp (second fli)) (second fli))
+        (objc::%type-encoding (second fli)))
+       (t (error "objc: ~s is not an FLI type this interface can call" fli)))))
+   ((member fli '(:void)) "v")
+   ((member fli '(:char :byte :int8)) "c")
+   ((member fli '(:uint8)) "C")
+   ((member fli '(:short :int16)) "s")
+   ((member fli '(:uint16)) "S")
+   ((member fli '(:int :int32)) "i")
+   ((member fli '(:uint32)) "I")
+   ((member fli '(:long :long-long :int64 :intptr :intmax :ptrdiff-t :ssize-t))
+    "q")
+   ((member fli '(:uint64 :uintptr :size-t)) "Q")
+   ((member fli '(:float :single-float)) "f")
+   ((member fli '(:double :double-float)) "d")
+   ((member fli '(:boolean)) "B")
+   ((member fli '(:pointer)) "^v")
+   ((eq fli 'objc:objc-object-pointer) "@")
+   ((eq fli 'objc:objc-class) "#")
+   ((eq fli 'objc:sel) ":")
+   ((eq fli 'objc:objc-c-string) "*")
+   ((eq fli 'objc:objc-bool) "c")
+   ((eq fli 'objc:objc-c++-bool) "B")
+   ((eq fli 'objc:objc-at-question-mark) "@?")
+   ((eq fli 'objc:objc-unknown) "?")
+   ((eq fli 'cocoa:ns-rect) "{CGRect={CGPoint=dd}{CGSize=dd}}")
+   ((eq fli 'cocoa:ns-point) "{CGPoint=dd}")
+   ((eq fli 'cocoa:ns-size) "{CGSize=dd}")
+   ((eq fli 'cocoa:ns-range) "{_NSRange=QQ}")
+   ((gethash fli objc::*type-encodings*) (gethash fli objc::*type-encodings*))
+   (t (error "objc: ~s is not an FLI type this interface can call" fli))))
 
 ;; A variadic argument's encoding: C's default promotions (a float travels as a
 ;; double), and then every integer in a whole 64-bit slot -- a variadic argument takes
@@ -398,10 +465,8 @@
          (if (stringp target) (objc:coerce-to-objc-class target) target)
          (objc::%class-name cls)))
 
-(defun objc::%lookup-plan (target address name)
-  (let* ((cls (objc::%lookup-class address))
-         (entries (gethash name objc::*signatures*))
-         (hit (assoc cls entries)))
+(defun objc::%lookup-plan (target cls name)
+  (let* ((entries (gethash name objc::*signatures*)) (hit (assoc cls entries)))
     (if hit
         (cdr hit)
         (let* ((sel (objc::%sel-address name))
@@ -496,7 +561,12 @@
   (objc::%send (objc::%pointer-address pointer) (objc::%sel-address name)
                "v16@0:8" -1 nil 0))
 
-(defun objc:retain (pointer)
+(defun objc:retain (object)
+  (let ((pointer (or (objc::%as-pointer object) object)))
+    (objc::%retain pointer)
+    object))
+
+(defun objc::%retain (pointer)
   (cond ((objc::%classp pointer) pointer)
         ((objc::%pointerp pointer)
          (objc::%message pointer "retain")
@@ -504,7 +574,11 @@
          pointer)
         (t (error "objc:retain: ~s is not an Objective-C object" pointer))))
 
-(defun objc:release (pointer)
+(defun objc:release (object)
+  (objc::%release
+   (if (objc::%poolp object) object (or (objc::%as-pointer object) object))))
+
+(defun objc::%release (pointer)
   (cond ((objc::%poolp pointer) (objc::%drain pointer))
         ((objc::%classp pointer) nil)
         ((objc::%pointerp pointer)
@@ -513,7 +587,11 @@
          nil)
         (t (error "objc:release: ~s is not an Objective-C object" pointer))))
 
-(defun objc:autorelease (pointer)
+(defun objc:autorelease (object)
+  (objc::%autorelease (or (objc::%as-pointer object) object))
+  object)
+
+(defun objc::%autorelease (pointer)
   (cond ((objc::%classp pointer) pointer)
    ((objc::%pointerp pointer)
     (objc::%give-up pointer "autorelease")
@@ -526,7 +604,11 @@
     pointer)
    (t (error "objc:autorelease: ~s is not an Objective-C object" pointer))))
 
-(defun objc:retain-count (pointer)
+(defun objc:retain-count (object)
+  (let ((pointer (or (objc::%as-pointer object) object)))
+    (objc::%retain-count pointer)))
+
+(defun objc::%retain-count (pointer)
   (unless (objc::%pointerp pointer)
     (error "objc:retain-count: ~s is not an Objective-C object" pointer))
   (objc::%send (objc::%pointer-address pointer)
@@ -564,6 +646,8 @@
   (cond ((objc::%pointerp target) (objc::%pointer-address target))
         ((stringp target)
          (objc::%pointer-address (objc:coerce-to-objc-class target)))
+        ((objc::%as-pointer target)
+         (objc::%pointer-address (objc::%as-pointer target)))
         (t (error "objc:invoke: the receiver must be an object, a class or a class name, got ~s"
                   target))))
 
@@ -629,6 +713,8 @@
                         (let ((array (objc::%ns-array value temps)))
                           (push array (car temps))
                           (objc::%pointer-address array)))
+                       ((objc::%as-pointer value)
+                        (objc::%pointer-address (objc::%as-pointer value)))
                        (t (objc::%arg-error name index
                            "an object, a string, a vector or nil" value))))
         (:class
@@ -636,6 +722,8 @@
           ((objc::%pointerp value) (objc::%pointer-address value))
           ((stringp value)
            (objc::%pointer-address (objc:coerce-to-objc-class value)))
+          ((objc::%as-pointer value)
+           (objc::%pointer-address (objc::%as-pointer value)))
           (t (objc::%arg-error name index "a class or a class name" value))))
         (:sel
          (cond ((null value) 0)
@@ -722,8 +810,9 @@
 ;; retain, release and autorelease sent to an object go through the reference counts,
 ;; so no spelling of them bypasses the rule that a pointer gives up only what it holds.
 (defun objc::%counted-message-p (target method args)
-  (and (null args) (stringp method) (objc::%pointerp target)
-       (not (objc::%classp target))
+  (and (null args) (stringp method) (not (objc::%super-ref-p target))
+       (objc::%as-pointer target)
+       (not (objc::%classp (objc::%as-pointer target)))
        (or (string= method "retain") (string= method "release")
            (string= method "autorelease"))))
 
@@ -732,11 +821,17 @@
 (defun objc::%invoke (target method args into)
   (cond ((null target) nil)
         ((objc::%counted-message-p target method args)
-         (cond ((string= method "retain") (objc:retain target))
-               ((string= method "release") (objc:release target))
-               (t (objc:autorelease target))))
+         (let ((pointer (objc::%as-pointer target)))
+           (cond ((string= method "retain") (objc::%retain pointer))
+                 ((string= method "release") (objc::%release pointer))
+                 (t (objc::%autorelease pointer)))))
         (t
-         (let* ((address (objc::%target-address target))
+         (unless objc::*initialized* (objc::%ready))
+         (let* ((superp (objc::%super-ref-p target))
+                (address
+                 (if superp
+                     (objc::%super-receiver target)
+                     (objc::%target-address target)))
                 (listed (consp method))
                 (fixed -1)
                 (plan nil))
@@ -747,7 +842,12 @@
                  (unless (stringp method)
                    (error "objc:invoke: a method is a string or (name arg-types &key result-type variadic-num-of-fixed), got ~s"
                           method))
-                 (setq plan (objc::%lookup-plan target address method))))
+                 (setq plan
+                       (objc::%lookup-plan target
+                                           (if superp
+                                               (objc::%super-class target)
+                                               (objc::%lookup-class address))
+                                           method))))
            (let* ((name (if listed (first method) method))
                   (types (svref plan 0))
                   (return-type (svref plan 1))
@@ -792,8 +892,14 @@
                                                                temps) raws)
                                          (setq params (cdr params))
                                          (setq i (+ i 1)))
-                                       (objc::%send address (svref plan 3) types
-                                                    fixed (nreverse raws) mode))
+                                       (if superp
+                                           (objc::%send-super address
+                                            (objc::%super-class target)
+                                            (svref plan 3) types fixed
+                                            (nreverse raws) mode)
+                                           (objc::%send address (svref plan 3)
+                                                        types fixed
+                                                        (nreverse raws) mode)))
                        (when (car temps)
                          (dolist (temp (car temps)) (objc:release temp))))))
                (when (svref plan 5) (objc::%consume target))
@@ -896,6 +1002,7 @@
              module))
     (objc::%load-module module))
   (objc::%initialize)
+  (objc::%ready)
   nil)
 
 (defun objc:alloc-init-object (class)
@@ -905,9 +1012,14 @@
   (objc:invoke-into 'string pointer "description"))
 
 (defun objc:can-invoke-p (class-or-object-pointer method)
-  (let* ((address (objc::%target-address class-or-object-pointer))
-         (sel (objc::%sel-address method)))
-    (if (objc::%method-types (objc::%lookup-class address) sel) t nil)))
+  (let ((sel (objc::%sel-address (objc:selector-name method))))
+    (if (objc::%method-types (if (objc::%super-ref-p class-or-object-pointer)
+                                 (objc::%super-class class-or-object-pointer)
+                                 (objc::%lookup-class
+                                  (objc::%target-address
+                                   class-or-object-pointer))) sel)
+        t
+        nil)))
 
 (defun objc:objc-class-method-signature (class-spec method-name)
   (let* ((cls
@@ -941,17 +1053,19 @@
   method)
 
 (defun objc:objc-object-pointer (object-or-class)
-  (if (objc::%pointerp object-or-class)
-      object-or-class
+  (or (objc::%as-pointer object-or-class)
       (error "objc:objc-object-pointer: ~s is not an Objective-C object"
              object-or-class)))
 
-;; No class defined in Lisp exists yet, so no pointer has an associated Lisp object.
+;; The Lisp object made for a pointer: a standard-objc-object for an instance of a class
+;; defined in Lisp, the Lisp class for such a class, and nil for anything else.
 (defun objc:objc-object-from-pointer (pointer)
   (unless (objc::%pointerp pointer)
     (error "objc:objc-object-from-pointer: ~s is not an Objective-C object"
            pointer))
-  nil)
+  (if objc::*pointer-object-hook*
+      (funcall objc::*pointer-object-hook* pointer)
+      nil))
 
 ;;; --- COCOA --------------------------------------------------------------------------
 
@@ -988,3 +1102,16 @@
      location length))
   (setf (car range) location (cdr range) length)
   range)
+
+;; The default notification center's observers: TARGET receives SELECTOR (a method taking
+;; the NSNotification) for notifications of NAME from OBJECT; nil matches any.
+(defun cocoa:add-observer (target selector &key name object center)
+  (objc:invoke (or center (objc:invoke "NSNotificationCenter" "defaultCenter"))
+               "addObserver:selector:name:object:" target
+               (objc:coerce-to-selector selector) name object)
+  nil)
+
+(defun cocoa:remove-observer (target &key name object center)
+  (objc:invoke (or center (objc:invoke "NSNotificationCenter" "defaultCenter"))
+               "removeObserver:name:object:" target name object)
+  nil)

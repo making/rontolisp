@@ -49,6 +49,17 @@ final class JvmObjcPrimitivesCompiler {
 			Map.entry(LispNames.OBJC_INTERN, new Object[] { 2, "intern" }),
 			Map.entry(LispNames.OBJC_LOAD_MODULE, new Object[] { 1, "loadModule" }),
 			Map.entry(LispNames.OBJC_INITIALIZE, new Object[] { 0, "initialize" }),
+			Map.entry(LispNames.OBJC_ALLOCATE_CLASS, new Object[] { 2, "allocateClass" }),
+			Map.entry(LispNames.OBJC_ADD_IVAR, new Object[] { 5, "addIvar" }),
+			Map.entry(LispNames.OBJC_REGISTER_CLASS, new Object[] { 1, "registerClass" }),
+			Map.entry(LispNames.OBJC_ADD_METHOD, new Object[] { 5, "addMethod" }),
+			Map.entry(LispNames.OBJC_ADD_PROTOCOL, new Object[] { 2, "addProtocol" }),
+			Map.entry(LispNames.OBJC_SUPERCLASS, new Object[] { 1, "superclass" }),
+			Map.entry(LispNames.OBJC_SEND_SUPER, new Object[] { 7, "sendSuper" }),
+			Map.entry(LispNames.OBJC_IVAR_OFFSET, new Object[] { 2, "ivarOffset" }),
+			Map.entry(LispNames.OBJC_IVAR_TYPES, new Object[] { 2, "ivarTypes" }),
+			Map.entry(LispNames.OBJC_PEEK, new Object[] { 2, "peek" }),
+			Map.entry(LispNames.OBJC_POKE, new Object[] { 3, "poke" }),
 			Map.entry(ON_MAIN, new Object[] { 1, "onMain" }));
 
 	/**

@@ -44,11 +44,16 @@ public final class ObjcLibrary {
 
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> classForms;
+
+	@Nullable private static volatile List<LispVal> macroForms;
+
 	private ObjcLibrary() {
 	}
 
 	/**
-	 * Returns the parsed library definitions, in canonical shape. Parsed once and cached.
+	 * Returns the parsed library definitions ({@code objc.lisp}), in canonical shape.
+	 * Parsed once and cached.
 	 * @return the library forms
 	 */
 	public static List<LispVal> forms() {
@@ -57,7 +62,7 @@ public final class ObjcLibrary {
 			synchronized (ObjcLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
+					cached = List.copyOf(LispReader.readAllFromString(readSource("objc.lisp"), Features.INTERPRETER));
 					forms = cached;
 				}
 			}
@@ -65,10 +70,66 @@ public final class ObjcLibrary {
 		return cached;
 	}
 
-	private static String readSource() {
-		try (InputStream in = ObjcLibrary.class.getResourceAsStream("objc.lisp")) {
+	/**
+	 * Returns the class-definition half ({@code objc-class.lisp}: standard-objc-object,
+	 * the classes and methods the defining macros make), parsed once and cached. The
+	 * compile path splices it only into a program that defines something
+	 * ({@link #process}).
+	 * @return the forms
+	 */
+	public static List<LispVal> classForms() {
+		List<LispVal> cached = classForms;
+		if (cached == null) {
+			synchronized (ObjcLibrary.class) {
+				cached = classForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("objc-class.lisp"), Features.INTERPRETER));
+					classForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
+	 * Returns the defining macros ({@code objc-macros.lisp}: {@code define-objc-class}
+	 * and the rest), parsed once and cached. The compile path expands macros BEFORE it
+	 * splices libraries, so {@link #withMacros} puts these in front of the program for
+	 * that expansion; the interpreter evaluates them with the library.
+	 * @return the forms
+	 */
+	public static List<LispVal> macroForms() {
+		List<LispVal> cached = macroForms;
+		if (cached == null) {
+			synchronized (ObjcLibrary.class) {
+				cached = macroForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("objc-macros.lisp"), Features.INTERPRETER));
+					macroForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
+	 * Every form the interpreter evaluates on the first use: the library, the class half,
+	 * the macros.
+	 * @return the forms, in evaluation order
+	 */
+	public static List<LispVal> allForms() {
+		List<LispVal> all = new ArrayList<>(forms());
+		all.addAll(classForms());
+		all.addAll(macroForms());
+		return all;
+	}
+
+	private static String readSource(String name) {
+		try (InputStream in = ObjcLibrary.class.getResourceAsStream(name)) {
 			if (in == null) {
-				throw new IllegalStateException("objc.lisp is missing from the classpath");
+				throw new IllegalStateException(name + " is missing from the classpath");
 			}
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
@@ -114,24 +175,90 @@ public final class ObjcLibrary {
 		Set<String> cached = definedNames;
 		if (cached == null) {
 			Set<String> names = new HashSet<>();
-			for (LispVal form : forms()) {
-				if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && DEFINERS.contains(op.name())
-						&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
-					names.add(name.name());
-				}
-			}
+			collectDefinedNames(forms(), names);
+			collectDefinedNames(classForms(), names);
+			collectDefinedNames(macroForms(), names);
 			cached = Set.copyOf(names);
 			definedNames = cached;
 		}
 		return cached;
 	}
 
-	private static final Set<String> DEFINERS = Set.of(LispNames.DEFUN, LispNames.DEFVAR, LispNames.DEFCONSTANT);
+	@Nullable private static volatile Set<String> classDefinedNames;
+
+	/**
+	 * The names the class half defines or is reached through: its own definitions, and
+	 * the exported names only it gives a meaning.
+	 */
+	private static Set<String> classDefinedNames() {
+		Set<String> cached = classDefinedNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			collectDefinedNames(classForms(), names);
+			for (String member : CLASS_HALF_EXPORTS) {
+				names.add(PackageRegistry.qualify(LispNames.OBJC_PKG, member));
+			}
+			cached = Set.copyOf(names);
+			classDefinedNames = cached;
+		}
+		return cached;
+	}
+
+	/** {@code objc:standard-objc-object}, qualified: a superclass a defclass names. */
+	private static final String STANDARD_OBJC_OBJECT = LispNames.OBJC_PKG + ":STANDARD-OBJC-OBJECT";
+
+	/** The exported names of the class half that no macro expansion spells. */
+	private static final List<String> CLASS_HALF_EXPORTS = List.of("STANDARD-OBJC-OBJECT", "OBJC-OBJECT-VAR-VALUE",
+			"OBJC-OBJECT-COPIED", "OBJC-OBJECT-DESTROYED");
+
+	private static void collectDefinedNames(List<LispVal> source, Set<String> names) {
+		for (LispVal form : source) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && DEFINERS.contains(op.name())
+					&& cons.cdr() instanceof LispCons rest) {
+				if (rest.car() instanceof LispSymbol name) {
+					names.add(name.name());
+				}
+				else if (rest.car() instanceof LispCons setf && setf.cdr() instanceof LispCons place
+						&& place.car() instanceof LispSymbol name) {
+					names.add(name.name());
+				}
+			}
+		}
+	}
+
+	private static final Set<String> DEFINERS = Set.of(LispNames.DEFUN, LispNames.DEFVAR, LispNames.DEFCONSTANT,
+			LispNames.DEFMACRO, LispNames.DEFGENERIC, LispNames.DEFCLASS);
+
+	/**
+	 * Whether a symbol names one of the defining macros ({@code objc-macros.lisp}), which
+	 * the interpreter must load before it asks whether a call is a macro.
+	 * @param symbolName the canonical symbol name
+	 * @return {@code true} for a macro of the library
+	 */
+	public static boolean definesMacro(String symbolName) {
+		return symbolName.startsWith(LispNames.OBJC_PKG + ":") && macroNames().contains(symbolName);
+	}
+
+	@Nullable private static volatile Set<String> macroNames;
+
+	private static Set<String> macroNames() {
+		Set<String> cached = macroNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			collectDefinedNames(macroForms(), names);
+			cached = Set.copyOf(names);
+			macroNames = cached;
+		}
+		return cached;
+	}
 
 	/**
 	 * Whether a form mentions one of the library's type names anywhere -- a
 	 * {@code typep}, a {@code typecase} clause or a method specializer can name
-	 * {@code objc:objc-object-pointer} before any function of the library is resolved.
+	 * {@code objc:objc-object-pointer} before any function of the library is resolved,
+	 * and a {@code defclass} {@code objc:standard-objc-object} (what
+	 * {@code define-objc-class} expands to, which the compile path's macro-time evaluator
+	 * evaluates too).
 	 * @param form the form
 	 * @return {@code true} when it does
 	 */
@@ -140,7 +267,7 @@ public final class ObjcLibrary {
 			if (val instanceof LispSymbol sym) {
 				String name = sym.name();
 				return LispNames.OBJC_POINTER_TYPE.equals(name) || LispNames.OBJC_CLASS_TYPE.equals(name)
-						|| LispNames.OBJC_SEL_TYPE.equals(name);
+						|| LispNames.OBJC_SEL_TYPE.equals(name) || STANDARD_OBJC_OBJECT.equals(name);
 			}
 			if (val instanceof LispCons cons) {
 				if (mentionsType(cons.car())) {
@@ -165,8 +292,59 @@ public final class ObjcLibrary {
 			return program;
 		}
 		List<LispVal> out = new ArrayList<>(forms());
+		if (referencesClassHalf(program)) {
+			out.addAll(classForms());
+		}
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * The compile-path pass in front of user-macro expansion: prepends the defining
+	 * macros when the program references the library, so {@code define-objc-class} and
+	 * the rest expand like any macro (and are dropped with the other {@code defmacro}s).
+	 * @param program the top-level forms, before user-macro expansion
+	 * @return the program with the macros in front when used
+	 */
+	public static List<LispVal> withMacros(List<LispVal> program) {
+		if (!references(program)) {
+			return program;
+		}
+		List<LispVal> out = new ArrayList<>(macroForms());
+		out.addAll(program);
+		return out;
+	}
+
+	/**
+	 * Whether a program, its macros expanded, uses the class half: a name only that half
+	 * defines, or {@code standard-objc-object} and its generics.
+	 * @param program the top-level forms
+	 * @return {@code true} when it does
+	 */
+	public static boolean referencesClassHalf(List<LispVal> program) {
+		Set<String> names = classDefinedNames();
+		for (LispVal form : program) {
+			if (mentionsAny(form, names)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsAny(LispVal form, Set<String> names) {
+		for (LispVal val = form;;) {
+			if (val instanceof LispSymbol sym) {
+				return names.contains(sym.name());
+			}
+			if (val instanceof LispCons cons) {
+				if (mentionsAny(cons.car(), names)) {
+					return true;
+				}
+				val = cons.cdr();
+				continue;
+			}
+			return false;
+		}
 	}
 
 	/**

@@ -4,7 +4,7 @@
 
 ## LispWorks のインターフェース
 
-LispWorks 8.1 の Objective-C インターフェースの名前とラムダリストをそのまま持つため、そのマニュアルに沿って書いたコードがここで動きます。型もこのパッケージが名付けます。`objc:objc-object-pointer` (すべてのオブジェクト)、`objc:objc-class` (クラス。オブジェクトポインタでもある)、`objc:sel` (セレクタ) は、以下の関数が返す値の型です。`objc:objc-bool`、`objc:objc-c++-bool`、`objc:objc-c-string`、`objc:objc-at-question-mark`、`objc:objc-unknown` は、リスト形式のメソッドと `objc:objc-class-method-signature` が使う型指定子です。マクロ [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md) は本体を自動解放プールの中で評価します。下の `objc:on-main` はパッケージの両方の部分で共有されます。
+LispWorks 8.1 の Objective-C インターフェースの名前とラムダリストをそのまま持つため、そのマニュアルに沿って書いたコードがここで動きます。型もこのパッケージが名付けます。`objc:objc-object-pointer` (すべてのオブジェクト)、`objc:objc-class` (クラス。オブジェクトポインタでもある)、`objc:sel` (セレクタ) は、以下の関数が返す値の型です。`objc:objc-bool`、`objc:objc-c++-bool`、`objc:objc-c-string`、`objc:objc-at-question-mark`、`objc:objc-unknown` は、リスト形式のメソッドと `objc:objc-class-method-signature` が使う型指定子です。マクロ [`objc:with-autorelease-pool`](../macros/objc-with-autorelease-pool.md) は本体を自動解放プールの中で評価します。下の `objc:on-main` はパッケージの両方の部分で共有されます。クラスはマクロ [`objc:define-objc-class`](../macros/objc-define-objc-class.md)、[`objc:define-objc-method`](../macros/objc-define-objc-method.md)、[`objc:define-objc-class-method`](../macros/objc-define-objc-class-method.md)、[`objc:current-super`](../macros/objc-current-super.md)、[`objc:define-objc-struct`](../macros/objc-define-objc-struct.md)、[`objc:define-objc-typedef`](../macros/objc-define-objc-typedef.md)、[`objc:define-objc-protocol`](../macros/objc-define-objc-protocol.md) で定義し、そのインスタンスは `objc:standard-objc-object` です。
 
 | 関数 | 例 | 結果 |
 |------|-----|------|
@@ -30,7 +30,10 @@ LispWorks 8.1 の Objective-C インターフェースの名前とラムダリ�
 | [`objc:ns-string-to-string`](objc-ns-string-to-string.md) | `(objc:ns-string-to-string s)` | Lisp 文字列 |
 | [`objc:string-to-ns-string`](objc-string-to-ns-string.md) | `(objc:string-to-ns-string "hi")` | プログラムが所有する `NSString` |
 | [`objc:objc-object-pointer`](objc-objc-object-pointer.md) | `(objc:objc-object-pointer p)` | オブジェクトのポインタ |
-| [`objc:objc-object-from-pointer`](objc-objc-object-from-pointer.md) | `(objc:objc-object-from-pointer p)` | 対応する Lisp オブジェクト (`nil`) |
+| [`objc:objc-object-from-pointer`](objc-objc-object-from-pointer.md) | `(objc:objc-object-from-pointer p)` | 対応する Lisp オブジェクト、または `nil` |
+| [`objc:objc-object-var-value`](objc-objc-object-var-value.md) | `(objc:objc-object-var-value obj "count")` | インスタンス変数の値 (`setf` 可) |
+| [`objc:objc-object-copied`](objc-objc-object-copied.md) | `(defmethod objc:objc-object-copied :after ((old c) (new c)) ...)` | インスタンスが複製されたときに呼ばれる |
+| [`objc:objc-object-destroyed`](objc-objc-object-destroyed.md) | `(defmethod objc:objc-object-destroyed :after ((o c)) ...)` | インスタンスが解放されたときに呼ばれる |
 
 ## 最初の動詞
 
