@@ -90,6 +90,9 @@ public final class IndentRules {
 				// distinguished argument. Spelled out rather than left to the with-
 				// guess.
 				"with-deprecation",
+				// (objc:with-autorelease-pool (OPTION...) body...): LispWorks' option
+				// list is the distinguished argument.
+				"with-autorelease-pool",
 				// (uiop:while-collecting (COLLECTOR...) body...): the collector list is
 				// the distinguished argument. It has no with-/do- prefix, so the naming
 				// convention would read it as a call and align the whole body under the

@@ -18,7 +18,7 @@ CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
 
 ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL はあなたのものです — ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別です — し、ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
 
-もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、`examples/macos/life-macos.lisp` はその中でライフゲームを走らせます。どちらも以下のウィジェットだけでできています。2 つが共有しているのはその上のボード、つまり両者がたまたま欲しがったクリック可能なタイルのグリッドを持つ小さな `cocoa` パッケージ `examples/macos/cocoa.lisp` です。これはボードゲームのポリシーであり、だからこそサンプルのままです。
+もっと大きなものも同じように Lisp で組み立てます。`examples/browser/minesweeper/minesweeper-macos.lisp` は Cocoa ウィンドウで完全なマインスイーパを遊べますし、`examples/macos/life-macos.lisp` はその中でライフゲームを走らせます。どちらも以下のウィジェットだけでできています。2 つが共有しているのはその上のボード、つまり両者がたまたま欲しがったクリック可能なタイルのグリッドを持つ小さな `board` パッケージ `examples/macos/board.lisp` です。これはボードゲームのポリシーであり、だからこそサンプルのままです。
 
 `examples/macos/listener.lisp` は言語そのものをウィンドウに載せます。`NSTextView` のトランスクリプト、Return キーが Lisp のクロージャである編集可能な `NSTextField`、そして読み取った式への `eval` — 印字された出力も取り込み、エラーはプロセスを終わらせずに一行として表示されます。ウィンドウと評価器は同じイメージなので、そこに打ち込んだ式が次のウィンドウを開けます。
 
@@ -296,6 +296,80 @@ CL-USER> (objc:send button "setAction:" "invoke:")
 ### 所有権
 
 `objc:` の値はオブジェクトへの参照を 1 つ所有します — `alloc` / `new` / `copy` / `mutableCopy` / `retain` の結果からは引き継ぎ、それ以外は retain して — そして Lisp の値が回収されたときにメインスレッド上で解放します。つまり保持しているウィンドウや文字列は保持している限り有効で、手で解放するものはありません。唯一の規則: `objc:` で直接作るウィンドウには `appkit:window` がしているように `(objc:send win "setReleasedWhenClosed:" nil)` が必要です。さもないと閉じたときに Lisp の値がまだ持っている参照が解放されます。
+
+## LispWorks のインターフェース
+
+上の動詞と並んで、`objc` は LispWorks 8.1 の Objective-C インターフェースのうち呼び出し側 (`objc:invoke`、`objc:invoke-bool`、`objc:invoke-into`、`objc:retain` / `objc:release` / `objc:autorelease`、自動解放プール、クラスとセレクタの変換) を、LispWorks の名前とラムダリストのまま持ちます。その Foundation 構造体は `cocoa` パッケージが持ちます。LispWorks のマニュアルの呼び出し・文字列・メモリ管理の節に沿って書いたコードは、`objc` を use するパッケージの中で、インタプリタ、コンパイル済みクラス、`--native` 実行ファイルのどれでもそのまま動きます。すべての名前は[関数リファレンス](../reference/functions/objc.md)にあります。
+
+```console
+CL-USER> (defpackage :my-app (:use :cl :objc))
+:MY-APP
+CL-USER> (in-package :my-app)
+:MY-APP
+MY-APP> (defvar *s* (invoke "NSString" "stringWithUTF8String:" "hello world"))
+*S*
+MY-APP> (invoke *s* "rangeOfString:" "world")
+(6 . 5)
+MY-APP> (invoke-bool *s* "hasPrefix:" "hello")
+T
+MY-APP> (invoke-into 'string *s* "uppercaseString")
+"HELLO WORLD"
+MY-APP> (invoke-into 'string "NSString"
+                     '("stringWithFormat:" (objc-object-pointer :int)
+                       :result-type objc-object-pointer :variadic-num-of-fixed 1)
+                     "The integer %d" 42)
+"The integer 42"
+```
+
+### 宣言型による変換
+
+`objc:invoke` はメソッドの型エンコーディングをランタイムから読み (リスト形式のメソッドは型を自分で述べます)、それに従って各引数と結果を変換します。引数として渡した文字列やベクタは呼び出しの間だけ存在します。レシーバにないメソッドは、何も送る前に `No method ... for object ..., class ...` をシグナルします。クラスはランタイムがレシーバについて答えるものです。
+
+| 宣言型 | 引数として渡せるもの | 結果 |
+|--------|----------------------|------|
+| `id` | オブジェクトポインタ、`nil`、文字列 (`NSString` になる)、ベクタ (要素も同様に変換した `NSArray` になる) | `objc:objc-object-pointer` または `nil` |
+| `Class` | クラスポインタまたはクラス名 | `objc:objc-class` |
+| `SEL` | セレクタまたはその名前 | `objc:sel` |
+| `char *` | 文字列またはアドレス | 文字列 |
+| `BOOL` / `_Bool` | `t`、`nil`、整数 | `1` か `0` |
+| 整数 | 整数 (符号なし 64 ビットは 2^64-1 まで) | 整数 |
+| `float` / `double` | 実数 | 倍精度浮動小数点数 |
+| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)` | 倍精度のベクタ |
+| `NSRange` | `(location . length)` | コンス |
+| その他の構造体 | メモリ順に並べたフィールドのベクタ | フィールドのベクタ |
+| ポインタ | アドレス、`nil`、オブジェクトポインタ | アドレス |
+
+`objc:invoke-into` はさらに変換します。`'string` は結果の `NSString` を Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。
+
+### 所有権: ポインタは保持している参照だけを解放する
+
+すべての送信はメインスレッド上で専用の自動解放プールの中で行われるため、送信が autorelease したオブジェクトは、ポインタ値が先に参照を取らない限り送信から戻った時点で消えています。ポインタ値はオブジェクトの結果すべてについて参照を取り、`alloc` / `new` / `copy` / `mutableCopy` / `init` のメソッドが返す参照はそのまま引き取ります。ポインタ値は、コレクタに回収されるときにまだ保持している参照を解放します。`objc:retain` はプログラムが解放すべき参照を加えます。`objc:release` と `objc:autorelease` はポインタが保持する参照を一つ手放し、保持していなければシグナルします。そのため、マニュアルの規則どおり所有するものを解放するコードが、コレクタの解放と二重に解放することはありません。`(objc:invoke p "release")` も同じ計数を通ります。
+
+```console
+MY-APP> (defvar *o* (alloc-init-object "NSObject"))
+*O*
+MY-APP> (retain-count (retain *o*))
+2
+MY-APP> (release *o*)
+NIL
+MY-APP> (release *o*)
+NIL
+MY-APP> (release *o*)
+error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+MY-APP> (with-autorelease-pool ()
+          (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
+"pooled"
+```
+
+プールは Lisp 側で管理します。各送信がメインスレッドで自分のプールを積んで降ろすため、本物の `NSAutoreleasePool` は二つの送信にまたがれません。
+
+### 値
+
+オブジェクトは `objc:objc-object-pointer`、クラスは `objc:objc-class` (オブジェクトポインタでもある)、セレクタは `objc:sel` として返ります。どれも `structure-object` ではありません。一つのオブジェクトに対する二つの答えは `eq`、`eql`、`equal`、`equalp` のいずれでも等しく、どのハッシュテーブルでも互いに見つかります。ポインタは LispWorks と同じく `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>` と表示します。表示するのはアドレスだけで、オブジェクトからは何も読みません。
+
+### LispWorks との違い
+
+rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。Lisp でのクラス定義はまだこのインターフェースにありません。上の `objc:define-class` が担います。
 
 ## ネイティブバイナリ
 

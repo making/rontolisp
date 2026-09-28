@@ -659,6 +659,15 @@ final class JvmExprCompiler {
 				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			if (qn != null && LispNames.OBJC_PKG.equals(qn.pkg())
+					&& LispNames.OBJC_WITH_AUTORELEASE_POOL.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandObjcWithAutoreleasePool(cons), ctx, className);
+				return;
+			}
+			if (qn != null && JvmObjcPrimitivesCompiler.handles(sym.name())) {
+				JvmObjcPrimitivesCompiler.compile(sym.name(), cons, ctx, className);
+				return;
+			}
 			if (qn != null && LispNames.OBJC_PKG.equals(qn.pkg()) && JvmObjcInteropCompiler.handles(qn.member())) {
 				JvmObjcInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;

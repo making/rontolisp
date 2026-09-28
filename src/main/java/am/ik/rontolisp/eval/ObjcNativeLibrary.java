@@ -15,15 +15,19 @@ import org.jspecify.annotations.Nullable;
 /**
  * The {@code objc:} verbs of a {@code --native} output: {@code objc-native.lisp}, written
  * in rontolisp over the {@code rlobjc} imports the runner stub answers on macOS
- * ({@code rontolisp-native/runner/src/objc}). The compile path splices it into a
- * {@code --native} program that references any of the four macOS packages, AFTER
- * {@link AppKitLibrary} (whose widget layer is what introduces the {@code objc:}
- * references of an {@code appkit:} program). A {@code .wasm} output still refuses such a
- * program: only the runner provides the imports. See {@code .kb/objc.md}, "--native".
+ * ({@code rontolisp-native/runner/src/objc}), and in front of it the new base's primitive
+ * layer ({@code objc-native-primitives.lisp}, the {@code p_*} imports) that
+ * {@code objc.lisp} is written over. The compile path splices it into a {@code --native}
+ * program that references any of the four macOS packages, AFTER {@link AppKitLibrary}
+ * (whose widget layer is what introduces the {@code objc:} references of an
+ * {@code appkit:} program). A {@code .wasm} output still refuses such a program: only the
+ * runner provides the imports. See {@code .kb/objc.md}, "--native".
  */
 public final class ObjcNativeLibrary {
 
 	private static volatile @Nullable List<LispVal> forms;
+
+	private static volatile @Nullable List<LispVal> primitiveForms;
 
 	private ObjcNativeLibrary() {
 	}
@@ -46,10 +50,34 @@ public final class ObjcNativeLibrary {
 		return cached;
 	}
 
+	/**
+	 * Returns the new base's primitive layer on this target
+	 * ({@code objc-native-primitives.lisp}), parsed once and cached.
+	 * @return the forms
+	 */
+	public static List<LispVal> primitiveForms() {
+		List<LispVal> cached = primitiveForms;
+		if (cached == null) {
+			synchronized (ObjcNativeLibrary.class) {
+				cached = primitiveForms;
+				if (cached == null) {
+					cached = List.copyOf(LispReader.readAllFromString(readSource("objc-native-primitives.lisp"),
+							Features.INTERPRETER));
+					primitiveForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
 	private static String readSource() {
-		try (InputStream in = ObjcNativeLibrary.class.getResourceAsStream("objc-native.lisp")) {
+		return readSource("objc-native.lisp");
+	}
+
+	private static String readSource(String name) {
+		try (InputStream in = ObjcNativeLibrary.class.getResourceAsStream(name)) {
 			if (in == null) {
-				throw new IllegalStateException("objc-native.lisp is missing from the classpath");
+				throw new IllegalStateException(name + " is missing from the classpath");
 			}
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
@@ -70,7 +98,10 @@ public final class ObjcNativeLibrary {
 		if (!nativeOutput || AppKitLibrary.firstObjcReference(program) == null) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		// The new base's primitives first: they define objc:on-main and objc::%sleep,
+		// which both bases use.
+		List<LispVal> out = new ArrayList<>(primitiveForms());
+		out.addAll(forms());
 		out.addAll(program);
 		return out;
 	}

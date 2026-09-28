@@ -867,6 +867,11 @@ final class WasmExprCompiler {
 					return;
 				}
 			}
+			if (qn != null && LispNames.OBJC_PKG.equals(qn.pkg())
+					&& LispNames.OBJC_WITH_AUTORELEASE_POOL.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandObjcWithAutoreleasePool(cons), ctx);
+				return;
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {

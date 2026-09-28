@@ -12,7 +12,7 @@
     "(objc_autoreleasePoolPop).",
     "",
     "After them come am.ik.objc's runtime downcalls",
-    "(objc_getClass, sel_registerName, class_addMethod, protocol_getMethodDescription with",
+    "(objc_getClass, sel_registerName, object_isClass, class_addMethod, protocol_getMethodDescription with",
     "its struct { SEL; const char* } answer, dispatch_sync_f/dispatch_async_f, pthread_main_np,",
     "CFRunLoopRunInMode / CFRunLoopSourceCreate / CFRunLoopAddSource -- the run loop thread 0 parks in) and then the CLOSED TABLE of objc_msgSend shapes a native image",
     "can serve: the shapes appkit.lisp, metal.lisp, scene.lisp and the documented examples send, plus the 60 most common",
@@ -165,6 +165,10 @@
         "parameterTypes": ["void*", "void*"]
       },
       {
+        "returnType": "jboolean",
+        "parameterTypes": ["void*"]
+      },
+      {
         "returnType": "jint",
         "parameterTypes": ["void*", "jdouble", "jboolean"]
       },
@@ -195,6 +199,10 @@
       {
         "returnType": "void*",
         "parameterTypes": ["void*", "void*", "jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "void*", "jint"]
       },
       {
         "returnType": "void",

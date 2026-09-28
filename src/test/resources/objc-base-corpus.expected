@@ -1,0 +1,99 @@
+ensure-objc-initialized: NIL
+length: 11
+rangeOfString:: (6 . 5)
+rangeOfString: not found: (9223372036854775807 . 0)
+not found is ns-not-found: T
+substringWithRange:: "world"
+frame: #(0.0 0.0 100.0 100.0)
+Class argument: T
+BOOL argument t: 1
+BOOL argument nil: 0
+id argument vector: "a-b-c"
+char * result: "hello world"
+unsigned 64: 18446744073709551615
+double: 2.5
+nil receiver: NIL
+invoke on BOOL: 1
+invoke on BOOL false: 0
+invoke-bool: 1
+invoke-into vector: #(0.0 0.0 100.0 100.0)
+invoke-into cons: (4 . 1)
+NSValue round trip: #(1.0 2.0 3.0 4.0)
+NSPoint: #(5.0 6.0)
+NSSize: #(7.0 8.0)
+description pointer: T
+description string: "hello world"
+array: 2
+(array string): #("x" "y")
+(array (array string)): #(#("p" "q"))
+vector result: (T NIL)
+variadic list form: "The integer 42"
+variadic known selector: "x and 42 and 1.5"
+nil-terminated: 3
+can-invoke-p: T
+can-invoke-p class: T
+can-invoke-p missing: NIL
+retain-count of a new object: 1
+retain answers its argument: T
+retain-count after retain: 2
+release: NIL
+retain-count after release: 1
+autorelease answers its argument: T
+retain-count after the pool: 1
+retain-count inside a made pool: 2
+retain-count after releasing the pool: 1
+invoke release routes to release: NIL
+release its reference: NIL
+a second release is refused: "objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x...> holds no reference this program can give up"
+invoke release is refused too: "objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x...> holds no reference this program can give up"
+string-to-ns-string: "owned"
+release a string-to-ns-string: NIL
+string-to-ns-string autoreleased: "pooled"
+with-autorelease-pool example: "42"
+with-autorelease-pool values: (1 2)
+new is owned: 1
+selector-name: "frame"
+selector-name string: "notAColonName"
+selector interned: T
+respondsToSelector:: T
+SEL argument and result: "description"
+ns-string-to-string: "hello world"
+line terminators: "a
+b
+c"
+line terminators preserved: 3
+unicode: "λ→✓"
+description: "7"
+coerce-to-objc-class: "NSString"
+class interned: T
+class through self: T
+class of an object: "NSScrollView"
+unknown class: "objc:coerce-to-objc-class: no Objective-C class named NoSuchClassAnywhere"
+alloc-init-object: "__NSArrayM"
+sig length: ((OBJC-OBJECT-POINTER SEL) (:UNSIGNED :LONG-LONG) "Q16@0:8")
+sig rangeOfString:: ((OBJC-OBJECT-POINTER SEL OBJC-OBJECT-POINTER) (:STRUCT COCOA:NS-RANGE) "{_NSRange=QQ}24@0:8@16")
+sig substringWithRange:: ((OBJC-OBJECT-POINTER SEL (:STRUCT COCOA:NS-RANGE)) OBJC-OBJECT-POINTER "@32@0:8{_NSRange=QQ}16")
+sig description: ((OBJC-OBJECT-POINTER SEL) OBJC-OBJECT-POINTER "@16@0:8")
+sig missing: NIL
+missing method: "No method \"noSuchMethodAtAll\" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x...>, class \"__NSCFString\"."
+arity: "objc:invoke: length takes 0 argument(s), got 1"
+argument type: "objc:invoke: characterAtIndex:: argument 1 must be an integer, got \"x\""
+rect argument: "objc:invoke: initWithFrame:: argument 1 must be a vector #(x y width height), got (0 0 1 1)"
+range argument: "objc:invoke: substringWithRange:: argument 1 must be a cons (location . length), got #(1 2)"
+receiver: "objc:invoke: the receiver must be an object, a class or a class name, got 42"
+one object, one value: (T T T T)
+hash tables: (:FOUND :FOUND)
+two objects: NIL
+type-of: (OBJC-OBJECT-POINTER OBJC-CLASS SEL)
+typep: (T T T NIL T)
+no structure-object: (NIL NIL)
+typecase: :OBJECT
+objc-object-pointer: T
+objc-object-from-pointer: NIL
+set-ns-point*: #(1 2)
+set-ns-size*: #(3 4)
+set-ns-rect*: #(1 2 3 4)
+set-ns-range*: (6 . 5)
+a filled rect is an argument: #(9.0 8.0 7.0 6.0)
+ns-not-found: 9223372036854775807
+on-main: 11

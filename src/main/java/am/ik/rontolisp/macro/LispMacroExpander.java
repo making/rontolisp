@@ -186,6 +186,9 @@ public final class LispMacroExpander {
 			// synthesizes (the compilers and the evaluator dispatch it by qualified
 			// name themselves).
 			case LispNames.TORCH_NO_GRAD_QUALIFIED -> expandTorchNoGrad(cons);
+			// objc:with-autorelease-pool wraps its body in a lambda: the capture analysis
+			// must see it, or a variable the body closes over stays unboxed.
+			case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED -> expandObjcWithAutoreleasePool(cons);
 			default -> null;
 		};
 	}
@@ -10709,6 +10712,30 @@ public final class LispMacroExpander {
 		LispVal resignal = callOf(LispNames.USOCKET_PKG + "::%USOCK-RESIGNAL", condVar);
 		LispVal clause = listToCons(List.of(new LispSymbol("ERROR"), listToCons(List.<LispVal>of(condVar)), resignal));
 		return listToCons(List.of(new LispSymbol(LispNames.HANDLER_CASE), parts.get(1), clause));
+	}
+
+	/**
+	 * Expands {@code (objc:with-autorelease-pool (option*) form*)} -- LispWorks' pool
+	 * macro, which takes no options -- into
+	 * {@code (objc::%call-with-autorelease-pool (lambda () form*))}, the function in
+	 * {@code objc.lisp} that binds a fresh emulated pool and drains it on every exit
+	 * (.kb/objc.md, "The new base: ownership").
+	 * @param cons the macro call
+	 * @return the expansion
+	 */
+	public static LispVal expandObjcWithAutoreleasePool(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException(
+					LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED.toLowerCase(java.util.Locale.ROOT)
+							+ " takes an empty option list: (objc:with-autorelease-pool () form*), got "
+							+ cons.print());
+		}
+		List<LispVal> lambda = new java.util.ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(LispNil.INSTANCE);
+		lambda.addAll(parts.subList(2, parts.size()));
+		return callOf(LispNames.OBJC_CALL_WITH_AUTORELEASE_POOL, listToCons(lambda));
 	}
 
 	/**
@@ -33171,11 +33198,21 @@ public final class LispMacroExpander {
 	 * type").
 	 */
 	private static boolean isStructureObjectLayout(LispLayout layout) {
-		return layout.kind() == LispLayout.Kind.STRUCT && !OBJC_OBJECT_STRUCT_TAG.equals(layout.tag());
+		return layout.kind() == LispLayout.Kind.STRUCT && !FOREIGN_POINTER_STRUCT_TAGS.contains(layout.tag());
 	}
 
 	/** The instance tag of the {@code --native} Objective-C wrapper struct. */
 	private static final String OBJC_OBJECT_STRUCT_TAG = LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_TYPE;
+
+	/**
+	 * The defstructs that are foreign references, not {@code structure-object}s: the old
+	 * base's {@code --native} wrapper and the new base's three pointer types
+	 * ({@code objc.lisp}), which LispWorks' foreign pointers are not either.
+	 */
+	private static final Set<String> FOREIGN_POINTER_STRUCT_TAGS = Set.of(OBJC_OBJECT_STRUCT_TAG,
+			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_POINTER_TYPE,
+			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_CLASS_TYPE,
+			LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_SEL_TYPE);
 
 	/** {@code objc:objectp}, the predicate of the {@code objc:object} type. */
 	private static final String OBJC_OBJECTP_QUALIFIED = PackageRegistry.qualify(LispNames.OBJC_PKG,
@@ -40832,7 +40869,7 @@ public final class LispMacroExpander {
 		String subStructTag = sub.structTag();
 		if (subStructTag != null) {
 			if ("STRUCTURE-OBJECT".equals(sup.canonical)) {
-				return !OBJC_OBJECT_STRUCT_TAG.equals(subStructTag);
+				return !FOREIGN_POINTER_STRUCT_TAGS.contains(subStructTag);
 			}
 			if (sup.structTag() != null) {
 				return sup.descendantStructTags().contains(subStructTag);

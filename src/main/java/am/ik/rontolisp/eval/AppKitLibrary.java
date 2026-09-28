@@ -96,11 +96,11 @@ public final class AppKitLibrary {
 
 	/**
 	 * The first reference to a macOS-only package in a program -- {@code objc},
-	 * {@code appkit}, {@code metal} or {@code scene}, as a qualified symbol anywhere or
-	 * as a bare exported name while {@code (in-package <that>)} is in effect -- or
-	 * {@code null} when the program uses none of them. The compile path refuses a
-	 * {@code .wasm} output on this answer, naming the reference. All four are one
-	 * question because they are one refusal: every one of them bottoms out in
+	 * {@code cocoa}, {@code appkit}, {@code metal} or {@code scene}, as a qualified
+	 * symbol anywhere or as a bare exported name while {@code (in-package <that>)} is in
+	 * effect -- or {@code null} when the program uses none of them. The compile path
+	 * refuses a {@code .wasm} output on this answer, naming the reference. All four are
+	 * one question because they are one refusal: every one of them bottoms out in
 	 * {@code objc:send}, which no WASM backend has an API for.
 	 * @param program the top-level forms
 	 * @return the symbol as written, or {@code null}
@@ -108,6 +108,10 @@ public final class AppKitLibrary {
 	public static @Nullable String firstObjcReference(List<LispVal> program) {
 		ReferenceWalker walker = new ReferenceWalker();
 		for (LispVal form : program) {
+			if (ObjcLibrary.usesPackage(form)) {
+				// A package that uses objc or cocoa: its bare names are theirs.
+				return "a package that uses objc or cocoa";
+			}
 			walker.trackTopLevelInPackage(form);
 			walker.detect(form);
 			if (walker.found != null) {
@@ -167,13 +171,16 @@ public final class AppKitLibrary {
 	 * The packages that make a program macOS-only, and therefore un-compilable to WASM.
 	 */
 	private static final List<String> MACOS_PACKAGES = List.of(LispNames.OBJC_PKG, LispNames.APPKIT_PKG,
-			LispNames.METAL_PKG, LispNames.SCENE_PKG);
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG);
 
 	/** Whether {@code name} is an exported name of {@code pkg}, one of the four above. */
 	private static boolean exportedBy(String pkg, String name) {
 		String upper = name.toUpperCase(Locale.ROOT);
 		if (LispNames.OBJC_PKG.equals(pkg)) {
-			return OBJC_VERBS.contains(upper);
+			return OBJC_VERBS.contains(upper) || PackageRegistry.objcBaseNames().contains(upper);
+		}
+		if (LispNames.COCOA_PKG.equals(pkg)) {
+			return PackageRegistry.cocoaNames().contains(upper);
 		}
 		if (LispNames.APPKIT_PKG.equals(pkg)) {
 			return PackageRegistry.appkitFunctionNames().contains(upper);

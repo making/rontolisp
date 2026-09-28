@@ -15,7 +15,8 @@
 | [`torch`](functions/torch.md) | 自動微分と `nn` スタイルのモジュール層を備えた PyTorch スタイルのテンソル |
 | [`java`](functions/java.md) | リフレクションによる Java 連携 (JVM インタプリタのみ) |
 | [`ffi`](functions/ffi.md) | C ライブラリ連携 |
-| [`objc`](functions/objc.md) | Foreign Function API による Objective-C ランタイムと AppKit (macOS のインタプリタのみ) |
+| [`objc`](functions/objc.md) | Foreign Function API による Objective-C ランタイムと AppKit。LispWorks のインターフェースを持つ (macOS のみ) |
+| [`cocoa`](functions/cocoa.md) | `objc` と並ぶ LispWorks の Foundation 構造体 (macOS のみ) |
 | [`appkit`](functions/appkit.md) | `objc` の上の Cocoa ウィジェット層 |
 | [`checkpoint`](functions/checkpoint.md) | 公開モデルのテンソルをパックされた浮動小数点配列にステージングする。チェックポイントを読む処理のうちファイル形式によらず共通する半分 |
 | [`safetensors`](functions/safetensors.md) | Hugging Face の `model.safetensors` -- またはシャード分割された `model.safetensors.index.json` -- をパックされた浮動小数点配列に読み込む |

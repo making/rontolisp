@@ -23,6 +23,7 @@
 
 mod call;
 mod encoding;
+mod prim;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -52,6 +53,8 @@ struct Api {
     sel_get_name: unsafe extern "C" fn(Id) -> *const c_char,
     object_get_class: unsafe extern "C" fn(Id) -> Id,
     object_get_class_name: unsafe extern "C" fn(Id) -> *const c_char,
+    object_is_class: unsafe extern "C" fn(Id) -> bool,
+    class_get_name: unsafe extern "C" fn(Id) -> *const c_char,
     class_get_superclass: unsafe extern "C" fn(Id) -> Id,
     class_get_instance_method: unsafe extern "C" fn(Id, Id) -> Id,
     method_get_type_encoding: unsafe extern "C" fn(Id) -> *const c_char,
@@ -127,6 +130,8 @@ fn open() -> Result<Api, String> {
             sel_get_name: f!(c"sel_getName"),
             object_get_class: f!(c"object_getClass"),
             object_get_class_name: f!(c"object_getClassName"),
+            object_is_class: f!(c"object_isClass"),
+            class_get_name: f!(c"class_getName"),
             class_get_superclass: f!(c"class_getSuperclass"),
             class_get_instance_method: f!(c"class_getInstanceMethod"),
             method_get_type_encoding: f!(c"method_getTypeEncoding"),
@@ -144,6 +149,18 @@ fn open() -> Result<Api, String> {
             default_mode: *(sym(c"kCFRunLoopDefaultMode")? as *const Id),
         })
     }
+}
+
+/// Loads a framework or a dylib for `objc:ensure-objc-initialized`'s `:modules`.
+fn load_module(path: &str) -> Result<(), String> {
+    let c = cstring(path)?;
+    // SAFETY: a NUL-terminated path.
+    if unsafe { dlopen(c.as_ptr(), RTLD_NOW | RTLD_GLOBAL) }.is_null() {
+        // SAFETY: dlerror's message for the failure above.
+        let why = text(unsafe { dlerror() });
+        return Err(format!("the module {path} cannot be loaded: {why}"));
+    }
+    Ok(())
 }
 
 fn cstring(s: &str) -> Result<CString, String> {
@@ -1246,6 +1263,7 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
         }
         Ok(())
     })?;
+    prim::add_to_linker(linker)?;
     linker.func_wrap(
         MODULE,
         "pump",
@@ -1261,6 +1279,10 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
 
 /// Finds the module's callback export once it is instantiated.
 pub fn bind(instance: &Instance, store: &mut Store<WasiP1Ctx>) -> wasmtime::Result<()> {
+    // A module that defines no Objective-C class exports no callback.
+    if instance.get_export(&mut *store, CALLBACK_EXPORT).is_none() {
+        return Ok(());
+    }
     let callback = instance.get_typed_func::<(i32, i64, i64, i64, i32), i64>(&mut *store, CALLBACK_EXPORT)?;
     with(|s| s.callback = Some(callback));
     Ok(())

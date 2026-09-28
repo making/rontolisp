@@ -813,6 +813,36 @@ categories:
       - { slug: objc-bytes, name: "objc:bytes" }
       - { slug: objc-address, name: "objc:address" }
       - { slug: objc-objectp, name: "objc:objectp" }
+      - { slug: objc-ensure-objc-initialized, name: "objc:ensure-objc-initialized" }
+      - { slug: objc-invoke, name: "objc:invoke" }
+      - { slug: objc-invoke-bool, name: "objc:invoke-bool" }
+      - { slug: objc-invoke-into, name: "objc:invoke-into" }
+      - { slug: objc-can-invoke-p, name: "objc:can-invoke-p" }
+      - { slug: objc-alloc-init-object, name: "objc:alloc-init-object" }
+      - { slug: objc-description, name: "objc:description" }
+      - { slug: objc-trace-invoke, name: "objc:trace-invoke" }
+      - { slug: objc-untrace-invoke, name: "objc:untrace-invoke" }
+      - { slug: objc-coerce-to-objc-class, name: "objc:coerce-to-objc-class" }
+      - { slug: objc-objc-class-name, name: "objc:objc-class-name" }
+      - { slug: objc-coerce-to-selector, name: "objc:coerce-to-selector" }
+      - { slug: objc-selector-name, name: "objc:selector-name" }
+      - { slug: objc-objc-class-method-signature, name: "objc:objc-class-method-signature" }
+      - { slug: objc-retain, name: "objc:retain" }
+      - { slug: objc-release, name: "objc:release" }
+      - { slug: objc-autorelease, name: "objc:autorelease" }
+      - { slug: objc-retain-count, name: "objc:retain-count" }
+      - { slug: objc-make-autorelease-pool, name: "objc:make-autorelease-pool" }
+      - { slug: objc-ns-string-to-string, name: "objc:ns-string-to-string" }
+      - { slug: objc-string-to-ns-string, name: "objc:string-to-ns-string" }
+      - { slug: objc-objc-object-pointer, name: "objc:objc-object-pointer" }
+      - { slug: objc-objc-object-from-pointer, name: "objc:objc-object-from-pointer" }
+  - title: "cocoa パッケージ (Foundation の構造体)"
+    index_page: reference/functions/cocoa.md
+    functions:
+      - { slug: cocoa-set-ns-point-star, name: "cocoa:set-ns-point*" }
+      - { slug: cocoa-set-ns-size-star, name: "cocoa:set-ns-size*" }
+      - { slug: cocoa-set-ns-rect-star, name: "cocoa:set-ns-rect*" }
+      - { slug: cocoa-set-ns-range-star, name: "cocoa:set-ns-range*" }
   - title: "appkit パッケージ (Cocoa ウィジェット)"
     index_page: reference/functions/appkit.md
     functions:

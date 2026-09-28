@@ -18,7 +18,8 @@ function's deviations from Common Lisp are noted on its own page.
 | [`torch`](functions/torch.md) | A PyTorch-style tensor with automatic differentiation and an `nn`-style module layer |
 | [`java`](functions/java.md) | Java interop by reflection (JVM interpreter only) |
 | [`ffi`](functions/ffi.md) | C library interop |
-| [`objc`](functions/objc.md) | The Objective-C runtime and AppKit through the foreign function API (macOS interpreter only) |
+| [`objc`](functions/objc.md) | The Objective-C runtime and AppKit through the foreign function API, with LispWorks' interface (macOS only) |
+| [`cocoa`](functions/cocoa.md) | LispWorks' Foundation structures beside `objc` (macOS only) |
 | [`appkit`](functions/appkit.md) | A Cocoa widget layer over `objc` |
 | [`checkpoint`](functions/checkpoint.md) | Stages a published model's tensors into packed float arrays: the half of reading a checkpoint that every file format shares |
 | [`safetensors`](functions/safetensors.md) | Reads a Hugging Face `model.safetensors` -- or a sharded `model.safetensors.index.json` -- into packed float arrays |

@@ -74,6 +74,35 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void theNewBasesCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// objc.lisp over the p_* imports: the same conversions, ownership and value
+		// identity as the interpreter's primitives (eval/ObjcBaseTest pins the output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-base-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(interpret(source));
+		assertThat(actual.stderr()).isEmpty();
+	}
+
+	@Test
+	void theNewBaseReleasesWhatADeadPointerHeld() throws Exception {
+		// A pointer value's collector share rides on the externref p_new_handle hands
+		// out: when values die, their references are released, so 300,000 answers of one
+		// object leave a small count outstanding rather than 300,000.
+		Run run = nativeOutput("""
+				(let ((o (objc:alloc-init-object "NSObject")))
+				  (dotimes (i 300000) (objc:invoke o "self"))
+				  (format t "~a~%" (< (objc:retain-count o) 100000)))
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("T\n");
+	}
+
+	@Test
 	void sleepTurnsTheEventLoopSoATimerRunsWhileTheProgramWaits() throws Exception {
 		Run run = nativeOutput("""
 				(defvar *ticks* 0)

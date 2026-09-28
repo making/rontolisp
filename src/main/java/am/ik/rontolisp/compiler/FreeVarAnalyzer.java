@@ -231,6 +231,9 @@ public final class FreeVarAnalyzer {
 						}
 						case LispNames.LET_STAR -> collectFreeVars(LispMacroExpander.expandLetStar(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandObjcWithAutoreleasePool(cons), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
 						// Expand before walking: a cond clause whose test is a bare
 						// symbol would otherwise be misread as a call form, dropping
 						// the variable reference (cl-ppcre's (cond (start-anchored-p
@@ -676,6 +679,12 @@ public final class FreeVarAnalyzer {
 					}
 				}
 				case LispNames.LET_STAR -> acc.add(reach(LispMacroExpander.expandLetStar(cons), insideLambda, memo));
+				// objc:with-autorelease-pool wraps its body in a lambda the compilers
+				// only
+				// see once they expand it: walk the expansion, or a variable the body
+				// names stays unboxed with no cell for that lambda to load.
+				case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED ->
+					acc.add(reach(LispMacroExpander.expandObjcWithAutoreleasePool(cons), insideLambda, memo));
 				// The SUBSTITUTION family, expanded before walking for the same
 				// reason as in collectFreeVars -- and here it is a lost CAPTURE,
 				// not a spurious free variable: a lambda body that spells only

@@ -132,6 +132,10 @@ public final class LispEvaluator {
 
 	private boolean metalLibraryLoaded = false;
 
+	// The new objc base and cocoa (objc.lisp), loaded on the first resolution of one of
+	// their names or the first mention of one of their types.
+	private boolean objcLibraryLoaded = false;
+
 	private boolean sceneLibraryLoaded = false;
 
 	private boolean torchLibraryLoaded = false;
@@ -3682,6 +3686,8 @@ public final class LispEvaluator {
 	// (CompileFrontend).
 	private void registerObjc() {
 		ObjcInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
+		ObjcInterop.registerPrimitives(this.globalEnv,
+				(function, callArgs) -> apply(function, callArgs, this.globalEnv));
 	}
 
 	// Registers the interpreter side of the `ffi` package (eval/FfiInterop over
@@ -4721,6 +4727,33 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates the new {@code objc} base and {@code cocoa} ({@code objc.lisp},
+	 * {@code ObjcLibrary}) into the global environment once.
+	 */
+	private void ensureObjcLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.objcLibraryLoaded) {
+				return;
+			}
+			this.objcLibraryLoaded = true;
+			for (LispVal form : ObjcLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The type-mention half of the objc base's lazy trigger: a {@code typep}, a
+	 * {@code typecase} clause or a method specializer may name
+	 * {@code objc:objc-object-pointer} before any function of the library is resolved.
+	 */
+	private void ensureObjcTypesFor(LispVal form) {
+		if (!this.objcLibraryLoaded && ObjcLibrary.mentionsType(form)) {
+			ensureObjcLoaded();
+		}
+	}
+
+	/**
 	 * Evaluates the {@code metal} library (metal.lisp -- a Metal drawing surface over the
 	 * {@code objc:} verbs, {@code MetalLibrary}) into the global environment once.
 	 */
@@ -5670,6 +5703,11 @@ public final class LispEvaluator {
 			ensureUsocketLoaded();
 			value = this.globalEnv.lookupOrNull(name);
 		}
+		if (value == null && !this.objcLibraryLoaded && ObjcLibrary.definesName(name)) {
+			// cocoa:ns-not-found is a constant, so a variable read loads the library too.
+			ensureObjcLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
 		if (value == null && !this.metalLibraryLoaded && MetalLibrary.isMetalQualified(name)) {
 			// The metal library exports CONSTANTS (metal:+triangle+, metal:+line+, the
 			// cull and compare modes), and a program may well read one before it calls
@@ -6464,6 +6502,7 @@ public final class LispEvaluator {
 							case LispNames.DEFCLASS:
 								ensureAsdfClassesFor(cons);
 								ensureGeomClassesFor(cons);
+								ensureObjcTypesFor(cons);
 								result = singleValue(evalDefclass(cons, env));
 								break frame;
 							case LispNames.DEFGENERIC:
@@ -6472,6 +6511,7 @@ public final class LispEvaluator {
 							case LispNames.DEFMETHOD:
 								ensureAsdfClassesFor(cons);
 								ensureGeomClassesFor(cons);
+								ensureObjcTypesFor(cons);
 								result = singleValue(evalDefmethod(cons, env));
 								break frame;
 							case LispNames.MAKE_INSTANCE:
@@ -6480,6 +6520,7 @@ public final class LispEvaluator {
 								}
 								ensureAsdfClassesFor(cons);
 								ensureGeomClassesFor(cons);
+								ensureObjcTypesFor(cons);
 								next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
 								break dispatch;
 							case LispNames.CHANGE_CLASS:
@@ -6906,6 +6947,9 @@ public final class LispEvaluator {
 								// have declared it special BEFORE the let binds.
 								ensureTorchLoaded();
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad);
+								break dispatch;
+							case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED:
+								next = builtinMacroExpansion(cons, LispMacroExpander::expandObjcWithAutoreleasePool);
 								break dispatch;
 							case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithClientSocket);
@@ -7360,12 +7404,16 @@ public final class LispEvaluator {
 				// later print routes. The same ordering seam as the torch:no-grad case
 				// above (.kb/torch.md); torch and geom are the only lazily loaded
 				// libraries that define a print-object method (geom's are on
-				// geom:node/geom:solid, .kb/geom.md).
+				// geom:node/geom:solid, .kb/geom.md) besides objc.lisp.
 				if (!this.torchLibraryLoaded && referencesTorch(cons)) {
 					ensureTorchLoaded();
 				}
 				if (!this.geomLibraryLoaded && referencesGeom(cons)) {
 					ensureGeomLoaded();
+				}
+				// objc.lisp's pointer types print through print-object methods too.
+				if (!this.objcLibraryLoaded && ObjcLibrary.references(java.util.List.of(cons))) {
+					ensureObjcLoaded();
 				}
 				boolean printControls = printControlsInEffect();
 				ensurePrintObjectRuntimeLoadedIfRouted(printControls);
@@ -7424,16 +7472,19 @@ public final class LispEvaluator {
 			case LispNames.TYPECASE:
 				ensureAsdfClassesFor(cons);
 				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
 				ensureUiopTypesFor(cons);
 				return LispMacroExpander.expandTypecase(cons, this.closRegistry);
 			case LispNames.ETYPECASE:
 				ensureAsdfClassesFor(cons);
 				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
 				ensureUiopTypesFor(cons);
 				return LispMacroExpander.expandEtypecase(cons, this.closRegistry);
 			case LispNames.CTYPECASE:
 				ensureAsdfClassesFor(cons);
 				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
 				ensureUiopTypesFor(cons);
 				return LispMacroExpander.expandCtypecase(cons, this.closRegistry);
 			case LispNames.CHECK_TYPE:
@@ -7495,6 +7546,7 @@ public final class LispEvaluator {
 				seedMopClassesForTypepForm(cons);
 				ensureAsdfClassesFor(cons);
 				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
 				ensureUiopTypesFor(cons);
 				return LispMacroExpander.expandTypep(cons, this.closRegistry);
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE:
@@ -10094,6 +10146,15 @@ public final class LispEvaluator {
 			// verbs: load it the same way on the first resolution of an appkit:-qualified
 			// function. Nothing here asks whether this machine has AppKit -- the objc:
 			// call inside the first widget signals if it does not.
+			// The new objc base (objc.lisp) and cocoa load the same way, on the first
+			// resolution of one of their names.
+			if (!this.objcLibraryLoaded && ObjcLibrary.definesName(name)) {
+				ensureObjcLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
 			if (!this.appkitLibraryLoaded && AppKitLibrary.isAppkitQualified(name)) {
 				this.appkitLibraryLoaded = true;
 				for (LispVal form : AppKitLibrary.forms()) {

@@ -19,8 +19,10 @@ import am.ik.jvm.Opcode;
 /**
  * Builds the {@code objc:} runtime for the generated {@code .class}: the
  * {@link JvmGpuRuntimeBuilder} mechanism -- a CLOSURE of shipped classes rather than one
- * flat template -- over {@code am.ik.objc}, plus the two classes the call sites add,
- * {@link JvmObjcTemplate} (the bridge) and {@link JvmObjcHandle} (the value).
+ * flat template -- over {@code am.ik.objc}, plus the classes the call sites add:
+ * {@link JvmObjcTemplate} (the old verbs' bridge), {@link JvmObjcHandle} (their value)
+ * and {@link JvmObjcPrimitivesTemplate} (the new base's primitive layer, which
+ * {@code objc.lisp} compiled into the program calls).
  *
  * <p>
  * Why the whole library travels: the parts of the binding that were expensive to get
@@ -64,8 +66,17 @@ final class JvmObjcRuntimeBuilder {
 	 */
 	static final String HANDLE_SUFFIX = "$ObjcObject";
 
+	/**
+	 * Appended to the generated program's internal name to name the new base's primitive
+	 * layer ({@link JvmObjcPrimitivesTemplate}).
+	 */
+	static final String PRIMITIVES_SUFFIX = "$ObjcPrimitives";
+
 	/** The bridge's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcTemplate";
+
+	/** The primitive layer's internal (constant-pool) class name before renaming. */
+	private static final String PRIMITIVES_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcPrimitivesTemplate";
 
 	/** The handle's internal (constant-pool) class name before renaming. */
 	private static final String HANDLE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmObjcHandle";
@@ -89,7 +100,8 @@ final class JvmObjcRuntimeBuilder {
 	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "MainThread", "MainThread$Slot",
 			"ObjcClasses", "ObjcClasses$Bound", "ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec",
 			"VariadicSelectors", "ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent",
-			"ObjcRuntime$Signature", "TypeEncoding", "TypeEncoding$Kind", "TypeEncoding$Parser", "TypeEncoding$Type");
+			"ObjcRuntime$Signature", "ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind",
+			"TypeEncoding$Parser", "TypeEncoding$Type");
 
 	/**
 	 * The directory a program's copy of the {@code objc:} foreign registration travels in
@@ -123,10 +135,10 @@ final class JvmObjcRuntimeBuilder {
 	/**
 	 * The ready-to-emit {@code _objcInit} method, its guard field, and the constant-pool
 	 * references the {@code objc:} call-site compiler needs ({@code ops} keys:
-	 * {@code init}, {@code class}, {@code send}, {@code define-class}, {@code on-main},
-	 * {@code string}, {@code data}, {@code bytes}, {@code address}, {@code objectp},
-	 * {@value #PRINT}). The class files that travel beside the program, and their
-	 * native-image registration, are keyed by their paths within an output tree.
+	 * {@code init}, {@code class}, {@code send}, {@code define-class}, {@code string},
+	 * {@code data}, {@code bytes}, {@code address}, {@code objectp}, {@value #PRINT}).
+	 * The class files that travel beside the program, and their native-image
+	 * registration, are keyed by their paths within an output tree.
 	 */
 	record ObjcRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, FieldrefConstant initedField,
@@ -149,6 +161,15 @@ final class JvmObjcRuntimeBuilder {
 	 */
 	static String handleName(String programInternalName) {
 		return programInternalName + HANDLE_SUFFIX;
+	}
+
+	/**
+	 * The internal name of a program's copy of the new base's primitive layer.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return its internal name, in the program's own package
+	 */
+	static String primitivesName(String programInternalName) {
+		return programInternalName + PRIMITIVES_SUFFIX;
 	}
 
 	/**
@@ -226,16 +247,19 @@ final class JvmObjcRuntimeBuilder {
 	static ObjcRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
 		String handleName = handleName(programInternalName);
+		String primitivesName = primitivesName(programInternalName);
 		String objcPrefix = objcPrefix(programInternalName);
 		Map<String, byte[]> classFiles = new LinkedHashMap<>();
 		for (String name : OBJC_CLASSES) {
-			classFiles.put(objcPrefix + name + ".class",
-					rename(loadResource(OBJC_INTERNAL_PREFIX + name + ".class"), bridgeName, handleName, objcPrefix));
+			classFiles.put(objcPrefix + name + ".class", rename(loadResource(OBJC_INTERNAL_PREFIX + name + ".class"),
+					bridgeName, handleName, primitivesName, objcPrefix));
 		}
-		classFiles.put(handleName + ".class",
-				rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName, handleName, objcPrefix));
-		classFiles.put(bridgeName + ".class",
-				rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, handleName, objcPrefix));
+		classFiles.put(handleName + ".class", rename(loadResource(HANDLE_INTERNAL_NAME + ".class"), bridgeName,
+				handleName, primitivesName, objcPrefix));
+		classFiles.put(bridgeName + ".class", rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName,
+				handleName, primitivesName, objcPrefix));
+		classFiles.put(primitivesName + ".class", rename(loadResource(PRIMITIVES_INTERNAL_NAME + ".class"), bridgeName,
+				handleName, primitivesName, objcPrefix));
 		// What an image built from the output needs to serve the classes above: the
 		// foreign shapes they bind, and the two program methods bind(Class) finds by
 		// name. Without them the image refuses every send and runs no callback.
@@ -262,8 +286,6 @@ final class JvmObjcRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put("define-class", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcDefineClass"), cp
 			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put("on-main",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcOnMain"), cp.addUtf8(oneArgDesc))));
 		ops.put("string",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcString"), cp.addUtf8(oneArgDesc))));
 		ops.put("data",
@@ -276,6 +298,17 @@ final class JvmObjcRuntimeBuilder {
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("objcObjectp"), cp.addUtf8(oneArgDesc))));
 		ops.put(PRINT, cp.addMethodref(bridgeClass,
 				cp.addNameAndType(cp.addUtf8("objcPrint"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))));
+		// The new base's primitive layer, keyed by the qualified Lisp name it compiles.
+		ClassConstant primitivesClass = cp.addClass(cp.addUtf8(primitivesName));
+		MethodrefConstant bindPrimitives = cp.addMethodref(primitivesClass,
+				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
+		for (Map.Entry<String, Object[]> entry : JvmObjcPrimitivesCompiler.table().entrySet()) {
+			int arity = (Integer) entry.getValue()[0];
+			String method = (String) entry.getValue()[1];
+			String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
+			ops.put(entry.getKey(),
+					cp.addMethodref(primitivesClass, cp.addNameAndType(cp.addUtf8(method), cp.addUtf8(desc))));
+		}
 
 		// --- _objcInit body --------------------------------------------------------
 		// if (_objcInited != 0) return;
@@ -290,6 +323,10 @@ final class JvmObjcRuntimeBuilder {
 		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
 		code.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(code, bind.index());
+		// <Program>$ObjcPrimitives.bind(<Program>.class)
+		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
+		code.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(code, bindPrimitives.index());
 		// _objcInited = 1
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.PUTSTATIC);
@@ -309,9 +346,11 @@ final class JvmObjcRuntimeBuilder {
 	 * class ({@code am/ik/objc/ObjcClasses$Spec}) follows its outer one without being
 	 * listed.
 	 */
-	private static byte[] rename(byte[] classFile, String bridgeName, String handleName, String objcPrefix) {
+	private static byte[] rename(byte[] classFile, String bridgeName, String handleName, String primitivesName,
+			String objcPrefix) {
 		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(classFile, TEMPLATE_INTERNAL_NAME, bridgeName);
 		renamed = JvmJavaRuntimeBuilder.renameClass(renamed, HANDLE_INTERNAL_NAME, handleName);
+		renamed = JvmJavaRuntimeBuilder.renameClass(renamed, PRIMITIVES_INTERNAL_NAME, primitivesName);
 		return JvmJavaRuntimeBuilder.renameClass(renamed, OBJC_INTERNAL_PREFIX, objcPrefix);
 	}
 

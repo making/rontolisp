@@ -655,8 +655,8 @@ examples:
       of its own: it opens a Cocoa window, so it can never RUN head-less, but it
       is the largest objc:/appkit: program in the tree and compiling it needs no
       macOS at all. The leg pins the whole JVM lowering of a window in one go --
-      the literal (load "minesweeper-core.lisp"), the (require :cocoa
-      "../../macos/cocoa.lisp") splice, the spliced appkit library with the
+      the literal (load "minesweeper-core.lisp"), the (require :board
+      "../../macos/board.lisp") splice, the spliced appkit library with the
       objc:define-class callbacks its clickable panels and labels are instances
       of, and the embedded am.ik.objc blob.
 

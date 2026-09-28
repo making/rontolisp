@@ -165,10 +165,10 @@ final class WasmRuntimeBuilder {
 	 * when the program cannot build an instance. An instance of the address-keyed layout
 	 * compares its first slot only (see {@link #buildEqlTailBody}).
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
-	 * @param keyedLayout the address-keyed layout record, or -1
+	 * @param keyedLayout the address-keyed layout records, possibly none
 	 * @return the function body
 	 */
-	static byte[] buildEqualBody(int instanceTypeIndex, int keyedLayout, boolean charvecPossible) {
+	static byte[] buildEqualBody(int instanceTypeIndex, int[] keyedLayout, boolean charvecPossible) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -352,12 +352,11 @@ final class WasmRuntimeBuilder {
 	 * by address, and a wrapper cannot be interned, since the table would keep every
 	 * wrapper, and so every reference, alive ({@code .kb/objc.md}, "--native").
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
-	 * @param keyedLayout the address-keyed layout record, or -1 (nothing is emitted for
-	 * it)
+	 * @param keyedLayout the address-keyed layout records (nothing is emitted for none)
 	 * @return the function body
 	 */
-	static byte[] buildEqlTailBody(int instanceTypeIndex, int keyedLayout) {
-		boolean keyed = instanceTypeIndex >= 0 && keyedLayout >= 0;
+	static byte[] buildEqlTailBody(int instanceTypeIndex, int[] keyedLayout) {
+		boolean keyed = instanceTypeIndex >= 0 && keyedLayout.length > 0;
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 extra locals
@@ -442,8 +441,12 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.I32_AND);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
+			// ONE address-keyed layout on both sides: two such types never compare
+			// equal, whatever their addresses.
+			instanceField(w, 0, instanceTypeIndex, 0);
+			instanceField(w, 1, instanceTypeIndex, 0);
+			w.write(Instruction.I32_EQ);
 			emitLayoutIs(w, 0, instanceTypeIndex, keyedLayout);
-			emitLayoutIs(w, 1, instanceTypeIndex, keyedLayout);
 			w.write(Instruction.I32_AND);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
@@ -478,7 +481,7 @@ final class WasmRuntimeBuilder {
 	 * type): same layout record and every slot recursively equal. The caller closes the
 	 * {@code if} after the remaining eql arms, so this leaves the ELSE open.
 	 */
-	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex, int keyedLayout) {
+	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex, int[] keyedLayout) {
 		if (instanceTypeIndex < 0) {
 			return;
 		}
@@ -548,8 +551,8 @@ final class WasmRuntimeBuilder {
 	 * the rest (the handle that owns the reference) is not part of it. Nothing is emitted
 	 * without such a layout.
 	 */
-	private static void emitKeyedSlotCount(WasmWriter w, int local, int instanceTypeIndex, int keyedLayout) {
-		if (keyedLayout < 0) {
+	private static void emitKeyedSlotCount(WasmWriter w, int local, int instanceTypeIndex, int[] keyedLayout) {
+		if (keyedLayout.length == 0) {
 			return;
 		}
 		// select(count, 1, layout != keyed)
@@ -561,13 +564,19 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
-	 * Pushes whether the instance in {@code local} carries layout record {@code layout}.
+	 * Pushes whether the instance in {@code local} carries one of the layout records
+	 * {@code layouts} (at least one).
 	 */
-	private static void emitLayoutIs(WasmWriter w, int local, int instanceTypeIndex, int layout) {
-		instanceField(w, local, instanceTypeIndex, 0);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(layout);
-		w.write(Instruction.I32_EQ);
+	static void emitLayoutIs(WasmWriter w, int local, int instanceTypeIndex, int[] layouts) {
+		for (int i = 0; i < layouts.length; i++) {
+			instanceField(w, local, instanceTypeIndex, 0);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(layouts[i]);
+			w.write(Instruction.I32_EQ);
+			if (i > 0) {
+				w.write(Instruction.I32_OR);
+			}
+		}
 	}
 
 	/** Pushes field {@code field} of the instance in {@code local}. */
@@ -645,7 +654,7 @@ final class WasmRuntimeBuilder {
 	 * when {@code depthGlobalIndex} is
 	 * @return the function body
 	 */
-	static byte[] buildHashBody(int instanceTypeIndex, int keyedLayout, int depthGlobalIndex, int gasGlobalIndex,
+	static byte[] buildHashBody(int instanceTypeIndex, int[] keyedLayout, int depthGlobalIndex, int gasGlobalIndex,
 			boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);

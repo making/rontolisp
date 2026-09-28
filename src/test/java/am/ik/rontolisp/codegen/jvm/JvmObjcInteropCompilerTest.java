@@ -255,12 +255,15 @@ class JvmObjcInteropCompilerTest {
 				.toList();
 		}
 		assertThat(JvmObjcRuntimeBuilder.embeddedObjcClasses()).containsExactlyInAnyOrderElementsOf(onDisk);
-		// The bridge and the handle are ONE class file each: a nested class, or the
+		// The bridge, the handle and the new base's primitive layer are ONE class file
+		// each: a nested class, or the
 		// synthetic $1 an enum switch lowers to, would be a file the builder does not
 		// ship (found the hard way: NoClassDefFoundError RontoLispObjcBridge$1).
 		try (Stream<Path> files = Files.list(classes.resolve("am/ik/rontolisp/codegen/jvm"))) {
 			assertThat(files.map(p -> p.getFileName().toString())
-				.filter(name -> name.startsWith("JvmObjcTemplate$") || name.startsWith("JvmObjcHandle$"))).isEmpty();
+				.filter(name -> name.startsWith("JvmObjcTemplate$") || name.startsWith("JvmObjcHandle$")
+						|| name.startsWith("JvmObjcPrimitivesTemplate$")))
+				.isEmpty();
 		}
 		// And nothing of the library's own package name survives the rename: the
 		// emitted class resolves the shipped files under its own names or not at all.
@@ -273,7 +276,7 @@ class JvmObjcInteropCompilerTest {
 			.stream()
 			.filter(file -> file.getKey().startsWith("Test$Objc"))
 			.toList();
-		assertThat(shipped).hasSize(onDisk.size() + 2);
+		assertThat(shipped).hasSize(onDisk.size() + 3);
 		for (Map.Entry<String, byte[]> file : shipped) {
 			assertThat(new String(file.getValue(), StandardCharsets.ISO_8859_1)).as(file.getKey())
 				.doesNotContain("am/ik/objc/")

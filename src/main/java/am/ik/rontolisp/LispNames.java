@@ -7572,8 +7572,8 @@ public final class LispNames {
 
 	/**
 	 * {@code objc::%sleep}: the event-loop wait every {@code sleep} of a {@code --native}
-	 * program that carries {@code objc-native.lisp} compiles to (the module runs on
-	 * thread 0, so a spin would freeze its windows).
+	 * program that carries {@code objc-native-primitives.lisp} compiles to (the module
+	 * runs on thread 0, so a spin would freeze its windows).
 	 */
 	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
 
@@ -7634,6 +7634,105 @@ public final class LispNames {
 
 	/** {@code objc:objectp} -- whether a value is an Objective-C object reference. */
 	public static final String OBJC_OBJECTP = "OBJECTP";
+
+	/**
+	 * {@code objc:with-autorelease-pool} -- the new base's pool macro, a built-in
+	 * expansion into {@link #OBJC_CALL_WITH_AUTORELEASE_POOL} over a lambda.
+	 */
+	public static final String OBJC_WITH_AUTORELEASE_POOL = "WITH-AUTORELEASE-POOL";
+
+	/** {@link #OBJC_WITH_AUTORELEASE_POOL}, qualified. */
+	public static final String OBJC_WITH_AUTORELEASE_POOL_QUALIFIED = OBJC_PKG + ":" + OBJC_WITH_AUTORELEASE_POOL;
+
+	/**
+	 * The function {@code objc:with-autorelease-pool} expands into ({@code objc.lisp}).
+	 */
+	public static final String OBJC_CALL_WITH_AUTORELEASE_POOL = OBJC_PKG + "::%CALL-WITH-AUTORELEASE-POOL";
+
+	/**
+	 * {@code objc:objc-object-pointer}, qualified: the new base's type of an Objective-C
+	 * object (a defstruct in {@code objc.lisp}); no {@code structure-object}. A
+	 * {@code --native} backend compares it by its address slot ({@code .kb/objc.md}, "The
+	 * new base: one representation").
+	 */
+	public static final String OBJC_POINTER_TYPE = OBJC_PKG + ":OBJC-OBJECT-POINTER";
+
+	/**
+	 * {@code objc:objc-class}, qualified: a class pointer; no {@code structure-object}.
+	 */
+	public static final String OBJC_CLASS_TYPE = OBJC_PKG + ":OBJC-CLASS";
+
+	/** {@code objc:sel}, qualified: a selector; no {@code structure-object}. */
+	public static final String OBJC_SEL_TYPE = OBJC_PKG + ":SEL";
+
+	// The new base's primitive layer (objc.lisp is written over these; each backend
+	// supplies them: eval/ObjcPrimitives, codegen/jvm/JvmObjcPrimitivesTemplate,
+	// objc-native-primitives.lisp).
+
+	/** {@code (objc::%get-class name)} -- a class's address, 0 when there is none. */
+	public static final String OBJC_GET_CLASS = OBJC_PKG + "::%GET-CLASS";
+
+	/** {@code (objc::%class-name class)} -- a class's name. */
+	public static final String OBJC_CLASS_NAME_INTERNAL = OBJC_PKG + "::%CLASS-NAME";
+
+	/**
+	 * {@code (objc::%object-class object)} -- an object's class (a class's metaclass).
+	 */
+	public static final String OBJC_OBJECT_CLASS = OBJC_PKG + "::%OBJECT-CLASS";
+
+	/** {@code (objc::%class-p object)} -- whether an object is a class. */
+	public static final String OBJC_CLASS_P = OBJC_PKG + "::%CLASS-P";
+
+	/** {@code (objc::%register-selector name)} -- a {@code SEL}'s address. */
+	public static final String OBJC_REGISTER_SELECTOR = OBJC_PKG + "::%REGISTER-SELECTOR";
+
+	/** {@code (objc::%selector-name sel)} -- a {@code SEL}'s name. */
+	public static final String OBJC_SELECTOR_NAME_INTERNAL = OBJC_PKG + "::%SELECTOR-NAME";
+
+	/**
+	 * {@code (objc::%method-types class sel)} -- an instance method's encoding, or nil.
+	 */
+	public static final String OBJC_METHOD_TYPES = OBJC_PKG + "::%METHOD-TYPES";
+
+	/** {@code (objc::%send receiver sel types fixed args mode)} -- the one call. */
+	public static final String OBJC_SEND_INTERNAL = OBJC_PKG + "::%SEND";
+
+	/**
+	 * {@code (objc::%new-handle address gc)} -- a reference handle holding {@code gc}.
+	 */
+	public static final String OBJC_NEW_HANDLE = OBJC_PKG + "::%NEW-HANDLE";
+
+	/** {@code (objc::%refs handle which delta)} -- adjusts one of a handle's counts. */
+	public static final String OBJC_REFS = OBJC_PKG + "::%REFS";
+
+	/** {@code (objc::%interned address)} -- the live pointer value for an address. */
+	public static final String OBJC_INTERNED = OBJC_PKG + "::%INTERNED";
+
+	/**
+	 * {@code (objc::%intern address pointer)} -- records it; answers the one that won.
+	 */
+	public static final String OBJC_INTERN = OBJC_PKG + "::%INTERN";
+
+	/** {@code (objc::%load-module path)} -- loads a framework or a dylib. */
+	public static final String OBJC_LOAD_MODULE = OBJC_PKG + "::%LOAD-MODULE";
+
+	/** {@code (objc::%initialize)} -- opens the runtime, or signals why it cannot. */
+	public static final String OBJC_INITIALIZE = OBJC_PKG + "::%INITIALIZE";
+
+	/**
+	 * The new base's primitives, as the compile path gates the shipped binding on them.
+	 */
+	public static final java.util.List<String> OBJC_PRIMITIVES = java.util.List.of(OBJC_GET_CLASS,
+			OBJC_CLASS_NAME_INTERNAL, OBJC_OBJECT_CLASS, OBJC_CLASS_P, OBJC_REGISTER_SELECTOR,
+			OBJC_SELECTOR_NAME_INTERNAL, OBJC_METHOD_TYPES, OBJC_SEND_INTERNAL, OBJC_NEW_HANDLE, OBJC_REFS,
+			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE);
+
+	/**
+	 * The {@code cocoa} package name: LispWorks' {@code COCOA} -- the four Foundation
+	 * structures, their setters and {@code ns-not-found} -- implemented in
+	 * {@code objc.lisp} beside the new {@code objc} base. macOS only.
+	 */
+	public static final String COCOA_PKG = "COCOA";
 
 	/**
 	 * The {@code appkit} package name: a Cocoa widget layer over the {@code objc} verbs,

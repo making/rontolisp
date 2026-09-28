@@ -16,7 +16,9 @@ package am.ik.rontolisp.eval;
  * to {@code am.ik.objc} -- the {@code LinalgGpu} / {@code LinalgGpuKernels} shape, and
  * for the same reason: {@code src/web/java/.../Target_ObjcInterop.java} substitutes these
  * four methods, and with them the whole binding leaves the browser playground's Web Image
- * build. Adding a public method here that touches the bridge breaks that cut.
+ * build. Adding a public method here that touches the bridge breaks that cut. The new
+ * base's primitive layer ({@link ObjcPrimitives}) is reached the same way, through
+ * {@link #registerPrimitives}.
  *
  * <p>
  * Every failure is a SIGNAL, never a decline: a window that does not open has no
@@ -69,6 +71,18 @@ public final class ObjcInterop {
 	 */
 	public static void register(Environment globalEnv, ObjcCaller caller) {
 		ObjcBridge.register(globalEnv, caller);
+	}
+
+	/**
+	 * Defines the new base's primitive layer ({@code objc::%send} and friends, and
+	 * {@code objc:on-main}) that {@code objc.lisp} is written over. Defined on every
+	 * platform; each signals at call time where the runtime is absent.
+	 * @param globalEnv the global environment
+	 * @param apply how {@code objc:on-main} applies a Lisp function
+	 */
+	public static void registerPrimitives(Environment globalEnv,
+			java.util.function.BiFunction<am.ik.rontolisp.LispVal, java.util.List<am.ik.rontolisp.LispVal>, am.ik.rontolisp.LispVal> apply) {
+		ObjcPrimitives.register(globalEnv, apply);
 	}
 
 	/**

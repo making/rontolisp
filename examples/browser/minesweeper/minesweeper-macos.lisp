@@ -18,7 +18,7 @@
 ;;;; WASM has no foreign function API and refuses (doc/en/guides/objc-appkit.md).
 ;;;; The widgets are the built-in `appkit` package -- a colour, a rounded panel,
 ;;;; a centred label, a click, a timer -- and the board itself is the reusable
-;;;; `cocoa` grid (../../macos/cocoa.lisp), the AppKit counterpart of the Swing
+;;;; `board` grid (../../macos/board.lisp), the AppKit counterpart of the Swing
 ;;;; build's ../../jvm/swing.lisp.
 ;;;;
 ;;;; Left-click opens a cell, right-click (or Ctrl-click) flags it, and the face
@@ -27,7 +27,7 @@
 ;;;; them off the very first click so the opening move is always safe.
 
 (load "minesweeper-core.lisp")
-(require :cocoa "../../macos/cocoa.lisp")
+(require :board "../../macos/board.lisp")
 
 ;;; --- board configuration (Beginner) ------------------------------------------
 
@@ -150,7 +150,7 @@
                 :align :center))
 
 (defparameter *board*
-  (cocoa:grid *win* *h* *w*
+  (board:grid *win* *h* *w*
               :size *tile*
               :gap *gap*
               :x *pad*
@@ -181,39 +181,39 @@
          (is-mine (= (nth i (st-mines state)) 1))
          (is-rev (= (nth i (st-revealed state)) 1))
          (is-flag (= (nth i (st-flags state)) 1)))
-    (cocoa:cell-text *board* r c "")
+    (board:cell-text *board* r c "")
     (cond
           ;; The mine you actually stepped on.
           ((and is-rev is-mine)
-           (cocoa:paint *board* r c *c-boom*)
-           (cocoa:cell-text *board* r c *glyph-mine*))
+           (board:paint *board* r c *c-boom*)
+           (board:cell-text *board* r c *glyph-mine*))
           ;; A normally revealed cell: blank, or a neighbour count 1..8.
           (is-rev
-           (cocoa:paint *board* r c (if dark *c-open-b* *c-open-a*))
+           (board:paint *board* r c (if dark *c-open-b* *c-open-a*))
            (let ((cnt (adjacent-count (st-mines state) i *w* *h*)))
              (when (> cnt 0)
-               (cocoa:cell-fg *board* r c (number-color cnt))
-               (cocoa:cell-text *board* r c (princ-to-string cnt)))))
+               (board:cell-fg *board* r c (number-color cnt))
+               (board:cell-text *board* r c (princ-to-string cnt)))))
           ;; Game over: reveal every remaining mine -- as a planted flag if the
           ;; board was swept, as a bomb if it was not.
           ((and over is-mine)
-           (cocoa:paint *board* r c
+           (board:paint *board* r c
                         (if (= (game-status state) 1)
                             (if dark *c-hidden-b* *c-hidden-a*)
                             (if dark *c-open-b* *c-open-a*)))
-           (cocoa:cell-text *board* r c
+           (board:cell-text *board* r c
             (if (= (game-status state) 1) *glyph-flag* *glyph-mine*)))
           ;; Game over: a flag that turned out to be wrong.
           ((and over is-flag)
-           (cocoa:paint *board* r c (if dark *c-open-b* *c-open-a*))
-           (cocoa:cell-fg *board* r c *fg-wrong*)
-           (cocoa:cell-text *board* r c *glyph-wrong*))
+           (board:paint *board* r c (if dark *c-open-b* *c-open-a*))
+           (board:cell-fg *board* r c *fg-wrong*)
+           (board:cell-text *board* r c *glyph-wrong*))
           ;; A flag still standing.
           (is-flag
-           (cocoa:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))
-           (cocoa:cell-text *board* r c *glyph-flag*))
+           (board:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))
+           (board:cell-text *board* r c *glyph-flag*))
           ;; An ordinary covered cell.
-          (t (cocoa:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))))))
+          (t (board:paint *board* r c (if dark *c-hidden-b* *c-hidden-a*))))))
 
 (defun mines-shown ()
   (cond ((= (game-status *state*) 1) 0)
@@ -314,7 +314,7 @@
 
 ;;; --- wire it up --------------------------------------------------------------
 
-(cocoa:on-cell-click *board* (function on-click))
+(board:on-cell-click *board* (function on-click))
 (appkit:on-click *face-tile* (lambda (button) (reset)))
 (appkit:on-click *face* (lambda (button) (reset)))
 (reset)

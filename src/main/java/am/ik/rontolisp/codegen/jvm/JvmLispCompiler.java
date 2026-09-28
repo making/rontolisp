@@ -5198,6 +5198,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				return true;
 			}
 		}
+		// The new base's primitive layer (objc.lisp's calls, and objc:on-main).
+		for (String name : JvmObjcPrimitivesCompiler.names()) {
+			if (programUsesSymbol(program, name)) {
+				return true;
+			}
+		}
 		return false;
 	}
 

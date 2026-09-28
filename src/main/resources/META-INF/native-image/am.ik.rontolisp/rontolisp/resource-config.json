@@ -131,6 +131,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
         },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmObjcPrimitivesTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
         "pattern": "am/ik/objc/.*\\.class"
       },
       {
@@ -216,6 +222,18 @@
           "typeReachable": "am.ik.rontolisp.eval.ObjcNativeLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/objc-native\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcNativeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-native-primitives\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc\\.lisp"
       },
       {
         "condition": {

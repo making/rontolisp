@@ -93,6 +93,8 @@ public final class ObjcRuntime {
 
 	private final MethodHandle objectGetClass;
 
+	private final MethodHandle objectIsClass;
+
 	private final MethodHandle classGetName;
 
 	private final MethodHandle classGetSuperclass;
@@ -151,6 +153,7 @@ public final class ObjcRuntime {
 		this.selRegisterName = handle(objc, "sel_registerName", FunctionDescriptor.of(P, P));
 		this.selGetName = handle(objc, "sel_getName", FunctionDescriptor.of(P, P));
 		this.objectGetClass = handle(objc, "object_getClass", FunctionDescriptor.of(P, P));
+		this.objectIsClass = handle(objc, "object_isClass", FunctionDescriptor.of(B, P));
 		this.classGetName = handle(objc, "class_getName", FunctionDescriptor.of(P, P));
 		this.classGetSuperclass = handle(objc, "class_getSuperclass", FunctionDescriptor.of(P, P));
 		this.classGetInstanceMethod = handle(objc, "class_getInstanceMethod", FunctionDescriptor.of(P, P, P));
@@ -690,6 +693,265 @@ public final class ObjcRuntime {
 				outs.get(i).value = written.address() == 0 ? null : written;
 			}
 			return new Sent(unmarshal(ret, raw), ret);
+		}
+	}
+
+	// --- the new base's raw send ----------------------------------------------------
+
+	/**
+	 * {@link #sendRaw} mode bit: retain an object result before the hop's pool drains.
+	 */
+	public static final int RETAIN_RESULT = 1;
+
+	/** {@link #sendRaw} mode bit: answer a C-string result as its address. */
+	public static final int RAW_CSTRING = 2;
+
+	/** Parsed encodings by spelling: a frame loop sends the same few shapes. */
+	private final Map<String, TypeEncoding> encodings = new ConcurrentHashMap<>();
+
+	/**
+	 * The parsed form of an encoding, cached by spelling.
+	 * @param types the encoding
+	 * @return the parsed encoding
+	 * @throws ObjcException when the encoding names a type this binding cannot call
+	 */
+	public TypeEncoding parsed(String types) {
+		TypeEncoding cached = this.encodings.get(types);
+		if (cached != null) {
+			return cached;
+		}
+		TypeEncoding parsed = TypeEncoding.parse(types);
+		this.encodings.put(types, parsed);
+		return parsed;
+	}
+
+	/**
+	 * The new base's send: the whole call described by the caller, nothing looked up and
+	 * nothing converted but what only the host can do. Each argument is RAW -- a
+	 * {@link Number} for an integral, boolean or address kind (a {@code BOOL} is nonzero
+	 * for YES), a {@link Number} for a floating kind, a {@code Number[]} of a struct's
+	 * leaves in memory order -- except that a {@link String} is accepted where the
+	 * encoding says object (an autoreleased {@code NSString}) or C string (bytes in the
+	 * call's arena), and {@code null} anywhere an address goes. The answer is equally
+	 * raw: a {@link Long} for every integral, boolean or address kind (an unsigned 32-bit
+	 * value zero-extended; a 64-bit one as its bits), a {@link Double} for a floating
+	 * kind, a {@code Number[]} for a struct, {@code null} for {@code void} -- and a
+	 * {@link String} for a C string, read here because the buffer usually dies with the
+	 * caller's pool (unless {@link #RAW_CSTRING}).
+	 * <p>
+	 * Runs on the calling thread and pushes no pool: {@link #sendRawOnMain} is the entry
+	 * point that does both.
+	 * @param receiver the receiver's address
+	 * @param selector the {@code SEL}'s address
+	 * @param types the encoding, covering every argument including variadic ones
+	 * @param fixed the number of fixed method arguments of a variadic call, else -1
+	 * @param args the method's arguments (not the receiver, not the selector)
+	 * @param mode {@link #RETAIN_RESULT} and {@link #RAW_CSTRING}, or 0
+	 * @return the raw answer
+	 * @throws ObjcException when an argument does not fit, the arity is wrong, or the
+	 * shape has no stub in this binary
+	 */
+	public @Nullable Object sendRaw(long receiver, long selector, String types, int fixed, @Nullable Object[] args,
+			int mode) {
+		TypeEncoding encoding = parsed(types);
+		List<Type> params = encoding.argumentTypes();
+		if (params.size() < 2) {
+			throw new ObjcException("type encoding '" + types + "' has no receiver and selector");
+		}
+		int declared = params.size() - 2;
+		String name = selectorName(MemorySegment.ofAddress(selector));
+		if (args.length != declared) {
+			throw new ObjcException(name + " takes " + declared + " argument(s), got " + args.length);
+		}
+		if (fixed > declared) {
+			throw new ObjcException(name + ": " + fixed + " fixed argument(s) of " + declared);
+		}
+		try (Arena arena = Arena.ofConfined()) {
+			List<Object> all = new ArrayList<>(args.length + 3);
+			Type ret = encoding.returnType();
+			if (ret.isStruct()) {
+				all.add((SegmentAllocator) arena);
+			}
+			all.add(MemorySegment.ofAddress(receiver));
+			all.add(MemorySegment.ofAddress(selector));
+			for (int i = 0; i < declared; i++) {
+				all.add(marshalRaw(params.get(i + 2), args[i], arena, name, i));
+			}
+			Signature signature = new Signature(encoding.descriptor(), fixed < 0 ? -1 : fixed + 2);
+			MethodHandle handle = this.sends.computeIfAbsent(signature, s -> downcall(target(encoding), s, name));
+			Object raw;
+			try {
+				raw = handle.invokeWithArguments(all);
+			}
+			catch (Throwable ex) {
+				throw new ObjcException(name + " failed: " + ex, ex);
+			}
+			return unmarshalRaw(ret, raw, mode);
+		}
+	}
+
+	/**
+	 * {@link #sendRaw} on thread 0 inside an autorelease pool of its own, so what the
+	 * call autoreleased -- a string argument, an unretained result -- is gone when this
+	 * returns, deterministically.
+	 * @param receiver the receiver's address
+	 * @param selector the {@code SEL}'s address
+	 * @param types the encoding
+	 * @param fixed the fixed-argument count of a variadic call, else -1
+	 * @param args the raw arguments
+	 * @param mode the mode bits
+	 * @return the raw answer
+	 */
+	public @Nullable Object sendRawOnMain(long receiver, long selector, String types, int fixed,
+			@Nullable Object[] args, int mode) {
+		return this.mainThread.sync(() -> {
+			MemorySegment pool = autoreleasePoolPush();
+			try {
+				return sendRaw(receiver, selector, types, fixed, args, mode);
+			}
+			finally {
+				autoreleasePoolPop(pool);
+			}
+		});
+	}
+
+	private Object marshalRaw(Type type, @Nullable Object arg, Arena arena, String selector, int index) {
+		Kind kind = type.kind();
+		if (arg instanceof String s) {
+			if (kind == Kind.OBJECT) {
+				return nsString(s, arena);
+			}
+			if (kind == Kind.CSTRING) {
+				return arena.allocateFrom(s);
+			}
+			throw mismatch(selector, index, "a " + kind.name().toLowerCase(Locale.ROOT), arg);
+		}
+		if (kind == Kind.STRUCT) {
+			if (!(arg instanceof Number[] leaves) || leaves.length != type.leaves().size()) {
+				throw mismatch(selector, index, "a struct of " + type.leaves().size() + " numbers", arg);
+			}
+			return struct(type, leaves, arena);
+		}
+		if (arg == null) {
+			if (kind.isAddress()) {
+				return MemorySegment.NULL;
+			}
+			throw mismatch(selector, index, "a " + kind.name().toLowerCase(Locale.ROOT), null);
+		}
+		if (!(arg instanceof Number n)) {
+			throw mismatch(selector, index, "a number", arg);
+		}
+		return switch (kind) {
+			case OBJECT, CLASS, SELECTOR, CSTRING, POINTER -> MemorySegment.ofAddress(n.longValue());
+			case BOOL -> n.longValue() != 0;
+			case INT8 -> n.byteValue();
+			case INT16 -> n.shortValue();
+			case INT32 -> n.intValue();
+			case INT64 -> n.longValue();
+			case FLOAT -> n.floatValue();
+			case DOUBLE -> n.doubleValue();
+			case VOID, STRUCT -> throw new ObjcException(selector + ": argument " + (index + 1) + " is " + kind);
+		};
+	}
+
+	private @Nullable Object unmarshalRaw(Type type, @Nullable Object raw, int mode) {
+		if (raw == null) {
+			return null;
+		}
+		return switch (type.kind()) {
+			case VOID -> null;
+			case OBJECT -> {
+				MemorySegment object = (MemorySegment) raw;
+				if (object.address() != 0 && (mode & RETAIN_RESULT) != 0) {
+					retain(object);
+				}
+				yield object.address();
+			}
+			case CLASS, SELECTOR, POINTER -> ((MemorySegment) raw).address();
+			case CSTRING -> {
+				MemorySegment chars = (MemorySegment) raw;
+				if ((mode & RAW_CSTRING) != 0) {
+					yield chars.address();
+				}
+				yield chars.address() == 0 ? null : cString(chars);
+			}
+			case BOOL -> (Boolean) raw ? 1L : 0L;
+			case INT8 -> (long) (type.unsigned() ? Byte.toUnsignedInt((Byte) raw) : (Byte) raw);
+			case INT16 -> (long) (type.unsigned() ? Short.toUnsignedInt((Short) raw) : (Short) raw);
+			case INT32 -> type.unsigned() ? Integer.toUnsignedLong((Integer) raw) : (long) (Integer) raw;
+			case INT64 -> raw;
+			case FLOAT -> (double) (Float) raw;
+			case DOUBLE -> raw;
+			case STRUCT -> unmarshal(type, raw);
+		};
+	}
+
+	/**
+	 * The instance-method encoding of a class, by addresses: what the new base's
+	 * signature lookup reads (a class's metaclass answers its class methods).
+	 * @param cls the class's address
+	 * @param selector the {@code SEL}'s address
+	 * @return the encoding, or {@code null} when the class has no such method
+	 */
+	public @Nullable String methodTypes(long cls, long selector) {
+		try {
+			MemorySegment method = (MemorySegment) this.classGetInstanceMethod.invokeExact(MemorySegment.ofAddress(cls),
+					MemorySegment.ofAddress(selector));
+			if (method.address() == 0) {
+				return null;
+			}
+			MemorySegment types = (MemorySegment) this.methodGetTypeEncoding.invokeExact(method);
+			return types.address() == 0 ? null : cString(types);
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("method_getTypeEncoding failed", ex);
+		}
+	}
+
+	/**
+	 * A class by name, by address.
+	 * @param name the class name
+	 * @return the class's address, or 0 when no such class is loaded
+	 */
+	public long classOrNullAddress(String name) {
+		MemorySegment cls = classOrNull(name);
+		return cls == null ? 0 : cls.address();
+	}
+
+	/**
+	 * The class of an object (its metaclass for a class), by address.
+	 * @param object the object's address
+	 * @return the class's address
+	 */
+	public long classOfAddress(long object) {
+		return classOf(MemorySegment.ofAddress(object)).address();
+	}
+
+	/**
+	 * Whether an object is a class (or a metaclass).
+	 * @param object the object's address
+	 * @return {@code true} for a class object
+	 */
+	public boolean isClass(long object) {
+		try {
+			return (boolean) this.objectIsClass.invokeExact(MemorySegment.ofAddress(object));
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("object_isClass failed", ex);
+		}
+	}
+
+	/**
+	 * The name of a class, by address.
+	 * @param cls the class's address
+	 * @return its name
+	 */
+	public String nameOfClass(long cls) {
+		try {
+			return cString((MemorySegment) this.classGetName.invokeExact(MemorySegment.ofAddress(cls)));
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("class_getName failed", ex);
 		}
 	}
 

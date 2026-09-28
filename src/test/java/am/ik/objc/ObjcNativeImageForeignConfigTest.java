@@ -251,7 +251,22 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSWindow", "setContentView:"), cls("NSView", "alloc"), inst("NSView", "initWithFrame:"),
 			inst("NSView", "setPostsFrameChangedNotifications:"), inst("NSEvent", "locationInWindow"),
 			inst("NSEvent", "modifierFlags"), inst("NSEvent", "scrollingDeltaY"),
-			inst("NSEvent", "hasPreciseScrollingDeltas"));
+			inst("NSEvent", "hasPreciseScrollingDeltas"),
+			// The new base (objc.lisp): what its own verbs send -- retain / release /
+			// autorelease / retainCount, the NSArray a vector argument becomes, the
+			// NSString a string becomes -- and what the manual's call-side examples and
+			// the objc-base corpus send (doc/en/guides/objc-appkit.md).
+			inst("NSObject", "retain"), inst("NSObject", "release"), inst("NSObject", "autorelease"),
+			inst("NSObject", "retainCount"), cls("NSObject", "new"), inst("NSObject", "self"),
+			cls("NSMutableArray", "arrayWithCapacity:"), inst("NSScrollView", "frame"), inst("NSView", "setHidden:"),
+			inst("NSView", "isHidden"), cls("NSArray", "arrayWithArray:"),
+			cls("NSNumber", "numberWithUnsignedLongLong:"), inst("NSNumber", "unsignedLongLongValue"),
+			cls("NSNumber", "numberWithInt:"), cls("NSValue", "valueWithRect:"), inst("NSValue", "rectValue"),
+			cls("NSValue", "valueWithPoint:"), inst("NSValue", "pointValue"), cls("NSValue", "valueWithSize:"),
+			inst("NSValue", "sizeValue"), cls("NSValue", "valueWithRange:"), inst("NSValue", "rangeValue"),
+			cls("NSInvocation", "invocationWithMethodSignature:"),
+			cls("NSObject", "instanceMethodSignatureForSelector:"), inst("NSInvocation", "setSelector:"),
+			inst("NSInvocation", "selector"), inst("NSObject", "className"));
 
 	/**
 	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an

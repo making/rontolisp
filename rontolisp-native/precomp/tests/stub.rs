@@ -57,6 +57,10 @@ fn run_executable(dir: &Path, module: &[u8]) -> Output {
 /// [`run_executable`] under the runner `stub`.
 fn run_executable_on(stub: &Path, dir: &Path, module: &[u8]) -> Output {
     let exe = dir.join("prog");
+    // A fresh file, never one rewritten in place: macOS caches a signed executable's
+    // code signature by vnode, and running new bytes under a cached signature is a
+    // SIGKILL -- which is what a second run in one directory got.
+    let _ = std::fs::remove_file(&exe);
     std::fs::write(
         &exe,
         rlprecomp::assemble(&std::fs::read(stub).unwrap(), module).unwrap(),

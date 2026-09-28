@@ -176,14 +176,8 @@ final class ObjcBridge {
 			return onMain(runtime, () -> wrapClass(runtime,
 					ObjcClasses.define(runtime, name.value(), superclass.value(), protocols, specs)));
 		});
-		define(globalEnv, LispNames.OBJC_ON_MAIN, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException("objc:on-main expects 1 argument, got " + args.size());
-			}
-			ObjcRuntime runtime = ObjcRuntime.get();
-			LispVal function = args.get(0);
-			return onMain(runtime, () -> caller.apply(function, List.of()));
-		});
+		// objc:on-main belongs to the new base's primitive layer (ObjcPrimitives), which
+		// both bases call.
 		define(globalEnv, LispNames.OBJC_STRING, args -> {
 			String text = string(LispNames.OBJC_STRING, args, 0, 1);
 			ObjcRuntime runtime = ObjcRuntime.get();

@@ -76,12 +76,13 @@ final class WasmIdentityHashRuntimeBuilder {
 	 * from
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1 when the module has
 	 * no instances
-	 * @param keyedLayout the address-keyed layout record, or -1: an instance of it is eql
-	 * to another wrapper of the same address (WasmRuntimeBuilder.buildEqlTailBody), so it
-	 * is placed by {@code _hash}, which folds that address, not by its own slot
+	 * @param keyedLayout the address-keyed layout records, possibly none: an instance of
+	 * one is eql to another wrapper of the same address
+	 * (WasmRuntimeBuilder.buildEqlTailBody), so it is placed by {@code _hash}, which
+	 * folds that address, not by its own slot
 	 * @return the function body
 	 */
-	static byte[] build(int seqGlobalIndex, int instanceTypeIndex, int keyedLayout) {
+	static byte[] build(int seqGlobalIndex, int instanceTypeIndex, int[] keyedLayout) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1); // 1 local group
@@ -107,17 +108,8 @@ final class WasmIdentityHashRuntimeBuilder {
 			refTest(w, instanceTypeIndex);
 			w.write(Instruction.IF);
 			w.write(Type.I32);
-			if (keyedLayout >= 0) {
-				w.write(Instruction.GET_LOCAL);
-				w.writeUnsignedLeb128(0);
-				w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-				w.writeHeapType(instanceTypeIndex);
-				w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				w.writeUnsignedLeb128(instanceTypeIndex);
-				w.writeUnsignedLeb128(0);
-				w.write(Instruction.I32_CONST);
-				w.writeSignedLeb128(keyedLayout);
-				w.write(Instruction.I32_EQ);
+			if (keyedLayout.length > 0) {
+				WasmRuntimeBuilder.emitLayoutIs(w, 0, instanceTypeIndex, keyedLayout);
 				w.write(Instruction.IF);
 				w.write(Type.I32);
 				w.write(Instruction.GET_LOCAL);
@@ -127,7 +119,7 @@ final class WasmIdentityHashRuntimeBuilder {
 				w.write(Instruction.ELSE);
 			}
 			emitSlotHash(w, instanceTypeIndex, INSTANCE_HASH_FIELD, seqGlobalIndex);
-			if (keyedLayout >= 0) {
+			if (keyedLayout.length > 0) {
 				w.write(Instruction.END); // end keyed-layout if
 			}
 			w.write(Instruction.ELSE);

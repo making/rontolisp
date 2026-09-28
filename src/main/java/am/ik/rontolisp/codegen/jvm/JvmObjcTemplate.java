@@ -41,13 +41,13 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>Callbacks apply a compiled function</h2>
  *
- * A method of {@code objc:define-class} and the body of {@code objc:on-main} are Lisp
- * functions applied from an upcall on thread 0, through the generated program's
- * {@code _apply(Object, Object)} eval-runtime method handed over by {@link #bind(Class)}
- * from the emitted {@code _objcInit} -- the {@code java:proxy} precedent. A callback runs
- * with the program's GLOBAL dynamic bindings, and an error it does not handle is printed
- * ({@code objc: error in a callback: ...}) rather than thrown: unwinding into the native
- * frame above an upcall ends the process.
+ * A method of {@code objc:define-class} is a Lisp function applied from an upcall on
+ * thread 0 ({@code objc:on-main} belongs to {@link JvmObjcPrimitivesTemplate}), through
+ * the generated program's {@code _apply(Object, Object)} eval-runtime method handed over
+ * by {@link #bind(Class)} from the emitted {@code _objcInit} -- the {@code java:proxy}
+ * precedent. A callback runs with the program's GLOBAL dynamic bindings, and an error it
+ * does not handle is printed ({@code objc: error in a callback: ...}) rather than thrown:
+ * unwinding into the native frame above an upcall ends the process.
  *
  * <h2>Ownership: one retain per wrapper, released on thread 0</h2>
  *
@@ -203,17 +203,6 @@ final class JvmObjcTemplate {
 		}
 		catch (ObjcException ex) {
 			throw fail("define-class", ex);
-		}
-	}
-
-	/** Implements {@code (objc:on-main function)}. */
-	static @Nullable Object objcOnMain(@Nullable Object function) {
-		try {
-			ObjcRuntime runtime = ObjcRuntime.get();
-			return onMain(runtime, () -> applyCallable(function, null));
-		}
-		catch (ObjcException ex) {
-			throw fail("on-main", ex);
 		}
 	}
 

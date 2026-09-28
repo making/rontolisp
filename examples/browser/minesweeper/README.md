@@ -80,8 +80,8 @@ guide](../../../doc/en/guides/objc-appkit.md) says why). Compiling it to a
 class; only WASM refuses, having no foreign function API. Its widgets -- a
 colour, a rounded panel, a centred label, a click, a timer -- are the built-in
 `appkit` package; only the board on top of them is an example of its own,
-[`../../macos/cocoa.lisp`](../../macos/cocoa.lisp), spliced in like the Swing
-build's helper with `(require :cocoa "../../macos/cocoa.lisp")`.
+[`../../macos/board.lisp`](../../macos/board.lisp), spliced in like the Swing
+build's helper with `(require :board "../../macos/board.lisp")`.
 
 ## Play it in the browser (WebAssembly)
 

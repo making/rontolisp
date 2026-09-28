@@ -495,6 +495,31 @@ public final class PackageRegistry {
 	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
 
 	/**
+	 * The names the new {@code objc} base exports: LispWorks 8.1's {@code OBJC} call half
+	 * (the functions, the {@code with-autorelease-pool} macro, and the type designators),
+	 * implemented in {@code objc.lisp} ({@code ObjcLibrary}). Beside the old verbs until
+	 * those are retired (.kb/objc.md, "Two bases, one package").
+	 */
+	private static final Set<String> OBJC_BASE_NAMES = Set.of("ENSURE-OBJC-INITIALIZED", "INVOKE", "INVOKE-BOOL",
+			"INVOKE-INTO", "CAN-INVOKE-P", "ALLOC-INIT-OBJECT", "DESCRIPTION", "TRACE-INVOKE", "UNTRACE-INVOKE",
+			"COERCE-TO-OBJC-CLASS", "OBJC-CLASS-NAME", "COERCE-TO-SELECTOR", "SELECTOR-NAME",
+			"OBJC-CLASS-METHOD-SIGNATURE", "RETAIN", "RELEASE", "AUTORELEASE", "RETAIN-COUNT", "MAKE-AUTORELEASE-POOL",
+			LispNames.OBJC_WITH_AUTORELEASE_POOL, "NS-STRING-TO-STRING", "STRING-TO-NS-STRING", "OBJC-OBJECT-POINTER",
+			"OBJC-OBJECT-FROM-POINTER", "OBJC-CLASS", "SEL", "OBJC-BOOL", "OBJC-C++-BOOL", "OBJC-C-STRING",
+			"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN");
+
+	private static final List<String> OBJC_BASE_NAME_LIST = sorted(OBJC_BASE_NAMES);
+
+	/**
+	 * The names the {@code cocoa} package exports (LispWorks 8.1's {@code COCOA}, less
+	 * the observers, which come with class definition), implemented in {@code objc.lisp}.
+	 */
+	private static final Set<String> COCOA_NAMES = Set.of("NS-POINT", "NS-SIZE", "NS-RECT", "NS-RANGE", "SET-NS-POINT*",
+			"SET-NS-SIZE*", "SET-NS-RECT*", "SET-NS-RANGE*", "NS-NOT-FOUND");
+
+	private static final List<String> COCOA_NAME_LIST = sorted(COCOA_NAMES);
+
+	/**
 	 * The names exported by the {@code geom} package (solid modeling: rigid transforms, a
 	 * scene graph and boundary-represented solids), implemented in {@code geom.lisp} (see
 	 * {@code GeomLibrary}). Plain strings, like {@code linalg}: they exist only as
@@ -786,16 +811,18 @@ public final class PackageRegistry {
 	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
 	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
-			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
-			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
-			LispNames.TOKENIZER_PKG, LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG,
-			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-			LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG,
-			LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG,
-			LispNames.BT2_PKG, LispNames.BABEL_PKG, LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG,
-			LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG,
-			"KEYWORD"), Set.copyOf(UiopExports.subPackages()));
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
+			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
+					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
+					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
+					LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG, LispNames.METAL_PKG,
+					LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
+					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
+					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, "KEYWORD"),
+			Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -936,13 +963,17 @@ public final class PackageRegistry {
 				new HashSet<>(Set.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
 						LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_OBJECT,
 						LispNames.JAVA_WARN_ON_REFLECTION))));
-		// Interpreter-only Objective-C interop through the foreign function API (no
-		// reflection, so it runs in the native binary too). Does not use cl; its values
-		// (LispObjcObject) cannot be lowered by any compiler.
-		define(new LispPackage(LispNames.OBJC_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
-						LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA, LispNames.OBJC_BYTES,
-						LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP, LispNames.OBJC_OBJECT))));
+		// Objective-C through the foreign function API (no reflection, so it runs in the
+		// native binary too): the old verbs and the new, LispWorks-shaped base
+		// (objc.lisp) side by side until the old ones are retired. Does not use cl.
+		Set<String> objcNames = new HashSet<>(Set.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND,
+				LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA,
+				LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP, LispNames.OBJC_OBJECT));
+		objcNames.addAll(OBJC_BASE_NAMES);
+		define(new LispPackage(LispNames.OBJC_PKG, List.of(), objcNames));
+		// LispWorks' COCOA: the Foundation structures beside the new objc base
+		// (objc.lisp). Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.COCOA_PKG, List.of(), new HashSet<>(COCOA_NAMES)));
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
@@ -1348,6 +1379,22 @@ public final class PackageRegistry {
 	 */
 	public static List<String> appkitFunctionNames() {
 		return APPKIT_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The names the new {@code objc} base exports ({@code objc.lisp}), sorted.
+	 * @return the member names
+	 */
+	public static List<String> objcBaseNames() {
+		return OBJC_BASE_NAME_LIST;
+	}
+
+	/**
+	 * The names the {@code cocoa} package exports ({@code objc.lisp}), sorted.
+	 * @return the member names
+	 */
+	public static List<String> cocoaNames() {
+		return COCOA_NAME_LIST;
 	}
 
 	/**

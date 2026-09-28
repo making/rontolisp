@@ -27,6 +27,7 @@ import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.MetalLibrary;
+import am.ik.rontolisp.eval.ObjcLibrary;
 import am.ik.rontolisp.eval.ObjcNativeLibrary;
 import am.ik.rontolisp.eval.SceneLibrary;
 import am.ik.rontolisp.eval.SchemeLibrary;
@@ -518,7 +519,7 @@ final class CompileFrontend {
 		String objcReference = wasm && !objcHost ? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
-					+ " -- the objc:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
+					+ " -- the objc:, cocoa:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
 					+ "the rontolisp binary), in a compiled .class or .jar and in a --native executable for macos-aarch64, "
 					+ "not in a .wasm");
 		}
@@ -688,10 +689,12 @@ final class CompileFrontend {
 		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
 		// the
 		// string comparisons the helpers are written over.
-		List<LispVal> macos = AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
-			.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
-				.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(
-						SchemeLibrary.process(UserMacroExpander.expand(loaded), features, input.standards()))))))))))));
+		// ObjcLibrary (the new objc base and cocoa, objc.lisp) right OUTSIDE
+		// AppKitLibrary: a library written over the new base is seen too.
+		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(
+				GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
+					.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(SchemeLibrary
+						.process(UserMacroExpander.expand(loaded), features, input.standards())))))))))))));
 		// ObjcNativeLibrary right OUTSIDE AppKitLibrary: the objc: verbs of a --native
 		// output, needed by the objc: references the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary

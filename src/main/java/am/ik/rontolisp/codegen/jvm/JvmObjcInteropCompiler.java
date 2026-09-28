@@ -32,9 +32,9 @@ final class JvmObjcInteropCompiler {
 
 	/** Every member of the {@code objc} package, as the compiler gates on them. */
 	static List<String> members() {
-		return List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_ON_MAIN,
-				LispNames.OBJC_STRING, LispNames.OBJC_DATA, LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS,
-				LispNames.OBJC_OBJECTP);
+		// objc:on-main is the new base's primitive layer's (JvmObjcPrimitivesCompiler).
+		return List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS, LispNames.OBJC_STRING,
+				LispNames.OBJC_DATA, LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP);
 	}
 
 	/**
@@ -84,8 +84,8 @@ final class JvmObjcInteropCompiler {
 				}
 				emitBridgeCall(ctx, ops, "define-class");
 			}
-			case LispNames.OBJC_CLASS, LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_DATA,
-					LispNames.OBJC_BYTES, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP -> {
+			case LispNames.OBJC_CLASS, LispNames.OBJC_STRING, LispNames.OBJC_DATA, LispNames.OBJC_BYTES,
+					LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP -> {
 				String spelled = "objc:" + member.toLowerCase(java.util.Locale.ROOT);
 				requireArity(args.size() == 2, spelled + " expects 1 argument, got " + (args.size() - 1));
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);

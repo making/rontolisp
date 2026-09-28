@@ -13,10 +13,11 @@ import com.oracle.svm.core.annotate.TargetClass;
  * {@link Target_LinalgGpu}. The browser playground has no foreign function API, no
  * {@code libobjc} and no AppKit. {@link ObjcInterop#available()},
  * {@link ObjcInterop#description()}, {@link ObjcInterop#register},
+ * {@link ObjcInterop#registerPrimitives},
  * {@link ObjcInterop#mainThreadHandOverRequired()} and
  * {@link ObjcInterop#parkMainThread()} are the only entry points into
- * {@code ObjcBridge} (the holder of the single {@code am.ik.objc} reference), so
- * substituting all five makes that class -- and the whole binding -- unreachable. Adding
+ * {@code ObjcBridge} and {@code ObjcPrimitives} (the holders of the {@code am.ik.objc}
+ * references), so substituting all six makes those classes -- and the whole binding -- unreachable. Adding
  * a public method to {@code ObjcInterop} that touches the bridge breaks that, and only
  * the Pages workflow's Web Image build would catch it.
  *
@@ -40,13 +41,25 @@ final class Target_ObjcInterop {
 	@Substitute
 	static void register(Environment globalEnv, ObjcCaller caller) {
 		for (String member : List.of(LispNames.OBJC_CLASS, LispNames.OBJC_SEND, LispNames.OBJC_DEFINE_CLASS,
-				LispNames.OBJC_ON_MAIN, LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP)) {
-			String name = PackageRegistry.qualify(LispNames.OBJC_PKG, member);
-			globalEnv.defineFunction(name, new LispFunction(name, args -> {
-				throw new LispEvalException(
-						name.toLowerCase(java.util.Locale.ROOT) + ": Objective-C is not available in the browser playground");
-			}));
+				LispNames.OBJC_STRING, LispNames.OBJC_ADDRESS, LispNames.OBJC_OBJECTP)) {
+			unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, member));
 		}
+	}
+
+	@Substitute
+	static void registerPrimitives(Environment globalEnv,
+			java.util.function.BiFunction<am.ik.rontolisp.LispVal, java.util.List<am.ik.rontolisp.LispVal>, am.ik.rontolisp.LispVal> apply) {
+		unavailable(globalEnv, PackageRegistry.qualify(LispNames.OBJC_PKG, LispNames.OBJC_ON_MAIN));
+		for (String name : LispNames.OBJC_PRIMITIVES) {
+			unavailable(globalEnv, name);
+		}
+	}
+
+	private static void unavailable(Environment globalEnv, String name) {
+		globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			throw new LispEvalException(
+					name.toLowerCase(java.util.Locale.ROOT) + ": Objective-C is not available in the browser playground");
+		}));
 	}
 
 	@Substitute

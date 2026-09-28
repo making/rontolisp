@@ -1,4 +1,4 @@
-;; The objc: verbs of a --native output: the same nine the interpreter binds through
+;; The old objc: verbs of a --native output: the ones the interpreter binds through
 ;; FFM (ObjcBridge.java) and a compiled class carries (JvmObjcTemplate.java), written
 ;; here in rontolisp over the runner's Objective-C host -- the rlobjc imports, which
 ;; rontolisp-native/runner/src/objc answers (see ObjcNativeLibrary.java and
@@ -9,7 +9,7 @@
 ;; Threads: the module runs ON thread 0, so there is no hop -- objc:on-main is a plain
 ;; call, and a callback (a button's action, a timer) arrives inside a send or inside
 ;; sleep, which the host turns into thread 0's event loop (objc::%sleep, which the
-;; backend compiles every sleep to in such a program).
+;; backend compiles every sleep to in such a program; objc-native-primitives.lisp).
 ;;
 ;; Ownership: one reference per wrapper, as on the JVM. An object a send answers
 ;; arrives retained (+1), and its wrapper keeps, beside the address, the externref
@@ -118,10 +118,6 @@
                        :as "data_bytes"
                        :params '(:s64)
                        :returns :bytes)
-(rontolisp:wasm-import 'objc::%rl-pump
-                       :from "rlobjc"
-                       :as "pump"
-                       :params '(:float))
 (rontolisp:wasm-import 'objc::%rl-own
                        :from "rlobjc"
                        :as "own"
@@ -278,8 +274,6 @@
         (objc::%fail "bytes"))
       buffer)))
 
-(defun objc:on-main (function) (funcall function))
-
 ;;; --- classes whose methods are Lisp closures --------------------------------
 
 ;; Closure id -> the function a defined method calls.
@@ -346,8 +340,5 @@
                        :params '(:s32 :s64 :s64 :s64 :s32)
                        :returns :s64)
 
-;; What sleep compiles to: thread 0's event loop for that long, so a window stays
-;; alive while the program waits.
-(defun objc::%sleep (seconds)
-  (let ((s (* 1.0 seconds))) (when (> s 0) (objc::%rl-pump s)))
-  nil)
+;; objc:on-main and objc::%sleep (what every sleep compiles to) are both bases'; they
+;; are in objc-native-primitives.lisp, spliced in front of this file.

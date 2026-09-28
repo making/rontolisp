@@ -23,7 +23,7 @@
 ;;;; Close the window to stop.
 
 (load "../console/life-core.lisp")
-(require :cocoa "cocoa.lisp")
+(require :board "board.lisp")
 
 ;;; --- geometry and palette ----------------------------------------------------
 
@@ -57,7 +57,7 @@
 
 ;; A Life cell shows no text, so the board is panels alone.
 (defparameter *board*
-  (cocoa:grid *win* *rows* *cols*
+  (board:grid *win* *rows* *cols*
               :size *tile*
               :gap *gap*
               :x *pad*
@@ -91,7 +91,7 @@
          (let ((v (aref grid r c)))
            (unless (= v (aref *shown* r c))
              (setf (aref *shown* r c) v)
-             (cocoa:paint *board* r c (if (= v 1) *c-alive* *c-dead*))))))
+             (board:paint *board* r c (if (= v 1) *c-alive* *c-dead*))))))
      nil)))
 
 (defun show-status ()
@@ -117,7 +117,7 @@
 ;; A click edits the world under the simulation: left brings a cell to life,
 ;; right (or Ctrl-click) kills it. The next tick picks the change up, since the
 ;; grid IS the state.
-(cocoa:on-cell-click *board*
+(board:on-cell-click *board*
                      (lambda (r c button)
                        (setf (aref *g* r c) (if (= button 3) 0 1))
                        (render *g*)))

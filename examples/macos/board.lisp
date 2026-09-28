@@ -1,4 +1,4 @@
-;;;; cocoa.lisp -- a clickable AppKit grid for rontolisp examples.
+;;;; board.lisp -- a clickable AppKit grid for rontolisp examples.
 ;;;;
 ;;;; The macOS counterpart of the `swing` library's label-grid-window
 ;;;; (examples/jvm/swing.lisp): a board of square tiles, each a rounded panel
@@ -8,17 +8,17 @@
 ;;;; click, a timer -- are the built-in `appkit` package, so this file is the ten
 ;;;; lines above them that a game happens to want.
 ;;;;
-;;;; The helpers live in a `cocoa` package of their own; a program splices the
+;;;; The helpers live in a `board` package of their own; a program splices the
 ;;;; library in (idempotently, thanks to the provide below) with
 ;;;;
-;;;;   (require :cocoa "cocoa.lisp")
+;;;;   (require :board "board.lisp")
 ;;;;
-;;;; and calls the qualified names (cocoa:grid ...), (cocoa:paint ...), ...
+;;;; and calls the qualified names (board:grid ...), (board:paint ...), ...
 ;;;;
 ;;;; AppKit is reachable on macOS with a display -- under `java -jar`, in the
 ;;;; `rontolisp` native binary (which is what `java:` interop cannot do) and in a
 ;;;; compiled JVM class alike; only WASM refuses, having no foreign function API
-;;;; (doc/en/guides/objc-appkit.md). The requiring example resolves "cocoa.lisp"
+;;;; (doc/en/guides/objc-appkit.md). The requiring example resolves "board.lisp"
 ;;;; relative to its own directory, so run it from anywhere.
 ;;;;
 ;;;; Coordinates are AppKit's -- the origin is the window's BOTTOM-left corner
@@ -26,23 +26,23 @@
 ;;;; that its row 0 is the top row, the way a board is written down.
 ;;;;
 ;;;; API:
-;;;;   (cocoa:grid win rows cols &key size gap x y font-size radius labels)
+;;;;   (board:grid win rows cols &key size gap x y font-size radius labels)
 ;;;;                                         -> a grid
-;;;;   (cocoa:cell g r c)                    -> the NSBox at (row col)
-;;;;   (cocoa:cell-label g r c)              -> the NSTextField on top of it
-;;;;   (cocoa:paint g r c color)             -> set that cell's fill colour
-;;;;   (cocoa:cell-text g r c text)          -> set that cell's centred text
-;;;;   (cocoa:cell-fg g r c color)           -> set that cell's text colour
-;;;;   (cocoa:on-cell-click g handler)       -> handler is called (row col button)
+;;;;   (board:cell g r c)                    -> the NSBox at (row col)
+;;;;   (board:cell-label g r c)              -> the NSTextField on top of it
+;;;;   (board:paint g r c color)             -> set that cell's fill colour
+;;;;   (board:cell-text g r c text)          -> set that cell's centred text
+;;;;   (board:cell-fg g r c color)           -> set that cell's text colour
+;;;;   (board:on-cell-click g handler)       -> handler is called (row col button)
 ;;;;                                            on click (button: 1 left, 3 right)
 
-(provide :cocoa)
+(provide :board)
 
-(defpackage cocoa
+(defpackage board
   (:use cl)
   (:export grid cell cell-label paint cell-text cell-fg on-cell-click))
 
-(in-package cocoa)
+(in-package board)
 
 ;; ROWS x COLS square cells of SIZE pixels with GAP between them, the block's
 ;; bottom-left corner at (x y). Each cell is a rounded appkit:panel with a centred

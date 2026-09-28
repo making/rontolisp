@@ -40,7 +40,7 @@ Anything larger is built the same way, in Lisp:
 `examples/browser/minesweeper/minesweeper-macos.lisp` plays a full Minesweeper in a
 Cocoa window and `examples/macos/life-macos.lisp` runs Conway's Life in one, both
 out of the widgets below. What the two share above them is a board:
-`examples/macos/cocoa.lisp`, a small `cocoa` package holding the grid of clickable
+`examples/macos/board.lisp`, a small `board` package holding the grid of clickable
 tiles they happen to want — board-game policy, which is why it stays an example.
 
 `examples/macos/listener.lisp` puts the language itself in the window: a transcript in
@@ -384,6 +384,114 @@ string you hold is valid for as long as you hold it, and there is nothing to fre
 hand. The one rule: a window you make with `objc:` directly must have
 `(objc:send win "setReleasedWhenClosed:" nil)`, as `appkit:window` does, or
 closing it releases a reference the Lisp value still holds.
+
+## The LispWorks interface
+
+Beside the verbs above, `objc` carries the call half of LispWorks 8.1's Objective-C
+interface -- `objc:invoke`, `objc:invoke-bool`, `objc:invoke-into`,
+`objc:retain` / `objc:release` / `objc:autorelease`, the autorelease pools, the
+class and selector coercions -- with LispWorks' names and lambda lists, and the
+`cocoa` package its Foundation structures. Code written against the LispWorks
+manual's invoking, string and memory-management sections runs unchanged in a package
+that uses `objc`, on the interpreter, a compiled class and a `--native` executable
+alike. The [function reference](../reference/functions/objc.md) lists every name.
+
+```console
+CL-USER> (defpackage :my-app (:use :cl :objc))
+:MY-APP
+CL-USER> (in-package :my-app)
+:MY-APP
+MY-APP> (defvar *s* (invoke "NSString" "stringWithUTF8String:" "hello world"))
+*S*
+MY-APP> (invoke *s* "rangeOfString:" "world")
+(6 . 5)
+MY-APP> (invoke-bool *s* "hasPrefix:" "hello")
+T
+MY-APP> (invoke-into 'string *s* "uppercaseString")
+"HELLO WORLD"
+MY-APP> (invoke-into 'string "NSString"
+                     '("stringWithFormat:" (objc-object-pointer :int)
+                       :result-type objc-object-pointer :variadic-num-of-fixed 1)
+                     "The integer %d" 42)
+"The integer 42"
+```
+
+### Conversion by the declared type
+
+`objc:invoke` reads the method's type encoding from the runtime (a list-form method
+states the types itself) and converts each argument and the result by it. A string
+or a vector passed as an argument exists for the call only; a method the receiver
+does not have signals `No method ... for object ..., class ...` before anything is
+sent, with the class the runtime answers for the receiver.
+
+| Declared type | An argument may be | The result is |
+|---------------|--------------------|---------------|
+| `id` | an object pointer, `nil`, a string (an `NSString`), a vector (an `NSArray`, elements converted alike) | an `objc:objc-object-pointer`, or `nil` |
+| `Class` | a class pointer or a class name | an `objc:objc-class` |
+| `SEL` | a selector or its name | an `objc:sel` |
+| `char *` | a string or an address | a string |
+| `BOOL` / `_Bool` | `t`, `nil` or an integer | `1` or `0` |
+| an integer | an integer (an unsigned 64-bit one up to 2^64-1) | an integer |
+| `float` / `double` | a real | a double |
+| `NSRect` / `NSPoint` / `NSSize` | `#(x y width height)` / `#(x y)` / `#(width height)` | a vector of doubles |
+| `NSRange` | `(location . length)` | a cons |
+| any other structure | a vector of its fields in memory order | a vector of its fields |
+| a pointer | an address, `nil` or an object pointer | an address |
+
+`objc:invoke-into` converts further: `'string` turns an `NSString` result into a Lisp
+string, `'array` and `'(array string)` an `NSArray` into a vector, and a vector or a
+cons passed as the first argument receives a structure or an array's elements.
+
+### Ownership: a pointer releases only what it holds
+
+Every send runs on the main thread inside an autorelease pool of its own, so an
+object the send autoreleased is gone when it returns unless the pointer value took
+a reference first -- which it does for every object result, taking over the one an
+`alloc` / `new` / `copy` / `mutableCopy` / `init` method hands back. The value
+releases what it still holds when the collector frees it. `objc:retain` adds a
+reference the program must release; `objc:release` and `objc:autorelease` give up
+one the pointer holds and signal when it holds none, so code that releases what it
+owns, as the manual prescribes, never releases twice what the collector would
+release once. `(objc:invoke p "release")` goes through the same count.
+
+```console
+MY-APP> (defvar *o* (alloc-init-object "NSObject"))
+*O*
+MY-APP> (retain-count (retain *o*))
+2
+MY-APP> (release *o*)
+NIL
+MY-APP> (release *o*)
+NIL
+MY-APP> (release *o*)
+error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+MY-APP> (with-autorelease-pool ()
+          (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
+"pooled"
+```
+
+The pools are kept in Lisp: a real `NSAutoreleasePool` could not span two sends,
+each of which pushes and pops its own on the main thread.
+
+### Values
+
+An object answers an `objc:objc-object-pointer`, a class an `objc:objc-class` (also an
+object pointer) and a selector an `objc:sel`. None of them is a `structure-object`,
+and two answers for one object are `eq`, `eql`, `equal` and `equalp`, so either finds
+the other in any hash table. A pointer prints as LispWorks prints one,
+`#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>`: its address, never
+anything read from the object.
+
+### Where it differs from LispWorks
+
+rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
+passes and answers for it (`cocoa:set-ns-rect*` fills a vector) and the manual's
+`fli:with-dynamic-foreign-objects` forms have no counterpart. Calling
+`objc:ensure-objc-initialized` first is optional: every function opens the runtime on
+its first use. A variadic method named in the runtime's table of them
+(`stringWithFormat:`, `arrayWithObjects:` ...) also takes the string form, each extra
+argument typed by its value and a `nil` terminator appended. Defining classes in Lisp
+is not part of this interface yet; `objc:define-class` above does it.
 
 ## The native binary
 

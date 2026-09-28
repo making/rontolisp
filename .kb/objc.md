@@ -16,6 +16,159 @@ runtime offers FFM or AppKit; only the runner stub of a native executable answer
 exists: the native binary is the REPL people run, and `java:` cannot be INTERPRETED there (no
 reflection metadata); FFM needs none.
 
+## Two bases, one package (2026-09-28)
+The package is being rebuilt on a NEW BASE whose vocabulary is LispWorks 8.1's `OBJC` / `COCOA`
+(*Objective-C and Cocoa Interface User Guide and Reference Manual*). The OLD base -- the ten names
+`class`, `send`, `define-class`, `string`, `data`, `bytes`, `address`, `objectp`, `object` and the
+bridge behind them (`ObjcBridge`, `ObjcCaller`, `LispObjcObject`, `JvmObjcTemplate`,
+`JvmObjcHandle`, the verbs of `objc-native.lisp`) -- stays exported until the libraries are ported,
+and **new code never calls it**. Everything below "The new base" describes the new base; the rest
+of this file is the old base plus the platform substrate both use (thread 0, `TypeEncoding` /
+`encoding.rs`, `call.rs`, native-image registration, class-file embedding, the `Cleaner`).
+
+- `objc:on-main` is REBUILT (one primitive per backend, used by both bases -- its semantics never
+  depended on the representation). `data`, `bytes` and `objectp` keep the old verbs' bodies: a name
+  holds one function, and the old libraries hand those verbs old objects, so their new-base bodies
+  land when the old base goes.
+
+## The new base: one semantics in Lisp over a thin primitive layer
+`eval/objc.lisp` (+ `ObjcLibrary`) is the WHOLE vocabulary -- argument and result conversion,
+ownership, pools, tracing, the encoding parser, the variadic table, `cocoa:` -- written once and
+run on every target: the interpreter loads it on the first resolution of a new-base `objc:` /
+`cocoa:` name, and the compile path splices it (`ObjcLibrary.process`, right OUTSIDE
+`AppKitLibrary`) for a JVM class or a `--native` executable. Under it, per backend, the primitive
+layer: `objc::%get-class`, `%class-name`, `%object-class`, `%class-p`, `%register-selector`,
+`%selector-name`, `%method-types`, `%send`, `%new-handle`, `%refs`, `%interned`, `%intern`,
+`%load-module`, `%initialize` (`LispNames.OBJC_PRIMITIVES`), and the public `objc:on-main`.
+
+- Interpreter: `eval/ObjcPrimitives` over `am.ik.objc` (`ObjcRuntime.sendRaw`,
+  `ObjcReference`); JVM class output: `codegen/jvm/JvmObjcPrimitivesTemplate` (ships as
+  `<Program>$ObjcPrimitives` beside the renamed library) compiled to by
+  `JvmObjcPrimitivesCompiler`; `--native`: `eval/objc-native-primitives.lisp` over new `rlobjc`
+  imports (`runner/src/objc/prim.rs`). What differs between them is the value representation, never
+  a rule. The `p_*` imports cost the runner stub 115,904 B (1,799,168 -> 1,915,072, the
+  `release-runner` profile, 2026-09-28) -- every macOS `--native` output carries them, like the old
+  imports, which cost about the same and leave with the old base.
+- **`%send` is the whole call**: receiver address, SEL address, the encoding string (the method's
+  own, or one built from a list-form method's FLI types), the variadic split (`-1`, or the number
+  of FIXED method arguments), the raw arguments, and a mode. Raw means: an integer for every
+  integral or address kind (BOOL as 0/1), a float for `f`/`d`, a list of leaves in memory order
+  for a struct, and a Lisp STRING where the encoding says `@` (an autoreleased `NSString`) or `*` (a
+  C string) -- made INSIDE the hop, alive for the call, gone after it, which is the manual's
+  "released when the function returns". The answer is equally raw: integer / float / list of
+  leaves / nil, except `*`, which is read into a Lisp string inside the hop (Foundation frees a
+  `UTF8String` buffer with its pool). Mode bit 1: retain an `@` result inside the hop; bit 2: hand
+  a `*` result back as an address.
+- **Every `%send` runs in its own autorelease pool on thread 0** (interp/JVM: `MainThread.sync`
+  plus push/pop; `--native`: the module is on thread 0, the host pushes/pops). Deterministic: an
+  autoreleased result is dead the moment the send returns unless the hop retained it. This hop is
+  why ownership cannot be LispWorks' raw manual retain/release (below): LispWorks sends on the
+  calling thread, whose pool outlives the call.
+- **Where the rules live in `objc.lisp`**: a PLAN per (lookup class, method name) caches the parsed
+  encoding, the SEL, the mode and the family flags (`objc::%lookup-plan`; the lookup class is
+  `object_getClass` of the receiver, so a class receiver finds class methods through its
+  metaclass). The encoding parser maps to LispWorks' FLI descriptors (`objc::%fli-type`), and a
+  block (`@?`) or function pointer (`^?`) is re-spelled `^v` before `%send` so every host parser
+  takes it. A variadic argument of a list-form method travels promoted and WIDENED to a 64-bit slot
+  (`q`/`d`/`@`), which is ABI-equivalent on both macOS ABIs and keeps the shape inside the native
+  binary's variadic grid. The string form of a selector in `objc::*variadic-selectors*` (the same
+  names `VariadicSelectors` holds for the old base) types its extra arguments by value and appends
+  the nil terminator. An integer argument past 2^63 travels as its two's complement
+  (`objc::%bits64`: a wasm `:s64` import traps on a bignum); an unsigned 64-bit result or struct
+  leaf comes back fixed up from the parsed type.
+- **Two expansion traps the built-in macro `objc:with-autorelease-pool` hit** (it expands to
+  `(objc::%call-with-autorelease-pool (lambda () ...))`): it is registered in
+  `LispMacroExpander.expandBuiltinMacro` AND walked in both `FreeVarAnalyzer` walks, or the JVM
+  compile of a body naming an outer variable dies with "closure over X whose binding left it
+  unboxed" (the analysis never saw the lambda). And the interpreter's print routing is decided
+  BEFORE a `print`'s argument runs, while the argument is what loads `objc.lisp` and its
+  `print-object` methods: the print site loads the library first when the form names it
+  (`ObjcLibrary.references`), as it does for torch and geom.
+- **A pointer prints as LispWorks prints one**, `#<Pointer: OBJC:OBJC-OBJECT-POINTER =
+  #x0000600000C04000>` (`OBJC:OBJC-CLASS`, `OBJC:SEL`): the address only. A first cut printed the
+  class name through `object_getClass` and SIGSEGV'd when the message of a refused release printed
+  the freed object.
+- **Measured per send (2026-09-28, macOS 26 arm64, 20,000 sends after 2,000 warm-up;
+  length / self / rangeOfString:)**: `java -jar` old `send` 10.5 / 7.8 / 9.4 us, new `invoke`
+  23.0 / 30.8 / 31.2 us; JVM class old 8.7 / 7.1 / 8.4, new 8.2 / 7.9 / 13.1; native binary old
+  26.9 / 42.8 / 41.2, new 45.2 / 52.0 / 77.0; `--native` old 0.45 / 0.25 / 0.70, new 1.10 / 0.85 /
+  1.95. On a compiled class the Lisp layer is lost in the hop; interpreted, `objc.lisp` costs
+  12-23 us a send (the 15 us an uncached ARC family check cost is why the plan caches it), and on
+  `--native` about 1 us. Decided for the single implementation: no per-frame loop in the tree is
+  near those numbers, and the old base's hop already dominated `java -jar`.
+- **The recorded LispWorks answers** (`src/test/resources/objc-lispworks-answers.lisp`, recorded by
+  hand from LispWorks Personal 8.1.2 on arm64 -- the Personal edition cannot be scripted) settle
+  what the manual leaves open: `invoke` answers 1/0 for a `BOOL` even where it encodes as `B`;
+  the Foundation structures are doubles and 64-bit integers; `objc-class-method-signature` names
+  a structure `(:struct cocoa:ns-range)` and prefers the instance method; a missing method is a
+  `simple-error` reading `No method "x" for object #<Pointer: ...>, class "__NSCFString".`
+  (the RUNTIME class). `ObjcBaseTest#theRecordedLispWorksAnswersHold` asserts every entry.
+
+## The new base: ownership (the rule that makes manual-style code safe)
+Each `objc-object-pointer` value carries a HANDLE (host object: interp/JVM `ObjcReference`,
+`--native` an `externref` whose host data holds the counts) with three counts:
+
+- `gc` -- references released on thread 0 when the handle is collected. An `@` result arrives with
+  one: retained in the hop, or taken over from the `alloc` / `new` / `copy` / `mutableCopy` families
+  (ARC's family rule: the word at the start, ignoring leading underscores, followed by the end or a
+  non-lowercase character). The `init` family CONSUMES the receiver's reference (one `gc`, else one
+  `manual`, taken without a message) and answers +1.
+- `manual` -- `objc:retain` sends `retain` and counts one here. NOT released at collection: an
+  explicit retain is the program's to release, and is how a program keeps an object (a delegate)
+  alive after dropping the pointer, as in LispWorks.
+- `pooled` -- references an emulated pool holds (below).
+- A class pointer owns nothing: `retain` / `release` / `autorelease` on one change no count.
+
+`objc:release` gives up one `manual`, else one `gc`, and sends `release`; a pointer holding
+neither SIGNALS instead of over-releasing -- the double release manual-style code would otherwise
+commit against the collector's own release. `objc:autorelease` gives up one the same way and hands
+it to the innermost live pool, or, with none, back to `gc` (released at collection).
+`(objc:invoke p "retain" | "release" | "autorelease")` routes to these three, so no spelling
+bypasses the counts. Mutable state lives in the handle, never in a struct slot: `equal` and
+`equalp` hash tables hash an instance by its slots on the interpreter and the JVM.
+
+**Pools are emulated in Lisp**: a real `NSAutoreleasePool` pushed in one hop and popped in another
+would interleave with the pools thread 0's own loop pushes. `with-autorelease-pool` binds
+`objc::*autorelease-pools*`; `make-autorelease-pool` pushes one and answers it; `(release pool)`
+drains it (and every pool made after it). Draining releases each pooled reference.
+
+## The new base: one representation, equal by address
+`objc:objc-object-pointer` is a defstruct (address + handle) in `objc.lisp`, the same on all four
+targets; `objc:objc-class` INCLUDES it (a Class is an object) and `objc:sel` is its own. Classes and
+selectors are immortal and interned per address / name in Lisp tables. Object pointers: the
+interpreter and the JVM INTERN them per address in a weak table (`ObjcReference`, `%interned` /
+`%intern`), so `eq` holds by identity; `--native` cannot (no weak references in wasm-GC) and
+compares by the address slot: `WasmLispCompiler.addressKeyedLayout` holds every address-keyed
+layout the program carries (the old `objc:object` and `objc:objc-object-pointer`), and the eql arm
+requires ONE such layout on both sides. A result whose object is a class answers the interned
+`objc-class`. None of the three is a `structure-object`
+(`LispMacroExpander.FOREIGN_POINTER_STRUCT_TAGS`).
+
+- **Interning changes the bookkeeping, not the answers**: on the interpreter and the JVM every
+  answer for an address adds a `gc` reference to the ONE live value, on `--native` each answer is a
+  value of its own with one. So a program that releases a pointer more often than it received it is
+  refused at a different call there; a program releasing what it owns sees the same `retainCount`
+  deltas everywhere, which is what the corpus prints.
+- **`fboundp` loads no library**: `(fboundp 'objc:invoke)` in a fresh interpreter answers nil until a
+  new-base name was resolved (true of `appkit:` and `linalg:` too).
+- The web build substitutes `ObjcInterop.registerPrimitives` like `register`, so `ObjcPrimitives`,
+  the new base's one `am.ik.objc` reference in `eval`, leaves the browser build with `ObjcBridge`.
+
+## The new base: tests and where it runs
+The corpus `src/test/resources/objc-base-corpus.lisp` is the manual's call-side examples in a
+package that uses `objc`, plus conversions, ownership, identity and refusals, printing nothing
+address-dependent. `ObjcBaseTest` pins the interpreter's output (`objc-base-corpus.expected`) and
+the LispWorks answers; `JvmObjcBaseCompilerTest` runs it compiled; `NativeObjcE2eTest` runs it as a
+`--native` executable (and pins that 300,000 answers of one object leave < 100,000 references). The
+native binary (`-Pnative`, 2026-09-28) printed the same file by hand. `ObjcNativeImageForeignConfigTest`
+names every selector the corpus and the docs send; the new shapes were `jboolean(void*)`
+(`object_isClass`) and `void*(void*,void*,jint)` (`numberWithInt:`). `ensure-objc-initialized`'s
+`:modules` are `SymbolLookup.libraryLookup` / `dlopen`.
+
+Not here yet, by design: class definition, blocks, `NSException` as a condition, and the FLI forms
+of the manual (`fli:with-dynamic-foreign-objects` by-reference results and foreign structure
+objects) -- a structure is the vector / cons `invoke` answers, and `cocoa:set-ns-rect*` fills one.
+
 ## The one architectural fact: AppKit belongs to thread 0
 The thread the kernel started the process on (`pthread_main_np()` answers 1) is the only one that
 may touch a window, and the Lisp thread is never it.
@@ -53,7 +206,7 @@ may touch a window, and the Lisp thread is never it.
 ## Where the line goes: widgets ship, layout stays an example
 `appkit` carries `color`, `font`, `panel` (an `NSBox`), `set-color`, `on-click`, `timer`, a
 vertically centred `label`, `:background`/`:dark` on `window`, `status-item`, `menu`, `quit`,
-`&optional` on `wait`. LAYOUT stays out (`examples/macos/cocoa.lisp` is the grid alone).
+`&optional` on `wait`. LAYOUT stays out (`examples/macos/board.lisp` is the grid alone).
 
 - Two rungs cannot be reached by an obvious `objc:send`: a centred label needs the font's line
   height MEASURED (`appkit::%line-height`, a throwaway `sizeToFit` field once per font, cached by
@@ -64,8 +217,8 @@ vertically centred `label`, `:background`/`:dark` on `window`, `status-item`, `m
   address), so `%invoke` needed no change. `:dock nil` sets activation policy 1 on the shared
   `%app` started with policy 0. `set-text`/`text` test for the status item AHEAD of the button
   test (`appkit::%status-item-p`); a menu-bar program has no window, so `quit` sends `terminate:`.
-- The rungs are `appkit:` functions, NOT a second built-in `cocoa` package: a package name is
-  taken for good. `on-click`'s handler takes the BUTTON NUMBER (the `java.awt.event` numbers, so
+- The rungs are `appkit:` functions, NOT a second built-in package: a package name is taken for
+  good (`cocoa` is now LispWorks' `COCOA`, and the examples' grid package is `board`). `on-click`'s handler takes the BUTTON NUMBER (the `java.awt.event` numbers, so
   a Swing handler reads the same); a button's own `:on-click` closure takes none.
 - A rung costs a `PackageRegistry.APPKIT_FUNCTIONS` entry (library and registry must agree
   EXACTLY, `AppKitLibraryTest`), a per-operator page + `_catalog.yaml` entry + a guide-table row in
@@ -387,8 +540,8 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   GUI rule's check.
 
 ## Package rules and the web build
-`am.ik.objc -> (nothing)`; `eval -> am.ik.objc` through ONE class, `eval/ObjcBridge`, reached only
-via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` shape), so
+`am.ik.objc -> (nothing)`; `eval -> am.ik.objc` through TWO classes, `eval/ObjcBridge` (old base)
+and `eval/ObjcPrimitives` (new base), reached only via `eval/ObjcInterop`'s six entry points (the `LinalgGpu`/`LinalgGpuKernels` shape), so
 `src/web/java/.../Target_ObjcInterop.java` substitutes them and the browser build carries no FFM.
 `ObjcCaller` is its own type so the bridge and the entry class reference each other in no direction
 (`PackageCycleTest`). `cli` reaches the hand-over through `ObjcInterop`, never the library.
