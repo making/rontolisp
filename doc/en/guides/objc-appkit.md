@@ -562,11 +562,111 @@ MY-APP> (seen *w*)
 ("Ping")
 ```
 
+### Blocks
+
+A block is how Cocoa takes a closure: a comparator, an enumerator, a completion handler.
+`objc:make-objc-block` makes one from a Lisp function and a signature. The signature is
+the caller's to state, because a method's encoding says only that it takes a block, not
+what the block takes; a bare function passed where a block goes signals rather than
+guess. It is `(result-type (argument-type*))` in the types a list-form method takes, or a
+name `objc:define-objc-block-type` gave one. The arguments reach the function converted
+as a method's reach its body, and its value goes back the same way. `objc:with-objc-block`
+makes a block for the extent of a body and frees it on every exit; that is right for
+asynchronous work too, since a callee that keeps a block keeps a copy, and the copy keeps
+the function alive. `objc:call-objc-block` calls a block, whoever made it.
+
+```console
+MY-APP> (defvar *words* (invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
+*WORDS*
+MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-pointer))
+                                  (lambda (a b)
+                                    (let ((x (ns-string-to-string a))
+                                          (y (ns-string-to-string b)))
+                                      (cond ((string< x y) -1) ((string> x y) 1) (t 0)))))
+          (invoke-into '(array string) *words* "sortedArrayUsingComparator:" compare))
+#("apple" "fig" "pear")
+MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
+                                        (:pointer objc-c++-bool)))
+                               (lambda (word index stop)
+                                 (declare (ignore stop))
+                                 (format t "~a ~a~%" index (ns-string-to-string word))))
+          (invoke *words* "enumerateObjectsUsingBlock:" each))
+0 pear
+1 fig
+2 apple
+NIL
+MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
+*ADD*
+MY-APP> (call-objc-block '(:int (:int :int)) *add* 3 4)
+7
+MY-APP> (free-objc-block *add*)
+NIL
+```
+
+C functions take blocks too -- libdispatch's, for one. `fli:define-foreign-function`, the
+part of LispWorks' foreign language interface this package carries, declares one in the
+same types:
+
+```console
+MY-APP> (fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+            ((label objc-c-string) (attributes :pointer))
+          :result-type objc-object-pointer)
+DISPATCH-QUEUE-CREATE
+MY-APP> (fli:define-foreign-function (dispatch-async "dispatch_async")
+            ((queue objc-object-pointer) (work objc-at-question-mark))
+          :result-type :void)
+DISPATCH-ASYNC
+MY-APP> (defvar *queue* (dispatch-queue-create "com.example.work" nil))
+*QUEUE*
+MY-APP> (defvar *done* nil)
+*DONE*
+MY-APP> (with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
+          (dispatch-async *queue* work))
+NIL
+MY-APP> (sleep 0.1)
+NIL
+MY-APP> *done*
+T
+```
+
+A block runs on the thread that calls it. Foundation calls a comparator or an enumerator
+on the thread that sent to it, which is the main thread, since every send runs there. A
+serial queue runs its work, and `NSURLSession` its completion handler, on a libdispatch
+worker, concurrently with the program. There the function sees the global values of
+special variables, not the bindings the program's thread made (a closure's own captures
+aside), as in a thread `rontolisp:make-thread` starts. A `--native` executable cannot
+run Lisp on another thread: a `void` block called on one waits for the program's next
+`sleep`, which runs it on the main thread, and a block answering a value is refused,
+printed and answered with zero. So a program that waits for a block waits by sleeping,
+as below, and runs the same on every target:
+
+```console
+MY-APP> (defvar *status* nil)
+*STATUS*
+MY-APP> (with-objc-block (handler '(:void (objc-object-pointer objc-object-pointer
+                                           objc-object-pointer))
+                                  (lambda (data response error)
+                                    (declare (ignore data error))
+                                    (setq *status* (invoke response "statusCode"))))
+          (invoke (invoke (invoke "NSURLSession" "sharedSession")
+                          "dataTaskWithURL:completionHandler:"
+                          (invoke "NSURL" "URLWithString:" "https://example.com/")
+                          handler)
+                  "resume"))
+NIL
+MY-APP> (loop until *status* do (sleep 0.05))
+NIL
+MY-APP> *status*
+200
+```
+
 ### Where it differs from LispWorks
 
 rontolisp has no foreign memory interface, so a structure is the Lisp value `invoke`
 passes and answers for it (`cocoa:set-ns-rect*` fills a vector) and the manual's
-`fli:with-dynamic-foreign-objects` forms have no counterpart. Calling
+`fli:with-dynamic-foreign-objects` forms have no counterpart. LispWorks makes blocks with
+its foreign language interface, not `objc`; the names `objc:make-objc-block` and the rest
+are this package's own, and `fli` carries `define-foreign-function` alone. Calling
 `objc:ensure-objc-initialized` first is optional: every function opens the runtime on
 its first use. A variadic method named in the runtime's table of them
 (`stringWithFormat:`, `arrayWithObjects:` ...) also takes the string form, each extra
@@ -593,8 +693,10 @@ place to find out what a program sends before a binary is built for it.
 A method defined with `objc:define-objc-method` is an upcall of its own shape, and those are
 registered the same way: the binary serves the shapes of the class examples above and of
 the three methods every class defined in Lisp gets, and refuses a definition of any other
-shape with the entry to add under `foreign.upcalls`. `java -jar` and a `--native`
-executable take any shape.
+shape with the entry to add under `foreign.upcalls`. A block is such an upcall too: the
+binary serves the shapes of the blocks above (and of a comparator, a work item and a
+completion handler of three objects) and refuses a block of any other shape when it is
+made. `java -jar` and a `--native` executable take any shape.
 
 A variadic call is its own registration, so the binary serves a bounded grid of those
 too: up to eleven arguments past the declared ones — the binding's own `nil` terminator
@@ -664,8 +766,9 @@ quantized matrix is not accepted by `objc:data` in an executable.
 - A process without an application bundle gets no Dock icon or menu bar; there is no
   Cmd-Q, and closing the last window does not quit — the REPL is the process.
 - `objc:define-class`'s callback shapes are the closed set above; `objc:define-objc-method`
-  takes any shape (in the `rontolisp` binary, the registered ones). A block-taking selector
-  is not served yet.
+  takes any shape (in the `rontolisp` binary, the registered ones), and so does a block.
+- A `--native` executable runs a block another thread calls only if the block answers
+  nothing, and then at the program's next `sleep`.
 - The variadic selectors served are the table above. One a program declares itself is
   not in it, and the runtime gives the binding no way to tell.
 - Apple silicon. On an Intel Mac a struct wider than two registers is returned

@@ -48,6 +48,8 @@ public final class ObjcLibrary {
 
 	@Nullable private static volatile List<LispVal> macroForms;
 
+	@Nullable private static volatile List<LispVal> blockForms;
+
 	private ObjcLibrary() {
 	}
 
@@ -93,6 +95,27 @@ public final class ObjcLibrary {
 	}
 
 	/**
+	 * Returns the blocks half ({@code objc-block.lisp}: {@code make-objc-block},
+	 * {@code call-objc-block} and the rest), parsed once and cached. The compile path
+	 * splices it only into a program that names a block ({@link #process}).
+	 * @return the forms
+	 */
+	public static List<LispVal> blockForms() {
+		List<LispVal> cached = blockForms;
+		if (cached == null) {
+			synchronized (ObjcLibrary.class) {
+				cached = blockForms;
+				if (cached == null) {
+					cached = List
+						.copyOf(LispReader.readAllFromString(readSource("objc-block.lisp"), Features.INTERPRETER));
+					blockForms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	/**
 	 * Returns the defining macros ({@code objc-macros.lisp}: {@code define-objc-class}
 	 * and the rest), parsed once and cached. The compile path expands macros BEFORE it
 	 * splices libraries, so {@link #withMacros} puts these in front of the program for
@@ -116,12 +139,13 @@ public final class ObjcLibrary {
 
 	/**
 	 * Every form the interpreter evaluates on the first use: the library, the class half,
-	 * the macros.
+	 * the blocks half, the macros.
 	 * @return the forms, in evaluation order
 	 */
 	public static List<LispVal> allForms() {
 		List<LispVal> all = new ArrayList<>(forms());
 		all.addAll(classForms());
+		all.addAll(blockForms());
 		all.addAll(macroForms());
 		return all;
 	}
@@ -141,7 +165,7 @@ public final class ObjcLibrary {
 	/**
 	 * Whether a symbol name is one the library defines or exports: a new-base
 	 * {@code objc:} external, an {@code objc::%} helper of the library, or any
-	 * {@code cocoa:} name.
+	 * {@code cocoa:} or {@code fli:} name.
 	 * @param symbolName the canonical symbol name
 	 * @return {@code true} when resolving it needs the library
 	 */
@@ -150,7 +174,7 @@ public final class ObjcLibrary {
 		if (qn == null) {
 			return false;
 		}
-		if (LispNames.COCOA_PKG.equals(qn.pkg())) {
+		if (LispNames.COCOA_PKG.equals(qn.pkg()) || LispNames.FLI_PKG.equals(qn.pkg())) {
 			return true;
 		}
 		return LispNames.OBJC_PKG.equals(qn.pkg()) && isBaseMember(qn.member(), qn.internal());
@@ -177,6 +201,7 @@ public final class ObjcLibrary {
 			Set<String> names = new HashSet<>();
 			collectDefinedNames(forms(), names);
 			collectDefinedNames(classForms(), names);
+			collectDefinedNames(blockForms(), names);
 			collectDefinedNames(macroForms(), names);
 			cached = Set.copyOf(names);
 			definedNames = cached;
@@ -203,6 +228,27 @@ public final class ObjcLibrary {
 		}
 		return cached;
 	}
+
+	@Nullable private static volatile Set<String> blockDefinedNames;
+
+	/**
+	 * The names the blocks half defines or is reached through: its own definitions, and
+	 * {@code objc:objc-block}, its type.
+	 */
+	private static Set<String> blockDefinedNames() {
+		Set<String> cached = blockDefinedNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			collectDefinedNames(blockForms(), names);
+			names.add(OBJC_BLOCK);
+			cached = Set.copyOf(names);
+			blockDefinedNames = cached;
+		}
+		return cached;
+	}
+
+	/** {@code objc:objc-block}, qualified: the blocks half's type. */
+	private static final String OBJC_BLOCK = LispNames.OBJC_PKG + ":OBJC-BLOCK";
 
 	/** {@code objc:standard-objc-object}, qualified: a superclass a defclass names. */
 	private static final String STANDARD_OBJC_OBJECT = LispNames.OBJC_PKG + ":STANDARD-OBJC-OBJECT";
@@ -236,7 +282,8 @@ public final class ObjcLibrary {
 	 * @return {@code true} for a macro of the library
 	 */
 	public static boolean definesMacro(String symbolName) {
-		return symbolName.startsWith(LispNames.OBJC_PKG + ":") && macroNames().contains(symbolName);
+		return (symbolName.startsWith(LispNames.OBJC_PKG + ":") || symbolName.startsWith(LispNames.FLI_PKG + ":"))
+				&& macroNames().contains(symbolName);
 	}
 
 	@Nullable private static volatile Set<String> macroNames;
@@ -267,7 +314,8 @@ public final class ObjcLibrary {
 			if (val instanceof LispSymbol sym) {
 				String name = sym.name();
 				return LispNames.OBJC_POINTER_TYPE.equals(name) || LispNames.OBJC_CLASS_TYPE.equals(name)
-						|| LispNames.OBJC_SEL_TYPE.equals(name) || STANDARD_OBJC_OBJECT.equals(name);
+						|| LispNames.OBJC_SEL_TYPE.equals(name) || STANDARD_OBJC_OBJECT.equals(name)
+						|| OBJC_BLOCK.equals(name);
 			}
 			if (val instanceof LispCons cons) {
 				if (mentionsType(cons.car())) {
@@ -294,6 +342,9 @@ public final class ObjcLibrary {
 		List<LispVal> out = new ArrayList<>(forms());
 		if (referencesClassHalf(program)) {
 			out.addAll(classForms());
+		}
+		if (referencesBlockHalf(program)) {
+			out.addAll(blockForms());
 		}
 		out.addAll(program);
 		return out;
@@ -323,6 +374,22 @@ public final class ObjcLibrary {
 	 */
 	public static boolean referencesClassHalf(List<LispVal> program) {
 		Set<String> names = classDefinedNames();
+		for (LispVal form : program) {
+			if (mentionsAny(form, names)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a program, its macros expanded, uses the blocks half: a name only that half
+	 * defines, or {@code objc:objc-block}.
+	 * @param program the top-level forms
+	 * @return {@code true} when it does
+	 */
+	public static boolean referencesBlockHalf(List<LispVal> program) {
+		Set<String> names = blockDefinedNames();
 		for (LispVal form : program) {
 			if (mentionsAny(form, names)) {
 				return true;
@@ -368,10 +435,11 @@ public final class ObjcLibrary {
 	}
 
 	/**
-	 * Whether a top-level form makes a package use {@code objc} or {@code cocoa} -- a
-	 * {@code defpackage} with such a {@code :use} clause, or a {@code use-package} of one
-	 * -- so that its bare names are the library's. The manual's examples are written that
-	 * way, and on the compile path a bare name is still bare when the library passes run.
+	 * Whether a top-level form makes a package use {@code objc}, {@code cocoa} or
+	 * {@code fli} -- a {@code defpackage} with such a {@code :use} clause, or a
+	 * {@code use-package} of one -- so that its bare names are the library's. The
+	 * manual's examples are written that way, and on the compile path a bare name is
+	 * still bare when the library passes run.
 	 * @param form a top-level form
 	 * @return {@code true} when it does
 	 */
@@ -408,7 +476,7 @@ public final class ObjcLibrary {
 			default -> "";
 		};
 		String upper = PackageRegistry.canonicalBuiltinName(name.toUpperCase(Locale.ROOT));
-		return LispNames.OBJC_PKG.equals(upper) || LispNames.COCOA_PKG.equals(upper);
+		return LispNames.OBJC_PKG.equals(upper) || LispNames.COCOA_PKG.equals(upper) || LispNames.FLI_PKG.equals(upper);
 	}
 
 	private static String memberOf(String name) {
@@ -455,7 +523,9 @@ public final class ObjcLibrary {
 							this.found = (LispNames.OBJC_PKG.equals(this.currentPackage)
 									&& PackageRegistry.objcBaseNames().contains(upper))
 									|| (LispNames.COCOA_PKG.equals(this.currentPackage)
-											&& PackageRegistry.cocoaNames().contains(upper));
+											&& PackageRegistry.cocoaNames().contains(upper))
+									|| (LispNames.FLI_PKG.equals(this.currentPackage)
+											&& PackageRegistry.fliNames().contains(upper));
 						}
 					}
 					case LispCons cons -> {

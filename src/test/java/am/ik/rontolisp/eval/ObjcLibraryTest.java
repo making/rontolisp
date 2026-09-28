@@ -55,7 +55,7 @@ class ObjcLibraryTest {
 				"(use-package :objc)", "(use-package 'objc)")) {
 			assertThat(ObjcLibrary.references(read(form + " (invoke \"NSObject\" \"new\")"))).as(form).isTrue();
 			assertThat(AppKitLibrary.firstObjcReference(read(form))).as(form)
-				.isEqualTo("a package that uses objc or cocoa");
+				.isEqualTo("a package that uses objc, cocoa or fli");
 		}
 		assertThat(ObjcLibrary.references(read("(defpackage :app (:use :cl)) (invoke 1 2)"))).isFalse();
 	}
@@ -80,6 +80,34 @@ class ObjcLibraryTest {
 		List<LispVal> invoking = read("(objc:invoke \"NSObject\" \"new\")");
 		assertThat(ObjcLibrary.referencesClassHalf(invoking)).isFalse();
 		assertThat(ObjcLibrary.referencesClassHalf(read("(typep x 'objc:standard-objc-object)"))).isTrue();
+	}
+
+	@Test
+	void theBlocksHalfIsSplicedOnlyWhereABlockIsNamed() {
+		assertThat(ObjcLibrary.definesName("OBJC:MAKE-OBJC-BLOCK")).isTrue();
+		assertThat(ObjcLibrary.definesMacro("OBJC:WITH-OBJC-BLOCK")).isTrue();
+		assertThat(ObjcLibrary.definesMacro("OBJC:DEFINE-OBJC-BLOCK-TYPE")).isTrue();
+		assertThat(ObjcLibrary.mentionsType(read("(typep x 'objc:objc-block)").getFirst())).isTrue();
+		List<LispVal> invoking = read("(objc:invoke \"NSObject\" \"new\")");
+		assertThat(ObjcLibrary.referencesBlockHalf(invoking)).isFalse();
+		List<LispVal> blocking = read("(objc:make-objc-block '(:void ()) (lambda () nil))");
+		assertThat(ObjcLibrary.process(blocking))
+			.hasSize(ObjcLibrary.forms().size() + ObjcLibrary.blockForms().size() + 1);
+		assertThat(ObjcLibrary.referencesBlockHalf(read("(typep x 'objc:objc-block)"))).isTrue();
+	}
+
+	@Test
+	void fliIsTheLibrarysAndMacOsOnly() {
+		// fli:define-foreign-function expands into a call of objc.lisp, and a package
+		// that uses fli names it bare.
+		assertThat(ObjcLibrary.definesName("FLI:DEFINE-FOREIGN-FUNCTION")).isTrue();
+		assertThat(ObjcLibrary.definesMacro("FLI:DEFINE-FOREIGN-FUNCTION")).isTrue();
+		List<LispVal> declaring = read("(fli:define-foreign-function (f \"f\") ())");
+		assertThat(ObjcLibrary.withMacros(declaring)).hasSize(ObjcLibrary.macroForms().size() + 1);
+		assertThat(ObjcLibrary.references(read("(in-package fli) (define-foreign-function (f \"f\") ())"))).isTrue();
+		assertThat(AppKitLibrary.firstObjcReference(declaring)).isEqualTo("FLI:DEFINE-FOREIGN-FUNCTION");
+		assertThat(AppKitLibrary.firstObjcReference(read("(defpackage :app (:use :cl :fli))")))
+			.isEqualTo("a package that uses objc, cocoa or fli");
 	}
 
 }

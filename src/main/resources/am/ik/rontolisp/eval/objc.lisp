@@ -71,6 +71,11 @@
 ;; Run once the runtime is up: realizes the classes defined before that.
 (defvar objc::*realize-hook* nil)
 
+;; The blocks half (objc-block.lisp) plugs in here: an objc:objc-block stands for its
+;; literal's address wherever a block or a pointer is taken. Nil while that half is not
+;; loaded.
+(defvar objc::*block-pointer-hook* nil)
+
 (defvar objc::*initialized* nil)
 
 ;; define-objc-struct and define-objc-typedef: a type name -> its encoding, and a
@@ -233,6 +238,21 @@
     (loop while (and (< p n) (digit-char-p (char types p))) do (setq p (+ p 1)))
     p))
 
+;; Past the <...> Clang's extended encoding writes after a block's @?: the block's own
+;; signature, nested for a block taking a block.
+(defun objc::%skip-block-signature (types pos)
+  (let ((n (length types)) (p pos) (depth 0))
+    (when (and (< p n) (char= (char types p) #\<))
+      (loop while (< p n)
+            do
+              (let ((c (char types p)))
+                (setq p (+ p 1))
+                (cond ((char= c #\<) (setq depth (+ depth 1)))
+                      ((char= c #\>)
+                       (setq depth (- depth 1))
+                       (when (= depth 0) (return)))))))
+    p))
+
 ;; (type . next-position)
 (defun objc::%parse-type (types pos)
   (let ((n (length types)) (p pos))
@@ -242,11 +262,11 @@
     (let ((c (char types p)))
       (setq p (+ p 1))
       (case c
-        (#\@
-         (cond ((and (< p n) (char= (char types p) #\?)) (cons :block (+ p 1)))
-               ((and (< p n) (char= (char types p) #\"))
-                (cons :object (+ (position #\" types :start (+ p 1)) 1)))
-               (t (cons :object p))))
+        (#\@ (cond ((and (< p n) (char= (char types p) #\?))
+                    (cons :block (objc::%skip-block-signature types (+ p 1))))
+                   ((and (< p n) (char= (char types p) #\"))
+                    (cons :object (+ (position #\" types :start (+ p 1)) 1)))
+                   (t (cons :object p))))
         (#\# (cons :class p))
         (#\: (cons :sel p))
         (#\* (cons :cstring p))
@@ -329,7 +349,7 @@
               (cond ((and (< (+ i 1) n) (or (char= c #\@) (char= c #\^))
                           (char= (char types (+ i 1)) #\?))
                      (write-string "^v" out)
-                     (setq i (+ i 2)))
+                     (setq i (objc::%skip-block-signature types (+ i 2))))
                     (t
                      (write-char c out)
                      (setq i (+ i 1))))))
@@ -715,6 +735,7 @@
                           (objc::%pointer-address array)))
                        ((objc::%as-pointer value)
                         (objc::%pointer-address (objc::%as-pointer value)))
+                       ((objc::%block-address value))
                        (t (objc::%arg-error name index
                            "an object, a string, a vector or nil" value))))
         (:class
@@ -734,7 +755,12 @@
                         ((stringp value) value)
                         ((integerp value) (objc::%bits64 value name index))
                         (t (objc::%arg-error name index "a string" value))))
-        ((:block :unknown) (objc::%raw-address value name index))
+        (:block
+         (when (functionp value)
+           (error "objc:invoke: ~a: argument ~a is a block; a Lisp function becomes one with objc:make-objc-block or objc:with-objc-block, which name its signature -- the method's encoding does not"
+                  name (+ index 1)))
+         (objc::%raw-address value name index))
+        (:unknown (objc::%raw-address value name index))
         (:bool
          (cond ((null value) 0) ((integerp value) (if (= value 0) 0 1)) (t 1)))
         (:int8 (cond ((null value) 0)
@@ -763,8 +789,13 @@
         ((integerp value) (objc::%bits64 value name index))
         ((objc::%pointerp value) (objc::%pointer-address value))
         ((objc::%selp value) (objc::%sel-struct-address value))
+        ((objc::%block-address value))
         (t (objc::%arg-error name index "a pointer (an integer or an object)"
                              value))))
+
+;; The literal's address of a block made in Lisp, or nil for anything else.
+(defun objc::%block-address (value)
+  (and objc::*block-pointer-hook* (funcall objc::*block-pointer-hook* value)))
 
 (defun objc::%unsigned (value bits)
   (if (< value 0) (+ value (expt 2 bits)) value))
@@ -992,6 +1023,143 @@
 (defun objc:invoke-into (result class-or-object-pointer method &rest args)
   (objc::%invoke class-or-object-pointer method args
    (if (and (consp result) (eq (car result) :pointer)) :pointer result)))
+
+;;; --- callbacks: what a method or a block defined in Lisp receives and answers ------
+
+;; A declared type as the conversions read it: the parsed encoding, or :boolean for the
+;; FLI types that convert to t and nil.
+(defun objc::%declared-type (fli)
+  (if (or (eq fli 'objc:objc-bool) (eq fli 'objc:objc-c++-bool)
+          (eq fli :boolean) (and (consp fli) (eq (car fli) :boolean)))
+      :boolean (car (objc::%parse-type (objc::%type-encoding fli) 0))))
+
+;; The style symbols of an argument (string, array, (array style)), by name: string
+;; may be read as cl:string or as objc's own.
+(defun objc::%style-named-p (style name)
+  (and style (symbolp style) (string= (symbol-name style) name)))
+
+;; A raw argument the host handed a callback, as the Lisp value its SPEC -- (type
+;; [style]) -- declares. An object argument arrives retained, which the pointer takes
+;; over.
+(defun objc::%convert-argument (spec raw)
+  (let ((type (objc::%declared-type (first spec))) (style (second spec)))
+    (cond ((eq type :boolean) (/= raw 0))
+          ((eq type :object)
+           (let ((pointer (objc::%wrap-object raw)))
+             (cond ((null pointer) nil)
+                   ((objc::%style-named-p style "STRING")
+                    (objc:ns-string-to-string pointer))
+                   ((objc::%style-named-p style "ARRAY")
+                    (objc::%array-elements pointer nil))
+                   ((and (consp style)
+                         (objc::%style-named-p (car style) "ARRAY"))
+                    (objc::%array-elements pointer (second style)))
+                   (t pointer))))
+          ((eq style :foreign) raw)
+          (t (objc::%result type raw)))))
+
+;; What a callback that failed answers.
+(defun objc::%zero-answer (type)
+  (cond ((eq type :void) nil)
+        ((member type '(:float :double)) 0d0)
+        ((and (consp type) (eq (car type) :struct))
+         (let ((out nil))
+           (dolist (leaf (third type) out)
+             (push (if (member leaf '(:float :double)) 0d0 0) out))))
+        (t 0)))
+
+;; A callback's Lisp value answered as TYPE, raw as the host takes it back. NAME is the
+;; callback's, for messages; the :foreign STYLE answers an object as the address it is.
+(defun objc::%callback-answer (name type style value)
+  (cond ((eq type :void) nil)
+        ((eq type :boolean) (if (or (null value) (eql value 0)) 0 1))
+        ((eq type :object)
+         (cond ((null value) 0)
+          ((eq style :foreign) (objc::%raw-address value name 0))
+          ((stringp value)
+           (objc::%pointer-address (objc:string-to-ns-string value)))
+          ((and (vectorp value) (not (stringp value)))
+           (let* ((temps (list nil)) (array (objc::%ns-array value temps)))
+             (dolist (temp (car temps)) (objc:release temp))
+             (objc::%pointer-address array)))
+          ((objc::%as-pointer value)
+           (objc::%pointer-address (objc::%as-pointer value)))
+          ((objc::%block-address value))
+          (t (error "~a: an object callback cannot answer ~s" name value))))
+        ((eq type :cstring)
+         (error "~a: a callback cannot answer a C string; answer an NSString"
+                name))
+        (t (objc::%raw-arg type value name 0 (list nil)))))
+
+;;; --- C functions: fli:define-foreign-function -----------------------------------
+
+;; (foreign-name argument-types result-type fixed) -> #(address types return-type
+;; argument-types mode fixed), resolved on the first call.
+(defvar objc::*foreign-functions* (make-hash-table :test 'equal))
+
+;; Core Foundation's Create rule, which libdispatch follows too: a function whose name
+;; says it creates or copies hands its caller the reference; any other answers one the
+;; caller does not own.
+(defun objc::%creates-p (name)
+  (or (search "Create" name) (search "Copy" name) (search "_create" name)
+      (search "_copy" name)))
+
+(defun objc::%foreign-function (name arg-types result-type module fixed)
+  (or
+   (gethash (list name arg-types result-type fixed) objc::*foreign-functions*)
+   (progn
+     (when module (objc:ensure-objc-initialized :modules (list module)))
+     (objc::%ready)
+     (let ((address (objc::%symbol-address name))
+           (encoding (make-string-output-stream))
+           (i 0))
+       (when (= address 0)
+         (error "fli:define-foreign-function: no loaded image defines ~a" name))
+       (write-string (objc::%type-encoding result-type) encoding)
+       (dolist (fli arg-types)
+         (write-string (if (and fixed (>= i fixed))
+                           (objc::%promoted-encoding fli)
+                           (objc::%type-encoding fli)) encoding)
+         (setq i (+ i 1)))
+       (let* ((raw (get-output-stream-string encoding))
+              (parsed (objc::%parse-encoding raw))
+              (return-type (first parsed)))
+         (setf (gethash (list name arg-types result-type fixed)
+                        objc::*foreign-functions*)
+               (vector address (objc::%callable-types raw) return-type
+                       (rest parsed)
+                       (if (and (eq return-type :object)
+                                (not (objc::%creates-p name)))
+                           1
+                           0) (if fixed fixed -1))))))))
+
+;; A call of a function fli:define-foreign-function defined, on the calling thread.
+(defun objc::%foreign-call (name arg-types result-type module fixed values)
+  (let* ((function
+          (objc::%foreign-function name arg-types result-type module fixed))
+         (params (svref function 3))
+         (temps (list nil)))
+    (unless (= (length values) (length params))
+      (error "~a takes ~a argument(s), got ~a" name (length params)
+             (length values)))
+    (let ((raw
+           (unwind-protect (let ((raws nil) (i 0))
+                             (dolist (value values)
+                               (push
+                                (objc::%raw-arg (car params) value name i temps)
+                                raws)
+                               (setq params (cdr params))
+                               (setq i (+ i 1)))
+                             (objc::%call-function (svref function 0)
+                                                   (svref function 1)
+                                                   (svref function 5)
+                                                   (nreverse raws)
+                                                   (svref function 4)))
+             (when (car temps)
+               (dolist (temp (car temps)) (objc:release temp))))))
+      (if (eq (objc::%declared-type result-type) :boolean)
+          (/= raw 0)
+          (objc::%result (svref function 2) raw)))))
 
 ;;; --- the rest of OBJC -------------------------------------------------------------
 

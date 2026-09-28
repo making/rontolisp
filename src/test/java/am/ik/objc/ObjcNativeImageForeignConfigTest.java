@@ -95,6 +95,43 @@ class ObjcNativeImageForeignConfigTest {
 	}
 
 	/**
+	 * The blocks the guide makes (doc/en/guides/objc-appkit.md, "Blocks"), as the
+	 * encodings they are invoked by -- the block itself first, a plain pointer: the adder
+	 * {@code call-objc-block} calls, the comparator, the enumerator, the work item a
+	 * serial queue runs and a completion handler. Each is an upcall (the invoke
+	 * function); the copy and dispose helpers every block's descriptor carries are two
+	 * more.
+	 */
+	private static final List<String> DOCUMENTED_BLOCKS = List.of("i^vii", "q^v@@", "v^v@Q^B", "v^v", "v^v@@@");
+
+	/**
+	 * The C calls the guide's block examples make: the adder called from Lisp
+	 * ({@code call-objc-block}), {@code dispatch_queue_create}, {@code dispatch_async}
+	 * and {@code dlsym}, which finds them.
+	 */
+	private static final List<String> DOCUMENTED_CALLS = List.of("i^vii", "@*^v", "v@@?", "^v^v*");
+
+	@Test
+	void everyShapeTheDocumentedBlockExamplesUseIsRegistered() {
+		Set<FunctionDescriptor> blocks = new LinkedHashSet<>();
+		for (String types : DOCUMENTED_BLOCKS) {
+			blocks.add(ObjcBlocks.shape(types));
+		}
+		blocks.add(FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+		blocks.add(FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+		assertThat(NativeImageDowncalls.missingUpcalls(NativeImageDowncalls.OBJC, blocks))
+			.as("block shapes the guide makes with no foreign.upcalls entry -- the binary refuses the block")
+			.isEmpty();
+		Set<FunctionDescriptor> calls = new LinkedHashSet<>();
+		for (String types : DOCUMENTED_CALLS) {
+			calls.add(TypeEncoding.parse(types).descriptor());
+		}
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.OBJC, calls, Set.of()))
+			.as("C call shapes the guide's block examples make with no foreign.downcalls entry")
+			.isEmpty();
+	}
+
+	/**
 	 * Every selector the shipped layers and the documented examples send: a class, a
 	 * selector, and whether it is a class method. Kept in step with {@code appkit.lisp},
 	 * {@code metal.lisp}, {@code scene.lisp}, {@code doc/en/guides/objc-appkit.md}, the
@@ -298,7 +335,13 @@ class ObjcNativeImageForeignConfigTest {
 			inst("NSValue", "sizeValue"), cls("NSValue", "valueWithRange:"), inst("NSValue", "rangeValue"),
 			cls("NSInvocation", "invocationWithMethodSignature:"),
 			cls("NSObject", "instanceMethodSignatureForSelector:"), inst("NSInvocation", "setSelector:"),
-			inst("NSInvocation", "selector"), inst("NSObject", "className"));
+			inst("NSInvocation", "selector"), inst("NSObject", "className"),
+			// The guide's blocks: a comparator and an enumerator Foundation calls, and a
+			// completion handler NSURLSession calls when a data task finishes.
+			inst("NSArray", "sortedArrayUsingComparator:"), inst("NSArray", "enumerateObjectsUsingBlock:"),
+			cls("NSURLSession", "sharedSession"), inst("NSURLSession", "dataTaskWithURL:completionHandler:"),
+			inst("NSURLSessionTask", "resume"), cls("NSURL", "URLWithString:"),
+			inst("NSHTTPURLResponse", "statusCode"));
 
 	/**
 	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an

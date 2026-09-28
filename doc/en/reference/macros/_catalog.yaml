@@ -97,6 +97,9 @@ categories:
       - { slug: objc-define-objc-struct, name: "objc:define-objc-struct" }
       - { slug: objc-define-objc-typedef, name: "objc:define-objc-typedef" }
       - { slug: objc-define-objc-protocol, name: "objc:define-objc-protocol" }
+      - { slug: objc-define-objc-block-type, name: "objc:define-objc-block-type" }
+      - { slug: objc-with-objc-block, name: "objc:with-objc-block" }
+      - { slug: fli-define-foreign-function, name: "fli:define-foreign-function" }
       - { slug: uiop-if-let, name: "uiop:if-let" }
       - { slug: uiop-when-let, name: "uiop:when-let" }
       - { slug: uiop-when-let-star, name: "uiop:when-let*" }

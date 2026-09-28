@@ -249,6 +249,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-block\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GeomLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/geom\\.lisp"

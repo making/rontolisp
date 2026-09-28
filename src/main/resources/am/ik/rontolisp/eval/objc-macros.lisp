@@ -101,3 +101,54 @@
     (name &key incorporated-protocols instance-methods class-methods)
   `(objc::%define-objc-protocol ,name ',incorporated-protocols
                                 ',instance-methods ',class-methods))
+
+;; The blocks half (objc-block.lisp): a block signature named once, and a block alive for
+;; the extent of a body -- a callee that keeps the block has copied it by then, and the
+;; copy holds the function until the last copy is disposed of.
+(defmacro objc:define-objc-block-type (name result-type argument-types)
+  `(objc::%define-objc-block-type ',name ',result-type ',argument-types))
+
+(defmacro objc:with-objc-block ((var type function) &body body)
+  `(let ((,var (objc:make-objc-block ,type ,function)))
+     (unwind-protect (progn ,@body) (objc:free-objc-block ,var))))
+
+;; LispWorks' fli:define-foreign-function, the part C functions called beside the objc
+;; base need: (lisp-name [foreign-name]) or lisp-name, arguments (name type) or
+;; (:constant value type), :result-type (:int by default), :module, and
+;; :variadic-num-of-fixed. A foreign name left out is the Lisp name in lower case with
+;; each hyphen an underscore. The types are the ones objc:invoke's list form takes.
+(defmacro fli:define-foreign-function (name args &key (result-type :int) module
+                                            variadic-num-of-fixed documentation
+                                            language calling-convention no-check
+                                            lambda-list)
+  (declare (ignore documentation language calling-convention no-check))
+  (when lambda-list
+    (error "fli:define-foreign-function: :lambda-list is not supported"))
+  (let* ((lisp-name (if (consp name) (first name) name))
+         (foreign-name
+          (if (and (consp name) (second name))
+              (second name)
+              (substitute #\_ #\- (string-downcase (symbol-name lisp-name)))))
+         (parameters nil)
+         (forms nil)
+         (types nil))
+    (unless (stringp foreign-name)
+      (error
+       "fli:define-foreign-function: the foreign name must be a string, got ~s"
+       foreign-name))
+    (dolist (arg args)
+      (cond ((and (consp arg) (eq (first arg) :constant))
+             (push (list 'quote (second arg)) forms)
+             (push (third arg) types))
+            ((and (consp arg) (symbolp (first arg)) (consp (cdr arg)))
+             (push (first arg) parameters)
+             (push (first arg) forms)
+             (push (second arg) types))
+            (t (error "fli:define-foreign-function: an argument is (name type) or (:constant value type), got ~s"
+                      arg))))
+    `(progn
+       (defun ,lisp-name ,(reverse parameters)
+         (objc::%foreign-call ,foreign-name ',(reverse types) ',result-type
+                              ,module ,variadic-num-of-fixed
+                              (list ,@(reverse forms))))
+       ',lisp-name)))

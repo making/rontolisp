@@ -9,6 +9,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.objc.ObjcBlocks;
 import am.ik.objc.ObjcException;
 import am.ik.objc.ObjcMethods;
 import am.ik.objc.ObjcReference;
@@ -346,6 +347,57 @@ final class JvmObjcPrimitivesTemplate {
 		try {
 			ObjcRuntime.get().poke(address(at), string(types), toRaw(raw));
 			return null;
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	// --- the blocks and C functions half ---------------------------------------------
+
+	/** {@code (objc::%make-block types signature function)}. */
+	static Object makeBlock(@Nullable Object types, @Nullable Object signature, @Nullable Object function) {
+		try {
+			return ObjcBlocks.make(ObjcRuntime.get(), string(types), string(signature), raw -> {
+				Object args = null;
+				for (int i = raw.length - 1; i >= 0; i--) {
+					args = new Object[] { fromRaw(raw[i]), args };
+				}
+				return toRaw(applyCallable(function, new Object[] { args, null }));
+			});
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%free-block address)}. */
+	static @Nullable Object freeBlock(@Nullable Object address) {
+		ObjcBlocks.free(address(address));
+		return null;
+	}
+
+	/** {@code (objc::%call-function address types fixed args mode)}. */
+	static @Nullable Object callFunction(@Nullable Object function, @Nullable Object types, @Nullable Object fixed,
+			@Nullable Object args, @Nullable Object mode) {
+		List<@Nullable Object> raw = elements(args);
+		@Nullable Object[] operands = new @Nullable Object[raw.size()];
+		for (int i = 0; i < operands.length; i++) {
+			operands[i] = toRaw(raw.get(i));
+		}
+		try {
+			return fromRaw(ObjcRuntime.get()
+				.callRaw(address(function), string(types), (int) address(fixed), operands, (int) address(mode)));
+		}
+		catch (ObjcException ex) {
+			throw fail(ex);
+		}
+	}
+
+	/** {@code (objc::%symbol-address name)}. */
+	static Object symbolAddress(@Nullable Object name) {
+		try {
+			return ObjcRuntime.get().symbolAddress(string(name));
 		}
 		catch (ObjcException ex) {
 			throw fail(ex);

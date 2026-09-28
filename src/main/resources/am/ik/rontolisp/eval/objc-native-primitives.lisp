@@ -193,6 +193,32 @@
                        :params '(:s32)
                        :returns :s32)
 
+;; The blocks and C functions half (objc-block.lisp and fli:define-foreign-function are
+;; written over these; the host side is rontolisp-native/runner/src/objc/block.rs).
+(rontolisp:wasm-import 'objc::%p-make-block
+                       :from "rlobjc"
+                       :as "p_make_block"
+                       :params '(:string :string :s32)
+                       :returns :s64)
+(rontolisp:wasm-import 'objc::%p-free-block
+                       :from "rlobjc"
+                       :as "p_free_block"
+                       :params '(:s64))
+(rontolisp:wasm-import 'objc::%p-block-reap
+                       :from "rlobjc"
+                       :as "p_block_reap"
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%p-call-function
+                       :from "rlobjc"
+                       :as "p_call_function"
+                       :params '(:s64 :string :s32 :s32)
+                       :returns :s32)
+(rontolisp:wasm-import 'objc::%symbol-address
+                       :from "rlobjc"
+                       :as "p_symbol"
+                       :params '(:string)
+                       :returns :s64)
+
 (defun objc::%class-p (address) (/= (objc::%p-class-p address) 0))
 
 (defun objc::%method-types (cls sel)
@@ -295,6 +321,36 @@
            (funcall (gethash index objc::*methods*) self (nreverse args))))
       (when answer (objc::%p-push answer)))
     1))
+
+;; A block's function joins the methods' table: the host calls it through the same
+;; export, with no receiver. The host reports the blocks no copy holds any more.
+(defun objc::%reap-blocks ()
+  (do ((index (objc::%p-block-reap) (objc::%p-block-reap)))
+      ((< index 0))
+    (remhash index objc::*methods*)))
+
+(defun objc::%make-block (types signature function)
+  (objc::%reap-blocks)
+  (let ((index objc::*method-count*))
+    (setf (gethash index objc::*methods*)
+          (lambda (self args)
+            (declare (ignore self))
+            (funcall function args)))
+    (setq objc::*method-count* (+ index 1))
+    (let ((address (objc::%p-make-block types signature index)))
+      (when (= address 0)
+        (remhash index objc::*methods*)
+        (error "objc: ~a" (objc::%p-error)))
+      address)))
+
+(defun objc::%free-block (address)
+  (objc::%p-free-block address)
+  (objc::%reap-blocks)
+  nil)
+
+(defun objc::%call-function (function types fixed args mode)
+  (dolist (arg args) (objc::%p-push arg))
+  (objc::%p-answer (objc::%p-call-function function types fixed mode)))
 
 (rontolisp:wasm-export 'objc::%p-method
                        :as "rlobjc_method"

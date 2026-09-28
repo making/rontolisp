@@ -71,7 +71,20 @@
     "its super send), beside the root methods' +allocWithZone: / -copyWithZone: (void*(void*,",
     "void*,void*)) and -dealloc (void(void*,void*)), which the six already cover. The two runtime",
     "downcalls class_addIvar (jboolean(void*,void*,jlong,jbyte,void*)) and ivar_getOffset",
-    "(jlong(void*)) sit right before the variadic grid."
+    "(jlong(void*)) sit right before the variadic grid.",
+    "",
+    "The new base's blocks (objc-block.lisp over am.ik.objc.ObjcBlocks) make an upcall stub per",
+    "block SHAPE -- the block itself first, a pointer -- and the binary serves the registered ones",
+    "and refuses any other when the block is made. Registered beyond the shapes above: the guide's",
+    "adder (jint(void*,jint,jint), also the downcall call-objc-block makes of it) and the",
+    "enumerator enumerateObjectsUsingBlock: calls (void(void*,void*,jlong,void*)); its comparator",
+    "(jlong(void*,void*,void*)), a work item (void(void*)), a completion handler",
+    "(void(void*,void*,void*,void*)) and the copy and dispose helpers every block's descriptor",
+    "carries (void(void*,void*), void(void*)) coincide with the six. fli:define-foreign-function's",
+    "calls are unbound downcalls of the function's shape: the guide's dispatch_queue_create",
+    "(void*(void*,void*)) and dispatch_async (void(void*,void*)) are among the shapes above. A",
+    "block's literal is malloc'd (void*(jlong)) and freed with free (void(void*)): the binary",
+    "serves no shared arena."
   ],
   "foreign": {
     "downcalls": [
@@ -435,6 +448,8 @@
       { "returnType": "jlong", "parameterTypes": ["void*"] },
       { "returnType": "jint", "parameterTypes": ["void*", "void*", "jint", "jint"] },
       { "returnType": "struct(jfloat,jfloat)", "parameterTypes": ["void*", "void*"] },
+      { "returnType": "jint", "parameterTypes": ["void*", "jint", "jint"] },
+      { "returnType": "void*", "parameterTypes": ["jlong"] },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "void*", "void*"], "options": { "firstVariadicArg": 3 } },
       { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jlong", "void*"], "options": { "firstVariadicArg": 3 } },
@@ -620,6 +635,14 @@
       {
         "returnType": "struct(jfloat,jfloat)",
         "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "jlong", "void*"]
       }
     ]
   }

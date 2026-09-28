@@ -519,7 +519,7 @@ final class CompileFrontend {
 		String objcReference = wasm && !objcHost ? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
-					+ " -- the objc:, cocoa:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
+					+ " -- the objc:, cocoa:, fli:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
 					+ "the rontolisp binary), in a compiled .class or .jar and in a --native executable for macos-aarch64, "
 					+ "not in a .wasm");
 		}

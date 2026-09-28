@@ -110,7 +110,7 @@ public final class AppKitLibrary {
 		for (LispVal form : program) {
 			if (ObjcLibrary.usesPackage(form)) {
 				// A package that uses objc or cocoa: its bare names are theirs.
-				return "a package that uses objc or cocoa";
+				return "a package that uses objc, cocoa or fli";
 			}
 			walker.trackTopLevelInPackage(form);
 			walker.detect(form);
@@ -171,7 +171,7 @@ public final class AppKitLibrary {
 	 * The packages that make a program macOS-only, and therefore un-compilable to WASM.
 	 */
 	private static final List<String> MACOS_PACKAGES = List.of(LispNames.OBJC_PKG, LispNames.APPKIT_PKG,
-			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG);
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG);
 
 	/** Whether {@code name} is an exported name of {@code pkg}, one of the four above. */
 	private static boolean exportedBy(String pkg, String name) {
@@ -181,6 +181,9 @@ public final class AppKitLibrary {
 		}
 		if (LispNames.COCOA_PKG.equals(pkg)) {
 			return PackageRegistry.cocoaNames().contains(upper);
+		}
+		if (LispNames.FLI_PKG.equals(pkg)) {
+			return PackageRegistry.fliNames().contains(upper);
 		}
 		if (LispNames.APPKIT_PKG.equals(pkg)) {
 			return PackageRegistry.appkitFunctionNames().contains(upper);

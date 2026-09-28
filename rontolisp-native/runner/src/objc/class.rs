@@ -83,13 +83,13 @@ const BLOCK_IS_GLOBAL: i32 = 1 << 28;
 
 /// What [`rl_objc_block_imp`] saves and restores; the offsets are the assembly's.
 #[repr(C)]
-struct ImpFrame {
-    x: [u64; 8],   // 0
-    d: [u64; 8],   // 64
-    x8: u64,       // 128
-    stack: usize,  // 136: the caller's stack arguments
-    _pad: u64,     // 144
-    _pad2: u64,    // 152
+pub(super) struct ImpFrame {
+    pub(super) x: [u64; 8], // 0
+    d: [u64; 8],            // 64
+    x8: u64,                // 128
+    stack: usize,           // 136: the caller's stack arguments
+    _pad: u64,              // 144
+    _pad2: u64,             // 152
 }
 
 std::arch::global_asm!(
@@ -124,16 +124,32 @@ unsafe extern "C" {
     fn rl_objc_block_imp();
 }
 
+/// The invoke function of every block this runner makes: a method's IMP block and a
+/// block a program made from a Lisp function ([`super::block`]) alike.
+pub(super) fn block_entry() -> usize {
+    rl_objc_block_imp as *const () as usize
+}
+
 /// Reads the arguments of a call out of the saved registers and stack, the way
 /// [`super::call::Call`] lays them in.
-struct Reader<'a> {
+pub(super) struct Reader<'a> {
     frame: &'a ImpFrame,
     ngrn: usize,
     nsrn: usize,
     offset: usize,
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
+    /// A reader past the first `taken` integer registers (the block, a receiver).
+    pub(super) fn new(frame: &'a ImpFrame, taken: usize) -> Reader<'a> {
+        Reader {
+            frame,
+            ngrn: taken,
+            nsrn: 0,
+            offset: 0,
+        }
+    }
+
     fn stack(&mut self, size: usize, align: usize) -> &[u8] {
         self.offset += (align - self.offset % align) % align;
         // SAFETY: the caller's stack argument area, which the convention says holds this
@@ -163,7 +179,7 @@ impl Reader<'_> {
         }
     }
 
-    fn read(&mut self, ty: &Type) -> Vec<Leaf> {
+    pub(super) fn read(&mut self, ty: &Type) -> Vec<Leaf> {
         match ty.kind {
             Kind::Struct => self.read_struct(ty),
             Kind::Float | Kind::Double => {
@@ -223,8 +239,9 @@ impl Reader<'_> {
     }
 }
 
-/// Writes a method's answer where the caller reads it.
-fn write_result(frame: &mut ImpFrame, ret: &Type, leaves: &[Leaf]) {
+/// Writes a method's (or a block's) answer where the caller reads it; no leaves write
+/// the type's zero.
+pub(super) fn write_result(frame: &mut ImpFrame, ret: &Type, leaves: &[Leaf]) {
     let leaf = |i: usize| leaves.get(i).copied().unwrap_or(Leaf::Int(0));
     match ret.kind {
         Kind::Void => {}
@@ -283,6 +300,12 @@ extern "C" fn rl_objc_block_dispatch(frame: *mut ImpFrame) {
     // SAFETY: the frame rl_objc_block_imp built on its stack for this call.
     let frame = unsafe { &mut *frame };
     let block = frame.x[0] as *const MethodBlock;
+    // SAFETY: a block whose invoke function is rl_objc_block_imp: a method's (its
+    // descriptor is DESCRIPTOR) or one a program made, whose header is the same.
+    if !std::ptr::eq(unsafe { (*block).descriptor }, &DESCRIPTOR) {
+        super::block::invoke(frame);
+        return;
+    }
     // SAFETY: the block imp_implementationWithBlock was made from, which lives forever.
     let index = unsafe { (*block).method };
     let receiver = frame.x[1] as Id;
@@ -290,17 +313,12 @@ extern "C" fn rl_objc_block_dispatch(frame: *mut ImpFrame) {
         return;
     };
     let ret = method.encoding.ret.clone();
-    let mut reader = Reader {
-        frame,
-        ngrn: 2,
-        nsrn: 0,
-        offset: 0,
-    };
+    let mut reader = Reader::new(frame, 2);
     let args: Vec<(Type, Vec<Leaf>)> = method.encoding.args[2..]
         .iter()
         .map(|ty| (ty.clone(), reader.read(ty)))
         .collect();
-    let leaves = run(&method, receiver, args);
+    let leaves = run_closure(method.closure, receiver, args);
     if let (Kind::Object, Some(Leaf::Int(a))) = (ret.kind, leaves.first())
         && *a != 0
         && method.flags & RETAIN_RESULT != 0
@@ -316,8 +334,10 @@ extern "C" fn rl_objc_block_dispatch(frame: *mut ImpFrame) {
     write_result(frame, &ret, &leaves);
 }
 
-/// Runs a method in the module and answers the leaves it answered (none when it failed).
-fn run(method: &Method, receiver: Id, args: Vec<(Type, Vec<Leaf>)>) -> Vec<Leaf> {
+/// Runs a method's (or a block's) function in the module -- the closure the library
+/// registered under that index -- and answers the leaves it answered (none when it
+/// failed). Only on thread 0, inside a host call.
+pub(super) fn run_closure(closure: i32, receiver: Id, args: Vec<(Type, Vec<Leaf>)>) -> Vec<Leaf> {
     let caller = CALLER.get();
     let callback = with(|s| s.method.clone());
     let (Some(callback), false) = (callback, caller.is_null()) else {
@@ -328,7 +348,7 @@ fn run(method: &Method, receiver: Id, args: Vec<(Type, Vec<Leaf>)>) -> Vec<Leaf>
     // SAFETY: CALLER is the Caller of the host call this method runs inside, on this
     // thread, which does not touch it until the call returns.
     let caller = unsafe { &mut *(caller as *mut Caller<'_, WasiP1Ctx>) };
-    let status = callback.call(caller.as_context_mut(), (method.closure, receiver as i64));
+    let status = callback.call(caller.as_context_mut(), (closure, receiver as i64));
     FRAMES.with(|f| f.borrow_mut().pop());
     let answer = prim::take_args();
     prim::restore_args(saved);
@@ -403,7 +423,11 @@ fn allocate_class(api: &Api, superclass: Id, name: &str) -> Result<Id, String> {
     // SAFETY: a NUL-terminated name.
     let existing = unsafe { (api.get_class)(c.as_ptr()) };
     if existing != 0 {
-        return Ok(if ivar(api, existing, DEFINED_MARKER)? != 0 { existing } else { 0 });
+        return Ok(if ivar(api, existing, DEFINED_MARKER)? != 0 {
+            existing
+        } else {
+            0
+        });
     }
     // SAFETY: a live superclass and a fresh name.
     let cls = unsafe { (api.allocate_class_pair)(superclass, c.as_ptr(), 0) };
@@ -448,7 +472,10 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             let name = memory_string(&mut caller, name_p, name_n)?;
             let types = memory_string(&mut caller, types_p, types_n)?;
             let api = runtime()?;
-            Ok(failed(add_ivar(api, cls as Id, &name, size as usize, align as usize, &types), false) as i32)
+            Ok(failed(
+                add_ivar(api, cls as Id, &name, size as usize, align as usize, &types),
+                false,
+            ) as i32)
         },
     )?;
     linker.func_wrap(MODULE, "p_register_class", |cls: i64| -> wasmtime::Result<()> {
@@ -507,7 +534,11 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             let api = runtime()?;
             let v = ivar(api, cls as Id, &name).map_err(wasmtime::Error::msg)?;
             // SAFETY: an instance variable of a live class.
-            Ok(if v == 0 { -1 } else { (unsafe { (api.ivar_get_offset)(v) }) as i64 })
+            Ok(if v == 0 {
+                -1
+            } else {
+                (unsafe { (api.ivar_get_offset)(v) }) as i64
+            })
         },
     )?;
     linker.func_wrap(
@@ -518,7 +549,11 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             let api = runtime()?;
             let v = ivar(api, cls as Id, &name).map_err(wasmtime::Error::msg)?;
             // SAFETY: an instance variable of a live class.
-            let types = if v == 0 { String::new() } else { text(unsafe { (api.ivar_get_type_encoding)(v) }) };
+            let types = if v == 0 {
+                String::new()
+            } else {
+                text(unsafe { (api.ivar_get_type_encoding)(v) })
+            };
             return_string(&mut caller, &types)
         },
     )?;

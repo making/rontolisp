@@ -197,7 +197,12 @@ impl Parser<'_> {
         Ok(match c {
             b'@' => {
                 if !self.at_end() && self.peek() == b'?' {
-                    return Err(self.fail("a block argument is not supported"));
+                    // A block is an object; calling one is the caller's business, so the
+                    // call only needs its address. Clang's extended encoding appends the
+                    // block's own signature in angle brackets.
+                    self.pos += 1;
+                    self.skip_block_signature();
+                    return Ok(Type::of(Kind::Object));
                 }
                 self.skip_quoted_name();
                 Type::of(Kind::Object)
@@ -284,6 +289,25 @@ impl Parser<'_> {
         }
     }
 
+    fn skip_block_signature(&mut self) {
+        if self.at_end() || self.peek() != b'<' {
+            return;
+        }
+        let mut depth = 0;
+        while !self.at_end() {
+            let c = self.peek();
+            self.pos += 1;
+            if c == b'<' {
+                depth += 1;
+            } else if c == b'>' {
+                depth -= 1;
+                if depth == 0 {
+                    return;
+                }
+            }
+        }
+    }
+
     fn expect(&mut self, c: u8) -> Result<(), String> {
         if self.at_end() || self.peek() != c {
             return Err(self.fail(&format!("expected '{}'", c as char)));
@@ -316,12 +340,15 @@ mod tests {
     }
 
     #[test]
-    fn a_block_and_a_union_are_refused_by_name() {
-        assert!(
-            parse("v24@0:8@?16")
-                .unwrap_err()
-                .contains("a block argument is not supported")
-        );
+    fn a_block_is_an_object() {
+        assert_eq!(parse("v24@0:8@?16").unwrap().args[2].kind, Kind::Object);
+        let extended = parse("@32@0:8@?<v@?@?<v@?>>16q24").unwrap();
+        assert_eq!(extended.args[2].kind, Kind::Object);
+        assert_eq!(extended.args[3].kind, Kind::Int64);
+    }
+
+    #[test]
+    fn a_union_is_refused_by_name() {
         assert!(
             parse("v24@0:8(u=iq)16")
                 .unwrap_err()

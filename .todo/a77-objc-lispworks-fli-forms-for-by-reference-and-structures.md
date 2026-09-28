@@ -12,6 +12,12 @@ of:
   `(fli:with-dynamic-foreign-objects ((result-value :int)) (objc:invoke object "getValueInto:" result-value) (fli:dereference result-value))`;
 - `objc:invoke`'s "otherwise it is assumed to be a foreign pointer to a cocoa:ns-rect and is
   copied" for every structure argument, and `cocoa:set-ns-rect*` and friends on such a pointer.
+- A block's by-reference argument: `enumerateObjectsUsingBlock:` hands its block a `BOOL *stop`
+  (an address today), which a LispWorks-shaped program stops with `(setf (fli:dereference stop) t)`.
+
+The `fli` package exists: `fli:define-foreign-function` (`objc-macros.lisp`, over
+`objc::%call-function` and `objc::%symbol-address`, `.kb/objc.md`, "blocks and C functions") is
+its one name so far.
 
 Today a structure is the Lisp value `invoke` passes and answers (a vector, a cons), the setters
 fill those, and a by-reference argument takes a raw address nothing in the language can allocate
@@ -19,9 +25,9 @@ on every target (`ffi:alloc` exists on the interpreter and the JVM only, never o
 
 ## Decide
 
-- The subset of `fli` to provide (`with-dynamic-foreign-objects`, `allocate-foreign-object`,
-  `free-foreign-object`, `dereference`, `foreign-slot-value`, `size-of`), under the `fli` package
-  name, on all four objc targets -- which means foreign memory primitives on `--native` too (the
+- The subset of `fli` to add (`with-dynamic-foreign-objects`, `allocate-foreign-object`,
+  `free-foreign-object`, `dereference`, `foreign-slot-value`, `size-of`), on all four objc
+  targets -- which means foreign memory primitives on `--native` too (the
   runner's host memory, not the module's linear memory).
 - What a foreign structure object is (an address + a type) and how `invoke` / `invoke-into` tell
   one from the vector forms.

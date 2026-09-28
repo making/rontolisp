@@ -118,6 +118,25 @@ class JvmObjcBaseCompilerTest {
 	}
 
 	@Test
+	void aProgramThatMakesNoBlockCarriesNoBlockHalf() {
+		String calling = new String(compile("(print (objc:invoke \"NSObject\" \"new\"))"), StandardCharsets.ISO_8859_1);
+		assertThat(calling).doesNotContain("OBJC-BLOCK");
+		String blocking = new String(compile("""
+				(objc:with-objc-block (b '(:void ()) (lambda () nil))
+				  (print (objc:objc-block-live-p b)))
+				"""), StandardCharsets.ISO_8859_1);
+		assertThat(blocking).contains("OBJC-BLOCK");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void theBlockCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// Blocks on a libdispatch worker run there, as on the interpreter.
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		assertThat(run(compile(resource("objc-block-corpus.lisp")))).isEqualTo(resource("objc-block-corpus.expected"));
+	}
+
+	@Test
 	@EnabledOnOs(OS.MAC)
 	void theClassCorpusPrintsWhatTheInterpreterPrints() throws Exception {
 		assumeTrue(ObjcInterop.available(), ObjcInterop.description());

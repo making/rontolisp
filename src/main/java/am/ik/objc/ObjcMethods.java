@@ -181,20 +181,37 @@ public final class ObjcMethods {
 				raw[i - 2] = toRaw(target.runtime(), params.get(i), args[i]);
 			}
 			Object answer = target.body().invoke(((MemorySegment) args[0]).address(), raw);
-			return toNative(target, ret, answer);
+			return toNative(target.runtime(), target.flags(), ret, answer);
 		}
 		catch (Throwable ex) {
-			try {
-				errorSink.accept(ex);
-			}
-			catch (Throwable ignored) {
-				// the sink itself failed; nothing may escape into the native frame
-			}
+			fail(ex);
 			return zero(ret);
 		}
 	}
 
-	private static @Nullable Object toRaw(ObjcRuntime runtime, Type type, Object arg) {
+	/**
+	 * Hands a callback's failure to the error sink; nothing may escape into the native
+	 * frame above an upcall, not even the sink's own failure.
+	 * @param ex the failure
+	 */
+	static void fail(Throwable ex) {
+		try {
+			errorSink.accept(ex);
+		}
+		catch (Throwable ignored) {
+			// the sink itself failed; nothing may escape into the native frame
+		}
+	}
+
+	/**
+	 * A native argument as the raw protocol hands it to a body (an object RETAINED for
+	 * the value the body makes of it).
+	 * @param runtime the binding
+	 * @param type the argument's type
+	 * @param arg the native argument, boxed as its carrier
+	 * @return the raw value
+	 */
+	static @Nullable Object toRaw(ObjcRuntime runtime, Type type, Object arg) {
 		Kind kind = type.kind();
 		if (kind == Kind.STRUCT) {
 			return ObjcRuntime.leaves(type, (MemorySegment) arg);
@@ -237,7 +254,15 @@ public final class ObjcMethods {
 		return value;
 	}
 
-	private static @Nullable Object toNative(Target target, Type ret, @Nullable Object answer) {
+	/**
+	 * A body's raw answer as the native result, boxed as its carrier.
+	 * @param runtime the binding
+	 * @param flags {@link #RETAIN_RESULT} and {@link #AUTORELEASE_RESULT} for an object
+	 * @param ret the result type
+	 * @param answer the raw answer
+	 * @return the native result
+	 */
+	static @Nullable Object toNative(ObjcRuntime runtime, int flags, Type ret, @Nullable Object answer) {
 		Kind kind = ret.kind();
 		if (kind == Kind.VOID) {
 			return null;
@@ -258,10 +283,10 @@ public final class ObjcMethods {
 		long value = answer instanceof Number n ? n.longValue() : 0L;
 		if (kind == Kind.OBJECT) {
 			MemorySegment object = MemorySegment.ofAddress(value);
-			if (value != 0 && (target.flags() & RETAIN_RESULT) != 0) {
-				target.runtime().retain(object);
-				if ((target.flags() & AUTORELEASE_RESULT) != 0) {
-					target.runtime().autorelease(object);
+			if (value != 0 && (flags & RETAIN_RESULT) != 0) {
+				runtime.retain(object);
+				if ((flags & AUTORELEASE_RESULT) != 0) {
+					runtime.autorelease(object);
 				}
 			}
 			return object;
@@ -288,7 +313,12 @@ public final class ObjcMethods {
 		return value;
 	}
 
-	private static @Nullable Object zero(Type ret) {
+	/**
+	 * The zero value of a result type, as its carrier: what a failed callback answers.
+	 * @param ret the result type
+	 * @return the zero
+	 */
+	static @Nullable Object zero(Type ret) {
 		Kind kind = ret.kind();
 		if (kind == Kind.VOID) {
 			return null;

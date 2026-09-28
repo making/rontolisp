@@ -59,6 +59,24 @@ such a class is an `objc:standard-objc-object`.
 | [`objc:objc-object-copied`](objc-objc-object-copied.md) | `(defmethod objc:objc-object-copied :after ((old c) (new c)) ...)` | called when an instance is copied |
 | [`objc:objc-object-destroyed`](objc-objc-object-destroyed.md) | `(defmethod objc:objc-object-destroyed :after ((o c)) ...)` | called when an instance is deallocated |
 
+## Blocks
+
+Blocks made from Lisp functions, which LispWorks' `OBJC` has no interface for, under
+names of this package's own: an `objc:objc-block` passes wherever a method or a C
+function takes a block. The macros
+[`objc:define-objc-block-type`](../macros/objc-define-objc-block-type.md) and
+[`objc:with-objc-block`](../macros/objc-with-objc-block.md) name a signature and make a
+block for the extent of a body; C functions such as `dispatch_async` are declared with
+[`fli:define-foreign-function`](../macros/fli-define-foreign-function.md).
+
+| Function | Example | Result |
+|----------|---------|--------|
+| [`objc:make-objc-block`](objc-make-objc-block.md) | `(objc:make-objc-block '(:int (:int :int)) #'+)` | an `objc:objc-block` calling the function |
+| [`objc:free-objc-block`](objc-free-objc-block.md) | `(objc:free-objc-block b)` | `nil`; a copy a callee kept lives on |
+| [`objc:call-objc-block`](objc-call-objc-block.md) | `(objc:call-objc-block '(:int (:int :int)) b 3 4)` | the block's value |
+| [`objc:objc-block-pointer`](objc-objc-block-pointer.md) | `(objc:objc-block-pointer b)` | the literal's address, or `nil` once freed |
+| [`objc:objc-block-live-p`](objc-objc-block-live-p.md) | `(objc:objc-block-live-p b)` | `t` until freed |
+
 ## The first verbs
 
 The package's original verbs, which the `appkit`, `metal` and `scene` layers are

@@ -188,21 +188,72 @@ fn send(api: &Api, receiver: usize, superclass: usize, sel: usize, types: &str, 
     call.push(&encoding.args[1], &[Leaf::Int(sel as i64)]);
     // Storage an argument points into, alive past the call.
     let mut strings: Vec<CString> = Vec::new();
+    if let Err(failed) = push_args(api, &mut call, &encoding.args[2..], &args, fixed, &mut strings, &name) {
+        return failed;
+    }
+    // SAFETY: the shape is the caller's encoding, laid out by the convention.
+    let leaves = unsafe { call.invoke() };
+    drop(strings);
+    let _ = sup;
+    answer(api, &encoding.ret, &leaves, mode)
+}
+
+/// A call of a C function (or a block's invoke function) through its address, by an
+/// encoding that describes every argument -- there is no receiver or selector -- inside
+/// the caller's pool, on thread 0 like everything the module does.
+pub(super) fn call_function(api: &Api, function: usize, types: &str, fixed: i32, mode: i32) -> i32 {
+    let args = prim(|p| std::mem::take(&mut p.args));
+    let name = format!("the function at #x{function:x}");
+    if function == 0 {
+        return fail("a call through a null function pointer".into());
+    }
+    let encoding = match parsed(types) {
+        Ok(e) => e,
+        Err(e) => return fail(e),
+    };
+    let declared = encoding.args.len();
+    if args.len() != declared {
+        return fail(format!("{name} takes {declared} argument(s), got {}", args.len()));
+    }
+    let fixed = if fixed < 0 { declared } else { fixed as usize };
+    let mut call = Call::new(function, &encoding.ret);
+    let mut strings: Vec<CString> = Vec::new();
+    if let Err(failed) = push_args(api, &mut call, &encoding.args, &args, fixed, &mut strings, &name) {
+        return failed;
+    }
+    // SAFETY: the shape is the caller's encoding, laid out by the convention.
+    let leaves = unsafe { call.invoke() };
+    drop(strings);
+    answer(api, &encoding.ret, &leaves, mode)
+}
+
+/// Lays the raw arguments the library pushed into a call by their types; the first
+/// `fixed` in their own places, the rest as variadic arguments. A C string's bytes live
+/// in `strings` until the call returns.
+fn push_args(
+    api: &Api,
+    call: &mut Call,
+    types: &[encoding::Type],
+    args: &[Raw],
+    fixed: usize,
+    strings: &mut Vec<CString>,
+    name: &str,
+) -> Result<(), i32> {
     for (i, arg) in args.iter().enumerate() {
-        let ty = &encoding.args[i + 2];
+        let ty = &types[i];
         let leaves = match (ty.kind, arg) {
             (Kind::Struct, Raw::Leaves(l)) if l.len() == ty.leaves.len() => l.clone(),
             (Kind::Struct, _) => {
-                return fail(format!(
+                return Err(fail(format!(
                     "{name}: argument {} must be a struct of {} numbers, got {}",
                     i + 1,
                     ty.leaves.len(),
                     arg.describe()
-                ));
+                )));
             }
             (Kind::Object, Raw::Str(s)) => match api.ns_string(s) {
                 Ok(o) => vec![Leaf::Int(o as i64)],
-                Err(e) => return fail(e),
+                Err(e) => return Err(fail(e)),
             },
             (Kind::CString, Raw::Str(s)) => match cstring(s) {
                 Ok(c) => {
@@ -210,11 +261,11 @@ fn send(api: &Api, receiver: usize, superclass: usize, sel: usize, types: &str, 
                     strings.push(c);
                     vec![Leaf::Int(p)]
                 }
-                Err(e) => return fail(e),
+                Err(e) => return Err(fail(e)),
             },
             (_, Raw::Int(_) | Raw::Float(_)) => vec![leaf_of(arg).unwrap_or(Leaf::Int(0))],
             _ => {
-                return fail(format!("{name}: argument {} cannot be {}", i + 1, arg.describe()));
+                return Err(fail(format!("{name}: argument {} cannot be {}", i + 1, arg.describe())));
             }
         };
         if i < fixed {
@@ -223,11 +274,7 @@ fn send(api: &Api, receiver: usize, superclass: usize, sel: usize, types: &str, 
             call.push_variadic(leaves[0]);
         }
     }
-    // SAFETY: the shape is the caller's encoding, laid out by the convention.
-    let leaves = unsafe { call.invoke() };
-    drop(strings);
-    let _ = sup;
-    answer(api, &encoding.ret, &leaves, mode)
+    Ok(())
 }
 
 /// Makes a value of a type the answer the `p_result_*` imports fetch, and answers its
@@ -414,7 +461,15 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             let api = runtime()?;
             let entered = Entered::new(&mut caller);
             let answer = api.with_pool(|| {
-                send(api, receiver as usize, superclass as usize, sel as usize, &types, fixed, mode)
+                send(
+                    api,
+                    receiver as usize,
+                    superclass as usize,
+                    sel as usize,
+                    &types,
+                    fixed,
+                    mode,
+                )
             });
             if entered.outermost() {
                 release_pending(api);

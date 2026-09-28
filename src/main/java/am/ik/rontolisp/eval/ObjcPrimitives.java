@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import am.ik.objc.ObjcBlocks;
 import am.ik.objc.ObjcException;
 import am.ik.objc.ObjcMethods;
 import am.ik.objc.ObjcReference;
@@ -104,6 +105,7 @@ final class ObjcPrimitives {
 			return LispTrue.INSTANCE;
 		});
 		registerClassDefinition(globalEnv, apply);
+		registerBlocks(globalEnv, apply);
 		String onMain = PackageRegistry.qualify(LispNames.OBJC_PKG, LispNames.OBJC_ON_MAIN);
 		globalEnv.defineFunction(onMain, new LispFunction(onMain, args -> {
 			if (args.size() != 1) {
@@ -174,6 +176,39 @@ final class ObjcPrimitives {
 			ObjcRuntime.get().poke(address(args.get(0)), string(args.get(1)), toRaw(args.get(2)));
 			return LispNil.INSTANCE;
 		});
+	}
+
+	/**
+	 * The blocks and C functions half: the primitives {@code objc-block.lisp} and
+	 * {@code fli:define-foreign-function} are written over.
+	 */
+	private static void registerBlocks(Environment globalEnv, BiFunction<LispVal, List<LispVal>, LispVal> apply) {
+		define(globalEnv, LispNames.OBJC_MAKE_BLOCK, 3, args -> {
+			LispVal function = args.get(2);
+			return integer(ObjcBlocks.make(ObjcRuntime.get(), string(args.get(0)), string(args.get(1)), raw -> {
+				LispVal list = LispNil.INSTANCE;
+				for (int i = raw.length - 1; i >= 0; i--) {
+					list = new LispCons(fromRaw(raw[i]), list);
+				}
+				return toRaw(apply.apply(function, List.of(list)));
+			}));
+		});
+		define(globalEnv, LispNames.OBJC_FREE_BLOCK, 1, args -> {
+			ObjcBlocks.free(address(args.get(0)));
+			return LispNil.INSTANCE;
+		});
+		define(globalEnv, LispNames.OBJC_CALL_FUNCTION, 5, args -> {
+			List<LispVal> raw = list(args.get(3));
+			@Nullable Object[] operands = new @Nullable Object[raw.size()];
+			for (int i = 0; i < operands.length; i++) {
+				operands[i] = toRaw(raw.get(i));
+			}
+			return fromRaw(ObjcRuntime.get()
+				.callRaw(address(args.get(0)), string(args.get(1)), (int) address(args.get(2)), operands,
+						(int) address(args.get(4))));
+		});
+		define(globalEnv, LispNames.OBJC_SYMBOL_ADDRESS, 1,
+				args -> integer(ObjcRuntime.get().symbolAddress(string(args.get(0)))));
 	}
 
 	// Every primitive signals a plain error starting with objc: -- the runtime's own

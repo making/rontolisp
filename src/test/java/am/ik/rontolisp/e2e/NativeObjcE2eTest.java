@@ -105,6 +105,59 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void theBlockCorpusPrintsItsOwnExpectedOutput() throws Exception {
+		// block.rs: a block arriving inside a host call on thread 0 re-enters the module;
+		// one arriving on another thread waits for thread 0's event loop, so a
+		// completion handler and a dispatch_async run on thread 0 during the program's
+		// sleep -- the lines where this file differs from the interpreter's
+		// (eval/ObjcBlockTest pins that).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-block-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		String expected;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-block-corpus-native.expected")) {
+			expected = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(expected);
+		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: no 9\n");
+	}
+
+	@Test
+	void aBlockAnsweringAValueOnAnotherThreadIsRefused() throws Exception {
+		// Nobody can answer for the module on a libdispatch worker: dispatch_async_f
+		// calls the block's invoke function there, and the block answers zero with the
+		// reason printed; the program goes on.
+		Run run = nativeOutput("""
+				(fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+				    ((label objc:objc-c-string) (attributes :pointer))
+				  :result-type objc:objc-object-pointer)
+				(fli:define-foreign-function (dispatch-async-f "dispatch_async_f")
+				    ((queue objc:objc-object-pointer) (context :pointer) (work :pointer))
+				  :result-type :void)
+				(fli:define-foreign-function (dispatch-sync "dispatch_sync")
+				    ((queue objc:objc-object-pointer) (work objc:objc-at-question-mark))
+				  :result-type :void)
+				(defvar *q* (dispatch-queue-create "rontolisp.refused" nil))
+				(defvar *ran* nil)
+				(objc:with-objc-block (b '(:int ()) (lambda () (setq *ran* t) 42))
+				  (let ((address (objc:objc-block-pointer b)))
+				    (dispatch-async-f *q* address (objc::%peek (+ address 16) "^v")))
+				  (objc:with-objc-block (done '(:void ()) (lambda () nil))
+				    (dispatch-sync *q* done)))
+				(sleep 0.05)
+				(format t "~a~%" *ran*)
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("NIL\n");
+		assertThat(run.stderr()).isEqualTo("objc: error in a callback: a block answering a value was called on "
+				+ "another thread, where a --native program cannot run; it answers zero\n");
+	}
+
+	@Test
 	void theNewBaseReleasesWhatADeadPointerHeld() throws Exception {
 		// A pointer value's collector share rides on the externref p_new_handle hands
 		// out: when values die, their references are released, so 300,000 answers of one

@@ -839,6 +839,11 @@ categories:
       - { slug: objc-objc-object-var-value, name: "objc:objc-object-var-value" }
       - { slug: objc-objc-object-copied, name: "objc:objc-object-copied" }
       - { slug: objc-objc-object-destroyed, name: "objc:objc-object-destroyed" }
+      - { slug: objc-make-objc-block, name: "objc:make-objc-block" }
+      - { slug: objc-free-objc-block, name: "objc:free-objc-block" }
+      - { slug: objc-call-objc-block, name: "objc:call-objc-block" }
+      - { slug: objc-objc-block-pointer, name: "objc:objc-block-pointer" }
+      - { slug: objc-objc-block-live-p, name: "objc:objc-block-live-p" }
   - title: "cocoa パッケージ (Foundation の構造体)"
     index_page: reference/functions/cocoa.md
     functions:

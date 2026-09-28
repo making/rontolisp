@@ -7774,6 +7774,33 @@ public final class LispNames {
 	/** {@code (objc::%poke address types raw)} -- writes one raw value of a type. */
 	public static final String OBJC_POKE = OBJC_PKG + "::%POKE";
 
+	// The blocks and C functions half (objc-block.lisp and fli:define-foreign-function
+	// are written over these).
+
+	/**
+	 * {@code (objc::%make-block types signature function)} -- a block literal whose body
+	 * is a Lisp function of the raw arguments; answers its address.
+	 */
+	public static final String OBJC_MAKE_BLOCK = OBJC_PKG + "::%MAKE-BLOCK";
+
+	/**
+	 * {@code (objc::%free-block address)} -- gives up the maker's hold on a block and
+	 * frees the literal; the body lives while a copy does.
+	 */
+	public static final String OBJC_FREE_BLOCK = OBJC_PKG + "::%FREE-BLOCK";
+
+	/**
+	 * {@code (objc::%call-function address types fixed args mode)} -- a call of a C
+	 * function (or a block's invoke function) through its address, on the calling thread.
+	 */
+	public static final String OBJC_CALL_FUNCTION = OBJC_PKG + "::%CALL-FUNCTION";
+
+	/**
+	 * {@code (objc::%symbol-address name)} -- a symbol of any loaded image, 0 when none
+	 * defines it.
+	 */
+	public static final String OBJC_SYMBOL_ADDRESS = OBJC_PKG + "::%SYMBOL-ADDRESS";
+
 	/**
 	 * The new base's primitives, as the compile path gates the shipped binding on them.
 	 */
@@ -7782,7 +7809,15 @@ public final class LispNames {
 			OBJC_SELECTOR_NAME_INTERNAL, OBJC_METHOD_TYPES, OBJC_SEND_INTERNAL, OBJC_NEW_HANDLE, OBJC_REFS,
 			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE, OBJC_ALLOCATE_CLASS, OBJC_ADD_IVAR,
 			OBJC_REGISTER_CLASS, OBJC_ADD_METHOD, OBJC_ADD_PROTOCOL, OBJC_SUPERCLASS, OBJC_SEND_SUPER, OBJC_IVAR_OFFSET,
-			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE);
+			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE, OBJC_MAKE_BLOCK, OBJC_FREE_BLOCK, OBJC_CALL_FUNCTION,
+			OBJC_SYMBOL_ADDRESS);
+
+	/**
+	 * The {@code fli} package name: the part of LispWorks' foreign language interface the
+	 * {@code objc} base's examples reach for ({@code define-foreign-function}),
+	 * implemented in {@code objc.lisp} over the same primitive layer. macOS only.
+	 */
+	public static final String FLI_PKG = "FLI";
 
 	/**
 	 * The {@code cocoa} package name: LispWorks' {@code COCOA} -- the four Foundation

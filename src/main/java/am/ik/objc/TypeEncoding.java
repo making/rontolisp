@@ -27,8 +27,8 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * A struct is flattened to its scalar leaves ({@code {CGRect={CGPoint=dd}{CGSize=dd}}}
  * becomes four doubles), which is ABI-identical for every AppKit struct that crosses here
- * (all-double or all-integer homogeneous aggregates). Unions, bitfields, blocks
- * ({@code @?}), function pointers ({@code ?}) and {@code long double} are
+ * (all-double or all-integer homogeneous aggregates). A block ({@code @?}) is an object.
+ * Unions, bitfields, function pointers ({@code ?}) and {@code long double} are
  * {@linkplain #parse rejected}: a selector that takes one is outside the first cut, and
  * the error names the encoding so the caller can see why.
  *
@@ -297,7 +297,12 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 			return switch (c) {
 				case '@' -> {
 					if (!atEnd() && peek() == '?') {
-						throw fail("a block argument is not supported");
+						// A block is an object; calling one is the caller's business, so
+						// the call only needs its address. Clang's extended encoding
+						// appends the block's own signature in angle brackets.
+						this.pos++;
+						skipBlockSignature();
+						yield Type.of(Kind.OBJECT);
 					}
 					skipQuotedName();
 					yield Type.of(Kind.OBJECT);
@@ -391,6 +396,23 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 			if (!atEnd() && peek() == '"') {
 				int end = this.source.indexOf('"', this.pos + 1);
 				this.pos = end < 0 ? this.source.length() : end + 1;
+			}
+		}
+
+		private void skipBlockSignature() {
+			if (atEnd() || peek() != '<') {
+				return;
+			}
+			int depth = 0;
+			while (!atEnd()) {
+				char c = peek();
+				this.pos++;
+				if (c == '<') {
+					depth++;
+				}
+				else if (c == '>' && --depth == 0) {
+					return;
+				}
 			}
 		}
 

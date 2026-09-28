@@ -35,6 +35,18 @@ LispWorks 8.1 の Objective-C インターフェースの名前とラムダリ�
 | [`objc:objc-object-copied`](objc-objc-object-copied.md) | `(defmethod objc:objc-object-copied :after ((old c) (new c)) ...)` | インスタンスが複製されたときに呼ばれる |
 | [`objc:objc-object-destroyed`](objc-objc-object-destroyed.md) | `(defmethod objc:objc-object-destroyed :after ((o c)) ...)` | インスタンスが解放されたときに呼ばれる |
 
+## ブロック
+
+Lisp の関数から作るブロックです。LispWorks の `OBJC` にはこのインターフェースがないため、このパッケージ独自の名前を使います。`objc:objc-block` は、ブロックを受け取るメソッドや C 関数にそのまま渡せます。マクロ [`objc:define-objc-block-type`](../macros/objc-define-objc-block-type.md) はシグネチャに名前を付け、[`objc:with-objc-block`](../macros/objc-with-objc-block.md) は本体の間だけ有効なブロックを作ります。`dispatch_async` などの C 関数は [`fli:define-foreign-function`](../macros/fli-define-foreign-function.md) で宣言します。
+
+| 関数 | 例 | 結果 |
+|------|-----|------|
+| [`objc:make-objc-block`](objc-make-objc-block.md) | `(objc:make-objc-block '(:int (:int :int)) #'+)` | 関数を呼ぶ `objc:objc-block` |
+| [`objc:free-objc-block`](objc-free-objc-block.md) | `(objc:free-objc-block b)` | `nil` (呼び出し先が保持したコピーは生き続ける) |
+| [`objc:call-objc-block`](objc-call-objc-block.md) | `(objc:call-objc-block '(:int (:int :int)) b 3 4)` | ブロックの値 |
+| [`objc:objc-block-pointer`](objc-objc-block-pointer.md) | `(objc:objc-block-pointer b)` | リテラルのアドレス (解放後は `nil`) |
+| [`objc:objc-block-live-p`](objc-objc-block-live-p.md) | `(objc:objc-block-live-p b)` | 解放するまで `t` |
+
 ## 最初の動詞
 
 `appkit`、`metal`、`scene` の各層が土台にしている、パッケージ本来の動詞です。これらの層が LispWorks のインターフェースに移るまで残ります。

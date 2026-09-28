@@ -99,9 +99,10 @@ final class JvmObjcRuntimeBuilder {
 	 */
 	private static final List<String> OBJC_CLASSES = List.of("ObjcException", "MainThread", "MainThread$Slot",
 			"ObjcClasses", "ObjcClasses$Bound", "ObjcClasses$Method", "ObjcClasses$Shape", "ObjcClasses$Spec",
-			"VariadicSelectors", "ObjcMethods", "ObjcMethods$Body", "ObjcMethods$Target", "ObjcRuntime",
-			"ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent", "ObjcRuntime$Signature", "ObjcReference",
-			"ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind", "TypeEncoding$Parser", "TypeEncoding$Type");
+			"VariadicSelectors", "ObjcBlocks", "ObjcBlocks$Body", "ObjcBlocks$Entry", "ObjcMethods", "ObjcMethods$Body",
+			"ObjcMethods$Target", "ObjcRuntime", "ObjcRuntime$1", "ObjcRuntime$Out", "ObjcRuntime$Sent",
+			"ObjcRuntime$Signature", "ObjcReference", "ObjcReference$Entry", "TypeEncoding", "TypeEncoding$Kind",
+			"TypeEncoding$Parser", "TypeEncoding$Type");
 
 	/**
 	 * The directory a program's copy of the {@code objc:} foreign registration travels in

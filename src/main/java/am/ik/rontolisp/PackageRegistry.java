@@ -510,7 +510,8 @@ public final class PackageRegistry {
 			"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN", "DEFINE-OBJC-CLASS", "DEFINE-OBJC-METHOD",
 			"DEFINE-OBJC-CLASS-METHOD", "CURRENT-SUPER", "STANDARD-OBJC-OBJECT", "OBJC-OBJECT-VAR-VALUE",
 			"OBJC-OBJECT-COPIED", "OBJC-OBJECT-DESTROYED", "DEFINE-OBJC-STRUCT", "DEFINE-OBJC-TYPEDEF",
-			"DEFINE-OBJC-PROTOCOL");
+			"DEFINE-OBJC-PROTOCOL", "DEFINE-OBJC-BLOCK-TYPE", "MAKE-OBJC-BLOCK", "FREE-OBJC-BLOCK", "WITH-OBJC-BLOCK",
+			"CALL-OBJC-BLOCK", "OBJC-BLOCK", "OBJC-BLOCK-POINTER", "OBJC-BLOCK-LIVE-P");
 
 	private static final List<String> OBJC_BASE_NAME_LIST = sorted(OBJC_BASE_NAMES);
 
@@ -522,6 +523,15 @@ public final class PackageRegistry {
 			"SET-NS-SIZE*", "SET-NS-RECT*", "SET-NS-RANGE*", "NS-NOT-FOUND", "ADD-OBSERVER", "REMOVE-OBSERVER");
 
 	private static final List<String> COCOA_NAME_LIST = sorted(COCOA_NAMES);
+
+	/**
+	 * The names the {@code fli} package exports: the part of LispWorks 8.1's {@code FLI}
+	 * the {@code objc} base carries, implemented in {@code objc.lisp} and
+	 * {@code objc-macros.lisp}.
+	 */
+	private static final Set<String> FLI_NAMES = Set.of("DEFINE-FOREIGN-FUNCTION");
+
+	private static final List<String> FLI_NAME_LIST = sorted(FLI_NAMES);
 
 	/**
 	 * The names exported by the {@code geom} package (solid modeling: rigid transforms, a
@@ -820,8 +830,8 @@ public final class PackageRegistry {
 					LispNames.TORCH_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 					LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG, LispNames.TOKENIZER_PKG,
 					LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG, LispNames.METAL_PKG,
-					LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
-					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG, LispNames.ASDF_PKG,
+					LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
 					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
 					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
@@ -978,6 +988,10 @@ public final class PackageRegistry {
 		// LispWorks' COCOA: the Foundation structures beside the new objc base
 		// (objc.lisp). Does not use cl; every registered name is external.
 		define(new LispPackage(LispNames.COCOA_PKG, List.of(), new HashSet<>(COCOA_NAMES)));
+		// LispWorks' FLI, the part the objc base's C functions need
+		// (define-foreign-function,
+		// objc.lisp). Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.FLI_PKG, List.of(), new HashSet<>(FLI_NAMES)));
 		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
 		// demand (AppKitLibrary). Does not use cl; every function is external.
 		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
@@ -1399,6 +1413,14 @@ public final class PackageRegistry {
 	 */
 	public static List<String> cocoaNames() {
 		return COCOA_NAME_LIST;
+	}
+
+	/**
+	 * The names the {@code fli} package exports ({@code objc.lisp}), sorted.
+	 * @return the names
+	 */
+	public static List<String> fliNames() {
+		return FLI_NAME_LIST;
 	}
 
 	/**

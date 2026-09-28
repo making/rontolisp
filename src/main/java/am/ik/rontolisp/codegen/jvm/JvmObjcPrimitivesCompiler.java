@@ -60,6 +60,10 @@ final class JvmObjcPrimitivesCompiler {
 			Map.entry(LispNames.OBJC_IVAR_TYPES, new Object[] { 2, "ivarTypes" }),
 			Map.entry(LispNames.OBJC_PEEK, new Object[] { 2, "peek" }),
 			Map.entry(LispNames.OBJC_POKE, new Object[] { 3, "poke" }),
+			Map.entry(LispNames.OBJC_MAKE_BLOCK, new Object[] { 3, "makeBlock" }),
+			Map.entry(LispNames.OBJC_FREE_BLOCK, new Object[] { 1, "freeBlock" }),
+			Map.entry(LispNames.OBJC_CALL_FUNCTION, new Object[] { 5, "callFunction" }),
+			Map.entry(LispNames.OBJC_SYMBOL_ADDRESS, new Object[] { 1, "symbolAddress" }),
 			Map.entry(ON_MAIN, new Object[] { 1, "onMain" }));
 
 	/**

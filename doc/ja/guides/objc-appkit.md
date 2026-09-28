@@ -443,9 +443,87 @@ MY-APP> (seen *w*)
 ("Ping")
 ```
 
+### ブロック
+
+ブロックは Cocoa がクロージャを受け取る形です。比較関数、列挙の関数、完了ハンドラがそうです。`objc:make-objc-block` は Lisp の関数とシグネチャからブロックを作ります。シグネチャは呼ぶ側が示します。メソッドのエンコーディングはブロックを取ることしか表さず、そのブロックが何を取るかは表さないためです。ブロックを渡す場所に素の関数を渡すと、推測せずにシグナルします。シグネチャはリスト形式のメソッドと同じ型で書いた `(result-type (argument-type*))`、または `objc:define-objc-block-type` で付けた名前です。引数はメソッドの本体に渡る引数と同じように変換されて関数に渡り、関数の値は逆向きに変換されます。`objc:with-objc-block` は本体の間だけ有効なブロックを作り、どの脱出でも解放します。非同期の処理にもこれで足ります。ブロックを保持する呼び出し先はコピーを持ち、そのコピーが関数を生かすからです。`objc:call-objc-block` は、誰が作ったブロックでも呼べます。
+
+```console
+MY-APP> (defvar *words* (invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
+*WORDS*
+MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-pointer))
+                                  (lambda (a b)
+                                    (let ((x (ns-string-to-string a))
+                                          (y (ns-string-to-string b)))
+                                      (cond ((string< x y) -1) ((string> x y) 1) (t 0)))))
+          (invoke-into '(array string) *words* "sortedArrayUsingComparator:" compare))
+#("apple" "fig" "pear")
+MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
+                                        (:pointer objc-c++-bool)))
+                               (lambda (word index stop)
+                                 (declare (ignore stop))
+                                 (format t "~a ~a~%" index (ns-string-to-string word))))
+          (invoke *words* "enumerateObjectsUsingBlock:" each))
+0 pear
+1 fig
+2 apple
+NIL
+MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
+*ADD*
+MY-APP> (call-objc-block '(:int (:int :int)) *add* 3 4)
+7
+MY-APP> (free-objc-block *add*)
+NIL
+```
+
+C 関数もブロックを取ります (libdispatch の関数など)。このパッケージが持つ LispWorks の外部言語インターフェースの一部、`fli:define-foreign-function` で同じ型を使って宣言します:
+
+```console
+MY-APP> (fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+            ((label objc-c-string) (attributes :pointer))
+          :result-type objc-object-pointer)
+DISPATCH-QUEUE-CREATE
+MY-APP> (fli:define-foreign-function (dispatch-async "dispatch_async")
+            ((queue objc-object-pointer) (work objc-at-question-mark))
+          :result-type :void)
+DISPATCH-ASYNC
+MY-APP> (defvar *queue* (dispatch-queue-create "com.example.work" nil))
+*QUEUE*
+MY-APP> (defvar *done* nil)
+*DONE*
+MY-APP> (with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
+          (dispatch-async *queue* work))
+NIL
+MY-APP> (sleep 0.1)
+NIL
+MY-APP> *done*
+T
+```
+
+ブロックは呼んだスレッドで実行されます。Foundation は比較関数や列挙の関数を、送信したスレッドで呼びます。送信はすべてメインスレッドで実行されるため、それはメインスレッドです。シリアルキューは処理を、`NSURLSession` は完了ハンドラを、libdispatch のワーカーでプログラムと並行して実行します。そこでの関数は、スペシャル変数についてプログラムのスレッドの束縛ではなく大域値を見ます (クロージャ自身が捕捉したものは別です)。`rontolisp:make-thread` で始めたスレッドと同じです。`--native` 実行ファイルは別のスレッドで Lisp を実行できません。別のスレッドから呼ばれた `void` のブロックは、プログラムの次の `sleep` を待ってメインスレッドで実行されます。値を返すブロックは拒否され、そのことが表示されて 0 を返します。そのため、ブロックを待つプログラムは次のように `sleep` で待てば、どのターゲットでも同じように動きます:
+
+```console
+MY-APP> (defvar *status* nil)
+*STATUS*
+MY-APP> (with-objc-block (handler '(:void (objc-object-pointer objc-object-pointer
+                                           objc-object-pointer))
+                                  (lambda (data response error)
+                                    (declare (ignore data error))
+                                    (setq *status* (invoke response "statusCode"))))
+          (invoke (invoke (invoke "NSURLSession" "sharedSession")
+                          "dataTaskWithURL:completionHandler:"
+                          (invoke "NSURL" "URLWithString:" "https://example.com/")
+                          handler)
+                  "resume"))
+NIL
+MY-APP> (loop until *status* do (sleep 0.05))
+NIL
+MY-APP> *status*
+200
+```
+
 ### LispWorks との違い
 
-rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。
+rontolisp には外部メモリのインターフェースがないため、構造体は `invoke` がそれについて受け渡す Lisp の値です (`cocoa:set-ns-rect*` はベクタを埋めます)。マニュアルの `fli:with-dynamic-foreign-objects` を使う形に対応するものはありません。LispWorks はブロックを `objc` ではなく外部言語インターフェースで作ります。`objc:make-objc-block` などの名前はこのパッケージ独自のもので、`fli` が持つのは `define-foreign-function` だけです。どの関数も最初の使用時にランタイムを開くため、`objc:ensure-objc-initialized` を先に呼ぶ必要はありません。ランタイムの可変長メソッドの表にあるメソッド (`stringWithFormat:`、`arrayWithObjects:` など) は文字列形式でも呼べます。追加の引数はそれぞれ値から型を決め、末尾に `nil` を加えます。メソッドの構造体の結果は Lisp の値として返すか、キーワードでない結果スタイルが名付ける変数に埋めます。それに対するマニュアルの `fli:foreign-slot-value` に対応するものはありません。
 
 ## ネイティブバイナリ
 
@@ -458,7 +536,7 @@ in this binary; register it under foreign.downcalls in reachability-metadata.jso
 
 JVM は事前に何も登録せずどんな形でもバインドするので、バイナリを作る前にプログラムが何を送るかを知る場所は `java -jar` です。
 
-`objc:define-objc-method` で定義したメソッドはそれぞれの形のアップコールで、同じように登録します。バイナリは上のクラスの例の形と、Lisp で定義したどのクラスにも入る三つのメソッドの形を扱い、それ以外の形の定義は `foreign.upcalls` に追加すべきエントリを示して拒否します。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
+`objc:define-objc-method` で定義したメソッドはそれぞれの形のアップコールで、同じように登録します。バイナリは上のクラスの例の形と、Lisp で定義したどのクラスにも入る三つのメソッドの形を扱い、それ以外の形の定義は `foreign.upcalls` に追加すべきエントリを示して拒否します。ブロックも同じくアップコールです。バイナリは上のブロックの形 (と、比較関数、処理の単位、三つのオブジェクトを取る完了ハンドラの形) を扱い、それ以外の形のブロックは作る時点で拒否します。`java -jar` と `--native` 実行ファイルはどんな形でも受け付けます。
 
 可変長引数の呼び出しは別個の登録になるため、バイナリはその有界なグリッドも提供します。宣言された引数を超えて 11 個まで (バインディングが付ける `nil` 終端子を含めて 12 個)、うち先頭 3 個までは数、残りはオブジェクトです。これより長い、あるいは数がこれより多いリストは同じようにシグナルします。
 
@@ -494,6 +572,7 @@ $ ./counter
 
 - macOS のみ: インタプリタ (`java -jar`、または `rontolisp` バイナリ)、コンパイル済み `.class` / `.jar`、Apple シリコン向けの `--native` 実行ファイル。`.wasm` は不可で、`objc:` / `appkit:` の参照はそれ以外のすべての WASM 出力でコンパイルエラーです。
 - アプリケーションバンドルのないプロセスには Dock アイコンもメニューバーもありません。Cmd-Q はなく、最後のウィンドウを閉じても終了しません — REPL がプロセスです。
-- `objc:define-class` のコールバックの形は上の閉じた集合です。`objc:define-objc-method` はどんな形でも受け付けます (`rontolisp` バイナリでは登録済みの形)。ブロックを取るセレクタはまだ扱いません。
+- `objc:define-class` のコールバックの形は上の閉じた集合です。`objc:define-objc-method` はどんな形でも受け付けます (`rontolisp` バイナリでは登録済みの形)。ブロックも同じです。
+- `--native` 実行ファイルが別のスレッドから呼ばれたブロックを実行するのは、そのブロックが何も返さない場合だけで、実行はプログラムの次の `sleep` の時点です。
 - 扱える可変長引数セレクタは上の表のものです。プログラム自身が宣言したものは含まれず、ランタイムにはそれを判別する手段がありません。
 - Apple シリコン向け。Intel Mac では 2 レジスタより広い構造体は `objc_msgSend_stret` で返され、バインディングはそれを選びますが動作確認はしていません。

@@ -75,9 +75,16 @@ class TypeEncodingTest {
 	}
 
 	@Test
+	void aBlockIsAnObject() {
+		// Calling a block is its caller's business: the send only passes its address.
+		assertThat(TypeEncoding.parse("v24@0:8@?16").argumentTypes().get(2).kind()).isEqualTo(Kind.OBJECT);
+		TypeEncoding extended = TypeEncoding.parse("@32@0:8@?<v@?@?<v@?>>16q24");
+		assertThat(extended.argumentTypes().get(2).kind()).isEqualTo(Kind.OBJECT);
+		assertThat(extended.argumentTypes().get(3).kind()).isEqualTo(Kind.INT64);
+	}
+
+	@Test
 	void theShapesOutsideTheFirstCutAreRefusedByName() {
-		assertThatThrownBy(() -> TypeEncoding.parse("v24@0:8@?16")).isInstanceOf(ObjcException.class)
-			.hasMessageContaining("block");
 		assertThatThrownBy(() -> TypeEncoding.parse("v24@0:8(?=id)16")).isInstanceOf(ObjcException.class)
 			.hasMessageContaining("union");
 		assertThatThrownBy(() -> TypeEncoding.parse("v24@0:8b3")).isInstanceOf(ObjcException.class)

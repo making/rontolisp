@@ -135,6 +135,14 @@ public final class ObjcRuntime {
 
 	private final MethodHandle poolPop;
 
+	private final MethodHandle dlsym;
+
+	private final MethodHandle malloc;
+
+	private final MethodHandle free;
+
+	private final MemorySegment stackBlockIsa;
+
 	private final MemorySegment msgSend;
 
 	private final MemorySegment msgSendSuper;
@@ -151,6 +159,11 @@ public final class ObjcRuntime {
 	private final Map<Signature, MethodHandle> sends = new ConcurrentHashMap<>();
 
 	private final Map<Signature, MethodHandle> superSends = new ConcurrentHashMap<>();
+
+	/**
+	 * Unbound downcall handles for {@link #callRaw}, by shape: the target is an argument.
+	 */
+	private final Map<Signature, MethodHandle> calls = new ConcurrentHashMap<>();
 
 	// Both caches are load-bearing rather than an optimization: the C strings they are
 	// built from live in the global arena forever.
@@ -194,6 +207,15 @@ public final class ObjcRuntime {
 		this.objcAutorelease = handle(objc, "objc_autorelease", FunctionDescriptor.of(P, P));
 		this.poolPush = handle(objc, "objc_autoreleasePoolPush", FunctionDescriptor.of(P));
 		this.poolPop = handle(objc, "objc_autoreleasePoolPop", FunctionDescriptor.ofVoid(P));
+		// Found through libobjc's handle, which searches the images it depends on:
+		// libSystem's dlsym, and the isa of a block made on the "stack" (ObjcBlocks).
+		this.dlsym = handle(objc, "dlsym", FunctionDescriptor.of(P, P, P));
+		// A block's literal lives in C memory: a native image serves no shared arena, and
+		// the literal is freed from whichever thread frees the block.
+		this.malloc = handle(objc, "malloc", FunctionDescriptor.of(P, L));
+		this.free = handle(objc, "free", FunctionDescriptor.ofVoid(P));
+		this.stackBlockIsa = objc.find("_NSConcreteStackBlock")
+			.orElseThrow(() -> new ObjcException("_NSConcreteStackBlock is missing"));
 		this.msgSend = objc.find("objc_msgSend").orElseThrow(() -> new ObjcException("objc_msgSend is missing"));
 		// x86_64 returns a struct wider than two registers through a hidden pointer and a
 		// different entry point; arm64 has one objc_msgSend for everything.
@@ -277,6 +299,11 @@ public final class ObjcRuntime {
 			}
 		}
 		for (Signature signature : this.superSends.keySet()) {
+			if (!signature.isVariadic()) {
+				all.add(signature.descriptor());
+			}
+		}
+		for (Signature signature : this.calls.keySet()) {
 			if (!signature.isVariadic()) {
 				all.add(signature.descriptor());
 			}
@@ -896,6 +923,132 @@ public final class ObjcRuntime {
 				autoreleasePoolPop(pool);
 			}
 		});
+	}
+
+	/**
+	 * A call of a C function through its address -- a function {@code dlsym} found, or a
+	 * block's invoke pointer -- described whole by the caller, with {@link #sendRaw}'s
+	 * raw conventions in both directions. {@code types} covers every argument (there is
+	 * no implicit receiver or selector). Runs on the CALLING thread, inside an
+	 * autorelease pool of its own: a C function has no thread of its own to hop to, and
+	 * one that waits (a semaphore, {@code dispatch_sync}) must not hold thread 0 while a
+	 * block it waits for needs it.
+	 * @param function the function's address
+	 * @param types the encoding: the result, then every argument
+	 * @param fixed the number of fixed arguments of a variadic call, else -1
+	 * @param args the raw arguments
+	 * @param mode {@link #RETAIN_RESULT} and {@link #RAW_CSTRING}, or 0
+	 * @return the raw answer
+	 * @throws ObjcException when an argument does not fit, the arity is wrong, or the
+	 * shape has no stub in this binary
+	 */
+	public @Nullable Object callRaw(long function, String types, int fixed, @Nullable Object[] args, int mode) {
+		if (function == 0) {
+			throw new ObjcException("a call through a null function pointer");
+		}
+		TypeEncoding encoding = parsed(types);
+		List<Type> params = encoding.argumentTypes();
+		String what = "the function at #x" + Long.toHexString(function);
+		if (args.length != params.size()) {
+			throw new ObjcException(what + " takes " + params.size() + " argument(s), got " + args.length);
+		}
+		if (fixed > params.size()) {
+			throw new ObjcException(what + ": " + fixed + " fixed argument(s) of " + params.size());
+		}
+		MemorySegment pool = autoreleasePoolPush();
+		try (Arena arena = Arena.ofConfined()) {
+			List<Object> all = new ArrayList<>(args.length + 2);
+			all.add(MemorySegment.ofAddress(function));
+			Type ret = encoding.returnType();
+			if (ret.isStruct()) {
+				all.add((SegmentAllocator) arena);
+			}
+			for (int i = 0; i < params.size(); i++) {
+				all.add(marshalRaw(params.get(i), args[i], arena, what, i));
+			}
+			Signature signature = new Signature(encoding.descriptor(), fixed < 0 ? -1 : fixed);
+			MethodHandle handle = this.calls.computeIfAbsent(signature, s -> unboundDowncall(s, what));
+			Object raw;
+			try {
+				raw = handle.invokeWithArguments(all);
+			}
+			catch (Throwable ex) {
+				throw new ObjcException(what + " failed: " + ex, ex);
+			}
+			return unmarshalRaw(ret, raw, mode);
+		}
+		finally {
+			autoreleasePoolPop(pool);
+		}
+	}
+
+	private static MethodHandle unboundDowncall(Signature signature, String what) {
+		try {
+			return LINKER.downcallHandle(signature.descriptor(), signature.options());
+		}
+		catch (Throwable ex) {
+			throw new ObjcException(what + ": the shape " + signature
+					+ " has no foreign-call stub in this binary; register it under foreign.downcalls in "
+					+ "reachability-metadata.json and rebuild", ex);
+		}
+	}
+
+	/**
+	 * A symbol of any image loaded in the process ({@code dlsym(RTLD_DEFAULT, name)}):
+	 * libSystem's own, a framework's, a module {@code ensure-objc-initialized} loaded.
+	 * @param name the symbol's C name
+	 * @return its address, or 0 when no loaded image defines it
+	 */
+	public long symbolAddress(String name) {
+		try (Arena arena = Arena.ofConfined()) {
+			// RTLD_DEFAULT on macOS is ((void *) -2).
+			return ((MemorySegment) this.dlsym.invokeExact(MemorySegment.ofAddress(-2L), arena.allocateFrom(name)))
+				.address();
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("dlsym failed for " + name, ex);
+		}
+	}
+
+	/**
+	 * {@code malloc}: memory the caller frees with {@link #freeMemory}.
+	 * @param size the size in bytes
+	 * @return the memory, sized
+	 */
+	MemorySegment allocateMemory(long size) {
+		MemorySegment memory;
+		try {
+			memory = (MemorySegment) this.malloc.invokeExact(size);
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("malloc failed", ex);
+		}
+		if (memory.address() == 0) {
+			throw new ObjcException("malloc answered no memory for " + size + " bytes");
+		}
+		return memory.reinterpret(size);
+	}
+
+	/**
+	 * {@code free}.
+	 * @param address memory {@link #allocateMemory} answered
+	 */
+	void freeMemory(long address) {
+		try {
+			this.free.invokeExact(MemorySegment.ofAddress(address));
+		}
+		catch (Throwable ex) {
+			throw new ObjcException("free failed", ex);
+		}
+	}
+
+	/**
+	 * The isa of a block literal made outside libclosure: {@code &_NSConcreteStackBlock}
+	 * ({@link ObjcBlocks}).
+	 * @return its address
+	 */
+	long stackBlockIsa() {
+		return this.stackBlockIsa.address();
 	}
 
 	private Object marshalRaw(Type type, @Nullable Object arg, Arena arena, String selector, int index) {

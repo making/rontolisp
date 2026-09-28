@@ -21,6 +21,7 @@
 //! convention). The frameworks are opened on the first `rlobjc` call, so an output that
 //! makes none starts exactly as before.
 
+mod block;
 mod call;
 mod class;
 mod encoding;
@@ -52,6 +53,8 @@ struct Api {
     msg_send_super: usize,
     /// `&_NSConcreteGlobalBlock`: the isa of the block a defined method's IMP is made from.
     global_block: usize,
+    /// `&_NSConcreteStackBlock`: the isa of a block a program makes (`block`).
+    stack_block: usize,
     get_class: unsafe extern "C" fn(*const c_char) -> Id,
     sel_register_name: unsafe extern "C" fn(*const c_char) -> Id,
     sel_get_name: unsafe extern "C" fn(Id) -> *const c_char,
@@ -138,6 +141,7 @@ fn open() -> Result<Api, String> {
             msg_send: sym(c"objc_msgSend")? as usize,
             msg_send_super: sym(c"objc_msgSendSuper")? as usize,
             global_block: sym(c"_NSConcreteGlobalBlock")? as usize,
+            stack_block: sym(c"_NSConcreteStackBlock")? as usize,
             get_class: f!(c"objc_getClass"),
             sel_register_name: f!(c"sel_registerName"),
             sel_get_name: f!(c"sel_getName"),
@@ -781,6 +785,8 @@ fn pump(api: &Api, seconds: f64, outermost: bool) {
     let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
     let started = with(|s| s.app_started);
     loop {
+        // The void blocks another thread called, queued for this one (`block`).
+        block::drain(api);
         let now = Instant::now();
         if now >= deadline {
             break;
@@ -1290,6 +1296,7 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
     })?;
     prim::add_to_linker(linker)?;
     class::add_to_linker(linker)?;
+    block::add_to_linker(linker)?;
     linker.func_wrap(
         MODULE,
         "pump",

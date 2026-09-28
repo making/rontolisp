@@ -1,0 +1,31 @@
+block: #<OBJC:OBJC-BLOCK i@?ii live>
+typep: T
+live: T
+pointer: T
+call: 7
+free: NIL
+after free: (#<OBJC:OBJC-BLOCK i@?ii freed> NIL NIL)
+free twice: NIL
+call a freed block: "objc:call-objc-block: #<OBJC:OBJC-BLOCK i@?ii freed> has been freed"
+send a freed block: "objc:invoke: #<OBJC:OBJC-BLOCK i@?ii freed> has been freed"
+define-objc-block-type: UNARY-OP
+a named type: 6.0
+a structure in and out: #(2.0 4.0 6.0 8.0)
+a boolean: (T NIL)
+an object in and out: "SHOUT"
+an unsigned 64-bit value: 18446744073709551614
+an unknown type: "objc:make-objc-block: NO-SUCH-TYPE names no block type; define it with objc:define-objc-block-type, or pass (result-type (argument-type...))"
+not a function: "objc:make-objc-block: 42 is not a function"
+arity: "objc:call-objc-block: the block takes 1 argument(s), got 0"
+an error inside: 0
+enumerateObjectsUsingBlock:: ((0 "pear" :MAIN) (1 "fig" :MAIN) (2 "apple" :MAIN))
+sortedArrayUsingComparator:: #("apple" "fig" "pear")
+indexesOfObjectsPassingTest:: 2
+structures into a block: (("hello" (0 . 5)) ("block" (6 . 5)) ("world" (12 . 5)))
+a function where a block goes: "objc:invoke: enumerateObjectsUsingBlock:: argument 1 is a block; a Lisp function becomes one with objc:make-objc-block or objc:with-objc-block, which name its signature -- the method's encoding does not"
+pthread_main_np: T
+no such function: "fli:define-foreign-function: no loaded image defines rontolisp_no_such_function"
+dispatch_sync ran on: :OTHER
+dispatch_async before the wait: (:RAN :OTHER)
+dispatch_async after the wait: (:RAN :OTHER)
+a completion handler: ("hello blocks" "text/plain" NIL :OTHER)

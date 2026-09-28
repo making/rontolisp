@@ -272,13 +272,6 @@
       (write-string (objc::%type-encoding (first spec)) out))
     (get-output-stream-string out)))
 
-;; A declared type as the conversions read it: the parsed encoding, or :boolean for the
-;; FLI types that convert to t and nil.
-(defun objc::%declared-type (fli)
-  (if (or (eq fli 'objc:objc-bool) (eq fli 'objc:objc-c++-bool)
-          (eq fli :boolean) (and (consp fli) (eq (car fli) :boolean)))
-      :boolean (car (objc::%parse-type (objc::%type-encoding fli) 0))))
-
 ;; An object answer is retained for the caller, and autoreleased unless the method is
 ;; of a family whose caller owns the answer (ARC's rule, as for a send).
 (defun objc::%result-flags (selector) (if (objc::%owned-result-p selector) 1 3))
@@ -293,28 +286,6 @@
      (objc::%def-types def)
      (lambda (self args) (objc::%run-method def super self args))
      (objc::%result-flags (objc::%md-selector def)))))
-
-;; The style symbols of an argument (string, array, (array style)), by name: string
-;; may be read as cl:string or as objc's own.
-(defun objc::%style-named-p (style name)
-  (and style (symbolp style) (string= (symbol-name style) name)))
-
-(defun objc::%convert-argument (spec raw)
-  (let ((type (objc::%declared-type (first spec))) (style (second spec)))
-    (cond ((eq type :boolean) (/= raw 0))
-          ((eq type :object)
-           (let ((pointer (objc::%wrap-object raw)))
-             (cond ((null pointer) nil)
-                   ((objc::%style-named-p style "STRING")
-                    (objc:ns-string-to-string pointer))
-                   ((objc::%style-named-p style "ARRAY")
-                    (objc::%array-elements pointer nil))
-                   ((and (consp style)
-                         (objc::%style-named-p (car style) "ARRAY"))
-                    (objc::%array-elements pointer (second style)))
-                   (t pointer))))
-          ((eq style :foreign) raw)
-          (t (objc::%result type raw)))))
 
 (defun objc::%self-object (self class-method-p)
   (if class-method-p
@@ -356,37 +327,10 @@
         (format *error-output* "objc: error in a callback: ~a~%" condition)
         (objc::%zero-answer type)))))
 
-(defun objc::%zero-answer (type)
-  (cond ((eq type :void) nil)
-        ((member type '(:float :double)) 0d0)
-        ((and (consp type) (eq (car type) :struct))
-         (let ((out nil))
-           (dolist (leaf (third type) out)
-             (push (if (member leaf '(:float :double)) 0d0 0) out))))
-        (t 0)))
-
 ;; A method's value as the host takes it back.
 (defun objc::%method-answer (def type value)
-  (let ((name (objc::%md-selector def)))
-    (cond ((eq type :void) nil)
-          ((eq type :boolean) (if (or (null value) (eql value 0)) 0 1))
-          ((eq type :object)
-           (cond ((null value) 0)
-            ((eq (objc::%md-result-style def) :foreign)
-             (objc::%raw-address value name 0))
-            ((stringp value)
-             (objc::%pointer-address (objc:string-to-ns-string value)))
-            ((and (vectorp value) (not (stringp value)))
-             (let* ((temps (list nil)) (array (objc::%ns-array value temps)))
-               (dolist (temp (car temps)) (objc:release temp))
-               (objc::%pointer-address array)))
-            ((objc::%as-pointer value)
-             (objc::%pointer-address (objc::%as-pointer value)))
-            (t (error "~a: an object method cannot answer ~s" name value))))
-          ((eq type :cstring)
-           (error "~a: a method cannot answer a C string; answer an NSString"
-                  name))
-          (t (objc::%raw-arg type value name 0 (list nil))))))
+  (objc::%callback-answer (objc::%md-selector def) type
+                          (objc::%md-result-style def) value))
 
 ;;; --- the three methods of a root class ----------------------------------------------
 

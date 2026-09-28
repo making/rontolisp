@@ -39,7 +39,8 @@ run on every target: the interpreter loads it on the first resolution of a new-b
 `AppKitLibrary`) for a JVM class or a `--native` executable. Under it, per backend, the primitive
 layer: `objc::%get-class`, `%class-name`, `%object-class`, `%class-p`, `%register-selector`,
 `%selector-name`, `%method-types`, `%send`, `%new-handle`, `%refs`, `%interned`, `%intern`,
-`%load-module`, `%initialize` (`LispNames.OBJC_PRIMITIVES`), and the public `objc:on-main`.
+`%load-module`, `%initialize` (`LispNames.OBJC_PRIMITIVES`; the class and block halves add their
+own, below), and the public `objc:on-main`.
 
 - Interpreter: `eval/ObjcPrimitives` over `am.ik.objc` (`ObjcRuntime.sendRaw`,
   `ObjcReference`); JVM class output: `codegen/jvm/JvmObjcPrimitivesTemplate` (ships as
@@ -166,7 +167,7 @@ names every selector the corpus and the docs send; the new shapes were `jboolean
 (`object_isClass`) and `void*(void*,void*,jint)` (`numberWithInt:`). `ensure-objc-initialized`'s
 `:modules` are `SymbolLookup.libraryLookup` / `dlopen`.
 
-Not here yet, by design: blocks, `NSException` as a condition, and the FLI forms of the manual
+Not here yet, by design: `NSException` as a condition, and the FLI forms of the manual
 (`fli:with-dynamic-foreign-objects` by-reference results and foreign structure objects) -- a
 structure is the vector / cons `invoke` answers, and `cocoa:set-ns-rect*` fills one.
 
@@ -263,6 +264,88 @@ a calling-only program carries no class half), `NativeObjcE2eTest` (the corpus a
 lifecycle and observers print the corpus's lines; a method of an unregistered shape (the
 corpus's `sum:plus:`) is refused with the entry to add.
 
+## The new base: blocks and C functions (2026-09-28)
+`make-objc-block`, `free-objc-block`, `with-objc-block`, `call-objc-block`,
+`define-objc-block-type`, the type `objc-block`, `objc-block-pointer`, `objc-block-live-p`, and
+`fli:define-foreign-function`. LispWorks' `OBJC` has no block interface (its FLI makes blocks),
+so the block names are this package's own; `fli` is a built-in package carrying
+`define-foreign-function` alone (`.todo/a77` decides the rest of it).
+
+- **No implicit wrapping, decided**: a method's encoding says `@?` and never what the block
+  takes (the extended `@?<...>` appears in protocol metadata only), so a Lisp function passed
+  where a block goes SIGNALS, naming `make-objc-block`. A wrong guess would be a crash.
+- `objc-block.lisp` (spliced when the expanded program names one of its definitions or
+  `objc-block`, `ObjcLibrary.referencesBlockHalf`) plugs into `objc.lisp` through
+  `*block-pointer-hook*`: an `objc-block` stands for its literal's address where a block, a
+  pointer or an object goes, and a FREED one signals there. A block's arguments and answer go
+  through the conversions a method's do -- `%convert-argument`, `%callback-answer`,
+  `%zero-answer`, `%declared-type`, moved from `objc-class.lisp` into `objc.lisp` so both halves
+  share them. A Lisp error inside prints `objc: error in a callback: ...` and answers zero.
+- **Four primitives**: `%make-block (types signature function)` answers the literal's address;
+  `%free-block`; `%call-function (address types fixed args mode)` -- a C call through an
+  address, the `%send` raw conventions, `types` covering every argument -- which
+  `call-objc-block` makes on the invoke pointer (`%peek` of the literal at +16) and
+  `fli:define-foreign-function` on a `dlsym` answer; `%symbol-address` (`dlsym(RTLD_DEFAULT)`).
+  `types` spells the block itself `^v`; `signature` (the descriptor's, for `_Block_signature`)
+  spells it `@?`.
+- **The literal** (`am.ik.objc.ObjcBlocks`, `runner/src/objc/block.rs`): isa
+  `&_NSConcreteStackBlock`, flags `BLOCK_HAS_COPY_DISPOSE | BLOCK_HAS_SIGNATURE`, invoke,
+  descriptor, then an ID. The ID travels INSIDE the literal because `_Block_copy` copies the
+  literal to the heap whenever a callee keeps it, and the copy must find the function; IDs are
+  never reused, so a block called after its function is gone is reported, never routed to
+  another. A STACK isa, not a global one: `_Block_copy` of a global block answers the same
+  pointer, so the storage would have to outlive every holder; `_Block_release` of our own storage
+  is a no-op (`BLOCK_NEEDS_FREE` clear). The copy/dispose helpers count HOLDERS per ID (the Lisp
+  value, plus each live copy); `free-objc-block` gives up the Lisp value's, so freeing a block
+  a queue kept is safe -- `with-objc-block` around a `dispatch_async` is the idiom. A block
+  never freed leaks (as in LispWorks; no finalizer). The JVM's literal is `malloc`'d, not an
+  arena's: a native image serves no shared arena (`Arena.ofShared().close()` threw
+  `UnsupportedFeatureError` in the binary), and a block may be freed from any thread.
+- **Interpreter / JVM: a block runs on the thread that calls it.** One FFM upcall stub per block
+  SHAPE, all landing in `ObjcBlocks.dispatch`, which finds the function by the ID and converts
+  by the block's own encoding (two blocks of one shape may convert differently). A libdispatch
+  worker is attached by the JVM and runs the function concurrently with the program, with the
+  interpreter's rules for a thread (`.kb/threads.md`): no dynamic binding of the program's thread
+  is visible, a closure built inside one still reads its capture. Foundation calls a comparator
+  or an enumerator on the sending thread, which is thread 0 (every send hops there). The
+  helpers are upcalls too (`void(void*,void*)`, `void(void*)`): no Lisp runs in them.
+- **`--native`: the module is thread 0's, so only thread 0 enters it.** The invoke function is
+  the IMP assembly entry `rl_objc_block_imp` (a method block and a program's block tell apart by
+  the descriptor; same header, the ID where the method index is). A block arriving inside a host
+  call on thread 0 (`CALLER` set: a send, `dispatch_sync` through `p_call_function`, a pump turn)
+  re-enters through the `rlobjc_method` export -- a block's function joins the methods' table,
+  called with no receiver. One arriving elsewhere: a `void` block is QUEUED (object arguments
+  retained, C strings copied, one holder taken) and a no-op `dispatch_async_f` to the main queue
+  makes a pump turn in progress return; `pump` drains the queue each turn, so the block runs at
+  the program's next `sleep`. A block answering a value is refused: printed, zero answered.
+  Dead IDs are reported to the module by `p_block_reap` and dropped from its table on the next
+  make or free. Stub size (`release-runner`, 2026-09-28): 1,915,200 -> 1,931,856 B.
+- **C functions run on the CALLING thread** (`ObjcRuntime.callRaw`, in a pool of that thread),
+  never hopped: a function that waits (`dispatch_sync`, a semaphore) must not hold thread 0
+  while a block it waits for needs it. `callRaw` binds UNBOUND downcall handles per shape (the
+  target an argument). An object result follows Core Foundation's Create rule, which libdispatch
+  follows too: a foreign name containing `Create` / `Copy` / `_create` / `_copy` hands over +1,
+  anything else is retained in the call.
+- **`@?` parses as an object** in `TypeEncoding` and `encoding.rs` (extended `@?<...>` skipped),
+  no longer refused: a send only passes the block's address.
+- **The native binary** serves the block shapes registered under `foreign.upcalls` (the guide's
+  adder `jint(void*,jint,jint)` and enumerator `void(void*,void*,jlong,void*)` joined the six,
+  which already cover a comparator, a work item, a three-object completion handler and the
+  helpers) and refuses any other when the block is made, naming the entry;
+  `ObjcNativeImageForeignConfigTest#everyShapeTheDocumentedBlockExamplesUseIsRegistered`.
+  Verified by hand (`-Pnative`, 2026-09-28): the guide's adder, comparator, enumerator (on
+  thread 0), a `dispatch_async` and an `NSURLSession` completion handler (on a worker) run; the
+  corpus stops at its first unregistered shape (`jdouble(void*,jdouble,jdouble)`) with the entry
+  to add.
+
+Tests: `ObjcBlockTest` (the corpus `objc-block-corpus.lisp` against `.expected`; declarations
+need no runtime; a worker sees the global values), `JvmObjcBaseCompilerTest` (the same bytes
+compiled; a program that makes no block carries no block half), `NativeObjcE2eTest` (the corpus
+against `objc-block-corpus-native.expected`, which differs exactly on the lines naming the
+thread a block ran on and whether a `dispatch_async` ran before the wait; a value-answering
+block called by `dispatch_async_f` on a worker is refused), `ObjcLibraryTest`,
+`TypeEncodingTest`, the runner's `encoding.rs` tests.
+
 ## The one architectural fact: AppKit belongs to thread 0
 The thread the kernel started the process on (`pthread_main_np()` answers 1) is the only one that
 may touch a window, and the Lisp thread is never it.
@@ -325,8 +408,8 @@ vertically centred `label`, `:background`/`:dark` on `window`, `status-item`, `m
 `objc_msgSend` handle PER DISTINCT SHAPE -- Apple's arm64 rule; **never through the variadic
 declaration, since an `NSRect` through a `long` shape is a SIGBUS** -- calling it with
 `invokeWithArguments`, which a native image serves. A wrong selector, arity or operand type is an
-`ObjcException` -> a Lisp `error`, never a crash. Blocks (`@?`), unions, bitfields and function
-pointers are refused by name.
+`ObjcException` -> a Lisp `error`, never a crash. Unions, bitfields and function pointers are
+refused by name; a block (`@?`) is an object.
 
 - **"Describes every selector completely" is false for a VARIADIC one**, which is declared byte
   for byte like its fixed-arity twin (`arrayWithObjects:` and `arrayWithObject:` are both `@@:@`).
@@ -661,8 +744,7 @@ and `eval/ObjcPrimitives` (new base), reached only via `eval/ObjcInterop`'s six 
 
 ## Open items
 - No MAIN menu (a process with no bundle sets none), so no Cmd-Q on a windowed program.
-- `objc:define-class`'s callback shapes (the old base) stay the closed six; block-taking
-  selectors are not served.
+- `objc:define-class`'s callback shapes (the old base) stay the closed six.
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
   the runtime offers no way to recognise another.
 - x86_64: `objc_msgSend_stret` (struct returns wider than 16 bytes) has not been exercised.
