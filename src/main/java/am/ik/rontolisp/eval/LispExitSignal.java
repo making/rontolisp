@@ -1,5 +1,7 @@
 package am.ik.rontolisp.eval;
 
+import am.ik.objc.ProcessExit;
+
 /**
  * The interpreter's {@code %host-exit}: {@code uiop:quit} asking for the process to end
  * with a status code.
@@ -20,8 +22,16 @@ package am.ik.rontolisp.eval;
  * not a call's decision to make -- the same rule the JVM backend's uncaught-condition
  * handler follows. {@code main} is the process entry point and is where the code becomes
  * the process's.
+ *
+ * <p>
+ * One frame never lets it get that far: an {@code objc:} method or block body runs inside
+ * a native upcall ({@code am.ik.objc.ObjcMethods} / {@code ObjcBlocks}), which contains
+ * every escape so that nothing unwinds into the Objective-C frame above it. Implementing
+ * {@link ProcessExit} is how it is told apart from an ordinary error there:
+ * {@code ObjcMethods#fail} ends the process right at the callback, with this code,
+ * instead of reporting and continuing.
  */
-public final class LispExitSignal extends RuntimeException {
+public final class LispExitSignal extends RuntimeException implements ProcessExit {
 
 	/** The process status code {@code uiop:quit} was given. */
 	private final int code;

@@ -335,11 +335,13 @@ The primitive layer grows by eleven (`LispNames.OBJC_PRIMITIVES`): `%allocate-cl
   answer for such an object adds its count to the ONE value `release` later gives up.
 - A method's receiver is BORROWED (`%borrow`: the live value, or one holding nothing), never
   retained -- `-dealloc` runs on a receiver no one may retain.
-- **A method that lets a Lisp error, a `throw` or an exit escape** is contained by
+- **A method that lets a Lisp error or a `throw` escape** is contained by
   `objc::%run-method`'s `handler-case` -- printed (`objc: error in a callback: ...`) and answered
-  as zero, never an unwind through Objective-C's frames. On `--native` a `proc_exit` inside ends
-  the process with its code; on the interpreter and the JVM the exit is contained like any other
-  escape (`.todo/a78`).
+  as zero, never an unwind through Objective-C's frames. **An exit inside is different**: it is
+  not a Lisp condition (`handler-case` cannot see it), so it unwinds through the Lisp frames as a
+  host exception until it reaches the Java-level upcall guard (`am.ik.objc.ObjcMethods` /
+  `ObjcBlocks`), which recognizes it (`ProcessExit`) and ends the process with its code right
+  there, never reporting it as an error -- the same on `--native`, the interpreter and the JVM.
 
 Tests: `ObjcClassTest` (the corpus `objc-class-corpus.lisp` against `.expected`, the macros on a
 machine with no runtime, no primitive redefined), `JvmObjcBaseCompilerTest` (the corpus compiled;

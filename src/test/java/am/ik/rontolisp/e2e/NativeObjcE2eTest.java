@@ -312,6 +312,32 @@ class NativeObjcE2eTest {
 		assertThat(run.exit()).as("stderr: %s", run.stderr()).isEqualTo(7);
 	}
 
+	@Test
+	void anExitInsideACallbackEndsTheProcessWithItsCodeOnTheInterpreter() throws Exception {
+		// Same program, run through the interpreter's own path -- a forked JVM, never
+		// in-process: the fix calls System.exit for real (am.ik.objc.ObjcMethods#fail),
+		// which would kill this test's JVM if it ran there. The upcall guard used to
+		// catch LispExitSignal along with every other Throwable, print "objc: error in
+		// a callback: ..." and answer zero, letting the program run past the quit.
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		Path dir = Files.createDirectories(this.tempDir.resolve("interpreter"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, """
+				(objc:define-objc-class exit-target () () (:objc-class-name "InterpreterE2eExit"))
+				(objc:define-objc-method ("bye:" :void) ((self exit-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (format t "bye~%") (finish-output) (uiop:quit 7))
+				(objc:invoke (make-instance 'exit-target) "performSelector:withObject:" "bye:" nil)
+				(format t "not reached~%")
+				""");
+		String java = ProcessHandle.current().info().command().orElse("java");
+		List<String> command = List.of(java, "--enable-native-access=ALL-UNNAMED", "-cp",
+				System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli", src.toString());
+		Run run = exec(dir, command);
+		assertThat(run.stdout()).isEqualTo("bye\n");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isEqualTo(7);
+	}
+
 	private String interpret(String source) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));

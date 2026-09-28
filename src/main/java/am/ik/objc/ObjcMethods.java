@@ -41,7 +41,8 @@ import org.jspecify.annotations.Nullable;
  * under {@code foreign.upcalls} and refuses any other at definition, naming the entry to
  * add ({@link ObjcRuntime#upcall}). A body that throws never unwinds into the native
  * frame above it: the failure goes to the {@linkplain #onError error sink} and the method
- * answers its zero value.
+ * answers its zero value -- except a {@link ProcessExit}, whose meaning is to end the
+ * process, which {@link #fail} does right there instead.
  */
 public final class ObjcMethods {
 
@@ -191,10 +192,15 @@ public final class ObjcMethods {
 
 	/**
 	 * Hands a callback's failure to the error sink; nothing may escape into the native
-	 * frame above an upcall, not even the sink's own failure.
+	 * frame above an upcall, not even the sink's own failure. The one exception to
+	 * "report and answer zero": a {@link ProcessExit}, whose meaning is to end the
+	 * process, does that right here rather than being reported and swallowed.
 	 * @param ex the failure
 	 */
 	static void fail(Throwable ex) {
+		if (ex instanceof ProcessExit exit) {
+			System.exit(exit.code());
+		}
 		try {
 			errorSink.accept(ex);
 		}

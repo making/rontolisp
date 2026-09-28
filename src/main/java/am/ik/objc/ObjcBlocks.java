@@ -49,8 +49,9 @@ import org.jspecify.annotations.Nullable;
  * whichever thread calls it, a libdispatch worker included: the JVM attaches the thread,
  * and the body runs there. A body that throws never unwinds into the native frame: the
  * failure goes to {@link ObjcMethods#onError the error sink} and the block answers its
- * zero value. Under {@code java} every shape is served; a native image serves the shapes
- * under {@code foreign.upcalls} and refuses any other when the block is made.
+ * zero value -- except a {@link ProcessExit}, which {@link ObjcMethods#fail} ends the
+ * process for, in place. Under {@code java} every shape is served; a native image serves
+ * the shapes under {@code foreign.upcalls} and refuses any other when the block is made.
  */
 public final class ObjcBlocks {
 
