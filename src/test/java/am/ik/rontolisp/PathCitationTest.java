@@ -171,18 +171,26 @@ class PathCitationTest {
 	 * live under {@code .todo/artefacts/}, which makes the listing readable without
 	 * opening anything and costs nothing at close time -- the directory is already where
 	 * it belongs, so closing an item moves nothing.
+	 *
+	 * <p>
+	 * A third top-level directory, {@code .todo/pending/}, holds {@code NNN-title.md}
+	 * files the same shape as an open item, for one specific state: the work itself is
+	 * done and what remains is waiting on an upstream party (a bug report filed, a fix
+	 * merged upstream) rather than on anything this repository can still act on. A file
+	 * under it is still an open item -- {@code claim-number.sh} counts its numbers as
+	 * used -- just not one a listing of {@code .todo/} itself needs to surface.
 	 */
 	@Test
 	void theTodoDirectoryHoldsNoItemNumberedDirectories() throws IOException {
 		try (Stream<Path> entries = Files.list(Path.of(".todo"))) {
 			List<String> misplaced = entries.filter(Files::isDirectory)
 				.map(path -> path.getFileName().toString())
-				.filter(name -> !name.equals("artefacts") && !name.equals("history"))
+				.filter(name -> !name.equals("artefacts") && !name.equals("history") && !name.equals("pending"))
 				.sorted()
 				.toList();
 			assertThat(misplaced)
 				.as("Measurement artefacts belong under .todo/artefacts/NNN-title/; only a .todo/NNN-title.md FILE "
-						+ "says an item is open.")
+						+ "or a .todo/pending/NNN-title.md FILE (an item waiting on an upstream party) says an item is open.")
 				.isEmpty();
 		}
 	}
@@ -322,13 +330,22 @@ class PathCitationTest {
 	}
 
 	/**
-	 * Top level only: {@code .todo/artefacts/} and {@code .todo/history/} are dated
-	 * records.
+	 * Every {@code NNN-title.md} item file, open ones at the top level plus the ones
+	 * under {@code .todo/pending/} waiting on an upstream party. {@code .todo/artefacts/}
+	 * and {@code .todo/history/} are dated records and stay out.
 	 */
 	private static List<Path> todoItemFiles() throws IOException {
+		List<Path> files = new ArrayList<>();
 		try (Stream<Path> entries = Files.list(Path.of(".todo"))) {
-			return entries.filter(path -> path.getFileName().toString().endsWith(".md")).sorted().toList();
+			files.addAll(entries.filter(path -> path.getFileName().toString().endsWith(".md")).toList());
 		}
+		Path pending = Path.of(".todo", "pending");
+		if (Files.isDirectory(pending)) {
+			try (Stream<Path> entries = Files.list(pending)) {
+				files.addAll(entries.filter(path -> path.getFileName().toString().endsWith(".md")).toList());
+			}
+		}
+		return files.stream().sorted().toList();
 	}
 
 	private static List<Path> filesUnder(Path root, String suffix) throws IOException {
