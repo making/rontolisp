@@ -68,7 +68,10 @@ public final class OperandTypes {
 		/** A non-string reaching {@code char}/{@code schar} or their {@code setf}. */
 		STRING,
 
-		/** A non-character stored into a string ({@code (setf char)} and its kin). */
+		/**
+		 * A non-character stored into a string ({@code (setf char)} and its kin) or
+		 * reaching a character built-in ({@link OperandTypes#characterOperators}).
+		 */
 		CHARACTER,
 
 		/**
@@ -226,12 +229,33 @@ public final class OperandTypes {
 	 * The accessors of a vector's fill pointer, adjustability, displacement and element
 	 * type, funnel-typed like {@code aref}: an operand that is no array lands
 	 * {@code ARRAY}. {@code (setf fill-pointer)} is {@code %set-fill-pointer}'s reported
-	 * name, {@code array-displacement} {@code %array-disp-target}'s. Last in the table,
-	 * after the character comparisons.
+	 * name, {@code array-displacement} {@code %array-disp-target}'s. After the character
+	 * comparisons.
 	 */
 	private static final List<String> ARRAY_SHAPE_OPERATORS = List.of("FILL-POINTER", SETF_FILL_POINTER, "VECTOR-PUSH",
 			"VECTOR-PUSH-EXTEND", "VECTOR-POP", "ARRAY-ELEMENT-TYPE", "ADJUSTABLE-ARRAY-P", "ARRAY-HAS-FILL-POINTER-P",
 			"ARRAY-DISPLACEMENT", "ADJUST-ARRAY");
+
+	/**
+	 * The other character built-ins, fixed-typed {@code CHARACTER} like the comparisons:
+	 * {@code char-code}, the case folds and the character predicates. Last in the table,
+	 * after the array-shape accessors.
+	 */
+	private static final List<String> CHARACTER_BUILTINS = List.of("CHAR-CODE", "CHAR-UPCASE", "CHAR-DOWNCASE",
+			"ALPHA-CHAR-P", "UPPER-CASE-P", "LOWER-CASE-P", "BOTH-CASE-P", "ALPHANUMERICP", "CHAR-NAME",
+			"GRAPHIC-CHAR-P", "STANDARD-CHAR-P");
+
+	/**
+	 * {@code digit-char-p}, funnel-typed: its character lands {@code CHARACTER}, its
+	 * radix {@code INTEGER}. After {@link #CHARACTER_BUILTINS}.
+	 */
+	private static final String DIGIT_CHAR_P = "DIGIT-CHAR-P";
+
+	/** The operators whose sites can land {@code CHARACTER}. */
+	private static final List<String> CHARACTER_OPERATORS_ALL = java.util.stream.Stream
+		.of(CHARACTER_OPERATORS.stream(), CHARACTER_BUILTINS.stream(), java.util.stream.Stream.of(DIGIT_CHAR_P))
+		.flatMap(s -> s)
+		.toList();
 
 	/** The operators whose sites can land {@code ARRAY}. */
 	private static final List<String> ARRAY_OPERATORS = java.util.stream.Stream
@@ -298,6 +322,12 @@ public final class OperandTypes {
 			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
+		for (String op : CHARACTER_BUILTINS) {
+			OPERATOR_TYPES.put(op, Kind.CHARACTER.name());
+			order.add(op);
+		}
+		OPERATOR_TYPES.put(DIGIT_CHAR_P, FUNNEL_TYPE);
+		order.add(DIGIT_CHAR_P);
 		OPERATORS = List.copyOf(order);
 	}
 
@@ -376,6 +406,16 @@ public final class OperandTypes {
 	 */
 	public static List<String> hashTableOperators() {
 		return HASH_TABLE_OPERATORS;
+	}
+
+	/**
+	 * The operators whose checks land {@link Kind#CHARACTER}: the comparisons, the other
+	 * character built-ins and {@code digit-char-p}, as {@link #sequenceOperators()} is
+	 * for {@code SEQUENCE}.
+	 * @return the operator names
+	 */
+	public static List<String> characterOperators() {
+		return CHARACTER_OPERATORS_ALL;
 	}
 
 	/**

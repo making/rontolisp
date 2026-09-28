@@ -1278,10 +1278,8 @@ final class JvmExprCompiler {
 					className);
 			case LispNames.SCHAR_SET ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
-			case LispNames.LOWER_CASE_P ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx, className);
-			case LispNames.UPPER_CASE_P ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
+			case LispNames.LOWER_CASE_P -> JvmCharCompiler.compileLowerCaseP(cons, ctx, className);
+			case LispNames.UPPER_CASE_P -> JvmCharCompiler.compileUpperCaseP(cons, ctx, className);
 			case LispNames.CONSTANTP ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
 			case LispNames.STREAMP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,

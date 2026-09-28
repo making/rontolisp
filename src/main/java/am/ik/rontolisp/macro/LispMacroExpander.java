@@ -12069,38 +12069,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (lower-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
-	 * (char-upcase __cc))))}: a character is lowercase exactly when upcasing changes it.
-	 * Follows the platform's Unicode case tables.
-	 * @param cons the lower-case-p expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandLowerCaseP(LispCons cons) {
-		return expandCaseTest(cons, LispNames.LOWER_CASE_P, LispNames.CHAR_UPCASE);
-	}
-
-	/**
-	 * Expands {@code (upper-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
-	 * (char-downcase __cc))))}: a character is uppercase exactly when downcasing changes
-	 * it.
-	 * @param cons the upper-case-p expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandUpperCaseP(LispCons cons) {
-		return expandCaseTest(cons, LispNames.UPPER_CASE_P, LispNames.CHAR_DOWNCASE);
-	}
-
-	private static LispVal expandCaseTest(LispCons cons, String name, String flipOp) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() != 2) {
-			throw new IllegalArgumentException(name + " expects exactly one argument");
-		}
-		LispSymbol c = new LispSymbol("__cc");
-		LispVal test = makeNot(fmtCall(LispNames.CHAR_EQ, c, fmtCall(flipOp, c)));
-		return makeLet("__cc", parts.get(1), test);
-	}
-
-	/**
 	 * Expands {@code (constantp form [env])} into a runtime type test: true for numbers,
 	 * strings, characters, keywords, {@code t}/{@code nil}, and {@code (quote x)} forms
 	 * (lite -- false negatives only push work to runtime). The optional environment

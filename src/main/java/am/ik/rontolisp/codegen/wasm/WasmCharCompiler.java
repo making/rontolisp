@@ -156,7 +156,7 @@ final class WasmCharCompiler {
 
 	/** {@code (char-code ch)}. */
 	static void compileCharCode(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
@@ -192,7 +192,7 @@ final class WasmCharCompiler {
 	// inside
 	// TYPE_CHAR without allocating a string.
 	private static void compileCaseFold(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(funcIndex);
 		makeChar(ctx);
@@ -201,7 +201,7 @@ final class WasmCharCompiler {
 	/** {@code (alpha-char-p ch)} (ASCII letters). */
 	static void compileAlphaCharP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		int t = ctx.allocTemp();
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(t);
@@ -211,18 +211,58 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	/**
+	 * {@code (lower-case-p ch)}: whether upcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileLowerCaseP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCaseTest(cons, ctx, WasmLispCompiler.FUNC_CHAR_UPCASE);
+	}
+
+	/**
+	 * {@code (upper-case-p ch)}: whether downcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileUpperCaseP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCaseTest(cons, ctx, WasmLispCompiler.FUNC_CHAR_DOWNCASE);
+	}
+
+	// The checked code point against its fold through funcIndex: t when they differ.
+	private static void compileCaseTest(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
+		}
+		int t = ctx.allocTemp();
+		pushCheckedCode(args.get(1), ctx, false);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(t);
+		getI32(ctx, t);
+		getI32(ctx, t);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
+		ctx.writer.write(Instruction.I32_NE);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
 	/** {@code (digit-char-p ch [radix])}. */
 	static void compileDigitCharP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		int c = ctx.allocTemp();
 		int r = ctx.allocTemp();
 		int d = ctx.allocTemp();
-		pushCode(args.get(1), ctx);
+		pushCheckedCode(args.get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(c);
 		if (args.size() > 2) {
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			if (!(args.get(2) instanceof LispInteger)) {
+				// In EH mode a radix that is no integer is DIGIT-CHAR-P's INTEGER
+				// type-error.
+				WasmEmitHelper.emitIndexCheck(ctx);
+			}
 		}
 		else {
 			ctx.writer.write(Instruction.I32_CONST);
@@ -405,10 +445,11 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
-	// Pushes the i32 code point of a comparison's argument -- downcased with fold -- a
-	// literal's as the constant it is. In EH mode any other goes through _chr_code under
-	// the innermost named operator's id, so a non-character is that operator's CHARACTER
-	// type-error rather than the cast's trap; outside it the cast still traps.
+	// Pushes the i32 code point of a character built-in's argument -- downcased with
+	// fold -- a literal's as the constant it is. In EH mode any other goes through
+	// _chr_code under the innermost named operator's id, so a non-character is that
+	// operator's CHARACTER type-error rather than the cast's trap; outside it the cast
+	// still traps.
 	private static void pushCheckedCode(LispVal arg, WasmLispCompiler.Ctx ctx, boolean fold) {
 		if (arg instanceof am.ik.rontolisp.LispChar c) {
 			ctx.writer.write(Instruction.I32_CONST);
@@ -433,22 +474,6 @@ final class WasmCharCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHAR_DOWNCASE);
 		}
-	}
-
-	// Pushes the i32 code point of the character produced by the argument expression --
-	// a literal's as the constant it is, not through a char struct.
-	private static void pushCode(LispVal arg, WasmLispCompiler.Ctx ctx) {
-		if (arg instanceof am.ik.rontolisp.LispChar c) {
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(c.codePoint());
-			return;
-		}
-		WasmExprCompiler.compileExpr(arg, ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	/**

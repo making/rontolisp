@@ -1384,6 +1384,64 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void characterBuiltInsCheckTheirArgument() throws Exception {
+		// The evaluator twin is characterBuiltInsCheckTheirArgument. The unboxing's
+		// checkcast failed here with the generic report and a NIL datum.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *c* 1)
+						(defvar *x* 'a)
+						(print (te (lambda () (char-code *c*))))
+						(print (te (lambda () (char-code 1))))
+						(print (te (lambda () (char-upcase *c*))))
+						(print (te (lambda () (char-downcase *c*))))
+						(print (te (lambda () (alpha-char-p *c*))))
+						(print (te (lambda () (if (alpha-char-p *c*) :y :n))))
+						(print (te (lambda () (digit-char-p *c*))))
+						(print (te (lambda () (digit-char-p #\\a *x*))))
+						(print (te (lambda () (upper-case-p *c*))))
+						(print (te (lambda () (if (lower-case-p *c*) :y :n))))
+						(print (te (lambda () (both-case-p *c*))))
+						(print (te (lambda () (alphanumericp *c*))))
+						(print (te (lambda () (char-name *c*))))
+						(print (te (lambda () (graphic-char-p *c*))))
+						(print (te (lambda () (standard-char-p *c*))))
+						(print (te (lambda () (funcall #'char-code *c*))))
+						(print (te (lambda () (mapcar #'char-upcase (list #\\a *c*)))))
+						(print (te (lambda () (funcall #'lower-case-p *c*))))
+						(print (te (lambda () (funcall #'digit-char-p *c* 16))))
+						(print (list (char-code #\\a) (char-upcase #\\a) (char-downcase #\\A) (alpha-char-p #\\a) (digit-char-p #\\7)
+						             (digit-char-p #\\f 16) (upper-case-p #\\A) (lower-case-p #\\A) (both-case-p #\\1)
+						             (alphanumericp #\\x) (char-name #\\Space) (graphic-char-p #\\a) (standard-char-p #\\Newline)))
+						"""))
+			.isEqualTo("""
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-DOWNCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+					("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHANUMERICP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-NAME: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("GRAPHIC-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("STANDARD-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					(97 #\\A #\\a T 7 15 T NIL NIL T "Space" T T)""");
+	}
+
+	@Test
 	void listWalksAndStringIndicesNameTheOperator() throws Exception {
 		// A list walk over a non-list and a string index that is no integer name their
 		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's

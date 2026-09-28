@@ -1495,10 +1495,47 @@ interpreter, the generic `ClassCastException` text on the JVM and trapped on was
   class 188,039 -> 187,699; `hello_world`, `pi_approx` and a non-EH module comparing characters
   byte-identical. 40M comparisons with one non-literal operand in EH mode: wasmtime 1.49 -> 1.55 s,
   JVM 0.31 -> 0.30 s. An inline `ref.test` check instead cost +4,428 B on the Worker (228 sites).
-- The other character built-ins (`char-code`, `char-upcase`, the predicates) still differ per
-  backend (`.todo/a63`).
+- The other character built-ins check the same way: "A character built-in checks its argument".
 - Pinned by `ci-spec.yaml`'s `one-argument-calls-check-their-argument` and the
   `oneArgumentCallsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
+  `WasmLispCompilerIntegrationTest`).
+
+## A character built-in checks its argument
+**Invariant: a non-character reaching `char-code`, `char-upcase`, `char-downcase`,
+`alpha-char-p`, `digit-char-p`, `upper-case-p`, `lower-case-p`, `both-case-p`, `alphanumericp`,
+`char-name`, `graphic-char-p` or `standard-char-p` -- directly or through `#'` -- reports
+`OP: The value 1 is not of type CHARACTER` as a catchable `type-error`, byte-identical on all four
+backends (wasm-GC: EH mode); a `digit-char-p` radix that is no integer is its `INTEGER` one.**
+Before (measured 2026-09-27): a simple-error `CHAR-CODE expects a character, got: 1` interpreted
+(named after the helper a prelude defun or lowering called: `upper-case-p` said `CHAR-DOWNCASE`),
+the datum-less `ClassCastException` report on the JVM (`CHAR=` for the case predicates) and a trap
+on wasm.
+
+- **Table**: eleven fixed-typed `CHARACTER` rows after the array-shape accessors, then
+  `DIGIT-CHAR-P` funnel-typed -- a `CHARACTER` row would name its radix's `INTEGER` failure
+  `CHARACTER` through the interpreter's seam. `OperandTypes.characterOperators()` is what gives a
+  wasm table naming `DIGIT-CHAR-P` its `CHARACTER` text.
+- **Interpreter**: `Environment.requireChar` throws `OperandTypeException` under its caller's name
+  (also `make-array`'s, `fill`'s and `vector-push`'s character checks). `digit-char-p` checks the
+  character before the radix, as the compiled order does. `lower-case-p`/`upper-case-p` run the
+  built-in; the shared `(not (char= c (char-upcase c)))` lowering is gone.
+- **Compiled**: `char-code`, the folds, `alpha-char-p`, `digit-char-p` and the two case predicates
+  push the code point through the comparisons' `pushCheckedCode` (JVM `_ckChr` under the
+  operator's wrapper; wasm `_chr_code` in EH mode, the cast outside it). The case predicates
+  compile natively: code point vs. its fold. A non-literal radix goes through `_ckIdx` /
+  `_idx_chk`. The prelude defuns (`alphanumericp`, `both-case-p`, `char-name`,
+  `graphic-char-p`, `standard-char-p`) check first with `%check-character`.
+- Measured 2026-09-28: hello-clack Worker (`--no-wasi --optimize=size`) 680,279 -> 680,498 (code
+  +139: string addresses and the operator ids after the three new rows crossing a LEB boundary,
+  less 1-2 bytes per character site; data +80, the rows); `zlib` P1 129,718 -> 130,172 (code +4; data +450, of which
+  the rows are ~80 and the rest strings the tree-shaker now keeps because an unrelated `i32.const`
+  lands in their shifted range), size 99,533 -> 99,987, component 133,727 -> 133,809; JVM `zlib`
+  class 188,098 unchanged, `examples/net/hello-clack.lisp` class 948,278 -> 949,038 (the `_ckChr`
+  wrappers); `hello_world`, `pi_approx` byte-identical. 40M `char-code`/`upper-case-p`/
+  `char-downcase` in EH mode: wasmtime 4.23 -> 4.20 s, JVM 0.33 -> 0.34 s.
+- `char-int` is not defined on any backend.
+- Pinned by `ci-spec.yaml`'s `character-built-ins-check-their-argument` and the
+  `characterBuiltInsCheckTheirArgument` triple (`LispEvaluatorTest`, `JvmLispCompilerTest`,
   `WasmLispCompilerIntegrationTest`).
 
 ## A sequence, array or hash-table operand of the wrong kind names its operator

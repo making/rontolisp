@@ -7780,8 +7780,9 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.DIGIT_CHAR_P, new LispFunction(LispNames.DIGIT_CHAR_P, args -> {
 			requireMinArgCount(LispNames.DIGIT_CHAR_P, args, 1);
+			int code = requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint();
 			int radix = args.size() > 1 ? (int) asLong(args.get(1)) : 10;
-			int weight = Character.digit(requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint(), radix);
+			int weight = Character.digit(code, radix);
 			return weight < 0 ? LispNil.INSTANCE : new LispInteger(weight);
 		}));
 		env.defineFunction(LispNames.LOWER_CASE_P, new LispFunction(LispNames.LOWER_CASE_P, args -> {
@@ -8116,11 +8117,13 @@ public final class Environment implements Scope {
 		return new LispChar(s.codePointAt(stringSlot(name, args.get(1), index, s.capacity())));
 	}
 
+	// A non-character is NAME's CHARACTER type-error, as the compiled backends' check
+	// reports it (.kb/error-handling.md, "A character built-in checks its argument").
 	private static LispChar requireChar(String name, LispVal val) {
 		if (val instanceof LispChar c) {
 			return c;
 		}
-		throw new LispEvalException(name + " expects a character, got: " + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.CHARACTER, name);
 	}
 
 	/**

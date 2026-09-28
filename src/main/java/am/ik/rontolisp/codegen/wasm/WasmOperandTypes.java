@@ -146,7 +146,8 @@ final class WasmOperandTypes {
 	 * {@code STRING}'s when a row's sites land with it directly
 	 * ({@link #STRING_CHECKED}), {@code SEQUENCE}'s when a sequence operator's do
 	 * ({@link OperandTypes#sequenceOperators}), {@code ARRAY}'s and {@code HASH-TABLE}'s
-	 * when an array or a hash-table accessor's do and {@code CHARACTER}'s when the module
+	 * when an array or a hash-table accessor's do and {@code CHARACTER}'s when a
+	 * character operator's do ({@link OperandTypes#characterOperators}) or the module
 	 * stores into strings ({@link #CHARACTER_CHECKED}): a landing selects among only the
 	 * types they can name, so a suffix no row can reach is never cited and drops with the
 	 * string blob's dead ranges
@@ -228,6 +229,9 @@ final class WasmOperandTypes {
 				}
 				if (OperandTypes.hashTableOperators().contains(op)) {
 					rowCodes.add(code(OperandTypes.Kind.HASH_TABLE));
+				}
+				if (OperandTypes.characterOperators().contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.CHARACTER));
 				}
 			}
 			if (spelled.test(CHARACTER_CHECKED)) {

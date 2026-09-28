@@ -7402,10 +7402,6 @@ public final class LispEvaluator {
 			// successive replaces (cl-who's string-list-to-string) mutates in place.
 			// The compilers still expand it to a fresh concatenate (no runtime string
 			// mutation there; cl-who resolves it at macro-expansion time).
-			case LispNames.LOWER_CASE_P:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandLowerCaseP);
-			case LispNames.UPPER_CASE_P:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandUpperCaseP);
 			case LispNames.CONSTANTP:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandConstantp);
 			case LispNames.STREAMP:

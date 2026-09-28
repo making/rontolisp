@@ -1481,8 +1481,8 @@ final class WasmExprCompiler {
 						routesToArrayArm(cons, LispNames.FILL_ARRAY_RUNTIME, ctx)), ctx);
 			case LispNames.SCHAR_SET ->
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
-			case LispNames.LOWER_CASE_P -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx);
-			case LispNames.UPPER_CASE_P -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
+			case LispNames.LOWER_CASE_P -> WasmCharCompiler.compileLowerCaseP(cons, ctx);
+			case LispNames.UPPER_CASE_P -> WasmCharCompiler.compileUpperCaseP(cons, ctx);
 			case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
 			case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
 					ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx);

@@ -233,9 +233,12 @@ public final class LispPreludeLibrary {
 				                    (intern %gt-name %gt-package)
 				                    (intern %gt-name)))))))
 				""");
+		// alphanumericp, both-case-p, char-name and the graphic / standard predicates
+		// check their argument under their own name first, so a non-character is their
+		// CHARACTER type-error rather than that of the built-in they call.
 		SOURCES.put(LispNames.ALPHANUMERICP, """
 				(defun alphanumericp (c)
-				  (or (alpha-char-p c) (digit-char-p c)))
+				  (or (alpha-char-p (%check-character c 'alphanumericp)) (digit-char-p c)))
 				""");
 		SOURCES.put(LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, """
 				(defun make-load-form-saving-slots (object &key slot-names environment)
@@ -469,7 +472,7 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.BOTH_CASE_P, """
 				(defun both-case-p (c)
-				  (or (lower-case-p c) (upper-case-p c)))
+				  (or (lower-case-p (%check-character c 'both-case-p)) (upper-case-p c)))
 				""");
 		// special-operator-p / macro-function partition the operators with no function
 		// value between them, from ONE definition each: the 25 ANSI special operators
@@ -2401,7 +2404,7 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.CHAR_NAME, """
 				(defun char-name (c)
-				  (let ((cp (char-code c)))
+				  (let ((cp (char-code (%check-character c 'char-name))))
 				    (cond ((= cp 32) "Space")
 				          ((= cp 10) "Newline")
 				          ((= cp 9) "Tab")
@@ -3610,12 +3613,12 @@ public final class LispPreludeLibrary {
 		// rather than the character for it.
 		SOURCES.put(LispNames.GRAPHIC_CHAR_P, """
 				(defun graphic-char-p (character)
-				  (let ((n (char-code character)))
+				  (let ((n (char-code (%check-character character 'graphic-char-p))))
 				    (if (or (and (> n 31) (< n 127)) (> n 159)) t nil)))
 				""");
 		SOURCES.put(LispNames.STANDARD_CHAR_P, """
 				(defun standard-char-p (character)
-				  (let ((n (char-code character)))
+				  (let ((n (char-code (%check-character character 'standard-char-p))))
 				    (if (or (and (> n 31) (< n 127)) (= n 10)) t nil)))
 				""");
 		// The printer-control renderer: the ONE walk every backend prints through when

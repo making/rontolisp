@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispNil;
@@ -230,9 +231,7 @@ final class JvmCharCompiler {
 
 	/** {@code (char-code ch)}: the code point as an integer. */
 	static void compileCharCode(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmEmitHelper.unboxCodePoint(ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
 		ctx.emit(Opcode.I2L);
 		JvmEmitHelper.boxLong(ctx);
 	}
@@ -262,9 +261,7 @@ final class JvmCharCompiler {
 	}
 
 	private static void compileCaseFold(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String method) {
-		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmEmitHelper.unboxCodePoint(ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
 		// Character.toUpperCase(int)/toLowerCase(int) take a code point and return a code
 		// point; a mapping that would expand to multiple code units lives on the String
 		// overload, so this is the right level for a single-character fold.
@@ -284,21 +281,53 @@ final class JvmCharCompiler {
 
 	/** {@code (alpha-char-p ch)}: {@code Character.isLetter(int)} on the code point. */
 	static void compileAlphaCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmEmitHelper.unboxCodePoint(ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z").index());
+		JvmEmitHelper.emitBoolFromInt(ctx);
+	}
+
+	/**
+	 * {@code (lower-case-p ch)}: whether upcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileLowerCaseP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseTest(cons, ctx, className, "toUpperCase");
+	}
+
+	/**
+	 * {@code (upper-case-p ch)}: whether downcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileUpperCaseP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseTest(cons, ctx, className, "toLowerCase");
+	}
+
+	// The checked code point against its fold through method: t when they differ.
+	private static void compileCaseTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String method) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
+		}
+		pushCheckedCode(args.get(1), ctx, className, false);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, method, "(I)I").index());
+		ctx.emit(Opcode.ISUB);
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
 	/** {@code (digit-char-p ch [radix])}: the digit weight, or nil. */
 	static void compileDigitCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmEmitHelper.unboxCodePoint(ctx);
+		pushCheckedCode(args.get(1), ctx, className, false);
 		if (args.size() > 2) {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			if (!(args.get(2) instanceof LispInteger)) {
+				// A radix that is no integer is DIGIT-CHAR-P's INTEGER type-error.
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+			}
 			JvmEmitHelper.unboxLong(ctx);
 			ctx.emit(Opcode.L2I);
 		}
@@ -416,9 +445,10 @@ final class JvmCharCompiler {
 		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
 	}
 
-	// Pushes the int code point of a comparison's argument -- downcased with fold -- a
-	// literal's as the constant it is; any other through _ckChr, under the comparison's
-	// wrapper, so a non-character is its named type-error rather than a failed cast.
+	// Pushes the int code point of a character built-in's argument -- downcased with
+	// fold -- a literal's as the constant it is; any other through _ckChr, under the
+	// operator's wrapper, so a non-character is its named type-error rather than a
+	// failed cast.
 	private static void pushCheckedCode(LispVal arg, JvmLispCompiler.Ctx ctx, String className, boolean fold) {
 		if (arg instanceof LispChar c) {
 			JvmEmitHelper.emitIntConst(ctx, fold ? Character.toLowerCase(c.codePoint()) : c.codePoint());
