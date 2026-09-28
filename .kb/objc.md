@@ -226,8 +226,15 @@ module's linear memory) exactly as the interpreter and the JVM do.
   symbol name. `define-objc-struct` records its slots there.
 - **Layout is the C rule over named slots** (`objc::%fli-layout`): `fli:size-of` answers the
   recorded LispWorks sizes (asserted directly by `theRecordedLispWorksAnswersHold`), and an ivar
-  of a declared structure type is sized by it. The hosts lay a PARSED structure out over its
-  flattened leaves, which differs for a nested structure with tail padding (`.todo/a79`).
+  of a declared structure type is sized by it. A PARSED structure is laid out by the same rule
+  over its NESTED members on every host (`TypeEncoding.Type`, `encoding.rs` `Type::structure`,
+  `objc::%type-size`), so the two agree: `{Outer={Inner=dc}c}` is 24 bytes with the tail at 16,
+  and `{O=c{I=cd}}` puts the inner `c` at 8. The VALUE stays the leaves in memory order, each
+  at its C offset. The JVM hands FFM the flat leaves when they sit where natural alignment
+  puts them (every AppKit struct, so the closed table's spellings hold) and the nested
+  layout otherwise -- the linker refuses padding alignment does not call for, and both
+  classify the same. A spelled shape includes its padding (`padding(7)`): the image builder
+  rebuilds it with `structLayout`, which refuses a member off its alignment.
 - Refused, never a crash: a null pointer, a `:void` pointee without `:type`, an aggregate
   dereferenced without `:copy-foreign-object` (LispWorks' `:error` default; `nil` answers a
   pointer, `t` a `calloc`'d copy), a Lisp string or vector stored where an object goes (it would
@@ -241,8 +248,10 @@ module's linear memory) exactly as the interpreter and the JVM do.
 
 Tests: the corpora -- the manual's 1.3.5 and 1.3.7 forms (`scanInt:` by reference in the base
 corpus, the literal `getValueInto:` defined in the class corpus), the 1.4 `pair` result variable,
-a block stopping through `BOOL *stop`, and every verb and refusal -- on the interpreter, a JVM
-class and `--native`. The native binary (`-Pnative`, 2026-09-29) printed the base corpus
+a block stopping through `BOOL *stop`, a tail-padded nested structure through a Lisp method
+(`nested:`, called by `invoke`, into a foreign object and by `NSInvocation`, whose C-side call
+is what pins the layout), and every verb and refusal -- on the interpreter, a JVM class and
+`--native`. The native binary (`-Pnative`, 2026-09-29) printed the base corpus
 byte for byte, and ran the manual's forms, the `pair` result variable and the stopping block.
 
 ## Class definition (2026-09-28)
@@ -599,7 +608,7 @@ vertically centred `label`, `:background`/`:dark` on `window`, `status-item`, `m
 
 ## The send's shape comes from the encoding; the native binary serves a CLOSED table
 `method_getTypeEncoding` describes every selector completely; `TypeEncoding` parses it into a
-`FunctionDescriptor` (struct flattened to scalar leaves) and `ObjcRuntime.sendRaw` binds one
+`FunctionDescriptor` (struct as its scalar leaves at their C offsets, "FLI" above) and `ObjcRuntime.sendRaw` binds one
 `objc_msgSend` handle PER DISTINCT SHAPE -- Apple's arm64 rule; **never through the variadic
 declaration, since an `NSRect` through a `long` shape is a SIGBUS** -- calling it with
 `invokeWithArguments`, which a native image serves. A wrong selector, arity or operand type is an

@@ -4,7 +4,6 @@ import java.lang.foreign.AddressLayout;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SegmentAllocator;
 import java.lang.foreign.SymbolLookup;
@@ -1042,13 +1041,10 @@ public final class ObjcRuntime {
 	 * @param out the segment
 	 */
 	static void fill(Type type, Number[] leaves, MemorySegment out) {
-		long offset = 0;
 		List<Kind> kinds = type.leaves();
 		for (int i = 0; i < kinds.size(); i++) {
 			Kind leaf = kinds.get(i);
-			MemoryLayout layout = leaf.scalarLayout();
-			long align = layout.byteAlignment();
-			offset += (align - offset % align) % align;
+			long offset = type.offsets().get(i);
 			switch (leaf) {
 				case DOUBLE -> out.set(ValueLayout.JAVA_DOUBLE, offset, leaves[i].doubleValue());
 				case FLOAT -> out.set(ValueLayout.JAVA_FLOAT, offset, leaves[i].floatValue());
@@ -1059,7 +1055,6 @@ public final class ObjcRuntime {
 				case BOOL -> out.set(B, offset, leaves[i].longValue() != 0);
 				default -> out.set(P, offset, MemorySegment.ofAddress(leaves[i].longValue()));
 			}
-			offset += layout.byteSize();
 		}
 	}
 
@@ -1092,12 +1087,9 @@ public final class ObjcRuntime {
 	static Number[] leaves(Type type, MemorySegment seg) {
 		List<Kind> kinds = type.leaves();
 		Number[] leaves = new Number[kinds.size()];
-		long offset = 0;
 		for (int i = 0; i < kinds.size(); i++) {
 			Kind leaf = kinds.get(i);
-			MemoryLayout layout = leaf.scalarLayout();
-			long align = layout.byteAlignment();
-			offset += (align - offset % align) % align;
+			long offset = type.offsets().get(i);
 			leaves[i] = switch (leaf) {
 				case DOUBLE -> seg.get(ValueLayout.JAVA_DOUBLE, offset);
 				case FLOAT -> (double) seg.get(ValueLayout.JAVA_FLOAT, offset);
@@ -1108,7 +1100,6 @@ public final class ObjcRuntime {
 				case BOOL -> seg.get(B, offset) ? 1L : 0L;
 				default -> seg.get(P, offset).address();
 			};
-			offset += layout.byteSize();
 		}
 		return leaves;
 	}

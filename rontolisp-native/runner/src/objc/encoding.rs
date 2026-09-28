@@ -1,6 +1,6 @@
 //! `method_getTypeEncoding`'s strings, parsed into the shapes a send is laid out by: the
-//! twin of `am.ik.objc.TypeEncoding` (same kinds, same flattening of a struct into its
-//! scalar leaves, same refusals), so a selector the JVM binding refuses is refused here in
+//! twin of `am.ik.objc.TypeEncoding` (same kinds, a struct carried as its scalar leaves at
+//! their C offsets, same refusals), so a selector the JVM binding refuses is refused here in
 //! the same words.
 
 /// The kind of a value in an encoding.
@@ -47,11 +47,14 @@ impl Kind {
     }
 }
 
-/// One type: a scalar, or a struct flattened to its scalar leaves in memory order.
+/// One type: a scalar, or a struct carried as its scalar leaves in memory order, each at
+/// the offset the C rule gives it over the NESTED members -- an inner struct keeps its own
+/// tail padding, so `{Outer={Inner=dc}c}` puts the outer `c` at 16, not 9.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
     pub kind: Kind,
     pub leaves: Vec<Kind>,
+    pub offsets: Vec<usize>,
     pub unsigned: bool,
 }
 
@@ -60,6 +63,7 @@ impl Type {
         Type {
             kind,
             leaves: Vec::new(),
+            offsets: Vec::new(),
             unsigned: false,
         }
     }
@@ -68,32 +72,56 @@ impl Type {
         Type {
             kind,
             leaves: Vec::new(),
+            offsets: Vec::new(),
             unsigned: true,
         }
     }
 
-    fn structure(leaves: Vec<Kind>) -> Type {
+    /// A struct of MEMBERS laid end to end by the C rule: each member at its own
+    /// alignment, its leaves at their offsets within it.
+    fn structure(members: Vec<Type>) -> Type {
+        let mut leaves = Vec::new();
+        let mut offsets = Vec::new();
+        let mut offset = 0;
+        for member in members {
+            let (size, align) = member.size_and_alignment();
+            offset = round_up(offset, align);
+            if member.kind == Kind::Struct {
+                leaves.extend_from_slice(&member.leaves);
+                offsets.extend(member.offsets.iter().map(|o| offset + o));
+            } else {
+                leaves.push(member.kind);
+                offsets.push(offset);
+            }
+            offset += size;
+        }
         Type {
             kind: Kind::Struct,
             leaves,
+            offsets,
             unsigned: false,
         }
     }
 
-    /// A struct's C layout: each leaf's byte offset, the size and the alignment.
-    pub fn layout(&self) -> (Vec<usize>, usize, usize) {
-        let mut offsets = Vec::with_capacity(self.leaves.len());
-        let mut offset = 0;
-        let mut align = 1;
-        for leaf in &self.leaves {
-            let a = leaf.size();
-            offset += (a - offset % a) % a;
-            offsets.push(offset);
-            offset += a;
-            align = align.max(a);
+    fn size_and_alignment(&self) -> (usize, usize) {
+        if self.kind == Kind::Struct {
+            let (_, size, align) = self.layout();
+            (size, align)
+        } else {
+            (self.kind.size(), self.kind.size())
         }
-        offset += (align - offset % align) % align;
-        (offsets, offset, align)
+    }
+
+    /// A struct's C layout: each leaf's byte offset, the size and the alignment. The
+    /// alignment is the widest leaf's, and the size the end of the last leaf rounded up
+    /// to it -- which is where every nested member's own tail padding already ends.
+    pub fn layout(&self) -> (Vec<usize>, usize, usize) {
+        let align = self.leaves.iter().map(|k| k.size()).max().unwrap_or(1);
+        let end = match (self.leaves.last(), self.offsets.last()) {
+            (Some(k), Some(o)) => o + k.size(),
+            _ => 0,
+        };
+        (self.offsets.clone(), round_up(end, align), align)
     }
 
     /// A homogeneous floating-point aggregate: 1-4 leaves, all `float` or all `double`,
@@ -102,6 +130,10 @@ impl Type {
         let first = *self.leaves.first()?;
         (first.is_float() && self.leaves.len() <= 4 && self.leaves.iter().all(|k| *k == first)).then_some(first)
     }
+}
+
+fn round_up(offset: usize, align: usize) -> usize {
+    offset.div_ceil(align) * align
 }
 
 /// A method's encoding: the return type, then `self`, `_cmd` and the declared arguments.
@@ -213,15 +245,7 @@ impl Parser<'_> {
                 }
                 let element = self.ty()?;
                 self.expect(b']')?;
-                let mut leaves = Vec::new();
-                for _ in 0..count {
-                    if element.kind == Kind::Struct {
-                        leaves.extend_from_slice(&element.leaves);
-                    } else {
-                        leaves.push(element.kind);
-                    }
-                }
-                Type::structure(leaves)
+                Type::structure(vec![element; count])
             }
             b'(' => return Err(self.fail("a union is not supported")),
             b'b' => return Err(self.fail("a bitfield is not supported")),
@@ -230,27 +254,26 @@ impl Parser<'_> {
         })
     }
 
-    fn aggregate(&mut self, close: u8) -> Result<Vec<Kind>, String> {
+    fn aggregate(&mut self, close: u8) -> Result<Vec<Type>, String> {
         // {CGRect=...}: the name (possibly "?") runs to '='; a struct in a POINTEE
         // position may have no member list at all ({CGRect}).
         while !self.at_end() && self.peek() != b'=' && self.peek() != close {
             self.pos += 1;
         }
-        let mut leaves = Vec::new();
+        let mut members = Vec::new();
         if !self.at_end() && self.peek() == b'=' {
             self.pos += 1;
             while !self.at_end() && self.peek() != close {
                 self.skip_quoted_name();
                 let member = self.ty()?;
-                match member.kind {
-                    Kind::Void => return Err(self.fail("void struct member")),
-                    Kind::Struct => leaves.extend(member.leaves),
-                    k => leaves.push(k),
+                if member.kind == Kind::Void {
+                    return Err(self.fail("void struct member"));
                 }
+                members.push(member);
             }
         }
         self.expect(close)?;
-        Ok(leaves)
+        Ok(members)
     }
 
     fn skip_quoted_name(&mut self) {
@@ -328,6 +351,22 @@ mod tests {
                 .unwrap_err()
                 .contains("a union is not supported")
         );
+    }
+
+    #[test]
+    fn a_nested_struct_keeps_its_tail_padding_by_the_c_rule() {
+        // Inner is 16 bytes (d, c, 7 of padding), so the outer c sits at 16 and the whole
+        // is 24 -- not the 16 its leaves (d c c) would pack into.
+        let e = parse("v@:{Outer={Inner=dc}c}").unwrap();
+        assert_eq!(e.args[2].leaves, vec![Kind::Double, Kind::Int8, Kind::Int8]);
+        assert_eq!(e.args[2].layout(), (vec![0, 8, 16], 24, 8));
+        assert_eq!(e.args[2].hfa(), None);
+        // An inner struct's alignment moves its first leaf past where packing the leaves
+        // would put it.
+        let aligned = parse("v@:{Outer=c{Inner=cd}}").unwrap();
+        assert_eq!(aligned.args[2].layout(), (vec![0, 8, 16], 24, 8));
+        let array = parse("v@:{?=[2{Inner=dc}]s}").unwrap();
+        assert_eq!(array.args[2].layout(), (vec![0, 8, 16, 24, 32], 40, 8));
     }
 
     #[test]

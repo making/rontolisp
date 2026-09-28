@@ -265,11 +265,11 @@
 
 ;; A parsed type is a keyword -- :void :object :class :sel :cstring :block :unknown
 ;; :bool (B) :int8 (c) :uint8 :int16 :uint16 :int32 :uint32 :long (l) :ulong :int64
-;; :uint64 :float :double -- or a list: (:pointer pointee), (:struct name leaves)
-;; with the struct's scalar leaves in memory order, (:array count element), (:union
-;; name), (:bitfield width). The encoding grammar is Apple's (Type Encodings, the
-;; Objective-C Runtime Programming Guide), the one TypeEncoding.java and encoding.rs
-;; read for the call itself.
+;; :uint64 :float :double -- or a list: (:pointer pointee), (:struct name members)
+;; with the struct's members as parsed (nested; objc::%leaves flattens them), (:array
+;; count element), (:union name), (:bitfield width). The encoding grammar is Apple's
+;; (Type Encodings, the Objective-C Runtime Programming Guide), the one
+;; TypeEncoding.java and encoding.rs read for the call itself.
 
 (defun objc::%skip-digits (types pos)
   (let ((n (length types)) (p pos))
@@ -337,7 +337,7 @@
 
 ;; {name=members} / (name=members); a pointee may have no member list ({CGRect}).
 (defun objc::%parse-aggregate (types pos close kind)
-  (let* ((n (length types)) (p pos) (start pos) (leaves nil))
+  (let* ((n (length types)) (p pos) (start pos) (members nil))
     (loop while
             (and (< p n) (char/= (char types p) #\=)
                  (char/= (char types p) close))
@@ -351,13 +351,18 @@
                   (setq p (+ (position #\" types :start (+ p 1)) 1)))
                 (let ((member (objc::%parse-type types p)))
                   (setq p (cdr member))
-                  (setq leaves (append leaves (objc::%leaves (car member)))))))
+                  (push (car member) members))))
       (when (>= p n) (error "objc: type encoding ~s: expected ~s" types close))
-      (cons (if (eq kind :struct) (list :struct name leaves) (list :union name))
-            (+ p 1)))))
+      (cons (if (eq kind :struct)
+                (list :struct name (nreverse members))
+                (list :union name)) (+ p 1)))))
 
+;; A type's scalar leaves in memory order: what a structure value holds, one per leaf.
 (defun objc::%leaves (type)
-  (cond ((and (consp type) (eq (car type) :struct)) (third type))
+  (cond ((and (consp type) (eq (car type) :struct))
+         (let ((out nil))
+           (dolist (member (third type) out)
+             (setq out (append out (objc::%leaves member))))))
         ((and (consp type) (eq (car type) :array))
          (let ((out nil))
            (dotimes (i (second type) out)
@@ -499,20 +504,21 @@
         ((eq fli 'cocoa:ns-range) "{_NSRange=QQ}")
         (t (gethash fli objc::*type-encodings*))))
 
-;; A parsed type spelled back as an encoding (a structure by its leaves, which is how
-;; every host lays one out), for a pointee whose FLI type has no encoding of its own.
+;; A parsed type spelled back as an encoding (a structure by its nested members, which
+;; every host lays out by the C rule), for a pointee whose FLI type has no encoding of its
+;; own.
 (defun objc::%unparse (type)
   (if (consp type)
       (case (car type)
         (:pointer (concatenate 'string "^" (objc::%unparse (second type))))
-        (:struct
-         (let ((out (make-string-output-stream)))
-           (write-string "{" out)
-           (write-string (second type) out)
-           (write-string "=" out)
-           (dolist (leaf (third type)) (write-string (objc::%unparse leaf) out))
-           (write-string "}" out)
-           (get-output-stream-string out)))
+        (:struct (let ((out (make-string-output-stream)))
+                   (write-string "{" out)
+                   (write-string (second type) out)
+                   (write-string "=" out)
+                   (dolist (member (third type))
+                     (write-string (objc::%unparse member) out))
+                   (write-string "}" out)
+                   (get-output-stream-string out)))
         (:array
          (format nil "[~a~a]" (second type) (objc::%unparse (third type))))
         (:union (format nil "(~a)" (second type)))
@@ -539,8 +545,8 @@
         (:double "d")
         (t "?"))))
 
-;; A scalar's size, and a parsed type's by C layout over its leaves (the flattened
-;; layout every host uses for a structure it parsed).
+;; A scalar's size, and a parsed type's by the C rule over its nested members (the layout
+;; every host uses for a structure it parsed).
 (defun objc::%leaf-size (leaf)
   (case leaf
     ((:bool :int8 :uint8) 1)
@@ -551,8 +557,8 @@
 (defun objc::%type-alignment (type)
   (cond ((and (consp type) (eq (car type) :struct))
          (let ((align 1))
-           (dolist (leaf (third type) align)
-             (setq align (max align (objc::%type-alignment leaf))))))
+           (dolist (member (third type) align)
+             (setq align (max align (objc::%type-alignment member))))))
         ((and (consp type) (eq (car type) :array))
          (objc::%type-alignment (third type)))
         (t (objc::%leaf-size (if (consp type) :pointer type)))))
@@ -560,10 +566,10 @@
 (defun objc::%type-size (type)
   (cond ((and (consp type) (eq (car type) :struct))
          (let ((offset 0) (align (objc::%type-alignment type)))
-           (dolist (leaf (third type))
-             (let ((a (objc::%type-alignment leaf)))
+           (dolist (member (third type))
+             (let ((a (objc::%type-alignment member)))
                (setq offset (* a (ceiling offset a)))
-               (setq offset (+ offset (objc::%type-size leaf)))))
+               (setq offset (+ offset (objc::%type-size member)))))
            (* align (ceiling offset align))))
         ((and (consp type) (eq (car type) :array))
          (* (second type) (objc::%type-size (third type))))
@@ -864,7 +870,7 @@
             (list (objc::%bits64 (car value) name index)
                   (objc::%bits64 (cdr value) name index)))
            (t
-            (let ((n (length (third type))))
+            (let ((n (length (objc::%leaves type))))
               (objc::%leaf-values value n name index
                                   (format nil "a vector of the ~a leaves of ~a"
                                           n (second type)))))))
@@ -966,7 +972,7 @@
     (t value)))
 
 (defun objc::%struct-leaves (type raw)
-  (let ((out nil) (kinds (third type)))
+  (let ((out nil) (kinds (objc::%leaves type)))
     (dolist (value raw)
       (push (objc::%leaf-value (car kinds) value) out)
       (setq kinds (cdr kinds)))
@@ -1366,7 +1372,7 @@
         ((member type '(:float :double)) 0d0)
         ((and (consp type) (eq (car type) :struct))
          (let ((out nil))
-           (dolist (leaf (third type) out)
+           (dolist (leaf (objc::%leaves type) out)
              (push (if (member leaf '(:float :double)) 0d0 0) out))))
         (t 0)))
 
@@ -1796,7 +1802,7 @@
          (address (objc::%non-null pointer who))
          (parsed (car (objc::%parse-type (fli::%pointer-encoding pointer) 0))))
     (unless (and (consp parsed) (eq (car parsed) :struct)
-                 (= (length (third parsed)) (length values)))
+                 (= (length (objc::%leaves parsed)) (length values)))
       (error "~a: ~s does not point at a structure of ~a fields" who pointer
              (length values)))
     (dolist (value values)
@@ -1805,8 +1811,8 @@
                  (mapcar (lambda (leaf value)
                            (if (member leaf '(:float :double))
                                (float value 1d0)
-                               (objc::%bits64 value who 0))) (third parsed)
-                         values))
+                               (objc::%bits64 value who 0)))
+                         (objc::%leaves parsed) values))
     pointer))
 
 (defun cocoa:set-ns-point* (point x y)

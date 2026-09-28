@@ -29,6 +29,9 @@ BOOL argument: (7 3)
 structure argument and result: #(2.0 4.0 6.0 8.0)
 result variable: (7 . 1)
 a structure of floats both ways: #(2.0 1.0)
+a nested structure both ways: #(3.0 3 4)
+a nested structure into a foreign object: (24 4)
+a nested structure through NSInvocation: (3.0 3 4 24)
 a scalar result variable: 7
 a foreign structure answered is copied: #(0.0 0.0 1.0 1.0)
 string style, string result: "hello world"

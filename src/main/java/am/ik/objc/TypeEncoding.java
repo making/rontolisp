@@ -4,8 +4,10 @@ import java.lang.foreign.AddressLayout;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.GroupLayout;
 import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.PaddingLayout;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -25,10 +27,11 @@ import org.jspecify.annotations.Nullable;
  * {@code NSRect} through a {@code long} shape gives you.
  *
  * <p>
- * A struct is flattened to its scalar leaves ({@code {CGRect={CGPoint=dd}{CGSize=dd}}}
- * becomes four doubles), which is ABI-identical for every AppKit struct that crosses here
- * (all-double or all-integer homogeneous aggregates). A block ({@code @?}) is an object.
- * Unions, bitfields, function pointers ({@code ?}) and {@code long double} are
+ * A struct is carried as its scalar leaves ({@code {CGRect={CGPoint=dd}{CGSize=dd}}}
+ * becomes four doubles), each at the offset the C rule gives it over the NESTED members:
+ * an inner struct keeps its own tail padding, so {@code {Outer={Inner=dc}c}} is 24 bytes
+ * with the outer {@code c} at 16 ({@link Type#layout()}). A block ({@code @?}) is an
+ * object. Unions, bitfields, function pointers ({@code ?}) and {@code long double} are
  * {@linkplain #parse rejected}: a selector that takes one is outside the first cut, and
  * the error names the encoding so the caller can see why.
  *
@@ -106,49 +109,106 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 	 * One parameter or return type.
 	 *
 	 * @param kind the scalar kind, or {@link Kind#STRUCT}
+	 * @param members a struct's members as the encoding nests them (empty otherwise); an
+	 * array member is its element repeated
 	 * @param leaves the scalar leaves of a struct (empty otherwise), in memory order
+	 * @param offsets each leaf's byte offset, by the C rule over the nested members
 	 * @param unsigned whether an integer kind was declared unsigned
 	 */
-	public record Type(Kind kind, List<Kind> leaves, boolean unsigned) {
+	public record Type(Kind kind, List<Type> members, List<Kind> leaves, List<Long> offsets, boolean unsigned) {
 
 		static Type of(Kind kind) {
-			return new Type(kind, List.of(), false);
+			return new Type(kind, List.of(), List.of(), List.of(), false);
 		}
 
 		static Type unsigned(Kind kind) {
-			return new Type(kind, List.of(), true);
+			return new Type(kind, List.of(), List.of(), List.of(), true);
 		}
 
-		static Type struct(List<Kind> leaves) {
-			return new Type(Kind.STRUCT, List.copyOf(leaves), false);
+		/**
+		 * A struct of MEMBERS laid end to end by the C rule: each member at its own
+		 * alignment, its leaves at their offsets within it.
+		 */
+		static Type struct(List<Type> members) {
+			List<Kind> leaves = new ArrayList<>();
+			List<Long> offsets = new ArrayList<>();
+			long offset = 0;
+			for (Type member : members) {
+				MemoryLayout layout = member.argumentLayout();
+				offset = roundUp(offset, layout.byteAlignment());
+				if (member.isStruct()) {
+					leaves.addAll(member.leaves);
+					for (long inner : member.offsets) {
+						offsets.add(offset + inner);
+					}
+				}
+				else {
+					leaves.add(member.kind);
+					offsets.add(offset);
+				}
+				offset += layout.byteSize();
+			}
+			return new Type(Kind.STRUCT, List.copyOf(members), List.copyOf(leaves), List.copyOf(offsets), false);
 		}
 
 		/**
 		 * The FFM layout of this type, or {@code null} for {@code void}.
+		 *
+		 * <p>
+		 * A struct's is its leaves laid end to end whenever that puts each leaf at its C
+		 * offset -- every AppKit struct, whose spelling in the native image's closed
+		 * table is the flat one -- and the nested members otherwise: an inner struct's
+		 * tail padding (or a wider inner alignment) moves the leaves after it past where
+		 * the flat layout would put them, and the linker refuses padding that natural
+		 * alignment does not call for. Both classify the same (an HFA by its leaves, any
+		 * other composite by its size), so the choice only decides which one the linker
+		 * accepts.
 		 * @return the layout
 		 */
 		public @Nullable MemoryLayout layout() {
-			if (this.kind == Kind.STRUCT) {
-				List<MemoryLayout> members = new ArrayList<>();
-				long offset = 0;
-				for (Kind leaf : this.leaves) {
-					long align = leaf.scalarLayout().byteAlignment();
-					long pad = (align - offset % align) % align;
-					if (pad != 0) {
-						members.add(MemoryLayout.paddingLayout(pad));
-						offset += pad;
-					}
-					members.add(leaf.scalarLayout());
-					offset += leaf.scalarLayout().byteSize();
-				}
-				long align = this.leaves.stream().mapToLong(l -> l.scalarLayout().byteAlignment()).max().orElse(1);
-				long tail = (align - offset % align) % align;
-				if (tail != 0) {
-					members.add(MemoryLayout.paddingLayout(tail));
-				}
-				return MemoryLayout.structLayout(members.toArray(MemoryLayout[]::new));
+			if (this.kind != Kind.STRUCT) {
+				return this.kind.layout;
 			}
-			return this.kind.layout;
+			List<MemoryLayout> flat = this.leaves.stream().map(Kind::scalarLayout).toList();
+			return naturalOffsets(flat).equals(this.offsets) ? natural(flat)
+					: natural(this.members.stream().map(Type::argumentLayout).toList());
+		}
+
+		/** Each member's offset when laid end to end at its own alignment. */
+		private static List<Long> naturalOffsets(List<MemoryLayout> members) {
+			List<Long> offsets = new ArrayList<>();
+			long offset = 0;
+			for (MemoryLayout member : members) {
+				offset = roundUp(offset, member.byteAlignment());
+				offsets.add(offset);
+				offset += member.byteSize();
+			}
+			return offsets;
+		}
+
+		/** A struct of MEMBERS with the padding natural alignment calls for. */
+		private static MemoryLayout natural(List<MemoryLayout> members) {
+			List<MemoryLayout> out = new ArrayList<>();
+			long offset = 0;
+			long align = 1;
+			for (MemoryLayout member : members) {
+				long at = roundUp(offset, member.byteAlignment());
+				if (at > offset) {
+					out.add(MemoryLayout.paddingLayout(at - offset));
+				}
+				out.add(member);
+				offset = at + member.byteSize();
+				align = Math.max(align, member.byteAlignment());
+			}
+			long size = roundUp(offset, align);
+			if (size > offset) {
+				out.add(MemoryLayout.paddingLayout(size - offset));
+			}
+			return MemoryLayout.structLayout(out.toArray(MemoryLayout[]::new));
+		}
+
+		private static long roundUp(long offset, long align) {
+			return (offset + align - 1) / align * align;
 		}
 
 		/**
@@ -236,9 +296,11 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 			case ValueLayout.OfLong ignored -> "jlong";
 			case ValueLayout.OfFloat ignored -> "jfloat";
 			case ValueLayout.OfDouble ignored -> "jdouble";
+			// The padding is part of the spelling: the image builder rebuilds the layout
+			// with MemoryLayout.structLayout, which refuses a member off its alignment.
+			case PaddingLayout padding -> "padding(" + padding.byteSize() + ")";
 			case GroupLayout group -> group.memberLayouts()
 				.stream()
-				.filter(m -> !(m instanceof java.lang.foreign.PaddingLayout))
 				.map(TypeEncoding::spell)
 				.collect(Collectors.joining(",", "struct(", ")"));
 			default -> layout.toString();
@@ -328,18 +390,7 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 					}
 					Type element = type();
 					expect(']');
-					if (element.isStruct()) {
-						List<Kind> leaves = new ArrayList<>();
-						for (int i = 0; i < count; i++) {
-							leaves.addAll(element.leaves());
-						}
-						yield Type.struct(leaves);
-					}
-					List<Kind> leaves = new ArrayList<>();
-					for (int i = 0; i < count; i++) {
-						leaves.add(element.kind());
-					}
-					yield Type.struct(leaves);
+					yield Type.struct(Collections.nCopies(count, element));
 				}
 				case '(' -> throw fail("a union is not supported");
 				case 'b' -> throw fail("a bitfield is not supported");
@@ -349,15 +400,15 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 		}
 
 		/**
-		 * Reads {@code name=members} up to the closing bracket and flattens the members.
+		 * Reads {@code name=members} up to the closing bracket.
 		 */
-		private List<Kind> aggregate(char close) {
+		private List<Type> aggregate(char close) {
 			// {CGRect=...}: the name (possibly "?" for an anonymous one) runs to '='; a
 			// struct in a POINTEE position may have no member list at all ({CGRect}).
 			while (!atEnd() && peek() != '=' && peek() != close) {
 				this.pos++;
 			}
-			List<Kind> leaves = new ArrayList<>();
+			List<Type> members = new ArrayList<>();
 			if (!atEnd() && peek() == '=') {
 				this.pos++;
 				while (!atEnd() && peek() != close) {
@@ -366,16 +417,11 @@ public record TypeEncoding(Type returnType, List<Type> argumentTypes) {
 					if (member.kind() == Kind.VOID) {
 						throw fail("void struct member");
 					}
-					if (member.isStruct()) {
-						leaves.addAll(member.leaves());
-					}
-					else {
-						leaves.add(member.kind());
-					}
+					members.add(member);
 				}
 			}
 			expect(close);
-			return leaves;
+			return members;
 		}
 
 		/** {@code @"NSString"} and {@code "field"} labels carry a quoted name. */

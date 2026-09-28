@@ -61,9 +61,42 @@ class TypeEncodingTest {
 		assertThat(layout).isNotNull();
 		assertThat(layout.byteSize()).isEqualTo(16);
 		assertThat(layout.memberLayouts().stream().filter(m -> m instanceof PaddingLayout).count()).isEqualTo(1);
-		assertThat(TypeEncoding.spelling(FunctionDescriptor.ofVoid(layout))).isEqualTo("void(struct(jbyte,jdouble))");
+		// The image builder rebuilds a struct with MemoryLayout.structLayout, which
+		// refuses
+		// a member off its alignment, so the padding is part of the entry to add.
+		assertThat(TypeEncoding.spelling(FunctionDescriptor.ofVoid(layout)))
+			.isEqualTo("void(struct(jbyte,padding(7),jdouble))");
 		TypeEncoding.Type array = TypeEncoding.parse("v@0:8{?=[4d]}16").argumentTypes().get(2);
 		assertThat(array.leaves()).containsExactly(Kind.DOUBLE, Kind.DOUBLE, Kind.DOUBLE, Kind.DOUBLE);
+	}
+
+	@Test
+	void aNestedStructKeepsItsTailPaddingByTheCRule() {
+		// Inner is 16 bytes (d, c, 7 of padding), so the outer c sits at 16 and the whole
+		// is
+		// 24 -- not the 16 its leaves (d c c) would pack into.
+		TypeEncoding.Type nested = TypeEncoding.parse("v@0:8{Outer={Inner=dc}c}16").argumentTypes().get(2);
+		assertThat(nested.leaves()).containsExactly(Kind.DOUBLE, Kind.INT8, Kind.INT8);
+		assertThat(nested.offsets()).containsExactly(0L, 8L, 16L);
+		MemoryLayout layout = nested.argumentLayout();
+		assertThat(layout.byteSize()).isEqualTo(24);
+		assertThat(layout.byteAlignment()).isEqualTo(8);
+		// Laid flat, the tail's padding is more than its alignment asks, which the linker
+		// refuses; the nesting says where it comes from.
+		assertThat(TypeEncoding.spelling(FunctionDescriptor.ofVoid(layout)))
+			.isEqualTo("void(struct(struct(jdouble,jbyte,padding(7)),jbyte,padding(7)))");
+		// An inner struct's alignment moves its first leaf past where the flat layout
+		// would put it.
+		TypeEncoding.Type aligned = TypeEncoding.parse("v@0:8{Outer=c{Inner=cd}}16").argumentTypes().get(2);
+		assertThat(aligned.offsets()).containsExactly(0L, 8L, 16L);
+		assertThat(aligned.argumentLayout().byteSize()).isEqualTo(24);
+		TypeEncoding.Type array = TypeEncoding.parse("v@0:8{?=[2{Inner=dc}]s}16").argumentTypes().get(2);
+		assertThat(array.offsets()).containsExactly(0L, 8L, 16L, 24L, 32L);
+		assertThat(array.argumentLayout().byteSize()).isEqualTo(40);
+		TypeEncoding.Type rect = TypeEncoding.parse("v@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16").argumentTypes().get(2);
+		assertThat(rect.offsets()).containsExactly(0L, 8L, 16L, 24L);
+		assertThat(TypeEncoding.spelling(FunctionDescriptor.ofVoid(rect.argumentLayout())))
+			.isEqualTo("void(struct(jdouble,jdouble,jdouble,jdouble))");
 	}
 
 	@Test

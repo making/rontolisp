@@ -140,6 +140,19 @@
 (define-objc-method ("swapped:" (:struct pair)) ((self shapes) (p (:struct pair)))
   (vector (aref p 1) (aref p 0)))
 
+;; Inner is 16 bytes (d, c, 7 of padding), so Outer's tail sits at 16 and Outer is 24 --
+;; laid out over its leaves (d c c) it would be 16 with the tail at 9.
+(define-objc-struct (padded-inner (:foreign-name "_PaddedInner"))
+  (:wide :double)
+  (:narrow :char))
+
+(define-objc-struct (padded-outer (:foreign-name "_PaddedOuter"))
+  (:inner (:struct padded-inner))
+  (:tail :char))
+
+(define-objc-method ("nested:" (:struct padded-outer)) ((self shapes) (s (:struct padded-outer)))
+  (vector (* 2 (aref s 0)) (+ (aref s 1) 1) (+ (aref s 2) 1)))
+
 (define-objc-method ("tally" :int result-count) ((self shapes))
   (setf (fli:dereference result-count) 7))
 
@@ -191,6 +204,32 @@
 (show "structure argument and result" (invoke *shapes* "scaled:by:" #(1 2 3 4) 2d0))
 (show "result variable" (invoke *shapes* "rangeAfter:" '(3 . 4)))
 (show "a structure of floats both ways" (invoke *shapes* "swapped:" #(1 2)))
+(show "a nested structure both ways" (invoke *shapes* "nested:" #(1.5d0 2 3)))
+(show "a nested structure into a foreign object"
+      (fli:with-dynamic-foreign-objects ((outer (:struct padded-outer)))
+        (invoke-into outer *shapes* "nested:" #(1.5d0 2 3))
+        (list (fli:size-of '(:struct padded-outer)) (fli:foreign-slot-value outer :tail))))
+(show "a nested structure through NSInvocation"
+      (let* ((selector (coerce-to-selector "nested:"))
+             (invocation (invoke "NSInvocation" "invocationWithMethodSignature:"
+                                 (invoke *shapes* "methodSignatureForSelector:" selector)))
+             (in (fli:allocate-foreign-object :type '(:struct padded-outer)))
+             (out (fli:allocate-foreign-object :type '(:struct padded-outer)))
+             (inner (fli:foreign-slot-value in :inner :copy-foreign-object nil)))
+        (setf (fli:foreign-slot-value inner :wide) 1.5d0
+              (fli:foreign-slot-value inner :narrow) 2
+              (fli:foreign-slot-value in :tail) 3)
+        (invoke invocation "setTarget:" *shapes*)
+        (invoke invocation "setSelector:" selector)
+        (invoke invocation "setArgument:atIndex:" in 2)
+        (invoke invocation "invoke")
+        (invoke invocation "getReturnValue:" out)
+        (prog1 (let ((answer (fli:foreign-slot-value out :inner :copy-foreign-object nil)))
+                 (list (fli:foreign-slot-value answer :wide) (fli:foreign-slot-value answer :narrow)
+                       (fli:foreign-slot-value out :tail)
+                       (invoke (invoke invocation "methodSignature") "methodReturnLength")))
+          (fli:free-foreign-object in)
+          (fli:free-foreign-object out))))
 (show "a scalar result variable" (invoke *shapes* "tally"))
 (show "a foreign structure answered is copied" (invoke *shapes* "unitRect"))
 (show "string style, string result" (invoke-into 'string *shapes* "greeting:" "world"))
