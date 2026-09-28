@@ -114,6 +114,12 @@ final class WasmSetqCompiler {
 	}
 
 	private static void compilePair(String name, LispVal valueExpr, WasmLispCompiler.Ctx ctx) {
+		if (am.ik.rontolisp.LispNames.MV_SPILL.equals(name) && !ctx.globalIndices.containsKey(name)) {
+			// No spill global: nothing can read what an expansion publishes, so the
+			// store is dropped and only the value remains (.kb/multiple-values.md).
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
+			return;
+		}
 		// An unboxed (dual-representation) local: raw store, then re-read boxed as the
 		// form's value (i31 for the fixnum range -- allocation-free).
 		WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);

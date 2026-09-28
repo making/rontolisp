@@ -9,6 +9,7 @@ import java.util.List;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -517,6 +518,12 @@ public final class GrayStreamsLibrary {
 			if (bindingForm != null) {
 				return bindingForm;
 			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons, opName);
+			if (withoutIgnored != cons) {
+				return rewrite(withoutIgnored, ctx);
+			}
 			if (LispNames.WARN.equals(opName)) {
 				// warn writes its report to the current *error-output*, which may hold
 				// a Gray instance (a broadcast stream): the backends' %warn lowering
@@ -614,8 +621,8 @@ public final class GrayStreamsLibrary {
 			// dispatch does too -- but V still evaluates, and AFTER the stream, which is
 			// what the let/progn preserves.
 			if (CLOSE_DISPATCH.equals(unaryStreamHelper) && parts.size() == 4
-					&& parts.get(2) instanceof am.ik.rontolisp.LispSymbol abortKw && ":ABORT".equals(abortKw.name())
-					&& streamArgMayBeInstance(parts.get(1))) {
+					&& parts.get(2) instanceof am.ik.rontolisp.LispSymbol abortKw
+					&& LispNames.ABORT_KEYWORD.equals(abortKw.name()) && streamArgMayBeInstance(parts.get(1))) {
 				am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_close_stream");
 				LispVal dispatch = listOf(dispatchSymbol(CLOSE_DISPATCH, ctx), temp);
 				return listOf(new am.ik.rontolisp.LispSymbol(LispNames.LET),

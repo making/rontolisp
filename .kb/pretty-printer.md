@@ -16,9 +16,17 @@ conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-
 - `write-to-string`: same keywords as a Pass-2 `let` lowering
   (`LispMacroExpander.expandWriteToStringKeywords`). **No `with-output-to-string`** — it flips the
   WASM exception-handling gate (`.kb/format.md`). Wired into `LispEvaluator.evalConsRareOperator`,
-  the first-class wrapper and both `ExprCompiler`s. **Trap:** `#'write-to-string` as a VALUE is the
-  one-argument `BuiltinFunctionWrappers` defun, so `(apply #'write-to-string (list x :length 1))`
-  silently ignores keywords.
+  the first-class wrapper and both `ExprCompiler`s. `#'write-to-string` as a VALUE takes the
+  keywords too (2026-09-27): on the compile paths its wrapper hands a runtime tail to the prelude
+  `%write-to-string-keyed`, which judges it with the call position's report and binds all fifteen
+  variables. That defun names every variable, so splicing it routes the program (`defvar`s +
+  renderer, like `write`): it is spliced only for a program spelling the designator somewhere
+  other than an exactly-one-argument position (`(funcall #'f x)`, `(mapcar #'f l)` and siblings
+  over one list, `(map 'list #'f s)` -- `LispPreludeLibrary.mayPassMoreThanOneArgument`), and the
+  wrapper takes the keyed shape exactly where it is spliced (`BuiltinFunctionWrappers
+  .HELPER_WRAPPERS`). Cost (JVM `.class` / wasm P1): `(let ((f #'write-to-string)) (print
+  (funcall f 1)))` 10,294 -> 52,284 / 5,559 -> 32,187; `(mapcar #'write-to-string ...)` and every
+  program without the designator byte-identical.
 - `pprint`: fresh line, `write` with `:escape t :pretty t`, no values.
 - `copy-pprint-dispatch` / `set-pprint-dispatch` / `pprint-dispatch`: real entries, `typep`
   matching, priority order. A table is a one-element LIST so `set-pprint-dispatch` can `rplaca` one
@@ -71,7 +79,7 @@ to an unrouted one. Covers `princ` `prin1` `print` `princ-to-string` `prin1-to-s
 != 1 or packed float vector is neither cased nor truncated — the walk covers symbols, conses and
 general rank-1 vectors. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap and
 is never live in the same program — read them together. Also inert: `*print-array*` nil,
-`*print-circle*` t, compile-path `#'write-to-string`, `~@W`.
+`*print-circle*` t, `~@W`.
 
 ## Quote/function abbreviation and `|...|` symbol escaping
 **Invariant:** a two-element list headed by `quote`/`function` prints `'x`/`#'x` (CLHS 22.1.3.7,

@@ -2,6 +2,8 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -30,6 +32,11 @@ import am.ik.rontolisp.compiler.OperandTypes;
  * every {@code length} call site, so each site is just an {@code invokestatic}. Keeping
  * the call sites tiny matters because top-level forms compile into one {@code main}
  * method bounded by the JVM's 64&nbsp;KB per-method code limit.
+ *
+ * <p>
+ * In a {@code java:} program a call can answer a host {@code ArrayList}, which is no
+ * sequence: the array arm then asks the program's shared {@code _jlarr} instead of the
+ * class, and a host list reaches the {@code SEQUENCE} type-error the interpreter signals.
  */
 final class JvmLengthRuntimeBuilder {
 
@@ -44,8 +51,20 @@ final class JvmLengthRuntimeBuilder {
 	private JvmLengthRuntimeBuilder() {
 	}
 
+	/**
+	 * Builds the helper.
+	 * @param cp the constant pool
+	 * @param objectArrayClass {@code Object[]}
+	 * @param stringClass {@code String}
+	 * @param longValueOf {@code Long.valueOf(long)}
+	 * @param selfClass the generated class
+	 * @param lispArray in a {@code java:} program, the shared {@code _jlarr} test
+	 * ({@code JvmJavaDirectSites#lispArray}); null elsewhere, where the class alone
+	 * decides
+	 * @return the method
+	 */
 	static LengthMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
-			MethodrefConstant longValueOf, ClassConstant selfClass) {
+			MethodrefConstant longValueOf, ClassConstant selfClass, @Nullable MethodrefConstant lispArray) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		// _scount(s) returns the CHARACTER-visible length of the content inside the
@@ -95,9 +114,15 @@ final class JvmLengthRuntimeBuilder {
 		a.bind(notString);
 
 		// Array: an ArrayList whose slot 0 is the {dims, fillPointer, adjustable}
-		// header. The fill pointer, when present, is the effective length.
+		// header. The fill pointer, when present, is the effective length. A host
+		// ArrayList falls through to the list walk, which refuses it.
 		a.aload(0);
-		a.instanceOf(arrayListClass);
+		if (lispArray != null) {
+			a.invokestatic(lispArray);
+		}
+		else {
+			a.instanceOf(arrayListClass);
+		}
 		a.branch(Opcode.IFEQ, notArray);
 		a.aload(0);
 		a.checkcast(arrayListClass);

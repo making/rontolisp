@@ -916,6 +916,10 @@ public final class PureBuiltinFolder {
 		// -- characters ---------------------------------------------------------
 		t.put(LispNames.CHAR_CODE,
 				args -> args.size() == 1 && args.get(0) instanceof LispChar c ? new LispInteger(c.codePoint()) : null);
+		// char-int: the same code point char-code answers -- no implementation-defined
+		// attributes beyond it to fold differently.
+		t.put(LispNames.CHAR_INT,
+				args -> args.size() == 1 && args.get(0) instanceof LispChar c ? new LispInteger(c.codePoint()) : null);
 		t.put(LispNames.CODE_CHAR, args -> {
 			List<BigInteger> ns = integers(args);
 			if (ns == null || ns.size() != 1 || ns.get(0).bitLength() > 31) {

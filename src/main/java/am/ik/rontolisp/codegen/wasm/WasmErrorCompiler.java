@@ -36,10 +36,7 @@ final class WasmErrorCompiler {
 	/**
 	 * Compiles {@code (%error message)}: the condition instance slot is nil. The message
 	 * operand IS the payload a handler-case landing synthesizes its {@code simple-error}
-	 * from, so it compiles -- unless {@code ctx.condMessagesObservable} says no program
-	 * code can ever hold a condition (then no clause binds the synthesized instance, the
-	 * tag tests never read the string, and an uncaught throw is a textless trap), in
-	 * which case the message render is skipped like {@code %error-cond}'s.
+	 * from, and the only text the entry landing pad has, so it always compiles.
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.ehMode) {
@@ -49,13 +46,7 @@ final class WasmErrorCompiler {
 		List<LispVal> parts = cons.toList();
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		if (ctx.condMessagesObservable) {
-			WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		}
-		else {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-		}
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		emitThrowPayload(ctx);
 	}
 
@@ -83,16 +74,17 @@ final class WasmErrorCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		LispVal text = !ctx.closRegistry.routesConditionReports() ? (ctx.condMessagesObservable ? parts.get(2) : null)
+		LispVal text = !ctx.closRegistry.routesConditionReports() ? parts.get(2)
 				: LispMacroExpander.conditionReportFallback(parts.get(2));
-		if (text != null) {
-			WasmExprCompiler.compileExpr(text, ctx);
-		}
-		else {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-		}
-		emitThrowPayload(ctx);
+		emitThrowPayload(ctx, LispMacroExpander.handlersRan(parts), () -> {
+			if (text != null) {
+				WasmExprCompiler.compileExpr(text, ctx);
+			}
+			else {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+			}
+		});
 	}
 
 	/**
@@ -104,6 +96,67 @@ final class WasmErrorCompiler {
 		WasmEmitHelper.emitNewCons(ctx);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
+	 * Emits the payload construction and throw over the instance on the stack, the
+	 * message being what {@code message} pushes -- in the payload saying the
+	 * {@code handler-bind} handlers already ran for the instance when
+	 * {@code handlersRan}: {@code (instance . (nil . message))}. Its cdr is then a cons,
+	 * which no message is (a string, a character vector or nil), so a {@code %hb-guard}
+	 * pad tells the two shapes apart with one {@code ref.test} and passes such a payload
+	 * on untouched, and the entry pad reads the message out of it
+	 * ({@link #emitUnwrapMessage}). The message rides a CDR, as in every other payload:
+	 * in a car it would be a string where the module's type-test fold
+	 * ({@code .kb/wasm-ref-type-fold.md}) proved no cons car holds one, and the string
+	 * and sequence runtime it had pruned came back (+1,066 B on a minimal restart-mode
+	 * module, measured 2026-09-27). The fact rides the payload wherever the condition
+	 * goes (a failed future, an unwind-protect's rethrow, a handler-case that declines
+	 * it), since a cleanup may signal and handle a condition of its own while this one is
+	 * on its way out.
+	 * @param ctx the compilation context
+	 * @param handlersRan whether the payload says the handlers ran
+	 * @param message pushes the message
+	 */
+	static void emitThrowPayload(WasmLispCompiler.Ctx ctx, boolean handlersRan, Runnable message) {
+		if (handlersRan) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		message.run();
+		if (handlersRan) {
+			WasmEmitHelper.emitNewCons(ctx);
+		}
+		emitThrowPayload(ctx);
+	}
+
+	/**
+	 * Emits the unwrapping of a payload message read into {@code messageSlot} (the
+	 * payload's cdr): when the payload says the handlers ran
+	 * ({@link #emitThrowPayload(WasmLispCompiler.Ctx, boolean, Runnable)}) the slot holds
+	 * {@code (nil . message)} and is replaced by the message. Only a restart-mode program
+	 * throws that shape, so a reader emits this under restart mode alone.
+	 * @param ctx the compilation context
+	 * @param messageSlot the local holding the payload's cdr
+	 */
+	static void emitUnwrapMessage(WasmLispCompiler.Ctx ctx, int messageSlot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
 	}
 
 }

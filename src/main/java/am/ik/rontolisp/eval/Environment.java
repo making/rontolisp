@@ -77,6 +77,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
@@ -1471,42 +1473,24 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.FILL_POINTER, new LispFunction(LispNames.FILL_POINTER, args -> {
 			requireArgCount(LispNames.FILL_POINTER, args, 1);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.FILL_POINTER + ": string has no fill pointer");
-				}
-				return new LispInteger(str.fillPointer());
-			}
-			LispArray array = requireGeneralArray(LispNames.FILL_POINTER, args.get(0));
-			if (!array.hasFillPointer()) {
-				throw new LispEvalException(LispNames.FILL_POINTER + ": array has no fill pointer");
-			}
-			return new LispInteger(array.fillPointer());
+			LispVal vector = fillPointerVector(LispNames.FILL_POINTER, args.get(0));
+			return new LispInteger(
+					vector instanceof LispString str ? str.fillPointer() : ((LispArray) vector).fillPointer());
 		}));
 		env.defineFunction(LispNames.SET_FILL_POINTER, new LispFunction(LispNames.SET_FILL_POINTER, args -> {
 			requireArgCount(LispNames.SET_FILL_POINTER, args, 2);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.SET_FILL_POINTER + ": string has no fill pointer");
-				}
-				try {
-					str.setFillPointer((int) asLong(args.get(1)));
-				}
-				catch (IllegalArgumentException ex) {
-					throw new LispEvalException(LispNames.SET_FILL_POINTER + ": " + ex.getMessage());
-				}
-				return args.get(1);
+			LispVal vector = fillPointerVector(LispNames.SET_FILL_POINTER, args.get(0));
+			// Any value but an integer in [0, dimension] is not of type (INTEGER 0
+			// dimension), a wrong-type one included, as SBCL's run-time check reports.
+			long dimension = vector instanceof LispString str ? str.capacity() : ((LispArray) vector).dimensions()[0];
+			if (!(args.get(1) instanceof LispInteger n) || n.value() < 0 || n.value() > dimension) {
+				throw OperandTypeException.notOfType(args.get(1), OperandTypes.fillPointerType(dimension));
 			}
-			LispArray array = requireGeneralArray(LispNames.SET_FILL_POINTER, args.get(0));
-			if (!array.hasFillPointer()) {
-				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": array has no fill pointer");
+			if (vector instanceof LispString str) {
+				str.setFillPointer((int) n.value());
 			}
-			int value = (int) asLong(args.get(1));
-			try {
-				array.setFillPointer(value);
-			}
-			catch (IndexOutOfBoundsException ex) {
-				throw new LispEvalException(LispNames.SET_FILL_POINTER + ": " + ex.getMessage());
+			else {
+				((LispArray) vector).setFillPointer((int) n.value());
 			}
 			return args.get(1);
 		}));
@@ -1562,61 +1546,57 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.VECTOR_PUSH, new LispFunction(LispNames.VECTOR_PUSH, args -> {
 			requireArgCount(LispNames.VECTOR_PUSH, args, 2);
-			if (args.get(1) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.VECTOR_PUSH + ": string has no fill pointer");
-				}
+			LispVal vector = fillPointerVector(LispNames.VECTOR_PUSH, args.get(1));
+			if (vector instanceof LispString str) {
 				if (str.fillPointer() >= str.capacity()) {
 					return LispNil.INSTANCE;
 				}
 				return new LispInteger(str.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH, args.get(0)).codePoint(),
 						ArrayGrowth.NO_EXTENSION));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH, args.get(1));
-			int index = vectorPush(LispNames.VECTOR_PUSH, array, args.get(0));
+			int index = vectorPush(LispNames.VECTOR_PUSH, (LispArray) vector, args.get(0));
 			return index < 0 ? LispNil.INSTANCE : new LispInteger(index);
 		}));
 		env.defineFunction(LispNames.VECTOR_POP, new LispFunction(LispNames.VECTOR_POP, args -> {
 			requireArgCount(LispNames.VECTOR_POP, args, 1);
-			if (args.get(0) instanceof LispString str) {
-				if (str.fillPointer() <= 0) {
-					throw new LispEvalException(LispNames.VECTOR_POP + ": string is empty or has no fill pointer");
+			LispVal vector = fillPointerVector(LispNames.VECTOR_POP, args.get(0));
+			if (vector instanceof LispString str) {
+				if (str.fillPointer() == 0) {
+					throw new LispEvalException(OperandTypes.VECTOR_POP_EMPTY);
 				}
 				str.setFillPointer(str.fillPointer() - 1);
 				return new LispChar(str.charAt(str.fillPointer()));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_POP, args.get(0));
-			try {
-				return array.vectorPop();
+			LispArray array = (LispArray) vector;
+			if (array.fillPointer() == 0) {
+				throw new LispEvalException(OperandTypes.VECTOR_POP_EMPTY);
 			}
-			catch (IllegalStateException ex) {
-				throw new LispEvalException(String.valueOf(ex.getMessage()));
-			}
+			return array.vectorPop();
 		}));
 		env.defineFunction(LispNames.VECTOR_PUSH_EXTEND, new LispFunction(LispNames.VECTOR_PUSH_EXTEND, args -> {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + " expects 2 or 3 arguments");
 			}
+			// The vector before the extension, the order the compiled sites check them
+			// in.
+			LispVal vector = fillPointerVector(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
 			int extension = args.size() == 3 ? (int) asLong(args.get(2)) : ArrayGrowth.NO_EXTENSION;
-			if (args.get(1) instanceof LispString str) {
-				if (str.fillPointer() < 0) {
-					throw new LispEvalException(LispNames.VECTOR_PUSH_EXTEND + ": string has no fill pointer");
-				}
+			if (vector instanceof LispString str) {
 				return new LispInteger(str
 					.vectorPushExtend(requireChar(LispNames.VECTOR_PUSH_EXTEND, args.get(0)).codePoint(), extension));
 			}
-			LispArray array = requireGeneralArray(LispNames.VECTOR_PUSH_EXTEND, args.get(1));
-			try {
-				return new LispInteger(array.vectorPushExtend(args.get(0), extension));
-			}
-			catch (IllegalStateException ex) {
-				throw new LispEvalException(String.valueOf(ex.getMessage()));
-			}
+			return new LispInteger(((LispArray) vector).vectorPushExtend(args.get(0), extension));
 		}));
 		env.defineFunction(LispNames.ADJUST_ARRAY, new LispFunction(LispNames.ADJUST_ARRAY, args -> {
 			if (args.size() < 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
+			}
+			// The array is checked before anything else reads it: the :displaced-to
+			// half would otherwise build a fresh view whatever the source was.
+			if (!(args.get(0) instanceof LispString || args.get(0) instanceof LispArray
+					|| args.get(0) instanceof LispFloatArray || args.get(0) instanceof LispIntVector)) {
+				throw accessorTypeError(LispNames.ADJUST_ARRAY, args.get(0), OperandTypes.Kind.ARRAY);
 			}
 			// The slots the adjustment OPENS take the value's own element type zero, the
 			// same fill make-array gives an unsupplied element, unless an explicit
@@ -2082,7 +2062,43 @@ public final class Environment implements Scope {
 		if (val instanceof LispArray array) {
 			return array;
 		}
-		throw new LispEvalException(fn + " expects an array, got " + val.print());
+		throw accessorTypeError(fn, val, OperandTypes.Kind.ARRAY);
+	}
+
+	/**
+	 * The vector the fill-pointer surface reads: a string or a general vector that has a
+	 * fill pointer answers itself. Any other array is not of type {@code (AND VECTOR
+	 * (SATISFIES ARRAY-HAS-FILL-POINTER-P))} and a value that is no array at all not of
+	 * type {@code ARRAY} -- the first unnamed, for the built-in seam to name, as the
+	 * compiled checks report it.
+	 * @param fn the operator's name
+	 * @param val the operand
+	 * @return the operand, a {@link LispString} or a {@link LispArray}
+	 */
+	private static LispVal fillPointerVector(String fn, LispVal val) {
+		if (val instanceof LispString str ? str.fillPointer() >= 0
+				: val instanceof LispArray array && array.hasFillPointer()) {
+			return val;
+		}
+		if (val instanceof LispString || val instanceof LispArray || val instanceof LispFloatArray
+				|| val instanceof LispIntVector) {
+			throw OperandTypeException.notOfType(val, OperandTypes.FILL_POINTER_VECTOR_TYPE);
+		}
+		throw accessorTypeError(fn, val, OperandTypes.Kind.ARRAY);
+	}
+
+	/**
+	 * An accessor's refusal of an operand that is not the array or hash table it reads:
+	 * the {@code type-error} naming {@code kind}, under the operator when it is a named
+	 * one and unnamed otherwise -- the report a compiled accessor gives too.
+	 * @param fn the accessor's name
+	 * @param val the operand
+	 * @param kind {@code ARRAY} or {@code HASH-TABLE}
+	 * @return the exception to throw
+	 */
+	static OperandTypeException accessorTypeError(String fn, LispVal val, OperandTypes.Kind kind) {
+		String reported = OperandTypes.reportedOperator(fn);
+		return reported == null ? OperandTypeException.of(val, kind) : OperandTypeException.of(val, kind, reported);
 	}
 
 	// The one refusal a quantized matrix gives: an element has no slot of its own (a
@@ -2352,7 +2368,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispHashTable table) {
 			return table;
 		}
-		throw new LispEvalException(fn + " expects a hash table, got " + val.print());
+		throw accessorTypeError(fn, val, OperandTypes.Kind.HASH_TABLE);
 	}
 
 	/**
@@ -2906,6 +2922,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.MIN, new LispFunction(LispNames.MIN, args -> {
 			requireMinArgCount(LispNames.MIN, args, 1);
 			LispVal best = args.get(0);
+			if (args.size() == 1) {
+				requireNumericOperand(LispNames.MIN, best, true);
+			}
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
 				int sign = compareNumeric(best, cand);
@@ -2918,6 +2937,9 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.MAX, new LispFunction(LispNames.MAX, args -> {
 			requireMinArgCount(LispNames.MAX, args, 1);
 			LispVal best = args.get(0);
+			if (args.size() == 1) {
+				requireNumericOperand(LispNames.MAX, best, true);
+			}
 			for (int i = 1; i < args.size(); i++) {
 				LispVal cand = args.get(i);
 				int sign = compareNumeric(best, cand);
@@ -3878,10 +3900,13 @@ public final class Environment implements Scope {
 
 	/**
 	 * Normalizes a sequence argument: a string becomes a list of its characters (indexed
-	 * like char/length), anything else is returned unchanged. The sequence functions
-	 * accept strings as well as lists (Common Lisp sequences) through this helper.
+	 * like char/length), a vector a list of its elements, and a list is returned
+	 * unchanged. The sequence functions accept strings and vectors as well as lists
+	 * (Common Lisp sequences) through this helper.
 	 * @param val the sequence argument
 	 * @return the value as a list
+	 * @throws OperandTypeException the unnamed {@code SEQUENCE} report for a value that
+	 * is no sequence
 	 */
 	static LispVal seqAsList(LispVal val) {
 		if (val instanceof LispString str) {
@@ -3921,7 +3946,14 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}
-		return val;
+		if (val instanceof LispCons || val instanceof LispNil) {
+			return val;
+		}
+		// Anything else -- a number, a symbol, a hash table, an array of rank 2 or more
+		// -- is no sequence: the unnamed SEQUENCE report the built-in seam names after
+		// the operator whose body asked (a scan used to see it as an empty list and
+		// answer nil).
+		throw OperandTypeException.of(val, OperandTypes.Kind.SEQUENCE);
 	}
 
 	/**
@@ -4059,9 +4091,6 @@ public final class Environment implements Scope {
 			return;
 		}
 		LispVal cur = seqAsList(seq);
-		if (!(cur instanceof LispCons) && !(cur instanceof LispNil)) {
-			throw new LispEvalException("not a sequence: " + seq.print());
-		}
 		while (cur instanceof LispCons cell) {
 			out.add(cell.car());
 			cur = cell.cdr();
@@ -4294,18 +4323,28 @@ public final class Environment implements Scope {
 		// gensym: a per-environment counter; the result is an ordinary symbol (rontolisp
 		// has no uninterned symbols) whose "#:" prefix keeps it out of the way of
 		// user-written names. The compilers require a literal string prefix; here the
-		// prefix is any runtime string.
+		// prefix is any runtime string. A non-negative integer argument is CL's other
+		// shape: it is the suffix itself (under the default "G" prefix), and it does not
+		// touch the counter -- (gensym 5) is #:G5, and the very next (gensym) still uses
+		// the count it would have without that call (todo a42).
 		AtomicLong gensymCounter = new AtomicLong();
 		env.defineFunction(LispNames.GENSYM, new LispFunction(LispNames.GENSYM, args -> {
 			if (args.size() > 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.GENSYM + " expects at most 1 argument, got " + args.size());
 			}
+			if (args.size() == 1 && args.get(0) instanceof LispInteger n) {
+				if (n.value() < 0) {
+					throw new LispEvalException(
+							LispNames.GENSYM + " suffix must be a non-negative integer, got " + n.print());
+				}
+				return new LispSymbol("#:G" + n.value());
+			}
 			String prefix = "G";
 			if (args.size() == 1) {
 				if (!(args.get(0) instanceof LispString s)) {
-					throw new LispEvalException(
-							LispNames.GENSYM + " prefix must be a string, got " + args.get(0).print());
+					throw new LispEvalException(LispNames.GENSYM
+							+ " prefix must be a string or non-negative integer, got " + args.get(0).print());
 				}
 				prefix = s.value();
 			}
@@ -4511,22 +4550,56 @@ public final class Environment implements Scope {
 		};
 	}
 
+	/**
+	 * {@code (string-upcase string &key start end)} and its two siblings: only the
+	 * bounded substring (character positions) is converted, the text around it is kept --
+	 * the rule {@code LispMacroExpander.expandBoundedCaseConversion} lowers the compiled
+	 * call to.
+	 */
+	private static LispString boundedCaseConversion(String name, List<LispVal> args,
+			java.util.function.UnaryOperator<String> convert) {
+		requireMinArgCount(name, args, 1);
+		String full = stringDesignator(name, args.get(0));
+		if (args.size() == 1) {
+			return new LispString(convert.apply(full));
+		}
+		String problem = am.ik.rontolisp.macro.LispMacroExpander.keywordTailProblem(name, args, 1,
+				List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD));
+		if (problem != null) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, problem);
+		}
+		int cpLen = full.codePointCount(0, full.length());
+		LispVal startArg = null;
+		LispVal endArg = null;
+		for (int i = 1; i + 1 < args.size(); i += 2) {
+			String key = ((LispSymbol) args.get(i)).name();
+			if (LispNames.START_KEYWORD.equals(key) && startArg == null) {
+				startArg = args.get(i + 1);
+			}
+			else if (LispNames.END_KEYWORD.equals(key) && endArg == null) {
+				endArg = args.get(i + 1);
+			}
+		}
+		int start = startArg == null ? 0 : requireIndex(name, startArg);
+		int end = endArg == null || endArg instanceof LispNil ? cpLen : requireIndex(name, endArg);
+		if (start > end || end > cpLen) {
+			throw new LispEvalException(name + ": bad bounding indices " + start + ".." + end);
+		}
+		int from = full.offsetByCodePoints(0, start);
+		int to = full.offsetByCodePoints(0, end);
+		return new LispString(full.substring(0, from) + convert.apply(full.substring(from, to)) + full.substring(to));
+	}
+
 	private static void registerStringOps(Environment env) {
-		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE, args -> {
-			requireArgCount(LispNames.STRING_UPCASE, args, 1);
-			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_UPCASE, args.get(0)), true));
-		}));
-		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE, args -> {
-			requireArgCount(LispNames.STRING_DOWNCASE, args, 1);
-			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_DOWNCASE, args.get(0)), false));
-		}));
-		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE, args -> {
-			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
-			return new LispString(capitalizeString(stringDesignator(LispNames.STRING_CAPITALIZE, args.get(0))));
-		}));
+		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE,
+				args -> boundedCaseConversion(LispNames.STRING_UPCASE, args, s -> caseFoldString(s, true))));
+		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE,
+				args -> boundedCaseConversion(LispNames.STRING_DOWNCASE, args, s -> caseFoldString(s, false))));
+		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE,
+				args -> boundedCaseConversion(LispNames.STRING_CAPITALIZE, args, Environment::capitalizeString)));
 		// subseq: strings and lists. (seq start [end]); end defaults to the sequence
 		// length.
-		env.defineFunction(LispNames.SUBSEQ, new LispFunction(LispNames.SUBSEQ, args -> {
+		LispFunction subseq = new LispFunction(LispNames.SUBSEQ, args -> {
 			requireMinArgCount(LispNames.SUBSEQ, args, 2);
 			if (args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
@@ -4630,11 +4703,13 @@ public final class Environment implements Scope {
 				}
 				return packedFloatVector(LispNames.SUBSEQ, fa, elements);
 			}
-			throw new LispEvalException(
-					LispNames.SUBSEQ + " expects a string, list, or vector, got: " + args.get(0).print());
-		}));
-		// copy-seq is (subseq seq 0): a fresh copy of a string or list. The call
-		// position expands to exactly that; this registration covers first-class use.
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.SEQUENCE, LispNames.SUBSEQ);
+		});
+		env.defineFunction(LispNames.SUBSEQ, subseq);
+		// copy-seq is (subseq seq 0): a fresh copy of the sequence. The call position
+		// expands to exactly that; this registration covers first-class use, and answers
+		// what that expansion does for every shape it has no arm of its own for -- a
+		// vector, and SUBSEQ's type-error for a non-sequence.
 		env.defineFunction(LispNames.COPY_SEQ, new LispFunction(LispNames.COPY_SEQ, args -> {
 			requireArgCount(LispNames.COPY_SEQ, args, 1);
 			if (args.get(0) instanceof LispString str) {
@@ -4656,7 +4731,7 @@ public final class Environment implements Scope {
 				}
 				return result;
 			}
-			throw new LispEvalException(LispNames.COPY_SEQ + " expects a string or list, got: " + args.get(0).print());
+			return subseq.body().apply(List.of(args.get(0), new LispInteger(0)));
 		}));
 		env.defineFunction(LispNames.STRING_EQ, new LispFunction(LispNames.STRING_EQ, args -> {
 			String a = boundedStringArg(LispNames.STRING_EQ, args, 0);
@@ -4716,7 +4791,10 @@ public final class Environment implements Scope {
 			}
 			return n;
 		}
-		throw new LispEvalException(name + ": expected a sequence, got: " + val.print());
+		if (val instanceof LispFloatArray packed && packed.rank() == 1) {
+			return packed.totalSize();
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.SEQUENCE, name);
 	}
 
 	/**
@@ -4737,6 +4815,9 @@ public final class Environment implements Scope {
 		}
 		if (val instanceof LispIntVector iv) {
 			return new LispInteger(iv.elementAt(index));
+		}
+		if (val instanceof LispFloatArray packed) {
+			return packed.readFlat(index);
 		}
 		LispVal cur = val;
 		int i = 0;
@@ -5368,8 +5449,11 @@ public final class Environment implements Scope {
 			emitTo.accept(text, dest);
 			return str;
 		}));
+		// (object &key ...): the keyword tail never reaches here -- the evaluator wraps
+		// this function (LispEvaluator.wrapPrintCaseOperator) and lowers a tail as the
+		// call position does -- so only the missing object is this body's to report.
 		env.defineFunction(LispNames.WRITE_TO_STRING, new LispFunction(LispNames.WRITE_TO_STRING, args -> {
-			requireArgCount(LispNames.WRITE_TO_STRING, args, 1);
+			requireMinArgCount(LispNames.WRITE_TO_STRING, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
 		// String streams: internal helpers behind with-output-to-string /
@@ -5437,20 +5521,6 @@ public final class Environment implements Scope {
 					streams.put(handle, new RontoStringInputStream(bounded));
 					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
-		// Lite: with no component streams a broadcast stream is a discarding sink -- a
-		// fresh string output stream nobody ever reads. A CALL with components never
-		// reaches here (LispEvaluator expands it, like the compile paths, into the Gray
-		// %make-broadcast-stream); this definition survives so #'make-broadcast-stream is
-		// still a first-class value, and that value is the sink shape only.
-		env.defineFunction(LispNames.MAKE_BROADCAST_STREAM, new LispFunction(LispNames.MAKE_BROADCAST_STREAM, args -> {
-			if (!args.isEmpty()) {
-				throw new LispEvalException(
-						LispNames.MAKE_BROADCAST_STREAM + " supports the zero-argument (sink) form only as a value");
-			}
-			long handle = nextStreamHandle.getAndIncrement();
-			streams.put(handle, new StringWriter());
-			return streamValue(handle, LispLayout.Kinds.STRING_OUTPUT);
-		}));
 		// file-position: REAL for the three position-bearing streams -- the buffered
 		// served-request body (a real byte index, what lets circular-streams rewind a
 		// body lack-request already parsed) and a BINARY FILE stream, whose position
@@ -5699,17 +5769,27 @@ public final class Environment implements Scope {
 			return new LispString(printString(args.get(0)));
 		}));
 		// The &optional surplus-argument message (LambdaLists): max and required are
-		// literals, the count is required plus the rest list's length.
+		// literals, the count is required plus the rest list's length, and the
+		// function's name, when it has one, picks the operator the report names.
 		env.defineFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
 				new LispFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args -> {
-					requireArgCount(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args, 3);
+					requireArgCountBetween(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args, 3, 4);
 					int got = (int) ((LispInteger) args.get(1)).value();
 					for (LispVal l = args.get(2); l instanceof LispCons c; l = c.cdr()) {
 						got++;
 					}
+					String operator = args.size() > 3 && args.get(3) instanceof LispString name
+							? BuiltinFunctionWrappers.arityOperator(name.value()) : null;
 					return new LispString(
-							ClosRegistry.aritySurplusMessage((int) ((LispInteger) args.get(0)).value(), got));
+							ClosRegistry.aritySurplusMessage(operator, (int) ((LispInteger) args.get(0)).value(), got));
 				}));
+		// A physical optional's prologue test (LambdaLists): an flet/labels definition
+		// reaches the interpreter in the compilers' physical shape, and its missing
+		// optionals are bound to LambdaLists.UNSUPPLIED.
+		env.defineFunction(LispNames.SUPPLIED_P_INTERNAL, new LispFunction(LispNames.SUPPLIED_P_INTERNAL, args -> {
+			requireArgCount(LispNames.SUPPLIED_P_INTERNAL, args, 1);
+			return args.get(0) == am.ik.rontolisp.LambdaLists.UNSUPPLIED ? LispNil.INSTANCE : LispTrue.INSTANCE;
+		}));
 		// The destructuring missing-element message (LambdaLists): required and got
 		// are literals, the message the lower-bound half of the arity report.
 		env.defineFunction(LispNames.ARITY_MISSING_MESSAGE_INTERNAL,
@@ -5827,18 +5907,23 @@ public final class Environment implements Scope {
 		}));
 		// %error-cond: internal two-argument primitive that signals an error carrying a
 		// condition object (a CLOS-subset tagged-list instance) alongside the message.
-		// Produced by the typed / condition-object error designator expansions.
+		// Produced by the typed / condition-object error designator expansions; the
+		// restart-mode signal hook's terminal adds a third operand, t, when the
+		// handler-bind handlers already ran for the condition, and the error says so.
 		env.defineFunction(LispNames.ERROR_COND_INTERNAL, new LispFunction(LispNames.ERROR_COND_INTERNAL, args -> {
-			requireArgCount(LispNames.ERROR_COND_INTERNAL, args, 2);
+			requireArgCountBetween(LispNames.ERROR_COND_INTERNAL, args, 2, 3);
 			String message = (args.get(1) instanceof LispString s) ? s.value() : args.get(1).display();
-			throw new LispEvalException(message, args.get(0));
+			LispEvalException error = new LispEvalException(message, args.get(0));
+			throw args.size() > 2 && args.get(2) != LispNil.INSTANCE ? error.markHandlersRan() : error;
 		}));
-		// %warn: internal single-argument primitive that writes a pre-built
-		// "WARNING: ..." message to the current *error-output* -- the seeded handle 2
-		// (the process standard error) unless the program rebound it -- and returns nil.
-		// Produced by the warn macro expansion.
+		// %warn: internal primitive that writes a pre-built "WARNING: ..." message to the
+		// current *error-output* -- the seeded handle 2 (the process standard error)
+		// unless the program rebound it -- and returns nil. Produced by the warn macro
+		// expansion; the interpreter's expansion adds a second argument naming what was
+		// signalled (LispMacroExpander.expandWarnWithDesignator), which only
+		// LispEvaluator's macro-time report reads.
 		env.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
-			requireArgCount(LispNames.WARN_INTERNAL, args, 1);
+			requireArgCountBetween(LispNames.WARN_INTERNAL, args, 1, 2);
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			emitTo.accept(message + "\n", resolveErrorDest.get());
 			return LispNil.INSTANCE;
@@ -6103,10 +6188,14 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
 			// (close stream) or (close stream :abort expr) -- every rontolisp close is
 			// effectively aborting (no buffered data survives it), so :abort is
-			// accepted and ignored.
-			if (!(args.size() == 1
-					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name())))) {
-				requireArgCount(LispNames.CLOSE, args, 1);
+			// accepted and ignored. A wrong count reports by the call shape, as a
+			// direct call does; a wrong keyword in the pair's place, as one argument.
+			if (!(args.size() == 1 || (args.size() == 3 && args.get(1) instanceof LispSymbol kw
+					&& LispNames.ABORT_KEYWORD.equals(kw.name())))) {
+				String message = am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(LispNames.CLOSE,
+						args.size());
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						message != null ? message : ClosRegistry.arityMessage(LispNames.CLOSE, 1, false, args.size()));
 			}
 			if (isSynonymStream(args.get(0))) {
 				// Closing a synonym stream closes the SYNONYM, not the stream it
@@ -6604,14 +6693,13 @@ public final class Environment implements Scope {
 		// case. The compiled backends reach the same behavior through
 		// LispMacroExpander.expandPeekChar, which lowers the loop onto %peek-char.
 		env.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, args -> {
-			if (args.size() > 4) {
-				throw new LispEvalException(LispNames.PEEK_CHAR + " expects 0 to 4 arguments");
-			}
+			// 0 to 5: the fifth is CL's recursive-p, which nothing here reads.
+			requireArgCountBetween(LispNames.PEEK_CHAR, args, 0, 5);
 			LispVal peekType = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
 			if (!(peekType instanceof LispNil || peekType instanceof LispTrue || peekType instanceof LispChar)) {
 				throw new LispEvalException(LispNames.PEEK_CHAR + " expects nil, t or a character as the peek type");
 			}
-			List<LispVal> rest = args.isEmpty() ? List.of() : args.subList(1, args.size());
+			List<LispVal> rest = args.isEmpty() ? List.of() : args.subList(1, Math.min(args.size(), 4));
 			while (true) {
 				LispVal peeked = peekChar.apply(rest);
 				if (peekType instanceof LispNil || !(peeked instanceof LispChar ch)) {
@@ -7616,6 +7704,13 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.CHAR_CODE, args, 1);
 			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());
 		}));
+		// char-int: a non-negative integer encoding the character. With no
+		// implementation-defined attributes beyond the code point, it answers the same
+		// value char-code does.
+		env.defineFunction(LispNames.CHAR_INT, new LispFunction(LispNames.CHAR_INT, args -> {
+			requireArgCount(LispNames.CHAR_INT, args, 1);
+			return new LispInteger(requireChar(LispNames.CHAR_INT, args.get(0)).codePoint());
+		}));
 		env.defineFunction(LispNames.CODE_CHAR, new LispFunction(LispNames.CODE_CHAR, args -> {
 			requireArgCount(LispNames.CODE_CHAR, args, 1);
 			return new LispChar((int) asLong(args.get(0)));
@@ -7631,30 +7726,41 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.CHAR_GE,
 				new LispFunction(LispNames.CHAR_GE, args -> charCompareChain(LispNames.CHAR_GE, args, 0, 1)));
 		env.defineFunction(LispNames.CHAR_EQUAL, new LispFunction(LispNames.CHAR_EQUAL, args -> {
-			requireMinArgCount(LispNames.CHAR_EQUAL, args, 1);
-			for (int i = 0; i + 1 < args.size(); i++) {
-				int a = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i)).codePoint());
-				int b = Character.toLowerCase(requireChar(LispNames.CHAR_EQUAL, args.get(i + 1)).codePoint());
-				if (a != b) {
+			int[] codes = charOperandCodes(LispNames.CHAR_EQUAL, args);
+			for (int i = 0; i + 1 < codes.length; i++) {
+				if (Character.toLowerCase(codes[i]) != Character.toLowerCase(codes[i + 1])) {
 					return LispNil.INSTANCE;
 				}
 			}
 			return LispTrue.INSTANCE;
 		}));
 		env.defineFunction(LispNames.CHAR_NE, new LispFunction(LispNames.CHAR_NE, args -> {
-			requireMinArgCount(LispNames.CHAR_NE, args, 1);
+			int[] codes = charOperandCodes(LispNames.CHAR_NE, args);
 			// char/= is true when ALL arguments are pairwise distinct (not just
 			// adjacent pairs), per CL.
-			for (int i = 0; i < args.size(); i++) {
-				for (int j = i + 1; j < args.size(); j++) {
-					if (requireChar(LispNames.CHAR_NE, args.get(i))
-						.codePoint() == requireChar(LispNames.CHAR_NE, args.get(j)).codePoint()) {
+			for (int i = 0; i < codes.length; i++) {
+				for (int j = i + 1; j < codes.length; j++) {
+					if (codes[i] == codes[j]) {
 						return LispNil.INSTANCE;
 					}
 				}
 			}
 			return LispTrue.INSTANCE;
 		}));
+		// (%check-character x 'op): x when it is a character, else OP's CHARACTER
+		// type-error (unnamed for a nil op) -- the check a lowering or a prelude defun
+		// makes on its operator's behalf (the case-insensitive character comparisons).
+		env.defineFunction(LispNames.CHECK_CHARACTER_INTERNAL,
+				new LispFunction(LispNames.CHECK_CHARACTER_INTERNAL, args -> {
+					requireArgCount(LispNames.CHECK_CHARACTER_INTERNAL, args, 2);
+					LispVal x = args.get(0);
+					if (x instanceof LispChar) {
+						return x;
+					}
+					throw args.get(1) instanceof LispSymbol op
+							? OperandTypeException.of(x, OperandTypes.Kind.CHARACTER, op.name())
+							: OperandTypeException.of(x, OperandTypes.Kind.CHARACTER);
+				}));
 		env.defineFunction(LispNames.CHAR_UPCASE, new LispFunction(LispNames.CHAR_UPCASE, args -> {
 			requireArgCount(LispNames.CHAR_UPCASE, args, 1);
 			return new LispChar(Character.toUpperCase(requireChar(LispNames.CHAR_UPCASE, args.get(0)).codePoint()));
@@ -7674,8 +7780,9 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.DIGIT_CHAR_P, new LispFunction(LispNames.DIGIT_CHAR_P, args -> {
 			requireMinArgCount(LispNames.DIGIT_CHAR_P, args, 1);
+			int code = requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint();
 			int radix = args.size() > 1 ? (int) asLong(args.get(1)) : 10;
-			int weight = Character.digit(requireChar(LispNames.DIGIT_CHAR_P, args.get(0)).codePoint(), radix);
+			int weight = Character.digit(code, radix);
 			return weight < 0 ? LispNil.INSTANCE : new LispInteger(weight);
 		}));
 		env.defineFunction(LispNames.LOWER_CASE_P, new LispFunction(LispNames.LOWER_CASE_P, args -> {
@@ -7782,7 +7889,7 @@ public final class Environment implements Scope {
 			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
-			requireMinArgCount(LispNames.CONSTANTP, args, 1);
+			requireCallShape(LispNames.CONSTANTP, args);
 			LispVal v = args.get(0);
 			boolean constant = v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispRatio
 					|| v instanceof LispDouble || v instanceof LispString || v instanceof LispChar
@@ -7889,6 +7996,13 @@ public final class Environment implements Scope {
 					targetIv.setElement(start1 + k, exactIntElement(LispNames.REPLACE, element.apply(k)));
 				}
 				return targetIv;
+			}
+			if (target instanceof LispFloatArray targetFa && targetFa.rank() == 1) {
+				// A packed float target stores each element at its width, as fill does.
+				for (int k = 0; k < copied; k++) {
+					targetFa.setElement(start1 + k, asDouble(element.apply(k)));
+				}
+				return targetFa;
 			}
 			if (target instanceof LispCons || target instanceof LispNil) {
 				// A list target: walk to start1 and destructively rewrite copied cars.
@@ -8003,20 +8117,40 @@ public final class Environment implements Scope {
 		return new LispChar(s.codePointAt(stringSlot(name, args.get(1), index, s.capacity())));
 	}
 
+	// A non-character is NAME's CHARACTER type-error, as the compiled backends' check
+	// reports it (.kb/error-handling.md, "A character built-in checks its argument").
 	private static LispChar requireChar(String name, LispVal val) {
 		if (val instanceof LispChar c) {
 			return c;
 		}
-		throw new LispEvalException(name + " expects a character, got: " + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.CHARACTER, name);
+	}
+
+	/**
+	 * The code points of a character comparison's arguments, EVERY one checked before any
+	 * pair is compared -- the lone argument of a one-argument call included -- as the
+	 * compiled chains check each operand as they evaluate it: a non-character is the
+	 * comparison's {@code CHARACTER} type-error.
+	 */
+	private static int[] charOperandCodes(String name, java.util.List<LispVal> args) {
+		requireMinArgCount(name, args, 1);
+		int[] codes = new int[args.size()];
+		for (int i = 0; i < codes.length; i++) {
+			if (!(args.get(i) instanceof LispChar c)) {
+				throw OperandTypeException.of(args.get(i), OperandTypes.Kind.CHARACTER, name);
+			}
+			codes[i] = c.codePoint();
+		}
+		return codes;
 	}
 
 	// Variadic character comparison, mirroring compareChain for numbers: true when
 	// every adjacent pair's code-point comparison falls within [low, high].
 	private static LispVal charCompareChain(String name, java.util.List<LispVal> args, int low, int high) {
-		requireMinArgCount(name, args, 1);
-		for (int i = 0; i + 1 < args.size(); i++) {
-			int a = requireChar(name, args.get(i)).codePoint();
-			int b = requireChar(name, args.get(i + 1)).codePoint();
+		int[] codes = charOperandCodes(name, args);
+		for (int i = 0; i + 1 < codes.length; i++) {
+			int a = codes[i];
+			int b = codes[i + 1];
 			int cmp = Integer.compare(a, b);
 			int normalized = cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
 			if (normalized < low || normalized > high) {
@@ -8295,6 +8429,30 @@ public final class Environment implements Scope {
 			}
 			return list;
 		}));
+		// %elt-cell: the cons holding a list's element at an index -- elt's list arm,
+		// read and setf place. One walk counts the cells it passes, so an index outside
+		// the list (past its end, negative, a bignum) reports the counted length as its
+		// bound without a second walk: ELT's (INTEGER 0 (length)) type-error.
+		env.defineFunction(LispNames.ELT_CELL, new LispFunction(LispNames.ELT_CELL, args -> {
+			requireArgCount(LispNames.ELT_CELL, args, 2);
+			LispVal index = args.get(1);
+			long target = subscriptValue(index);
+			LispVal list = args.get(0);
+			for (long k = 0;; k++) {
+				if (list instanceof LispCons cons) {
+					if (k == target) {
+						return cons;
+					}
+					list = cons.cdr();
+				}
+				else if (list instanceof LispNil) {
+					throw OperandTypeException.outOfRange(index, k, LispNames.ELT_CELL);
+				}
+				else {
+					throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.ELT_CELL);
+				}
+			}
+		}));
 		// endp: t for nil, nil for a cons, a type-error for anything else -- also
 		// dolist's, whose expansion checks the list's end once after its loop.
 		env.defineFunction(LispNames.ENDP, new LispFunction(LispNames.ENDP, args -> {
@@ -8312,6 +8470,35 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.CHECK_LIST_INTERNAL, args, 2);
 			return requireListArgument(((LispSymbol) args.get(1)).name(), args.get(0));
 		}));
+		// (%check-sequence x 'op): x when it is a list or a vector, else OP's SEQUENCE
+		// type-error -- the check a lowering makes before its first use of a sequence.
+		env.defineFunction(LispNames.CHECK_SEQUENCE_INTERNAL,
+				new LispFunction(LispNames.CHECK_SEQUENCE_INTERNAL, args -> {
+					requireArgCount(LispNames.CHECK_SEQUENCE_INTERNAL, args, 2);
+					LispVal x = args.get(0);
+					boolean sequence = x instanceof LispCons || x instanceof LispNil || x instanceof LispString
+							|| x instanceof LispIntVector || x instanceof LispArray arr && arr.dimensions().length == 1
+							|| x instanceof LispFloatArray packed && packed.rank() == 1;
+					if (sequence) {
+						return x;
+					}
+					String reported = args.get(1) instanceof LispSymbol op ? OperandTypes.reportedOperator(op.name())
+							: null;
+					throw reported == null ? OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE)
+							: OperandTypeException.of(x, OperandTypes.Kind.SEQUENCE, reported);
+				}));
+		// (%operand-type-error x 'op 'kind): OP's type-error over x naming KIND -- the
+		// signal a lowering places where its own type dispatch has no arm left; a nil
+		// op reports unnamed.
+		env.defineFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL,
+				new LispFunction(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args -> {
+					requireArgCount(LispNames.OPERAND_TYPE_ERROR_INTERNAL, args, 3);
+					OperandTypes.Kind kind = OperandTypes.Kind.named(((LispSymbol) args.get(2)).name());
+					String reported = args.get(1) instanceof LispSymbol op ? OperandTypes.reportedOperator(op.name())
+							: null;
+					throw reported == null ? OperandTypeException.of(args.get(0), kind)
+							: OperandTypeException.of(args.get(0), kind, reported);
+				}));
 		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
 			if (args.get(0) instanceof LispCons cons) {
@@ -8970,6 +9157,12 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal compareChain(String name, List<LispVal> args, int loSign, int hiSign) {
 		requireMinArgCount(name, args, 1);
+		if (args.size() == 1) {
+			// No pair to compare, but the argument is still checked: a number for =, a
+			// real for the orderings, as the compiled one-argument lowering checks it.
+			requireNumericOperand(name, args.get(0), !LispNames.EQ.equals(name));
+			return LispTrue.INSTANCE;
+		}
 		if (LispNames.EQ.equals(name) && hasComplex(args)) {
 			for (int i = 1; i < args.size(); i++) {
 				if (!complexEqual(args.get(i - 1), args.get(i))) {
@@ -9037,6 +9230,21 @@ public final class Environment implements Scope {
 
 	// Signals for a complex operand only; any other value falls through to the
 	// caller's own funnel, so a non-number keeps its existing message.
+	/**
+	 * The one-argument check of a numeric operator that performs no arithmetic on its
+	 * argument ({@code (< x)}, {@code (max x)}): {@code x} must be a number, a real when
+	 * {@code real}, else the operator's type-error.
+	 */
+	private static void requireNumericOperand(String name, LispVal val, boolean real) {
+		if (!(val instanceof LispInteger || val instanceof LispBigInteger || val instanceof LispRatio
+				|| val instanceof LispDouble || val instanceof LispComplex)) {
+			throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER, name);
+		}
+		if (real) {
+			requireRealOperand(name, val);
+		}
+	}
+
 	private static void requireRealOperand(String name, LispVal val) {
 		if (val instanceof LispComplex) {
 			throw OperandTypeException.of(val, OperandTypes.Kind.REAL).named(name);
@@ -9911,6 +10119,21 @@ public final class Environment implements Scope {
 		if (args.size() < min) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					ClosRegistry.arityMessage(name, min, true, args.size()));
+		}
+	}
+
+	/**
+	 * Rejects a count the built-in's call shape ({@link BuiltinCallArity}) rules out, for
+	 * a body that would otherwise ANSWER it: {@code LispEvaluator.apply} turns what a
+	 * body raises for such a count into the shape's report, but cannot see a body that
+	 * returns.
+	 * @param name the built-in's name
+	 * @param args its arguments
+	 */
+	static void requireCallShape(String name, List<LispVal> args) {
+		String wrongCount = BuiltinCallArity.wrongCountMessage(name, args.size());
+		if (wrongCount != null) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, wrongCount);
 		}
 	}
 

@@ -118,10 +118,18 @@ class JvmLispCompilerSplitTest {
 	}
 
 	// Direct java: calls are private methods of the class, the helpers they share too,
-	// and the bridge finds _apply by name: a forced split must leave every one reachable.
+	// the bridge finds _apply, _jsig and _jfail by name, and a generated interface
+	// implementation calls its program-side callback from its own class: a forced split
+	// must leave every one reachable -- what a callback raises too.
 	@Test
 	void aForcedSplitKeepsJavaCallsWorking() throws Exception {
 		String source = FEATURES + """
+				(let ((lst (java:new "java.util.ArrayList")))
+				  (java:call lst "add" 2)
+				  (java:call lst "add" 1)
+				  (java:static "java.util.Collections" "sort" lst
+				    (java:reify "java.util.Comparator" "compare" (lambda (a b) (- a b))))
+				  (print (java:call lst "toString")))
 				(defun describe-point (p)
 				  (declare (type (java:object "java.awt.Point") p))
 				  (list (java:field p "x") (java:call p "getY")))
@@ -132,10 +140,16 @@ class JvmLispCompilerSplitTest {
 				(java:call (java:static "java.util.List" "of" 1 2) "forEach" (lambda (m x) (print x)))
 				(defun len (x) (java:call x "length"))
 				(print (len (java:new "java.lang.StringBuilder" "abc")))
+				(print (block b
+				         (java:call (java:static "java.util.List" "of" 1 2) "forEach"
+				                    (lambda (m x) (return-from b (* x 10))))))
+				(defun each (c f) (java:call c "forEach" f))
+				(print (handler-case (each (java:static "java.util.List" "of" 1) (lambda (m x) (error "boom ~a" x)))
+				         (error (e) (format nil "~a" e))))
 				""";
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
-		assertThat(expected).endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3");
+		assertThat(expected).contains("\"[1, 2]\"").endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));
 		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");

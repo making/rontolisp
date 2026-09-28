@@ -8,9 +8,12 @@ import org.jspecify.annotations.Nullable;
 /**
  * Parses and desugars extended lambda lists ({@code &optional}, {@code &rest},
  * {@code &key}, {@code &aux}, {@code &allow-other-keys}) shared by the interpreter and
- * both compilers. The only shape the backends implement natively is "required parameters
- * plus an optional trailing {@code &rest} list"; every other lambda-list keyword is
- * rewritten here into that shape plus a {@code let*} prologue wrapped around the body:
+ * both compilers. The shapes the backends implement natively are "required parameters
+ * plus an optional trailing {@code &rest} list" and -- on the compiled backends only --
+ * "required parameters, PHYSICAL optional parameters, and a trailing rest list"; every
+ * other lambda-list keyword is rewritten here into one of them plus a {@code let*}
+ * prologue wrapped around the body. The interpreter's shape steps the optionals off the
+ * rest list:
  *
  * <pre>
  * (defun f (a &amp;optional (b 10 bp) &amp;key (k 1)) body...)
@@ -23,6 +26,30 @@ import org.jspecify.annotations.Nullable;
  *     body...))
  * </pre>
  *
+ * The compilers' shape ({@link #toNative}, {@link #desugarProgram}) passes an optional
+ * argument as a parameter of its own, so a call that supplies it conses no rest list: a
+ * caller with no argument for it passes the UNSUPPLIED marker the prologue tests with
+ * {@code %supplied-p}, and the rest list holds only what is past the last optional:
+ *
+ * <pre>
+ * (defun f (a &amp;optional #opt0 &amp;rest #rest)
+ *   (let* ((bp (%supplied-p #opt0))
+ *          (b (if (%supplied-p #opt0) #opt0 10))
+ *          (k ...))
+ *     body...))
+ * </pre>
+ *
+ * Every call path agrees on it: a callee takes {@code required} arguments, then
+ * {@code optionals} parameters that are an argument or the marker, then the rest list
+ * (nil when nothing is surplus) -- even without {@code &rest}/{@code &key}, where the
+ * rest list is the surplus the prologue's count check reports. The physical names are
+ * internal ({@value #OPT_VAR_PREFIX}N), never the user's: a default form must not see a
+ * LATER parameter's binding, and a physical parameter named after it would be in scope. A
+ * lambda list whose required parameters and optionals would exceed the backend's
+ * parameter budget keeps its trailing optionals on the rest list, stepped as the
+ * interpreter steps them.
+ *
+ * <p>
  * Optional/key defaults are evaluated only when the argument is absent (the {@code if}
  * guards), in left-to-right {@code let*} scope so a default can reference earlier
  * parameters, matching Common Lisp. Keyword parsing is a CALL per keyword parameter
@@ -40,6 +67,43 @@ public final class LambdaLists {
 
 	/** Prefix of generated helper variable names (mirrors {@code __getf_key} etc.). */
 	private static final String REST_VAR = "__ll_rest";
+
+	/**
+	 * The prefix of a PHYSICAL optional parameter's name ({@code __ll_opt_0},
+	 * {@code __ll_opt_1}, ...): what {@link #toNative} and {@link #desugarProgram} write
+	 * into a lambda list whose optionals travel as parameters, and what marks such a list
+	 * as already desugared when it is expanded again.
+	 */
+	private static final String OPT_VAR_PREFIX = "__ll_opt_";
+
+	/**
+	 * The parameter budget of the interpreter's expansion: no physical optional, every
+	 * optional stepped off the rest list.
+	 */
+	private static final int STEPPED = 0;
+
+	/**
+	 * The most physical parameters (the closure environment not counted) the compiled
+	 * backends' shape gives a function: required parameters, physical optionals and the
+	 * rest list together. Past it, the remaining optionals ride the rest list. It is the
+	 * WASM backend's callable ceiling ({@code WasmLispCompiler.MAX_CALLABLE_ARITY} may
+	 * not be lower), and the JVM's too, where the JVM itself would allow 254: every
+	 * dispatcher case passes each parameter, and a SPREAD case walks each one out of the
+	 * argument list from its head, so a physical parameter's cost grows with the count.
+	 * One number, because a lambda list desugared BEFORE the backend is known -- an
+	 * {@code flet}/{@code labels} definition ({@link #expandPhysical}) -- has to fit
+	 * both.
+	 */
+	public static final int MAX_PHYSICAL_PARAMS = 10;
+
+	/**
+	 * What the INTERPRETER binds a physical optional to when the call has no argument for
+	 * it: a lambda list in the compilers' physical shape reaches the interpreter too (an
+	 * {@code flet}/{@code labels} definition, {@link #expandPhysical}), and its prologue
+	 * tests the parameter with {@code %supplied-p}. A host object no Lisp value can be
+	 * {@code eq} to; it self-evaluates, so the expansion names it as a literal.
+	 */
+	public static final LispVal UNSUPPLIED = new LispJavaObject(new Object());
 
 	private static final String CUR_VAR = "__ll_cur";
 
@@ -70,15 +134,30 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * A lambda list reduced to the shape the backends implement natively: required
-	 * parameter symbols, an optional trailing rest parameter, and the (possibly
+	 * A lambda list reduced to a shape the backends implement natively: required
+	 * parameter symbols, the physical optional parameters (always empty in the
+	 * interpreter's shape), an optional trailing rest parameter, and the (possibly
 	 * prologue-wrapped) body.
 	 *
 	 * @param required the required parameter symbols
+	 * @param optionals the physical optional parameters, each an argument or the
+	 * UNSUPPLIED marker; non-empty only with a rest parameter
 	 * @param rest the rest parameter, or {@code null} for a fixed-arity function
 	 * @param body the body forms
 	 */
-	public record Expanded(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body) {
+	public record Expanded(List<LispSymbol> required, List<LispSymbol> optionals, @Nullable LispSymbol rest,
+			List<LispVal> body) {
+
+		/**
+		 * The interpreter's shape: no physical optional.
+		 * @param required the required parameter symbols
+		 * @param rest the rest parameter, or {@code null} for a fixed-arity function
+		 * @param body the body forms
+		 */
+		public Expanded(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body) {
+			this(required, List.of(), rest, body);
+		}
+
 	}
 
 	/**
@@ -99,9 +178,9 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * Parses the lambda list and desugars every extension into the native "required +
-	 * rest" shape, wrapping the body in a {@code let*} prologue when needed. A plain
-	 * parameter list is returned unchanged (no wrapping).
+	 * Parses the lambda list and desugars every extension into the interpreter's native
+	 * "required + rest" shape, wrapping the body in a {@code let*} prologue when needed.
+	 * A plain parameter list is returned unchanged (no wrapping).
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
 	 * @return the native-shape lambda list and body
@@ -126,8 +205,22 @@ public final class LambdaLists {
 		return expand(paramList, body, wrapReturnFrom, null);
 	}
 
+	/**
+	 * Like {@link #expand(LispVal, List, boolean)}, for a function with a name: the
+	 * {@code &optional} surplus check carries it ({@link #tooManyArgsCheck}).
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @param wrapReturnFrom whether to wrap a return-from-containing body in %fn-block
+	 * @param functionName the function's name, or {@code null} for an anonymous one
+	 * @return the native-shape lambda list and body
+	 */
+	public static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
+			@Nullable String functionName) {
+		return expand(paramList, body, wrapReturnFrom, null, STEPPED, functionName);
+	}
+
 	private static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
-			@Nullable LispVal blockNameSym) {
+			@Nullable LispVal blockNameSym, int maxParams, @Nullable String functionName) {
 		if (body.isEmpty()) {
 			// An empty function body answers nil, per CL -- dissect's
 			// (defun restarts (&optional condition)) interface stubs; without the
@@ -147,6 +240,23 @@ public final class LambdaLists {
 			return new Expanded(required, null, body);
 		}
 		Parsed parsed = parse(params);
+		if (isPhysicalShape(parsed)) {
+			// (a &optional #opt0 &rest #rest): a lambda list this class already wrote,
+			// its prologue already in the body.
+			if (maxParams == STEPPED) {
+				// The interpreter binds it off its argument list like any other,
+				// UNSUPPLIED where the list runs out, so the prologue's %supplied-p reads
+				// the same answer a compiled caller's marker gives.
+				parsed = withUnsuppliedDefaults(parsed);
+			}
+			else {
+				List<LispSymbol> optionals = new ArrayList<>(parsed.optionals().size());
+				for (OptionalParam opt : parsed.optionals()) {
+					optionals.add(opt.name());
+				}
+				return new Expanded(parsed.required(), optionals, parsed.rest(), body);
+			}
+		}
 		if (parsed.optionals().isEmpty() && !parsed.sawKey() && parsed.auxes().isEmpty()) {
 			// Pure (a b &rest r): already native, no prologue needed.
 			return new Expanded(parsed.required(), parsed.rest(), body);
@@ -156,25 +266,222 @@ public final class LambdaLists {
 			// (a &aux x): FIXED arity -- the native shape checks the count, so an extra
 			// argument signals like any other wrong count.
 			List<LispVal> bindings = new ArrayList<>();
-			appendPrologueBindings(parsed, new LispSymbol(REST_VAR), false, bindings);
+			appendPrologueBindings(parsed, List.of(), new LispSymbol(REST_VAR), false, bindings);
 			return new Expanded(parsed.required(), null, List.of(letStar(bindings, body)));
 		}
+		// The optionals that travel as parameters: as many as the budget leaves beside
+		// the required parameters and the rest list, which a callee with an optional
+		// always takes (it is the surplus the count check below reports).
+		int physical = Math.max(0, Math.min(parsed.optionals().size(), maxParams - parsed.required().size() - 1));
+		List<OptionalParam> stepped = parsed.optionals().subList(physical, parsed.optionals().size());
 		LispSymbol restVar = parsed.rest() != null && parsed.optionals().isEmpty() ? parsed.rest()
 				: new LispSymbol(REST_VAR);
 		List<LispVal> bindings = new ArrayList<>();
 		if (bounded) {
 			// (a &optional b): variadic physically, bounded logically. The check comes
 			// FIRST, before any default form runs -- CL signals a wrong count before
-			// binding anything.
-			bindings.add(tooManyArgsCheck(restVar, parsed.required().size(), parsed.optionals().size()));
+			// binding anything. A caller hands the rest list only what is past the
+			// physical optionals, so a surplus there means every one was supplied.
+			bindings.add(tooManyArgsCheck(restVar, parsed.required().size() + physical, stepped.size(), functionName));
 		}
-		appendPrologueBindings(parsed, restVar, false, bindings);
+		List<LispSymbol> optionals = new ArrayList<>(physical);
+		for (int i = 0; i < physical; i++) {
+			LispSymbol param = new LispSymbol(OPT_VAR_PREFIX + i);
+			optionals.add(param);
+			appendPhysicalOptionalBindings(parsed.optionals().get(i), param, bindings);
+		}
+		appendPrologueBindings(parsed, stepped, restVar, false, bindings);
 		List<LispVal> letBody = new ArrayList<>();
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			letBody.add(unknownKeyCheck(parsed.rest() != null ? parsed.rest() : restVar, parsed.keys()));
 		}
 		letBody.addAll(body);
-		return new Expanded(parsed.required(), restVar, List.of(letStar(bindings, letBody)));
+		for (int i = 0; i < physical; i++) {
+			LispSymbol suppliedP = parsed.optionals().get(i).suppliedP();
+			if (suppliedP != null) {
+				testSuppliedPInPlace(suppliedP, optionals.get(i), bindings, letBody);
+			}
+		}
+		return new Expanded(parsed.required(), optionals, restVar, List.of(letStar(bindings, letBody)));
+	}
+
+	/**
+	 * Drops the binding of a physical optional's supplied-p variable whose every
+	 * reference -- in the bindings after it and in the body -- is the TEST of an
+	 * {@code if}, and tests the physical parameter there instead: {@code (if sp a b)}
+	 * becomes {@code (if (%supplied-p #optN) a b)}. The variable is then never read as a
+	 * value, so nothing builds the boxed {@code t} it would hold -- one reference
+	 * comparison per test, where the binding cost a boolean box per call (on wasmtime a
+	 * fifth of a two-argument {@code #'<}, whose wrapper tests its {@code bp},
+	 * 2026-09-26). Any other occurrence keeps the binding: a value use, an assignment, a
+	 * macro form the variable is an argument of, a rebinding of the name, a declaration.
+	 * @param suppliedP the supplied-p variable
+	 * @param param the physical optional it reports on
+	 * @param bindings the prologue's bindings, the variable's among them
+	 * @param letBody the body under the prologue
+	 */
+	private static void testSuppliedPInPlace(LispSymbol suppliedP, LispSymbol param, List<LispVal> bindings,
+			List<LispVal> letBody) {
+		int at = -1;
+		for (int i = 0; i < bindings.size(); i++) {
+			if (bindings.get(i) instanceof LispCons binding && suppliedP.equals(binding.car())) {
+				at = i;
+				break;
+			}
+		}
+		if (at < 0) {
+			return;
+		}
+		String name = suppliedP.name();
+		for (int i = at + 1; i < bindings.size(); i++) {
+			if (!onlyIfTests(bindings.get(i), name)) {
+				return;
+			}
+		}
+		for (LispVal form : letBody) {
+			if (!onlyIfTests(form, name)) {
+				return;
+			}
+		}
+		bindings.remove(at);
+		for (int i = at; i < bindings.size(); i++) {
+			bindings.set(i, replaceIfTests(bindings.get(i), name, param));
+		}
+		letBody.replaceAll(form -> replaceIfTests(form, name, param));
+	}
+
+	/**
+	 * Whether every occurrence of the variable in {@code form} outside quoted data is the
+	 * test of an {@code if}. The CDR direction is a loop, so a long body costs no stack.
+	 */
+	private static boolean onlyIfTests(LispVal form, String name) {
+		if (form instanceof LispSymbol sym) {
+			return !name.equals(sym.name());
+		}
+		if (!(form instanceof LispCons cons)) {
+			return true;
+		}
+		LispVal node = cons;
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return true;
+			}
+			if (LispNames.IF.equals(head.name()) && cons.cdr() instanceof LispCons test
+					&& test.car() instanceof LispSymbol var && name.equals(var.name())) {
+				node = test.cdr();
+			}
+		}
+		while (node instanceof LispCons cell) {
+			if (!onlyIfTests(cell.car(), name)) {
+				return false;
+			}
+			node = cell.cdr();
+		}
+		return onlyIfTests(node, name);
+	}
+
+	/**
+	 * {@code form} with the test of every {@code (if var ...)} outside quoted data
+	 * replaced by {@code (%supplied-p param)}, a fresh cell per test -- the walk
+	 * {@link #onlyIfTests} made, which reads a form's head once and every element after
+	 * it as a form, so the two agree on what an occurrence is. The cells nothing changed
+	 * under keep their identity ({@link LispCons#rebuilt}).
+	 */
+	private static LispVal replaceIfTests(LispVal form, String name, LispSymbol param) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return form;
+			}
+			if (LispNames.IF.equals(head.name()) && cons.cdr() instanceof LispCons testCell
+					&& testCell.car() instanceof LispSymbol var && name.equals(var.name())) {
+				return LispCons.rebuilt(cons, head, LispCons.rebuilt(testCell,
+						call(LispNames.SUPPLIED_P_INTERNAL, param), replaceElements(testCell.cdr(), name, param)));
+			}
+		}
+		return replaceElements(cons, name, param);
+	}
+
+	// Every element of a list as a form; the tail rebuilt from the back, so a long body
+	// costs no stack in the cdr direction.
+	private static LispVal replaceElements(LispVal list, String name, LispSymbol param) {
+		List<LispCons> cells = new ArrayList<>();
+		LispVal node = list;
+		while (node instanceof LispCons cell) {
+			cells.add(cell);
+			node = cell.cdr();
+		}
+		LispVal tail = node;
+		for (int i = cells.size() - 1; i >= 0; i--) {
+			LispCons cell = cells.get(i);
+			tail = LispCons.rebuilt(cell, replaceIfTests(cell.car(), name, param), tail);
+		}
+		return tail;
+	}
+
+	// A physical lambda list with every optional defaulting to the UNSUPPLIED marker.
+	private static Parsed withUnsuppliedDefaults(Parsed parsed) {
+		List<OptionalParam> optionals = new ArrayList<>(parsed.optionals().size());
+		for (OptionalParam opt : parsed.optionals()) {
+			optionals.add(new OptionalParam(opt.name(), UNSUPPLIED, null));
+		}
+		return new Parsed(parsed.required(), optionals, parsed.rest(), parsed.sawKey(), parsed.keys(),
+				parsed.allowOtherKeys(), parsed.auxes());
+	}
+
+	/**
+	 * Expands a lambda list into the compilers' physical shape ({@link #toNative}) within
+	 * {@link #MAX_PHYSICAL_PARAMS}, without the {@code %fn-block} wrap: for a definition
+	 * expanded before the backend is known and shared with the interpreter -- an
+	 * {@code flet}/{@code labels} local, whose expansion builds its own {@code block}.
+	 * The rebuilt lambda list ({@code &optional #opt0 ... &rest #rest}) is one every
+	 * backend takes: a compiler as it is, the interpreter by binding a missing optional
+	 * to {@link #UNSUPPLIED}.
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @return the physical lambda list and the prologue-wrapped body
+	 */
+	public static Expanded expandPhysical(LispVal paramList, List<LispVal> body) {
+		return expand(paramList, body, false, null, MAX_PHYSICAL_PARAMS, null);
+	}
+
+	/**
+	 * Whether a parsed lambda list is the compilers' physical shape this class writes --
+	 * required parameters, plain {@value #OPT_VAR_PREFIX}N optionals, the internal rest
+	 * parameter and nothing else -- so expanding it again must neither wrap a second
+	 * prologue around the body nor move the optionals back onto the rest list.
+	 */
+	private static boolean isPhysicalShape(Parsed parsed) {
+		if (parsed.optionals().isEmpty() || parsed.sawKey() || !parsed.auxes().isEmpty() || parsed.rest() == null
+				|| !REST_VAR.equals(parsed.rest().name())) {
+			return false;
+		}
+		for (int i = 0; i < parsed.optionals().size(); i++) {
+			OptionalParam opt = parsed.optionals().get(i);
+			if (!(OPT_VAR_PREFIX + i).equals(opt.name().name()) || opt.suppliedP() != null
+					|| !(opt.defaultForm() instanceof LispNil)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The bindings of one physical optional: its supplied-p variable, when it has one,
+	 * the test's t/nil, and the user's parameter the argument when the caller passed one
+	 * and the default otherwise. The parameter's own binding tests the physical parameter
+	 * again rather than reading the supplied-p variable: a test of {@code %supplied-p} is
+	 * one reference comparison, where a read of the variable is a test of the boxed
+	 * boolean the binding had to build.
+	 */
+	private static void appendPhysicalOptionalBindings(OptionalParam opt, LispSymbol param, List<LispVal> bindings) {
+		LispVal supplied = call(LispNames.SUPPLIED_P_INTERNAL, param);
+		if (opt.suppliedP() != null) {
+			bindings.add(list(opt.suppliedP(), supplied));
+		}
+		bindings.add(list(opt.name(), list(new LispSymbol(LispNames.IF), supplied, param, opt.defaultForm())));
 	}
 
 	private static LispVal letStar(List<LispVal> bindings, List<LispVal> body) {
@@ -190,8 +497,14 @@ public final class LambdaLists {
 	 * optional -- nested {@code cdr}s for a tail of up to {@value #NESTED_CDR_MAX}:
 	 *
 	 * <pre>
-	 * (__ll_arity (if (nthcdr k rest) (%program-error (%arity-surplus-message max req rest)) nil))
+	 * (__ll_arity (if (nthcdr k rest) (%program-error (%arity-surplus-message max req rest [name])) nil))
 	 * </pre>
+	 *
+	 * The function's name, when it has one, rides along as a string literal: each backend
+	 * reports the surplus under {@code BuiltinFunctionWrappers.arityOperator} of it --
+	 * the rule its missing-argument check follows -- so a built-in's function value names
+	 * the built-in and a program's own function stays {@code Function}. The rule lives
+	 * above this package, hence the name and not the operator.
 	 *
 	 * INLINE, not a helper call like the keyword check: first-class built-in wrappers
 	 * ({@code BuiltinFunctionWrappers}) and several expansions build {@code &optional}
@@ -202,7 +515,8 @@ public final class LambdaLists {
 	 * ({@code .kb/lambda-lists.md}). The message is computed, so the compilers' static
 	 * program-error warning (literal messages only) never fires for it.
 	 */
-	private static LispVal tooManyArgsCheck(LispVal restVar, int required, int optionals) {
+	private static LispVal tooManyArgsCheck(LispVal restVar, int required, int optionals,
+			@Nullable String functionName) {
 		// Nested cdrs for a short tail: on the JVM each is a few inline bytes, where
 		// nthcdr brings its runtime helper into a program that may not otherwise have it.
 		LispVal beyond = restVar;
@@ -214,8 +528,11 @@ public final class LambdaLists {
 		else {
 			beyond = list(new LispSymbol(LispNames.NTHCDR), new LispInteger(optionals), restVar);
 		}
-		LispVal message = list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL),
-				new LispInteger(required + optionals), new LispInteger(required), restVar);
+		LispVal message = functionName == null
+				? list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL), new LispInteger(required + optionals),
+						new LispInteger(required), restVar)
+				: list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL), new LispInteger(required + optionals),
+						new LispInteger(required), restVar, new LispString(functionName));
 		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
 		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
 	}
@@ -276,15 +593,19 @@ public final class LambdaLists {
 	}
 
 	/**
-	 * Lowers {@code (%arity-surplus-message max req rest)} for a backend without a
+	 * Lowers {@code (%arity-surplus-message max req rest [name])} for a backend without a
 	 * runtime helper for it (WASM) to
 	 * {@code (%string-concat "Function expects at most MAX argument(s), got " (%prin1-to-string (+ req (length rest))))}
 	 * -- the non-consulting conversion, since the count is decimal whatever
-	 * {@code *print-base*} says.
+	 * {@code *print-base*} says -- with {@code operator} in place of {@code Function}
+	 * when there is one. {@code operator} is what the backend made of the form's function
+	 * name ({@link #aritySurplusFunctionName}).
 	 * @param form the {@code %arity-surplus-message} form
+	 * @param operator the operator the message names, or {@code null} for
+	 * {@code Function}
 	 * @return the lowered form
 	 */
-	public static LispVal lowerAritySurplusMessage(LispCons form) {
+	public static LispVal lowerAritySurplusMessage(LispCons form, @Nullable String operator) {
 		List<LispVal> args = form.toList();
 		int max = (int) ((LispInteger) args.get(1)).value();
 		long required = ((LispInteger) args.get(2)).value();
@@ -292,8 +613,30 @@ public final class LambdaLists {
 		LispVal count = required == 0 ? call(LispNames.LENGTH, rest)
 				: list(new LispSymbol(LispNames.ADD), new LispInteger(required), call(LispNames.LENGTH, rest));
 		String zero = ClosRegistry.aritySurplusMessage(max, 0);
-		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(zero.substring(0, zero.length() - 1)),
+		String opening = zero.substring(0, zero.length() - 1);
+		if (operator == null) {
+			return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(opening),
+					call(LispNames.PRIN1_TO_STRING_RAW, count));
+		}
+		// The operator in front of the opening's shared remainder: one literal per
+		// operator and one per bound, where a whole opening per operator put +2 KB on
+		// the eval-carrying module, whose registry holds every wrapper.
+		LispVal tail = list(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(opening.substring(ClosRegistry.ARITY_ANONYMOUS_OPERATOR.length())),
 				call(LispNames.PRIN1_TO_STRING_RAW, count));
+		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(operator), tail);
+	}
+
+	/**
+	 * The name of the function whose {@code &optional} surplus check this
+	 * {@code (%arity-surplus-message max req rest [name])} form is, or {@code null} for
+	 * an anonymous one ({@link #tooManyArgsCheck}).
+	 * @param form the {@code %arity-surplus-message} form
+	 * @return the function's name, or {@code null}
+	 */
+	public static @Nullable String aritySurplusFunctionName(LispCons form) {
+		List<LispVal> args = form.toList();
+		return args.size() > 4 && args.get(4) instanceof LispString name ? name.value() : null;
 	}
 
 	/**
@@ -318,41 +661,76 @@ public final class LambdaLists {
 
 	/**
 	 * The native lambda shape as the compilers consume it: physical parameter names
-	 * (required parameters plus, when variadic, the rest parameter as the last name), the
-	 * variadic flag, and the (possibly prologue-wrapped) body.
+	 * (required parameters, then the physical optionals, then -- when variadic -- the
+	 * rest parameter as the last name), the variadic flag, how many physical optionals
+	 * sit before the rest parameter, and the (possibly prologue-wrapped) body.
 	 *
 	 * @param paramNames the physical parameter names, rest parameter last when variadic
 	 * @param variadic whether the last parameter collects the remaining arguments
+	 * @param optionals how many of the names before the rest parameter are physical
+	 * optionals, which a caller fills with an argument or the UNSUPPLIED marker; zero
+	 * unless variadic
 	 * @param body the body forms
 	 */
-	public record NativeForm(List<String> paramNames, boolean variadic, List<LispVal> body) {
+	public record NativeForm(List<String> paramNames, boolean variadic, int optionals, List<LispVal> body) {
+
+		/**
+		 * {@return the arguments a call must pass at least} -- every name before the
+		 * physical optionals
+		 */
+		public int required() {
+			return this.paramNames.size() - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
 	}
 
 	/**
 	 * Parses a lambda list into the {@link NativeForm} the compilers consume, desugaring
-	 * extensions via {@link #expand} when present.
+	 * extensions when present into the compilers' shape: as many optionals as fit
+	 * {@code maxParams} beside the required parameters and the rest list travel as
+	 * parameters of their own.
 	 * @param paramList the raw parameter list AST
 	 * @param body the body forms
+	 * @param maxParams the most physical parameters (the closure environment not counted)
+	 * the backend lets a function take
 	 * @return the native form
 	 */
-	public static NativeForm toNative(LispVal paramList, List<LispVal> body) {
-		Expanded e = expand(paramList, body);
-		List<String> names = new ArrayList<>(e.required().size() + 1);
+	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams) {
+		return toNative(paramList, body, maxParams, null);
+	}
+
+	/**
+	 * {@link #toNative(LispVal, List, int)} for a function with a name: the
+	 * {@code &optional} surplus check carries it ({@link #tooManyArgsCheck}).
+	 * @param paramList the raw parameter list AST
+	 * @param body the body forms
+	 * @param maxParams the most physical parameters the backend lets a function take
+	 * @param functionName the function's name, or {@code null} for an anonymous one
+	 * @return the native form
+	 */
+	public static NativeForm toNative(LispVal paramList, List<LispVal> body, int maxParams,
+			@Nullable String functionName) {
+		Expanded e = expand(paramList, body, true, null, maxParams, functionName);
+		List<String> names = new ArrayList<>(e.required().size() + e.optionals().size() + 1);
 		for (LispSymbol s : e.required()) {
+			names.add(s.name());
+		}
+		for (LispSymbol s : e.optionals()) {
 			names.add(s.name());
 		}
 		if (e.rest() != null) {
 			names.add(e.rest().name());
 		}
-		return new NativeForm(names, e.rest() != null, e.body());
+		return new NativeForm(names, e.rest() != null, e.optionals().size(), e.body());
 	}
 
 	/**
 	 * Rewrites every {@code defun}/{@code lambda} form in the program whose parameter
-	 * list uses lambda-list keywords into the native "required + rest" shape via
-	 * {@link #expand}. Quoted data is left untouched (so forms destined for a runtime
-	 * {@code eval} keep their source shape). Used by the compilers as a pre-pass; the
-	 * interpreter expands lazily at lambda-creation time instead.
+	 * list uses lambda-list keywords into the compilers' native shape via
+	 * {@link #toNative}'s expansion -- required parameters, the physical optionals that
+	 * fit {@code maxParams}, and a rest list. Quoted data is left untouched (so forms
+	 * destined for a runtime {@code eval} keep their source shape). Used by the compilers
+	 * as a pre-pass; the interpreter expands lazily at lambda-creation time instead.
 	 *
 	 * <p>
 	 * A program that spells {@code &key} anywhere gets the two keyword helpers
@@ -365,15 +743,17 @@ public final class LambdaLists {
 	 * defuns the shakers collect), never miss. A program without {@code &key} is returned
 	 * form for form.
 	 * @param program the top-level forms
+	 * @param maxParams the most physical parameters the backend lets a function take
+	 * ({@link #toNative})
 	 * @return the rewritten forms
 	 */
-	public static List<LispVal> desugarProgram(List<LispVal> program) {
+	public static List<LispVal> desugarProgram(List<LispVal> program, int maxParams) {
 		List<LispVal> out = new ArrayList<>(program.size() + 2);
 		if (program.stream().anyMatch(LambdaLists::spellsKey)) {
 			out.addAll(runtimeDefuns());
 		}
 		for (LispVal form : program) {
-			out.add(desugar(form));
+			out.add(desugar(form, maxParams));
 		}
 		return out;
 	}
@@ -478,13 +858,13 @@ public final class LambdaLists {
 				list(new LispSymbol(LispNames.DO), bindings, endClause, body));
 	}
 
-	private static LispVal desugar(LispVal form) {
+	private static LispVal desugar(LispVal form, int maxParams) {
 		// A form with no lambda-list keyword and no return-from anywhere under it -- most
 		// of every program -- comes back AS IT WAS READ. Cons identity is what
 		// {@link SourceProvenance} keys a form's source position on, so a rebuild here
 		// would drop every position below the top level of a program that has nothing to
 		// desugar. The cdr spine is walked in a loop, so a long list costs no stack.
-		return LispTrees.rebuildSpine(form, LambdaLists::desugarHead, LambdaLists::desugar);
+		return LispTrees.rebuildSpine(form, node -> desugarHead(node, maxParams), node -> desugar(node, maxParams));
 	}
 
 	/**
@@ -492,7 +872,7 @@ public final class LambdaLists {
 	 * atom, a quoted form, a rebuilt lambda/defun -- or {@code null} for an ordinary
 	 * cell.
 	 */
-	private static @Nullable LispVal desugarHead(LispVal form) {
+	private static @Nullable LispVal desugarHead(LispVal form, int maxParams) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -507,13 +887,14 @@ public final class LambdaLists {
 			// lives in expand so the lambda compilers' toNative path shares it).
 			if (LispNames.LAMBDA.equals(name) && parts.size() >= 2 && (usesLambdaListKeywords(parts.get(1))
 					|| anyContainsReturnFrom(parts.subList(2, parts.size())))) {
-				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()));
-				return rebuildFunction(sym, null, e);
+				Expanded e = expand(parts.get(1), parts.subList(2, parts.size()), true, null, maxParams, null);
+				return rebuildFunction(sym, null, e, maxParams);
 			}
 			if (LispNames.DEFUN.equals(name) && parts.size() >= 3 && (usesLambdaListKeywords(parts.get(2))
 					|| anyContainsReturnFrom(parts.subList(3, parts.size())))) {
-				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)));
-				return rebuildFunction(sym, parts.get(1), e);
+				Expanded e = expand(parts.get(2), parts.subList(3, parts.size()), true, defunBlockName(parts.get(1)),
+						maxParams, parts.get(1) instanceof LispSymbol functionName ? functionName.name() : null);
+				return rebuildFunction(sym, parts.get(1), e, maxParams);
 			}
 		}
 		return null;
@@ -618,8 +999,12 @@ public final class LambdaLists {
 		return LispNames.LAMBDA.equals(op) || LispNames.DEFUN.equals(op);
 	}
 
-	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e) {
+	private static LispVal rebuildFunction(LispSymbol op, @Nullable LispVal name, Expanded e, int maxParams) {
 		List<LispVal> paramParts = new ArrayList<>(e.required());
+		if (!e.optionals().isEmpty()) {
+			paramParts.add(new LispSymbol(LispNames.LAMBDA_OPTIONAL));
+			paramParts.addAll(e.optionals());
+		}
 		if (e.rest() != null) {
 			paramParts.add(new LispSymbol(LispNames.LAMBDA_REST));
 			paramParts.add(e.rest());
@@ -631,7 +1016,7 @@ public final class LambdaLists {
 		}
 		parts.add(list(paramParts.toArray(LispVal[]::new)));
 		for (LispVal bodyForm : e.body()) {
-			parts.add(desugar(bodyForm));
+			parts.add(desugar(bodyForm, maxParams));
 		}
 		return list(parts.toArray(LispVal[]::new));
 	}
@@ -639,16 +1024,19 @@ public final class LambdaLists {
 	/**
 	 * Appends the {@code let*} bindings desugaring the parsed
 	 * {@code &optional}/{@code &rest}/{@code &key}/{@code &aux} parameters over
-	 * {@code restVar} (the variable holding the argument list tail). When
-	 * {@code aliasRest} is {@code true} the declared {@code &rest} parameter is always
-	 * bound to {@code restVar} (the destructuring path, where {@code restVar} is a
-	 * generated temporary); otherwise the alias is only needed after {@code &optional}
-	 * stepping consumed {@code restVar} (the native-parameter path, where a keyword-free
-	 * {@code &rest} parameter IS the physical rest parameter).
+	 * {@code restVar} (the variable holding the argument list tail), the optionals being
+	 * {@code stepped} -- every one in the interpreter's shape and the destructuring path,
+	 * those past the physical ones in the compilers'. When {@code aliasRest} is
+	 * {@code true} the declared {@code &rest} parameter is always bound to
+	 * {@code restVar} (the destructuring path, where {@code restVar} is a generated
+	 * temporary); otherwise the alias is needed exactly when {@code restVar} is not the
+	 * declared parameter itself -- a lambda list with optionals, whose rest list is the
+	 * internal one (the native-parameter path, where a keyword-free {@code &rest}
+	 * parameter of an optional-free list IS the physical rest parameter).
 	 */
-	private static void appendPrologueBindings(Parsed parsed, LispSymbol restVar, boolean aliasRest,
-			List<LispVal> bindings) {
-		for (OptionalParam opt : parsed.optionals()) {
+	private static void appendPrologueBindings(Parsed parsed, List<OptionalParam> stepped, LispSymbol restVar,
+			boolean aliasRest, List<LispVal> bindings) {
+		for (OptionalParam opt : stepped) {
 			LispVal supplied = list(new LispSymbol(LispNames.CONSP), restVar);
 			if (opt.suppliedP() != null) {
 				bindings.add(list(opt.suppliedP(), supplied));
@@ -659,7 +1047,7 @@ public final class LambdaLists {
 			bindings.add(list(restVar, list(new LispSymbol(LispNames.IF),
 					list(new LispSymbol(LispNames.CONSP), restVar), call(LispNames.CDR, restVar), LispNil.INSTANCE)));
 		}
-		if (parsed.rest() != null && (aliasRest || !parsed.optionals().isEmpty())) {
+		if (parsed.rest() != null && (aliasRest || !parsed.rest().name().equals(restVar.name()))) {
 			bindings.add(list(parsed.rest(), restVar));
 		}
 		LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
@@ -696,9 +1084,9 @@ public final class LambdaLists {
 		if (parsed.rest() == null && !parsed.sawKey()) {
 			// Nothing consumes the list past the optionals: a surplus element signals,
 			// before any default runs -- the function lambda lists' check.
-			out.add(tooManyArgsCheck(restVar, required, parsed.optionals().size()));
+			out.add(tooManyArgsCheck(restVar, required, parsed.optionals().size(), null));
 		}
-		appendPrologueBindings(parsed, restVar, true, out);
+		appendPrologueBindings(parsed, parsed.optionals(), restVar, true, out);
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
 			out.add(list(new LispSymbol("__ll_check"), unknownKeyCheck(keySource, parsed.keys())));

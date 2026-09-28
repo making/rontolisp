@@ -271,10 +271,10 @@ public final class HostFetchLibrary {
 		src.append("""
 				  (rontolisp::%host-fetch-parse
 				   (rontolisp::%host-fetch-send request-json)))
-				(defun rontolisp:fetch (url &rest options)
+				(defun rontolisp:fetch (url &optional options)
 				  ;; The options are validated here, at fetch time, like every backend.
 				  (rontolisp::%host-fetch-run
-				   (rontolisp::%host-fetch-request url (if options (car options) nil))))
+				   (rontolisp::%host-fetch-request url options)))
 				""");
 		return src.toString();
 	}
@@ -399,12 +399,12 @@ public final class HostFetchLibrary {
 		appendRequestBuilder(src, true);
 		appendResponseParser(src, false, true);
 		src.append("""
-				(defun rontolisp:fetch (url &rest options)
+				(defun rontolisp:fetch (url &optional options)
 				  ;; The options are validated here, at fetch time, like every backend;
 				  ;; the request is in flight when the call returns. The head is waited
 				  ;; for at the first await, where a transport failure signals.
 				  (let ((reply (rontolisp::%host-fetch-start
-				                (rontolisp::%host-fetch-request url (if options (car options) nil))))
+				                (rontolisp::%host-fetch-request url options)))
 				        (head nil)
 				        (settled nil))
 				    (rontolisp::%future-deferred

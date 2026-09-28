@@ -1484,6 +1484,36 @@ class RontoLispCliTest {
 		assertThat(output).contains("CL-USER").contains(":VERSION");
 	}
 
+	@Test
+	void warningsAsErrorsNeedsACompile() {
+		// The interpreter warns about nothing before it runs, so there is nothing for
+		// the option to fail on: refused, like every other compile-only flag.
+		assertThatThrownBy(() -> runCli("", "-e", "(print 1)", "--warnings-as-errors"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--warnings-as-errors")
+			.hasMessageContaining("needs -o");
+	}
+
+	@Test
+	void warningsAsErrorsLeavesACompileThatWarnsAboutNothingAlone() throws Exception {
+		Path program = this.tempDir.resolve("clean.lisp");
+		Files.writeString(program, "(defun add (a b) (+ a b))\n(print (add 1 2))\n");
+		Path output = this.tempDir.resolve("Clean.class");
+		runCli("", program.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(output).exists();
+	}
+
+	@Test
+	void warningsAsErrorsFailsAnInlineProgramToo() {
+		// An -e program has no file to name, but it is the program's own source.
+		Path output = this.tempDir.resolve("E.class");
+		assertThatThrownBy(
+				() -> runCli("", "-e", "(print (car '(1) 2))", "-o", output.toString(), "--warnings-as-errors"))
+			.isInstanceOf(WarningsAsErrorsException.class)
+			.hasMessage("1 warning about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+	}
+
 	// -- frontend source positions ------------------------
 
 	@Test

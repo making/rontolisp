@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.NativeImageDowncalls;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.Features;
@@ -117,16 +118,15 @@ class ShippedBridgeClassFilesTest {
 	void everyBridgeThatCallsNativeCodeShipsItsNativeImageRegistration() throws Exception {
 		// An image is built from the user's jar, which carries none of rontolisp's own
 		// META-INF: a bridge whose downcalls are not registered in the OUTPUT makes the
-		// image refuse the binding. --gpu then declines silently and objc: signals, so
-		// each carries its file verbatim, under a directory named after the program so
-		// two
-		// programs in one target/classes keep two. (--blas and ffi: still take the
+		// image refuse the binding. --gpu and --blas then decline silently and objc:
+		// signals, so each carries its file verbatim, under a directory named after the
+		// program so two programs in one target/classes keep two. (ffi: still takes the
 		// tracing agent's configuration.)
-		Map<String, String> registrations = Map.of("--gpu", "rontolisp-gpu", "objc:", "rontolisp-objc");
+		Map<String, String> registrations = Map.of("--gpu", "rontolisp-gpu", "objc:", "rontolisp-objc", "--blas",
+				"rontolisp-blas");
 		Map<String, Path> sources = Map.of("--gpu",
 				Path.of("src", "main", "resources", "am", "ik", "gpu", "reachability-metadata.json"), "objc:",
-				Path.of("src", "main", "resources", "META-INF", "native-image", "am.ik.rontolisp", "rontolisp-objc",
-						"reachability-metadata.json"));
+				NativeImageDowncalls.OBJC, "--blas", NativeImageDowncalls.BLAS);
 		for (Bridge bridge : BRIDGES) {
 			Map<String, byte[]> files = compile("com/example/Prog", bridge.source(), bridge.simd(), bridge.blas(),
 					bridge.gpu(), new HashMap<>());

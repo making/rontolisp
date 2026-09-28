@@ -1,18 +1,34 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.reflect.Executable;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.runtime.RontoComplex;
+import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,6 +52,10 @@ class JavaBridgeTemplateParityTest {
 
 	private static Arg integer(long v) {
 		return new Arg(JavaKind.Lisp.INTEGER, v);
+	}
+
+	private static Arg bignum(BigInteger v) {
+		return new Arg(JavaKind.Lisp.BIGNUM, v);
 	}
 
 	private static Arg real(double v) {
@@ -102,7 +122,17 @@ class JavaBridgeTemplateParityTest {
 				new Object[] { StringBuilder.class, "insert", List.of(integer(0), string("x")) },
 				new Object[] { java.util.ArrayList.class, "remove", List.of(integer(1)) },
 				new Object[] { java.util.Collection.class, "remove", List.of(integer(1)) },
-				new Object[] { java.util.ArrayList.class, "add", List.of(integer(0), integer(42)) });
+				new Object[] { java.util.ArrayList.class, "add", List.of(integer(0), integer(42)) },
+				new Object[] { String.class, "valueOf", List.of(bignum(BigInteger.TWO.pow(100))) },
+				new Object[] { java.util.Objects.class, "equals",
+						List.of(bignum(BigInteger.TWO.pow(100)), integer(1)) },
+				new Object[] { java.util.List.class, "of", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) },
+				new Object[] { BigInteger.class, "add", List.of(integer(5)) },
+				new Object[] { BigInteger.class, "add", List.of(bignum(BigInteger.TWO.pow(64))) },
+				new Object[] { BigInteger.class, "pow", List.of(integer(5)) },
+				new Object[] { BigDecimal.class, "valueOf", List.of(integer(5)) },
+				new Object[] { Math.class, "sqrt", List.of(bignum(BigInteger.TWO.pow(64))) },
+				new Object[] { Math.class, "max", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) });
 		int checked = 0;
 		for (Object[] row : corpus) {
 			Class<?> type = (Class<?>) row[0];
@@ -121,7 +151,7 @@ class JavaBridgeTemplateParityTest {
 			assertThat(template[2]).as("%s packs the same way", what).isEqualTo(shared.packed());
 			checked++;
 		}
-		assertThat(checked).isGreaterThan(35);
+		assertThat(checked).isGreaterThan(42);
 	}
 
 	// A covariant variant is never chosen over the method it overrides: both copies pick
@@ -133,6 +163,186 @@ class JavaBridgeTemplateParityTest {
 		JavaOverloads.Overload shared = sharedChoice(StringBuilder.class, "append", List.of(string("xy")));
 		assertThat(Objects.requireNonNull(shared).executable().returnType().name())
 			.isEqualTo("java.lang.StringBuilder");
+	}
+
+	// A java:reify / java:proxy the bridge implements when it runs declares the slots
+	// the shared rule chooses (compiler/JavaImplementations) -- the ones the
+	// interpreter and a compiled program's generated class declare -- and refuses a
+	// designator with the same text.
+	@Test
+	void theTemplateImplementsAnInterfaceAsTheSharedRuleDoes() throws Exception {
+		List<List<String>> corpus = List.of(List.of("java.util.Comparator", "compare"),
+				List.of("java.util.Comparator", "compare", "equals"), List.of("java.util.Iterator", "hasNext"),
+				List.of("java.util.Iterator", "hasNext", "next", "remove"), List.of("java.lang.Runnable", "run"),
+				List.of("java.lang.Runnable", "run", "toString", "hashCode"),
+				List.of("java.lang.Appendable", "append(char)"),
+				List.of("java.lang.Appendable", "append(CharSequence,_,_)", "append(char)", "append(CharSequence)"),
+				List.of("java.lang.CharSequence", "length", "charAt"),
+				List.of("java.util.function.Function", "apply", "andThen"),
+				List.of("am.ik.rontolisp.compiler.JavaImplementationsTest$Narrowed", "get"),
+				List.of("java.util.Comparator", "nope"), List.of("java.lang.Appendable", "append"),
+				List.of("java.util.Iterator", "next", "next()"), List.of("java.util.Iterator", "next("));
+		for (List<String> row : corpus) {
+			Class<?> iface = Class.forName(row.get(0));
+			List<String> designators = row.subList(1, row.size());
+			String shared;
+			try {
+				shared = slots(am.ik.rontolisp.compiler.JavaImplementations.reify(ReflectiveJavaClasses.of(iface),
+						designators, ReflectiveJavaClasses.instance()));
+			}
+			catch (IllegalArgumentException ex) {
+				shared = "error: " + ex.getMessage();
+			}
+			String template;
+			try {
+				template = String.valueOf(new java.util.TreeMap<>((java.util.Map<?, ?>) invoke("reifySlots",
+						new Class<?>[] { Class.class, String[].class }, iface, designators.toArray(String[]::new))));
+			}
+			catch (java.lang.reflect.InvocationTargetException ex) {
+				template = "error: " + Objects.requireNonNull(ex.getCause()).getMessage();
+			}
+			assertThat(template).as("%s", row).isEqualTo(shared);
+		}
+		for (String name : List.of("java.util.Comparator", "java.util.function.Function", "java.lang.CharSequence",
+				"java.util.List")) {
+			Class<?> iface = Class.forName(name);
+			assertThat(String.valueOf(new java.util.TreeMap<>(
+					(java.util.Map<?, ?>) invoke("proxySlots", new Class<?>[] { Class.class }, iface))))
+				.as(name)
+				.isEqualTo(slots(am.ik.rontolisp.compiler.JavaImplementations.proxy(ReflectiveJavaClasses.of(iface),
+						ReflectiveJavaClasses.instance())));
+		}
+	}
+
+	// The shared rule's slots in the template's shape: dispatch key -> implementation.
+	private static String slots(am.ik.rontolisp.compiler.JavaImplementation implementation) {
+		java.util.TreeMap<String, Integer> slots = new java.util.TreeMap<>();
+		for (am.ik.rontolisp.compiler.JavaImplementation.Slot slot : implementation.slots()) {
+			slots.put(slot.dispatchKey(), slot.implementation());
+		}
+		return slots.toString();
+	}
+
+	// What a compiled program counts as a host object is one rule with two copies: the
+	// bridge's isJavaObject and the _jhost a resolved site calls. Over the compiled
+	// representation of every kind of Lisp value and a spread of host objects -- the
+	// ArrayList / LinkedHashMap a Lisp array / hash table also is among them -- the two
+	// answer alike, and as intended.
+	@Test
+	void theBridgeAndADirectSiteCountTheSameHostObjects(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("HostTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defun size (x)
+				  (declare (type (java:object "java.util.Collection") x))
+				  (java:call x "size"))
+				(print (size (java:new "java.util.ArrayList")))
+				"""));
+		Files.write(dir.resolve("HostTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		ArrayList<Object> lispArray = new ArrayList<>();
+		lispArray.add(new Object[] { new Object[] { 1L }, null, null });
+		lispArray.add(7L);
+		LinkedHashMap<Object, Object> lispTable = new LinkedHashMap<>();
+		lispTable.put(RontoHashTable.ORDER_KEY, new ArrayList<>());
+		ArrayList<Object> hostList = new ArrayList<>(List.of(1L));
+		LinkedHashMap<Object, Object> hostMap = new LinkedHashMap<>(Map.of("#order", "not a list"));
+		List<@Nullable Object> lisp = Arrays.asList(null, 5L, 1.5, BigInteger.TEN.pow(30), "\"s\"", "FOO", "T",
+				new int[] { 97 }, new BigInteger[] { BigInteger.ONE, BigInteger.TWO }, new Object[] { 1L, null },
+				new Object[] { 3, "car" }, new double[] { 2, 1, 0 }, new byte[] { 8, 1 }, lispArray, lispTable,
+				new RontoComplex(1L, 2L));
+		List<Object> host = List.of(new StringBuilder(), new ArrayList<>(), hostList, new LinkedHashMap<>(), hostMap,
+				new HashMap<>(), Optional.empty(), BigDecimal.ONE);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method jhost = loader.loadClass("HostTest").getDeclaredMethod(JvmJavaDirectSites.HOST, Object.class);
+			jhost.setAccessible(true);
+			for (Object value : lisp) {
+				assertThat(jhost.invoke(null, value)).as("_jhost %s", value).isEqualTo(false);
+				assertThat(invoke("isJavaObject", new Class<?>[] { Object.class }, value)).as("bridge %s", value)
+					.isEqualTo(false);
+			}
+			for (Object value : host) {
+				assertThat(jhost.invoke(null, value)).as("_jhost %s", value).isEqualTo(true);
+				assertThat(invoke("isJavaObject", new Class<?>[] { Object.class }, value)).as("bridge %s", value)
+					.isEqualTo(true);
+			}
+		}
+	}
+
+	// A specialized vector reaches a site as the same elements whichever copy reads it:
+	// the bridge's packedElements and the _jseq a dispatched site calls, over every
+	// packed shape -- the rank-1 ones as aref reads them, a rank-2 array and a quantized
+	// matrix (a byte[] whose slot 0 is its format code) as no sequence.
+	@Test
+	void theBridgeAndADirectSiteReadASpecializedVectorAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("PackedTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defvar *c* "java.util.Arrays")
+				(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+				(defun ts* (x) (java:static *c* "toString" x))
+				(print (ts (make-array 1 :element-type 'bfloat16)))
+				(print (ts* (make-array 1 :element-type '(unsigned-byte 8))))
+				"""));
+		Files.write(dir.resolve("PackedTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		short oneAndAHalf = (short) (Float.floatToRawIntBits(1.5f) >>> 16);
+		short nan = (short) 0x7f81;
+		List<Object> values = List.of(new double[] { 1, 2, 1.5, -2 }, new float[] { 1, 1, 6 },
+				new short[] { 1, 0, 2, oneAndAHalf, nan }, new long[] { 16, 7, 65535 },
+				new byte[] { 8, 1, (byte) 200, (byte) 255 }, new double[] { 2, 1, 1, 0 }, new byte[] { 1, 0, 0 });
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("PackedTest");
+			Method jseq = program.getDeclaredMethod(JvmJavaDirectSites.SEQUENCE, Object.class);
+			jseq.setAccessible(true);
+			invoke("bind", new Class<?>[] { Class.class }, program);
+			try {
+				List<@Nullable List<?>> direct = new ArrayList<>();
+				List<@Nullable Object> bridge = new ArrayList<>();
+				for (Object value : values) {
+					Object[] elements = (Object[]) jseq.invoke(null, value);
+					direct.add(elements == null ? null : Arrays.asList(elements));
+					bridge.add(invoke("packedElements", new Class<?>[] { Object.class }, value));
+				}
+				assertThat(bridge).isEqualTo(direct);
+				assertThat(direct).containsExactly(List.of(1.5, -2.0), List.of(6.0),
+						List.of(1.5, am.ik.rontolisp.BFloat16.value(nan)), List.of(7L, 65535L), List.of(1L, 200L, 255L),
+						null, null);
+				assertThat(Double.doubleToRawLongBits((Double) Objects.requireNonNull(direct.get(2)).get(1)))
+					.isEqualTo(Double.doubleToRawLongBits(am.ik.rontolisp.BFloat16.value(nan)));
+			}
+			finally {
+				// The template class is this JVM's: leave it unbound for the other tests.
+				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
+						"signalMethod", "failMethod")) {
+					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
+					f.setAccessible(true);
+					f.set(null, null);
+				}
+			}
+		}
+	}
+
+	// The bridge may import nothing of rontolisp's, so it spells the hash table's order
+	// key and the runtime package itself.
+	@Test
+	void theBridgeSpellsTheRepresentationAsTheRuntimeDoes() throws Exception {
+		assertThat(constant("HASH_TABLE_ORDER_KEY")).isEqualTo(RontoHashTable.ORDER_KEY);
+		assertThat(constant("RUNTIME_PACKAGE_PREFIX")).isEqualTo(JvmJavaDirectSites.RUNTIME_PACKAGE_PREFIX);
+	}
+
+	private static @Nullable Object constant(String name) throws Exception {
+		Field field = JavaBridgeTemplate.class.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(null);
 	}
 
 	private static JavaOverloads.@Nullable Overload sharedChoice(Class<?> type, String designator, List<Arg> args) {

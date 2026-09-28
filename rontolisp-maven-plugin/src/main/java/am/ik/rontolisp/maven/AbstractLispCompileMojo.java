@@ -60,6 +60,14 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 	private boolean noPrune;
 
 	/**
+	 * {@code --warnings-as-errors}: fail the build on a compile-time warning about the
+	 * source set's own code (a wrong argument count, an undefined function, ...), after
+	 * printing every warning of the file that emitted it.
+	 */
+	@Parameter(property = "rontolisp.warningsAsErrors", defaultValue = "false")
+	private boolean warningsAsErrors;
+
+	/**
 	 * {@code --no-main}: emit a library class, entered through its
 	 * {@code rontolisp:jvm-export} declarations only.
 	 * <p>
@@ -229,6 +237,7 @@ abstract class AbstractLispCompileMojo extends AbstractMojo {
 			.dynamic(this.dynamic)
 			.optimize(OptimizeLevel.parse(this.optimize))
 			.noPrune(this.noPrune)
+			.warningsAsErrors(this.warningsAsErrors)
 			.servlet(this.servlet)
 			.systemPath(this.systemPath == null ? List.of() : this.systemPath)
 			.dists(this.dists == null ? List.of() : this.dists);

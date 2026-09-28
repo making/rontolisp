@@ -4,6 +4,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -11,7 +12,11 @@ import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.function.ToIntBiFunction;
@@ -21,12 +26,14 @@ import org.jspecify.annotations.Nullable;
 /**
  * The {@code java:} interop runtime injected into a compiled {@code .class} program. This
  * is a rewrite of the interpreter's {@code eval/JavaInterop} against the compiled runtime
- * value representation ({@code null} = nil, {@code Long} = integer, {@code Double} =
- * float, a {@code String} with surrounding quotes = string, any other {@code String} =
- * symbol ({@code "T"} = true), {@code Character} = character, an exact {@code Object[]} =
- * cons cell or (with an {@code Integer} head) a function value, an {@code ArrayList} with
- * a leading {@code Object[]} of dimension sizes = array); the overload selection costs
- * and tie-breaking are identical, so a program behaves the same interpreted and compiled.
+ * value representation ({@code null} = nil, {@code Long} = integer, {@code BigInteger} =
+ * bignum, {@code Double} = float, a {@code String} with surrounding quotes = string, any
+ * other {@code String} = symbol ({@code "T"} = true), {@code Character} = character, an
+ * exact {@code Object[]} = cons cell or (with an {@code Integer} head) a function value,
+ * an {@code ArrayList} with a leading {@code Object[]} of dimension sizes = array, a
+ * header-carrying {@code double[]} / {@code float[]} / {@code short[]} / {@code long[]} /
+ * {@code byte[]} = specialized array); the overload selection costs and tie-breaking are
+ * identical, so a program behaves the same interpreted and compiled.
  *
  * <p>
  * The class is never referenced by the rontolisp code base at runtime. Its compiled
@@ -99,11 +106,27 @@ final class JavaBridgeTemplate {
 	// nested record would become a second class file).
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object[][]>> CHOICES = new ConcurrentHashMap<>();
 
+	// How a java:reify of (interface, designators), or a java:proxy of an interface, is
+	// implemented: its slots, resolved once.
+	private static final ConcurrentHashMap<List<Object>, Map<String, Integer>> IMPLEMENTATIONS = new ConcurrentHashMap<>();
+
+	// The designators stand-in of a java:proxy's key.
+	private static final String PROXY_KEY = "proxy";
+
+	// Object's methods a java:reify may implement and every implementation answers
+	// (mirrors compiler/JavaImplementations).
+	private static final List<String> OBJECT_METHODS = List.of("equals(java.lang.Object)", "hashCode()", "toString()");
+
+	// Mirrors compiler/JavaImplementations.REIFY_USAGE.
+	private static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
+
 	private static final String KIND_NIL = "nil";
 
 	private static final String KIND_T = "t";
 
 	private static final String KIND_INTEGER = "integer";
+
+	private static final String KIND_BIGNUM = "bignum";
 
 	private static final String KIND_FLOAT = "float";
 
@@ -136,6 +159,55 @@ final class JavaBridgeTemplate {
 	 */
 	private static @Nullable Method strvMethod;
 
+	/**
+	 * The generated program's {@code _lispToString(Object)} printer, or null when the
+	 * program has none (then {@link #describe(Object)} falls back to its own minimal
+	 * text). Bound beside {@code _apply}, so a message shows a value as the interpreter's
+	 * does -- {@code (1 2)}, {@code 1.0e10}, {@code #(0 0)} -- and not as its Java class.
+	 */
+	private static @Nullable Method lispToStringMethod;
+
+	/**
+	 * The generated program's {@code _bf16Value(int)} -- the one widening of a bfloat16
+	 * bit pattern the program's own {@code aref} reads through -- or null when the
+	 * program carries no packed float runtime (then no {@code short[]} bfloat16 array can
+	 * exist). Bound beside {@code _strv}, so an element this bridge marshals is the value
+	 * {@code aref} answers without a fourth hand copy of the arithmetic.
+	 */
+	private static @Nullable Method bf16ValueMethod;
+
+	/**
+	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
+	 * records a throwable leaving its callback with, as a generated implementation's
+	 * callback does, so the site whose Java call it reaches -- this bridge's or a direct
+	 * one -- throws it on unchanged. Bound beside {@code _apply}.
+	 */
+	private static @Nullable Method signalMethod;
+
+	/**
+	 * The generated program's {@code _jfail(Throwable, String)}: what a failed call
+	 * throws -- what a callback raised, as it is, or the error calling the member -- the
+	 * one rule this bridge and the program's direct calls share. Bound beside
+	 * {@code _apply}.
+	 */
+	private static @Nullable Method failMethod;
+
+	/** The width tag slot 0 of a packed {@code (unsigned-byte 8)} vector holds. */
+	private static final int OCTET_TAG = 8;
+
+	/**
+	 * The key a compiled hash table's insertion-order list hangs off; mirrors
+	 * {@code runtime/RontoHashTable.ORDER_KEY} (this class may import nothing of
+	 * rontolisp's).
+	 */
+	private static final String HASH_TABLE_ORDER_KEY = "#order";
+
+	/**
+	 * The package of the classes that travel with a compiled program and hold Lisp values
+	 * ({@code RontoComplex}, ...): none of them is a host object.
+	 */
+	private static final String RUNTIME_PACKAGE_PREFIX = "am.ik.rontolisp.runtime.";
+
 	private JavaBridgeTemplate() {
 	}
 
@@ -145,14 +217,9 @@ final class JavaBridgeTemplate {
 	 * @param mainClass the generated program class
 	 */
 	static void bind(Class<?> mainClass) {
-		try {
-			Method apply = mainClass.getDeclaredMethod("_apply", Object.class, Object.class);
-			apply.setAccessible(true);
-			applyMethod = apply;
-		}
-		catch (NoSuchMethodException ex) {
-			throw new RuntimeException("java interop: no _apply method in " + mainClass.getName());
-		}
+		applyMethod = required(mainClass, "_apply", Object.class, Object.class);
+		signalMethod = required(mainClass, "_jsig", Throwable.class);
+		failMethod = required(mainClass, "_jfail", Throwable.class, String.class);
 		try {
 			Method strv = mainClass.getDeclaredMethod("_strv", Object.class);
 			strv.setAccessible(true);
@@ -161,6 +228,35 @@ final class JavaBridgeTemplate {
 		catch (NoSuchMethodException ex) {
 			// No array runtime in this program: no character vector can exist.
 			strvMethod = null;
+		}
+		try {
+			Method print = mainClass.getDeclaredMethod("_lispToString", Object.class);
+			print.setAccessible(true);
+			lispToStringMethod = print;
+		}
+		catch (NoSuchMethodException ex) {
+			lispToStringMethod = null;
+		}
+		try {
+			Method bf16Value = mainClass.getDeclaredMethod("_bf16Value", int.class);
+			bf16Value.setAccessible(true);
+			bf16ValueMethod = bf16Value;
+		}
+		catch (NoSuchMethodException ex) {
+			// No packed float runtime in this program: no bfloat16 array can exist.
+			bf16ValueMethod = null;
+		}
+	}
+
+	// A method every program the bridge travels with declares.
+	private static Method required(Class<?> mainClass, String name, Class<?>... parameterTypes) {
+		try {
+			Method method = mainClass.getDeclaredMethod(name, parameterTypes);
+			method.setAccessible(true);
+			return method;
+		}
+		catch (NoSuchMethodException ex) {
+			throw new RuntimeException("java interop: no " + name + " method in " + mainClass.getName());
 		}
 	}
 
@@ -262,44 +358,277 @@ final class JavaBridgeTemplate {
 		return proxy(iface, callable);
 	}
 
-	// The callable is applied as (callable method-name arg1 arg2 ...) for every
-	// interface method; Object methods (equals/hashCode/toString) keep identity
-	// behavior, like the interpreter's proxy.
+	/**
+	 * Implements {@code (java:reify "fully.qualified.Interface" "method" function ...)}
+	 * left to run time: the rest is designator, function, ... (mirrors
+	 * {@code compiler/JavaImplementations.reify}).
+	 */
+	static @Nullable Object javaReify(@Nullable Object interfaceName, @Nullable Object[] rest) {
+		String name = lispString(interfaceName);
+		if (name == null || rest.length % 2 != 0) {
+			throw new RuntimeException(REIFY_USAGE);
+		}
+		String[] designators = new String[rest.length / 2];
+		@Nullable Object[] functions = new @Nullable Object[rest.length / 2];
+		for (int i = 0; i < designators.length; i++) {
+			String designator = lispString(rest[2 * i]);
+			if (designator == null) {
+				throw new RuntimeException(REIFY_USAGE);
+			}
+			designators[i] = designator;
+			functions[i] = rest[2 * i + 1];
+		}
+		Class<?> iface = loadClass(name);
+		if (!iface.isInterface()) {
+			throw new RuntimeException("java:reify expects an interface, got " + name);
+		}
+		List<Object> key = List.of(iface, List.of(designators));
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = reifySlots(iface, designators);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return implementation(iface, false, slots, functions);
+	}
+
+	// A function value where an interface is expected, or java:proxy: every method but
+	// Object's three calls the callable with the method's name first.
 	private static Object proxy(Class<?> iface, @Nullable Object callable) {
+		List<Object> key = List.of(iface, PROXY_KEY);
+		Map<String, Integer> slots = IMPLEMENTATIONS.get(key);
+		if (slots == null) {
+			slots = proxySlots(iface);
+			remember(IMPLEMENTATIONS, key, slots);
+		}
+		return implementation(iface, true, slots, new @Nullable Object[] { callable });
+	}
+
+	// Every method a java:proxy of the interface declares, by name(parameters)return:
+	// all but Object's three call the callable (mirrors
+	// compiler/JavaImplementations.proxy).
+	private static Map<String, Integer> proxySlots(Class<?> iface) {
+		Map<String, Integer> slots = new HashMap<>();
+		for (Map.Entry<String, List<Method>> group : groups(iface).entrySet()) {
+			if (OBJECT_METHODS.contains(group.getKey())) {
+				continue;
+			}
+			for (List<Method> variant : variants(group.getValue()).values()) {
+				slots.put(group.getKey() + variant.get(0).getReturnType().getName(), 0);
+			}
+		}
+		return slots;
+	}
+
+	// The object: a Proxy whose handler dispatches by name(parameters)return on the
+	// slots -- a function's index, or -1 for an abstract method no function implements --
+	// as the interpreter's and a compiled program's generated class do. A default method
+	// no slot names runs its body; Object's three keep their identity behavior. What the
+	// function raises -- or the refusal of its value -- is recorded on its way out to the
+	// Java caller (the program's _jsig), as a generated class's callback records it.
+	private static Object implementation(Class<?> iface, boolean proxy, Map<String, Integer> slots,
+			@Nullable Object[] functions) {
+		String name = iface.getName();
 		return Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[] { iface }, (p, method, methodArgs) -> {
-			switch (method.getName()) {
-				case "hashCode" -> {
-					return System.identityHashCode(p);
+			String key = keyOf(method);
+			Integer index = slots.get(key + method.getReturnType().getName());
+			if (index == null) {
+				switch (key) {
+					case "hashCode()" -> {
+						return System.identityHashCode(p);
+					}
+					case "equals(java.lang.Object)" -> {
+						return p == (methodArgs == null ? null : methodArgs[0]);
+					}
+					case "toString()" -> {
+						return "#<java-" + (proxy ? "proxy " : "reify ") + name + ">";
+					}
+					default -> {
+					}
 				}
-				case "equals" -> {
-					return p == (methodArgs == null ? null : methodArgs[0]);
+				if (method.isDefault()) {
+					return InvocationHandler.invokeDefault(p, method, methodArgs);
 				}
-				case "toString" -> {
-					return "#<java-proxy " + iface.getName() + ">";
-				}
-				default -> {
-				}
+				index = -1;
 			}
-			// Build the (method-name arg...) cons list, tail-first.
-			Object argList = null;
-			if (methodArgs != null) {
-				for (int i = methodArgs.length - 1; i >= 0; i--) {
-					argList = new Object[] { unmarshal(methodArgs[i]), argList };
-				}
+			if (index < 0) {
+				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
 			}
-			argList = new Object[] { quote(method.getName()), argList };
-			Object result = applyCallable(callable, argList);
-			Class<?> ret = method.getReturnType();
-			if (ret == void.class) {
-				return null;
+			try {
+				return callback(name, proxy, method, methodArgs, functions[index]);
 			}
-			@Nullable Object[] slot = new @Nullable Object[1];
-			if (marshal(result, ret, slot, 0) == NO_MATCH) {
-				throw new RuntimeException(
-						"java:proxy: cannot return " + describe(result) + " as " + ret + " from " + iface.getName());
+			catch (Throwable raised) {
+				throw signal(raised);
 			}
-			return slot[0];
 		});
+	}
+
+	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
+	// to the method's return type.
+	private static @Nullable Object callback(String name, boolean proxy, Method method,
+			@Nullable Object @Nullable [] methodArgs, @Nullable Object function) {
+		// Build the ([method-name] arg...) cons list, tail-first.
+		Object argList = null;
+		if (methodArgs != null) {
+			for (int i = methodArgs.length - 1; i >= 0; i--) {
+				argList = new Object[] { unmarshal(methodArgs[i]), argList };
+			}
+		}
+		if (proxy) {
+			argList = new Object[] { quote(method.getName()), argList };
+		}
+		Object result = applyCallable(function, argList);
+		Class<?> ret = method.getReturnType();
+		if (ret == void.class) {
+			return null;
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(result, ret, slot, 0, false) == NO_MATCH) {
+			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
+					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
+		}
+		return slot[0];
+	}
+
+	// Records a throwable leaving a callback through the program's _jsig; answers it.
+	private static Throwable signal(Throwable throwable) {
+		Method record = signalMethod;
+		if (record != null) {
+			try {
+				record.invoke(null, throwable);
+			}
+			catch (ReflectiveOperationException ex) {
+				// Not recorded: the site wraps it as a failure of the Java call.
+			}
+		}
+		return throwable;
+	}
+
+	// The methods (java:reify "I" designator ...) declares, by name(parameters)return:
+	// the index of the designator that names it, or -1 for an abstract one none names.
+	// Mirrors compiler/JavaImplementations.reify, errors and all.
+	private static Map<String, Integer> reifySlots(Class<?> iface, String[] designators) {
+		TreeMap<String, List<Method>> groups = groups(iface);
+		TreeMap<String, List<Method>> objectGroups = new TreeMap<>();
+		for (Method method : Object.class.getMethods()) {
+			String key = keyOf(method);
+			if (OBJECT_METHODS.contains(key)) {
+				objectGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(method);
+			}
+		}
+		Map<String, Integer> assigned = new HashMap<>();
+		for (int i = 0; i < designators.length; i++) {
+			Object[] member = member(designators[i]);
+			List<String> candidates = new ArrayList<>();
+			for (Map.Entry<String, List<Method>> group : groups.entrySet()) {
+				if (named(group.getValue().get(0), member)) {
+					candidates.add(group.getKey());
+				}
+			}
+			for (Map.Entry<String, List<Method>> group : objectGroups.entrySet()) {
+				if (!groups.containsKey(group.getKey()) && named(group.getValue().get(0), member)) {
+					candidates.add(group.getKey());
+				}
+			}
+			if (candidates.isEmpty()) {
+				throw new RuntimeException(
+						"java:reify: interface " + iface.getName() + " has no method " + designators[i]);
+			}
+			if (candidates.size() > 1) {
+				throw new RuntimeException("java:reify: " + designators[i] + " names more than one method of "
+						+ iface.getName() + ": " + String.join(", ", candidates));
+			}
+			if (assigned.putIfAbsent(candidates.get(0), i) != null) {
+				throw new RuntimeException(
+						"java:reify: " + iface.getName() + "." + candidates.get(0) + " is implemented twice");
+			}
+		}
+		Map<String, Integer> slots = new HashMap<>();
+		for (Map.Entry<String, List<Method>> group : groups.entrySet()) {
+			Integer implementation = assigned.get(group.getKey());
+			for (List<Method> variant : variants(group.getValue()).values()) {
+				String dispatch = group.getKey() + variant.get(0).getReturnType().getName();
+				if (implementation != null) {
+					slots.put(dispatch, implementation);
+				}
+				else if (mustImplement(variant) && !OBJECT_METHODS.contains(group.getKey())) {
+					slots.put(dispatch, -1);
+				}
+			}
+		}
+		for (Map.Entry<String, List<Method>> group : objectGroups.entrySet()) {
+			Integer implementation = assigned.get(group.getKey());
+			if (implementation != null && !groups.containsKey(group.getKey())) {
+				slots.put(group.getKey() + group.getValue().get(0).getReturnType().getName(), implementation);
+			}
+		}
+		return slots;
+	}
+
+	// The interface's instance methods by name(parameters), in key order.
+	private static TreeMap<String, List<Method>> groups(Class<?> iface) {
+		TreeMap<String, List<Method>> groups = new TreeMap<>();
+		for (Method method : iface.getMethods()) {
+			if (!Modifier.isStatic(method.getModifiers())) {
+				groups.computeIfAbsent(keyOf(method), k -> new ArrayList<>()).add(method);
+			}
+		}
+		return groups;
+	}
+
+	// One method's declarations by return type name.
+	private static TreeMap<String, List<Method>> variants(List<Method> declarations) {
+		TreeMap<String, List<Method>> variants = new TreeMap<>();
+		for (Method declaration : declarations) {
+			variants.computeIfAbsent(declaration.getReturnType().getName(), k -> new ArrayList<>()).add(declaration);
+		}
+		return variants;
+	}
+
+	// A class must implement a variant one declaration leaves abstract, or two
+	// interfaces supply a default for.
+	private static boolean mustImplement(List<Method> variant) {
+		int defaults = 0;
+		for (Method declaration : variant) {
+			if (Modifier.isAbstract(declaration.getModifiers())) {
+				return true;
+			}
+			defaults++;
+		}
+		return defaults > 1;
+	}
+
+	// Whether a parsed designator {name, tag} names the method.
+	private static boolean named(Method method, Object[] member) {
+		if (!method.getName().equals(member[0])) {
+			return false;
+		}
+		String[] tag = (String[]) member[1];
+		if (tag == null) {
+			return true;
+		}
+		Class<?>[] params = method.getParameterTypes();
+		if (params.length != tag.length) {
+			return false;
+		}
+		for (int i = 0; i < params.length; i++) {
+			if (!"_".equals(tag[i]) && !tag[i].equals(params[i].getName())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// name(p1,p2), the parameters in Class.getName() spelling.
+	private static String keyOf(Method method) {
+		StringBuilder sb = new StringBuilder(method.getName()).append('(');
+		Class<?>[] params = method.getParameterTypes();
+		for (int i = 0; i < params.length; i++) {
+			if (i > 0) {
+				sb.append(',');
+			}
+			sb.append(params[i].getName());
+		}
+		return sb.append(')').toString();
 	}
 
 	private static @Nullable Object applyCallable(@Nullable Object callable, @Nullable Object argList) {
@@ -311,15 +640,20 @@ final class JavaBridgeTemplate {
 			return apply.invoke(null, callable, argList);
 		}
 		catch (InvocationTargetException ex) {
-			// A Lisp error thrown by the callable propagates unchanged.
-			if (ex.getCause() instanceof RuntimeException re) {
-				throw re;
-			}
-			throw new RuntimeException("error applying callback: " + ex.getCause());
+			// What the callable raised -- an exit, a condition -- goes on as it is.
+			Throwable raised = ex.getCause();
+			throw rethrow(raised != null ? raised : ex);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw new RuntimeException("error applying callback: " + ex);
 		}
+	}
+
+	// Throws a throwable as it is, whatever its class: only bytecode's rules apply to
+	// what a compiled program throws.
+	@SuppressWarnings("unchecked")
+	private static <T extends Throwable> RuntimeException rethrow(Throwable throwable) throws T {
+		throw (T) throwable;
 	}
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
@@ -582,6 +916,9 @@ final class JavaBridgeTemplate {
 		if (value instanceof Long) {
 			return KIND_INTEGER;
 		}
+		if (value instanceof BigInteger) {
+			return KIND_BIGNUM;
+		}
 		if (value instanceof Double) {
 			return KIND_FLOAT;
 		}
@@ -598,13 +935,9 @@ final class JavaBridgeTemplate {
 			Object[] arr = (Object[]) value;
 			return arr.length > 0 && arr[0] instanceof Integer ? KIND_FUNCTION : null;
 		}
-		if (value instanceof BigInteger || value instanceof BigInteger[]) {
-			return null;
-		}
-		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
-			return null;
-		}
-		return value.getClass();
+		// A host object's kind is its exact class; any other value (a ratio, a Lisp array
+		// or hash table, ...) has none.
+		return isJavaObject(value) ? value.getClass() : null;
 	}
 
 	private static List<Constructor<?>> constructors(Class<?> cls) {
@@ -846,14 +1179,25 @@ final class JavaBridgeTemplate {
 	// Writes the Java value for `value` into out[index] and returns its conversion
 	// cost, or NO_MATCH if it cannot convert, mirroring eval/JavaInterop over the
 	// compiled value representation. A value with a kind is costed by kindCost -- the
-	// one cost table -- and converted by convert(); a cons or Lisp array element-wise.
+	// one cost table -- and converted by convert(); a cons or Lisp array element-wise. A
+	// function becomes a proxy of an interface: an argument's conversion.
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
+		return marshal(value, target, out, index, true);
+	}
+
+	// With proxies false a function converts to nothing: the conversion of a value a
+	// java:reify / java:proxy function answers (mirrors eval/JavaInterop).
+	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index,
+			boolean proxies) {
 		// A mutable character vector marshals as the string it spells: rendered once
 		// here, the single source of truth for every argument position (fixed arity,
 		// varargs, constructors and sequence elements alike).
 		value = rendered(value);
 		Object kind = kindOf(value);
 		if (kind != null) {
+			if (!proxies && KIND_FUNCTION.equals(kind)) {
+				return NO_MATCH;
+			}
 			int cost = kindCost(kind, target);
 			if (cost != NO_MATCH) {
 				out[index] = convert(value, target);
@@ -865,7 +1209,7 @@ final class JavaBridgeTemplate {
 			if (elements == null) {
 				return NO_MATCH; // a dotted (improper) list is not a sequence
 			}
-			return marshalSequence(elements, target, out, index);
+			return marshalSequence(elements, target, out, index, proxies);
 		}
 		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
 			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
@@ -881,13 +1225,77 @@ final class JavaBridgeTemplate {
 				for (long v : packed) {
 					elements.add(v == Long.MIN_VALUE ? null : v);
 				}
-				return marshalSequence(elements, target, out, index);
+				return marshalSequence(elements, target, out, index, proxies);
 			}
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
-			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index);
+			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, proxies);
 		}
-		return NO_MATCH; // other symbols, bignums and ratios are not bridged (as
+		List<@Nullable Object> packed = packedElements(value);
+		if (packed != null) {
+			return marshalSequence(packed, target, out, index, proxies);
+		}
+		return NO_MATCH; // other symbols, ratios, rank-2+ arrays are not bridged (as
 							// interpreted)
+	}
+
+	// The elements of a rank-1 SPECIALIZED vector -- a bare primitive array carrying its
+	// header -- as aref reads them, or null for anything else: a packed float vector
+	// (double[] / float[] {rank, dim, e...}, bfloat16 short[] {rank, hi, lo, e...}, each
+	// element a Double), a packed (unsigned-byte 16|32) vector (long[] {width, e...}) or
+	// an octet vector (byte[] {8, e...}, widened unsigned), each element a Long. A packed
+	// array of another rank, and a quantized matrix (a byte[] whose slot 0 is its format
+	// code), is no sequence. Mirrors JvmJavaDirectSites' _jseq.
+	private static @Nullable List<@Nullable Object> packedElements(@Nullable Object value) {
+		List<@Nullable Object> elements = new ArrayList<>();
+		if (value instanceof double[] d) {
+			if (d[0] != 1) {
+				return null;
+			}
+			for (int i = 2; i < d.length; i++) {
+				elements.add(d[i]);
+			}
+			return elements;
+		}
+		if (value instanceof float[] f) {
+			if (f[0] != 1) {
+				return null;
+			}
+			for (int i = 2; i < f.length; i++) {
+				elements.add((double) f[i]);
+			}
+			return elements;
+		}
+		if (value instanceof short[] s) {
+			Method bf16Value = bf16ValueMethod;
+			if (s[0] != 1 || bf16Value == null) {
+				return null;
+			}
+			for (int i = 3; i < s.length; i++) {
+				try {
+					elements.add(bf16Value.invoke(null, (int) s[i]));
+				}
+				catch (ReflectiveOperationException ex) {
+					throw new IllegalStateException("java interop: cannot read a bfloat16 element", ex);
+				}
+			}
+			return elements;
+		}
+		if (value instanceof long[] l) {
+			for (int i = 1; i < l.length; i++) {
+				elements.add(l[i]);
+			}
+			return elements;
+		}
+		if (value instanceof byte[] b) {
+			if (b.length == 0 || b[0] != OCTET_TAG) {
+				return null;
+			}
+			for (int i = 1; i < b.length; i++) {
+				elements.add((long) (b[i] & 0xFF));
+			}
+			return elements;
+		}
+		return null;
 	}
 
 	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH.
@@ -918,6 +1326,9 @@ final class JavaBridgeTemplate {
 				yield target.isAssignableFrom(Boolean.class) ? COST_BOXED : NO_MATCH;
 			}
 			case KIND_INTEGER -> integerCost(target);
+			// A bignum is a BigInteger: that class or a supertype, never narrower.
+			case KIND_BIGNUM -> target == BigInteger.class ? COST_EXACT
+					: (target.isAssignableFrom(BigInteger.class) ? COST_BOXED : NO_MATCH);
 			case KIND_FLOAT -> floatCost(target);
 			case KIND_STRING, KIND_STRING_1 -> {
 				if (target.isAssignableFrom(String.class)) {
@@ -960,6 +1371,9 @@ final class JavaBridgeTemplate {
 		if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
 			return COST_NARROW;
 		}
+		if (target == BigInteger.class) {
+			return COST_CONVERT;
+		}
 		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
 				|| target.isAssignableFrom(Integer.class)) {
 			return COST_BOXED;
@@ -990,6 +1404,9 @@ final class JavaBridgeTemplate {
 		}
 		if (value instanceof Long l) {
 			return convertLong(l, target);
+		}
+		if (value instanceof BigInteger) {
+			return value; // a bignum, for BigInteger or a supertype
 		}
 		if (value instanceof Double d) {
 			return target == float.class || target == Float.class ? (Object) (float) d.doubleValue() : (Object) d;
@@ -1032,6 +1449,9 @@ final class JavaBridgeTemplate {
 		if (target == byte.class || target == Byte.class) {
 			return (byte) v;
 		}
+		if (target == BigInteger.class) {
+			return BigInteger.valueOf(v);
+		}
 		// Box to the narrowest type that holds the value, like Common Lisp fixnums.
 		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
 	}
@@ -1040,14 +1460,14 @@ final class JavaBridgeTemplate {
 	// component type, recursively) or, for any List-compatible reference target, to a
 	// java.util.List of boxed elements.
 	private static int marshalSequence(List<@Nullable Object> elements, Class<?> target, @Nullable Object[] out,
-			int index) {
+			int index, boolean proxies) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (target.isArray()) {
 			Class<?> component = target.getComponentType();
 			Object array = Array.newInstance(component, elements.size());
 			int total = COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
-				int cost = marshal(elements.get(i), component, slot, 0);
+				int cost = marshal(elements.get(i), component, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -1061,7 +1481,7 @@ final class JavaBridgeTemplate {
 			List<@Nullable Object> list = new ArrayList<>(elements.size());
 			int total = COST_BOXED;
 			for (Object element : elements) {
-				int cost = marshal(element, Object.class, slot, 0);
+				int cost = marshal(element, Object.class, slot, 0, proxies);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -1112,6 +1532,11 @@ final class JavaBridgeTemplate {
 		}
 		if (o instanceof Float f) {
 			return (double) f;
+		}
+		if (o instanceof BigInteger b) {
+			// A Java BigInteger is a Lisp integer, a fixnum when it fits (as
+			// interpreted).
+			return b.bitLength() < 64 ? (Object) b.longValue() : b;
 		}
 		if (o instanceof Character c) {
 			// A Java char is a UTF-16 code unit; the Lisp CHARACTER is a length-1
@@ -1174,19 +1599,41 @@ final class JavaBridgeTemplate {
 		return "\"" + s + "\"";
 	}
 
-	// A wrapped host object is any value outside the compiled Lisp representation
-	// (Long/Double/BigInteger integers, BigInteger[] ratios, String symbols/strings,
-	// int[]{codePoint} CHARACTERs, Object[] conses/function values). ArrayList/HashMap
-	// receivers are accepted: a wrapped List/Map is indistinguishable from a Lisp
-	// array/hash-table here, and calling methods on either is harmless.
+	// A wrapped host object is any value outside the compiled Lisp representation:
+	// not a Long/Double/BigInteger integer or float, not a String symbol or string, not
+	// a Java array (an int[]{codePoint} CHARACTER, a BigInteger[] ratio, an Object[]
+	// cons / function value / instance, a double[]/float[]/byte[] specialized vector --
+	// a Java array a call answers is unmarshalled into a list, so none is ever a host
+	// object), not a Lisp array (an ArrayList whose slot 0 is its Object[] header), not a
+	// Lisp hash table (a LinkedHashMap holding its insertion-order ArrayList under
+	// "#order") and not a travelling runtime class's value (a complex number). Mirrored
+	// by JvmJavaDirectSites' _jhost: a resolved site and the bridge classify alike.
 	private static boolean isJavaObject(@Nullable Object v) {
-		return v != null && !(v instanceof Long) && !(v instanceof Double) && !(v instanceof BigInteger)
-				&& !(v instanceof BigInteger[]) && !(v instanceof String) && !(v instanceof int[])
-				&& v.getClass() != Object[].class;
+		if (v == null || v instanceof Long || v instanceof Double || v instanceof BigInteger || v instanceof String
+				|| v.getClass().isArray()) {
+			return false;
+		}
+		if (v instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
+			return false;
+		}
+		if (v instanceof LinkedHashMap<?, ?> map && map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList) {
+			return false;
+		}
+		return !v.getClass().getName().startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
-	// A minimal prin1-ish description for error messages.
+	// How a message shows a value: the program's printer (prin1), as the interpreter
+	// shows it; a minimal prin1-ish text when the program has none.
 	private static String describe(@Nullable Object v) {
+		Method print = lispToStringMethod;
+		if (print != null) {
+			try {
+				return (String) print.invoke(null, v);
+			}
+			catch (ReflectiveOperationException ex) {
+				// Fall through to the minimal text.
+			}
+		}
 		if (v == null) {
 			return "NIL";
 		}
@@ -1214,9 +1661,28 @@ final class JavaBridgeTemplate {
 		}
 	}
 
+	// What a failed call throws, as the program's _jfail decides for its direct calls:
+	// what a callback raised, as it is, or the error calling the member.
 	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
 		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
-		return new RuntimeException("error " + what + ": " + cause);
+		String text = "error " + what + ": ";
+		Method fail = failMethod;
+		Throwable answer = null;
+		if (fail != null) {
+			try {
+				answer = (Throwable) fail.invoke(null, cause, text);
+			}
+			catch (ReflectiveOperationException unexpected) {
+				// The error calling the member, below.
+			}
+		}
+		if (answer == null) {
+			return new RuntimeException(text + cause);
+		}
+		if (answer instanceof RuntimeException exception) {
+			return exception;
+		}
+		throw rethrow(answer);
 	}
 
 }

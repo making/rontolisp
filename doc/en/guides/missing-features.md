@@ -17,7 +17,7 @@ the [Language Reference](../reference/special-forms.md).
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
 | `declare` / `declaim` / `proclaim` / `the` | never change a result; on WASM an array `type` declaration directs the element-accessor emission (smaller, faster modules), everywhere else parsed no-ops |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
-| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow` (runtime) | `make-package`, `rename-package`, `delete-package`, `packagep`, `package-nicknames`, `find-all-symbols`, `do-all-symbols` and `apropos`/`apropos-list` are available (two tiers below); `unintern` and the runtime `shadow` / `shadowing-import` cannot exist -- a symbol IS its name, so there is no intern table to remove it from |
+| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow` (runtime) | `make-package`, `rename-package`, `delete-package`, `packagep`, `package-nicknames`, `find-all-symbols`, `do-all-symbols` and `apropos`/`apropos-list` are available (two tiers below); `shadow` / `shadowing-import` / `unintern` change a package's member table, which on the compiled backends only the packages the program creates have |
 | `eval-when` | treated as `progn` (no phase distinction) |
 | `#:name` | reads as a plain symbol, without gensym-style freshness |
 | `*modules*` | not available (`require`/`provide` are) |
@@ -186,16 +186,19 @@ and deleted like any other. The queries cover both tiers:
 [`apropos-list`](../reference/functions/apropos-list.md), with the compiled
 backends answering from a table baked in at compile time plus the packages the
 program itself creates.
-`unintern` (and the runtime `shadow` / `shadowing-import`) cannot exist here at
-all — a symbol IS its name, so there is no intern table to remove it from.
+[`shadow`](../reference/functions/shadow.md),
+[`shadowing-import`](../reference/functions/shadowing-import.md) and
+[`unintern`](../reference/functions/unintern.md) change a package's member table;
+on the compiled backends a read/compile-time package is frozen, so they answer
+`t` (`unintern` `nil`) and change nothing there.
 The queries are real: [`find-package`](../reference/functions/find-package.md),
 [`package-name`](../reference/functions/package-name.md),
 [`list-all-packages`](../reference/functions/list-all-packages.md),
 [`package-use-list`](../reference/functions/package-use-list.md),
 [`package-used-by-list`](../reference/functions/package-used-by-list.md) and
-[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md)
-(always `nil`), with the compiled backends answering from a table baked in at
-compile time — so a package a compiled program creates later is invisible there.
+[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md),
+with the compiled backends answering from a table baked in at compile time plus
+the packages the program itself creates.
 When several used packages export the same name, the first package in `:use`
 order wins instead of signaling a conflict.
 

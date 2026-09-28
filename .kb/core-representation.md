@@ -162,7 +162,8 @@ first-class values -- internal encoding, not a real user definition (Lisp-2).
   decides STATICALLY (argument count, result type, file mode) is fixed while the caller's
   arguments are runtime values. Trap: a narrower wrapper does not signal -- surplus arguments go
   nowhere, wrong on the compile backends, right on the interpreter. Three answers, ascending
-  cost: a `&rest` fold (`variadicIdentity`/`variadicNonEmpty`); a `&rest` dispatch onto the
+  cost: a fold over optionals (`identityFold`/`variadicNonEmpty`, whose two-argument call
+  passes both as parameters, [lambda-lists.md](lambda-lists.md)); a `&rest` dispatch onto the
   literal shapes (`openWrapper`, `concatenateWrapper` --
   [concatenate-result-families.md](concatenate-result-families.md)); the wrapper implementing
   the general case (`mapFamilyWrapper`, all six of the map family --

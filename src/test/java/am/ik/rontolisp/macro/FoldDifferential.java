@@ -149,6 +149,7 @@ public final class FoldDifferential {
 		add(probes, "oddp", "3");
 		// -- characters ---------------------------------------------------------
 		add(probes, "char-code", "#\\A");
+		add(probes, "char-int", "#\\A");
 		add(probes, "code-char", "66");
 		add(probes, "char-upcase", "#\\a");
 		add(probes, "char-upcase", "#\\1");

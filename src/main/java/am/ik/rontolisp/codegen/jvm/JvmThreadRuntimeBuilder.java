@@ -38,10 +38,10 @@ import am.ik.rontolisp.codegen.jvm.JvmAsyncRuntimeBuilder.Asm;
  * the bindings die with the thread;</li>
  * <li>an error thrown by the body cannot ride the {@code _condTl} condition channel
  * across threads, so {@code call()} completes NORMALLY with the async runtime's
- * {@code {EMARKER, throwable, condition}} payload and {@code _thread_join} re-sets the
- * condition on the joining thread before rethrowing -- {@code handler-case} around the
- * join then dispatches by type exactly like a same-thread signal (the {@code _await}
- * precedent).</li>
+ * {@code {EMARKER, throwable, condition}} payload and {@code _thread_join} records the
+ * condition under the throwable on the joining thread before rethrowing it --
+ * {@code handler-case} around the join then dispatches by type exactly like a same-thread
+ * signal (the {@code _await} precedent).</li>
  * </ul>
  *
  * Emitted ONLY when the program references one of the five primitives, so a thread-free
@@ -151,9 +151,8 @@ final class JvmThreadRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("_invoke_0"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant dtl = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(DTL_METHOD), cp.addUtf8(DTL_DESC)));
-		FieldrefConstant condTlField = java.util.Objects.requireNonNull(channel.condTlField);
-		MethodrefConstant tlGet = java.util.Objects.requireNonNull(channel.tlGet);
-		MethodrefConstant tlSet = java.util.Objects.requireNonNull(channel.tlSet);
+		MethodrefConstant condTake = java.util.Objects.requireNonNull(channel.condTake);
+		MethodrefConstant condPut = java.util.Objects.requireNonNull(channel.condPut);
 		ConstantPool.StringConstant tMarker = cp.addString(TMARKER);
 		ConstantPool.StringConstant eMarker = cp.addString(JvmAsyncRuntimeBuilder.EMARKER);
 		ConstantPool.StringConstant tStr = cp.addString("T");
@@ -272,20 +271,19 @@ final class JvmThreadRuntimeBuilder {
 			a.aaload();
 			a.ldc(eMarker.index());
 			a.branch(Opcode.IF_ACMPNE, ret);
-			// error payload: re-set the condition on this thread, rethrow the throwable
-			a.op(Opcode.GETSTATIC);
-			a.u2(condTlField.index());
-			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
-			a.aaload();
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlSet.index());
+			// error payload: record the condition under the throwable on this thread,
+			// rethrow the throwable
 			a.aload(1);
 			a.checkcast(objectArrayClass);
 			a.iconst(1);
 			a.aaload();
 			a.checkcast(throwableClass);
+			a.aload(1);
+			a.checkcast(objectArrayClass);
+			a.iconst(2);
+			a.aaload();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(condPut.index());
 			a.op(Opcode.ATHROW);
 			a.bind(ret);
 			a.aload(1);
@@ -482,7 +480,7 @@ final class JvmThreadRuntimeBuilder {
 			a.u2(invoke0.index());
 			a.areturn();
 			int tryEnd = a.pos();
-			// catch (Throwable t): answer {EMARKER, t, _condTl.get()} normally -- the
+			// catch (Throwable t): answer {EMARKER, t, _condTake(t)} normally -- the
 			// condition channel is a ThreadLocal, so the payload carries it to the joiner
 			int handler = a.pos();
 			a.astore(1);
@@ -498,10 +496,9 @@ final class JvmThreadRuntimeBuilder {
 			a.aastore();
 			a.op(Opcode.DUP);
 			a.iconst(2);
-			a.op(Opcode.GETSTATIC);
-			a.u2(condTlField.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlGet.index());
+			a.aload(1);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(condTake.index());
 			a.aastore();
 			a.areturn();
 			callMethod = new ThreadMethod(cp.addUtf8("call"), cp.addUtf8("()Ljava/lang/Object;"), 4, 4, a.finish(),

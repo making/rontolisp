@@ -12,8 +12,14 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.HelperWrapperFixture;
+import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
+import am.ik.rontolisp.MethodedBuiltinTailFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.IgnoredArgumentFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -1965,6 +1971,19 @@ class LispEvaluatorTest {
 	void evalSubseq() {
 		assertThat(eval("(subseq \"hello world\" 6)")).isEqualTo(new LispString("world"));
 		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void subseqSignalsInvalidBoundsOnEveryBackend() {
+		// A start < 0, an end past the string's length, or start > end are all one
+		// report -- the JVM twin used to raise a raw StringIndexOutOfBoundsException and
+		// wasm silently truncated instead of signalling (todo a42).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SubseqBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	// There is no f32 SCALAR: a single-float array's element crosses a double on the way
@@ -6476,7 +6495,8 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(2 NIL 4 2 NIL 1 1)");
 		// A bound the list does not reach, and a negative one: the cursor cannot answer
 		// either, so the read falls back to the elt call the body always made and the
-		// answer is the one it always gave. SequenceScanFast DECLINES all of these
+		// answer is the one it always gave -- or, where that elt indexes the list outside
+		// it (:start2 -1), ELT's type-error. SequenceScanFast DECLINES all of these
 		// (.kb/seq-coerce-runtime.md), which is why this body still has to own them.
 		assertThat(evalMulti(both + """
 				(list (both :end2-past (search '(1 2) '(1 2 3) :end2 99)
@@ -6487,15 +6507,17 @@ class LispEvaluatorTest {
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 99))
 				      (both :end1-past (search '(1 2 3) '(1 2 3) :start1 1 :end1 99)
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-				      (both :start2-negative (search '(1 2 3) '(1 2 3) :start2 -1)
-				            (funcall #'search '(1 2 3) '(1 2 3) :start2 -1))
 				      (both :start1-negative (search '(1 2 3) '(1 2 3) :start1 -1)
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 -1))
 				      (both :m-end1-past (mismatch '(1 2 3) '(1 2 3) :end1 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end1 99))
 				      (both :m-end2-past (mismatch '(1 2 3) '(1 2 3) :end2 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99)))
-				""").print()).isEqualTo("(0 NIL 0 NIL 0 NIL 3 3)");
+				""").print()).isEqualTo("(0 NIL 0 NIL NIL 3 3)");
+		assertThatThrownBy(() -> eval("(search '(1 2 3) '(1 2 3) :start2 -1)"))
+			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
+		assertThatThrownBy(() -> eval("(funcall #'search '(1 2 3) '(1 2 3) :start2 -1)"))
+			.hasMessageContaining("ELT: The value -1 is not of type (INTEGER 0 (3))");
 		// The shapes the arm declines land in this body, so the cursor has to serve them.
 		assertThat(evalMulti("""
 				(list (funcall #'search '(3 4) '(1 2 3 4 5) :key #'identity)
@@ -10218,6 +10240,60 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched() {
+		// (byte-size x) expanded into (car x), and (floor x) in a tail or under a
+		// consumer into floor's quotient and remainder, before the global binding --
+		// the user's dispatcher -- was read. Pinned on all three backends.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(MethodedBuiltinFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(MethodedBuiltinFixture.EXPECTED);
+	}
+
+	@Test
+	void aMethodedBuiltinTakesTheWholeTailWhenNoMethodApplies() {
+		// The stashed built-in is applied to every argument the dispatcher received.
+		// Pinned on all three backends, whose forwarder used to drop the tail.
+		assertThat(evalPrinting(MethodedBuiltinTailFixture.PROGRAM)).isEqualTo(MethodedBuiltinTailFixture.EXPECTED);
+	}
+
+	@Test
+	void aBuiltinFunctionValueReportsAWrongCountWithItsCallShape() {
+		// Pinned on all three backends: the interpreter's Java bodies spelled their own
+		// range, the compiled wrappers' &optional surplus check said Function.
+		assertThat(evalPrinting(BuiltinFunctionValueCountFixture.PROGRAM))
+			.isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
+	}
+
+	@Test
+	void theArgumentsAnOperatorIgnoresAreTaken() {
+		// Pinned on all three backends: peek-char refused its fifth argument here, and
+		// the compile paths failed the compile or signalled for all four operators.
+		assertThat(evalPrinting(IgnoredArgumentFixture.PROGRAM)).isEqualTo(IgnoredArgumentFixture.EXPECTED);
+		assertThat(evalPrinting(IgnoredArgumentFixture.PUSHBACK_PROGRAM))
+			.isEqualTo(IgnoredArgumentFixture.PUSHBACK_EXPECTED);
+		assertThat(evalPrinting(IgnoredArgumentFixture.GRAY_PROGRAM)).isEqualTo(IgnoredArgumentFixture.GRAY_EXPECTED);
+	}
+
+	@Test
+	void closeTakesItsAbortPairInADirectCall() {
+		// (close s :abort t) was a wrong count once close had a call shape (1 argument).
+		assertThat(evalPrinting(MethodedBuiltinTailFixture.CLOSE_PROGRAM))
+			.isEqualTo(MethodedBuiltinTailFixture.CLOSE_EXPECTED);
+	}
+
+	private static String evalPrinting(String program) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
+	}
+
+	@Test
 	void peekCharPushbackSurvivesReadLineAndRead(@TempDir Path tempDir) {
 		// A peeked character opens the next read-line instead of being dropped, and a
 		// peeked datum opener is still there for read -- sbcl's answers, pinned on all
@@ -13400,6 +13476,18 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(:CAUGHT T 1)");
 	}
 
+	// Whether a condition's handlers ran rides its own throw, so a condition handled,
+	// declined or abandoned while it is on its way out -- in a cleanup, in a report --
+	// cannot make them run again (one global mark held it, and each of these replaced
+	// it). The twins are
+	// JvmLispCompilerTest#handlerBindHandlersRunOnceWhileACleanupSignals
+	// and WasmLispCompilerIntegrationTest#handlerBindHandlersRunOnceWhileACleanupSignals.
+	@Test
+	void handlerBindHandlersRunOnceWhileACleanupSignals() {
+		assertThat(printedLines(am.ik.rontolisp.HandlersRunOnceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
+	}
+
 	@Test
 	void arefOutOfBoundsAndNegativeMakeArrayAreCatchable() {
 		// These used to escape even handler-case as raw Java exceptions; the
@@ -16240,6 +16328,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void gensymAcceptsANonNegativeIntegerSuffix() {
+		// CL's other gensym shape: the integer IS the suffix (under the default "G"
+		// prefix) and does not consume the counter -- the (gensym) either side of
+		// (gensym 42) still gets consecutive numbers (todo a42).
+		assertThat(evalMulti("(list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym)))").print())
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
+		assertThatThrownBy(() -> evalMulti("(gensym -1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("non-negative integer");
+	}
+
+	@Test
 	void gensymIsAFirstClassFunction() {
 		assertThat(evalMulti("(symbolp (funcall #'gensym))")).isEqualTo(LispTrue.INSTANCE);
 	}
@@ -16531,6 +16630,17 @@ class LispEvaluatorTest {
 			.isEqualTo("((PACKAGE-ERROR :CL) :UT-DUP :UT-DUP (PACKAGE-ERROR :NOPE-UT-ZZZ) :CL :CL :NOPE-UT-ZZZ T)");
 	}
 
+	// A program whose only package operation is delete-package / shadow /
+	// shadowing-import / unintern, and a designator naming no package: a catchable
+	// package-error, spelled as the compiled backends spell it. The twins are
+	// JvmLispCompilerTest#compileAndRunALonePackageOperation and
+	// WasmLispCompilerIntegrationTest#lonePackageOperation.
+	@Test
+	void lonePackageOperation() {
+		am.ik.rontolisp.LonePackageOperationFixture.PROGRAMS
+			.forEach((program, expected) -> assertThat(printedLines(program)).as(program).isEqualTo(expected));
+	}
+
 	@Test
 	void symbolBuildersAnswerTheTAndNilSingletons() {
 		// The compiled harnesses pin the same line; (intern "T" "CL") reaches the
@@ -16583,7 +16693,7 @@ class LispEvaluatorTest {
 				             (delete-package "H") (delete-package "G")))
 				""").print()).isEqualTo("(T NIL T T)");
 		assertThatThrownBy(() -> evalMulti("(unuse-package)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("UNUSE-PACKAGE expects 1 or 2 arguments");
+			.hasMessageContaining("UNUSE-PACKAGE expects at least 1 argument, got 0");
 	}
 
 	@Test
@@ -17366,17 +17476,18 @@ class LispEvaluatorTest {
 		// Declining means the shared expansion runs unchanged over the already-evaluated
 		// value, so every answer below -- error, oddity and identity alike -- is the one
 		// the expansion has always given.
-		// A non-sequence is the expansion's (length x) SEQUENCE type-error -- the fast
-		// arm must reproduce it, not improve on it.
-		assertThatThrownBy(() -> eval("(coerce 5 'list)")).hasMessageContaining("The value 5 is not of type SEQUENCE");
-		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)")).hasMessageContaining("not a sequence");
+		// A non-sequence -- a rank-2 array included -- is the expansion's COERCE
+		// SEQUENCE type-error: the fast arm must reproduce it, not improve on it.
+		assertThatThrownBy(() -> eval("(coerce 5 'list)")).hasMessage("COERCE: The value 5 is not of type SEQUENCE");
+		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)"))
+			.hasMessage("COERCE: The value #2A((NIL NIL) (NIL NIL)) is not of type SEQUENCE");
 		// A non-character element on the way to a string is the expansion's business --
 		// which signals it.
 		assertThatThrownBy(() -> eval("(coerce '(1 2) 'string)"))
 			.hasMessageContaining("The value 1 is not of type CHARACTER");
-		// (coerce x 'vector) over a non-list, non-string is the identity, packed arrays
-		// included.
-		assertThat(eval("(coerce 5 'vector)").print()).isEqualTo("5");
+		// (coerce x 'vector) over a vector is the identity, packed arrays included; over
+		// anything else it is the expansion's type-error (it answered the value itself).
+		assertThatThrownBy(() -> eval("(coerce 5 'vector)")).hasMessage("COERCE: The value 5 is not of type SEQUENCE");
 		assertThat(evalMulti("""
 				(coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'vector)
 				""").print()).isEqualTo("#d(1.0 2.0)");
@@ -17391,9 +17502,9 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(let ((n 0))
 				  (list (coerce (progn (setq n (+ n 1)) "ab") 'list)
-				        (coerce (progn (setq n (+ n 1)) 5) 'vector)
+				        (coerce (progn (setq n (+ n 1)) #(5)) 'vector)
 				        n))
-				""").print()).isEqualTo("((#\\a #\\b) 5 2)");
+				""").print()).isEqualTo("((#\\a #\\b) #(5) 2)");
 	}
 
 	@Test
@@ -17809,6 +17920,77 @@ class LispEvaluatorTest {
 		assertThat(evalMulti(def + "(f 1)").print()).isEqualTo("(1 10 20 NIL)");
 		assertThat(evalMulti(def + "(f 1 2)").print()).isEqualTo("(1 2 4 NIL)");
 		assertThat(evalMulti(def + "(f 1 2 3)").print()).isEqualTo("(1 2 3 T)");
+	}
+
+	// The interpreter's answers for the program its compiled twins pin
+	// (JvmLispCompilerTest#compileAndRunOptionalArgumentsTravelAsParametersOnEveryCallPath):
+	// its lambda lists keep stepping the optionals off the argument list.
+	@Test
+	void optionalArgumentsAnswerTheSameOnEveryCallPath() {
+		assertThat(printedLines(
+				"""
+						(defvar *oa-special* :global)
+						(defun oa-f (a &optional (b 10 bp) (c (+ a b))) (list a b bp c))
+						(defun oa-g (a &optional b &rest r) (list a b r))
+						(defun oa-k (&optional (x 1) &key (y 2)) (list x y))
+						(defun oa-late (&optional (x *oa-special*) (*oa-special* :bound)) (list x *oa-special*))
+						(defun oa-test-only (&optional (a 1 ap)) (if ap (list :given a) (list :default a)))
+						(defun oa-close (&optional (n 0)) (lambda () (incf n)))
+						(defun oa-wide (p1 p2 p3 p4 p5 p6 p7 p8 &optional (o1 :d1) (o2 :d2) (o3 :d3))
+						  (list p1 p8 o1 o2 o3))
+						(defun oa-full (p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional (o1 :d1)) (list p9 o1))
+						(defun oa-count (n &optional (acc 0)) (if (= n 0) acc (oa-count (- n 1) (+ acc 1))))
+						(print (list (oa-f 1) (oa-f 1 2) (oa-f 1 2 3) (oa-f 1 nil 0)))
+						(print (list (oa-g 1) (oa-g 1 2) (oa-g 1 2 3 4)))
+						(print (list (oa-k) (oa-k 5) (oa-k 5 :y 6)))
+						(print (list (oa-late) (oa-late :x) (oa-late :x :y) *oa-special*))
+						(print (list (oa-test-only) (oa-test-only nil) (oa-test-only 7)))
+						(print (let ((c (oa-close 5))) (funcall c) (list (funcall c) (funcall (oa-close)))))
+						(print (list (oa-wide 1 2 3 4 5 6 7 8) (oa-wide 1 2 3 4 5 6 7 8 :a :b) (oa-wide 1 2 3 4 5 6 7 8 :a :b :c)))
+						(print (list (oa-full 1 2 3 4 5 6 7 8 9) (oa-full 1 2 3 4 5 6 7 8 9 :x)))
+						(print (oa-count 10000))
+						(let ((f #'oa-f) (g #'oa-g) (w #'oa-wide))
+						  (print (list (funcall f 1) (funcall f 1 2) (funcall f 1 2 3)))
+						  (print (list (funcall g 1) (funcall g 1 2) (funcall g 1 2 3 4 5)))
+						  (print (list (apply f '(1)) (apply f 1 '(2)) (apply f 1 2 '(3)) (apply g 1 2 3 '(4))))
+						  (print (list (funcall w 1 2 3 4 5 6 7 8 :a) (apply w 1 2 3 4 5 6 7 8 '(:a :b :c)))))
+						(print (list (apply #'oa-f '(1)) (apply #'oa-f 1 '(2)) (apply #'oa-f 1 2 3 nil) (apply #'oa-g 1 2 3 '(4 5))
+						             (apply #'oa-g 1 '(2 3))))
+						(print (list (eval '(oa-f 7)) (eval '(oa-f 7 8)) (eval '(oa-g 1 2 3))))
+						(print (list ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1)
+						             ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1 2 5)))
+						(print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2) '(10 20)))
+						(print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2)))
+						(print (flet ((lf (a &optional (b 2)) (* a b))) (list (lf 3) (lf 3 4) (funcall #'lf 5))))
+						(print (labels ((lr (n &optional (acc 1)) (if (= n 0) acc (lr (- n 1) (* acc n))))) (lr 5)))
+						(print (list (handler-case (oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+						             (handler-case (funcall #'oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+						             (handler-case (apply #'oa-f '(1 2 3 4)) (program-error (e) (princ-to-string e)))
+						             (handler-case (oa-full 1 2 3 4 5 6 7 8 9 10 11) (program-error (e) (princ-to-string e)))))
+						"""))
+			.isEqualTo(
+					"""
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 NIL T 0))
+							((1 NIL NIL) (1 2 NIL) (1 2 (3 4)))
+							((1 2) (5 2) (5 6))
+							((:GLOBAL :BOUND) (:X :BOUND) (:X :Y) :GLOBAL)
+							((:DEFAULT 1) (:GIVEN NIL) (:GIVEN 7))
+							(7 1)
+							((1 8 :D1 :D2 :D3) (1 8 :A :B :D3) (1 8 :A :B :C))
+							((9 :D1) (9 :X))
+							10000
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3))
+							((1 NIL NIL) (1 2 NIL) (1 2 (3 4 5)))
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4)))
+							((1 8 :A :D2 :D3) (1 8 :A :B :C))
+							((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4 5)) (1 2 (3)))
+							((7 10 NIL 17) (7 8 T 15) (1 2 (3)))
+							((1 3 4 NIL) (1 2 5 T))
+							(11 22)
+							(101 102)
+							(6 12 10)
+							120
+							("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")""");
 	}
 
 	@Test
@@ -18856,6 +19038,141 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void oneArgumentCallsCheckTheirArgument() {
+		// A one-argument call compares or folds nothing, but its argument is checked
+		// like any other: (+ x), (* x) and the bitwise family answered x unexamined on
+		// the compiled backends, the orderings, = and min/max answered on all of them,
+		// and a character comparison's check differed per backend (none here, a
+		// ClassCastException's generic text on the JVM, a trap on wasm) at every arity.
+		// Every argument of a character comparison is evaluated and checked
+		// (.kb/error-handling.md, "One argument is still checked").
+		// The twins are JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// oneArgumentCallsCheckTheirArgument.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *x* 'a)
+				(defvar *c* 1)
+				(print (te (lambda () (+ *x*))))
+				(print (te (lambda () (* *x*))))
+				(print (te (lambda () (logand 1.5))))
+				(print (te (lambda () (logeqv *x*))))
+				(print (te (lambda () (> *x*))))
+				(print (te (lambda () (= *x*))))
+				(print (te (lambda () (/= *x*))))
+				(print (te (lambda () (min #c(1 2)))))
+				(print (te (lambda () (funcall #'max *x*))))
+				(print (te (lambda () (if (<= *x*) :y :n))))
+				(print (te (lambda () (char= *c*))))
+				(print (te (lambda () (char/= #\\a #\\b *c*))))
+				(print (te (lambda () (char>= #\\b #\\a *c*))))
+				(print (te (lambda () (if (char< *c* #\\a) :y :n))))
+				(print (te (lambda () (char-equal *c*))))
+				(print (te (lambda () (char-not-lessp *c*))))
+				(print (te (lambda () (funcall #'char= *c*))))
+				(print (list (+ 5) (* 2.5) (< 3) (= #c(1 2)) (/= 1) (max -0.0) (logand 6)
+				             (char= #\\a) (char/= #\\a #\\b #\\a) (char> #\\c #\\b #\\a) (char-equal #\\A #\\a #\\a)))
+				(let ((n 0)) (print (list (char= #\\a #\\b (progn (incf n) #\\c)) n)))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("+: The value A is not of type NUMBER" A NUMBER)
+				("*: The value A is not of type NUMBER" A NUMBER)
+				("LOGAND: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("LOGXOR: The value A is not of type INTEGER" A INTEGER)
+				(">: The value A is not of type REAL" A REAL)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("MIN: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+				("MAX: The value A is not of type REAL" A REAL)
+				("<=: The value A is not of type REAL" A REAL)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR/=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR>=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR<: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-EQUAL: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-NOT-LESSP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				(5 2.5 T T T -0.0 6 T NIL T T)
+				(NIL 1)""");
+	}
+
+	@Test
+	void characterBuiltInsCheckTheirArgument() {
+		// A non-character reaching char-code, the case folds and the character
+		// predicates is the operator's CHARACTER type-error on every backend, as the
+		// comparisons' is: it was a simple-error here (named after the helper a prelude
+		// defun or a lowering called), the generic ClassCastException report on the JVM
+		// and an uncatchable trap on wasm (.kb/error-handling.md, "A character built-in
+		// checks its argument"). The twins are JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's characterBuiltInsCheckTheirArgument.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *c* 1)
+				(defvar *x* 'a)
+				(print (te (lambda () (char-code *c*))))
+				(print (te (lambda () (char-code 1))))
+				(print (te (lambda () (char-int *c*))))
+				(print (te (lambda () (char-upcase *c*))))
+				(print (te (lambda () (char-downcase *c*))))
+				(print (te (lambda () (alpha-char-p *c*))))
+				(print (te (lambda () (if (alpha-char-p *c*) :y :n))))
+				(print (te (lambda () (digit-char-p *c*))))
+				(print (te (lambda () (digit-char-p #\\a *x*))))
+				(print (te (lambda () (upper-case-p *c*))))
+				(print (te (lambda () (if (lower-case-p *c*) :y :n))))
+				(print (te (lambda () (both-case-p *c*))))
+				(print (te (lambda () (alphanumericp *c*))))
+				(print (te (lambda () (char-name *c*))))
+				(print (te (lambda () (graphic-char-p *c*))))
+				(print (te (lambda () (standard-char-p *c*))))
+				(print (te (lambda () (funcall #'char-code *c*))))
+				(print (te (lambda () (mapcar #'char-upcase (list #\\a *c*)))))
+				(print (te (lambda () (funcall #'lower-case-p *c*))))
+				(print (te (lambda () (funcall #'digit-char-p *c* 16))))
+				(print (list (char-code #\\a) (char-int #\\a) (char-upcase #\\a) (char-downcase #\\A) (alpha-char-p #\\a) (digit-char-p #\\7)
+				             (digit-char-p #\\f 16) (upper-case-p #\\A) (lower-case-p #\\A) (both-case-p #\\1)
+				             (alphanumericp #\\x) (char-name #\\Space) (graphic-char-p #\\a) (standard-char-p #\\Newline)))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-INT: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-DOWNCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("DIGIT-CHAR-P: The value A is not of type INTEGER" A INTEGER)
+				("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("ALPHANUMERICP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-NAME: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("GRAPHIC-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("STANDARD-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				(97 97 #\\A #\\a T 7 15 T NIL NIL T "Space" T T)""");
+	}
+
+	@Test
 	void listWalksAndStringIndicesNameTheOperator() {
 		// A list walk over a non-list and a string index that is no integer name their
 		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
@@ -19122,6 +19439,50 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void eltOfAListOutsideItIsATypeErrorNamingItsLength() {
+		// elt of a LIST outside it -- past its end, negative, a bignum -- is ELT's
+		// type-error naming the list's length as its bound, as an out-of-range aref
+		// subscript names its dimension (.kb/error-handling.md, "An out-of-range
+		// subscript is a type-error naming its bound"); so is a (setf elt) place's. A
+		// non-list met on the walk is ELT's LIST type-error. The twins are
+		// LispEvaluatorTest, JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// eltOfAListOutsideItIsATypeErrorNamingItsLength. It answered nil past the end,
+		// the first element for -1, and (setf (elt l -1) v) stored into the first cell.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *l* (list 1 2 3))
+				(print (list (elt *l* 0) (elt *l* 2) (funcall #'elt *l* 1)))
+				(print (te (lambda () (elt *l* 3))))
+				(print (te (lambda () (elt *l* -1))))
+				(print (te (lambda () (elt *l* (expt 2 70)))))
+				(print (te (lambda () (elt nil 0))))
+				(print (te (lambda () (funcall #'elt *l* 3))))
+				(print (te (lambda () (elt '(1 . 2) 1))))
+				(print (te (lambda () (elt *l* "x"))))
+				(print (te (lambda () (setf (elt *l* 3) 0))))
+				(print (te (lambda () (setf (elt *l* -1) 0))))
+				(setf (elt *l* 1) 20)
+				(print *l*)
+				""";
+		assertThat(printedLines(source)).isEqualTo(
+				"""
+						(1 3 2)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("ELT: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+						("ELT: The value 0 is not of type (INTEGER 0 (0))" 0 (INTEGER 0 (0)))
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value 2 is not of type LIST" 2 LIST)
+						("ELT: The value \\"x\\" is not of type INTEGER" "x" INTEGER)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						(1 20 3)""");
+	}
+
+	@Test
 	void outOfRangeSubscriptsAreTypeErrorsNamingTheirBound() {
 		// A subscript outside its dimension is the access's type-error naming its bound:
 		// "OP: The value S is not of type (INTEGER 0 (D))", the datum the subscript and
@@ -19210,6 +19571,63 @@ class LispEvaluatorTest {
 		assertThat(eval("(handler-case (char \"abc\" 3) (type-error (e) (list (princ-to-string e)"
 				+ " (type-error-expected-type e))))")
 			.print()).isEqualTo("(\"CHAR: The value 3 is not of type (INTEGER 0 (3))\" (INTEGER 0 (3)))");
+	}
+
+	@Test
+	void functionValueArefAndArrayRowMajorIndexCheckRankAndBounds() {
+		// #'aref already goes through Environment's own AREF LispFunction
+		// (registerArrays),
+		// so it was never affected by this bug -- pinned here alongside
+		// #'array-row-major-index, which had no such native registration and fell back to
+		// BuiltinFunctionWrappers' shared Horner fold (arefFoldBody/rowMajorFoldBody),
+		// unchecked until todo a58. The compiled-backend twins are
+		// JvmLispCompilerTest#compileAndRunFunctionValueArefChecksRankAndBounds and
+		// WasmLispCompilerIntegrationTest#compileFunctionValueArefChecksRankAndBounds.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				(print (te (lambda () (apply #'aref *m* '(0 2)))))
+				(print (te (lambda () (apply #'aref *m* '(1)))))
+				(print (apply #'array-row-major-index *m* '(1 1)))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
+				""";
+		assertThat(printedLines(source)).isEqualTo("""
+				4
+				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")
+				3
+				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				(:NOT-A-TYPE-ERROR "aref: expected 2 subscripts, got 1")""");
+	}
+
+	// A sequence operator, an array accessor and a hash-table accessor handed a value
+	// that is none of those: a type-error naming the operator, the value and SEQUENCE /
+	// ARRAY / HASH-TABLE (several answered silently or signalled a simple-error). The
+	// twins are
+	// JvmLispCompilerTest#compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument
+	// and
+	// WasmLispCompilerIntegrationTest#sequenceAndAccessorOperatorsNameTheirWrongTypeArgument.
+	@Test
+	void sequenceAndAccessorOperatorsNameTheirWrongTypeArgument() {
+		assertThat(printedLines(am.ik.rontolisp.WrongTypeArgumentFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
+	}
+
+	// The fill-pointer surface handed an array without a fill pointer: a type-error whose
+	// expected type is (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)); a fill pointer
+	// set out of range a type-error (INTEGER 0 dim); an empty pop a simple-error. The
+	// twins are
+	// JvmLispCompilerTest#compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne
+	// and WasmLispCompilerIntegrationTest#fillPointerSurfaceRefusesAVectorWithoutOne.
+	@Test
+	void fillPointerSurfaceRefusesAVectorWithoutOne() {
+		assertThat(printedLines(am.ik.rontolisp.FillPointerVectorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FillPointerVectorFixture.EXPECTED);
 	}
 
 	@Test
@@ -19349,6 +19767,55 @@ class LispEvaluatorTest {
 			.print()).isEqualTo("(T 3 1 T (1 2))");
 	}
 
+	// The interpreter's function values take the standard lambda list too, and its
+	// string-upcase takes :start / :end (it refused them); one or zero arguments reach
+	// the comparisons' and logand's Java built-ins, which answer -- what the compiled
+	// wrappers answer as well.
+	@Test
+	void builtinFunctionValuesTakeTheStandardLambdaList() {
+		assertThat(printedLines(
+				"""
+						(defun wv-call (f &rest a) (apply f a))
+						(print (list (wv-call #'< 1 2 3) (wv-call #'< 1 3 2) (wv-call #'/= 1 2 1) (wv-call #'char< #\\a #\\b #\\c)
+						             (wv-call #'char-equal #\\a #\\A #\\a) (wv-call #'logand 1 3 7) (wv-call #'logxor 1 2 4 8)))
+						(print (list (wv-call #'digit-char-p #\\f 16) (wv-call #'float 1 1.0d0) (wv-call #'gethash 1 (make-hash-table) 'none)
+						             (wv-call #'pairlis '(a) '(1) '((b . 2))) (wv-call #'typep 1 'integer nil)
+						             (wv-call #'constantp 1 nil) (wv-call #'upgraded-complex-part-type 'double-float nil)))
+						(print (list (wv-call #'parse-integer "ff" :radix 16) (wv-call #'parse-integer "a12b" :start 1 :end 3)
+						             (wv-call #'make-string 2 :initial-element #\\z) (wv-call #'string-upcase "abcd" :start 1 :end 3)
+						             (wv-call #'string-capitalize "one two" :start 4) (string-downcase "ABCD" :end 2) (typep 1 'integer nil)))
+						(print (list (let ((v (make-array 0 :fill-pointer 0 :adjustable t)))
+						               (wv-call #'vector-push-extend 1 v 8)
+						               (array-total-size v))
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-element 0)
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-contents '(a b c))
+						             (wv-call #'adjust-array (make-array 2 :adjustable t) 2 :displaced-to (vector 7 8 9)
+						                      :displaced-index-offset 1)))
+						(print (list (with-output-to-string (s) (wv-call #'write-string "abcdef" s :start 1 :end 3))
+						             (with-input-from-string (s "") (wv-call #'read-char-no-hang s nil :eof))
+						             (symbolp (wv-call #'gensym "WV")) (symbol-name (wv-call #'intern "WV-SYM" "KEYWORD"))))
+						(print (list (wv-call #'< 1) (wv-call #'logand)))
+						"""))
+			.isEqualTo("""
+					(T NIL NIL T T 1 15)
+					(15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
+					(255 12 "zz" "aBCd" "one Two" "abCD" T)
+					(8 #(1 2 0) #(A B C) #(8 9))
+					("bc" :EOF T "WV-SYM")
+					(T -1)""");
+	}
+
+	// #'make-broadcast-stream is the catalog wrapper over the prelude broadcast stream
+	// (it was a Java sink refusing components), and #'write-to-string's keyword tail
+	// binds the printer variables. The compile-path twins are
+	// JvmLispCompilerTest#compileAndRunHelperWrappedFunctionValues and
+	// WasmLispCompilerIntegrationTest#helperWrappedFunctionValues.
+	@Test
+	void helperWrappedFunctionValues() {
+		assertThat(printedLines(HelperWrapperFixture.PROGRAM)).isEqualTo(HelperWrapperFixture.EXPECTED);
+		assertThat(eval("(list (fboundp 'make-broadcast-stream) (fboundp 'elt))").print()).isEqualTo("(T T)");
+	}
+
 	@Test
 	void everyWrappedBuiltinReportsAWrongDirectCountWithItsCallShape() {
 		for (String name : new java.util.TreeSet<>(am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames())) {
@@ -19362,6 +19829,113 @@ class LispEvaluatorTest {
 				String call = "(" + spelled + " nil".repeat(count) + ")";
 				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
 					.isEqualTo("\"" + shape.message(name, count) + "\"");
+			}
+		}
+	}
+
+	// Every wrapped or native built-in's FUNCTION VALUE reports a count its call shape
+	// rules out with the text its direct call reports (a function value with none --
+	// rontolisp:await -- aside). Measured before (2026-09-27): 187 of 798 (name, count)
+	// pairs said something else -- the Java body's own range ("1 to 2", "2 or 3"), a
+	// description ("expects an array and new dimensions"), an index out of bounds, a
+	// type-error -- or answered ((constantp nil nil nil) => T).
+	@Test
+	void everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape() {
+		java.util.Set<String> names = new java.util.TreeSet<>(
+				am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames());
+		names.addAll(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames());
+		for (String name : names) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min()
+					: shape.max() + 1;
+			for (int count = 0; count <= last; count++) {
+				if (shape.accepts(count)) {
+					continue;
+				}
+				String value = "(funcall '" + spelled + " nil".repeat(count) + ")";
+				String reported = eval("(handler-case " + value
+						+ " (undefined-function () :none) (program-error (c) (princ-to-string c)))")
+					.print();
+				if (!":NONE".equals(reported)) {
+					assertThat(reported).as(value)
+						.isEqualTo(
+								"\"" + am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(name, count) + "\"");
+				}
+			}
+		}
+	}
+
+	// Every count a built-in's call shape ADMITS reaches its body: a direct call and a
+	// funcall with that many nil arguments may fail on the values, never on the count.
+	// peek-char's shape admitted recursive-p while its body refused it. The compile
+	// paths' half is cli/BuiltinCallArityCompileTest.
+	@Test
+	void everyCountABuiltinCallShapeAdmitsReachesItsBody() {
+		java.util.Set<String> names = new java.util.TreeSet<>(
+				am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames());
+		names.addAll(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames());
+		List<String> refused = new java.util.ArrayList<>();
+		for (String name : names) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min() + 2
+					: shape.max();
+			java.util.regex.Pattern refusal = java.util.regex.Pattern.compile(
+					"(?i)(" + java.util.regex.Pattern.quote(am.ik.rontolisp.compiler.BuiltinCallArity.operator(name))
+							+ "|" + java.util.regex.Pattern.quote(name)
+							+ ") (expects|requires) (at (most|least) )?(\\d+|one)( (to|or) \\d+)? argument");
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()),
+					new ByteArrayInputStream(new byte[0]));
+			for (int count = shape.min(); count <= last; count++) {
+				if (!shape.accepts(count)) {
+					continue;
+				}
+				// close's pair is :abort and its value, and nothing else.
+				String args = am.ik.rontolisp.LispNames.CLOSE.equals(name) && count == 3 ? " nil :abort nil"
+						: " nil".repeat(count);
+				for (String call : List.of("(" + spelled + args + ")", "(funcall '" + spelled + args + ")")) {
+					// A body failing on its nil values may escape handler-case as a host
+					// exception; only the text of the failure matters here.
+					String reported;
+					try {
+						reported = evaluator
+							.eval(LispReader
+								.readFromString("(handler-case " + call + " (error (c) (princ-to-string c)))"))
+							.display();
+					}
+					catch (RuntimeException ex) {
+						reported = String.valueOf(ex.getMessage());
+					}
+					if (refusal.matcher(reported).find()) {
+						refused.add(call + " => " + reported);
+					}
+				}
+			}
+		}
+		assertThat(refused).isEmpty();
+	}
+
+	// The built-ins outside the wrapper catalog the interpreter implements natively
+	// (compiler/NativeCallShapes) report a wrong direct count by their shape, under the
+	// interpreter's name for them.
+	@Test
+	void everyNativeBuiltinReportsAWrongDirectCountWithItsCallShape() {
+		for (String name : new java.util.TreeSet<>(am.ik.rontolisp.compiler.BuiltinCallArity.nativeNames())) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			int last = shape.max() == am.ik.rontolisp.compiler.BuiltinCallArity.UNBOUNDED ? shape.min()
+					: shape.max() + 1;
+			for (int count = 0; count <= last; count++) {
+				if (shape.accepts(count)) {
+					continue;
+				}
+				String call = "(" + spelled + " nil".repeat(count) + ")";
+				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
+					.isEqualTo("\"" + am.ik.rontolisp.compiler.BuiltinCallArity.wrongCountMessage(name, count) + "\"");
 			}
 		}
 	}
@@ -21052,7 +21626,8 @@ class LispEvaluatorTest {
 	@Test
 	void fillPointerOnNonFillPointerVectorSignals() {
 		assertThatThrownBy(() -> eval("(fill-pointer (make-array 3))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("no fill pointer");
+			.hasMessageContaining(
+					"FILL-POINTER: The value #(NIL NIL NIL) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
 	}
 
 	@Test
@@ -23686,7 +24261,8 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)"))
 			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
-			.hasMessageContaining("packed integer vector");
+			.hasMessageContaining(
+					"VECTOR-PUSH: The value #(0 0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
 	}
 
 	@Test

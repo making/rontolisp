@@ -293,9 +293,11 @@ class JvmClassShakerTest {
 	@Test
 	void keepsTheReflectiveApplyRootForJavaInterop() throws Exception {
 		// The java: bridge looks up _apply reflectively (no bytecode edge); the shaker is
-		// invoked with _apply as an extra root, so a proxy callback still works.
+		// invoked with _apply as an extra root, so a proxy callback still works. The
+		// interface is named at run time, so the proxy is the bridge's.
 		String source = """
-				(setq s (java:proxy "java.util.function.Supplier" (lambda (method) 42)))
+				(defvar *iface* "java.util.function.Supplier")
+				(setq s (java:proxy *iface* (lambda (method) 42)))
 				(print (java:call s "get"))
 				""";
 		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(OptimizeLevel.DEFAULT).build();
@@ -304,6 +306,23 @@ class JvmClassShakerTest {
 		for (var file : compiler.runtimeClassFiles().entrySet()) {
 			Files.write(this.tempDir.resolve(file.getKey()), file.getValue());
 		}
+		assertThat(run(classBytes)).isEqualTo("42");
+	}
+
+	@Test
+	void keepsTheCallbacksOfAGeneratedInterfaceImplementation() throws Exception {
+		// A java:reify's generated class calls its program-side callback from its own
+		// class (no edge in this one); the callbacks are extra roots.
+		String source = """
+				(print (java:call (java:reify "java.util.function.Supplier" "get" (lambda () 42)) "get"))
+				""";
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(OptimizeLevel.DEFAULT).build();
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(source));
+		assertThat(compiler.runtimeClassFiles()).containsKey("Test$Reify0.class");
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Files.write(this.tempDir.resolve(file.getKey()), file.getValue());
+		}
+		assertThat(declaredMethodNames(classBytes)).anyMatch(name -> name.startsWith("_jimpl$"));
 		assertThat(run(classBytes)).isEqualTo("42");
 	}
 

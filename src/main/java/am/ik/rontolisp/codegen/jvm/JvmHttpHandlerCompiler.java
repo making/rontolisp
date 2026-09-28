@@ -74,7 +74,7 @@ final class JvmHttpHandlerCompiler {
 			// runs -- hanging forever. A written port is accepted and ignored, the way
 			// an ignored flag should behave: named once, not an error.
 			if (portExpr != null) {
-				CompileWarnings.warn("warning: " + LispNames.HTTP_HANDLER + " port " + portExpr.print()
+				CompileWarnings.warn(cons, LispNames.HTTP_HANDLER + " port " + portExpr.print()
 						+ " is ignored in a war: the servlet container owns the port");
 			}
 			ctx.emit(Opcode.ACONST_NULL);

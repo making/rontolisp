@@ -40,6 +40,27 @@ class LispPreludeLibraryTest {
 		return null;
 	}
 
+	// %write-to-string-keyed binds the printer variables #'write-to-string's keyword
+	// tail names, so splicing it routes the program's printing through the renderer:
+	// it is selected only where the value can be handed more than one argument. A
+	// designator in an exactly-one-argument position -- funcall with one argument,
+	// mapcar and its siblings over one list, map over one sequence -- is not such a
+	// spelling, nor is the call position, which lowers its own literal tail.
+	@Test
+	void theKeyedWriteToStringHelperIsSplicedOnlyWhereTheValueCanTakeAKeyword() {
+		String helper = "%WRITE-TO-STRING-KEYED";
+		for (String oneArgument : List.of("(print (mapcar #'write-to-string '(1 2)))",
+				"(print (funcall #'write-to-string 1))", "(print (map 'list 'write-to-string '(1 2)))",
+				"(print (mapc #'write-to-string '(1)))", "(print (write-to-string 10 :base 2))")) {
+			assertThat(splicedNames(oneArgument)).as(oneArgument).doesNotContain(helper);
+		}
+		for (String escaping : List.of("(let ((f #'write-to-string)) (print (funcall f 1 :base 2)))",
+				"(print (funcall #'write-to-string 10 :base 2))", "(print (apply 'write-to-string 1 '(:base 2)))",
+				"(print (mapcar #'write-to-string '(1) '(2)))", "(print (list #'write-to-string))")) {
+			assertThat(splicedNames(escaping)).as(escaping).contains(helper, "%PRINT-CASED");
+		}
+	}
+
 	// The two %make-array-et* helpers turn a RUNTIME :element-type designator back into
 	// literal spellings, one arm per specialized code, because every backend but the
 	// interpreter decides an array's representation from the literal designator at the

@@ -16,10 +16,15 @@ import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaStaticType;
 import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.runtime.RontoComplex;
+import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -38,9 +43,9 @@ import org.jspecify.annotations.Nullable;
  * A value is checked by its KIND ({@link JavaKind}), computed from the compiled
  * representation as the bridge's {@code kindOf} computes it; the conversions are the
  * bridge's {@code convert} and {@code convertLong}, one arm per (kind, parameter type)
- * the resolution counted on. The one arm that needs the bridge is a function value where
- * an interface is expected: it becomes the bridge's proxy, so such a site calls
- * {@code _javaInit} and {@code javaProxy} (and {@code --java-static} refuses it).
+ * the resolution counted on. A function value where an interface is expected becomes the
+ * interface's generated proxy class ({@link JvmJavaImplementations}), as the bridge makes
+ * it a {@code java.lang.reflect.Proxy}: nothing here reflects.
  * <p>
  * A DISPATCHED site -- its class known, its argument kinds only when it runs -- chooses
  * among its overloads as the interpreter does ({@code JavaOverloads.selectRanked}): each
@@ -53,6 +58,11 @@ import org.jspecify.annotations.Nullable;
  * (the bridge's {@code isJavaObject}), {@code _junm} (its {@code unmarshal}, for a value
  * declared as a type a box, a string or an array may hide behind) and {@code _jarr} (its
  * {@code arrayToList}, over every array type without {@code java.lang.reflect.Array}).
+ * <p>
+ * What a site's Java call throws goes through {@code _jfail}: a throwable a function
+ * called back from Java raised -- recorded on its way out by {@code _jsig}, which the
+ * generated implementations and the bridge's {@code Proxy} call -- is thrown on as it is,
+ * anything else as the error calling the member ({@link #finishHelpers}).
  */
 final class JvmJavaDirectSites {
 
@@ -61,6 +71,35 @@ final class JvmJavaDirectSites {
 
 	/** {@code _jhost(Object)Z}: whether a value is a wrapped host object. */
 	static final String HOST = "_jhost";
+
+	/**
+	 * {@code _jlarr(Object)Z}: whether a value is a Lisp array -- an {@code ArrayList}
+	 * whose slot 0 is its {@code Object[]} header, not a host list a call answered.
+	 */
+	static final String LISP_ARRAY = "_jlarr";
+
+	/**
+	 * {@code _jltab(Object)Z}: whether a value is a Lisp hash table -- a
+	 * {@code LinkedHashMap} holding its insertion-order {@code ArrayList} under
+	 * {@link RontoHashTable#ORDER_KEY}, not a host map a call answered.
+	 */
+	static final String LISP_TABLE = "_jltab";
+
+	/**
+	 * {@code _jckarr(Object, String)Object}: an array accessor's operand, answered
+	 * unchanged unless it is a host {@code ArrayList}, which is refused with the
+	 * interpreter's {@code ARRAY} type-error, named after the operator the second
+	 * argument spells (null for an unnamed report).
+	 */
+	static final String ARRAY_GUARD = "_jckarr";
+
+	/**
+	 * {@code _jcktab(Object, String)Object}: a hash-table accessor's operand, answered
+	 * unchanged unless it is a host {@code LinkedHashMap}, which is refused with the
+	 * interpreter's {@code HASH-TABLE} type-error, named as {@link #ARRAY_GUARD} names
+	 * its.
+	 */
+	static final String TABLE_GUARD = "_jcktab";
 
 	/** {@code _junm(Object)Object}: a Java value as the Lisp value it stands for. */
 	static final String UNMARSHAL = "_junm";
@@ -84,20 +123,49 @@ final class JvmJavaDirectSites {
 	 */
 	static final String CONVERT_PREFIX = "_jconv$";
 
-	// _jkind's codes, in the bridge's kindOf order; 0-8 index LISP_KINDS.
-	private static final int KIND_CONS = 9;
+	/**
+	 * {@code _jfail(Throwable, String)Throwable}: what a site throws when its Java call
+	 * throws -- what a function called back from Java raised, as it is, or else the error
+	 * calling the member, the given text before the throwable's. The bridge's
+	 * {@code fail} calls it too.
+	 */
+	static final String FAIL = "_jfail";
 
-	private static final int KIND_ARRAY = 10;
+	/**
+	 * {@code _jsig(Throwable)Throwable}: records a throwable leaving a function called
+	 * back from Java -- a generated implementation's callback, the bridge's {@code Proxy}
+	 * -- for {@link #FAIL}, and answers it.
+	 */
+	static final String SIGNAL = "_jsig";
 
-	private static final int KIND_HOST = 11;
+	/** The per-thread record {@link #SIGNAL} keeps and {@link #FAIL} reads. */
+	static final String SIGNALS = "_jsigTl";
 
-	private static final int KIND_NONE = 12;
+	private static final String FAIL_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)Ljava/lang/Throwable;";
 
-	private static final JavaKind.Lisp[] LISP_KINDS = { JavaKind.Lisp.NIL, JavaKind.Lisp.T, JavaKind.Lisp.INTEGER,
-			JavaKind.Lisp.FLOAT, JavaKind.Lisp.STRING_1, JavaKind.Lisp.STRING, JavaKind.Lisp.CHAR,
-			JavaKind.Lisp.SUPPLEMENTARY_CHAR, JavaKind.Lisp.FUNCTION };
+	private static final String SIGNAL_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
+
+	// _jkind's codes: a Lisp kind's is its index in LISP_KINDS (its ordinal), then the
+	// four below.
+	private static final JavaKind.Lisp[] LISP_KINDS = JavaKind.Lisp.values();
+
+	private static final int KIND_CONS = LISP_KINDS.length;
+
+	private static final int KIND_ARRAY = KIND_CONS + 1;
+
+	private static final int KIND_HOST = KIND_CONS + 2;
+
+	private static final int KIND_NONE = KIND_CONS + 3;
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String GUARD_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
+
+	/**
+	 * The package of the classes that travel with a compiled program; a value of one
+	 * ({@code RontoComplex}) is a Lisp value, never a host object.
+	 */
+	static final String RUNTIME_PACKAGE_PREFIX = RontoComplex.class.getPackageName() + ".";
 
 	/**
 	 * Past this many values a site's method takes them in one {@code Object[]}: a method
@@ -149,6 +217,14 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodrefConstant host;
 
+	private @Nullable MethodrefConstant lispArray;
+
+	private @Nullable MethodrefConstant lispTable;
+
+	private @Nullable MethodrefConstant arrayGuard;
+
+	private @Nullable MethodrefConstant tableGuard;
+
 	private @Nullable MethodrefConstant unmarshal;
 
 	private @Nullable MethodrefConstant arrayToList;
@@ -159,9 +235,38 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodrefConstant strv;
 
+	// The specialized vector shapes the program can hold (its gates), and the program's
+	// _bf16Value when a bfloat16 vector can be one of them.
+	private boolean floatVectors;
+
+	private boolean intVectors;
+
+	private @Nullable MethodrefConstant bf16Value;
+
 	private final Map<String, MethodrefConstant> costs = new LinkedHashMap<>();
 
+	private @Nullable JvmJavaImplementations implementations;
+
 	private final Map<String, MethodrefConstant> converts = new LinkedHashMap<>();
+
+	// _jfail and _jsig, named when first asked for and built by finishHelpers(), once
+	// every body is compiled: what they read depends on the whole program.
+	private @Nullable MethodrefConstant failure;
+
+	private @Nullable MethodrefConstant signal;
+
+	private boolean finished;
+
+	/**
+	 * The per-thread record of what functions called back from Java raised, a
+	 * {@code ThreadLocal} field the class declares and initializes in {@code <clinit>}.
+	 *
+	 * @param field the field
+	 * @param name its name
+	 * @param desc its descriptor
+	 */
+	record Signals(FieldrefConstant field, Utf8Constant name, Utf8Constant desc) {
+	}
 
 	/**
 	 * @param cp the class's constant pool
@@ -189,6 +294,26 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
+	 * Names the specialized vector shapes the program can hold, which a sequence
+	 * argument's elements are read from as the bridge's {@code marshal} reads them: a
+	 * packed float vector ({@code double[]} / {@code float[]} / bfloat16 {@code short[]},
+	 * read through the program's {@code _bf16Value}) and a packed integer vector
+	 * ({@code long[]} / octet {@code byte[]}). A shape the program cannot make is never
+	 * tested for.
+	 * @param floats whether the program carries the packed float runtime
+	 * @param ints whether it carries the packed integer runtime
+	 * @param bf16Value the program's {@code _bf16Value(I)D}, present when {@code floats}
+	 */
+	void packedVectors(boolean floats, boolean ints, @Nullable MethodrefConstant bf16Value) {
+		if (floats && bf16Value == null) {
+			throw new IllegalArgumentException("the packed float runtime without _bf16Value");
+		}
+		this.floatVectors = floats;
+		this.intVectors = ints;
+		this.bf16Value = bf16Value;
+	}
+
+	/**
 	 * @return the methods to add to the class, in the order they were made
 	 */
 	List<Method> methods() {
@@ -196,45 +321,287 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * Why a resolved site's method calls the bridge's proxy, or {@code null} when it does
-	 * not: an argument that may be a function value where an interface -- or, at a
-	 * dispatched site, an array of one a sequence becomes -- is expected, which the
-	 * function becomes a {@code java.lang.reflect.Proxy} of. What the site's method and
-	 * the conversion helpers it calls are made of follows the same rule, so a site this
-	 * answers {@code null} for never names the bridge.
-	 * @param site a resolved site
-	 * @return the reason, or {@code null}
+	 * Sets the generated classes a function value where an interface is expected becomes.
+	 * @param implementations the attempt's implementations
 	 */
-	static @Nullable String proxyReason(JavaSite site) {
-		List<JavaSite.Argument> arguments = site.arguments();
-		if (arguments.isEmpty()) {
-			return null;
-		}
-		List<JavaOverloads.Overload> overloads = site.dispatched() ? site.overloads()
-				: List.of(new JavaOverloads.Overload(Objects.requireNonNull(site.executable()), site.packed()));
-		for (int i = 0; i < arguments.size(); i++) {
-			if (!arguments.get(i).mayBeFunction()) {
-				continue;
-			}
-			for (JavaOverloads.Overload overload : overloads) {
-				JavaType proxied = proxied(JavaOverloads.parameterAt(overload, i));
-				if (proxied != null) {
-					return "argument " + (i + 1) + " may be a function, which becomes a java.lang.reflect.Proxy of "
-							+ proxied.name();
-				}
-			}
-		}
-		return null;
+	void implementations(JvmJavaImplementations implementations) {
+		this.implementations = implementations;
 	}
 
-	// The interface a function value converted to this type becomes a proxy of --
-	// directly, or as an element of a sequence converted to an array -- or null.
-	private static @Nullable JavaType proxied(JavaType type) {
-		if (type.isInterface()) {
-			return type;
+	/**
+	 * {@code _junm}: the bridge's {@code unmarshal}, made when first asked for.
+	 * @return the helper
+	 */
+	MethodrefConstant unmarshalHelper() {
+		return unmarshal();
+	}
+
+	/**
+	 * The cost of a value a {@code java:reify} / {@code java:proxy} function answers for
+	 * the method's return type: {@code _jcost$N} without the function arm -- a function
+	 * is never made a proxy on the way back -- {@code NO_MATCH} (negative) when it does
+	 * not convert.
+	 * @param target the return type
+	 * @return {@code _jcost$N(Object)I}
+	 */
+	MethodrefConstant returnedCost(JavaType target) {
+		return cost(target, false);
+	}
+
+	/**
+	 * The conversion of such a value to the return type: {@code _jconv$N} with sequences
+	 * made arrays or lists and no function arm, for a value {@link #returnedCost}
+	 * accepts.
+	 * @param target the return type
+	 * @return {@code _jconv$N(Object)T}
+	 */
+	MethodrefConstant returnedConvert(JavaType target) {
+		return convert(target, false, true);
+	}
+
+	/**
+	 * {@code _jsig}: what a generated implementation's callback calls with the throwable
+	 * leaving it. Built by {@link #finishHelpers}.
+	 * @return {@code _jsig(Throwable)Throwable}
+	 */
+	MethodrefConstant signalHelper() {
+		MethodrefConstant ref = this.signal;
+		if (ref == null) {
+			ref = unfinishedHelper(SIGNAL, SIGNAL_DESC);
+			this.signal = ref;
 		}
-		JavaType component = type.componentType();
-		return component != null ? proxied(component) : null;
+		return ref;
+	}
+
+	private MethodrefConstant failure() {
+		MethodrefConstant ref = this.failure;
+		if (ref == null) {
+			ref = unfinishedHelper(FAIL, FAIL_DESC);
+			this.failure = ref;
+		}
+		return ref;
+	}
+
+	private MethodrefConstant unfinishedHelper(String name, String desc) {
+		if (this.finished) {
+			throw new IllegalStateException(name + " asked for after the java: helpers were finished");
+		}
+		return this.cp.addMethodref(this.thisClass,
+				this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	}
+
+	/**
+	 * Builds {@code _jfail} and {@code _jsig}, once every body is compiled -- the bridge
+	 * finds both by name, so it asks for them whatever the sites did.
+	 * <p>
+	 * A throwable a function called back from Java raises is recorded on its way out
+	 * ({@code _jsig}); a site whose Java call throws that very throwable throws it on
+	 * unchanged ({@code _jfail}), anything else as the error calling the member. The
+	 * record is per thread -- a throwable Java moves to another thread arrives as
+	 * something else -- and keeps the newest
+	 * {@link am.ik.rontolisp.compiler.JavaImplementations#PENDING_SIGNALS}.
+	 * <p>
+	 * The two per-thread channels a compiled condition or exit also lives in travel with
+	 * it: {@code _jsig} takes t's condition off {@code _condTl} and t's own entry off the
+	 * exit stack {@code _nleTl}, and {@code _jfail} puts both back for the throwable it
+	 * passes on. So a callback that Java lets fail meanwhile (a second close handler)
+	 * cannot leave its own in their place, and one Java swallows leaves nothing behind.
+	 * @param bridge whether the reflective bridge travels with the program
+	 * @param channel the program's condition channel: which of {@code _condTl} and
+	 * {@code _nleTl} it has
+	 * @return the record's field, or {@code null} when no function can be called back
+	 * from Java
+	 */
+	@Nullable Signals finishHelpers(boolean bridge, JvmLispCompiler.ConditionChannel channel) {
+		if (bridge) {
+			failure();
+			signalHelper();
+		}
+		Signals signals = null;
+		MethodrefConstant condTake = channel.used ? channel.condTake : null;
+		MethodrefConstant condPut = channel.used ? channel.condPut : null;
+		FieldrefConstant nleTl = channel.nleUsed ? channel.nleTlField : null;
+		if (this.signal != null) {
+			Utf8Constant name = this.cp.addUtf8(SIGNALS);
+			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
+			signals = new Signals(this.cp.addFieldref(this.thisClass, this.cp.addNameAndType(name, desc)), name, desc);
+			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
+		}
+		if (this.failure != null) {
+			this.methods.add(buildFailure(signals == null ? null : signals.field(), condPut, nleTl));
+		}
+		this.finished = true;
+		return signals;
+	}
+
+	// static Throwable _jsig(Throwable t): t's condition taken off _condTl, and the
+	// entry of _nleTl t is the exit of off the stack; then {t, that condition, that
+	// entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
+	private Method buildSignal(FieldrefConstant signals, @Nullable MethodrefConstant condTake,
+			@Nullable FieldrefConstant nleTl) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant objects = cls("[Ljava/lang/Object;");
+		MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+		MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+		// 0 = t, 1 = the record, 2 = a node, 3 = its depth, 4 = the condition, 5 = the
+		// exit. The condition leaves the channel with t: one Java swallows stays in the
+		// record, not on the channel.
+		if (condTake != null) {
+			a.aload(0);
+			a.invokestatic(condTake);
+		}
+		else {
+			a.aconstNull();
+		}
+		a.astore(4);
+		a.aconstNull();
+		a.astore(5);
+		if (nleTl != null) {
+			int notItsExit = a.label();
+			a.getstatic(nleTl);
+			a.invokevirtual(get);
+			a.checkcast(objects);
+			a.astore(2);
+			a.aload(2);
+			a.branch(Opcode.IFNULL, notItsExit);
+			a.aload(2);
+			a.iconst(0);
+			a.aaload();
+			a.aload(0);
+			a.branch(Opcode.IF_ACMPNE, notItsExit);
+			a.aload(2);
+			a.astore(5);
+			a.getstatic(nleTl);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.invokevirtual(set);
+			a.bind(notItsExit);
+		}
+		int walk = a.label();
+		int cut = a.label();
+		int push = a.label();
+		a.getstatic(signals);
+		a.invokevirtual(get);
+		a.checkcast(objects);
+		a.astore(1);
+		a.aload(1);
+		a.astore(2);
+		a.iconst(1);
+		a.istore(3);
+		a.bind(walk);
+		a.aload(2);
+		a.branch(Opcode.IFNULL, push);
+		a.iload(3);
+		a.iconst(am.ik.rontolisp.compiler.JavaImplementations.PENDING_SIGNALS - 1);
+		a.branch(Opcode.IF_ICMPGE, cut);
+		a.aload(2);
+		a.iconst(3);
+		a.aaload();
+		a.checkcast(objects);
+		a.astore(2);
+		a.iinc(3, 1);
+		a.branch(Opcode.GOTO, walk);
+		a.bind(cut);
+		a.aload(2);
+		a.iconst(3);
+		a.aconstNull();
+		a.aastore();
+		a.bind(push);
+		a.getstatic(signals);
+		a.iconst(4);
+		a.anewarray(cls("java/lang/Object"));
+		int slot = 0;
+		for (int local : new int[] { 0, 4, 5, 1 }) {
+			a.dup();
+			a.iconst(slot++);
+			a.aload(local);
+			a.aastore();
+		}
+		a.invokevirtual(set);
+		a.aload(0);
+		a.areturn();
+		return new Method(this.cp.addUtf8(SIGNAL), this.cp.addUtf8(SIGNAL_DESC), 6, 6, a.finish(), List.of());
+	}
+
+	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
+	// taken off with every newer node, its condition and exit entry put back -- else
+	// new RuntimeException(text + t), which carries no condition.
+	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable MethodrefConstant condPut,
+			@Nullable FieldrefConstant nleTl) {
+		JvmAsm a = new JvmAsm();
+		if (signals != null) {
+			ClassConstant objects = cls("[Ljava/lang/Object;");
+			MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+			MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+			// 0 = t, 1 = the text, 2 = a node, 3 = its exit entry
+			int walk = a.label();
+			int found = a.label();
+			int wrap = a.label();
+			a.getstatic(signals);
+			a.invokevirtual(get);
+			a.checkcast(objects);
+			a.astore(2);
+			a.bind(walk);
+			a.aload(2);
+			a.branch(Opcode.IFNULL, wrap);
+			a.aload(2);
+			a.iconst(0);
+			a.aaload();
+			a.aload(0);
+			a.branch(Opcode.IF_ACMPEQ, found);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.checkcast(objects);
+			a.astore(2);
+			a.branch(Opcode.GOTO, walk);
+			a.bind(found);
+			a.getstatic(signals);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.invokevirtual(set);
+			if (condPut != null) {
+				a.aload(0);
+				a.aload(2);
+				a.iconst(1);
+				a.aaload();
+				a.invokestatic(condPut);
+				a.pop();
+			}
+			if (nleTl != null) {
+				int noExit = a.label();
+				a.aload(2);
+				a.iconst(2);
+				a.aaload();
+				a.checkcast(objects);
+				a.astore(3);
+				a.aload(3);
+				a.branch(Opcode.IFNULL, noExit);
+				a.aload(3);
+				a.iconst(3);
+				a.getstatic(nleTl);
+				a.invokevirtual(get);
+				a.aastore();
+				a.getstatic(nleTl);
+				a.aload(3);
+				a.invokevirtual(set);
+				a.bind(noExit);
+			}
+			a.aload(0);
+			a.areturn();
+			a.bind(wrap);
+		}
+		a.anew(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.aload(1);
+		a.aload(0);
+		a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.areturn();
+		return new Method(this.cp.addUtf8(FAIL), this.cp.addUtf8(FAIL_DESC), 6, 4, a.finish(), List.of());
 	}
 
 	/**
@@ -244,15 +611,10 @@ final class JvmJavaDirectSites {
 	 * class-name literal (a static read, no object passed)
 	 * @param valueCount how many values the call passes: the receiver or object, then the
 	 * arguments
-	 * @param bridge the bridge's references ({@code init}, {@code proxy}), or
-	 * {@code null} when the attempt carries no bridge -- a proxy argument then calls the
-	 * absent {@code _javaInit}, which the helper-gate check turns into a retry with the
-	 * bridge
 	 * @return the method, in the {@code (Object...)Object} shape or, past
 	 * {@link #MAX_SPREAD} values, {@code (Object[])Object}
 	 */
-	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount,
-			@Nullable Map<String, MethodrefConstant> bridge) {
+	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount) {
 		boolean packedValues = valueCount > MAX_SPREAD;
 		String key = shapeKey(site, staticField, packedValues);
 		MethodrefConstant cached = this.sites.get(key);
@@ -273,7 +635,7 @@ final class JvmJavaDirectSites {
 		MethodrefConstant ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(nameUtf, descUtf));
 		// Registered before it is built, which may add the shared helpers first.
 		this.sites.put(key, ref);
-		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues, bridge).build(nameUtf, descUtf));
+		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues).build(nameUtf, descUtf));
 		return ref;
 	}
 
@@ -354,6 +716,15 @@ final class JvmJavaDirectSites {
 		return "long".equals(type.name()) || "double".equals(type.name()) ? 2 : 1;
 	}
 
+	// A class whose exact instances the compiled representation also uses for Lisp values
+	// (a Lisp array is an ArrayList, a hash table a LinkedHashMap, a complex number a
+	// travelling runtime class): a host kind of it is told apart by _jhost.
+	private static boolean mayHoldALispValue(JavaType host) {
+		String name = host.name();
+		return "java.util.ArrayList".equals(name) || "java.util.LinkedHashMap".equals(name)
+				|| name.startsWith(RUNTIME_PACKAGE_PREFIX);
+	}
+
 	private MethodrefConstant host() {
 		MethodrefConstant ref = this.host;
 		if (ref == null) {
@@ -362,6 +733,77 @@ final class JvmJavaDirectSites {
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.host = ref;
 			this.methods.add(buildHost(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The one test a {@code java:} program tells a Lisp array from a host
+	 * {@code ArrayList} by: {@code _jhost}, the printer and the array predicates all call
+	 * it, so they cannot disagree about a value. Built on first use.
+	 * @return {@code _jlarr(Object)Z}
+	 */
+	MethodrefConstant lispArray() {
+		MethodrefConstant ref = this.lispArray;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(LISP_ARRAY);
+			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.lispArray = ref;
+			this.methods.add(buildLispArray(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The one test a {@code java:} program tells a Lisp hash table from a host
+	 * {@code LinkedHashMap} by, shared as {@link #lispArray()} is. Built on first use.
+	 * @return {@code _jltab(Object)Z}
+	 */
+	MethodrefConstant lispTable() {
+		MethodrefConstant ref = this.lispTable;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(LISP_TABLE);
+			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.lispTable = ref;
+			this.methods.add(buildLispTable(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard an array accessor runs its array operand through in a {@code java:}
+	 * program: a host {@code ArrayList} is no Lisp array, and the accessors read the
+	 * class alone. Built on first use.
+	 * @return {@code _jckarr(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant arrayGuard() {
+		MethodrefConstant ref = this.arrayGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(ARRAY_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.arrayGuard = ref;
+			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), OperandTypes.Kind.ARRAY));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard a hash-table accessor runs its table operand through in a {@code java:}
+	 * program, as {@link #arrayGuard()} is for arrays. Built on first use.
+	 * @return {@code _jcktab(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant tableGuard() {
+		MethodrefConstant ref = this.tableGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(TABLE_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.tableGuard = ref;
+			this.methods
+				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), OperandTypes.Kind.HASH_TABLE));
 		}
 		return ref;
 	}
@@ -443,9 +885,8 @@ final class JvmJavaDirectSites {
 		// The handler of each bound class an argument check names: "No such class".
 		private final Map<String, Integer> boundMissing = new LinkedHashMap<>();
 
-		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues,
-				@Nullable Map<String, MethodrefConstant> bridge) {
-			super(packedValues ? 1 + valueCount : valueCount, bridge);
+		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues) {
+			super(packedValues ? 1 + valueCount : valueCount);
 			this.site = site;
 			this.staticField = staticField;
 			this.valueCount = valueCount;
@@ -525,15 +966,12 @@ final class JvmJavaDirectSites {
 				this.a.pop();
 				throwMessage(this.a, "No such class: " + bound.getKey());
 			}
+			// What the member threw: through _jfail, which passes on what a function
+			// called
+			// back from Java raised and wraps anything else.
 			this.a.bind(memberFailed);
-			this.a.astore(this.objectTemp);
-			this.a.anew(cls("java/lang/RuntimeException"));
-			this.a.dup();
 			this.a.ldcString(str(failure));
-			this.a.aload(this.objectTemp);
-			this.a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
-			this.a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
-			this.a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+			this.a.invokestatic(failure());
 			this.a.athrow();
 			return finish(name, desc, Math.max(8, stackForCall + 6));
 		}
@@ -878,7 +1316,8 @@ final class JvmJavaDirectSites {
 			for (int j = 0; j < fixed; j++) {
 				JavaType param = params.get(j);
 				a.aload(this.valueSlots[firstValue + j]);
-				a.invokestatic(convert(param, arguments.get(j).mayBeFunction(), this.bridge));
+				boolean open = arguments.get(j).mayBeFunction();
+				a.invokestatic(convert(param, open, open));
 				converted[j] = this.nextSlot;
 				this.nextSlot += width(param);
 				store(param, converted[j]);
@@ -893,7 +1332,8 @@ final class JvmJavaDirectSites {
 					a.aload(array);
 					a.iconst(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
-					a.invokestatic(convert(component, arguments.get(j).mayBeFunction(), this.bridge));
+					boolean open = arguments.get(j).mayBeFunction();
+					a.invokestatic(convert(component, open, open));
 					a.op(arrayStore(component));
 				}
 				converted[fixed] = array;
@@ -922,15 +1362,10 @@ final class JvmJavaDirectSites {
 
 		final int longTemp;
 
-		final @Nullable Map<String, MethodrefConstant> bridge;
-
 		/**
 		 * @param firstFree the first local the parameters leave free
-		 * @param bridge the bridge's references, or {@code null} when the attempt carries
-		 * none
 		 */
-		Body(int firstFree, @Nullable Map<String, MethodrefConstant> bridge) {
-			this.bridge = bridge;
+		Body(int firstFree) {
 			this.objectTemp = firstFree;
 			this.longTemp = firstFree + 1;
 			this.nextSlot = firstFree + 3;
@@ -955,6 +1390,17 @@ final class JvmJavaDirectSites {
 		 */
 		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, int fail) {
 			JvmAsm a = this.a;
+			if (kind instanceof JavaImplementationType implementation) {
+				// An object a java:reify / java:proxy of the interface made: of a class
+				// generated for one (JvmJavaImplementations), implementing it.
+				a.aload(slot);
+				a.instanceOf(cls(implementations().baseClass()));
+				a.branch(Opcode.IFEQ, fail);
+				a.aload(slot);
+				a.instanceOf(cls(implementation.iface()));
+				a.branch(Opcode.IFEQ, fail);
+				return;
+			}
 			if (kind instanceof JavaType host) {
 				a.aload(slot);
 				a.branch(Opcode.IFNULL, fail);
@@ -962,21 +1408,12 @@ final class JvmJavaDirectSites {
 				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
 				a.ldcClass(cls(host));
 				a.branch(Opcode.IF_ACMPNE, fail);
-				if ("java.util.ArrayList".equals(host.name())) {
-					// A non-empty ArrayList whose first element is an Object[] is a Lisp
-					// array in the compiled representation, not a host object.
-					int hostObject = a.label();
+				if (mayHoldALispValue(host)) {
+					// A class the compiled representation also uses (a Lisp array is an
+					// ArrayList, a hash table a LinkedHashMap): _jhost tells them apart.
 					a.aload(slot);
-					a.checkcast(cls("java/util/ArrayList"));
-					a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-					a.branch(Opcode.IFNE, hostObject);
-					a.aload(slot);
-					a.checkcast(cls("java/util/ArrayList"));
-					a.iconst(0);
-					a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
-					a.instanceOf(cls("[Ljava/lang/Object;"));
-					a.branch(Opcode.IFNE, fail);
-					a.bind(hostObject);
+					a.invokestatic(host());
+					a.branch(Opcode.IFEQ, fail);
 				}
 				return;
 			}
@@ -994,6 +1431,11 @@ final class JvmJavaDirectSites {
 				case INTEGER -> {
 					a.aload(slot);
 					a.instanceOf(cls("java/lang/Long"));
+					a.branch(Opcode.IFEQ, fail);
+				}
+				case BIGNUM -> {
+					a.aload(slot);
+					a.instanceOf(cls("java/math/BigInteger"));
 					a.branch(Opcode.IFEQ, fail);
 				}
 				case FLOAT -> {
@@ -1093,6 +1535,8 @@ final class JvmJavaDirectSites {
 					}
 				}
 				case INTEGER -> convertInteger(slot, name);
+				// The BigInteger itself, for that class or a supertype.
+				case BIGNUM -> a.aload(slot);
 				case FLOAT -> {
 					switch (name) {
 						case "double" -> doubleValue(slot);
@@ -1152,25 +1596,15 @@ final class JvmJavaDirectSites {
 					}
 				}
 				case FUNCTION -> {
-					// The bridge's proxy of the interface parameter: the one arm that
-					// reflects.
-					Map<String, MethodrefConstant> ops = this.bridge;
-					if (ops == null) {
-						// No bridge in this attempt: calling the absent _javaInit makes
-						// the
-						// helper-gate check retry with it.
-						a.invokestatic(JvmJavaDirectSites.this.cp.addMethodref(JvmJavaDirectSites.this.thisClass,
-								JvmJavaDirectSites.this.cp.addNameAndType(
-										JvmJavaDirectSites.this.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD),
-										JvmJavaDirectSites.this.cp.addUtf8("()V"))));
-						a.aconstNull();
-					}
-					else {
-						a.invokestatic(Objects.requireNonNull(ops.get("init")));
-						a.ldcString(str("\"" + name + "\""));
-						a.aload(slot);
-						a.invokestatic(Objects.requireNonNull(ops.get("proxy")));
-					}
+					// The interface's generated proxy class over the function, as the
+					// bridge makes it a Proxy: of(new Object[] { function }).
+					a.iconst(1);
+					a.anewarray(cls("java/lang/Object"));
+					a.dup();
+					a.iconst(0);
+					a.aload(slot);
+					a.aastore();
+					a.invokestatic(implementations().proxyFactory(target));
 				}
 			}
 		}
@@ -1216,6 +1650,8 @@ final class JvmJavaDirectSites {
 					a.op(Opcode.I2B);
 					a.invokestatic(method("java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;"));
 				}
+				case "java.math.BigInteger" ->
+					a.invokestatic(method("java/math/BigInteger", "valueOf", "(J)Ljava/math/BigInteger;"));
 				default -> {
 					// Boxed to the narrowest type that holds it, like a fixnum.
 					int wide = a.label();
@@ -1425,19 +1861,11 @@ final class JvmJavaDirectSites {
 			this.a.bind(end);
 		}
 
-		// A supertype of a box, of String or of an array: a value declared so may be one
-		// of those at run time, which unmarshal turns into a Lisp value
-		// (compiler/JavaStaticType.ofDeclared's rule).
+		// A supertype of a box, of String, of BigInteger or of an array, or BigInteger's
+		// subclass: a value declared so may be one of those at run time, which unmarshal
+		// turns into a Lisp value (compiler/JavaStaticType.ofDeclared's rule).
 		boolean mayHideALispValue(JavaType declared) {
-			for (String name : new String[] { "java.lang.Boolean", "java.lang.Byte", "java.lang.Short",
-					"java.lang.Integer", "java.lang.Long", "java.lang.Float", "java.lang.Double", "java.lang.Character",
-					"java.lang.String", "[I" }) {
-				JavaType unmarshalled = JvmJavaDirectSites.this.lookup.find(name);
-				if (unmarshalled != null && declared.isAssignableFrom(unmarshalled)) {
-					return true;
-				}
-			}
-			return false;
+			return JavaStaticType.becomesLisp(declared, JvmJavaDirectSites.this.lookup);
 		}
 
 	}
@@ -1451,7 +1879,7 @@ final class JvmJavaDirectSites {
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.kind = ref;
-			this.methods.add(buildKind(name, desc));
+			this.methods.add(buildKind(name, desc, host()));
 		}
 		return ref;
 	}
@@ -1469,39 +1897,54 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * {@code _jcost$N}: what the bridge's {@code marshal} costs a value for this type.
+	 * {@code _jcost$N}: what the bridge's {@code marshal} costs a value for this type --
+	 * an argument's, a function costing its proxy.
 	 */
 	private MethodrefConstant cost(JavaType target) {
-		MethodrefConstant ref = this.costs.get(target.name());
+		return cost(target, true);
+	}
+
+	/**
+	 * {@code _jcost$N} for this type, with or without the function arm: a value a
+	 * {@code java:reify} / {@code java:proxy} function answers never makes a proxy.
+	 */
+	private MethodrefConstant cost(JavaType target, boolean functions) {
+		String key = target.name() + (functions ? "" : " returned");
+		MethodrefConstant ref = this.costs.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(COST_PREFIX + this.costs.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			// Registered before it is built: a list of lists costs itself.
-			this.costs.put(target.name(), ref);
-			this.methods.add(buildCost(name, desc, target));
+			this.costs.put(key, ref);
+			this.methods.add(buildCost(name, desc, target, functions));
 		}
 		return ref;
 	}
 
 	/**
 	 * {@code _jconv$N}: a value converted to this type as the bridge's {@code marshal}
-	 * converts it. An argument that may be a function takes the {@code open} variant,
-	 * which also makes a function a proxy of an interface and a sequence an array or a
-	 * list; the closed one, for a value of known kinds or an object, never names the
-	 * bridge.
+	 * converts it. An argument that may be a function takes the open variant (both
+	 * flags), which also makes a function the interface's generated proxy and a sequence
+	 * an array or a list; the closed one (neither) serves a value of known kinds or an
+	 * object; a value a {@code java:reify} / {@code java:proxy} function answers takes
+	 * sequences without functions.
 	 */
-	private MethodrefConstant convert(JavaType target, boolean open, @Nullable Map<String, MethodrefConstant> bridge) {
-		String key = target.name() + (open ? " open" : "");
+	private MethodrefConstant convert(JavaType target, boolean functions, boolean sequences) {
+		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
 		MethodrefConstant ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(CONVERT_PREFIX + this.converts.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)" + descriptor(target));
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.converts.put(key, ref);
-			this.methods.add(buildConvert(name, desc, target, open, bridge));
+			this.methods.add(buildConvert(name, desc, target, functions, sequences));
 		}
 		return ref;
+	}
+
+	private JvmJavaImplementations implementations() {
+		return Objects.requireNonNull(this.implementations, "the attempt's implementations");
 	}
 
 	// The type a sequence's elements convert to for this parameter: an array's
@@ -1539,9 +1982,9 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
-	// index), a cons, a Lisp array, a host object, or none (a symbol, a bignum, a ratio)
-	// -- tested in its order.
-	private Method buildKind(Utf8Constant name, Utf8Constant desc) {
+	// index), a cons, a Lisp array (a specialized one too), a host object, or none (a
+	// symbol, a ratio, a hash table) -- tested in its order.
+	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodrefConstant hostTest) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant string = cls("java/lang/String");
 		ClassConstant objects = cls("[Ljava/lang/Object;");
@@ -1550,19 +1993,25 @@ final class JvmJavaDirectSites {
 		int notNil = a.label();
 		a.aload(0);
 		a.branch(Opcode.IFNONNULL, notNil);
-		returnCode(a, 0);
+		returnCode(a, code(JavaKind.Lisp.NIL));
 		a.bind(notNil);
 		int notInteger = a.label();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Long"));
 		a.branch(Opcode.IFEQ, notInteger);
-		returnCode(a, 2);
+		returnCode(a, code(JavaKind.Lisp.INTEGER));
 		a.bind(notInteger);
+		int notBignum = a.label();
+		a.aload(0);
+		a.instanceOf(cls("java/math/BigInteger"));
+		a.branch(Opcode.IFEQ, notBignum);
+		returnCode(a, code(JavaKind.Lisp.BIGNUM));
+		a.bind(notBignum);
 		int notFloat = a.label();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Double"));
 		a.branch(Opcode.IFEQ, notFloat);
-		returnCode(a, 3);
+		returnCode(a, code(JavaKind.Lisp.FLOAT));
 		a.bind(notFloat);
 		// A character is an int[] of length 1; any other int[] is a host object.
 		int notChar = a.label();
@@ -1581,9 +2030,9 @@ final class JvmJavaDirectSites {
 		a.iaload();
 		a.invokestatic(method("java/lang/Character", "isBmpCodePoint", "(I)Z"));
 		a.branch(Opcode.IFEQ, supplementary);
-		returnCode(a, 6);
+		returnCode(a, code(JavaKind.Lisp.CHAR));
 		a.bind(supplementary);
-		returnCode(a, 7);
+		returnCode(a, code(JavaKind.Lisp.SUPPLEMENTARY_CHAR));
 		a.bind(notChar);
 		// A quote-framed string is a Lisp string (length 3: one character), "T" the
 		// symbol t, any other string another symbol.
@@ -1608,16 +2057,16 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(length);
 		a.iconst(3);
 		a.branch(Opcode.IF_ICMPNE, longer);
-		returnCode(a, 4);
+		returnCode(a, code(JavaKind.Lisp.STRING_1));
 		a.bind(longer);
-		returnCode(a, 5);
+		returnCode(a, code(JavaKind.Lisp.STRING));
 		a.bind(symbol);
 		int other = a.label();
 		a.ldcString(str("T"));
 		a.aload(0);
 		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
 		a.branch(Opcode.IFEQ, other);
-		returnCode(a, 1);
+		returnCode(a, code(JavaKind.Lisp.T));
 		a.bind(other);
 		returnCode(a, KIND_NONE);
 		a.bind(notString);
@@ -1638,38 +2087,64 @@ final class JvmJavaDirectSites {
 		a.aaload();
 		a.instanceOf(cls("java/lang/Integer"));
 		a.branch(Opcode.IFEQ, cons);
-		returnCode(a, 8);
+		returnCode(a, code(JavaKind.Lisp.FUNCTION));
 		a.bind(cons);
 		returnCode(a, KIND_CONS);
 		a.bind(notObjects);
-		int none = a.label();
-		a.aload(0);
-		a.instanceOf(cls("java/math/BigInteger"));
-		a.branch(Opcode.IFNE, none);
-		a.aload(0);
-		a.instanceOf(cls("[Ljava/math/BigInteger;"));
-		a.branch(Opcode.IFNE, none);
 		// An ArrayList whose first element is an Object[] header is a Lisp array.
-		int host = a.label();
+		int notArray = a.label();
 		a.aload(0);
 		a.instanceOf(arrayList);
-		a.branch(Opcode.IFEQ, host);
+		a.branch(Opcode.IFEQ, notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.branch(Opcode.IFNE, host);
+		a.branch(Opcode.IFNE, notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.iconst(0);
 		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
 		a.instanceOf(objects);
-		a.branch(Opcode.IFEQ, host);
+		a.branch(Opcode.IFEQ, notArray);
 		returnCode(a, KIND_ARRAY);
-		a.bind(host);
+		a.bind(notArray);
+		// A specialized array the program can hold: _jseq reads a rank-1 one.
+		for (String shape : packedShapes()) {
+			int next = a.label();
+			a.aload(0);
+			a.instanceOf(cls(shape));
+			a.branch(Opcode.IFEQ, next);
+			returnCode(a, KIND_ARRAY);
+			a.bind(next);
+		}
+		// A host object (_jhost), or a value of no kind (a ratio, a hash table).
+		int none = a.label();
+		a.aload(0);
+		a.invokestatic(hostTest);
+		a.branch(Opcode.IFEQ, none);
 		returnCode(a, KIND_HOST);
 		a.bind(none);
 		returnCode(a, KIND_NONE);
 		return new Method(name, desc, 3, 1, a.finish(), List.of());
+	}
+
+	private static int code(JavaKind.Lisp kind) {
+		return kind.ordinal();
+	}
+
+	// The array classes of the specialized arrays the program can hold.
+	private List<String> packedShapes() {
+		List<String> shapes = new ArrayList<>();
+		if (this.floatVectors) {
+			shapes.add("[D");
+			shapes.add("[F");
+			shapes.add("[S");
+		}
+		if (this.intVectors) {
+			shapes.add("[J");
+			shapes.add("[B");
+		}
+		return shapes;
 	}
 
 	private static void returnCode(JvmAsm a, int code) {
@@ -1679,8 +2154,9 @@ final class JvmJavaDirectSites {
 
 	// _jseq(Object)Object[]: the bridge's element list of a cons or a Lisp array (the
 	// value is one: _jkind said so), or null when it is not a sequence -- a dotted list,
-	// a list ending in a function value, an array of rank other than 1. A packed vector's
-	// Long.MIN_VALUE is nil; a fill pointer bounds the elements.
+	// a list ending in a function value, an array of rank other than 1, a quantized
+	// matrix. A packed fixnum vector's Long.MIN_VALUE is nil; a fill pointer bounds the
+	// elements; a specialized vector's are the values aref reads (emitPackedElements).
 	private Method buildSequence(Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant objects = cls("[Ljava/lang/Object;");
@@ -1760,6 +2236,9 @@ final class JvmJavaDirectSites {
 		a.aload(3);
 		a.areturn();
 		a.bind(notCons);
+		for (String shape : packedShapes()) {
+			emitPackedElements(a, shape);
+		}
 		// A Lisp array: slot 0 the {dims, fillPointer, ...} header (1 = header).
 		int rankOne = a.label();
 		a.aload(0);
@@ -1885,13 +2364,136 @@ final class JvmJavaDirectSites {
 		a.bind(done);
 		a.aload(3);
 		a.areturn();
-		return new Method(name, desc, 6, 7, a.finish(), List.of());
+		return new Method(name, desc, 6, 11, a.finish(), List.of());
+	}
+
+	// One specialized shape's arm of _jseq: when the value is of the array class, its
+	// elements after the header -- each a Double read as aref reads it, or a Long -- or
+	// null when it is no rank-1 vector. The shapes and their headers: a packed float
+	// array double[] / float[] {rank, dim..., e...} and bfloat16 short[] {rank, hi, lo,
+	// ..., e...} (JvmPackedFloatWidth, its element through _bf16Value), a packed integer
+	// vector long[] {width, e...} and an octet vector byte[] {8, e...} (read unsigned;
+	// any other byte[] is a quantized matrix). Locals 7 = the array, 8 = the count, 9 =
+	// the elements, 10 = the index.
+	private void emitPackedElements(JvmAsm a, String shape) {
+		int array = 7;
+		int count = 8;
+		int out = 9;
+		int index = 10;
+		int next = a.label();
+		int notVector = a.label();
+		a.aload(0);
+		a.instanceOf(cls(shape));
+		a.branch(Opcode.IFEQ, next);
+		a.aload(0);
+		a.checkcast(cls(shape));
+		a.astore(array);
+		int offset;
+		switch (shape) {
+			case "[D", "[F", "[S" -> {
+				JvmPackedFloatWidth width = switch (shape) {
+					case "[D" -> JvmPackedFloatWidth.DOUBLE;
+					case "[F" -> JvmPackedFloatWidth.SINGLE;
+					default -> JvmPackedFloatWidth.BFLOAT16;
+				};
+				// Rank 1: slot 0 is 1.
+				a.aload(array);
+				a.iconst(0);
+				switch (shape) {
+					case "[D" -> {
+						a.daload();
+						a.d2i();
+					}
+					case "[F" -> {
+						a.faload();
+						a.f2i();
+					}
+					default -> a.saload();
+				}
+				a.iconst(1);
+				a.branch(Opcode.IF_ICMPNE, notVector);
+				offset = width.dataOffset(1);
+			}
+			case "[B" -> {
+				a.aload(array);
+				a.arraylength();
+				a.branch(Opcode.IFEQ, notVector);
+				a.aload(array);
+				a.iconst(0);
+				a.baload();
+				a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				a.branch(Opcode.IF_ICMPNE, notVector);
+				offset = 1;
+			}
+			default -> offset = 1; // [J: the width, then the elements
+		}
+		int loop = a.label();
+		int done = a.label();
+		a.aload(array);
+		a.arraylength();
+		a.iconst(offset);
+		a.op(Opcode.ISUB);
+		a.istore(count);
+		a.iload(count);
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(out);
+		a.iconst(0);
+		a.istore(index);
+		a.bind(loop);
+		a.iload(index);
+		a.iload(count);
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.aload(out);
+		a.iload(index);
+		a.aload(array);
+		a.iload(index);
+		a.iconst(offset);
+		a.iadd();
+		MethodrefConstant doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
+		MethodrefConstant longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		switch (shape) {
+			case "[D" -> {
+				a.daload();
+				a.invokestatic(doubleValueOf);
+			}
+			case "[F" -> {
+				a.faload();
+				a.f2d();
+				a.invokestatic(doubleValueOf);
+			}
+			case "[S" -> {
+				a.saload();
+				a.invokestatic(Objects.requireNonNull(this.bf16Value, "_bf16Value"));
+				a.invokestatic(doubleValueOf);
+			}
+			case "[J" -> {
+				a.laload();
+				a.invokestatic(longValueOf);
+			}
+			default -> {
+				a.baload();
+				a.iconst(0xFF);
+				a.op(Opcode.IAND);
+				a.i2l();
+				a.invokestatic(longValueOf);
+			}
+		}
+		a.aastore();
+		a.iinc(index, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.aload(out);
+		a.areturn();
+		a.bind(notVector);
+		a.aconstNull();
+		a.areturn();
+		a.bind(next);
 	}
 
 	// _jcost$N(Object)I for one type: the bridge's marshal cost -- kindCost of a value's
 	// kind, a host object's class against the type, a sequence its base plus its
 	// elements' costs -- or NO_MATCH.
-	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target) {
+	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions) {
 		JvmAsm a = new JvmAsm();
 		render(a, 0);
 		int code = 1;
@@ -1900,7 +2502,7 @@ final class JvmJavaDirectSites {
 		a.istore(code);
 		for (int c = 0; c < LISP_KINDS.length; c++) {
 			int cost = JavaOverloads.kindCost(LISP_KINDS[c], target, this.lookup);
-			if (cost == JavaOverloads.NO_MATCH) {
+			if (cost == JavaOverloads.NO_MATCH || (!functions && LISP_KINDS[c] == JavaKind.Lisp.FUNCTION)) {
 				continue;
 			}
 			int next = a.label();
@@ -1950,7 +2552,7 @@ final class JvmJavaDirectSites {
 			a.aload(elements);
 			a.iload(index);
 			a.aaload();
-			a.invokestatic(cost(element));
+			a.invokestatic(cost(element, functions));
 			a.istore(each);
 			a.iload(each);
 			a.branch(Opcode.IFGE, add);
@@ -1999,9 +2601,9 @@ final class JvmJavaDirectSites {
 	// host object itself, and in the open variant a function's proxy and a sequence's
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
-	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean open,
-			@Nullable Map<String, MethodrefConstant> bridge) {
-		Body body = new Body(2, bridge);
+	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions,
+			boolean sequences) {
+		Body body = new Body(2);
 		JvmAsm a = body.a;
 		int code = 1;
 		int reject = a.label();
@@ -2014,7 +2616,7 @@ final class JvmJavaDirectSites {
 		boolean needsCast = reference && !"java.lang.Object".equals(target.name());
 		for (int c = 0; c < LISP_KINDS.length; c++) {
 			JavaKind.Lisp kind = LISP_KINDS[c];
-			if ((kind == JavaKind.Lisp.FUNCTION && !open)
+			if ((kind == JavaKind.Lisp.FUNCTION && !functions)
 					|| JavaOverloads.kindCost(kind, target, this.lookup) == JavaOverloads.NO_MATCH) {
 				continue;
 			}
@@ -2029,7 +2631,7 @@ final class JvmJavaDirectSites {
 			a.op(returnOpcode(target));
 			a.bind(next);
 		}
-		JavaType element = open ? sequenceElement(target) : null;
+		JavaType element = sequences ? sequenceElement(target) : null;
 		if (element != null) {
 			int sequenceValue = a.label();
 			int notSequence = a.label();
@@ -2050,7 +2652,7 @@ final class JvmJavaDirectSites {
 			a.astore(elements);
 			a.aload(elements);
 			a.branch(Opcode.IFNULL, reject);
-			MethodrefConstant each = convert(element, true, bridge);
+			MethodrefConstant each = convert(element, functions, sequences);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();
@@ -2126,25 +2728,123 @@ final class JvmJavaDirectSites {
 
 	// --- the shared helpers ---
 
-	// _jhost(Object)Z: the bridge's isJavaObject -- anything outside the compiled Lisp
-	// representation (Long/Double/BigInteger integers, BigInteger[] ratios, String
-	// symbols and strings, int[] characters, exact Object[] conses and function values).
+	// _jhost(Object)Z: the bridge's isJavaObject, test for test -- anything outside the
+	// compiled Lisp representation: not a Long/Double/BigInteger/String, not a Java array
+	// (characters, ratios, conses, function values, specialized vectors), not a Lisp
+	// array (_jlarr), not a Lisp hash table (_jltab), not a travelling runtime class's
+	// value (a complex number).
 	private Method buildHost(Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
+		MethodrefConstant getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
 		int no = a.label();
 		a.aload(0);
 		a.branch(Opcode.IFNULL, no);
 		for (String excluded : new String[] { "java/lang/Long", "java/lang/Double", "java/math/BigInteger",
-				"[Ljava/math/BigInteger;", "java/lang/String", "[I" }) {
+				"java/lang/String" }) {
 			a.aload(0);
 			a.instanceOf(cls(excluded));
 			a.branch(Opcode.IFNE, no);
 		}
 		a.aload(0);
-		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-		a.ldcClass(cls("[Ljava/lang/Object;"));
-		a.branch(Opcode.IF_ACMPEQ, no);
+		a.invokevirtual(getClass);
+		a.invokevirtual(method("java/lang/Class", "isArray", "()Z"));
+		a.branch(Opcode.IFNE, no);
+		// A Lisp array or a Lisp hash table: the shared tests.
+		a.aload(0);
+		a.invokestatic(lispArray());
+		a.branch(Opcode.IFNE, no);
+		a.aload(0);
+		a.invokestatic(lispTable());
+		a.branch(Opcode.IFNE, no);
+		// A value of a class that travels with the program (a complex number).
+		a.aload(0);
+		a.invokevirtual(getClass);
+		a.invokevirtual(method("java/lang/Class", "getName", "()Ljava/lang/String;"));
+		a.ldcString(str(RUNTIME_PACKAGE_PREFIX));
+		a.invokevirtual(method("java/lang/String", "startsWith", "(Ljava/lang/String;)Z"));
+		a.branch(Opcode.IFNE, no);
 		a.iconst(1);
+		a.ireturn();
+		a.bind(no);
+		a.iconst(0);
+		a.ireturn();
+		return new Method(name, desc, 3, 1, a.finish(), List.of());
+	}
+
+	// _jlarr(Object)Z: a non-empty ArrayList whose first element is an Object[] header.
+	private Method buildLispArray(Utf8Constant name, Utf8Constant desc) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant arrayList = cls("java/util/ArrayList");
+		int no = a.label();
+		a.aload(0);
+		a.instanceOf(arrayList);
+		a.branch(Opcode.IFEQ, no);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
+		a.branch(Opcode.IFNE, no);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.iconst(0);
+		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
+		a.instanceOf(cls("[Ljava/lang/Object;"));
+		a.ireturn();
+		a.bind(no);
+		a.iconst(0);
+		a.ireturn();
+		return new Method(name, desc, 2, 1, a.finish(), List.of());
+	}
+
+	// _jckarr / _jcktab(Object v, String op)Object: v unless it is an instance of the
+	// class a Lisp array / table shares with a host collection and the shared test says
+	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
+	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
+	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodrefConstant lispTest,
+			OperandTypes.Kind kind) {
+		JvmAsm a = new JvmAsm();
+		int pass = a.label();
+		int named = a.label();
+		a.aload(0);
+		a.instanceOf(cls(sharedClass));
+		a.branch(Opcode.IFEQ, pass);
+		a.aload(0);
+		a.invokestatic(lispTest);
+		a.branch(Opcode.IFNE, pass);
+		// The accessor's type-error over the host value, as the interpreter's refusal of
+		// it is: _teRaw's unnamed report, renamed after the operator the site handed in
+		// (null for one that is no named operator).
+		a.aload(0);
+		a.ldcString(str(kind.typeName()));
+		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.aload(1);
+		a.branch(Opcode.IFNONNULL, named);
+		a.athrow();
+		a.bind(named);
+		a.aload(1);
+		a.ldcString(str(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.athrow();
+		a.bind(pass);
+		a.aload(0);
+		a.areturn();
+		return new Method(name, desc, 4, 2, a.finish(), List.of());
+	}
+
+	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
+	private Method buildLispTable(Utf8Constant name, Utf8Constant desc) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant linkedHashMap = cls(RontoHashTable.MAP_CLASS);
+		int no = a.label();
+		a.aload(0);
+		a.instanceOf(linkedHashMap);
+		a.branch(Opcode.IFEQ, no);
+		a.aload(0);
+		a.checkcast(linkedHashMap);
+		a.ldcString(str(RontoHashTable.ORDER_KEY));
+		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
 		a.ireturn();
 		a.bind(no);
 		a.iconst(0);
@@ -2209,6 +2909,27 @@ final class JvmJavaDirectSites {
 		a.invokestatic(doubleValueOf);
 		a.areturn();
 		a.bind(notFloat);
+		// BigInteger -> a Lisp integer: the long when it fits, else the bignum itself
+		int notBignum = a.label();
+		int bignum = a.label();
+		ClassConstant bigInteger = cls("java/math/BigInteger");
+		a.aload(0);
+		a.instanceOf(bigInteger);
+		a.branch(Opcode.IFEQ, notBignum);
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "bitLength", "()I"));
+		a.iconst(64);
+		a.branch(Opcode.IF_ICMPGE, bignum);
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "longValue", "()J"));
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.bind(bignum);
+		a.aload(0);
+		a.areturn();
+		a.bind(notBignum);
 		// Character -> int[]{code unit}
 		int notCharacter = a.label();
 		a.aload(0);

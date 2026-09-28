@@ -15,6 +15,7 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.wasm.WasmCodeModel.Instr;
 import am.ik.wasm.WasmCodeModel.StructType;
 import am.ik.wasm.WasmCodeModel.TypeSection;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -42,13 +43,25 @@ class WasmRefTypeFolderTest {
 		.addRecGroup(rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.F64))));
 
 	private static byte[] module(int[] funcTypes, List<byte[]> bodies, Map<String, Integer> exports) {
+		return module(funcTypes, null, bodies, exports);
+	}
+
+	// With a global section when `globals` is not null.
+	private static byte[] module(int[] funcTypes, @Nullable Consumer<GlobalDef> globals, List<byte[]> bodies,
+			Map<String, Integer> exports) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		new WasmWriter(out).write("\0asm").writeLittleEndian4(1).writeTypeSection(TYPES).writeFunction(functions -> {
-			for (int t : funcTypes) {
-				functions.addFunction(t);
-			}
-		})
-			.writeExport(ex -> exports.forEach((name, index) -> ex.addExport(name, ExternalKind.FUNCTION, index)))
+		WasmWriter w = new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(TYPES)
+			.writeFunction(functions -> {
+				for (int t : funcTypes) {
+					functions.addFunction(t);
+				}
+			});
+		if (globals != null) {
+			w.writeGlobal(globals);
+		}
+		w.writeExport(ex -> exports.forEach((name, index) -> ex.addExport(name, ExternalKind.FUNCTION, index)))
 			.writeCode(code -> {
 				for (byte[] body : bodies) {
 					code.addFunction(body);
@@ -115,6 +128,8 @@ class WasmRefTypeFolderTest {
 				case 0x00 -> "unreachable";
 				case 0x10 -> "call " + in.a;
 				case 0x20 -> "local.get " + in.a;
+				case 0x23 -> "global.get " + in.a;
+				case 0xD3 -> "ref.eq";
 				case 0x41 -> "i32.const " + in.a;
 				case 0x72 -> "i32.or";
 				case 0xFB -> switch (in.sub) {
@@ -225,6 +240,106 @@ class WasmRefTypeFolderTest {
 		assertThat(mnemonics(code(folded, 0))).containsExactly("local.get 0", "ref.test " + WasmCodeModel.HEAP_I31,
 				"if", "i32.const 1", "else", "i32.const 0", "end", "end");
 		assertThat(validateAndInvoke(folded, "g")).isEqualTo("1");
+	}
+
+	// Global 0: an immutable eqref initialized by `struct.new 0 (i32.const 0)` -- ONE
+	// object, made once, at instantiation.
+	private static void singletonGlobal(GlobalDef globals) {
+		globals.add(g -> {
+			g.writeRefType(true, Type.EQ.code());
+			g.write(Mutability.CONST.code());
+			struct(g, 0);
+			g.write(Instruction.END);
+		});
+	}
+
+	private static void identityTest(WasmWriter w) {
+		local(w, 0);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.REF_EQ);
+	}
+
+	@Test
+	void decidesAnIdentityTestAgainstASingletonGlobal() throws Exception {
+		// f asks whether its argument IS the global's object. Handed only a struct of the
+		// same type made elsewhere, the answer is no -- a type test could not say that,
+		// identity can; handed only the global's own value, the answer is yes.
+		byte[] f = body(WasmRefTypeFolderTest::identityTest);
+		byte[] g = body(w -> {
+			struct(w, 7);
+			call(w, 0);
+		});
+		byte[] folded = WasmRefTypeFolder
+			.fold(module(new int[] { 1, 2 }, WasmRefTypeFolderTest::singletonGlobal, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("i32.const 0", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("0");
+
+		byte[] h = body(w -> {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(0);
+			call(w, 0);
+		});
+		folded = WasmRefTypeFolder
+			.fold(module(new int[] { 1, 2 }, WasmRefTypeFolderTest::singletonGlobal, List.of(f, h), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("i32.const 1", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("1");
+	}
+
+	@Test
+	void refinesTheLocalAnIdentityTestSelects() throws Exception {
+		// f is handed the global's object and an i31: the identity test stays a question,
+		// and each arm knows which of the two the local is -- the global's object is a
+		// struct, so `is i31` is decided in both.
+		byte[] f = body(w -> {
+			identityTest(w);
+			w.write(Instruction.IF, Type.I32.code());
+			local(w, 0);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.ELSE);
+			local(w, 0);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.END);
+		});
+		byte[] g = body(w -> {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(0);
+			call(w, 0);
+			i31(w, 5);
+			call(w, 0);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] folded = WasmRefTypeFolder
+			.fold(module(new int[] { 1, 2 }, WasmRefTypeFolderTest::singletonGlobal, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("local.get 0", "global.get 0", "ref.eq", "if",
+				"i32.const 0", "else", "i32.const 1", "end", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("1");
+	}
+
+	@Test
+	void aStructOfTheSingletonsTypeIsStillATestOfThatType() throws Exception {
+		// The global's object is one more value of struct type 0: a type test on a local
+		// that may hold it or a fresh struct of the same type is still decided.
+		byte[] f = body(w -> {
+			local(w, 0);
+			refTest(w, 0);
+		});
+		byte[] g = body(w -> {
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(0);
+			call(w, 0);
+			struct(w, 7);
+			call(w, 0);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] folded = WasmRefTypeFolder
+			.fold(module(new int[] { 1, 2 }, WasmRefTypeFolderTest::singletonGlobal, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("i32.const 1", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("2");
 	}
 
 	@Test
@@ -472,6 +587,23 @@ class WasmRefTypeFolderTest {
 		byte[] refolded = WasmRefTypeFolder.fold(folded);
 		assertThat(floatTests(refolded)).isZero();
 		assertThat(WasmRefTypeFolder.fold(refolded)).isSameAs(refolded);
+	}
+
+	@Test
+	void anOptionalNoCallPassesCostsNothingOnceTheMarkerTestIsDecided() {
+		// A physical optional's prologue asks `(ref.eq b <the UNSUPPLIED global>)`. The
+		// marker is a singleton global's object, so with every call leaving b out the
+		// question is decided, b is the constant default, and `+` keeps no arm for a
+		// non-fixnum -- the program is no larger than its two-required twin. Opaque, the
+		// test kept the marker's type in b's set and cost 1,330 bytes against 981.
+		byte[] optional = WasmLispCompiler.builder()
+			.build()
+			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
+		byte[] required = WasmLispCompiler.builder()
+			.build()
+			.compile(LispReader.readAllFromString("(defun f (a b) (+ a b)) (print (f 1 2))"));
+
+		assertThat(optional.length).isLessThanOrEqualTo(required.length);
 	}
 
 	// How many ref.test / ref.cast instructions across the module name a struct whose one

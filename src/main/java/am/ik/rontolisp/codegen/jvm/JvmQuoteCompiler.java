@@ -30,19 +30,19 @@ final class JvmQuoteCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal quoted = ((LispCons) cons.cdr()).car();
 		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
-		// caches its build in a volatile static field -- GETSTATIC; on null build and
-		// PUTSTATIC -- so every evaluation answers the SAME object, like the
-		// interpreter, whose evalQuote hands back the reader's datum. Lazy AT THE SITE
-		// rather than in <clinit> on purpose: JvmClassShaker runs on every build, and a
-		// quote site inside a shaken wrapper defun must go with it -- a <clinit>
+		// caches its build in a slot of the class's quoted-datum table -- read it; on
+		// null build and fill it -- so every evaluation answers the SAME object, like
+		// the interpreter, whose evalQuote hands back the reader's datum. Lazy AT THE
+		// SITE rather than in <clinit> on purpose: JvmClassShaker runs on every build,
+		// and a quote site inside a shaken wrapper defun must go with it -- a <clinit>
 		// initializer would keep every quoted table of every dropped wrapper alive
-		// (measured +13 KB on a three-defun program). The field is ACC_VOLATILE so the
-		// racing first evaluations of two threads each publish a fully-built datum; the
-		// site converges on one object right after. Keyed by datum IDENTITY
-		// (JvmLispCompiler.QuotePool), so a macro expansion splicing one template datum
-		// into several sites shares one constant across them too. An atom keeps the
-		// inline emission below; a BARE array literal never comes here and stays a
-		// constructor (.kb/array-literals.md).
+		// (measured +13 KB on a three-defun program). The fill settles racing first
+		// evaluations under the class monitor -- every loser answers the winner -- and
+		// publishes the datum fully built through a final field. Keyed by datum
+		// IDENTITY (JvmQuotePool), so a macro expansion splicing one template datum into
+		// several sites shares one constant across them too. An atom keeps the inline
+		// emission below; a BARE array literal never comes here and stays a constructor
+		// (.kb/array-literals.md).
 		if (isSharedAggregate(quoted)) {
 			emitSharedConstant(quoted, ctx, className, () -> compileQuotedVal(quoted, ctx, className));
 			return;
@@ -51,33 +51,32 @@ final class JvmQuoteCompiler {
 	}
 
 	/**
-	 * Emits one datum's build behind its lazy {@code _qd$N} field, so every evaluation of
-	 * the site answers the same object. Shared by the {@code quote} path and the
-	 * bare-instance-literal path, which have the same identity rule and differ only in
-	 * what they build.
-	 * @param datum the datum the field is keyed by (identity, not equality)
+	 * Emits one datum's build behind its lazy slot of the quoted-datum table
+	 * ({@link JvmQuotePool}), so every evaluation of the site answers the same object.
+	 * Shared by the {@code quote} path and the bare-instance-literal path, which have the
+	 * same identity rule and differ only in what they build.
+	 * @param datum the datum the slot is keyed by (identity, not equality)
 	 * @param ctx the compilation context
 	 * @param className the class being emitted
 	 * @param build emits the construction, leaving exactly one value on the stack
 	 */
 	private static void emitSharedConstant(LispVal datum, JvmLispCompiler.Ctx ctx, String className, Runnable build) {
-		am.ik.jvm.ConstantPool.FieldrefConstant ref = ctx.quotePool.lookup(datum);
-		if (ref == null) {
-			ref = ctx.quotePool.intern(ctx.cp, className, datum);
-		}
-		// GETSTATIC f; DUP; IFNONNULL end; POP; <build>; DUP; PUTSTATIC f; end:
-		// -- one value on the stack on both paths.
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ref.index());
+		int slot = ctx.quotePool.slot(datum);
+		JvmQuotePool.Refs refs = ctx.quotePool.refs(ctx.cp, className);
+		// <slot>; INVOKESTATIC _qd; DUP; IFNONNULL end; POP; <build>; <slot>;
+		// INVOKESTATIC _qdSet; end: -- one value on the stack on both paths.
+		JvmEmitHelper.emitIntConst(ctx, slot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(refs.get().index());
 		ctx.emit(Opcode.DUP);
 		int branchPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
 		ctx.emit(Opcode.POP);
 		build.run();
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(ref.index());
+		JvmEmitHelper.emitIntConst(ctx, slot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(refs.set().index());
 		JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
 	}
 
@@ -86,7 +85,7 @@ final class JvmQuoteCompiler {
 	 * aggregates: an atom (a number, a string, a symbol, a character, nil, t) has no
 	 * identity a program can observe diverging, so it keeps its inline emission.
 	 * @param val the quoted datum
-	 * @return true when the datum gets a shared {@code _qd$N} field
+	 * @return true when the datum gets a slot of the shared quoted-datum table
 	 */
 	private static boolean isSharedAggregate(LispVal val) {
 		return val instanceof LispCons || val instanceof LispArray || val instanceof am.ik.rontolisp.LispInstance
@@ -356,11 +355,11 @@ final class JvmQuoteCompiler {
 	 * <p>
 	 * It is one SHARED constant, exactly as under {@code quote} (.kb/quoted-data.md): the
 	 * interpreter's {@code LispInstance} arm hands the reader's own instance back at
-	 * every evaluation, so the site memoizes into the same lazy {@code _qd$N} field a
-	 * quoted datum uses. This is the one literal family that does NOT follow the
-	 * fresh-per-evaluation rule of an array literal (.kb/array-literals.md): there the
-	 * interpreter could be moved, here it cannot -- the same arm carries every live
-	 * instance the evaluator splices back through {@code (quote <value>)}.
+	 * every evaluation, so the site memoizes into the same lazy table slot a quoted datum
+	 * uses. This is the one literal family that does NOT follow the fresh-per-evaluation
+	 * rule of an array literal (.kb/array-literals.md): there the interpreter could be
+	 * moved, here it cannot -- the same arm carries every live instance the evaluator
+	 * splices back through {@code (quote <value>)}.
 	 * @param inst the instance literal
 	 * @param ctx the compilation context
 	 * @param className the class being emitted

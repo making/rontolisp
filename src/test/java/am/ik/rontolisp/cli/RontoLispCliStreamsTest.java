@@ -77,6 +77,91 @@ class RontoLispCliStreamsTest {
 				err.toString(StandardCharsets.UTF_8) };
 	}
 
+	// -- --warnings-as-errors ------------------------------
+
+	private static final String WRONG_COUNTS = """
+			(defun add (a b) (+ a b))
+			(defun f (x)
+			  (list (add x)
+			        (car x 2)))
+			(print (handler-case (f '(1)) (program-error () :caught)))
+			""";
+
+	@Test
+	void warningsAsErrorsPrintsEveryWarningExitsOneAndWritesNothingOnEveryCompileBackend() throws Exception {
+		Path file = this.tempDir.resolve("counts.lisp");
+		Files.writeString(file, WRONG_COUNTS);
+		for (String name : List.of("Counts.class", "counts.jar", "counts.wasm")) {
+			Path output = this.tempDir.resolve(name);
+			String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+			assertThat(failed[0]).as(name).isEqualTo("1");
+			// Both warnings, a user function's and a built-in's, then the failure.
+			assertThat(failed[2].lines().toList()).as(name)
+				.containsExactly(file
+						+ ":3:9: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error",
+						file + ":4:9: warning: CAR expects 1 argument, got 2; compiled as a call-time program-error",
+						"error: 2 warnings about the program's source, treated as errors (--warnings-as-errors)");
+			assertThat(output).as(name).doesNotExist();
+
+			// Without the option the same program compiles: each call is a run-time
+			// program-error, and the warnings are only printed.
+			String[] compiled = runReporting(file.toString(), "-o", output.toString());
+			assertThat(compiled[0]).as(name).isEqualTo("0");
+			assertThat(compiled[2].lines().filter(line -> line.contains("warning:")).count()).as(name).isEqualTo(2);
+			assertThat(output).as(name).exists();
+		}
+	}
+
+	@Test
+	void warningsAsErrorsCountsAWarningAboutCodeAUserMacroBuiltAtTheMacroCall() throws Exception {
+		// Neither call has a position of its own: `list` built the first, and the second
+		// is a top-level form spliced out of the progn the macro expanded to. Both are
+		// placed -- and counted -- at the macro call.
+		Path file = this.tempDir.resolve("built.lisp");
+		Files.writeString(file, """
+				(defun add (a b) (+ a b))
+				(defmacro call-add (x) (list 'progn (list 'print (list 'add x))))
+				(defmacro wrapped (x) `(let ((y ,x)) (car y 2)))
+				(call-add 1)
+				(print (wrapped '(1)))
+				""");
+		Path output = this.tempDir.resolve("built.wasm");
+		String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(failed[0]).isEqualTo("1");
+		assertThat(failed[2].lines().toList()).containsExactly(
+				file + ":4:1: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error",
+				file + ":5:8: warning: CAR expects 1 argument, got 2; compiled as a call-time program-error",
+				"error: 2 warnings about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+	}
+
+	@Test
+	void warningsAsErrorsCountsAWarningAMacroSignalsWhileItExpands() throws Exception {
+		Path file = this.tempDir.resolve("mw.lisp");
+		Files.writeString(file, """
+				(defmacro m (x) (warn "m got ~a" x) x)
+				(print (m 1))
+				""");
+		Path output = this.tempDir.resolve("Mw.class");
+		String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(failed[0]).isEqualTo("1");
+		assertThat(failed[2].lines().toList()).containsExactly(file + ":2:8: warning: m got 1",
+				"error: 1 warning about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+
+		// A style-warning and a muffled warning leave the compile alone.
+		Files.writeString(file, """
+				(defmacro s (x) (warn 'style-warning) x)
+				(defmacro q (x) (handler-bind ((warning #'muffle-warning)) (warn "q")) x)
+				(print (list (s 1) (q 2)))
+				""");
+		String[] compiled = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(compiled[0]).isEqualTo("0");
+		assertThat(compiled[2].lines().toList()).singleElement()
+			.satisfies(line -> assertThat(line).startsWith(file + ":3:14: style-warning: "));
+		assertThat(output).exists();
+	}
+
 	// A program deeper than the 1 MiB linux-x64 gives a process's first thread, and well
 	// inside the stack the CLI hands the interpreter. cl-mustache's spec suite is the
 	// real-world specimen (~800 KiB down); this is the same shape in two lines.

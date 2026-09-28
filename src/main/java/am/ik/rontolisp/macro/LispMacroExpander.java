@@ -2722,6 +2722,8 @@ public final class LispMacroExpander {
 
 	private static final String SEQ_RES_VAR = "__seq_res";
 
+	private static final String SEQ_CHECK_VAR = "__seq_chk";
+
 	/** Builds a {@code (coerce expr 'type)} form. */
 	private static LispVal coerceTo(LispVal expr, String type) {
 		return listToCons(List.of(new LispSymbol(LispNames.COERCE), expr,
@@ -2736,8 +2738,17 @@ public final class LispMacroExpander {
 	 * accept every Common Lisp sequence, not just strings and lists -- uax-15's
 	 * {@code (stable-sort <unicode-string> ...)} is the seed vector case.
 	 */
-	private static LispVal seqAsListForm(LispVal seqExpr) {
-		return coerceTo(seqExpr, "LIST");
+	public static LispVal seqAsListForm(LispVal seqExpr, @Nullable String operator) {
+		// (let ((__seq_chk seq))
+		// (if (listp __seq_chk) __seq_chk
+		// (coerce (%check-sequence __seq_chk 'operator) 'list)))
+		// A value that is neither a list nor a vector is the operator's SEQUENCE
+		// type-error; the scans walk with (atom cursor) as their end test and used to
+		// take
+		// it for an empty list.
+		LispSymbol chk = new LispSymbol(SEQ_CHECK_VAR);
+		return makeLet(SEQ_CHECK_VAR, seqExpr,
+				makeIf(callOf(LispNames.LISTP, chk), chk, coerceTo(checkedSequenceOf(chk, operator), "LIST")));
 	}
 
 	/**
@@ -2771,7 +2782,7 @@ public final class LispMacroExpander {
 	 * sequence function may return a simple vector" latitude.
 	 */
 	private static LispVal seqResultDispatchForm(LispVal seqExpr, java.util.function.UnaryOperator<LispVal> algo,
-			boolean arraysExist, boolean destructive) {
+			boolean arraysExist, boolean destructive, @Nullable String operator) {
 		LispSymbol in = new LispSymbol(SEQ_IN_VAR);
 		LispSymbol isStr = new LispSymbol(SEQ_STR_VAR);
 		LispSymbol isVec = new LispSymbol(SEQ_VEC_VAR);
@@ -2810,7 +2821,12 @@ public final class LispMacroExpander {
 				: makeIf(isStr, strRebuild, res);
 		LispVal resLet = makeLet(SEQ_RES_VAR, algo.apply(lst), result);
 		LispVal asList = arraysExist ? listToCons(List.of(new LispSymbol(LispNames.OR), isStr, isVec)) : isStr;
-		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), in), resLet);
+		// Neither a string nor a vector: a list, else the operator's SEQUENCE type-error
+		// (a scan's (atom cursor) end test took it for an empty list). An operator
+		// whose scan checks the atom it ends at itself (reverse, nreverse) passes none.
+		LispVal notVector = operator == null ? in
+				: makeIf(callOf(LispNames.LISTP, in), in, sequenceTypeErrorOf(in, operator));
+		LispVal lstLet = makeLet(SEQ_LIST_VAR, makeIf(asList, coerceTo(in, "LIST"), notVector), resLet);
 		LispVal vecLet = arraysExist ? makeLet(SEQ_VEC_VAR, callOf(LispNames.VECTORP, in), lstLet) : lstLet;
 		LispVal strLet = makeLet(SEQ_STR_VAR, callOf(LispNames.STRINGP, in), vecLet);
 		return makeLet(SEQ_IN_VAR, seqExpr, strLet);
@@ -2851,7 +2867,7 @@ public final class LispMacroExpander {
 			List<LispVal> inner = new java.util.ArrayList<>(parts);
 			inner.set(1, lst);
 			return listToCons(inner);
-		}, arraysExist, true);
+		}, arraysExist, true, headName(cons));
 	}
 
 	/**
@@ -2870,7 +2886,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> inner = new java.util.ArrayList<>(parts);
 		inner.set(2, new LispSymbol(SEQ_LIST_VAR));
-		return makeLet(SEQ_LIST_VAR, seqAsListForm(parts.get(2)), listToCons(inner));
+		return makeLet(SEQ_LIST_VAR, seqAsListForm(parts.get(2), headName(cons)), listToCons(inner));
 	}
 
 	private static final String REDUCE_FN_VAR = "__reduce_fn";
@@ -2942,7 +2958,8 @@ public final class LispMacroExpander {
 		LispVal initForm = keywordValue(call, 3, LispNames.INITIAL_VALUE_KEYWORD);
 		// :start/:end restrict the fold to a subsequence (subseq accepts a nil end).
 		if (startForm != null || endForm != null) {
-			seqForm = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seqForm,
+			// Checked first, so a non-sequence is REDUCE's own type-error, not SUBSEQ's.
+			seqForm = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), checkedSequenceOf(seqForm, LispNames.REDUCE),
 					startForm == null ? new LispInteger(0) : startForm, endForm == null ? LispNil.INSTANCE : endForm));
 		}
 		// :key maps every element (via mapcar, which leaves the initial value untouched;
@@ -2957,8 +2974,8 @@ public final class LispMacroExpander {
 				? listToCons(List.of(new LispSymbol(LispNames.OR), keyForm,
 						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY)))))
 				: keyForm;
-		LispVal seqExpr = keyAbsent ? seqForm
-				: listToCons(List.of(new LispSymbol(LispNames.MAPCAR), keyUse, seqAsListForm(seqForm)));
+		LispVal seqExpr = keyAbsent ? seqForm : listToCons(
+				List.of(new LispSymbol(LispNames.MAPCAR), keyUse, seqAsListForm(seqForm, LispNames.REDUCE)));
 		LispVal forward = buildPlainReduce(fnForm, seqExpr, initForm, null);
 		// The direction decides which of two shapes to fold with, so a literal
 		// :from-end is folded away here (byte-identical to before) and only a COMPUTED
@@ -3016,9 +3033,10 @@ public final class LispMacroExpander {
 		reduceParts.add(seq);
 		// The function binds FIRST so the argument evaluation order stays
 		// (function, sequence) -- .kb/argument-evaluation-order.md.
-		return makeLet(REDUCE_GUARD_FN_VAR, fnForm, makeLet(SEQ_LIST_VAR, seqAsListForm(seqExpr), makeIf(seq,
-				listToCons(reduceParts),
-				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), emptyFnForm == null ? fn : emptyFnForm)))));
+		return makeLet(REDUCE_GUARD_FN_VAR, fnForm,
+				makeLet(SEQ_LIST_VAR, seqAsListForm(seqExpr, LispNames.REDUCE),
+						makeIf(seq, listToCons(reduceParts), listToCons(
+								List.of(new LispSymbol(LispNames.FUNCALL), emptyFnForm == null ? fn : emptyFnForm)))));
 	}
 
 	/**
@@ -3044,11 +3062,9 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	/**
-	 * Expands {@code (open-stream-p x)} to {@code (if x t nil)} -- the lite answer for a
-	 * backend with no per-stream open/closed record (Preview 1 WASM, and a component
-	 * program that never spliced the sockets library). The socket case is exact: the
-	 * component rewrite redirects this call to the sockets library's table-backed
-	 * dispatch defun before compilation.
+	 * Expands {@code (open-stream-p x)} to {@code (if x t nil)} -- the wasm answer for a
+	 * program that can build no stream value, so no designator it holds can have been
+	 * closed ({@link #expandOpenStreamPOnValue} is the answer once it can).
 	 * @param cons the open-stream-p expression
 	 * @return the expanded expression
 	 */
@@ -3058,6 +3074,84 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(LispNames.OPEN_STREAM_P + " expects 1 argument: " + cons.print());
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.IF), parts.get(1), LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
+	/**
+	 * {@code (open-stream-p x)} off the stream VALUE's closed mark
+	 * ({@link LispLayout#STREAM_CLOSED_CELL}) -- the wasm backends' answer once the
+	 * program can build a stream value, whose {@code close} sets the mark
+	 * ({@link #markingClose}). A synonym answers what its target answers (resolved only
+	 * where the program can build one), and anything that is not a stream value -- the
+	 * {@code t} designator, a raw handle -- keeps the lite non-nil answer.
+	 *
+	 * <pre>
+	 * (let ((__osp_s x))
+	 *   (while (%obj-is __osp_s '%SYNONYM-STREAM) (setq __osp_s (funcall (%obj-ref __osp_s 1))))
+	 *   (if (%obj-is __osp_s '%STREAM) (if (%obj-ref __osp_s 2) nil t) (if __osp_s t nil)))
+	 * </pre>
+	 * @param cons the open-stream-p expression
+	 * @param synonymStreams whether the program can build a synonym stream
+	 * @return the expanded expression
+	 */
+	public static LispVal expandOpenStreamPOnValue(LispCons cons, boolean synonymStreams) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.OPEN_STREAM_P + " expects 1 argument: " + cons.print());
+		}
+		LispSymbol s = new LispSymbol("__osp_s");
+		List<LispVal> body = new ArrayList<>();
+		body.add(new LispSymbol(LispNames.LET));
+		body.add(listToCons(List.of(listToCons(List.of(s, parts.get(1))))));
+		if (synonymStreams) {
+			body.add(listToCons(List.of(new LispSymbol(LispNames.WHILE),
+					objIs(s, List.of(LispLayout.SYNONYM_STREAM_TAG)), listToCons(List.of(new LispSymbol(LispNames.SETQ),
+							s, listToCons(List.of(new LispSymbol(LispNames.FUNCALL), objRef(s, 1))))))));
+		}
+		body.add(makeIf(objIs(s, List.of(LispLayout.STREAM_TAG)),
+				makeIf(objRef(s, LispLayout.STREAM_CLOSED_CELL), LispNil.INSTANCE, LispTrue.INSTANCE),
+				makeIf(s, LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(body);
+	}
+
+	/**
+	 * A wasm {@code close} over a stream VALUE: the first close sets the value's closed
+	 * mark ({@link LispLayout#STREAM_CLOSED_CELL}) and runs the backend's close; a later
+	 * one answers t without touching the handle. A WASI descriptor is reused by the next
+	 * {@code open}, so closing the old handle twice would close -- and forget the
+	 * registry entries of -- whichever stream holds the descriptor now. Anything that is
+	 * not a stream value (a synonym, a raw handle, {@code t}) always reaches the close.
+	 * The standard-error value ({@code *error-output*}, the one stream value over a
+	 * process standard descriptor) is never marked: a standard stream outlives a close of
+	 * it, as the runtime's {@code _close} and the other two backends already say.
+	 *
+	 * <pre>
+	 * (let ((__cls_v s))
+	 *   (if (if (%obj-is __cls_v '%STREAM)
+	 *           (if (%obj-ref __cls_v 2) nil (if (eql (%obj-ref __cls_v 0) 2) t (%obj-set __cls_v 2 t)))
+	 *           t)
+	 *       &lt;close of __cls_v&gt;
+	 *       t))
+	 * </pre>
+	 * @param cons the close call ({@code :abort} allowed)
+	 * @param standardErrorHandle the handle the {@code *error-output*} value wraps
+	 * @param close builds the backend's own close of the bound temporary
+	 * @return the marking form, or the backend's close of {@code cons} itself for a
+	 * malformed call (which reports the arity)
+	 */
+	public static LispVal markingClose(LispCons cons, long standardErrorHandle,
+			java.util.function.Function<LispCons, LispVal> close) {
+		LispCons stripped = stripCloseAbort(cons) instanceof LispCons c ? c : cons;
+		List<LispVal> parts = stripped.toList();
+		if (parts.size() != 2) {
+			return close.apply(cons);
+		}
+		LispSymbol v = new LispSymbol("__cls_v");
+		LispVal mark = makeIf(fmtCall(LispNames.EQL, objRef(v, 0), new LispInteger(standardErrorHandle)),
+				LispTrue.INSTANCE, objSet(v, LispLayout.STREAM_CLOSED_CELL, LispTrue.INSTANCE));
+		LispVal firstClose = makeIf(objIs(v, List.of(LispLayout.STREAM_TAG)),
+				makeIf(objRef(v, LispLayout.STREAM_CLOSED_CELL), LispNil.INSTANCE, mark), LispTrue.INSTANCE);
+		LispCons inner = (LispCons) listToCons(List.of(parts.get(0), v));
+		return makeLet(v.name(), parts.get(1), makeIf(firstClose, close.apply(inner), LispTrue.INSTANCE));
 	}
 
 	/**
@@ -3345,7 +3439,7 @@ public final class LispMacroExpander {
 				wrapped = makeLet(key.name(), keyForm, wrapped);
 			}
 			return makeLet(pred.name(), parts.get(2), wrapped);
-		}, arraysExist, true);
+		}, arraysExist, true, headName(cons));
 		return dispatch;
 	}
 
@@ -3745,10 +3839,7 @@ public final class LispMacroExpander {
 					// (let ((%a array))
 					// (%row-major-aset %a (apply #'array-row-major-index %a
 					// (list* sub... tail-list)) val)).
-					String applied = placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
-							&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
-							&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym
-									? fnSym.name() : null;
+					String applied = setfApplyArrayPlaceFunction(placeParts);
 					if (!LispNames.AREF.equals(applied) && !LispNames.SVREF.equals(applied)) {
 						throw new UnsupportedOperationException(
 								"setf does not support place: APPLY (only (setf (apply #'aref ...)) is supported)");
@@ -3863,9 +3954,10 @@ public final class LispMacroExpander {
 				case LispNames.ELT -> {
 					// (setf (elt seq i) val): elt reads from lists, arrays AND strings,
 					// so
-					// the place dispatches at run time -- rplaca into the nthcdr cell of
-					// a
-					// list, the schar-set rebuild for a string, %aset for an array. The
+					// the place dispatches at run time -- rplaca into the %elt-cell cell
+					// of a
+					// list (an index outside it is ELT's type-error), the schar-set
+					// rebuild for a string, %aset for an array. The
 					// string arm is the same one (setf (aref s i) v) has above, and
 					// carries
 					// the same lite restriction: only a VARIABLE place can take it,
@@ -3881,7 +3973,7 @@ public final class LispMacroExpander {
 					boolean varPlace = stringsExist && placeParts.get(1) instanceof LispSymbol;
 					LispSymbol seqVar = varPlace ? (LispSymbol) placeParts.get(1) : new LispSymbol("__setf_seq");
 					LispVal listSet = listToCons(List.of(new LispSymbol(LispNames.RPLACA),
-							listToCons(List.of(new LispSymbol(LispNames.NTHCDR), idxVar, seqVar)), valVar));
+							callOf(LispNames.ELT_CELL, seqVar, idxVar), valVar));
 					LispVal arraySet = listToCons(List.of(new LispSymbol(LispNames.ASET), seqVar, idxVar, valVar));
 					// The string arm's subscript reports as the array arm's store does.
 					LispVal nonList = varPlace ? makeIf(callOf(LispNames.STRINGP, seqVar),
@@ -4228,6 +4320,71 @@ public final class LispMacroExpander {
 	 */
 	public static String setfFunctionName(String placeName) {
 		return "%setf-" + placeName;
+	}
+
+	// Recognizes a (setf (apply #'aref array sub... tail-list) val) / #'svref place --
+	// the AREF/SVREF designator expandSetf's APPLY case requires -- and answers the
+	// applied name, or null when the place is not this shape (placeParts is the place's
+	// OWN parts: (apply #'name array sub...), so placeParts.get(0) is APPLY itself).
+	// Shared with usesSetfApplyArrayRowMajorIndex below so the two can never drift apart
+	// on what counts as this place (todo a66): expandSetf runs LAZILY, from
+	// JvmExprCompiler/WasmExprCompiler's SETF case, at actual codegen time -- after the
+	// REFERENCE_GATED_FUNCTIONS wrapper gate has already scanned the surface program for
+	// every #'name it needs to see, so the (function array-row-major-index) this case
+	// injects is invisible to that scan unless something else tells it to expect one.
+	private static @Nullable String setfApplyArrayPlaceFunction(List<LispVal> placeParts) {
+		return placeParts.size() >= 4 && placeParts.get(1) instanceof LispCons fnCons
+				&& fnCons.car() instanceof LispSymbol fnHead && LispNames.FUNCTION.equals(fnHead.name())
+				&& fnCons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fnSym ? fnSym.name()
+						: null;
+	}
+
+	/**
+	 * Whether the program contains a {@code (setf (apply #'aref ...) ...)} or
+	 * {@code (setf (apply #'svref ...) ...)} place -- the shape whose lazy expansion (see
+	 * {@link #setfApplyArrayPlaceFunction}) injects a {@code (function
+	 * array-row-major-index)} reference no scan of the SURFACE program can see. The
+	 * REFERENCE_GATED_FUNCTIONS wrapper gate in {@code Jvm/WasmLispCompiler} calls this
+	 * alongside its ordinary {@code (function name)} scan so the array-row-major-index
+	 * wrapper is injected whenever codegen is about to need it (todo a66), the same way
+	 * {@code usesRestartSystem}/{@code mayCreateInstances} already see their own lazy
+	 * Pass-2 products coming.
+	 * @param program the program to scan
+	 * @return {@code true} when such a place occurs anywhere in the program
+	 */
+	public static boolean usesSetfApplyArrayRowMajorIndex(List<? extends LispVal> program) {
+		for (LispVal form : program) {
+			if (usesSetfApplyArrayRowMajorIndex(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesSetfApplyArrayRowMajorIndex(LispVal expr) {
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.SETF.equals(head.name())) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispCons placeCons) {
+						List<LispVal> placeParts = placeCons.toList();
+						if (!placeParts.isEmpty() && placeParts.get(0) instanceof LispSymbol op
+								&& LispNames.APPLY.equals(op.name())) {
+							String applied = setfApplyArrayPlaceFunction(placeParts);
+							if (LispNames.AREF.equals(applied) || LispNames.SVREF.equals(applied)) {
+								return true;
+							}
+						}
+					}
+				}
+			}
+			if (usesSetfApplyArrayRowMajorIndex(cons.car())) {
+				return true;
+			}
+			x = cons.cdr();
+		}
+		return false;
 	}
 
 	private static LispVal expandSetfWithRplaca(LispVal target, LispVal value) {
@@ -4897,7 +5054,7 @@ public final class LispMacroExpander {
 			LispVal endClause = listToCons(
 					List.of(callOf(LispNames.ATOM, cur), checkListOf(cur, LispNames.REVERSE), acc));
 			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
-		}, arraysExist, false);
+		}, arraysExist, false, null);
 	}
 
 	/**
@@ -5695,7 +5852,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException("/= expects at least one number: " + cons.print());
 		}
 		if (parts.size() == 2) {
-			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+			// (/= x) is t for any number, and (= x)'s check of it.
+			return mvCall(LispNames.EQ, parts.get(1));
 		}
 		List<LispSymbol> temps = new java.util.ArrayList<>();
 		List<MvBinding> bindings = new java.util.ArrayList<>();
@@ -5788,13 +5946,15 @@ public final class LispMacroExpander {
 		// the whole sequence to a list per call, which was O(n) conses before the
 		// first element was even looked at (and a rendered-representation walk on top
 		// for a mutable character vector). The (elt lst idx) read is O(1) in every
-		// vector representation (.kb/string-index-cost.md). A non-list non-vector
-		// still answers nil (lenv 0, the recorded oddity of the coerce-based scan).
+		// vector representation (.kb/string-index-cost.md). A non-list non-vector is the
+		// operator's SEQUENCE type-error (it answered nil, lenv 0).
+		@Nullable String operator = callParts.get(0) instanceof LispSymbol head ? head.name() : null;
 		LispVal lenvInit = arraysExist
 				? makeIf(callOf(LispNames.LISTP, lst), LispNil.INSTANCE,
-						makeIf(callOf(LispNames.VECTORP, lst), callOf(LispNames.LENGTH, lst), new LispInteger(0)))
-				: makeIf(callOf(LispNames.LISTP, lst), LispNil.INSTANCE,
-						makeIf(callOf(LispNames.STRINGP, lst), callOf(LispNames.LENGTH, lst), new LispInteger(0)));
+						makeIf(callOf(LispNames.VECTORP, lst), callOf(LispNames.LENGTH, lst),
+								sequenceTypeErrorOf(lst, operator)))
+				: makeIf(callOf(LispNames.LISTP, lst), LispNil.INSTANCE, makeIf(callOf(LispNames.STRINGP, lst),
+						callOf(LispNames.LENGTH, lst), sequenceTypeErrorOf(lst, operator)));
 		LispVal curInit = makeIf(lenv, LispNil.INSTANCE,
 				listToCons(List.of(new LispSymbol(LispNames.NTHCDR), startv, lst)));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(idx, startv, idxStep)),
@@ -5808,7 +5968,7 @@ public final class LispMacroExpander {
 		}
 		LispVal endClause = listToCons(List.of(atEnd, LispNil.INSTANCE));
 		// The indexed read is spelled as its own two-way dispatch rather than (elt ...):
-		// the lenv arm implies "not a list", so elt's nth arm (an inlined list walk)
+		// the lenv arm implies "not a list", so elt's list arm (a %elt-cell walk)
 		// and its let scaffolding would be dead bytes at every position/find site --
 		// the site-size budget in
 		// WasmLispCompilerTest.aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions
@@ -6493,7 +6653,7 @@ public final class LispMacroExpander {
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__count_item");
 		return tail.wrap(countScan(seqScanBounds(parts, 3, false), item, parts.get(1), parts.get(2), "__count",
-				elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem))));
+				headName(cons), elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem))));
 	}
 
 	/**
@@ -6516,6 +6676,7 @@ public final class LispMacroExpander {
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol pred = new LispSymbol("__countif_pred");
 		return tail.wrap(countScan(seqScanBounds(parts, 3, false), pred, parts.get(1), parts.get(2), "__countif",
+				headName(cons),
 				elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem)))));
 	}
 
@@ -6539,8 +6700,8 @@ public final class LispMacroExpander {
 	 * </pre>
 	 */
 	private static LispVal countScan(SeqScanBounds bounds, LispSymbol operand, LispVal operandInit, LispVal seqForm,
-			String prefix, java.util.function.UnaryOperator<LispVal> matchOf) {
-		SeqScanScaffold scan = new SeqScanScaffold(bounds, seqAsListForm(seqForm), prefix, false);
+			String prefix, @Nullable String operator, java.util.function.UnaryOperator<LispVal> matchOf) {
+		SeqScanScaffold scan = new SeqScanScaffold(bounds, seqAsListForm(seqForm, operator), prefix, false);
 		LispSymbol n = new LispSymbol(prefix + "_n");
 		LispSymbol cur = new LispSymbol(prefix + "_cur");
 		List<LispVal> bindings = new ArrayList<>(
@@ -6892,11 +7053,12 @@ public final class LispMacroExpander {
 		boolean literalDirection = fromEndForm == null || keepFirst || isLiteralNil(fromEndForm);
 		if (literalDirection && !bounds.indexed()) {
 			return tail.wrap(seqResultDispatchForm(call.get(1), lst -> dedupScan(lst, testForm, keyForm, keepFirst),
-					arraysExist, false));
+					arraysExist, false, operator));
 		}
 		LispVal direction = literalDirection ? null : fromEndForm;
 		return tail.wrap(seqResultDispatchForm(call.get(1),
-				lst -> boundedDedupScan(lst, bounds, direction, keepFirst, testForm, keyForm), arraysExist, false));
+				lst -> boundedDedupScan(lst, bounds, direction, keepFirst, testForm, keyForm), arraysExist, false,
+				operator));
 	}
 
 	/**
@@ -7159,7 +7321,7 @@ public final class LispMacroExpander {
 			return null;
 		}
 		return seqResultDispatchForm(parts.get(1), list -> nreverseListForm(list, LispNames.NREVERSE), arraysExist,
-				true);
+				true, null);
 	}
 
 	/**
@@ -7582,7 +7744,8 @@ public final class LispMacroExpander {
 		List<LispVal> callArgs = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), pred));
 		for (int i = 0; i < nSeqs; i++) {
 			LispSymbol cursor = new LispSymbol(prefix + "c" + i);
-			bindings.add(listToCons(List.of(cursor, seqAsListForm(parts.get(i + 2)), callOf(LispNames.CDR, cursor))));
+			bindings
+				.add(listToCons(List.of(cursor, seqAsListForm(parts.get(i + 2), name), callOf(LispNames.CDR, cursor))));
 			exhausted.add(callOf(LispNames.ATOM, cursor));
 			callArgs.add(callOf(LispNames.CAR, cursor));
 		}
@@ -7646,7 +7809,7 @@ public final class LispMacroExpander {
 				seqResultDispatchForm(parts.get(2),
 						lst -> expandFilter(item, item, lst, "__remove",
 								elem -> testMatchForm(testForm, item, keyedForm(keyForm, elem)), false, bounds),
-						arraysExist, false)));
+						arraysExist, false, headName(cons))));
 	}
 
 	/**
@@ -7681,7 +7844,7 @@ public final class LispMacroExpander {
 		return tail.wrap(makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						false, bounds), arraysExist, false)));
+						false, bounds), arraysExist, false, headName(cons))));
 	}
 
 	/**
@@ -7716,7 +7879,7 @@ public final class LispMacroExpander {
 		return tail.wrap(makeLet(pred.name(), parts.get(1),
 				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
-						true, bounds), arraysExist, false)));
+						true, bounds), arraysExist, false, headName(cons))));
 	}
 
 	/**
@@ -7780,7 +7943,7 @@ public final class LispMacroExpander {
 		LispVal scan = seqResultDispatchForm(parts.get(3),
 				lst -> substituteScan(newItem, lst, "__subst",
 						elem -> testMatchForm(testForm, oldItem, keyedForm(keyForm, elem)), true, bounds),
-				arraysExist, destructive);
+				arraysExist, destructive, headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), scan)));
 	}
 
@@ -7839,7 +8002,8 @@ public final class LispMacroExpander {
 		substParts.set(2, oldItem);
 		substParts.set(3, lst);
 		LispVal nonListForm = expandSubstitute((LispCons) listToCons(substParts), arraysExist, true);
-		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist,
+				headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(oldItem.name(), parts.get(2), dispatch)));
 	}
 
@@ -7854,17 +8018,22 @@ public final class LispMacroExpander {
 	 * list argument keeps {@code listForm} unchanged. {@code seq} is bound to
 	 * {@code seqExpr} exactly once, and both forms must read {@code seq} rather than the
 	 * original expression, so the sequence argument is evaluated only once.
-	 * {@code arraysExist} false drops the whole check (no vector/string can reach here),
-	 * keeping only {@code listForm} -- the {@code seqResultDispatchForm} precedent.
+	 * {@code arraysExist} false drops the vector test (no vector can reach here) -- the
+	 * {@code seqResultDispatchForm} precedent -- and a value that is no sequence at all
+	 * is {@code operator}'s {@code SEQUENCE} type-error.
 	 */
 	private static LispVal deleteOrSubstituteDispatch(LispSymbol seq, LispVal seqExpr, LispVal listForm,
-			LispVal nonListForm, boolean arraysExist) {
+			LispVal nonListForm, boolean arraysExist, @Nullable String operator) {
+		// Neither a string, a vector nor a list: the operator's SEQUENCE type-error (the
+		// splice walked it as an empty list and answered it back).
+		LispVal checkedListForm = makeIf(callOf(LispNames.LISTP, seq), listForm, sequenceTypeErrorOf(seq, operator));
 		if (!arraysExist) {
-			return makeLet(seq.name(), seqExpr, listForm);
+			// No vector can reach here, but a string can: it takes the non-list arm too.
+			return makeLet(seq.name(), seqExpr, makeIf(callOf(LispNames.STRINGP, seq), nonListForm, checkedListForm));
 		}
 		LispVal isNonList = listToCons(
 				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, seq), callOf(LispNames.VECTORP, seq)));
-		return makeLet(seq.name(), seqExpr, makeIf(isNonList, nonListForm, listForm));
+		return makeLet(seq.name(), seqExpr, makeIf(isNonList, nonListForm, checkedListForm));
 	}
 
 	/**
@@ -7941,7 +8110,7 @@ public final class LispMacroExpander {
 				lst -> substituteScan(newItem, lst, "__substif",
 						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
 						!negated, bounds),
-				arraysExist, destructive);
+				arraysExist, destructive, headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), scan)));
 	}
 
@@ -8016,7 +8185,8 @@ public final class LispMacroExpander {
 		substIfParts.set(2, pred);
 		substIfParts.set(3, lst);
 		LispVal nonListForm = expandSubstituteIf((LispCons) listToCons(substIfParts), arraysExist, negated, true);
-		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(lst, parts.get(3), listForm, nonListForm, arraysExist,
+				headName(cons));
 		return tail.wrap(makeLet(newItem.name(), parts.get(1), makeLet(pred.name(), parts.get(2), dispatch)));
 	}
 
@@ -8070,7 +8240,8 @@ public final class LispMacroExpander {
 			// through a singly linked spine.
 			return tail.wrap(makeLet(item.name(), parts.get(1), makeLet(seq.name(), parts.get(2), nonListForm)));
 		}
-		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist,
+				headName(cons));
 		return tail.wrap(makeLet(item.name(), parts.get(1), dispatch));
 	}
 
@@ -8120,7 +8291,8 @@ public final class LispMacroExpander {
 			// through a singly linked spine.
 			return tail.wrap(makeLet(pred.name(), parts.get(1), makeLet(seq.name(), parts.get(2), nonListForm)));
 		}
-		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist,
+				headName(cons));
 		return tail.wrap(makeLet(pred.name(), parts.get(1), dispatch));
 	}
 
@@ -8170,7 +8342,8 @@ public final class LispMacroExpander {
 			// through a singly linked spine.
 			return tail.wrap(makeLet(pred.name(), parts.get(1), makeLet(seq.name(), parts.get(2), nonListForm)));
 		}
-		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist);
+		LispVal dispatch = deleteOrSubstituteDispatch(seq, parts.get(2), listForm, nonListForm, arraysExist,
+				headName(cons));
 		return tail.wrap(makeLet(pred.name(), parts.get(1), dispatch));
 	}
 
@@ -10242,6 +10415,10 @@ public final class LispMacroExpander {
 			bindings.add(listToCons(List.of(errpVar, eofErrorP)));
 			bindings.add(listToCons(List.of(valueVar, eofValue)));
 		}
+		else if (!IgnoredArgument.isInert(eofValue)) {
+			// The signal never answers the eof-value, but CL evaluates it all the same.
+			bindings.add(listToCons(List.of(valueVar, eofValue)));
+		}
 		bindings.add(listToCons(List.of(resultVar, fmtCall(op.name(), streamVar, LispNil.INSTANCE, LispNil.INSTANCE))));
 		LispVal signal = endOfFileSignal();
 		LispVal onEof = staticSignal ? signal
@@ -11601,9 +11778,14 @@ public final class LispMacroExpander {
 		LispSymbol ve2 = new LispSymbol("__rpl_e2");
 		LispSymbol n = new LispSymbol("__rpl_n");
 		LispVal nInit = fmtCall(LispNames.MIN, fmtCall(LispNames.SUB, ve1, vs1), fmtCall(LispNames.SUB, ve2, vs2));
-		LispVal bindings = listToCons(List.of(listToCons(List.of(r1, seq1)), listToCons(List.of(r2, seq2)),
-				listToCons(List.of(vs1, s1)), listToCons(List.of(ve1, e1)), listToCons(List.of(vs2, s2)),
-				listToCons(List.of(ve2, e2)), listToCons(List.of(n, nInit))));
+		// Both sequences are checked before their lengths are taken, so a non-sequence is
+		// REPLACE's own type-error rather than LENGTH's -- except the destination of the
+		// array arm, which its callers have proven an array.
+		LispVal checked1 = arms == SeqOpArms.ARRAY_ONLY ? seq1 : checkedSequenceOf(seq1, LispNames.REPLACE);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(r1, checked1)),
+				listToCons(List.of(r2, checkedSequenceOf(seq2, LispNames.REPLACE))), listToCons(List.of(vs1, s1)),
+				listToCons(List.of(ve1, e1)), listToCons(List.of(vs2, s2)), listToCons(List.of(ve2, e2)),
+				listToCons(List.of(n, nInit))));
 		LispVal head = fmtCall(LispNames.SUBSEQ, r1, new LispInteger(0), vs1);
 		LispVal mid = fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n));
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
@@ -11838,7 +12020,11 @@ public final class LispMacroExpander {
 		LispSymbol to = new LispSymbol("__fll_b");
 		LispSymbol index = new LispSymbol("__fll_k");
 		LispSymbol cell = new LispSymbol("__fll_c");
-		LispVal bindings = listToCons(List.of(listToCons(List.of(seq, sequence)), listToCons(List.of(item, value)),
+		// The one arm whose destination is proven an array takes it unchecked; every
+		// other checks it before its length is taken, so a non-sequence is FILL's own
+		// type-error rather than LENGTH's.
+		LispVal checkedSeq = arms == SeqOpArms.ARRAY_ONLY ? sequence : checkedSequenceOf(sequence, LispNames.FILL);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(seq, checkedSeq)), listToCons(List.of(item, value)),
 				listToCons(List.of(from, start)), listToCons(List.of(to, end))));
 		LispVal step = listToCons(List.of(index, from, fmtCall(LispNames.ADD, index, new LispInteger(1))));
 		LispVal arrayLoop = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(step)),
@@ -11885,38 +12071,6 @@ public final class LispMacroExpander {
 			return expr;
 		}
 		return fmtCall(LispNames.OR, expr, defaultExpr);
-	}
-
-	/**
-	 * Expands {@code (lower-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
-	 * (char-upcase __cc))))}: a character is lowercase exactly when upcasing changes it.
-	 * Follows the platform's Unicode case tables.
-	 * @param cons the lower-case-p expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandLowerCaseP(LispCons cons) {
-		return expandCaseTest(cons, LispNames.LOWER_CASE_P, LispNames.CHAR_UPCASE);
-	}
-
-	/**
-	 * Expands {@code (upper-case-p c)} into {@code (let ((__cc c)) (not (char= __cc
-	 * (char-downcase __cc))))}: a character is uppercase exactly when downcasing changes
-	 * it.
-	 * @param cons the upper-case-p expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandUpperCaseP(LispCons cons) {
-		return expandCaseTest(cons, LispNames.UPPER_CASE_P, LispNames.CHAR_DOWNCASE);
-	}
-
-	private static LispVal expandCaseTest(LispCons cons, String name, String flipOp) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() != 2) {
-			throw new IllegalArgumentException(name + " expects exactly one argument");
-		}
-		LispSymbol c = new LispSymbol("__cc");
-		LispVal test = makeNot(fmtCall(LispNames.CHAR_EQ, c, fmtCall(flipOp, c)));
-		return makeLet("__cc", parts.get(1), test);
 	}
 
 	/**
@@ -12424,7 +12578,9 @@ public final class LispMacroExpander {
 	 * <ul>
 	 * <li>{@code (read-line s nil)} -> {@code (read-line s)}</li>
 	 * <li>{@code (read-line s nil nil)} -> {@code (read-line s)}</li>
-	 * <li>{@code (read-line s nil EOF-VAL)} -> {@code (or (read-line s) EOF-VAL)}</li>
+	 * <li>{@code (read-line s nil EOF-VAL)} -> {@code (or (read-line s) EOF-VAL)}, the
+	 * stream and a computed {@code EOF-VAL} bound first so the value is evaluated whether
+	 * or not the read ends the file</li>
 	 * </ul>
 	 *
 	 * The runtime stream helpers on all backends already return {@code nil} at EOF, so
@@ -12462,8 +12618,24 @@ public final class LispMacroExpander {
 		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
 			return readLineOnly;
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.OR), readLineOnly, parts.get(3)));
+		LispVal eofValue = parts.get(3);
+		if (IgnoredArgument.isInert(eofValue)) {
+			return listToCons(List.of(new LispSymbol(LispNames.OR), readLineOnly, eofValue));
+		}
+		// The eof-value is evaluated before the read, after the stream, as CL evaluates
+		// it: the or alone would run it at end of file only.
+		LispSymbol streamVar = new LispSymbol(READ_LINE_STREAM_VAR);
+		LispSymbol valueVar = new LispSymbol(READ_LINE_VALUE_VAR);
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(streamVar, stream)), listToCons(List.of(valueVar, eofValue)))),
+				listToCons(List.of(new LispSymbol(LispNames.OR), listToCons(List.of(new LispSymbol(head), streamVar)),
+						valueVar))));
 	}
+
+	/** Fixed temporaries of {@link #expandReadLineCompat} over a computed eof-value. */
+	private static final String READ_LINE_STREAM_VAR = "__rl_stream";
+
+	private static final String READ_LINE_VALUE_VAR = "__rl_value";
 
 	private static boolean isLiteralNil(LispVal expr) {
 		return expr instanceof LispNil || (expr instanceof LispSymbol sym && "NIL".equals(sym.name()));
@@ -14234,32 +14406,21 @@ public final class LispMacroExpander {
 			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE);
 
 	/**
-	 * The operator names whose presence makes the backends inject the
-	 * {@code %baked-packages%} table: the three mutations above (their prelude defuns
-	 * validate against the read/compile-time packages), {@code package-nicknames}, and
-	 * the enumeration family ({@code do-symbols} / {@code do-external-symbols} /
-	 * {@code do-all-symbols} / {@code find-all-symbols} / {@code apropos} /
-	 * {@code apropos-list}, whose universe the table carries).
-	 */
-	public static final java.util.Set<String> BAKED_PACKAGE_TABLE_USERS = java.util.Set.of(LispNames.MAKE_PACKAGE,
-			LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGE_NICKNAMES, LispNames.DO_SYMBOLS,
-			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS,
-			LispNames.APROPOS_LIST, LispNames.WITH_PACKAGE_ITERATOR, LispNames.PACKAGE_SHADOWING_SYMBOLS);
-
-	/**
-	 * Whether the program references one of {@link #BAKED_PACKAGE_TABLE_USERS} (quote
-	 * included -- a quoted mention still means the operator is in play for the
-	 * prelude-selection half of this gate). The backends call this after package
-	 * resolution, where the names are canonical.
+	 * Whether the program reads the {@code %baked-packages%} table: some form -- in
+	 * practice a spliced prelude defun ({@code %baked-package-find},
+	 * {@code %do-symbols-list}, ...) -- names it. The backends call this after package
+	 * resolution, on the program the front end spliced and pruned, so the gate is the
+	 * reader itself rather than a list of the operators whose defuns happen to reach one:
+	 * such a list missed {@code shadow} / {@code shadowing-import} / {@code unintern},
+	 * whose defuns reach the table through {@code %runtime-package-op}, and compiled them
+	 * to a reference to an undefined variable.
 	 * @param program the top-level forms
 	 * @return {@code true} when the baked package table must be injected
 	 */
 	public static boolean needsBakedPackageTable(List<LispVal> program) {
 		for (LispVal form : program) {
-			for (String name : BAKED_PACKAGE_TABLE_USERS) {
-				if (usesSymbol(form, name)) {
-					return true;
-				}
+			if (usesSymbol(form, LispNames.BAKED_PACKAGES_INTERNAL)) {
+				return true;
 			}
 		}
 		return false;
@@ -15169,7 +15330,7 @@ public final class LispMacroExpander {
 		LispSymbol xv = new LispSymbol("%stv_x");
 		return List.of(conversionWrapper(LispNames.SEQ_TO_LIST, xl, coerceToListBody(xl, true)),
 				conversionWrapper(LispNames.SEQ_TO_STRING, xs, coerceToStringBody(xs, true)),
-				conversionWrapper(LispNames.SEQ_TO_VECTOR, xv, coerceToVectorBody(xv)));
+				conversionWrapper(LispNames.SEQ_TO_VECTOR, xv, coerceToVectorBody(xv, true)));
 	}
 
 	// One (setq name (lambda (param) body)) helper definition of the conversion trio.
@@ -15368,7 +15529,11 @@ public final class LispMacroExpander {
 		// backends) stays on the string branch and the returned value keeps the
 		// caller-expected element type; only a general (non-string) array switches to
 		// the fresh make-array copy.
-		LispVal arrayDispatch = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seqVar), vectorBody, coreCall);
+		// Neither a string nor an array: a list takes the core's list lane, anything else
+		// is SUBSEQ's SEQUENCE type-error (the core walked it as an empty list).
+		LispVal listDispatch = makeIf(callOf(LispNames.LISTP, seqVar), coreCall,
+				sequenceTypeErrorOf(seqVar, LispNames.SUBSEQ));
+		LispVal arrayDispatch = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seqVar), vectorBody, listDispatch);
 		return makeIf(callOf(LispNames.STRINGP, seqVar), coreCall, arrayDispatch);
 	}
 
@@ -15423,9 +15588,11 @@ public final class LispMacroExpander {
 	 * it replaces), or {@code (list* a<sub>required+1</sub> ... ak lst)} for the excess.
 	 * Left-to-right argument evaluation order is the source order either way. The
 	 * unaligned shapes (fewer leading arguments than required parameters, or a
-	 * non-variadic target) keep the build-then-unpack path.
+	 * non-variadic target) keep the build-then-unpack path. A callee with physical
+	 * optionals ({@code LambdaLists.toNative}) passes its parameter count before the rest
+	 * list here -- the optionals are leading expressions too.
 	 * @param cons the apply expression
-	 * @param required the callee's required (non-rest) parameter count
+	 * @param required the callee's parameter count before its rest list
 	 * @return the rest-argument expression
 	 */
 	public static LispVal applyAlignedRestExpr(LispCons cons, int required) {
@@ -15669,6 +15836,10 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(op), arg));
 	}
 
+	private static LispVal callOf(String op, LispVal first, LispVal second) {
+		return listToCons(List.of(new LispSymbol(op), first, second));
+	}
+
 	/**
 	 * {@code (%check-list form 'operator)}: the form's value when it is a list, else the
 	 * operator's {@code LIST} type-error -- the check a lowering makes on behalf of the
@@ -15680,6 +15851,196 @@ public final class LispMacroExpander {
 	static LispVal checkListOf(LispVal form, String operator) {
 		return listToCons(List.of(new LispSymbol(LispNames.CHECK_LIST_INTERNAL), form,
 				callOf(LispNames.QUOTE, new LispSymbol(operator))));
+	}
+
+	/**
+	 * The symbol name a call form's head spells -- the operator a lowering's own check
+	 * names ({@link #sequenceTypeErrorOf}).
+	 * @param cons the call form
+	 * @return the head's name, or null when the head is no symbol
+	 */
+	private static @Nullable String headName(LispCons cons) {
+		return cons.car() instanceof LispSymbol head ? head.name() : null;
+	}
+
+	/**
+	 * {@code (%operand-type-error form 'operator 'SEQUENCE)}: the operator's
+	 * {@code SEQUENCE} type-error over the form's value -- the arm a sequence lowering
+	 * reaches when its own list/vector dispatch has none left for the value.
+	 * @param form the offending value's form
+	 * @param operator the operator the report names (a backend reports unnamed when it is
+	 * no named operator)
+	 * @return the signalling form
+	 */
+	static LispVal sequenceTypeErrorOf(LispVal form, @Nullable String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), form,
+				operator == null ? LispNil.INSTANCE : callOf(LispNames.QUOTE, new LispSymbol(operator)),
+				callOf(LispNames.QUOTE, new LispSymbol("SEQUENCE"))));
+	}
+
+	/**
+	 * {@code (%check-sequence form 'operator)}: the form's value when it is a sequence --
+	 * a list or a vector -- else the operator's {@code SEQUENCE} type-error. For a
+	 * lowering whose first use of the argument would otherwise be a {@code length} (which
+	 * names itself) or a walk that takes an atom for an empty list. A compile path calls
+	 * the shared {@link #checkSequenceRuntimeWrapper()} when the program carries it and
+	 * spells {@link #checkSequenceInline} otherwise -- the test is a whole
+	 * {@code vectorp}, several hundred bytes a site would repeat.
+	 * @param form the sequence argument's form
+	 * @param operator the operator the report names, or null for an unnamed report
+	 * @return the checked form
+	 */
+	public static LispVal checkedSequenceOf(LispVal form, @Nullable String operator) {
+		if (isLiteralSequence(form)) {
+			return form;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.CHECK_SEQUENCE_INTERNAL), form,
+				operator == null ? LispNil.INSTANCE : callOf(LispNames.QUOTE, new LispSymbol(operator))));
+	}
+
+	/**
+	 * Whether a form is a sequence as written -- a string, nil, a rank-1 array literal
+	 * (which evaluates to a fresh copy of itself), or a quoted list, string or rank-1
+	 * array -- so no check of it can fail and the site needs none. A literal kept
+	 * unwrapped also stays visible to the lowerings that fold one.
+	 * @param form the form
+	 * @return whether its value is a sequence however it runs
+	 */
+	private static boolean isLiteralSequence(LispVal form) {
+		LispVal value = form;
+		if (form instanceof LispCons quoted && quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons body && body.cdr() instanceof LispNil) {
+			value = body.car();
+			if (value instanceof LispCons) {
+				return true;
+			}
+		}
+		return value instanceof LispNil || value instanceof LispString || value instanceof am.ik.rontolisp.LispIntVector
+				|| value instanceof LispArray arr && arr.dimensions().length == 1
+				|| value instanceof LispFloatArray packed && packed.rank() == 1;
+	}
+
+	/**
+	 * The inline spelling of a {@code (%check-sequence x 'operator)} form
+	 * ({@link #checkedSequenceOf}): {@code (let ((__sqc x)) (if (or (listp __sqc)
+	 * (vectorp __sqc)) __sqc (%operand-type-error __sqc 'operator 'sequence)))}.
+	 * @param cons the form
+	 * @return the expansion
+	 */
+	public static LispVal checkSequenceInline(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol v = new LispSymbol("__sqc");
+		LispVal sequencep = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, v), callOf(LispNames.VECTORP, v)));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), v, parts.get(2),
+				callOf(LispNames.QUOTE, new LispSymbol("SEQUENCE"))));
+		return makeLet(v.name(), parts.get(1), makeIf(sequencep, v, signal));
+	}
+
+	/**
+	 * The operator a {@code (%check-sequence x 'operator)} form names, or null for an
+	 * unnamed report.
+	 * @param cons the form
+	 * @return the operator's symbol name, or null
+	 */
+	public static @Nullable String checkSequenceOperator(LispCons cons) {
+		return checkOperator(cons);
+	}
+
+	/**
+	 * Builds the shared {@code %check-sequence-runtime} defun every compiled
+	 * {@code %check-sequence} site calls when the program carries it: the whole
+	 * {@code vectorp} test once, the operator handed in as a backend's own operator token
+	 * (the reported name on the JVM, the operator table's row id on wasm), which
+	 * {@code %operand-type-error} reads at run time.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal checkSequenceRuntimeWrapper() {
+		LispSymbol x = new LispSymbol("%csr_x");
+		LispSymbol op = new LispSymbol("%csr_op");
+		LispVal sequencep = listToCons(
+				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.VECTORP, x)));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), x, op,
+				callOf(LispNames.QUOTE, new LispSymbol("SEQUENCE"))));
+		LispVal lambda = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x, op)), makeIf(sequencep, x, signal)));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.CHECK_SEQUENCE_RUNTIME), lambda));
+	}
+
+	/**
+	 * The operators whose lowering can reach a {@code %check-sequence} site: the sequence
+	 * operators, {@code coerce} (whose shared conversions check) and the
+	 * {@code %check-sequence} form itself, which a spliced prelude defun
+	 * ({@code mismatch}, {@code search}, {@code count-if-not}) spells.
+	 */
+	private static final java.util.Set<String> SEQUENCE_CHECK_USERS;
+
+	static {
+		java.util.Set<String> users = new java.util.HashSet<>(SEQ_CONVERSION_USERS);
+		users.addAll(List.of(LispNames.FILL, LispNames.REPLACE, LispNames.MAP_INTO, LispNames.CONCATENATE,
+				LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.NSUBSTITUTE,
+				LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT, LispNames.SUBSEQ, LispNames.COPY_SEQ,
+				LispNames.CHECK_SEQUENCE_INTERNAL));
+		SEQUENCE_CHECK_USERS = java.util.Set.copyOf(users);
+	}
+
+	/**
+	 * Whether any form names an operator whose lowering can reach a
+	 * {@code %check-sequence} site, i.e. whether injecting
+	 * {@link #checkSequenceRuntimeWrapper()} could give the sites a shared callee.
+	 * Over-predicting costs one unreachable defun, which the shaker drops;
+	 * under-predicting costs the sites their sharing, never their correctness (a site
+	 * without the helper spells {@link #checkSequenceInline}).
+	 * @param forms the program's (or the generated wrappers') top-level forms
+	 * @return true when a check site can occur
+	 */
+	public static boolean programUsesSequenceCheck(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesAnySymbol(form, SEQUENCE_CHECK_USERS)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * What a {@code (%operand-type-error x op 'kind)} form names
+	 * ({@link #sequenceTypeErrorOf}): a literal operator -- quoted, or nil for an unnamed
+	 * report -- or, in {@link #checkSequenceRuntimeWrapper()}'s body, an operator token
+	 * computed at run time.
+	 *
+	 * @param operator the literal operator's symbol name, or null (unnamed, or a computed
+	 * one)
+	 * @param operatorForm the form computing the operator token, or null for a literal
+	 * @param kind the kind's type name
+	 */
+	public record OperandTypeErrorForm(@Nullable String operator, @Nullable LispVal operatorForm, String kind) {
+
+		/**
+		 * Reads the form.
+		 * @param cons the form
+		 * @return what it names
+		 */
+		public static OperandTypeErrorForm of(LispCons cons) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() == 4 && parts.get(3) instanceof LispCons kindQuote
+					&& kindQuote.cdr() instanceof LispCons kindBody && kindBody.car() instanceof LispSymbol kind) {
+				LispVal opPart = parts.get(2);
+				if (opPart instanceof LispNil) {
+					return new OperandTypeErrorForm(null, null, kind.name());
+				}
+				if (opPart instanceof LispCons opQuote && opQuote.car() instanceof LispSymbol q
+						&& LispNames.QUOTE.equals(q.name()) && opQuote.cdr() instanceof LispCons opBody
+						&& opBody.car() instanceof LispSymbol sym) {
+					return new OperandTypeErrorForm(sym.name(), null, kind.name());
+				}
+				return new OperandTypeErrorForm(null, opPart, kind.name());
+			}
+			throw new IllegalArgumentException(LispNames.OPERAND_TYPE_ERROR_INTERNAL
+					+ " expects a value, an operator and a quoted kind: " + cons.print());
+		}
+
 	}
 
 	/**
@@ -20147,6 +20508,8 @@ public final class LispMacroExpander {
 
 	/** The per-operator half of {@link #mayCreateInstances}. */
 	private static boolean constructsInstance(String head, LispCons form) {
+		// The reads are judged without the recursive-p they ignore (IgnoredArgument).
+		form = IgnoredArgument.withoutArgument(form, head);
 		switch (head) {
 			case LispNames.OBJ_NEW, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.SIGNAL,
 					LispNames.MAKE_CONDITION:
@@ -20165,9 +20528,10 @@ public final class LispMacroExpander {
 				// they are prelude Lisp whose spliced bodies carry the %obj-new this
 				// scan already answers for.
 				return true;
-			case LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
+			case LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
 				// A read whose end of file SIGNALS builds the end-of-file condition
-				// instance (expandReadEofSignal).
+				// instance (expandReadEofSignal) -- read-char-no-hang's too, as the
+				// read-char it expands to (expandReadCharNoHang).
 				return expandReadEofSignal(form, true) != null;
 			case LispNames.READ_LINE:
 				return expandReadEofSignal(form, false) != null;
@@ -20194,18 +20558,23 @@ public final class LispMacroExpander {
 			case LispNames.FUNCTION:
 				// #'signal: the generated first-class wrapper re-enters the designator
 				// expansion, whose every signal arm builds a simple-condition.
-				// #'read-char / #'peek-char / #'read-byte: their wrappers signal
-				// end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are injected only
-				// because of this very reference. #'read-sequence / #'write-sequence:
-				// their wrappers run the bounds check, which signals type-error for
-				// the same reason. #'read / #'read-from-string: their
+				// #'read-char / #'read-char-no-hang / #'peek-char / #'read-byte: their
+				// wrappers signal end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are
+				// injected only because of this very reference. #'read-sequence /
+				// #'write-sequence: their wrappers run the bounds check, which signals
+				// type-error for the same reason. #'read / #'read-from-string: their
 				// wrappers can read a #P"..." pathname instance, like the head case.
+				// #'aref / #'array-row-major-index (todo a58): the shared fold's per-axis
+				// bound check and subscript-count check signal a type-error/simple-error
+				// the same way.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
+								|| LispNames.READ_CHAR_NO_HANG.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
 								|| LispNames.READ_SEQUENCE.equals(fn.name())
 								|| LispNames.WRITE_SEQUENCE.equals(fn.name()) || LispNames.READ.equals(fn.name())
-								|| LispNames.READ_FROM_STRING.equals(fn.name()));
+								|| LispNames.READ_FROM_STRING.equals(fn.name()) || LispNames.AREF.equals(fn.name())
+								|| LispNames.ARRAY_ROW_MAJOR_INDEX.equals(fn.name()));
 			case LispNames.ERROR, LispNames.WARN, LispNames.CERROR: {
 				List<LispVal> parts = form.toList();
 				// (cerror continue-control datum args...) drops its first argument.
@@ -22733,8 +23102,11 @@ public final class LispMacroExpander {
 		return listToCons(defun);
 	}
 
-	/** The dispatcher's rest parameter of a variadic generic function. */
-	private static final String GF_REST_VAR = "%gf-rest";
+	/**
+	 * The dispatcher's rest parameter of a variadic generic function, also the tail
+	 * parameter of the compile paths' built-in forwarder ({@code ShadowedBuiltins}).
+	 */
+	public static final String GF_REST_VAR = "%gf-rest";
 
 	/**
 	 * The internal name a built-in is stashed under when a program defines a method on
@@ -22771,7 +23143,8 @@ public final class LispMacroExpander {
 	 * built-in stays the generic's default method), but emitted under
 	 * {@link #shadowedDispatcherName} -- under the original name the defun would be dead,
 	 * because the expression compilers lower that name in call position unconditionally.
-	 * The fallback name is bound by {@link #builtinForwarderDefun} on these paths.
+	 * The fallback name is bound by {@code ShadowedBuiltins}' forwarder defun on these
+	 * paths.
 	 * @param genericName the generic-function name (any spelling)
 	 * @param closRegistry the registry holding the generic and the class ancestor sets
 	 * @return the renamed dispatcher defun
@@ -22782,62 +23155,6 @@ public final class LispMacroExpander {
 		LispCons nameCell = (LispCons) defun.cdr();
 		return new LispCons(defun.car(),
 				new LispCons(new LispSymbol(shadowedDispatcherName(genericName)), nameCell.cdr()));
-	}
-
-	/**
-	 * The compile-path binding of {@link #builtinDefaultMethodName}: where the
-	 * interpreter stashes the Java-backed {@code LispFunction} it found in the global
-	 * environment, the compilers have no function VALUE to stash -- but they still lower
-	 * the original name in call position. So the stash becomes a forwarder defun,
-	 * {@code (defun %<generic>--builtin (p1..pn [&rest %gf-rest]) (<generic> p1..pn))}:
-	 * its body spells the ORIGINAL built-in call, which the expression compilers lower,
-	 * and the walker that rewrites the program's call sites onto the dispatcher must skip
-	 * this defun (rewriting it would recurse through the dispatcher forever -- the
-	 * {@code GrayStreamsLibrary.DISPATCH_DEFUNS} rule). A variadic generic's
-	 * {@code &rest} tail is deliberately NOT forwarded: the lite built-ins ignore their
-	 * keyword tails anyway (the lowered {@code close} strips a literal {@code :abort} the
-	 * same way), and forwarding a runtime tail would need {@code apply} over a
-	 * first-class value of the original name, which not every lowered built-in has.
-	 * @param genericName the generic-function name (any spelling)
-	 * @param closRegistry the registry holding the generic (for the parameter names)
-	 * @return the forwarder defun
-	 */
-	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry) {
-		return builtinForwarderDefun(genericName, closRegistry, genericName);
-	}
-
-	/**
-	 * As {@link #builtinForwarderDefun(String, ClosRegistry)}, but spelling
-	 * {@code targetName} in the body's call position instead of the generic's own name --
-	 * for a backend whose pre-pass has already redirected the built-in onto a dispatch
-	 * defun of its own ({@code WasmSocketsRewrite}'s {@code rontolisp::%io-close}): the
-	 * fall-through must reach THAT defun, or its bookkeeping (the socket table) silently
-	 * diverges.
-	 * @param genericName the generic-function name (any spelling)
-	 * @param closRegistry the registry holding the generic (for the parameter names)
-	 * @param targetName the function name the forwarder body calls
-	 * @return the forwarder defun
-	 */
-	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry, String targetName) {
-		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
-		if (generic == null) {
-			throw new IllegalArgumentException("Unknown generic function: " + genericName);
-		}
-		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
-		List<LispVal> defun = new java.util.ArrayList<>();
-		defun.add(new LispSymbol(LispNames.DEFUN));
-		defun.add(new LispSymbol(builtinDefaultMethodName(genericName)));
-		List<LispVal> defunParams = new java.util.ArrayList<>(params);
-		if (generic.variadic()) {
-			defunParams.add(new LispSymbol("&REST"));
-			defunParams.add(new LispSymbol(GF_REST_VAR));
-		}
-		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
-		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(targetName));
-		call.addAll(params);
-		defun.add(listToCons(call));
-		return listToCons(defun);
 	}
 
 	/**
@@ -27429,6 +27746,66 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The interpreter's {@code (warn ...)}:
+	 * {@link #expandWarn(LispCons, ClosRegistry, boolean)} with every
+	 * {@code (%warn message)} terminal widened to {@code (%warn message designator)}, the
+	 * designator naming what was signalled -- the quoted class of a typed designator, the
+	 * runtime datum ({@code __signal_cond}: a condition instance, a class-name symbol, or
+	 * a format-control string), or nil for a literal control string (a
+	 * {@code simple-warning}). The interpreter's {@code %warn} reads it to tell a
+	 * {@code style-warning} apart when a warning reaches its report while a macro expands
+	 * on the compile path (the {@code --warnings-as-errors} count). The compiled backends
+	 * never see this shape: they expand {@code warn} themselves.
+	 * @param cons the warn expression
+	 * @param closRegistry the class registry
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWarnWithDesignator(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
+		LispVal expansion = expandWarn(cons, closRegistry, signalHook);
+		List<LispVal> parts = cons.toList();
+		LispVal datum = parts.get(1);
+		LispVal designator;
+		if (datum instanceof LispCons mc && mc.car() instanceof LispSymbol mcOp
+				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs
+				&& quotedSymbol(mcArgs.car()) instanceof LispSymbol typeSym) {
+			designator = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		}
+		else if (quotedSymbol(datum) instanceof LispSymbol typeSym) {
+			designator = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		}
+		else if (datum instanceof LispString) {
+			designator = LispNil.INSTANCE;
+		}
+		else {
+			designator = new LispSymbol(SIGNAL_COND_VAR);
+		}
+		// The call's own subforms stand in the expansion as they were written; none of
+		// them is a terminal of THIS warn, so the walk does not enter them.
+		java.util.Set<LispVal> userForms = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		userForms.addAll(parts.subList(1, parts.size()));
+		return withWarnDesignator(expansion, designator, userForms);
+	}
+
+	private static LispVal withWarnDesignator(LispVal form, LispVal designator, java.util.Set<LispVal> userForms) {
+		if (!(form instanceof LispCons cons) || userForms.contains(form)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return form;
+			}
+			if (LispNames.WARN_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
+					&& args.cdr() instanceof LispNil) {
+				return listToCons(List.of(head, args.car(), designator));
+			}
+		}
+		LispVal car = withWarnDesignator(cons.car(), designator, userForms);
+		LispVal cdr = withWarnDesignator(cons.cdr(), designator, userForms);
+		return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+	}
+
+	/**
 	 * Expands {@code (signal datum args...)} -- the non-fatal signaling operator, with
 	 * the same designator surface as {@link #expandError} -- into
 	 * {@code (%signal-cond condition message)}: the condition is raised when a
@@ -27581,6 +27958,36 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The throwing terminal of a signal whose {@code handler-bind} handlers the
+	 * restart-mode hook has just run: {@code (%error-cond condition message t)} or
+	 * {@code (%signal-cond condition message t)}. The third operand says the handlers
+	 * ran, and the throw carries that fact with it (the interpreter's exception, the
+	 * JVM's record under the throwable, the wasm-GC payload), so every {@code %hb-guard}
+	 * pad the condition crosses passes it on untouched. Reaching the terminal is the
+	 * proof: a walk that did not complete transferred control, and nothing after the hook
+	 * -- the report a message renders included -- can take the fact back.
+	 * @param internalName {@link LispNames#ERROR_COND_INTERNAL} or
+	 * {@link LispNames#SIGNAL_COND_INTERNAL}
+	 * @param condition the form answering the instance the handlers saw
+	 * @param message the message form
+	 * @return the terminal
+	 */
+	private static LispVal handlersRanTerminal(String internalName, LispVal condition, LispVal message) {
+		return listToCons(List.of(new LispSymbol(internalName), condition, message, LispTrue.INSTANCE));
+	}
+
+	/**
+	 * Whether a {@code %error-cond} / {@code %signal-cond} form says the
+	 * {@code handler-bind} handlers already ran for its condition
+	 * ({@link #handlersRanTerminal}): a third operand that is not the nil literal.
+	 * @param terminal the terminal form, its operator first
+	 * @return whether its throw carries the fact
+	 */
+	public static boolean handlersRan(List<LispVal> terminal) {
+		return terminal.size() > 3 && !(terminal.get(3) instanceof LispNil);
+	}
+
+	/**
 	 * The literal-control-string designator: builds the message with the format machinery
 	 * and delegates to the internal primitive. {@code error} keeps the plain one-argument
 	 * {@code (%error message)} shape (a {@code handler-case} synthesizes the
@@ -27618,14 +28025,13 @@ public final class LispMacroExpander {
 			LispVal terminal = switch (internalName) {
 				case LispNames.WARN_INTERNAL -> listToCons(List.of(new LispSymbol(internalName), listToCons(
 						List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), msgVar))));
-				case LispNames.SIGNAL_COND_INTERNAL ->
-					listToCons(List.of(new LispSymbol(internalName), condVar, msgVar));
+				case LispNames.SIGNAL_COND_INTERNAL -> handlersRanTerminal(internalName, condVar, msgVar);
 				// The error terminal carries the SAME instance %run-handlers just saw
-				// (%error-cond, uncaught output identical to %error): a %hb-guard /
-				// signal-point seam recognizes it by identity and does not run the
-				// handlers a second time, and a handler-case catches the identical
-				// instance the handler-bind handlers were given, as in CL.
-				default -> listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, msgVar));
+				// (%error-cond, uncaught output identical to %error), so a handler-case
+				// catches the identical instance the handler-bind handlers were given,
+				// as in CL -- and its throw says the handlers ran, so no %hb-guard pad
+				// or signal-point seam runs them a second time.
+				default -> handlersRanTerminal(LispNames.ERROR_COND_INTERNAL, condVar, msgVar);
 			};
 			signalCall = makeLet(SIG_MSG_VAR, message,
 					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(textControlForm(msgVar), LispNil.INSTANCE)),
@@ -27677,6 +28083,19 @@ public final class LispMacroExpander {
 
 	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
 			ClosRegistry closRegistry, boolean signalHook) {
+		return expandTypedSignal(opName, internalName, typeSym, args, closRegistry, signalHook, null);
+	}
+
+	/**
+	 * The typed signal, with {@code passedInitargs} naming the variable that holds the
+	 * call's ACTUAL initarg plist when {@code args} are not the call's arguments but
+	 * {@code getf} reads of every slot from it (the {@code %error-runtime} helpers). The
+	 * message then follows what the call passed, exactly as the literal call's would: the
+	 * legacy text lists the plist itself, and a {@code :format-control} is the message
+	 * only when the plist carries one.
+	 */
+	private static LispVal expandTypedSignal(String opName, String internalName, LispSymbol typeSym, List<LispVal> args,
+			ClosRegistry closRegistry, boolean signalHook, @Nullable LispSymbol passedInitargs) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> items = new java.util.ArrayList<>();
 		ClosRegistry.ClassInfo cls = closRegistry.findClass(typeSym.name());
@@ -27717,15 +28136,15 @@ public final class LispMacroExpander {
 			// string, or a stream's contents), so its fallback is dead and not built: the
 			// wasm-GC signal compiles the fallback into every site's payload.
 			LispVal fallback = cls != null && inheritsConditionReport(cls, closRegistry) ? LispNil.INSTANCE
-					: suppliedFormatControl(cls, items) instanceof LispVal supplied ? supplied
-							: legacySignalMessage(typeSym, items, bindings, false);
+					: formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal supplied
+							? supplied : legacySignalMessage(typeSym, items, bindings, false, passedInitargs);
 			LispVal rendered = conditionReportOr(condVar, fallback);
 			message = warn
 					? listToCons(
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
 					: rendered;
 		}
-		else if (suppliedFormatControl(cls, items) instanceof LispVal formatControl) {
+		else if (formatControlMessage(typeSym, cls, items, bindings, passedInitargs) instanceof LispVal formatControl) {
 			// A simple-* style class with a supplied :format-control: the message is
 			// its value (lite: :format-arguments are carried in the instance but not
 			// rendered into the message), preserving the (error (make-condition
@@ -27735,17 +28154,19 @@ public final class LispMacroExpander {
 					: formatControl;
 		}
 		else {
-			message = legacySignalMessage(typeSym, items, bindings, warn);
+			message = legacySignalMessage(typeSym, items, bindings, warn, passedInitargs);
 		}
 		// The two-argument condition-carrying internal: %error maps to %error-cond
 		// (signal already is %signal-cond; warn stays the one-argument %warn).
 		String condInternal = LispNames.ERROR_INTERNAL.equals(internalName) ? LispNames.ERROR_COND_INTERNAL
 				: internalName;
 		LispVal signalCall = warn ? listToCons(List.of(new LispSymbol(internalName), message))
-				: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
+				: signalHook ? handlersRanTerminal(condInternal, condVar, message)
+						: listToCons(List.of(new LispSymbol(condInternal), condVar, message));
 		if (signalHook) {
 			// Restart mode: run the handler-bind handlers on the instance at the
-			// signal point, before the throwing/printing terminal.
+			// signal point, before the throwing/printing terminal -- whose throw says
+			// they ran.
 			signalCall = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), signalCall));
 		}
@@ -27775,13 +28196,23 @@ public final class LispMacroExpander {
 	 * report-less condition has always signalled.
 	 */
 	private static LispVal legacySignalMessage(LispSymbol typeSym, List<LispVal> items, List<LispVal> bindings,
-			boolean warn) {
-		List<LispVal> msgListParts = new java.util.ArrayList<>();
-		msgListParts.add(new LispSymbol(LispNames.LIST));
-		msgListParts.add(listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym)));
-		msgListParts.addAll(items);
+			boolean warn, @Nullable LispSymbol passedInitargs) {
+		LispVal quotedType = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		LispVal msgList;
+		if (passedInitargs != null) {
+			// The initargs as the call passed them, not the slot reads: a slot the call
+			// left out is not an initarg it wrote.
+			msgList = mvCall(LispNames.CONS, quotedType, passedInitargs);
+		}
+		else {
+			List<LispVal> msgListParts = new java.util.ArrayList<>();
+			msgListParts.add(new LispSymbol(LispNames.LIST));
+			msgListParts.add(quotedType);
+			msgListParts.addAll(items);
+			msgList = listToCons(msgListParts);
+		}
 		LispSymbol msgVar = new LispSymbol(ERROR_ARG_VAR + "m");
-		bindings.add(listToCons(List.of(msgVar, listToCons(msgListParts))));
+		bindings.add(listToCons(List.of(msgVar, msgList)));
 		String control = warn ? "WARNING: Condition ~s was signalled." : "Condition ~s was signalled.";
 		return formatMessagePieces(control, List.of(msgVar));
 	}
@@ -27827,6 +28258,29 @@ public final class LispMacroExpander {
 			}
 			throw unknownType;
 		}
+	}
+
+	/**
+	 * The message a {@code :format-control} makes, or null when the class carries none or
+	 * the call supplies none ({@link #suppliedFormatControl}). Over a helper's runtime
+	 * plist ({@code passedInitargs}) the slot read is there whether or not the call
+	 * passed the key, so the message is its value only when the plist carries it, and the
+	 * legacy text over the plist otherwise.
+	 */
+	private static @Nullable LispVal formatControlMessage(LispSymbol typeSym, ClosRegistry.@Nullable ClassInfo cls,
+			List<LispVal> items, List<LispVal> bindings, @Nullable LispSymbol passedInitargs) {
+		LispVal supplied = suppliedFormatControl(cls, items);
+		if (supplied == null || passedInitargs == null) {
+			return supplied;
+		}
+		// Over a runtime plist the key is read either way, so whether the CALL passed it
+		// is a runtime question: getf defaulting to the plist itself answers it (no
+		// value inside a plist is that plist). A passed nil stays the message, as in the
+		// literal call.
+		LispVal absent = mvCall(LispNames.EQ_GENERAL,
+				mvCall(LispNames.GETF, passedInitargs, new LispSymbol(":FORMAT-CONTROL"), passedInitargs),
+				passedInitargs);
+		return makeIf(absent, legacySignalMessage(typeSym, items, bindings, false, passedInitargs), supplied);
 	}
 
 	/**
@@ -27950,11 +28404,10 @@ public final class LispMacroExpander {
 			// Restart mode: run the handler-bind handlers at the signal point. The
 			// string/symbol arms synthesize the same simple-* instance a handler-case
 			// would, bind it, and hand the SAME instance to the throwing terminal
-			// (%error-cond / %signal-cond): a %hb-guard landing pad or the
-			// interpreter's signal-point seam recognizes it by identity
-			// (%handlers-ran%) and does not run the handlers a second time. warn's
-			// terminal does not throw, so its hook instance stays unbound. The
-			// condition arm passes the datum's instance itself.
+			// (%error-cond / %signal-cond), whose throw says the handlers ran: no
+			// %hb-guard landing pad or interpreter signal-point seam runs them a
+			// second time. warn's terminal does not throw, so its hook instance stays
+			// unbound. The condition arm passes the datum's instance itself.
 			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
 					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
 			if (warn) {
@@ -27975,14 +28428,15 @@ public final class LispMacroExpander {
 						objNew(simpleTag, List.of(textControlForm(stringMessage), LispNil.INSTANCE)),
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
-								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
+								handlersRanTerminal(throwInternal, instVar, stringMessage))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
 				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
 						makeLet(SIGNAL_INST_VAR,
 								objNew(simpleTag, List.of(textControlForm(symMsgVar), LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
-										listToCons(List.of(new LispSymbol(throwInternal), instVar, symMsgVar))))));
+										handlersRanTerminal(throwInternal, instVar, symMsgVar)))));
+				conditionCase = handlersRanTerminal(throwInternal, condVar, message);
 			}
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), conditionCase));
@@ -28136,7 +28590,7 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(((LispSymbol) op).name() + " requires at least one argument");
 		}
 		if (n == 1) {
-			return makeProgn(List.of(parts.get(1), LispTrue.INSTANCE));
+			return checkedOneArgument(((LispSymbol) op).name(), parts.get(1), LispTrue.INSTANCE);
 		}
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> gsyms = new java.util.ArrayList<>();
@@ -28151,6 +28605,44 @@ public final class LispMacroExpander {
 			andParts.add(listToCons(List.of(op, gsyms.get(i), gsyms.get(i + 1))));
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), listToCons(andParts)));
+	}
+
+	/**
+	 * The one-argument call of a numeric operator that does no arithmetic on its argument
+	 * -- {@code (+ x)}, {@code (* x)}, {@code (logand x)}, {@code (< x)}, {@code (min x)}
+	 * and their kin -- as the argument checked to be of the type the operator accepts
+	 * ({@code NUMBER} for {@code + * =}, {@code REAL} for the orderings and
+	 * {@code min}/{@code max}, {@code INTEGER} for the bitwise family): {@code (let
+	 * ((__one x)) (if (realp __one) t (%operand-type-error __one '< 'real)))}. A literal
+	 * of the type needs no check. The interpreter's built-ins check the same argument, so
+	 * a wrong-type one is the operator's type-error on every backend
+	 * ({@code .kb/error-handling.md}, "One argument is still checked").
+	 * @param operator the operator's symbol name
+	 * @param operand the argument's form
+	 * @param answer what the call answers, or null for the argument itself
+	 * @return the checked form
+	 */
+	public static LispVal checkedOneArgument(String operator, LispVal operand, @Nullable LispVal answer) {
+		String kind = switch (operator) {
+			case LispNames.ADD, LispNames.MUL, LispNames.EQ -> "NUMBER";
+			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGEQV -> "INTEGER";
+			default -> "REAL";
+		};
+		String predicate = switch (kind) {
+			case "NUMBER" -> LispNames.NUMBERP;
+			case "INTEGER" -> LispNames.INTEGERP;
+			default -> LispNames.REALP;
+		};
+		boolean integer = operand instanceof LispInteger || operand instanceof LispBigInteger;
+		boolean literalOfKind = "INTEGER".equals(kind) ? integer
+				: integer || operand instanceof LispRatio || operand instanceof LispDouble;
+		if (literalOfKind) {
+			return answer != null ? answer : operand;
+		}
+		LispSymbol v = new LispSymbol("__one");
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), v,
+				callOf(LispNames.QUOTE, new LispSymbol(operator)), callOf(LispNames.QUOTE, new LispSymbol(kind))));
+		return makeLet(v.name(), operand, makeIf(callOf(predicate, v), answer != null ? answer : v, signal));
 	}
 
 	/**
@@ -28185,7 +28677,7 @@ public final class LispMacroExpander {
 		}
 		if (n == 1) {
 			return gcdLcm ? listToCons(List.of(op, parts.get(1), new LispInteger(LispNames.GCD.equals(name) ? 0 : 1)))
-					: parts.get(1);
+					: checkedOneArgument(name, parts.get(1), null);
 		}
 		LispVal acc = listToCons(List.of(op, parts.get(1), parts.get(2)));
 		for (int i = 3; i <= n; i++) {
@@ -28228,7 +28720,9 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands (elt seq n) into a runtime dispatch on the sequence type: {@code char} for
-	 * a string, {@code nth} for a list.
+	 * a string, {@code (car (%elt-cell seq n))} for a list -- a walk that signals
+	 * {@code ELT}'s type-error for an index outside the list, where {@code nth} would
+	 * answer nil past its end.
 	 * @param cons the elt expression
 	 * @return the expanded expression
 	 */
@@ -28251,7 +28745,7 @@ public final class LispMacroExpander {
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(seq, parts.get(1))), listToCons(List.of(idx, parts.get(2)))));
 		LispVal stringCase = listToCons(List.of(new LispSymbol(LispNames.CHAR), seq, idx));
-		LispVal listCase = listToCons(List.of(new LispSymbol(LispNames.NTH), idx, seq));
+		LispVal listCase = callOf(LispNames.CAR, callOf(LispNames.ELT_CELL, seq, idx));
 		// A non-string, non-list sequence is an array: read it with aref (nil counts as a
 		// list here, so listp -- not consp -- guards the list case). With no array in the
 		// program that arm cannot be taken, so the dispatch collapses to the list read.
@@ -28341,21 +28835,52 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (array-element-type array) into {@code (if (stringp array) 'character t)}
+	 * Expands (array-element-type array) into {@code (let ((v array)) (if (stringp v)
+	 * 'character (if (%arrayp v) t (%operand-type-error v 'array-element-type 'array))))}
 	 * on the compile path: a string is a vector of characters, so it answers
-	 * {@code character} (the one character type), and a general array answers {@code t}
-	 * because element types are not tracked. The array expression is evaluated once, as
-	 * the {@code stringp} argument, and the synthesized {@code character} name is an
-	 * unspelled quote -- real run-time data, not a spelling the program wrote
-	 * ({@code character} is also a function name, which a plain quote would arm in the
-	 * funcall-dispatch gate).
+	 * {@code character} (the one character type), a general array answers {@code t}
+	 * because element types are not tracked, and a value that is no array is the
+	 * operator's {@code ARRAY} type-error. The array expression is evaluated once, and
+	 * the synthesized {@code character} name is an unspelled quote -- real run-time data,
+	 * not a spelling the program wrote ({@code character} is also a function name, which
+	 * a plain quote would arm in the funcall-dispatch gate).
 	 * @param cons the array-element-type expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandArrayElementType(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		return listToCons(List.of(new LispSymbol(LispNames.IF), fmtCall(LispNames.STRINGP, parts.get(1)),
-				unspelledQuoteOf(LispNames.CHARACTER_TYPE), LispTrue.INSTANCE));
+		LispSymbol v = new LispSymbol("__aet");
+		LispVal general = makeIf(callOf(LispNames.ARRAYP_INTERNAL, v), LispTrue.INSTANCE,
+				arrayTypeErrorOf(v, LispNames.ARRAY_ELEMENT_TYPE));
+		return makeLet(v.name(), parts.get(1),
+				makeIf(callOf(LispNames.STRINGP, v), unspelledQuoteOf(LispNames.CHARACTER_TYPE), general));
+	}
+
+	/**
+	 * {@code (%operand-type-error form 'operator 'ARRAY)}: the operator's {@code ARRAY}
+	 * type-error over the form's value, as {@link #sequenceTypeErrorOf} is for
+	 * {@code SEQUENCE}.
+	 * @param form the offending value's form
+	 * @param operator the operator the report names
+	 * @return the signalling form
+	 */
+	static LispVal arrayTypeErrorOf(LispVal form, String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.OPERAND_TYPE_ERROR_INTERNAL), form,
+				callOf(LispNames.QUOTE, new LispSymbol(operator)), callOf(LispNames.QUOTE, new LispSymbol("ARRAY"))));
+	}
+
+	/**
+	 * {@code (let ((v form)) (if (arrayp v) v (%operand-type-error v 'operator 'ARRAY)))}:
+	 * the form's value when it is an array of any representation, else the operator's
+	 * {@code ARRAY} type-error -- for a lowering that reads its array argument through
+	 * internal operators that name no operator of their own.
+	 * @param form the array argument's form
+	 * @param operator the operator the report names
+	 * @return the checked form
+	 */
+	public static LispVal checkedArrayOf(LispVal form, String operator) {
+		LispSymbol v = new LispSymbol("__arc");
+		return makeLet(v.name(), form, makeIf(callOf(LispNames.ARRAYP, v), v, arrayTypeErrorOf(v, operator)));
 	}
 
 	/**
@@ -28430,9 +28955,11 @@ public final class LispMacroExpander {
 		LispVal fpExpr = null;
 		LispVal displacedToExpr = null;
 		LispVal displacedOffsetExpr = null;
+		LispVal contentsChoice = null;
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol kw) {
 				switch (kw.name()) {
+					case ADJUST_CONTENTS_P_KEYWORD -> contentsChoice = parts.get(i + 1);
 					case LispNames.INITIAL_ELEMENT_KEYWORD -> {
 						initExpr = parts.get(i + 1);
 						initGiven = true;
@@ -28451,6 +28978,9 @@ public final class LispMacroExpander {
 			}
 		}
 		boolean displaced = displacedToExpr != null && !(displacedToExpr instanceof LispNil);
+		// The source is checked before any internal reader sees it: each of them would
+		// name itself, or (the :displaced-to half) build a fresh view whatever it was.
+		LispVal source = checkedArrayOf(parts.get(1), LispNames.ADJUST_ARRAY);
 		LispSymbol a = new LispSymbol("__adj_a");
 		LispSymbol nd = new LispSymbol("__adj_nd");
 		LispSymbol ndl = new LispSymbol("__adj_ndl");
@@ -28458,8 +28988,7 @@ public final class LispMacroExpander {
 		// the carried-over fill pointer: the explicit expression, else the array's own
 		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
 				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
-		List<LispVal> baseBindings = List.of(listToCons(List.of(a, parts.get(1))),
-				listToCons(List.of(nd, parts.get(2))),
+		List<LispVal> baseBindings = List.of(listToCons(List.of(a, source)), listToCons(List.of(nd, parts.get(2))),
 				listToCons(List.of(ndl,
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(fp, fpInit)));
@@ -28500,14 +29029,67 @@ public final class LispMacroExpander {
 		// adjustment answers has to remember what the original did, which is what the
 		// %array-adopt-element-type stamp carries over. (An :adjustable array keeps its
 		// own identity through %array-become and never reads the copy's stamp.)
+		LispVal fresh;
+		if (contentsChoice != null) {
+			// The function value's one expansion (BuiltinFunctionWrappers): which of the
+			// two fills applies is known only at run time.
+			fresh = makeIf(contentsChoice, adjustedArrayMake(a, ndl, fp, icExpr, null),
+					adjustedArrayMake(a, ndl, fp, null, initExpr));
+		}
+		else {
+			fresh = adjustedArrayMake(a, ndl, fp, icExpr, initExpr);
+		}
+		// `a` un-displaces (SBCL 2.2.9) as PART of its own binding, before any later
+		// binding reads it: its current view contents become its own storage and the
+		// displacement drops, in place. Later than this the ordering would matter --
+		// %array-adopt-element-type's stamp (the newArr binding just below) can only
+		// read a chain-resolved element type off a NON-displaced array (a displaced
+		// array's marker word doubles as its offset, so it reads as "remembers
+		// nothing" while still displaced), and %array-become (the :adjustable half of
+		// the result) would otherwise leave the adjusted array pointing at data it no
+		// longer owns.
+		List<LispVal> bindings = new java.util.ArrayList<>(
+				List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, source))),
+						listToCons(List.of(nd, parts.get(2))),
+						listToCons(List.of(ndl,
+								makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
+						listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
+						listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, fresh, a))),
+						listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr)))));
+		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
+				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
+		// The overlap copy is skipped for :initial-contents, which fills the result
+		// wholesale; both backends need a no-op there, and the form below only drives the
+		// (unused when absent) copy.
+		LispVal copyLoop = contentsChoice != null
+				? makeIf(contentsChoice, LispNil.INSTANCE, adjustArrayCopyLoop(a, ndl, od, newArr, total))
+				: icExpr != null ? LispNil.INSTANCE : adjustArrayCopyLoop(a, ndl, od, newArr, total);
+		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
+				newArr);
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), rankCheck, copyLoop, result));
+	}
+
+	/**
+	 * The internal keyword whose value picks, at run time, between an adjustment's
+	 * {@code :initial-contents} and its {@code :initial-element} -- both of which the
+	 * call then carries -- in ONE expansion. The {@code #'adjust-array} function value
+	 * writes it (its keywords are a run-time plist), where two expansions would double
+	 * the element-copy loop the wrapper carries.
+	 */
+	public static final String ADJUST_CONTENTS_P_KEYWORD = ":%CONTENTS-P";
+
+	// The fresh array of an adjustment: (make-array ndl <fill> :fill-pointer fp
+	// :adjustable (adjustable-array-p a)). :initial-contents fills the WHOLE result (like
+	// make-array), so it takes no :initial-element and the caller skips the overlap
+	// copy; the RESULT's element type is then the adjusted array's, passed as a RUNTIME
+	// :element-type so make-array builds the right representation (a character vector
+	// for a char source) rather than defaulting to a boxed `t` array -- otherwise the
+	// copy would stop answering stringp.
+	private static LispVal adjustedArrayMake(LispSymbol a, LispSymbol ndl, LispSymbol fp, @Nullable LispVal icExpr,
+			@Nullable LispVal initExpr) {
 		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
 		if (icExpr != null) {
-			// :initial-contents fills the WHOLE result (like make-array), so no :initial-
-			// element and no overlap copy. The RESULT's element type is the adjusted
-			// array's, passed as a RUNTIME :element-type so make-array builds the right
-			// representation (a character vector for a char source) rather than
-			// defaulting
-			// to a boxed `t` array -- otherwise the copy would stop answering stringp.
 			makeParts.add(new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD));
 			makeParts.add(callOf(LispNames.ARRAY_ELEMENT_TYPE, a));
 			makeParts.add(new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD));
@@ -28521,34 +29103,7 @@ public final class LispMacroExpander {
 		makeParts.add(fp);
 		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
 		makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
-		// `a` un-displaces (SBCL 2.2.9) as PART of its own binding, before any later
-		// binding reads it: its current view contents become its own storage and the
-		// displacement drops, in place. Later than this the ordering would matter --
-		// %array-adopt-element-type's stamp (the newArr binding just below) can only
-		// read a chain-resolved element type off a NON-displaced array (a displaced
-		// array's marker word doubles as its offset, so it reads as "remembers
-		// nothing" while still displaced), and %array-become (the :adjustable half of
-		// the result) would otherwise leave the adjusted array pointing at data it no
-		// longer owns.
-		List<LispVal> bindings = new java.util.ArrayList<>(
-				List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, parts.get(1)))),
-						listToCons(List.of(nd, parts.get(2))),
-						listToCons(List.of(ndl,
-								makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
-						listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
-						listToCons(
-								List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
-						listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr)))));
-		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
-				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
-		// The overlap copy is skipped for :initial-contents, which fills the result
-		// wholesale; both backends need a no-op there, and the form below only drives the
-		// (unused when absent) copy.
-		LispVal copyLoop = icExpr != null ? LispNil.INSTANCE : adjustArrayCopyLoop(a, ndl, od, newArr, total);
-		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
-				newArr);
-		return listToCons(
-				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), rankCheck, copyLoop, result));
+		return listToCons(makeParts);
 	}
 
 	// The element-copy loop of expandAdjustArray: for every row-major index of the new
@@ -28806,10 +29361,18 @@ public final class LispMacroExpander {
 								listToCons(List.of(new LispSymbol(LispNames.STR_FRESH),
 										listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), cx))))));
 			}
-			if (type != null) {
-				// VECTOR and the unresolved-deftype default, the same pairing as the
-				// inline arms below.
+			if ("VECTOR".equals(type)) {
 				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), parts.get(1)));
+			}
+			if (type != null) {
+				// The unresolved-deftype default, the same pairing as the inline arms
+				// below: a list or a string converts through the shared helper, anything
+				// else answers itself (the helper signals COERCE's type-error for it).
+				LispSymbol cx = new LispSymbol("__coerce_x");
+				LispVal convertible = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, cx),
+						callOf(LispNames.STRINGP, cx)));
+				return makeLet(cx.name(), parts.get(1),
+						makeIf(convertible, listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), cx)), cx));
 			}
 		}
 		LispSymbol x = new LispSymbol("__coerce_x");
@@ -28818,7 +29381,7 @@ public final class LispMacroExpander {
 			body = coerceToListBody(x, arraysExist);
 		}
 		else if ("VECTOR".equals(type)) {
-			body = coerceToVectorBody(x);
+			body = coerceToVectorBody(x, true);
 		}
 		else if ("STRING".equals(type)) {
 			body = coerceToStringBody(x, arraysExist, freshString, simpleString);
@@ -28827,8 +29390,10 @@ public final class LispMacroExpander {
 			// A user deftype name we cannot resolve at expansion time (no deftype
 			// registry from here). Common shape in real libraries: the deftype expands
 			// to a (vector ...) subtype -- uax-15's unicode-string is `(vector
-			// unicode-point)` -- so default to the vector conversion.
-			body = coerceToVectorBody(x);
+			// unicode-point)` -- so default to the vector conversion. Leniently: a value
+			// that is no sequence may well be of that type already (an integer
+			// deftype), and answers itself as it always has.
+			body = coerceToVectorBody(x, false);
 		}
 		else {
 			throw new UnsupportedOperationException(
@@ -28899,7 +29464,7 @@ public final class LispMacroExpander {
 		// (.todo/750).
 		LispVal functionArm = makeIf(memberOfTypeNames(t, "FUNCTION"), coerceTempToFunction(x), identity);
 		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
-				: coerceToVectorBody(x);
+				: coerceToVectorBody(x, true);
 		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
 				: coerceToStringBody(x, arraysExist);
 		LispVal toList = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), x))
@@ -29189,6 +29754,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandUpgradedComplexPartType(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3) {
+			return withEnvironmentEvaluated(parts, "__ucpt_a");
+		}
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("upgraded-complex-part-type expects a type specifier");
 		}
@@ -29215,24 +29783,44 @@ public final class LispMacroExpander {
 	 * only be a string, so the scan -- and the stringp test guarding it -- fall away.
 	 */
 	private static LispVal coerceToListBody(LispSymbol x, boolean arraysExist) {
-		return arraysExist
-				? makeIf(callOf(LispNames.LISTP, x), x,
-						makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), coerceVectorToList(x)))
-				: makeIf(callOf(LispNames.LISTP, x), x, coerceStringToList(x));
+		return makeIf(callOf(LispNames.LISTP, x), x,
+				makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), vectorElementsOrTypeError(x, arraysExist)));
+	}
+
+	/**
+	 * A conversion's arm for a value that is neither a list nor a string: a vector's
+	 * elements as a list, anything else -- a number, a symbol, an array of rank 2 or more
+	 * -- {@code coerce}'s {@code SEQUENCE} type-error. With no array in the program
+	 * ({@code arraysExist} false) only the signal is left.
+	 * @param x the (temp-bound) value, known to be no list and no string
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the form
+	 */
+	private static LispVal vectorElementsOrTypeError(LispSymbol x, boolean arraysExist) {
+		LispVal checked = checkedSequenceOf(x, LispNames.COERCE);
+		if (!arraysExist) {
+			return checked;
+		}
+		LispSymbol v = new LispSymbol("__coerce_vec");
+		return makeLet(v.name(), checked, coerceVectorToList(v));
 	}
 
 	/**
 	 * The {@code 'vector} conversion body: {@code (if (or (listp x) (stringp x)) (let
-	 * ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>) x)}.
+	 * ((__coerce_l (if (stringp x) (map 'list #'identity x) x))) <fill>) OTHER)}, where
+	 * {@code OTHER} is {@code x} for a vector and {@code coerce}'s {@code SEQUENCE}
+	 * type-error for anything else when {@code strict}, and {@code x} itself otherwise --
+	 * the unresolved-deftype default, whose value may already be of that type.
 	 */
-	private static LispVal coerceToVectorBody(LispSymbol x) {
+	private static LispVal coerceToVectorBody(LispSymbol x, boolean strict) {
 		LispSymbol l = new LispSymbol("__coerce_l");
 		LispVal asList = makeIf(callOf(LispNames.STRINGP, x), coerceStringToList(x), x);
 		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of(listToCons(List.of(l, asList)))), coerceListToVector(l)));
 		LispVal sequencep = listToCons(
 				List.of(new LispSymbol(LispNames.OR), callOf(LispNames.LISTP, x), callOf(LispNames.STRINGP, x)));
-		return makeIf(sequencep, fill, x);
+		LispVal other = strict ? checkedSequenceOf(x, LispNames.COERCE) : x;
+		return makeIf(sequencep, fill, other);
 	}
 
 	/**
@@ -29271,7 +29859,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal coerceToStringBody(LispSymbol x, boolean arraysExist, boolean freshString,
 			boolean simpleString) {
-		LispVal chars = arraysExist ? makeIf(callOf(LispNames.LISTP, x), x, coerceVectorToList(x)) : x;
+		LispVal chars = makeIf(callOf(LispNames.LISTP, x), x, vectorElementsOrTypeError(x, arraysExist));
 		LispVal build = listToCons(List.of(new LispSymbol(LispNames.MAP),
 				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.SEQ_STRING_RESULT))),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.IDENTITY))), chars));
@@ -29382,12 +29970,14 @@ public final class LispMacroExpander {
 
 		List<LispSymbol> seqVars = new java.util.ArrayList<>();
 		List<LispVal> bindings = new java.util.ArrayList<>();
-		bindings.add(listToCons(List.of(resVar, resultForm)));
+		// Every sequence is checked as it binds, so one that is not is MAP-INTO's own
+		// type-error rather than the length's below.
+		bindings.add(listToCons(List.of(resVar, checkedSequenceOf(resultForm, LispNames.MAP_INTO))));
 		bindings.add(listToCons(List.of(fnVar, fnForm)));
 		for (int k = 0; k < nSeqs; k++) {
 			LispSymbol seqVar = new LispSymbol("__mi_s" + k);
 			seqVars.add(seqVar);
-			bindings.add(listToCons(List.of(seqVar, sourceForms.get(k))));
+			bindings.add(listToCons(List.of(seqVar, checkedSequenceOf(sourceForms.get(k), LispNames.MAP_INTO))));
 		}
 
 		// (min (length res) (length s0) ...) -- each length is a single O(n) pass, so
@@ -29926,6 +30516,70 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers a {@code string-upcase} / {@code string-downcase} /
+	 * {@code string-capitalize} call that carries {@code :start} / {@code :end} onto the
+	 * one-argument conversion every backend compiles: only the bounded substring is
+	 * converted, and the text around it is kept, as CL specifies.
+	 * {@code string-capitalize} starts a word at {@code start} whatever precedes it,
+	 * which is what converting the substring alone gives (SBCL answers the same).
+	 *
+	 * <pre>
+	 * (string-upcase x :start a :end b) ->
+	 * (let* ((__bcc_s (string x)) (__bcc_k0 a) (__bcc_k1 b)
+	 *        (__bcc_st __bcc_k0) (__bcc_en (or __bcc_k1 (length __bcc_s))))
+	 *   (%string-concat (%string-concat (subseq __bcc_s 0 __bcc_st)
+	 *                                   (string-upcase (subseq __bcc_s __bcc_st __bcc_en)))
+	 *                   (subseq __bcc_s __bcc_en)))
+	 * </pre>
+	 *
+	 * The keyword values are evaluated in the order written, after the string, and the
+	 * first occurrence of a keyword counts; a malformed tail is the {@code program-error}
+	 * every keyword operator reports. {@code %string-concat} rather than
+	 * {@code concatenate}: this runs inside the expression compilers, after the scans
+	 * that gate {@code concatenate}'s helpers.
+	 * @param cons the conversion call
+	 * @return the lowered form, or {@code null} for a call without keywords
+	 */
+	public static @Nullable LispVal expandBoundedCaseConversion(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() <= 2 || !(parts.get(0) instanceof LispSymbol op)) {
+			return null;
+		}
+		LispVal keywordError = keywordTailError(cons, op.name(), parts, 2, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD);
+		if (keywordError != null) {
+			return keywordError;
+		}
+		LispSymbol s = new LispSymbol("__bcc_s");
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(listToCons(List.of(s, callOf(LispNames.STRING, parts.get(1)))));
+		LispVal start = new LispInteger(0);
+		LispVal end = null;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			LispSymbol value = new LispSymbol("__bcc_k" + (i / 2 - 1));
+			bindings.add(listToCons(List.of(value, parts.get(i + 1))));
+			String key = ((LispSymbol) parts.get(i)).name();
+			if (LispNames.START_KEYWORD.equals(key) && start instanceof LispInteger) {
+				start = value;
+			}
+			else if (LispNames.END_KEYWORD.equals(key) && end == null) {
+				end = value;
+			}
+		}
+		LispSymbol st = new LispSymbol("__bcc_st");
+		LispSymbol en = new LispSymbol("__bcc_en");
+		LispVal length = callOf(LispNames.LENGTH, s);
+		bindings.add(listToCons(List.of(st, start)));
+		bindings.add(listToCons(
+				List.of(en, end == null ? length : listToCons(List.of(new LispSymbol(LispNames.OR), end, length)))));
+		LispVal converted = callOf(op.name(), mvCall(LispNames.SUBSEQ, s, st, en));
+		LispVal body = mvCall(LispNames.STRING_CONCAT,
+				mvCall(LispNames.STRING_CONCAT, mvCall(LispNames.SUBSEQ, s, new LispInteger(0), st), converted),
+				mvCall(LispNames.SUBSEQ, s, en));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+	}
+
+	/**
 	 * Wraps the argument at {@code index} of a call in the shared {@code (string ...)}
 	 * designator coercion, unless it is already a literal string or a hand-written
 	 * {@code (string ...)}.
@@ -30221,9 +30875,11 @@ public final class LispMacroExpander {
 		bindings.add(listToCons(List.of(fnVar, fnForm)));
 		List<LispSymbol> seqVars = new java.util.ArrayList<>();
 		for (int k = 0; k < seqs.size(); k++) {
+			// Checked as it binds: a sequence that is not is MAP's own type-error rather
+			// than the length's below.
 			LispSymbol sv = new LispSymbol("__map_s" + k);
 			seqVars.add(sv);
-			bindings.add(listToCons(List.of(sv, seqs.get(k))));
+			bindings.add(listToCons(List.of(sv, checkedSequenceOf(seqs.get(k), LispNames.MAP))));
 		}
 		// n = (length s0) for a single sequence, else (min (length s0) (length s1) ...).
 		LispVal lenExpr;
@@ -30611,93 +31267,6 @@ public final class LispMacroExpander {
 		letParts.addAll(assignments);
 		letParts.add(LispNil.INSTANCE);
 		return listToCons(letParts);
-	}
-
-	/**
-	 * Expands {@code (char> ...)}/{@code (char>= ...)} for the compilers: the arguments
-	 * are hoisted into {@code let*} temps (preserving left-to-right evaluation) and the
-	 * chain is delegated to the ascending sibling over the REVERSED temps --
-	 * {@code (char> a b c)} holds exactly when {@code (char< c b a)} does.
-	 * @param cons the char>/char>= expression
-	 * @param ascendingOp the delegate operator ({@code char<} or {@code char<=})
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharDescending(LispCons cons, String ascendingOp) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__chcmp_" + (i - 1));
-			bindings.add(listToCons(List.of(temp, parts.get(i))));
-			temps.add(temp);
-		}
-		List<LispVal> call = new java.util.ArrayList<>();
-		call.add(new LispSymbol(ascendingOp));
-		for (int i = temps.size() - 1; i >= 0; i--) {
-			call.add(temps.get(i));
-		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), listToCons(call)));
-	}
-
-	/**
-	 * Expands {@code (char-equal ...)} for the compilers: a case-insensitive
-	 * {@code char=} chain over downcased {@code let*} temps.
-	 * @param cons the char-equal expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharEqual(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(LispNames.CHAR_EQUAL + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__cheq_" + (i - 1));
-			bindings.add(listToCons(
-					List.of(temp, listToCons(List.of(new LispSymbol(LispNames.CHAR_DOWNCASE), parts.get(i))))));
-			temps.add(temp);
-		}
-		List<LispVal> tests = new java.util.ArrayList<>();
-		tests.add(new LispSymbol(LispNames.AND));
-		for (int i = 0; i + 1 < temps.size(); i++) {
-			tests.add(listToCons(List.of(new LispSymbol(LispNames.CHAR_EQ), temps.get(i), temps.get(i + 1))));
-		}
-		LispVal body = tests.size() == 1 ? LispTrue.INSTANCE : listToCons(tests);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
-	}
-
-	/**
-	 * Expands {@code (char/= ...)} for the compilers: all arguments pairwise distinct
-	 * (not just adjacent pairs), as an {@code and} of negated {@code char=} tests over
-	 * {@code let*} temps.
-	 * @param cons the char/= expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandCharNe(LispCons cons) {
-		List<LispVal> parts = cons.toList();
-		if (parts.size() < 2) {
-			throw new IllegalArgumentException(LispNames.CHAR_NE + " expects at least one argument");
-		}
-		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispVal> temps = new java.util.ArrayList<>();
-		for (int i = 1; i < parts.size(); i++) {
-			LispSymbol temp = new LispSymbol("__chne_" + (i - 1));
-			bindings.add(listToCons(List.of(temp, parts.get(i))));
-			temps.add(temp);
-		}
-		List<LispVal> tests = new java.util.ArrayList<>();
-		tests.add(new LispSymbol(LispNames.AND));
-		for (int i = 0; i < temps.size(); i++) {
-			for (int j = i + 1; j < temps.size(); j++) {
-				tests.add(makeNot(listToCons(List.of(new LispSymbol(LispNames.CHAR_EQ), temps.get(i), temps.get(j)))));
-			}
-		}
-		LispVal body = tests.size() == 1 ? LispTrue.INSTANCE : listToCons(tests);
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
 	}
 
 	/**
@@ -31150,11 +31719,13 @@ public final class LispMacroExpander {
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
 	 * instance in the expression expansion ({@link #expandReadEofSignal}), after the
-	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation.
+	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation. read-char-no-hang
+	 * is the read-char it expands to ({@link #expandReadCharNoHang}).
 	 */
 	public static final java.util.Set<String> END_OF_FILE_SITES = java.util.Set.of(LispNames.READ_CHAR,
-			LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR, LispNames.PEEK_CHAR_INTERNAL,
-			LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL, LispNames.READ_LINE_RAW_INTERNAL);
+			LispNames.READ_CHAR_NO_HANG, LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR,
+			LispNames.PEEK_CHAR_INTERNAL, LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
+			LispNames.READ_LINE_RAW_INTERNAL);
 
 	/**
 	 * The sequence operators whose compiled form can construct a {@code type-error}
@@ -33661,7 +34232,7 @@ public final class LispMacroExpander {
 	 */
 	public static @org.jspecify.annotations.Nullable LispVal stripCloseAbort(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 4 && parts.get(2) instanceof LispSymbol kw && ":ABORT".equals(kw.name())) {
+		if (parts.size() == 4 && parts.get(2) instanceof LispSymbol kw && LispNames.ABORT_KEYWORD.equals(kw.name())) {
 			return listToCons(List.of(parts.get(0), parts.get(1)));
 		}
 		return null;
@@ -34098,9 +34669,9 @@ public final class LispMacroExpander {
 		// bad car, an index out of bounds, an internal %error with no signal hook)
 		// never went through %run-handlers, so the pad synthesizes the condition
 		// instance, runs the cluster stack, and rethrows. A condition whose handlers
-		// already ran at the signal point is recognized by identity (%handlers-ran%)
-		// and rethrown untouched. The analysis expansion skips the wrapper -- it adds
-		// no variable structure.
+		// already ran -- at the signal point, or at a pad nearer it -- says so on its
+		// own throw (handlersRanTerminal) and is rethrown untouched. The analysis
+		// expansion skips the wrapper -- it adds no variable structure.
 		LispVal body = prognOrNil(parts.subList(2, parts.size()));
 		if (!analysisOnly) {
 			body = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL), body));
@@ -34164,17 +34735,18 @@ public final class LispMacroExpander {
 
 	/**
 	 * The condition-dispatch form a {@code %hb-guard} landing pad compiles over its
-	 * condition pseudo-local: run the {@code handler-bind} cluster stack unless
-	 * {@code %run-handlers} already completed a walk for THIS instance (identity against
-	 * {@code %handlers-ran%}, which {@code %run-handlers} sets at the end of a walk).
+	 * condition pseudo-local when the throw it caught does NOT say the handlers ran
+	 * ({@link #handlersRanTerminal}): run the {@code handler-bind} cluster stack. Each
+	 * backend reads the fact off what it caught before it gets here, and rethrows marked
+	 * after -- so the answer belongs to the one flight, and no signal handled, declined
+	 * or abandoned while the flight is on its way out (a cleanup's, a report's) can
+	 * change it. One global mark answered for every flight until 2026-09-27, and such a
+	 * signal replaced it: the outer condition's handlers ran twice.
 	 * @param condVar the pseudo-local holding the condition instance
 	 * @return the guard dispatch expression
 	 */
 	public static LispVal hbGuardHandlerForm(LispSymbol condVar) {
-		return makeIf(
-				listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), condVar,
-						new LispSymbol(LispNames.HANDLERS_RAN_VAR))),
-				LispNil.INSTANCE, callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar));
+		return callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar);
 	}
 
 	/**
@@ -34396,6 +34968,18 @@ public final class LispMacroExpander {
 		WRITE_KEYWORD_VARS.put(":CASE", LispNames.PRINT_CASE_VAR);
 		WRITE_KEYWORD_VARS.put(":GENSYM", LispNames.PRINT_GENSYM_VAR);
 		WRITE_KEYWORD_VARS.put(":ARRAY", LispNames.PRINT_ARRAY_VAR);
+	}
+
+	/**
+	 * The {@code write-to-string} keywords, keyword name to the printer variable each
+	 * binds, in the order a rejected tail's report lists them: the table the
+	 * call-position lowering ({@link #expandWriteToStringKeywords}) and the function
+	 * value's runtime twin ({@code LispPreludeLibrary}'s {@code %write-to-string-keyed})
+	 * are both built from.
+	 * @return the keyword-to-variable map
+	 */
+	public static java.util.Map<String, String> writeToStringKeywordVariables() {
+		return java.util.Collections.unmodifiableMap(WRITE_KEYWORD_VARS);
 	}
 
 	/**
@@ -34828,8 +35412,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * The restart-runtime globals, nil-initialized (prepended on the compile path): the
-	 * handler and restart cluster stacks plus the {@code %handlers-ran%} mark the
-	 * {@code %hb-guard} landing pad compares against.
+	 * handler and restart cluster stacks. Whether a condition's handlers already ran is
+	 * no global: its own throw carries it ({@link #hbGuardHandlerForm}).
 	 * @return the defvar forms
 	 */
 	public static List<LispVal> restartRuntimeGlobalForms() {
@@ -34837,8 +35421,6 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR),
 						LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RESTART_CLUSTERS_VAR),
-						LispNil.INSTANCE)),
-				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLERS_RAN_VAR),
 						LispNil.INSTANCE)));
 	}
 
@@ -34919,7 +35501,8 @@ public final class LispMacroExpander {
 		// backends -- must be walked HERE, against the remaining clusters the global
 		// holds now. Without it the failure escapes this walk's cleanup with the full
 		// stack restored and the handler-bind's own pad reruns the failing handler.
-		// The pad marks the walk, so every pad further out rethrows untouched.
+		// The pad rethrows it saying its handlers ran, so every pad further out passes
+		// it on untouched.
 		LispVal callHandler = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c))));
 		LispVal callEntry = makeIf(
@@ -34946,15 +35529,12 @@ public final class LispMacroExpander {
 								listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(List
 									.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
 										runCluster)))))));
-		// The mark is set at the END of the walk -- every handler declined, or a
-		// handler-case entry stopped it -- so a %hb-guard landing pad can tell this
-		// condition's handlers already ran. A nested signal inside a handler completes
-		// ITS walk first and is overwritten here when the outer walk finishes -- the
-		// identity a pad compares stays the outermost pending condition's.
-		LispVal mark = listToCons(
-				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.HANDLERS_RAN_VAR), c));
+		// A walk that returns completed -- every handler declined, or a handler-case
+		// entry stopped it -- and nothing is recorded here: the caller's throw says so
+		// (the hooked terminal, the %hb-guard pad's rethrow), since only the flight
+		// knows it until it lands.
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),
-				listToCons(List.<LispVal>of(c)), clustersLoop, mark, LispNil.INSTANCE));
+				listToCons(List.<LispVal>of(c)), clustersLoop, LispNil.INSTANCE));
 	}
 
 	// (defun %hc-match-p (__hm_c)
@@ -35252,14 +35832,21 @@ public final class LispMacroExpander {
 	/**
 	 * Lowers {@code (make-array dims ... :initial-contents list)} for the compiled
 	 * backends to the equivalent allocation plus an element-wise fill: the inner
-	 * {@code make-array} keeps every other keyword. A rank-1 array (dims not a literal
-	 * multi-element list) fills with {@code %aset}, walking the contents with
-	 * {@code elt}; a literal rank >= 2 dims list fills with
-	 * {@link #lowerNestedInitialContentsMakeArray}, one nested {@code dotimes} per
-	 * dimension descending into {@code contents} with {@code elt} and writing each leaf
+	 * {@code make-array} keeps every other keyword. Every level's length is checked
+	 * against its dimension and a mismatch signals the interpreter's report
+	 * ({@link #initialContentsShapeCheck}). A literal rank-0 dims list stores the
+	 * contents as the one element; a dims form that is rank 1 whatever its value
+	 * ({@link #isRankOneDimensionSpec}) fills with {@code %aset} through
+	 * {@link #buildInitialContentsLeafFill}; any other run-time dims form takes
+	 * {@link #buildRunTimeRankInitialContentsFill}, which walks whatever rank arrives; a
+	 * literal rank >= 2 dims list fills with
+	 * {@link #buildNestedInitialContentsFillLevel}, one nested {@code dotimes} per
+	 * dimension descending into {@code contents} with a cursor and writing each leaf
 	 * through {@code %row-major-aset} at its row-major flat index (this used to be
 	 * refused outright, out of step with the interpreter, which fills nested contents
-	 * natively). Returns {@code null} when the form has no {@code :initial-contents}.
+	 * natively). {@link #lowerRuntimeElementTypeMakeArray} builds the same fill ONCE over
+	 * its whole element-type dispatch. Returns {@code null} when the form has no
+	 * {@code :initial-contents}.
 	 * @param cons the make-array expression
 	 * @return the lowering, or null
 	 */
@@ -35284,10 +35871,40 @@ public final class LispMacroExpander {
 		if (contents == null) {
 			return null;
 		}
-		if (parts.get(1) instanceof LispCons dims && dims.car() instanceof LispSymbol q
-				&& LispNames.QUOTE.equals(q.name()) && dims.cdr() instanceof LispCons dimList
-				&& dimList.car() instanceof LispCons literalDims && literalDims.cdr() instanceof LispCons) {
-			List<LispVal> dimVals = literalDims.toList();
+		LispVal dimsSpec = parts.get(1);
+		if (isLiteralDimensionSpec(dimsSpec)) {
+			return initialContentsFill(listToCons(inner), dimsSpec, dimsSpec, contents);
+		}
+		// A run-time dims form is evaluated once, into the variable the fill reads the
+		// dimension from, and the allocation takes the variable in its place.
+		LispSymbol dimsVar = new LispSymbol("__mk_dims");
+		inner.set(1, dimsVar);
+		return makeLet(dimsVar.name(), dimsSpec, initialContentsFill(listToCons(inner), dimsSpec, dimsVar, contents));
+	}
+
+	/**
+	 * Builds a compiled {@code make-array :initial-contents} fill over an allocation that
+	 * carries every other keyword: bind the array, bind the contents, fill, answer the
+	 * array. The shape of {@code dimsSpec} picks the fill: a literal multi-element list
+	 * the nested one ({@link #buildNestedInitialContentsFillLevel}), a literal empty one
+	 * the rank-0 store, a form that is rank 1 whatever its value the rank-1 one, whose
+	 * dimension is the literal or read from {@code dimsValue}, and any other form the
+	 * run-time rank walk over {@code dimsValue}
+	 * ({@link #buildRunTimeRankInitialContentsFill}).
+	 * @param allocation the form allocating the array (evaluated first)
+	 * @param dimsSpec the call's dims form, read for its literal shape only
+	 * @param dimsValue a variable holding the dims value when {@code dimsSpec} is not
+	 * literal (read more than once)
+	 * @param contents the {@code :initial-contents} form (evaluated once, after the
+	 * allocation)
+	 * @return the allocation-plus-fill expression
+	 */
+	private static LispVal initialContentsFill(LispVal allocation, LispVal dimsSpec, LispVal dimsValue,
+			LispVal contents) {
+		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		LispSymbol contentsVar = new LispSymbol("__mk_c");
+		if (isLiteralMultiDimensionSpec(dimsSpec)) {
+			List<LispVal> dimVals = ((LispCons) ((LispCons) ((LispCons) dimsSpec).cdr()).car()).toList();
 			int[] sizes = new int[dimVals.size()];
 			for (int i = 0; i < dimVals.size(); i++) {
 				if (!(dimVals.get(i) instanceof LispInteger n)) {
@@ -35296,54 +35913,256 @@ public final class LispMacroExpander {
 				}
 				sizes[i] = (int) n.value();
 			}
-			return lowerNestedInitialContentsMakeArray(inner, contents, sizes);
+			int[] strides = new int[sizes.length];
+			strides[sizes.length - 1] = 1;
+			for (int d = sizes.length - 2; d >= 0; d--) {
+				strides[d] = strides[d + 1] * sizes[d + 1];
+			}
+			LispVal loop = buildNestedInitialContentsFillLevel(arrVar, contentsVar, sizes, strides, 0,
+					new java.util.ArrayList<>());
+			return makeLet(arrVar.name(), allocation, makeLet(contentsVar.name(), contents, loop));
 		}
-		LispSymbol arrVar = new LispSymbol("__mk_arr");
+		if (isLiteralRankZeroDimensionSpec(dimsSpec)) {
+			// A rank-0 array's :initial-contents is its one element, not a sequence
+			// (CLHS 15.1.1), stored at the only row-major index there is.
+			return makeLet(arrVar.name(), allocation, makeProgn(
+					List.of(fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, new LispInteger(0), contents), arrVar)));
+		}
+		if (!isRankOneDimensionSpec(dimsSpec)) {
+			return makeLet(arrVar.name(), allocation, makeLet(contentsVar.name(), contents,
+					makeProgn(List.of(buildRunTimeRankInitialContentsFill(arrVar, contentsVar, dimsValue), arrVar))));
+		}
 		LispSymbol idxVar = new LispSymbol("__mk_i");
-		LispSymbol contentsVar = new LispSymbol("__mk_c");
-		LispSymbol lenVar = new LispSymbol("__mk_n");
-		LispSymbol curVar = new LispSymbol("__mk_cur");
-		// The contents can be ANY sequence (cl-ppcre passes a string), so the fill
-		// cannot simply walk them as a list -- but elt on a LIST is an nth walk from the
-		// head, which made this loop quadratic on every compiled backend (the
-		// interpreter never sees it; make-array is native there). A cons cursor beside
-		// the index serves the list case in O(1) and pins itself to a non-cons for every
-		// other representation, which keeps indexing with elt exactly as before.
-		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
-				listToCons(List.of(listToCons(
-						List.of(idxVar, new LispInteger(0), fmtCall(LispNames.ADD, idxVar, new LispInteger(1)))))),
-				listToCons(List.of(fmtCall(LispNames.GE, idxVar, lenVar), arrVar)),
-				listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar,
-						readElementAdvancing(curVar, contentsVar, idxVar)))));
-		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, makeLet(lenVar.name(),
-				callOf(LispNames.LENGTH, contentsVar), makeLet(curVar.name(), contentsVar, fill))));
+		LispVal fill = buildInitialContentsLeafFill(contentsVar, new LispSymbol("__mk_cur"), idxVar,
+				new LispSymbol("__mk_bad"), rankOneDimension(dimsSpec, dimsValue), new LispInteger(0),
+				read -> listToCons(List.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, read)),
+				callOf(LispNames.AREF, arrVar, idxVar));
+		return makeLet(arrVar.name(), allocation,
+				makeLet(contentsVar.name(), contents, makeProgn(List.of(fill, arrVar))));
+	}
+
+	// Whether a make-array dims form is literal -- an integer or a quoted list -- so its
+	// shape, and so the fill it needs, is known at compile time.
+	private static boolean isLiteralDimensionSpec(LispVal dimsExpr) {
+		return dimsExpr instanceof LispInteger || dimsExpr instanceof LispNil || dimsExpr instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name());
 	}
 
 	/**
-	 * Builds the rank >= 2 lowering for {@link #lowerInitialContentsMakeArray}: allocate
-	 * with {@code inner}, bind {@code contents} once, then descend it one dimension at a
-	 * time with nested {@code dotimes}/{@code elt} and store each leaf with
-	 * {@code %row-major-aset} at the row-major flat index computed from the
-	 * compile-time-known {@code sizes} (a running counter is unnecessary since the
-	 * strides -- and so every index -- are already constants).
-	 * @param inner the {@code (make-array dims other-keywords...)} call, contents
-	 * stripped
-	 * @param contents the {@code :initial-contents} form (any nested sequence, evaluated
-	 * once)
-	 * @param sizes the literal dimension sizes, most significant first
-	 * @return the let-wrapped allocation-plus-fill expression
+	 * The operators whose call answers a number, so a dims form spelled as one allocates
+	 * a rank-1 array whatever it evaluates to -- {@code (make-array (length s)
+	 * :initial-contents s)} keeps the rank-1 fill. Standard names a conforming program
+	 * cannot redefine; anything else (a variable, a user call) leaves the rank a run-time
+	 * fact.
 	 */
-	private static LispVal lowerNestedInitialContentsMakeArray(List<LispVal> inner, LispVal contents, int[] sizes) {
-		LispSymbol arrVar = new LispSymbol("__mk_arr");
-		LispSymbol contentsVar = new LispSymbol("__mk_c");
-		int[] strides = new int[sizes.length];
-		strides[sizes.length - 1] = 1;
-		for (int d = sizes.length - 2; d >= 0; d--) {
-			strides[d] = strides[d + 1] * sizes[d + 1];
+	private static final java.util.Set<String> NUMBER_VALUED_OPERATORS = java.util.Set.of(LispNames.LENGTH,
+			LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.ONE_PLUS, LispNames.ONE_MINUS, LispNames.MIN,
+			LispNames.MAX, LispNames.ASH, LispNames.FLOOR, LispNames.CEILING, LispNames.TRUNCATE, LispNames.ROUND,
+			LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE);
+
+	// Whether a make-array dims form allocates a rank-1 array whatever its value: a
+	// literal other than a multi-element or empty list, or a call answering a number.
+	private static boolean isRankOneDimensionSpec(LispVal dimsExpr) {
+		if (isLiteralDimensionSpec(dimsExpr)) {
+			return !isLiteralMultiDimensionSpec(dimsExpr) && !isLiteralRankZeroDimensionSpec(dimsExpr);
 		}
-		LispVal loop = buildNestedInitialContentsFillLevel(arrVar, contentsVar, sizes, strides, 0,
-				new java.util.ArrayList<>());
-		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents, loop));
+		return dimsExpr instanceof LispCons call && call.car() instanceof LispSymbol op
+				&& NUMBER_VALUED_OPERATORS.contains(op.name());
+	}
+
+	/**
+	 * Builds the fill of a compiled {@code make-array :initial-contents} whose RANK is
+	 * only known at run time: the dims value, an integer or a list of them, is walked
+	 * depth first over an explicit stack of {@code (sequence . dims-suffix)} entries --
+	 * the lowering runs during code generation, so no recursive helper can be relied on
+	 * to be in the module. Every popped sequence runs the ONE streaming level fill
+	 * ({@link #buildInitialContentsLeafFill}, one report site): on the last axis it
+	 * stores at the running row-major index, above it it collects its rows, which are
+	 * pushed (first row on top) only after the level's length has checked out. A row is
+	 * thus never descended into before its parent's length is known, which is the
+	 * interpreter's recursive report order. An empty dims list stores the contents as the
+	 * one element.
+	 *
+	 * <pre>
+	 * (let ((dl (if (listp dims) dims (cons dims nil))))
+	 *   (if dl
+	 *       (let ((st (cons (cons c dl) nil)) (k 0))
+	 *         (while st
+	 *           (let* ((e (car st)) (s (car e)) (ds (cdr e)) (n (car ds)) (up (cdr ds)) (rows nil))
+	 *             (setq st (cdr st))
+	 *             (level-fill s n level
+	 *               (if up (setq rows (cons (cons read up) rows)) (%row-major-aset arr (+ k i) read)))
+	 *             (if up
+	 *                 (while rows (setq st (cons (car rows) st)) (setq rows (cdr rows)))
+	 *                 (setq k (+ k n))))))
+	 *       (%row-major-aset arr 0 c)))
+	 * </pre> where {@code level} is {@code (- (length dl) (length ds))}, computed only by
+	 * the report.
+	 * @param arrVar the variable holding the allocated array
+	 * @param contentsVar the variable holding the contents
+	 * @param dimsValue the variable holding the dims value
+	 * @return the fill, answering nil
+	 */
+	private static LispVal buildRunTimeRankInitialContentsFill(LispSymbol arrVar, LispSymbol contentsVar,
+			LispVal dimsValue) {
+		LispSymbol dl = new LispSymbol("__mk_dl");
+		LispSymbol st = new LispSymbol("__mk_st");
+		LispSymbol k = new LispSymbol("__mk_k");
+		LispSymbol entry = new LispSymbol("__mk_e");
+		LispSymbol seq = new LispSymbol("__mk_s");
+		LispSymbol ds = new LispSymbol("__mk_ds");
+		LispSymbol n = new LispSymbol("__mk_n");
+		LispSymbol up = new LispSymbol("__mk_up");
+		LispSymbol rows = new LispSymbol("__mk_rows");
+		LispSymbol idx = new LispSymbol("__mk_i");
+		LispVal level = fmtCall(LispNames.SUB, callOf(LispNames.LENGTH, dl), callOf(LispNames.LENGTH, ds));
+		LispVal slot = fmtCall(LispNames.ADD, k, idx);
+		LispVal fill = buildInitialContentsLeafFill(seq, new LispSymbol("__mk_cur"), idx, new LispSymbol("__mk_bad"), n,
+				level,
+				read -> makeIf(up, setqOf(rows, mvCall(LispNames.CONS, mvCall(LispNames.CONS, read, up), rows)),
+						fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, slot, read)),
+				makeIf(up, LispNil.INSTANCE, callOf(LispNames.ROW_MAJOR_AREF, arrVar, slot)));
+		LispVal push = listToCons(List.of(new LispSymbol(LispNames.WHILE), rows,
+				setqOf(st, mvCall(LispNames.CONS, callOf(LispNames.CAR, rows), st)),
+				setqOf(rows, callOf(LispNames.CDR, rows))));
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(entry, callOf(LispNames.CAR, st))),
+						listToCons(List.of(seq, callOf(LispNames.CAR, entry))),
+						listToCons(List.of(ds, callOf(LispNames.CDR, entry))),
+						listToCons(List.of(n, callOf(LispNames.CAR, ds))),
+						listToCons(List.of(up, callOf(LispNames.CDR, ds))),
+						listToCons(List.of(rows, LispNil.INSTANCE)))),
+				setqOf(st, callOf(LispNames.CDR, st)), fill,
+				makeIf(up, push, setqOf(k, fmtCall(LispNames.ADD, k, n)))));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(st,
+								mvCall(LispNames.CONS, mvCall(LispNames.CONS, contentsVar, dl), LispNil.INSTANCE))),
+								listToCons(List.of(k, new LispInteger(0))))),
+						listToCons(List.of(new LispSymbol(LispNames.WHILE), st, step))));
+		LispVal rankZero = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, new LispInteger(0), contentsVar);
+		return makeLet(dl.name(), makeIf(callOf(LispNames.LISTP, dimsValue), dimsValue,
+				mvCall(LispNames.CONS, dimsValue, LispNil.INSTANCE)), makeIf(dl, walk, rankZero));
+	}
+
+	// (setq var value)
+	private static LispVal setqOf(LispSymbol var, LispVal value) {
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), var, value));
+	}
+
+	// The dimension a rank-1 fill's contents must match: the literal itself for an
+	// integer or a quoted one-element list, else read from the dims value -- an integer,
+	// or a list whose first element is the dimension. A fill pointer does not shorten it.
+	private static LispVal rankOneDimension(LispVal dimsSpec, LispVal dimsValue) {
+		if (dimsSpec instanceof LispInteger n) {
+			return n;
+		}
+		if (dimsSpec instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispCons dims && dims.car() instanceof LispInteger n
+				&& dims.cdr() instanceof LispNil) {
+			return n;
+		}
+		return makeIf(callOf(LispNames.CONSP, dimsValue), callOf(LispNames.CAR, dimsValue), dimsValue);
+	}
+
+	/**
+	 * Builds the innermost level of a compiled {@code make-array :initial-contents} fill:
+	 * {@code size} reads of {@code seq}, each handed to {@code store}, checking that
+	 * {@code seq} has exactly {@code size} elements.
+	 *
+	 * <p>
+	 * The contents can be ANY sequence (cl-ppcre passes a string), so a read cannot
+	 * simply walk a list -- but {@code elt} on a LIST is an nth walk from the head, which
+	 * made the fill quadratic on every compiled backend. A cons cursor beside the index
+	 * serves a list in O(1) and pins itself to a non-cons for every other representation,
+	 * which keeps indexing with {@code elt}. The shape check rides the same cursor so a
+	 * list is walked once: a non-list's (or an empty list's) length is compared up front,
+	 * a list that runs out leaves the cursor {@code nil} where a vector's stays the
+	 * vector (each remaining iteration stores back the slot's {@code current} value,
+	 * which has the array's element type whatever that is), and one with cells left over
+	 * leaves it a cons after the last read. All three reach ONE report, after the loop,
+	 * which alone takes the list's {@code length}: each {@code error} site costs code on
+	 * every backend. The store is spelled ONCE, over a three-way read: a store in each
+	 * branch cost a 1000x1000 list fill 921 ms against 611 on wasm (2026-09-28).
+	 *
+	 * <pre>
+	 * (let* ((cur seq) (bad (if (consp cur) nil (/= (length seq) size))))
+	 *   (if bad nil
+	 *       (dotimes (idx size)
+	 *         (store (if (consp cur) (prog1 (car cur) (setq cur (cdr cur)))
+	 *                    (if cur (elt seq idx) (progn (setq bad t) current))))))
+	 *   (if (if bad t (consp cur)) (error ...) nil))
+	 * </pre>
+	 * @param seq the variable holding this level's sequence
+	 * @param cur the cursor variable to bind
+	 * @param idx the index variable to bind
+	 * @param bad the variable to bind to whether the shape is wrong
+	 * @param size the form answering this level's dimension, evaluated more than once
+	 * @param dimension the axis number a report names: a literal, or a form evaluated
+	 * only by the report
+	 * @param store builds the store into {@code idx}'s slot from the read form
+	 * @param current the form reading that slot's current value
+	 * @return the fill, answering nil
+	 */
+	private static LispVal buildInitialContentsLeafFill(LispSymbol seq, LispSymbol cur, LispSymbol idx, LispSymbol bad,
+			LispVal size, LispVal dimension, java.util.function.UnaryOperator<LispVal> store, LispVal current) {
+		LispVal wrongLength = makeIf(callOf(LispNames.CONSP, cur), LispNil.INSTANCE,
+				fmtCall(LispNames.NE, callOf(LispNames.LENGTH, seq), size));
+		LispVal advance = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
+		LispVal take = listToCons(List.of(new LispSymbol(LispNames.PROG1), callOf(LispNames.CAR, cur), advance));
+		LispVal ranOut = makeProgn(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.SETQ), bad, LispTrue.INSTANCE)), current));
+		LispVal step = store
+			.apply(makeIf(callOf(LispNames.CONSP, cur), take, makeIf(cur, callOf(LispNames.ELT, seq, idx), ranOut)));
+		LispVal loop = makeIf(bad, LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(idx, size)), step)));
+		LispVal report = makeIf(makeIf(bad, LispTrue.INSTANCE, callOf(LispNames.CONSP, cur)),
+				initialContentsShapeError(callOf(LispNames.LENGTH, seq), size, dimension), LispNil.INSTANCE);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, seq)), listToCons(List.of(bad, wrongLength))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeProgn(List.of(loop, report))));
+	}
+
+	/**
+	 * The shape check of a compiled {@code make-array :initial-contents} fill:
+	 * {@code (if (/= length expected) (error ...))} with the interpreter's text
+	 * ({@code Environment.fillInitialContents}), so a level whose length differs from its
+	 * dimension signals the same simple-error on every backend instead of padding with
+	 * {@code NIL} or overrunning into a store's bound check. A plain {@code error} with a
+	 * format control, not a typed condition: the check is introduced during code
+	 * generation, after the scans that decide which condition layouts a module carries.
+	 * @param length the form answering the level's length
+	 * @param expected the form answering the dimension it must match
+	 * @param dimension the axis number the report names: a literal, or a form evaluated
+	 * only by the report
+	 * @return the check form, answering nil when the shape matches
+	 */
+	private static LispVal initialContentsShapeCheck(LispVal length, LispVal expected, LispVal dimension) {
+		return makeIf(fmtCall(LispNames.NE, length, expected), initialContentsShapeError(length, expected, dimension),
+				LispNil.INSTANCE);
+	}
+
+	// The report of initialContentsShapeCheck, for a site that already knows the shape
+	// is wrong. A literal axis number is spelled into the control string; one known only
+	// at run time is one more ~D argument.
+	private static LispVal initialContentsShapeError(LispVal length, LispVal expected, LispVal dimension) {
+		String prefix = LispNames.MAKE_ARRAY + " :initial-contents dimension ";
+		String suffix = " has ~D elements, expected ~D";
+		if (dimension instanceof LispInteger literal) {
+			return fmtCall(LispNames.ERROR, new LispString(prefix + literal.value() + suffix), length, expected);
+		}
+		return fmtCall(LispNames.ERROR, new LispString(prefix + "~D" + suffix), dimension, length, expected);
+	}
+
+	// Whether a make-array dims expression is a literal empty dimension list -- '() or
+	// nil -- which allocates a rank-0 array.
+	private static boolean isLiteralRankZeroDimensionSpec(LispVal dimsExpr) {
+		if (dimsExpr instanceof LispNil) {
+			return true;
+		}
+		return dimsExpr instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispNil && rest.cdr() instanceof LispNil;
 	}
 
 	// One dimension level of the nested-fill loop: (dotimes (idx size [arr]) body),
@@ -35362,8 +36181,7 @@ public final class LispMacroExpander {
 		LispSymbol curVar = new LispSymbol("__mk_cur" + level);
 		List<LispSymbol> withThisLevel = new java.util.ArrayList<>(idxVars);
 		withThisLevel.add(idxVar);
-		LispVal read = readElementAdvancing(curVar, seqExpr, idxVar);
-		LispVal body;
+		LispVal size = new LispInteger(sizes[level]);
 		if (level == sizes.length - 1) {
 			LispVal index = strides[0] == 1 ? withThisLevel.get(0)
 					: fmtCall(LispNames.MUL, withThisLevel.get(0), new LispInteger(strides[0]));
@@ -35372,16 +36190,23 @@ public final class LispMacroExpander {
 						: fmtCall(LispNames.MUL, withThisLevel.get(d), new LispInteger(strides[d]));
 				index = fmtCall(LispNames.ADD, index, term);
 			}
-			body = fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, index, read);
+			LispVal flatIndex = index;
+			return buildInitialContentsLeafFill(seqExpr, curVar, idxVar, new LispSymbol("__mk_bad"), size,
+					new LispInteger(level), read -> fmtCall(LispNames.ROW_MAJOR_ASET, arrVar, flatIndex, read),
+					callOf(LispNames.ROW_MAJOR_AREF, arrVar, flatIndex));
 		}
-		else {
-			LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
-			body = makeLet(rowVar.name(), read,
-					buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
-		}
+		// An outer level's length is checked BEFORE any of its rows is read, as the
+		// interpreter does, so contents wrong at two levels report the outer one. The
+		// leaf level streams its check (buildInitialContentsLeafFill): nothing is checked
+		// after a leaf row, so the order is the same without a second walk of every row.
+		LispSymbol rowVar = new LispSymbol("__mk_row" + (level + 1));
+		LispVal body = makeLet(rowVar.name(), readElementAdvancing(curVar, seqExpr, idxVar),
+				buildNestedInitialContentsFillLevel(arrVar, rowVar, sizes, strides, level + 1, withThisLevel));
 		LispVal resultForm = (level == 0) ? arrVar : LispNil.INSTANCE;
-		LispVal spec = listToCons(List.of(idxVar, new LispInteger(sizes[level]), resultForm));
-		return makeLet(curVar.name(), seqExpr, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)));
+		LispVal spec = listToCons(List.of(idxVar, size, resultForm));
+		LispVal check = initialContentsShapeCheck(callOf(LispNames.LENGTH, seqExpr), size, new LispInteger(level));
+		return makeLet(curVar.name(), seqExpr,
+				makeProgn(List.of(check, listToCons(List.of(new LispSymbol(LispNames.DOTIMES), spec, body)))));
 	}
 
 	/**
@@ -35711,11 +36536,34 @@ public final class LispMacroExpander {
 		// the representation is chosen and answers a CALL-TIME signal (WasmArrayCompiler
 		// for bfloat16), which is why spelling every width costs such a backend nothing
 		// until a program actually asks for one.
-		LispVal body = runtimeElementTypeArm(size, others, null);
+		//
+		// :initial-contents is filled ONCE, over the whole dispatch: the arms
+		// allocate and initialContentsFill follows, where each arm used to carry its
+		// own copy of the fill -- eight in #'adjust-array's wrapper, which took that
+		// method past HotSpot's 8000-bytecode HugeMethodLimit once the fill checked
+		// its shape. The character arm keeps its own spelling where the character
+		// lowering serves it (a fresh string copy: rank 1, no other keyword).
+		LispVal contents = findKeywordPair(others, LispNames.INITIAL_CONTENTS_KEYWORD)
+				? keywordValueOrNil(others, LispNames.INITIAL_CONTENTS_KEYWORD) : null;
+		List<LispVal> allocation = contents == null ? others
+				: withoutKeyword(others, LispNames.INITIAL_CONTENTS_KEYWORD);
+		boolean characterCopies = contents != null && allocation.isEmpty() && !isLiteralMultiDimensionSpec(parts.get(1))
+				&& !isLiteralRankZeroDimensionSpec(parts.get(1));
+		LispVal body = runtimeElementTypeArm(size, allocation, null);
 		int[] codes = ArrayElementTypes.specializedCodes();
 		for (int i = codes.length - 1; i >= 0; i--) {
+			if (characterCopies && codes[i] == ArrayElementTypes.CHARACTER) {
+				continue;
+			}
 			body = makeIf(runtimeElementTypeTest(et, codes[i]),
-					runtimeElementTypeArm(size, others, ArrayElementTypes.valueOf(codes[i])), body);
+					runtimeElementTypeArm(size, allocation, ArrayElementTypes.valueOf(codes[i])), body);
+		}
+		if (contents != null) {
+			body = initialContentsFill(body, parts.get(1), size, contents);
+		}
+		if (characterCopies) {
+			body = makeIf(runtimeElementTypeTest(et, ArrayElementTypes.CHARACTER),
+					runtimeElementTypeArm(size, others, ArrayElementTypes.valueOf(ArrayElementTypes.CHARACTER)), body);
 		}
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(size, parts.get(1))), listToCons(List.of(et, elementType))));
@@ -35761,6 +36609,17 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	private static List<LispVal> withoutKeyword(List<LispVal> pairs, String keyword) {
+		List<LispVal> kept = new java.util.ArrayList<>();
+		for (int i = 0; i + 1 < pairs.size(); i += 2) {
+			if (!(pairs.get(i) instanceof LispSymbol kw && keyword.equals(kw.name()))) {
+				kept.add(pairs.get(i));
+				kept.add(pairs.get(i + 1));
+			}
+		}
+		return kept;
 	}
 
 	private static LispVal keywordValueOrNil(List<LispVal> pairs, String keyword) {
@@ -35857,6 +36716,53 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether a {@code (make-array ...)} call's {@code :element-type} is a run-time
+	 * designator whose {@link #lowerRuntimeElementTypeMakeArray} dispatch can still reach
+	 * a packed float arm. SINGLE-FLOAT/DOUBLE-FLOAT/BFLOAT16 are among the
+	 * {@link am.ik.rontolisp.ArrayElementTypes#specializedCodes()} the inline dispatch --
+	 * or the {@code %make-array-et}/{@code %make-array-et-fp} helper -- spells
+	 * unconditionally, whatever the call's OTHER keywords ({@code :initial-element},
+	 * {@code :initial-contents}, ...): only {@code :fill-pointer} / {@code :adjustable}
+	 * rule every arm out (they degrade the whole dispatch to the general representation,
+	 * {@link #helperShapeIsFillPointer}), and {@code :displaced-to} rules the lowering
+	 * out entirely (a displaced view owns no storage, so {@code JvmArrayCompiler} never
+	 * reaches {@link #lowerRuntimeElementTypeMakeArray} for it). A literal designator is
+	 * excluded here -- the call-site recognizers that read it directly
+	 * ({@code JvmLispCompiler.makeArrayIsPackedFloat},
+	 * {@code JvmArrayCompiler.compileMake}) already see it.
+	 *
+	 * <p>
+	 * This is the packed-float RUNTIME-HELPER-GATE half of the fix for a run-time
+	 * designator combined with {@code :initial-contents}: that shape cannot use the
+	 * {@code %make-array-et} helper (it only carries {@code :initial-element}), so the
+	 * whole seven-arm dispatch is spelled INLINE, at codegen time -- after the
+	 * source-level scan that decides {@code ctx.usesFloatArray} has already run. Without
+	 * this predicate counting the site, the inline {@code double-float}/{@code
+	 * single-float} arm fell to the general boxed path.
+	 * @param makeArray the {@code make-array} call
+	 * @return whether a run-time designator here can still allocate a packed float array
+	 */
+	public static boolean runtimeElementTypeMakeArrayCanPackFloat(LispCons makeArray) {
+		List<LispVal> parts = makeArray.toList();
+		if (parts.size() < 2) {
+			return false;
+		}
+		LispVal elementType = null;
+		List<LispVal> others = new java.util.ArrayList<>();
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+				elementType = parts.get(i + 1);
+			}
+			else {
+				others.add(parts.get(i));
+				others.add(parts.get(i + 1));
+			}
+		}
+		return elementType != null && isRuntimeElementType(elementType) && !helperShapeIsFillPointer(others)
+				&& !findKeywordPair(others, LispNames.DISPLACED_TO_KEYWORD);
+	}
+
 	/** The member half of a possibly package-qualified symbol name. */
 	private static String memberName(String name) {
 		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
@@ -35914,11 +36820,11 @@ public final class LispMacroExpander {
 	 * or a non-character element type.
 	 *
 	 * <p>
-	 * It also declines a LITERAL rank >= 2 dimensions list: nothing above rank 1 is a
-	 * string, so that call is the general allocation-plus-fill of
-	 * {@link #lowerInitialContentsMakeArray} over a general array. A dims expression
-	 * whose rank is only known at run time keeps the rank-1 reading, which is the rank
-	 * the general lowering assumes there too.
+	 * It also declines a LITERAL rank >= 2 or rank-0 dimensions list: nothing but rank 1
+	 * is a string, so that call is the general allocation-plus-fill of
+	 * {@link #lowerInitialContentsMakeArray}. A dims expression whose rank is only known
+	 * at run time branches on it: rank 1 copies, any other allocates the character array
+	 * and takes the run-time rank fill.
 	 * @param cons the make-array expression
 	 * @return the lowered expression, or null when not applicable
 	 */
@@ -35941,19 +36847,45 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(parts.get(1))) {
+		LispVal dimsSpec = parts.get(1);
+		if (contents == null || !isCharacterElementType(elementType) || isLiteralMultiDimensionSpec(dimsSpec)
+				|| isLiteralRankZeroDimensionSpec(dimsSpec)) {
 			return null;
 		}
-		// (let* ((__mca_n n) (__mca_c c))
+		// (let* ((__mca_n n) (__mca_c c) (__mca_d dimension) (__mca_l length))
+		// (if (/= __mca_l __mca_d) (error ...))
 		// (if (stringp __mca_c) (subseq __mca_c 0) (coerce __mca_c 'string)))
 		LispSymbol nVar = new LispSymbol("__mca_n");
 		LispSymbol cVar = new LispSymbol("__mca_c");
+		LispSymbol dVar = new LispSymbol("__mca_d");
+		LispSymbol lVar = new LispSymbol("__mca_l");
 		LispVal copy = fmtCall(LispNames.SUBSEQ, cVar, new LispInteger(0));
 		LispVal convert = fmtCall(LispNames.COERCE, cVar, quoteOf("STRING"));
-		LispVal body = makeIf(callOf(LispNames.STRINGP, cVar), copy, convert);
+		LispVal body = makeProgn(List.of(initialContentsShapeCheck(lVar, dVar, new LispInteger(0)),
+				makeIf(callOf(LispNames.STRINGP, cVar), copy, convert)));
+		// The dims form is an integer or a one-element list here: a literal multi-element
+		// list was declined above.
+		LispVal dimension = makeIf(callOf(LispNames.CONSP, nVar), callOf(LispNames.CAR, nVar), nVar);
+		LispVal dBinding = listToCons(List.of(dVar, dimension));
+		LispVal lBinding = listToCons(List.of(lVar, callOf(LispNames.LENGTH, cVar)));
+		if (isRankOneDimensionSpec(dimsSpec)) {
+			LispVal bindings = listToCons(List.of(listToCons(List.of(nVar, dimsSpec)),
+					listToCons(List.of(cVar, contents)), dBinding, lBinding));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+		}
+		// A dims value whose rank is only known at run time: a rank other than 1 is no
+		// string, so it allocates the character array and takes the general fill.
+		// (if (if (listp n) (if n (cdr n) t) nil) <allocation + fill> <string copy>)
+		LispVal notRankOne = makeIf(callOf(LispNames.LISTP, nVar),
+				makeIf(nVar, callOf(LispNames.CDR, nVar), LispTrue.INSTANCE), LispNil.INSTANCE);
+		LispVal allocation = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), nVar,
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), java.util.Objects.requireNonNull(elementType)));
+		LispVal stringCopy = listToCons(
+				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(List.of(dBinding, lBinding)), body));
 		LispVal bindings = listToCons(
-				List.of(listToCons(List.of(nVar, parts.get(1))), listToCons(List.of(cVar, contents))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+				List.of(listToCons(List.of(nVar, dimsSpec)), listToCons(List.of(cVar, contents))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+				makeIf(notRankOne, initialContentsFill(allocation, nVar, nVar, cVar), stringCopy)));
 	}
 
 	/**
@@ -36060,7 +36992,9 @@ public final class LispMacroExpander {
 	 * Whether any {@code file-position} call in the program reaches for the stream's
 	 * {@code file-length} through {@link #rewriteFilePositionArg} (a {@code :end}, or a
 	 * computed position that may be one) -- the JVM backend's {@code _fileLength} gate
-	 * must then be on although the source never names {@code file-length}.
+	 * must then be on although the source never names {@code file-length}. A
+	 * {@code #'file-position} counts too: the function value forwards a computed
+	 * position.
 	 * @param program the forms the backend compiles
 	 * @return whether the rewrite can introduce a {@code file-length} call
 	 */
@@ -36078,6 +37012,11 @@ public final class LispMacroExpander {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 2 && parts.get(0) instanceof LispSymbol fn && LispNames.FUNCTION.equals(fn.name())
+				&& parts.get(1) instanceof LispSymbol named
+				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(named.name()))) {
+			return true;
+		}
 		if (parts.size() == 3 && parts.get(0) instanceof LispSymbol op
 				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(op.name()))
 				&& filePositionArgNeedsResolving(parts.get(2))
@@ -36461,17 +37400,24 @@ public final class LispMacroExpander {
 		int i = 0;
 		for (java.util.Map.Entry<String, LispSymbol> entry : fnVars.entrySet()) {
 			List<LispVal> dp = defParts.get(i++);
-			// Desugar the lambda list to the native "required + &rest" shape here:
-			// LambdaLists.desugarProgram (the compilers' pre-pass) does not see inside
-			// flet definition lists, and moving the defaults into the let* prologue
-			// also puts them in expression position for the body rewrite below.
+			// Desugar the lambda list to the compilers' physical shape here -- its
+			// optionals parameters of their own, so a call that passes one conses no
+			// rest list (LambdaLists.toNative): LambdaLists.desugarProgram (the
+			// compilers' pre-pass) does not see inside flet definition lists, and moving
+			// the defaults into the let* prologue also puts them in expression position
+			// for the body rewrite below. The interpreter shares this expansion and
+			// binds a missing physical optional to LambdaLists.UNSUPPLIED.
 			List<LispVal> defBody = dp.size() == 2 ? List.of((LispVal) LispNil.INSTANCE) : dp.subList(2, dp.size());
 			// No %fn-block wrap here (the interpreter shares this expansion); instead
 			// the body gets the REAL block CL mandates: an flet/labels local
 			// establishes a block named after it, so (return-from name v) exits the
 			// local function on every backend (cl-ppcre's advance-fn).
-			LambdaLists.Expanded e = LambdaLists.expand(dp.get(1), defBody, false);
+			LambdaLists.Expanded e = LambdaLists.expandPhysical(dp.get(1), defBody);
 			List<LispVal> paramParts = new java.util.ArrayList<LispVal>(e.required());
+			if (!e.optionals().isEmpty()) {
+				paramParts.add(new LispSymbol(LispNames.LAMBDA_OPTIONAL));
+				paramParts.addAll(e.optionals());
+			}
 			if (e.rest() != null) {
 				paramParts.add(new LispSymbol(LispNames.LAMBDA_REST));
 				paramParts.add(e.rest());
@@ -36919,9 +37865,30 @@ public final class LispMacroExpander {
 		return isMvProducerForm(form);
 	}
 
+	/**
+	 * True when {@code op} names an operator the multiple-value lowerings treat as a
+	 * syntactic producer (in the arities {@link #isMvProducerForm} lists). This list
+	 * GATES {@link #isMvProducerForm}, so a producer missing here is never lowered.
+	 * @param op the operator name
+	 * @return {@code true} for a syntactic producer's name
+	 */
+	public static boolean isSyntacticMultipleValueProducerName(String op) {
+		return switch (op) {
+			case LispNames.VALUES, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE,
+					LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE, LispNames.GETHASH,
+					LispNames.ARRAY_DISPLACEMENT, LispNames.SUBTYPEP, LispNames.FIND_SYMBOL, LispNames.INTERN,
+					LispNames.READ_FROM_STRING ->
+				true;
+			default -> false;
+		};
+	}
+
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
 	private static boolean isMvProducerForm(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		if (!isSyntacticMultipleValueProducerName(op.name())) {
 			return false;
 		}
 		int size = cons.toList().size();
@@ -36932,7 +37899,8 @@ public final class LispMacroExpander {
 				size == 2 || size == 3;
 			case LispNames.GETHASH -> size == 3 || size == 4;
 			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
-			case LispNames.SUBTYPEP -> size == 3;
+			// subtypep's environment is evaluated and ignored (IgnoredArgument).
+			case LispNames.SUBTYPEP -> size == 3 || size == 4;
 			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
 			case LispNames.READ_FROM_STRING -> size == 2;
 			default -> false;
@@ -37105,7 +38073,8 @@ public final class LispMacroExpander {
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.SUBTYPEP: {
-					// (subtypep sub super) -> the answer + CL's valid-p. The valid-p is
+					// (subtypep sub super [env]) -> the answer + CL's valid-p. The
+					// valid-p is
 					// a second decision over the SAME argument temps, so each specifier
 					// is evaluated once however many values the consumer takes; both
 					// reads are pure.
@@ -37124,6 +38093,11 @@ public final class LispMacroExpander {
 						LispSymbol p = new LispSymbol(prefix + "_p");
 						bindings.add(new MvBinding(p, supRef));
 						supRef = p;
+					}
+					// The environment is evaluated after both specifiers, and ignored
+					// (IgnoredArgument).
+					if (parts.size() == 4) {
+						bindings.add(new MvBinding(new LispSymbol(prefix + "_e"), parts.get(3)));
 					}
 					values.add(mvCall(LispNames.SUBTYPEP, subRef, supRef));
 					values.add(mvCall(LispNames.SUBTYPEP_VALID, subRef, supRef));
@@ -37776,10 +38750,10 @@ public final class LispMacroExpander {
 			LispNames.NTH, LispNames.NTHCDR, LispNames.LENGTH, LispNames.NOT, LispNames.NULL, LispNames.EQ_GENERAL,
 			LispNames.EQL, LispNames.CONSP, LispNames.ATOM, LispNames.LISTP, LispNames.SYMBOLP, LispNames.STRINGP,
 			LispNames.NUMBERP, LispNames.INTEGERP, LispNames.CHARACTERP, LispNames.AREF, LispNames.SVREF,
-			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.SYMBOL_NAME,
-			LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS, LispNames.MIN, LispNames.MAX,
-			LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH, LispNames.FLOAT, LispNames.STRING_EQ,
-			LispNames.CHAR_EQ, LispNames.SETQ);
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR,
+			LispNames.SYMBOL_NAME, LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS,
+			LispNames.MIN, LispNames.MAX, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH,
+			LispNames.FLOAT, LispNames.STRING_EQ, LispNames.CHAR_EQ, LispNames.SETQ);
 
 	/** Whether evaluating the form cannot publish through the channel. */
 	private static boolean quiet(LispVal form) {
@@ -38356,6 +39330,9 @@ public final class LispMacroExpander {
 		List<LispVal> operands = parts.subList(1, parts.size());
 		if (operands.isEmpty()) {
 			return new LispInteger(-1);
+		}
+		if (operands.size() == 1) {
+			return checkedOneArgument(LispNames.LOGEQV, operands.get(0), null);
 		}
 		LispVal acc = operands.get(0);
 		for (int i = 1; i < operands.size(); i++) {
@@ -39119,6 +40096,40 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * A call {@code (op a1 ... an env)} without its trailing ENVIRONMENT argument, which
+	 * nothing here consults (there is one global environment, as the interpreter's
+	 * {@code &environment} parameter is nil): {@code (op a1 ... an)} for a literal nil,
+	 * else {@code (let ((t1 a1) ...) env (op t1 ...))}, so {@code env} is still evaluated
+	 * after the arguments before it. A quoted or self-evaluating argument stays in place,
+	 * which keeps a literal type specifier literal for the static type test.
+	 * @param parts the call's operator and arguments, the environment last
+	 * @param prefix the temporaries' name prefix
+	 * @return the call without the environment
+	 */
+	private static LispVal withEnvironmentEvaluated(List<LispVal> parts, String prefix) {
+		List<LispVal> call = new ArrayList<>(parts.subList(0, parts.size() - 1));
+		LispVal environment = parts.getLast();
+		if (environment instanceof LispNil) {
+			return listToCons(call);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		for (int i = 1; i < call.size(); i++) {
+			LispVal arg = call.get(i);
+			boolean constant = arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+					&& LispNames.QUOTE.equals(q.name())
+					|| !(arg instanceof LispCons) && !(arg instanceof LispSymbol sym && !sym.name().startsWith(":"));
+			if (!constant) {
+				LispSymbol temp = new LispSymbol(prefix + i);
+				bindings.add(listToCons(List.of(temp, arg)));
+				call.set(i, temp);
+			}
+		}
+		LispVal body = makeProgn(List.of(environment, listToCons(call)));
+		return bindings.isEmpty() ? body
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), body));
+	}
+
+	/**
 	 * Expands {@code (typep value 'type)} through the shared static type-test builder.
 	 * Lite: the type specifier must be a literal (quoted) type -- the same set
 	 * {@code typecase} supports plus the registered classes; a non-literal specifier is
@@ -39147,6 +40158,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandTypep(LispCons cons, ClosRegistry closRegistry, boolean inlineRuntimeDispatch) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 4) {
+			return withEnvironmentEvaluated(parts, "__typep_a");
+		}
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(LispNames.TYPEP + " expects a value and a quoted type specifier");
 		}
@@ -40479,7 +41493,8 @@ public final class LispMacroExpander {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 				String member = qn == null ? op.name() : qn.member();
 				if (LispNames.SUBTYPEP.equals(member) && cons.isProperList()) {
-					List<LispVal> parts = cons.toList();
+					// Judged without the environment it ignores (IgnoredArgument).
+					List<LispVal> parts = IgnoredArgument.withoutArgument(cons, LispNames.SUBTYPEP).toList();
 					if (parts.size() == 3 && (literalTypeSpecifier(parts.get(1)) == null
 							|| literalTypeSpecifier(parts.get(2)) == null)) {
 						return true;
@@ -40879,6 +41894,27 @@ public final class LispMacroExpander {
 		return program.stream().anyMatch(LispMacroExpander::containsRuntimeErrorDispatch);
 	}
 
+	/**
+	 * Whether the {@code %error-runtime} dispatch {@link #needsRuntimeErrorDispatch}
+	 * injects carries a catching form: the helper of a condition class whose
+	 * {@code :report} is a lambda renders it through {@code with-output-to-string}
+	 * ({@link #expandTypedSignal}), and the seeded {@code UNBOUND-SLOT} is such a class.
+	 * No scan of the program as written sees that form, so a backend deciding from the
+	 * surface whether a caught or uncaught condition's message is read (the wasm-GC
+	 * report pre-scan) asks this.
+	 * @param program the top-level forms
+	 * @param closRegistry the class registry
+	 * @return {@code true} when the injected dispatch holds a catching form
+	 */
+	public static boolean runtimeErrorDispatchCatches(List<LispVal> program, ClosRegistry closRegistry) {
+		return needsRuntimeErrorDispatch(program) && closRegistry.classes()
+			.values()
+			.stream()
+			.anyMatch(info -> info.ancestors().contains("CONDITION")
+					&& closRegistry.findConditionReport(info.name()) instanceof LispVal report
+					&& !(report instanceof LispString));
+	}
+
 	private static boolean containsRuntimeErrorDispatch(LispVal form) {
 		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol op) {
@@ -41025,7 +42061,7 @@ public final class LispMacroExpander {
 				items.add(listToCons(getfParts));
 			}
 			LispVal body = expandTypedSignal(LispNames.ERROR, LispNames.ERROR_INTERNAL, new LispSymbol(info.name()),
-					items, closRegistry, signalHook);
+					items, closRegistry, signalHook, ha);
 			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
 					listToCons(List.<LispVal>of(ha)), body)));
 			List<String> spellings = new java.util.ArrayList<>();
@@ -43585,7 +44621,9 @@ public final class LispMacroExpander {
 				// handler-case's :no-error clause is a multiple-value consumer (.kb/
 				// multiple-values.md): the protected form's VALUES ride the spill,
 				// so the global must exist whenever a handler-case is reachable.
-				case LispNames.HANDLER_CASE -> true;
+				// multiple-value-setq is a consumer like multiple-value-bind: without
+				// the global a callee's secondary value never reaches it.
+				case LispNames.HANDLER_CASE, LispNames.MULTIPLE_VALUE_SETQ -> true;
 				default -> false;
 			};
 		}
@@ -43662,7 +44700,7 @@ public final class LispMacroExpander {
 			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				for (int i = 1; i < parts.size(); i++) {
-					flattenTopLevelInto(parts.get(i), out);
+					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
 				}
 				return;
 			}
@@ -43675,7 +44713,7 @@ public final class LispMacroExpander {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(parts.get(i), out);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
 					}
 					return;
 				}
@@ -43687,12 +44725,24 @@ public final class LispMacroExpander {
 			// pairs; flattening that keeps each a top-level definition.
 			if (isUiopWithDeprecationWrapper(sym.name())) {
 				if (cons.toList().size() >= 2) {
-					flattenTopLevelInto(expandUiopWithDeprecation(cons), out);
+					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out);
 					return;
 				}
 			}
 		}
 		out.add(form);
+	}
+
+	/**
+	 * A form spliced out of a top-level wrapper keeps the wrapper's position when it has
+	 * none of its own (compile path only): a user macro that expands to a {@code progn}
+	 * of definitions built them, and the macro CALL -- whose position the {@code progn}
+	 * inherited -- is where a warning about one of them belongs. A form read from source
+	 * keeps its own.
+	 */
+	private static LispVal splicedPart(LispCons wrapper, LispVal part) {
+		SourceProvenance.inheritWhenCompiling(wrapper, part);
+		return part;
 	}
 
 	private static LispCons listToCons(List<LispVal> elements) {

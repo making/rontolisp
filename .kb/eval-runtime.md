@@ -81,14 +81,22 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   operator ([error-handling.md](error-handling.md), "A wrong argument COUNT"). The registry's
   arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
   surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
-- **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): their wrappers
-  stay binary, since a sort predicate is a two-argument call and a variadic wrapper would cons a
-  rest list per comparison, so the arm evaluates every argument and tests adjacent pairs (every
-  pair for `/=`) through the binary wrapper. Without it the first bullet would have turned the old
-  "extra arguments ignored" (`(< 1 3 2)` => T) into a count error. `(<)` reports `< expects at
-  least 1 argument` through `_arityChk` with the operator's shape; on wasm the shape carries the
-  `<` wrapper's funcId when it is in the named set, and the call traps where the module reports
-  no count (no EH landing pad).
+- **`= < > <= >= /=` have no arm of their own** (2026-09-27; removed `comparisonChain` /
+  `emitComparisonChain`, `WasmEvalRuntimeBuilder.COMPARISON_OPERATORS`). The arm evaluated every
+  argument and tested adjacent pairs (every pair for `/=`) through the wrapper's two-argument call.
+  It was needed while the wrappers took `(a b &rest r)`: the registry path (the first bullet)
+  would have reported their count instead of the interpreter's `(< 1 3 2)` => `T`. They take
+  `(a &optional b &rest r)` since 2026-09-26 ([error-handling.md](error-handling.md), "A built-in's
+  function VALUE"), so the registry path answers every count the chain used to: `a` is still a
+  required parameter, so `(<)` reports `< expects at least 1 argument, got 0` through the same
+  `_arityChk`/`_arity_chk` the registry's spread dispatcher always used, naming the operator from
+  the wrapper's own arity metadata -- no separate shape or funcId tracking needed.
+  `SELF_COUNTED_OPERATORS` is now just `eval`, which no wrapper backs. Size (same method as
+  elsewhere in this file, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
+  360,144 -> 359,528 JVM (-616 B), 263,650 -> 263,306 wasm (-344 B); a program without `eval` is
+  unchanged. (These raw numbers differ from the 317,887/247,064 pair recorded above under "Size"
+  because of unrelated changes landed between 2026-09-26 and 2026-09-27; only the delta from this
+  change is the point here.)
 - **`apply` is a catalog wrapper** (`BuiltinFunctionWrappers.applyWrapper`, `(f a &rest r)`), so
   `eval` reaches it through the registry like any name and the report says `APPLY expects at least
   2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list

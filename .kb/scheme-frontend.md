@@ -1060,7 +1060,7 @@ standard streams are the `t` designator on the compiled backends (not a value,
 every read of `*error-output*` (`(eq *error-output* *error-output*)` is NIL there,
 `equal` is T; measured 2026-09-18), so neither can be told apart or compared. CL's
 stream predicates do not help either: `input-stream-p` of a string OUTPUT stream is T on
-all four and `open-stream-p` after `close` is T on wasm. Slots: `input`, `binary`,
+all four (`open-stream-p` after `close` was T on wasm too until 2026-09-27). Slots: `input`, `binary`,
 `string` (made by `open-...-string`), `stream`, `open`, `pushback`, `fold-case`. A
 textual port's `stream` is the CL stream it reads or writes (`t` for the standard ones);
 a binary input port's is the bytevector (a copy) with the position in `pushback`; a

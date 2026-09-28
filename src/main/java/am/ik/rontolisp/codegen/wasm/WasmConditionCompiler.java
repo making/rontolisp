@@ -110,12 +110,27 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
-			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE -> {
+			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+					LispNames.CHAR_NE -> {
 				if (args.size() != 3) {
 					return false;
 				}
 				WasmCharCompiler.emitPairCompareI32(cons, ctx, WasmCharCompiler.pairCompareOpcode(head.name()));
 				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.SUPPLIED_P_INTERNAL -> {
+				if (args.size() != 2) {
+					return false;
+				}
+				// A physical optional's prologue test: the parameter is not the
+				// UNSUPPLIED marker (WasmPhysicalArgs).
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmPhysicalArgs.emitUnsupplied(ctx);
+				ctx.writer.write(Instruction.REF_EQ);
+				if (!negated) {
 					ctx.writer.write(Instruction.I32_EQZ);
 				}
 				return true;

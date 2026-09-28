@@ -2443,7 +2443,7 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- variadic + - * / : left-fold via the binary wrapper ----
+		// ---- variadic + - * / : left-fold through the wrapper's two-argument call ----
 		int arith = a.label();
 		int notArith = a.label();
 		for (String opName : new String[] { LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV }) {
@@ -2522,12 +2522,9 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(notArith);
 
-		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
-		// The wrappers are binary (a sort predicate stays a two-argument call), so a
-		// chain goes pairwise through them here: adjacent pairs for the ordering
-		// operators, every pair for /=. The registry path below would evaluate every
-		// argument too and then report the binary wrapper's count.
-		comparisonChain(a, OP, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, IDX, VALID);
+		// `= < > <= >= /=` have no arm of their own: the wrappers take any count
+		// ((a &optional b &rest r)), so the registry path below reports their count
+		// naming the operator, the same as any other registered function.
 
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
@@ -2626,89 +2623,6 @@ final class JvmEvalRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		return a.finish();
-	}
-
-	/**
-	 * Emits the {@code _eval} arm for the comparison operators: {@code (< a b c)} is
-	 * {@code (and (< a b) (< b c))} over arguments all evaluated first, as the
-	 * interpreter does, and {@code (/= a b c)} tests every pair. With no argument it
-	 * reports the interpreter's {@code < expects at least 1 argument, got 0} through
-	 * {@code _arityChk}; one argument answers {@code T}. Falls through for any other
-	 * operator.
-	 */
-	private void comparisonChain(Asm a, int opSlot, int restSlot, int envSlot, int fnSlot, int leftSlot, int rightSlot,
-			int headSlot, int tailSlot, int cellSlot, int tmpSlot, int shapeSlot, int allPairsSlot) {
-		String[] operators = { LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.NE };
-		int chain = a.label();
-		int notComparison = a.label();
-		for (String operator : operators) {
-			int next = a.label();
-			a.aload(opSlot);
-			ldcStr(a, operator);
-			a.invokevirtual(this.k.objectEquals());
-			a.branch(Opcode.IFEQ, next);
-			ldcInt(a, this.k.arityOperators().shape(1, true, operator));
-			a.istore(shapeSlot);
-			a.iconst(LispNames.NE.equals(operator) ? 1 : 0);
-			a.istore(allPairsSlot);
-			a.branch(Opcode.GOTO, chain);
-			a.bind(next);
-		}
-		a.branch(Opcode.GOTO, notComparison);
-		a.bind(chain);
-		// no argument at all: _arityChk measures the empty list and throws
-		a.aload(restSlot);
-		a.iload(shapeSlot);
-		a.invokestatic(this.k.arityChkRef());
-		// fn = the binary wrapper, as a function value
-		a.aload(opSlot);
-		a.invokestatic(this.k.lookupRef());
-		a.astore(tmpSlot);
-		a.iconst(1);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		a.aload(tmpSlot);
-		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
-		a.aaload();
-		a.aastore();
-		a.astore(fnSlot);
-		buildArgList(a, restSlot, envSlot, headSlot, tailSlot, cellSlot, tmpSlot);
-		a.aload(headSlot);
-		a.astore(leftSlot);
-		int outer = a.label();
-		int inner = a.label();
-		int nextLeft = a.label();
-		int holds = a.label();
-		a.bind(outer);
-		cdr(a, leftSlot);
-		a.astore(rightSlot);
-		a.aload(rightSlot);
-		a.branch(Opcode.IFNONNULL, inner);
-		ldcStr(a, "T");
-		a.areturn();
-		a.bind(inner);
-		a.aload(rightSlot);
-		a.branch(Opcode.IFNULL, nextLeft);
-		a.aload(fnSlot);
-		car(a, leftSlot);
-		car(a, rightSlot);
-		a.invokestatic(this.k.invoke()[2]);
-		a.branch(Opcode.IFNONNULL, holds);
-		a.aconstNull();
-		a.areturn();
-		a.bind(holds);
-		a.iload(allPairsSlot);
-		a.branch(Opcode.IFEQ, nextLeft);
-		cdr(a, rightSlot);
-		a.astore(rightSlot);
-		a.branch(Opcode.GOTO, inner);
-		a.bind(nextLeft);
-		cdr(a, leftSlot);
-		a.astore(leftSlot);
-		a.branch(Opcode.GOTO, outer);
-		a.bind(notComparison);
 	}
 
 	/**

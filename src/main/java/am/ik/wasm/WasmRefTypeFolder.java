@@ -63,7 +63,11 @@ import org.jspecify.annotations.Nullable;
  * in, so {@code x is i31 | x is bignum | x is bigint} decides as one question about
  * {@code x};</li>
  * <li>two type indices count as the same type exactly when they are canonically equal
- * (structurally, with their {@code rec} groups), so a test on one is a test on both.</li>
+ * (structurally, with their {@code rec} groups), so a test on one is a test on both;</li>
+ * <li>an immutable global initialized by an allocation holds ONE object nothing else
+ * made, so it gets a member of its own (inside every test of its type), and a
+ * {@code ref.eq} against it -- the unsupplied-optional marker, the raw-local sentinel --
+ * is a question about that member, decided or refining like a type test.</li>
  * </ul>
  * The pass never renumbers a function or a type: it rewrites function bodies in place and
  * leaves every other section verbatim, so it composes with any claim a caller makes to
@@ -362,7 +366,26 @@ public final class WasmRefTypeFolder {
 
 		final BitSet eqSet = new BitSet();
 
+		/** What a constructor of each type makes: its canonical class. */
 		final BitSet[] typeClassSet;
+
+		/**
+		 * What a test on each type admits: its canonical class plus the singleton objects
+		 * of that class ({@link #singletonSets}).
+		 */
+		final BitSet[] typeTestSet;
+
+		/**
+		 * Per global, the one-member set naming the object it holds when it is a
+		 * singleton -- immutable, and initialized by an allocation, so the object exists
+		 * once and nothing but that global's initializer made it; else null. The member
+		 * is a pseudo-member of its own, after null / i31 / other, so an identity test
+		 * ({@code ref.eq}) against the global is a set question like a type test.
+		 */
+		final @Nullable BitSet[] singletonSets;
+
+		/** The first singleton pseudo-member. */
+		final int firstSingletonBit;
 
 		final int numImports;
 
@@ -488,18 +511,43 @@ public final class WasmRefTypeFolder {
 				}
 			}
 			this.globalPayload = globalSec == null ? new byte[0] : globalSec.payload();
+			List<Boolean> mutable = new ArrayList<>();
+			for (int g = 0; g < gt.size(); g++) {
+				mutable.add(true); // an imported global is none of this module's making
+			}
 			if (globalSec != null) {
 				int[] p = { 0 };
 				int count = WasmSections.readU(this.globalPayload, p);
 				for (int i = 0; i < count; i++) {
 					ValType t = WasmCodeModel.readValType(this.globalPayload, p);
-					p[0]++; // mutability
+					mutable.add(this.globalPayload[p[0]++] != 0);
 					gt.add(t);
 					inits.add(WasmCodeModel.decodeConstExpr(this.globalPayload, p, types));
 				}
 			}
 			this.globalTypes = gt.toArray(new ValType[0]);
 			this.globalInits = inits;
+			this.firstSingletonBit = this.numTypes + 3;
+			this.singletonSets = new BitSet[this.globalTypes.length];
+			this.typeTestSet = new BitSet[this.numTypes];
+			for (int t = 0; t < this.numTypes; t++) {
+				this.typeTestSet[t] = (BitSet) this.typeClassSet[t].clone();
+			}
+			int nextBit = this.firstSingletonBit;
+			for (int g = 0; g < this.globalTypes.length; g++) {
+				int type = mutable.get(g) || !this.globalTypes[g].isRef() ? -1 : allocatedType(inits.get(g));
+				if (type < 0) {
+					continue;
+				}
+				int member = nextBit++;
+				this.singletonSets[g] = bit(member);
+				BitSet sameType = this.typeClassSet[type];
+				for (int u = sameType.nextSetBit(0); u >= 0; u = sameType.nextSetBit(u + 1)) {
+					this.typeTestSet[u].set(member);
+				}
+				(this.structSet.get(type) ? this.structSet : this.arraySet).set(member);
+				this.eqSet.set(member);
+			}
 
 			List<FuncType> tags = new ArrayList<>();
 			if (tagSec != null) {
@@ -561,6 +609,25 @@ public final class WasmRefTypeFolder {
 			BitSet s = new BitSet();
 			s.set(index);
 			return s;
+		}
+
+		// The type a constant expression's result is allocated as, when the allocation is
+		// what it answers (its last instruction before `end`); else -1.
+		private static int allocatedType(List<Instr> init) {
+			if (init.size() < 2) {
+				return -1;
+			}
+			Instr last = init.get(init.size() - 2);
+			return last.op == 0xFB && isAllocation(last.sub) ? (int) last.a : -1;
+		}
+
+		// struct.new(_default), array.new(_default|_fixed).
+		private static boolean isAllocation(int sub) {
+			return sub == 0x00 || sub == 0x01 || sub == 0x06 || sub == 0x07 || sub == 0x08;
+		}
+
+		boolean isSingleton(BitSet set) {
+			return set.cardinality() == 1 && set.nextSetBit(0) >= this.firstSingletonBit;
 		}
 
 		private static @Nullable BitSet[] setsFor(List<ValType> types) {
@@ -902,7 +969,7 @@ public final class WasmRefTypeFolder {
 		 */
 		@Nullable BitSet heapTypeSet(long heap) {
 			if (heap >= 0) {
-				return this.typeClassSet[(int) heap];
+				return this.typeTestSet[(int) heap];
 			}
 			if (heap == WasmCodeModel.HEAP_I31) {
 				return this.i31Set;
@@ -1699,11 +1766,9 @@ public final class WasmRefTypeFolder {
 					return stepTest(i, in, v, this.m.nullSet);
 				}
 				case 0xD3 -> { // ref.eq
-					pop();
+					Val b = pop();
 					Val a = pop();
-					push(Val.scalar(a.spanStart()));
-					emit(in);
-					return i + 1;
+					return stepRefEq(i, in, a, b);
 				}
 				case 0xFB -> {
 					return stepGc(i, in);
@@ -2020,6 +2085,51 @@ public final class WasmRefTypeFolder {
 			return i + 1;
 		}
 
+		// The set an allocation at instruction i answers: a singleton global's object
+		// when it is that global's initializer's result, else the type's class.
+		private BitSet allocated(int t, int i) {
+			if (this.f < 0 && i == this.code.size() - 2) {
+				@Nullable BitSet singleton = this.m.singletonSets[this.global];
+				if (singleton != null) {
+					return singleton;
+				}
+			}
+			return this.m.typeClassSet[t];
+		}
+
+		// ref.eq is true of one reference only: two values whose sets are disjoint are
+		// never the same one, and a value that can only be a singleton global's object is
+		// that object -- so an identity test against the global is the question "is the
+		// other value that member", decided, or kept symbolic (and refining) like a type
+		// test.
+		private int stepRefEq(int i, Instr in, Val a, Val b) {
+			BitSet sa = a.refSet();
+			BitSet sb = b.refSet();
+			if (sa.isEmpty() || sb.isEmpty()) {
+				if (this.out != null) {
+					this.out.write(0x00);
+				}
+				return unreachable(top());
+			}
+			@Nullable Sym sym = null;
+			if (!sa.intersects(sb)) {
+				sym = new Const(0);
+			}
+			else if (this.m.isSingleton(sb)) {
+				sym = decide(a, sb);
+			}
+			else if (this.m.isSingleton(sa)) {
+				sym = decide(b, sa);
+			}
+			if (sym instanceof Const c) {
+				foldPairTo(a, b, in, i, c.value());
+				return i + 1;
+			}
+			push(Val.i32(sym, a.spanStart()));
+			emit(in);
+			return i + 1;
+		}
+
 		private int stepGc(int i, Instr in) {
 			int t = (int) in.a;
 			switch (in.sub) {
@@ -2031,14 +2141,14 @@ public final class WasmRefTypeFolder {
 							this.m.joinField(t, this.m.fieldSets[t][k], args.get(k).refSet());
 						}
 					}
-					push(Val.ref(this.m.typeClassSet[t], args.isEmpty() ? i : args.get(0).spanStart()));
+					push(Val.ref(allocated(t, i), args.isEmpty() ? i : args.get(0).spanStart()));
 				}
 				case 0x01 -> { // struct.new_default
 					for (@Nullable
 					BitSet field : this.m.fieldSets[t]) {
 						this.m.joinField(t, field, this.m.nullSet);
 					}
-					push(Val.ref(this.m.typeClassSet[t], i));
+					push(Val.ref(allocated(t, i), i));
 				}
 				case 0x02, 0x03, 0x04 -> { // struct.get(_s|_u)
 					Val ref = pop();
@@ -2060,12 +2170,12 @@ public final class WasmRefTypeFolder {
 					if (init.ref()) {
 						this.m.joinField(t, this.m.fieldSets[t][0], init.refSet());
 					}
-					push(Val.ref(this.m.typeClassSet[t], init.spanStart()));
+					push(Val.ref(allocated(t, i), init.spanStart()));
 				}
 				case 0x07 -> { // array.new_default
 					Val len = pop();
 					this.m.joinField(t, this.m.fieldSets[t][0], this.m.nullSet);
-					push(Val.ref(this.m.typeClassSet[t], len.spanStart()));
+					push(Val.ref(allocated(t, i), len.spanStart()));
 				}
 				case 0x08 -> { // array.new_fixed
 					List<Val> args = popN((int) in.b);
@@ -2074,7 +2184,7 @@ public final class WasmRefTypeFolder {
 							this.m.joinField(t, this.m.fieldSets[t][0], a.refSet());
 						}
 					}
-					push(Val.ref(this.m.typeClassSet[t], args.isEmpty() ? i : args.get(0).spanStart()));
+					push(Val.ref(allocated(t, i), args.isEmpty() ? i : args.get(0).spanStart()));
 				}
 				case 0x0B, 0x0C, 0x0D -> { // array.get(_s|_u)
 					pop();

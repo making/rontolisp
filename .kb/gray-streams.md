@@ -291,9 +291,13 @@ methods default start to 0, and an explicit nil would override that).
   broadcast entry: JVM `.class` 5,896 -> 12,717 B (+6.8 KB); with a write,
   9,816 -> 42,135 B (the protocol's first-use cost, at parity with a
   one-component broadcast at 42,179 B). Anything else is byte-identical.
-- `#'make-broadcast-stream` (and the compile-path wrapper) keeps the OLD sink
-  shape: a zero-component broadcast as a VALUE is still the discarding sink --
-  the instance needs class machinery no first-class value can reach.
+- `#'make-broadcast-stream` is the same Gray broadcast stream (2026-09-27): the catalog
+  wrapper is `(&rest c) (%make-broadcast-stream c)` on every backend (the interpreter's Java
+  sink built-in is gone). The prelude selects the entry on any mention of the name, `#'`
+  included, and the compile paths inject that wrapper exactly where the entry is in the
+  program (`BuiltinFunctionWrappers.HELPER_WRAPPERS`); elsewhere -- reachable only through
+  `eval` -- the value is still the discarding sink. `(print (typep (funcall
+  #'make-broadcast-stream) 'broadcast-stream))`: JVM 13,344 -> 15,102 B, wasm P1 3,523 -> 3,515.
 - **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed): 13 fixed, 0
   regressed -- `BROADCAST-STREAM-STREAMS.1/.3/.4`, `MAKE-BROADCAST-STREAM.1/.2/.3`
   (whose element-type asserts behind the typep ones pass too), `.5/.7/.8`,

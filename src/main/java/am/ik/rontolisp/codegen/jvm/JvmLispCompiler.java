@@ -36,6 +36,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -241,6 +242,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	private int classMajorVersion = CLASS_MAJOR_VERSION;
 
 	/**
+	 * The program-side methods this attempt's generated {@code java:} interface
+	 * implementations call ({@link JvmJavaImplementations#callbackNames()}): found from
+	 * another class, so kept in the program class when it is split and rooted for the
+	 * tree-shaker.
+	 */
+	private Set<String> implementationCallbacks = Set.of();
+
+	/**
 	 * The class files {@code java:} sites resolve against, opened by the first attempt
 	 * that compiles one and closed when {@link #compile(List)} returns.
 	 */
@@ -250,11 +259,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
-	 * and {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
+	 * {@code _lispToString}, which the java: bridge shows a value in a message with,
+	 * {@code _bf16Value}, which it reads a bfloat16 vector's elements through,
+	 * {@code _jsig}/{@code _jfail}, which its {@code Proxy} records what a callback
+	 * raised with and its calls pass it on through, and
+	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
-	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_gpuMaterialize",
-			"_gpuWritten");
+	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
+			JvmFloatArrayRuntimeBuilder.BF16_VALUE, JvmJavaDirectSites.SIGNAL, JvmJavaDirectSites.FAIL,
+			"_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -756,9 +770,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies). Some entries are not classes: the {@code $Gpu*} and {@code $Objc*}
-	 * copies bring their native-image registration under {@code META-INF/native-image/}
-	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
+	 * library copies). Some entries are not classes: {@code $BlasBridge} and the
+	 * {@code $Gpu*} and {@code $Objc*} copies bring their native-image registration under
+	 * {@code META-INF/native-image/}
+	 * ({@link JvmBlasRuntimeBuilder#nativeImageMetadataPath},
+	 * {@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
 	 * {@link JvmObjcRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>
@@ -1039,7 +1055,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// surface scans cannot see (the expansion happens during Pass 2).
 		boolean blockExitChannel = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
-		program = LambdaLists.desugarProgram(program);
+		// Read before the lambda lists lose their &optional bounds.
+		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
+		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
@@ -1425,15 +1443,18 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// java: interop. The sites resolve against class files, never the classes this
 		// compiler runs on (compiler/JavaSiteResolver, .kb/java-interop.md); a resolved
-		// site compiles to a direct call (JvmJavaDirectSites). The bridge runtime is
-		// emitted only when a site needs it -- a site left to run time, a java:proxy, a
-		// function value passed where an interface is expected -- and never under
-		// --java-static, which refuses such a site. The (renamed) JavaBridgeTemplate
-		// travels beside the class as its own class file, and the eval runtime is forced
-		// (the bridge applies Lisp callables through _apply).
+		// site compiles to a direct call (JvmJavaDirectSites), a resolved java:reify /
+		// java:proxy and a function passed where an interface is expected to an object of
+		// a class generated for it (JvmJavaImplementations). The bridge runtime is
+		// emitted only when a site needs it -- one left to run time, a java:reify /
+		// java:proxy whose interface is not resolved -- and never under --java-static,
+		// which refuses such a site. The (renamed) JavaBridgeTemplate travels beside the
+		// class as its own class file, and the eval runtime is forced (the bridge applies
+		// Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaSites javaSites = usesJava
-				? new JvmJavaSites(javaClasses(), cp, thisClass, lispToStringMethod, this.javaStatic) : null;
+				? new JvmJavaSites(javaClasses(), cp, thisClass, this.className, lispToStringMethod, this.javaStatic)
+				: null;
 		boolean usesJavaBridge = javaSites != null && !this.javaStatic
 				&& (forcedGroups.contains(GROUP_JAVA_BRIDGE) || javaSites.needsBridge(program));
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJavaBridge
@@ -1449,7 +1470,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				: CLASS_MAJOR_VERSION;
 		if (javaSites != null) {
 			if (!javaClasses().hasPlatform()) {
-				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
+				CompileWarnings.note("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
 						+ " java: sites that name JDK classes are resolved at run time");
 			}
 			javaSites.report(program, this.warnJavaReflection);
@@ -1711,8 +1732,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		applyGateWrappers.remove(LispNames.SEQ_FLOAT_VECTOR);
 		// The injected wrapper bodies that are (apply f r) count too: the wrappers and
 		// the runtime they call are gated on the same reference (see wrapperExcludes).
+		// So do the functions of a generated java: interface implementation
+		// (JvmJavaImplementations).
 		boolean usesApplyRuntime = usesEval || LispMacroExpander.needsApplyRuntime(program, applyGateWrappers)
-				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY);
+				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY)
+				|| (javaSites != null && javaSites.needsApply(program));
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -1776,6 +1800,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// only in the registry, but the error/signal expansions inject it back).
 		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
 		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
+		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
+		// during codegen (JvmExprCompiler's SETF case), to a (function
+		// array-row-major-index) reference no scan of the surface program above can see
+		// coming -- the scan has to be told (todo a66), the same way restartMode and
+		// mayCreateInstances are told about their own lazy Pass-2 products.
+		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		}
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
 			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
@@ -1802,12 +1834,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
-		// gethash/find-symbol/... take their full lambda list and publish their second
-		// value only in a program that names them as a designator.
+		// gethash/find-symbol/... publish their second value only in a program that
+		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes,
-				designatedProducers);
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
@@ -1874,6 +1905,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (LispVal helper : LispMacroExpander.seqConversionWrappers()) {
 				defuns.add(extractSetqLambda(helper));
 			}
+		}
+		// The shared sequence check every %check-sequence site calls: one vectorp for the
+		// whole program instead of one per site. No array gate: its vectorp compiles to
+		// the string test alone in an array-free class.
+		if (!userDefinedNames.contains(LispNames.CHECK_SEQUENCE_RUNTIME)
+				&& (LispMacroExpander.programUsesSequenceCheck(program)
+						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
+						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
+			defuns.add(extractSetqLambda(LispMacroExpander.checkSequenceRuntimeWrapper()));
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.
@@ -1975,8 +2015,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(mangleMethodName(defun.name));
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, false,
-					methodref, nameUtf8, descUtf8));
+			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
+					false, methodref, nameUtf8, descUtf8));
 		}
 
 		// Validate the jvm-export directives now that every defun (and its mangled
@@ -2154,8 +2194,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		if (javaSites != null) {
 			// A dispatched java: site renders a mutable character vector, a sequence's
-			// elements too, before it costs and converts it.
+			// elements too, before it costs and converts it -- as does the conversion
+			// of a value a java: interface implementation's function answers.
 			javaSites.direct().strv(strvMethod);
+			// ... and reads a specialized vector's elements from the shapes the program
+			// can hold, a bfloat16 one's through the program's own widening.
+			javaSites.direct()
+				.packedVectors(usesFloatArray, usesIntArray,
+						usesFloatArray ? cp.addMethodref(thisClass,
+								cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE),
+										cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)))
+								: null);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
@@ -2228,6 +2277,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC },
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC },
+				{ JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC },
+				{ JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC } }) {
 			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));
@@ -2469,6 +2520,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.geomOps(geomRuntime != null ? geomRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
@@ -2736,8 +2788,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8 = cp.addUtf8(lambda.methodName);
 			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
 			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
-			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic, true,
-					methodref, nameUtf8, descUtf8);
+			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic,
+					lambda.optionals, true, methodref, nameUtf8, descUtf8);
 			lambdaFuncInfos.add(fi);
 
 			Ctx lambdaCtx = ctxBuilder.build();
@@ -3059,14 +3111,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (int arity : indirectCallArities) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting));
+					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting,
+					mainCtx.unsupplied));
 		}
 		// The spread dispatcher _apply calls: it takes the argument list whole, so an
 		// apply through a COMPUTED designator has no arity ceiling. Emitted with _apply.
 		if (usesApplyRuntime) {
-			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos,
-					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-					applyRefForDispatch, lookupRefForDispatch, true, dispatchableFuncIds, arityReporting));
+			dispatchMethods.addAll(
+					JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass,
+							objectArrayClass, integerClass, integerValue, objectClass, stringClass, applyRefForDispatch,
+							lookupRefForDispatch, true, dispatchableFuncIds, arityReporting, mainCtx.unsupplied));
 		}
 
 		// Build the runtime reader methods (read/load), only when used
@@ -3110,7 +3164,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)), strvMethod,
-						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables)
+						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables,
+						javaSites != null ? javaSites.direct().lispTable() : null)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -3229,13 +3284,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
-			ClassConstant arrayListForPrint = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+			JvmJavaDirectSites direct = Objects.requireNonNull(javaSites).direct();
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"),
-					cp.addMethodref(arrayListForPrint, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
-					cp.addMethodref(arrayListForPrint,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
-					cp.addClass(cp.addUtf8("[Ljava/lang/Object;")));
+					stringConcat, cp.addString("#<java "), cp.addString(">"), usesArrays ? direct.lispArray() : null,
+					usesHashTables ? direct.lispTable() : null);
 		}
 		else {
 			javaPrint = null;
@@ -3640,7 +3692,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computation lives in one method so each call site is a single invokestatic,
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
-				objectArrayClass, stringClass, longValueOf, thisClass);
+				objectArrayClass, stringClass, longValueOf, thisClass,
+				javaSites != null ? javaSites.direct().lispArray() : null);
 
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
 		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's
@@ -3650,6 +3703,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// at all so its loop's backedge sits at operand stack depth 0, the only shape
 		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
 		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp, consShape,
+				thisClass);
+		// elt's list walk (%elt-cell), unconditional for the same reason: every elt and
+		// (setf elt) expansion reaches it, and so do the built-in wrappers and library
+		// bodies that read with (elt seq i). The class shaker drops it when unused.
+		final JvmEltCellRuntimeBuilder.EltCellMethod eltCellMethodBody = JvmEltCellRuntimeBuilder.build(cp, consShape,
 				thisClass);
 
 		// The &optional surplus-argument message (%arity-surplus-message). Emitted
@@ -3804,6 +3862,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (fusedState.usesFxAsh) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildFxAsh(cp));
+		}
+
+		// The java: sites' failure helpers, made now that every body is compiled: whether
+		// a function can be called back from Java -- a generated implementation's
+		// callback, the bridge's Proxy -- decides the per-thread record _jsigTl and what
+		// _jfail reads (JvmJavaDirectSites#finishHelpers).
+		final JvmJavaDirectSites.@Nullable Signals javaSignals = javaSites != null
+				? javaSites.direct().finishHelpers(usesJavaBridge, mainCtx.conditionChannel) : null;
+		if (javaSignals != null) {
+			mainCtx.conditionChannel.ensureThreadLocalInfra(cp);
 		}
 
 		// The class as data first: a program whose pool fits one class file is written
@@ -4030,6 +4098,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.nleFieldName),
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
 		}
+		if (javaSignals != null) {
+			// The per-thread record of what functions called back from Java raised, from
+			// _jsig to the _jfail of the site the Java call was made from; initialized in
+			// <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaSignals.name(), javaSignals.desc());
+		}
 		// One private static String[] per instance layout the program references:
 		// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
 		// array in slot 0 of an instance is also its type discriminator. The
@@ -4047,16 +4121,37 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, bf.name(),
 					java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc));
 		}
-		// One private static VOLATILE Object per quoted aggregate datum, built
-		// lazily by its quote site so every evaluation answers the same object
-		// (.kb/quoted-data.md) -- volatile so a racing first build publishes a
-		// fully-constructed datum. Lazy on purpose: JvmClassShaker drops the
-		// field with the method holding its site, which a <clinit> initializer
-		// would pin alive. The attribute count MUST stay 0 -- JvmClassShaker
-		// rejects field attributes.
-		for (QuotePool.QuoteField qf : mainCtx.quotePool.fields()) {
-			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, qf.name(),
-					java.util.Objects.requireNonNull(mainCtx.quotePool.fieldDesc));
+		// The quoted-datum table (JvmQuotePool): its field and the two helpers that
+		// read and fill it, in a class with a quoted aggregate. Every body is built by
+		// now, so no new slot may be interned past this point (the table's size is
+		// baked into _qdSet); the shake drops all three with the last site.
+		mainCtx.quotePool.freeze();
+		if (mainCtx.quotePool.used()) {
+			JvmQuotePool.Members table = mainCtx.quotePool.members();
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.fieldName(), table.fieldDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc(), 2, 1,
+					table.getCode(), List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					table.setName(), table.setDesc(), 3, 2, table.setCode(), List.of());
+		}
+		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
+		// create it on first use, in a class with a callee that takes physical
+		// optionals. Every body and dispatcher is built by now, so nothing may reference
+		// it for the first time past this point; the shake drops all three with the last
+		// caller.
+		mainCtx.unsupplied.freeze();
+		if (mainCtx.unsupplied.used()) {
+			JvmUnsupplied.Members marker = mainCtx.unsupplied.members();
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.fieldName(), marker.fieldDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
+					marker.methodDesc(), 2, 0, marker.accessorCode(), List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					marker.initName(), marker.methodDesc(), 2, 0, marker.initCode(), List.of());
+			if (marker.optArgCode() != null) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()), 2, 1,
+						marker.optArgCode(), List.of());
+			}
 		}
 
 		if (sizedMain != null) {
@@ -4119,7 +4214,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty()
-				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)) {
+				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)
+				|| javaSignals != null) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
 			// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -4153,6 +4249,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				// The per-thread %mv-spill store joins the same initializer: every
 				// thread's register starts null, nil.
 				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
+			}
+			if (javaSignals != null) {
+				// ... as does the record of what functions called back from Java raised.
+				tlFields.add(javaSignals.field());
 			}
 			List<Integer> clinitCode = new java.util.ArrayList<>();
 			// The holder-presence probe's single initialization (.todo/757):
@@ -4325,6 +4425,16 @@ public final class JvmLispCompiler implements LispCompiler {
 						hm.maxStack(), hm.maxLocals(), hm.code(), List.of());
 			}
 		}
+		if (mainCtx.conditionChannel.used || teTlField != null) {
+			// _tlMap, and _condTake/_condPut: the records a throwable carries, keyed by
+			// it (JvmThrowableRecords).
+			for (JvmNumericRuntimeBuilder.NumericMethod rm : JvmThrowableRecords.build(cp, thisClass,
+					mainCtx.conditionChannel.used ? mainCtx.conditionChannel.condTlField : null,
+					mainCtx.conditionChannel.condRan != null)) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
+						rm.maxStack(), rm.maxLocals(), rm.code(), List.of());
+			}
+		}
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf, 6, 2,
 				strEscCode, List.of());
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf, 4, 7,
@@ -4373,12 +4483,28 @@ public final class JvmLispCompiler implements LispCompiler {
 					javaRuntime.initCode(), List.of());
 		}
 		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
-		// helpers they share, made while the bodies above were compiled.
+		// helpers they share, made while the bodies above were compiled; then the
+		// program side of the generated interface implementations
+		// (JvmJavaImplementations): the callbacks their classes call, package-private,
+		// and the conversions those use. The classes travel beside the program.
 		if (javaSites != null) {
 			for (JvmJavaDirectSites.Method site : javaSites.direct().methods()) {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc(),
 						site.maxStack(), site.maxLocals(), site.code(), site.exceptionTable());
 			}
+			JvmJavaImplementations implementations = javaSites.implementations();
+			Set<String> callbacks = implementations.callbackNames();
+			for (JvmJavaDirectSites.Method method : implementations.methods()) {
+				boolean callback = callbacks.contains(cp.utf8At(method.name().index()));
+				definition.addMethod(callback ? AccessFlag.ACC_STATIC : AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						method.name(), method.desc(), method.maxStack(), method.maxLocals(), method.code(),
+						method.exceptionTable());
+			}
+			this.implementationCallbacks = callbacks;
+			this.bridgeClassFiles.putAll(implementations.classFiles(this.classMajorVersion));
+		}
+		else {
+			this.implementationCallbacks = Set.of();
 		}
 		if (objcRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
@@ -4535,6 +4661,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
 					nthcdrMethodBody.desc(), nthcdrMethodBody.maxStack(), nthcdrMethodBody.maxLocals(),
 					nthcdrMethodBody.code(), List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, eltCellMethodBody.name(),
+					eltCellMethodBody.desc(), eltCellMethodBody.maxStack(), eltCellMethodBody.maxLocals(),
+					eltCellMethodBody.code(), List.of());
 		}
 		{
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
@@ -4717,6 +4848,23 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesJavaBridge || usesObjc || usesFfi) {
 				roots.add("_apply");
 			}
+			// The java: bridge shows a value in a message through the program's printer,
+			// found by name like _apply.
+			if (usesJavaBridge) {
+				roots.add("_lispToString");
+				// ... and reads a bfloat16 vector's elements through the program's own
+				// widening, found by name too.
+				if (usesFloatArray) {
+					roots.add(JvmFloatArrayRuntimeBuilder.BF16_VALUE);
+				}
+				// ... and records what its Proxy's callback raised, and passes it on from
+				// a call, through the program's _jsig and _jfail.
+				roots.add(JvmJavaDirectSites.SIGNAL);
+				roots.add(JvmJavaDirectSites.FAIL);
+			}
+			// A generated java: interface implementation calls its program-side
+			// callbacks from its own class: an edge this class's bytecode cannot show.
+			roots.addAll(this.implementationCallbacks);
 			if (usesTlsConnect) {
 				roots.add("checkClientTrusted");
 				roots.add("checkServerTrusted");
@@ -4778,6 +4926,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			List<JvmExportDirective> exportDecls) {
 		Set<String> pinnedNames = new HashSet<>(REFLECTIVELY_FOUND_METHODS);
 		pinnedNames.add("main");
+		// The generated java: interface implementations name the program class as the
+		// owner of their callbacks.
+		pinnedNames.addAll(this.implementationCallbacks);
 		for (JvmExportDirective decl : exportDecls) {
 			pinnedNames.add(decl.methodName());
 			pinnedNames.add(mangleMethodName(decl.name()));
@@ -5024,11 +5175,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		return classes;
 	}
 
-	// True when the program references any of the five java: interop functions, so the
-	// bridge runtime (and the eval runtime its callbacks need) is emitted.
+	// True when the program references any of the six java: interop functions, so its
+	// sites are resolved against the class files (and the bridge emitted when one needs
+	// it).
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
 		for (String member : List.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
-				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY)) {
+				LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY)) {
 			if (programUsesSymbol(program, PackageRegistry.qualify(LispNames.JAVA_PKG, member))) {
 				return true;
 			}
@@ -5167,9 +5319,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	// True when the program can produce a packed float array: a #d(...) literal
-	// (LispFloatArray) or a (make-array ... :element-type 'double-float ...) form. Gates
-	// the _fv* dispatch helpers and their routing; when false the array op compilers call
-	// the general _array* helpers directly, keeping the default build byte-identical.
+	// (LispFloatArray), a (make-array ... :element-type 'double-float ...) form, or a
+	// (make-array ... :element-type <runtime designator> ...) form whose inline
+	// dispatch (LispMacroExpander.lowerRuntimeElementTypeMakeArray) can still reach one
+	// of its float arms -- a run-time designator combined with :initial-contents spells
+	// that dispatch inline, at codegen time, after this scan has already run. Gates the
+	// _fv* dispatch helpers and their routing; when false the
+	// array op compilers call the general _array* helpers directly, keeping the default
+	// build byte-identical.
 	private static boolean programUsesFloatArray(List<LispVal> program, ClosRegistry closRegistry) {
 		for (LispVal expr : program) {
 			if (usesFloatArray(expr, closRegistry)) {
@@ -5188,7 +5345,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				return false;
 			}
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
-					&& makeArrayIsPackedFloat(cons, closRegistry)) {
+					&& (makeArrayIsPackedFloat(cons, closRegistry)
+							|| LispMacroExpander.runtimeElementTypeMakeArrayCanPackFloat(cons))) {
 				return true;
 			}
 			if (usesFloatArray(cons.car(), closRegistry)) {
@@ -5494,9 +5652,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
-				lambdaParts.subList(2, lambdaParts.size()));
-		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, funcName);
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
 	}
 
 	// A (rontolisp:wasm-import ...) stub: a defun of the declared arity whose body
@@ -5579,18 +5737,43 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * A parsed defun. {@code paramNames} are the physical parameters (when
 	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
-	 * remaining arguments as a cons list).
+	 * remaining arguments as a cons list, and the {@code optionals} names before it are
+	 * physical optionals, {@link LambdaLists.NativeForm}).
 	 */
-	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, int optionals, List<LispVal> bodyExprs) {
+
+		/** A defun without physical optionals. */
+		DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+			this(name, paramNames, variadic, 0, bodyExprs);
+		}
+
 	}
 
 	/**
 	 * Registry entry for a compiled function. {@code paramCount} is the physical JVM
-	 * parameter count; when {@code variadic}, the last parameter is the rest list and the
-	 * callable minimum is {@code paramCount - 1} arguments.
+	 * parameter count; when {@code variadic}, the last parameter is the rest list, the
+	 * {@code optionals} before it are physical optionals (an argument or the UNSUPPLIED
+	 * marker, {@link JvmPhysicalArgs}), and the callable minimum is {@link #required()}
+	 * arguments.
 	 */
-	record FunctionInfo(int funcId, int paramCount, boolean variadic, boolean isClosure, MethodrefConstant methodref,
-			Utf8Constant nameUtf8, Utf8Constant descUtf8) {
+	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
+			MethodrefConstant methodref, Utf8Constant nameUtf8, Utf8Constant descUtf8) {
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramCount - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
+		/**
+		 * {@return the parameters before the rest list} -- the required ones and the
+		 * physical optionals
+		 */
+		int positional() {
+			return this.paramCount - (this.variadic ? 1 : 0);
+		}
+
 	}
 
 	/**
@@ -5616,8 +5799,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param writtenIn the name the report calls the program function its code is written
 	 * in, or {@code null} for none (the top level, an async body)
 	 */
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
+			List<LispVal> bodyExprs, List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
 			@Nullable String writtenIn) {
 	}
 
@@ -5664,16 +5847,41 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code private static ThreadLocal _condTl} field that carries a condition object (a
 	 * tagged-list instance) from a {@code %error-cond} throw site to a
 	 * {@code handler-case} catch handler on the same thread of control (thread-scoped so
-	 * concurrent {@code rontolisp:http-handler} requests do not clobber each other). One
-	 * instance is shared by every {@link Ctx} of a compilation (the {@code nextFuncId}
-	 * pattern); the field and its {@code <clinit>} initializer are emitted only when a
-	 * compiler marked it {@link #used}.
+	 * concurrent {@code rontolisp:http-handler} requests do not clobber each other),
+	 * keyed by the throwable it travels with ({@link JvmThrowableRecords}: a site records
+	 * through {@link #condPut}, a landing takes through {@link #condTake}). One instance
+	 * is shared by every {@link Ctx} of a compilation (the {@code nextFuncId} pattern);
+	 * the field, its {@code <clinit>} initializer and the two helpers are emitted only
+	 * when a compiler marked it {@link #used}.
 	 */
 	static final class ConditionChannel {
 
 		boolean used = false;
 
 		@Nullable FieldrefConstant condTlField;
+
+		/** {@code _condTake(Throwable)Object}: a landing's read of what it caught. */
+		@Nullable MethodrefConstant condTake;
+
+		/**
+		 * {@code _condPut(Throwable, Object)Throwable}: a throw site's record of the
+		 * condition its throwable carries.
+		 */
+		@Nullable MethodrefConstant condPut;
+
+		/**
+		 * {@code _condRan(Throwable, Object)Throwable}: the record of a condition whose
+		 * {@code handler-bind} handlers already ran -- a signal hook's terminal, a
+		 * {@code %hb-guard} pad's rethrow. Null until a site asks
+		 * ({@link #ensureHandlersRan}), so a program without either stays byte-identical.
+		 */
+		@Nullable MethodrefConstant condRan;
+
+		/**
+		 * {@code _condOf(Object)Object}: the condition a record names, whichever of the
+		 * two shapes it has. Minted with {@link #condRan}.
+		 */
+		@Nullable MethodrefConstant condOf;
 
 		@Nullable Utf8Constant fieldName;
 
@@ -5724,6 +5932,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable MethodrefConstant hbGuardPad;
 
 		/**
+		 * The shared synthesis of a condition-less throw's instance ({@code _hcSynth}),
+		 * built on the first landing that needs it and called by every
+		 * {@code handler-case} landing and the {@code _hbGuard} pad. Class-wide for the
+		 * same reason as {@link #hbGuardPad}: it reads only the caught throwable.
+		 */
+		@Nullable MethodrefConstant conditionSynthesizer;
+
+		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
 		 * channel used, so the class writer emits the two ThreadLocal fields and their
 		 * {@code <clinit>}.
@@ -5739,7 +5955,29 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.condTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.fieldName, this.fieldDesc));
 			this.depthFieldName = cp.addUtf8("_hcDepthTl");
 			this.depthTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.depthFieldName, this.fieldDesc));
+			this.condTake = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_TAKE,
+					JvmThrowableRecords.COND_TAKE_DESC);
+			this.condPut = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_PUT,
+					JvmThrowableRecords.COND_PUT_DESC);
 			ensureThreadLocalInfra(cp);
+		}
+
+		/**
+		 * {@link #ensure}, plus the two helpers of a record that says the
+		 * {@code handler-bind} handlers ran ({@link JvmThrowableRecords#COND_RAN}): what
+		 * a restart-mode signal hook's terminal, a {@code %hb-guard} pad and a
+		 * restart-mode {@code handler-case} landing call.
+		 */
+		void ensureHandlersRan(ConstantPool cp, String className) {
+			ensure(cp, className);
+			if (this.condRan != null) {
+				return;
+			}
+			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
+			this.condRan = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_RAN,
+					JvmThrowableRecords.COND_RAN_DESC);
+			this.condOf = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_OF,
+					JvmThrowableRecords.COND_OF_DESC);
 		}
 
 		/**
@@ -6019,81 +6257,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				code.add(Opcode.PUTSTATIC);
 				JvmRuntimeBuilder.emitU2(code, bf.ref().index());
 			}
-		}
-
-	}
-
-	/**
-	 * The compilation-wide quoted-datum interner (.kb/quoted-data.md): one private static
-	 * volatile {@code Object} field per DISTINCT quoted aggregate datum -- a cons, a
-	 * general array, an instance or a packed array under {@code quote} -- built LAZILY by
-	 * its quote site ({@code JvmQuoteCompiler.compile}), so every evaluation answers the
-	 * SAME object: the CL-conformant constant reading, and what the interpreter always
-	 * did. Lazy rather than a {@code <clinit>} initializer on purpose:
-	 * {@link am.ik.jvm.JvmClassShaker} runs on every build and must drop a quoted table
-	 * together with the wrapper defun holding its only site, which a {@code <clinit>}
-	 * reference would pin alive. Keyed by the datum's IDENTITY, so a macro expansion
-	 * splicing one template datum into several sites shares one constant across them,
-	 * exactly like the interpreter's shared template datum. A program with no quoted
-	 * aggregate interns nothing and is emitted byte for byte as before.
-	 */
-	static final class QuotePool {
-
-		/**
-		 * One interned quoted datum.
-		 *
-		 * @param name the field name constant
-		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
-		 */
-		record QuoteField(Utf8Constant name, FieldrefConstant ref) {
-		}
-
-		// Identity-keyed lookup beside an insertion-ordered emission list: an
-		// IdentityHashMap's iteration order is not deterministic, and the emitted
-		// output must be (.kb/emitted-output-determinism.md).
-		private final java.util.IdentityHashMap<am.ik.rontolisp.LispVal, QuoteField> byDatum = new java.util.IdentityHashMap<>();
-
-		private final List<QuoteField> fieldsInOrder = new ArrayList<>();
-
-		@Nullable Utf8Constant fieldDesc;
-
-		/**
-		 * The interned quoted-datum fields, in interning order.
-		 * @return the fields to emit
-		 */
-		List<QuoteField> fields() {
-			return this.fieldsInOrder;
-		}
-
-		/**
-		 * The already-interned field for a datum, by identity.
-		 * @param datum the quoted datum
-		 * @return the fieldref, or {@code null} when this datum is not interned yet
-		 */
-		@Nullable FieldrefConstant lookup(am.ik.rontolisp.LispVal datum) {
-			QuoteField existing = this.byDatum.get(datum);
-			return existing == null ? null : existing.ref();
-		}
-
-		/**
-		 * Interns the static field holding one quoted datum; the caller emits the
-		 * lazy-build site (idempotence is {@link #lookup}'s job).
-		 * @param cp the constant pool
-		 * @param className the internal name of the class being emitted
-		 * @param datum the quoted datum (keyed by identity)
-		 * @return the fieldref of the constant
-		 */
-		FieldrefConstant intern(ConstantPool cp, String className, am.ik.rontolisp.LispVal datum) {
-			if (this.fieldDesc == null) {
-				this.fieldDesc = cp.addUtf8("Ljava/lang/Object;");
-			}
-			Utf8Constant nameUtf = cp.addUtf8("_qd$" + this.fieldsInOrder.size());
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			FieldrefConstant ref = cp.addFieldref(thisClass, cp.addNameAndType(nameUtf, this.fieldDesc));
-			QuoteField field = new QuoteField(nameUtf, ref);
-			this.byDatum.put(datum, field);
-			this.fieldsInOrder.add(field);
-			return ref;
 		}
 
 	}
@@ -6799,6 +6962,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * The defuns whose lambda list takes the counts of the built-in they are named
+		 * after (compiler/BuiltinCallArity#builtinShapedDefuns): a direct call of one is
+		 * judged, and reported, as the built-in rather than by the defun's own check.
+		 */
+		Set<String> builtinShapedDefuns = Set.of();
+
+		/**
 		 * The {@code cl} function names this compile ATTEMPT has already warned about, so
 		 * an override that happens at fifty call sites reports once -- and a retried
 		 * attempt (a mispredicted helper gate) warns again, because
@@ -7070,18 +7240,26 @@ public final class JvmLispCompiler implements LispCompiler {
 		final BigIntPool bigIntPool;
 
 		/**
-		 * The compilation-wide quoted-datum interner (one static {@code Object} field per
-		 * distinct quoted aggregate, .kb/quoted-data.md); one instance shared across
-		 * every context of a compilation through the single builder, like
-		 * {@link #bigIntPool}.
+		 * The compilation-wide quoted-datum table (one slot per distinct quoted
+		 * aggregate, .kb/quoted-data.md); one instance shared across every context of a
+		 * compilation through the single builder, like {@link #bigIntPool}.
 		 */
-		final QuotePool quotePool;
+		final JvmQuotePool quotePool;
+
+		/**
+		 * The compilation-wide UNSUPPLIED marker (the static field a caller passes for a
+		 * physical optional it has no argument for, {@link JvmPhysicalArgs}); one
+		 * instance shared across every context of a compilation through the single
+		 * builder, like {@link #quotePool}.
+		 */
+		final JvmUnsupplied unsupplied;
 
 		private Ctx(Builder builder) {
 			this.conditionChannel = builder.conditionChannel;
 			this.layoutPool = builder.layoutPool;
 			this.bigIntPool = builder.bigIntPool;
 			this.quotePool = builder.quotePool;
+			this.unsupplied = builder.unsupplied;
 			this.dynamic = builder.dynamic;
 			this.servletMode = builder.servletMode;
 			this.blockExitChannel = builder.blockExitChannel;
@@ -7114,6 +7292,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
@@ -7375,7 +7554,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * One quoted-datum pool per builder (= per compilation): every context built
 			 * from the same builder shares it.
 			 */
-			private final QuotePool quotePool = new QuotePool();
+			private final JvmQuotePool quotePool = new JvmQuotePool();
+
+			/**
+			 * One UNSUPPLIED marker per builder (= per compilation): every context built
+			 * from the same builder shares it.
+			 */
+			private final JvmUnsupplied unsupplied = new JvmUnsupplied();
 
 			/**
 			 * One source-site table per builder (= per compilation), or none when the
@@ -7608,6 +7793,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> builtinShapedDefuns = Set.of();
 
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
@@ -8168,6 +8355,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder builtinShapedDefuns(Set<String> builtinShapedDefuns) {
+				this.builtinShapedDefuns = builtinShapedDefuns;
 				return this;
 			}
 

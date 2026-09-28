@@ -8,6 +8,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -79,7 +80,7 @@ final class WasmHashTableCompiler {
 	 */
 	static void compileTest(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!tagged(ctx)) {
-			WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableTest(cons), ctx);
+			compileTableThenConstant(LispMacroExpander.expandHashTableTest(cons), ctx);
 			return;
 		}
 		List<LispVal> args = cons.toList();
@@ -333,6 +334,7 @@ final class WasmHashTableCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int cellSlot = setTemp(ctx);
+		emitTableCheck(ctx, cellSlot);
 		getLocal(ctx, cellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -350,6 +352,11 @@ final class WasmHashTableCompiler {
 		// O(1): the live-entry count is the car of the header cons (an i31 integer),
 		// shifted past the test tag in a module that carries one.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			int tableSlot = setTemp(ctx);
+			emitTableCheck(ctx, tableSlot);
+			getLocal(ctx, tableSlot);
+		}
 		castCellGet0(ctx); // header cons
 		castConsGet(ctx, 0); // count i31
 		if (tagged(ctx)) {
@@ -362,14 +369,18 @@ final class WasmHashTableCompiler {
 	}
 
 	static void compileP(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// General arrays share the TYPE_CELL box (see WasmArraypCompiler): a hash
-		// table's header car is its i31 entry count, an array's is its dims array --
-		// mirror %arrayp's discrimination with the car test inverted.
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		int valueSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(valueSlot);
+		int valueSlot = setTemp(ctx);
+		emitHashTablePI32(ctx, valueSlot);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	// Pushes the i32 hash-table-p answers for the value in valueSlot. General arrays
+	// share the TYPE_CELL box (see WasmArraypCompiler): a hash table's header car is its
+	// i31 entry count, an array's is its dims array -- mirror %arrayp's discrimination
+	// with the car test inverted.
+	private static void emitHashTablePI32(WasmLispCompiler.Ctx ctx, int valueSlot) {
 		int innerSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(valueSlot);
@@ -409,7 +420,42 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.END);
-		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * EH mode only: a value in {@code slot} that is no hash table is the innermost named
+	 * operator's {@code HASH-TABLE} type-error -- the accessors below cast it, which
+	 * trapped. A module outside EH mode emits nothing.
+	 * @param ctx the compile context
+	 * @param slot the local holding the table operand
+	 */
+	private static void emitTableCheck(WasmLispCompiler.Ctx ctx, int slot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		emitHashTablePI32(ctx, slot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		WasmOperandTypes.emitTypeError(ctx, slot, OperandTypes.Kind.HASH_TABLE);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Compiles an accessor that answers a constant after evaluating its table,
+	 * {@code (progn table constant)}, checking the table in between in EH mode
+	 * ({@link #emitTableCheck}).
+	 * @param expansion the {@code (progn table constant)} expansion
+	 * @param ctx the compile context
+	 */
+	static void compileTableThenConstant(LispVal expansion, WasmLispCompiler.Ctx ctx) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			WasmExprCompiler.compileExpr(expansion, ctx);
+			return;
+		}
+		List<LispVal> forms = ((LispCons) expansion).toList();
+		WasmExprCompiler.compileExpr(forms.get(1), ctx);
+		emitTableCheck(ctx, setTemp(ctx));
+		WasmExprCompiler.compileExpr(forms.get(2), ctx);
 	}
 
 	static void compileMaphash(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -510,6 +556,11 @@ final class WasmHashTableCompiler {
 	// fresh temp, returning the temp slot.
 	private static int headerSlot(LispVal tableExpr, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(tableExpr, ctx);
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			int tableSlot = setTemp(ctx);
+			emitTableCheck(ctx, tableSlot);
+			getLocal(ctx, tableSlot);
+		}
 		castCellGet0(ctx);
 		return setTemp(ctx);
 	}

@@ -256,10 +256,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.EQ, LispNames.LT,
 			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
 			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE, LispNames.LENGTH,
-			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
-			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS,
-			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
-			LispNames.TANH, LispNames.EXPT);
+			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT,
+			LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG,
+			LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
+			LispNames.COSH, LispNames.TANH, LispNames.EXPT);
 
 	/**
 	 * The packed double-float array operators (F64VEC). Like {@link #BUILTINS} they
@@ -1382,7 +1382,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				return Ty.BOOL;
 			}
 			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH,
-					LispNames.LENGTH, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR -> {
+					LispNames.LENGTH, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
@@ -4428,7 +4428,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ "' is not a parameter or let binding (scalar mode has no globals or heap values)");
 			}
 			case LispCons cons -> {
-				return compileCall(cons, fn);
+				// A warning about a form a macro built is placed at this one when it is
+				// the innermost located form around it (CompileWarnings).
+				LispCons enclosing = SourceProvenance.enterForm(cons);
+				try {
+					return compileCall(cons, fn);
+				}
+				finally {
+					SourceProvenance.leaveForm(enclosing);
+				}
 			}
 			default -> throw new UnsupportedOperationException(
 					"--no-gc: unsupported value in function '" + fn.fnName + "': " + expr.print());
@@ -4603,7 +4611,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.SUBSEQ -> compileSubseq(args, fn);
 			case LispNames.STRING_EQ -> compileStringEq(args, fn);
 			case LispNames.CHAR -> compileCharAt(args, fn);
-			case LispNames.CHAR_CODE, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
+			case LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR -> compileCharIdentity(name, args, fn);
 			case LispNames.CHAR_EQ -> compileComparison(cons, args, fn, Instruction.I64_EQ, Instruction.F64_EQ);
 			case LispNames.PRINC_TO_STRING -> compilePrincToString(args, fn);
 			case LispNames.PRINT, LispNames.PRINC -> compilePrintOp(name, args, fn);
@@ -4630,7 +4638,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		};
 		if (redefinedClFunction && this.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 		return result;
 	}
@@ -7680,9 +7688,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return Ty.INT;
 	}
 
-	// Numeric comparison. Binary is emitted directly; one or 3+ args expand into nested
-	// binary comparisons combined with and (all supported core forms).
+	// Numeric comparison. Binary is emitted directly; 3+ args expand into nested binary
+	// comparisons combined with and (all supported core forms). One argument is t: this
+	// backend's typed subset has no type-error to signal (a wrong-type operand traps).
 	private Ty compileComparison(LispCons cons, List<LispVal> args, Fn fn, int intOp, int floatOp) {
+		if (args.size() == 2) {
+			return compileExpr(new LispCons(new LispSymbol(LispNames.PROGN),
+					new LispCons(args.get(1), new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE))), fn);
+		}
 		if (args.size() != 3) {
 			return compileExpr(LispMacroExpander.expandComparison(cons), fn);
 		}

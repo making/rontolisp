@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.eval.TlsPemSupport;
 
 import org.jspecify.annotations.Nullable;
@@ -64,7 +65,12 @@ public final class TlsPemInliner {
 			if (!(node instanceof LispCons cons)) {
 				return node;
 			}
-			if (cons.car() instanceof LispSymbol op && LispNames.TLS_LISTEN_PEM.equals(member(op.name()))) {
+			if (cons.car() instanceof LispSymbol op && LispNames.TLS_LISTEN_PEM.equals(member(op.name()))
+					&& BuiltinCallArity.wrongCountMessage(
+							PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_PEM),
+							cons.properLength() - 1) == null) {
+				// A wrong count stays the call, which each backend compiles to the
+				// interpreter's run-time program-error (compiler/BuiltinCallArity).
 				return rewriteCall(cons.toList(), baseDir);
 			}
 			return null;
@@ -73,10 +79,6 @@ public final class TlsPemInliner {
 
 	private static LispVal rewriteCall(List<LispVal> elements, @Nullable String baseDir) {
 		List<LispVal> args = elements.subList(1, elements.size());
-		if (args.size() < 3 || args.size() > 4) {
-			throw new UnsupportedOperationException(
-					LispNames.TLS_LISTEN_PEM + " expects 3 or 4 arguments, got " + args.size());
-		}
 		if (!(args.get(0) instanceof LispString certPath) || !(args.get(1) instanceof LispString keyPath)) {
 			throw new UnsupportedOperationException(
 					LispNames.TLS_LISTEN_PEM + ": cert-file and key-file must be string literals when compiling "

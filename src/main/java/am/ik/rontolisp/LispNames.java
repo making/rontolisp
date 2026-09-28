@@ -1378,10 +1378,19 @@ public final class LispNames {
 	public static final String ENDP = "ENDP";
 
 	/**
-	 * The {@code elt} built-in function (0-based element access; lists only, a synonym
-	 * for {@code nth} with reversed argument order, string indexing is not supported).
+	 * The {@code elt} built-in function (0-based element access into a list, a string or
+	 * a vector; an index outside the sequence is a {@code type-error}).
 	 */
 	public static final String ELT = "ELT";
+
+	/**
+	 * The {@code %elt-cell} internal: {@code (%elt-cell list index)} answers the cons
+	 * holding the list's element at {@code index} -- the list arm of an {@code elt} read
+	 * and of its {@code setf} place. An index outside {@code [0, length)} is
+	 * {@code ELT}'s {@code type-error} whose expected type is {@code (INTEGER 0
+	 * (length))}, counted by the same walk that would have found the cell.
+	 */
+	public static final String ELT_CELL = "%ELT-CELL";
 
 	/**
 	 * The {@code rassoc} built-in function (return the first pair whose cdr is
@@ -1625,6 +1634,32 @@ public final class LispNames {
 	 * like {@link #CHECK_STRING_INTERNAL}: the value of a string store.
 	 */
 	public static final String CHECK_CHARACTER_INTERNAL = "%CHECK-CHARACTER";
+
+	/**
+	 * The {@code %operand-type-error} internal: {@code (%operand-type-error x 'op 'kind)}
+	 * never returns -- it signals {@code op}'s type-error over {@code x}, naming
+	 * {@code kind} (an {@code OperandTypes.Kind}: {@code sequence}, {@code array},
+	 * {@code hash-table}); unnamed when {@code op} is nil. A lowering places it where its
+	 * own type dispatch has run out of arms, so the test is the dispatch's and the form
+	 * is only the signal.
+	 */
+	public static final String OPERAND_TYPE_ERROR_INTERNAL = "%OPERAND-TYPE-ERROR";
+
+	/**
+	 * The {@code %check-sequence} internal: {@code (%check-sequence x 'op)} answers
+	 * {@code x} when it is a sequence (a list or a vector) and otherwise signals
+	 * {@code op}'s {@code SEQUENCE} type-error -- unnamed when {@code op} is nil. A
+	 * compile path calls {@link #CHECK_SEQUENCE_RUNTIME} for it when the program carries
+	 * that defun.
+	 */
+	public static final String CHECK_SEQUENCE_INTERNAL = "%CHECK-SEQUENCE";
+
+	/**
+	 * The shared defun a compiled {@code %check-sequence} site calls:
+	 * {@code (%check-sequence-runtime x token)}, the token the backend's own spelling of
+	 * the operator {@code %operand-type-error} names at run time.
+	 */
+	public static final String CHECK_SEQUENCE_RUNTIME = "%CHECK-SEQUENCE-RUNTIME";
 
 	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
@@ -2405,19 +2440,12 @@ public final class LispNames {
 	 * expansion wraps its body in: a catch-any region that, for an escaping error whose
 	 * handlers did not run at the signal point (a raw built-in failure, an internal
 	 * {@code %error} with no signal hook), synthesizes the condition instance, runs the
-	 * {@code handler-bind} cluster stack, and rethrows carrying the instance. A condition
-	 * whose handlers already ran is recognized by identity against
-	 * {@link #HANDLERS_RAN_VAR} and rethrown untouched.
+	 * {@code handler-bind} cluster stack, and rethrows carrying the instance and saying
+	 * its handlers ran. A throw that already says so -- a signal hook's terminal
+	 * ({@link #ERROR_COND_INTERNAL}'s third operand), a pad nearer the signal -- is
+	 * rethrown untouched.
 	 */
 	public static final String HB_GUARD_INTERNAL = "%HB-GUARD";
-
-	/**
-	 * The condition instance {@code %run-handlers} last completed a cluster walk for (set
-	 * at the END of the walk, so a nested signal inside a handler cannot clear an outer
-	 * condition's mark). {@code %hb-guard} compares against it by identity to keep the
-	 * signal-point run and the landing-pad run from both firing for one condition.
-	 */
-	public static final String HANDLERS_RAN_VAR = "%HANDLERS-RAN%";
 
 	/**
 	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
@@ -2636,7 +2664,11 @@ public final class LispNames {
 	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
 	 * instance) alongside the pre-built message string. Produced by the {@code error}
 	 * macro expansion for the typed and condition-object designator forms; on the WASM
-	 * backends it traps like {@link #ERROR_INTERNAL}.
+	 * backends it traps like {@link #ERROR_INTERNAL}. A third operand {@code t} -- the
+	 * restart-mode signal hook's terminal, reached only once
+	 * {@link #RUN_HANDLERS_INTERNAL} completed a walk for the condition -- makes the
+	 * throw say the {@code handler-bind} handlers ran, so no {@link #HB_GUARD_INTERNAL}
+	 * pad runs them again ({@code LispMacroExpander.handlersRanTerminal}).
 	 */
 	public static final String ERROR_COND_INTERNAL = "%ERROR-COND";
 
@@ -2675,6 +2707,18 @@ public final class LispNames {
 	 * ({@code LambdaLists.lowerArityMissingMessage}).
 	 */
 	public static final String ARITY_MISSING_MESSAGE_INTERNAL = "%ARITY-MISSING-MESSAGE";
+
+	/**
+	 * Internal one-argument primitive {@code (%supplied-p param)}: true unless
+	 * {@code param} holds the UNSUPPLIED marker -- what a caller passes for an
+	 * {@code &optional} parameter it has no argument for, when the callee takes its
+	 * optionals as physical parameters ({@code LambdaLists.toNative}). Only the prologue
+	 * that desugaring writes reads it, over a physical optional parameter, so the marker
+	 * never reaches a Lisp binding. The interpreter answers it too, for the
+	 * {@code flet}/{@code labels} definitions that reach it in the physical shape
+	 * ({@code LambdaLists.expandPhysical}, {@code LambdaLists.UNSUPPLIED}).
+	 */
+	public static final String SUPPLIED_P_INTERNAL = "%SUPPLIED-P";
 
 	/**
 	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
@@ -2743,7 +2787,8 @@ public final class LispNames {
 	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} whose clause
 	 * types match it is established on the current thread of control, and returns nil
 	 * otherwise (CLHS 9.1.4.1: {@code signal} transfers control only to a handler that
-	 * will handle the condition).
+	 * will handle the condition). Takes the third operand {@link #ERROR_COND_INTERNAL}
+	 * does, to the same end.
 	 */
 	public static final String SIGNAL_COND_INTERNAL = "%SIGNAL-COND";
 
@@ -3874,6 +3919,13 @@ public final class LispNames {
 	public static final String CHAR_CODE = "CHAR-CODE";
 
 	/**
+	 * The {@code char-int} built-in function: a non-negative integer encoding the
+	 * character, the code point with no implementation-defined attributes beyond it --
+	 * the same value {@code char-code} answers.
+	 */
+	public static final String CHAR_INT = "CHAR-INT";
+
+	/**
 	 * The {@code code-char} built-in function (the character with a given code point).
 	 */
 	public static final String CODE_CHAR = "CODE-CHAR";
@@ -4316,6 +4368,9 @@ public final class LispNames {
 
 	/** The {@code :end} keyword recognized by {@code parse-integer}. */
 	public static final String END_KEYWORD = ":END";
+
+	/** The {@code :abort} keyword {@code close} accepts and ignores. */
+	public static final String ABORT_KEYWORD = ":ABORT";
 
 	/** The {@code :start1} keyword recognized by {@code replace}. */
 	public static final String START1_KEYWORD = ":START1";
@@ -5038,6 +5093,18 @@ public final class LispNames {
 	 * The {@code write-to-string} built-in function (a {@code prin1-to-string} alias).
 	 */
 	public static final String WRITE_TO_STRING = "WRITE-TO-STRING";
+
+	/**
+	 * The {@code %write-to-string-keyed} prelude defun: {@code #'write-to-string}'s
+	 * keyword arm on the compile paths, {@code (%write-to-string-keyed object keys)}
+	 * binding the printer variables the runtime keyword list names around one print --
+	 * what the call-position lowering
+	 * ({@code LispMacroExpander.expandWriteToStringKeywords}) does with a literal tail.
+	 * Spliced only for a program that can pass a function value of
+	 * {@code write-to-string} more than one argument; the wrapper calls it only where it
+	 * was spliced ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String WRITE_TO_STRING_KEYED_INTERNAL = "%WRITE-TO-STRING-KEYED";
 
 	/** The {@code with-output-to-string} macro (collect output into a string). */
 	public static final String WITH_OUTPUT_TO_STRING = "WITH-OUTPUT-TO-STRING";
@@ -5794,10 +5861,11 @@ public final class LispNames {
 	/**
 	 * The internal {@code rontolisp::%read-line-raw}/{@code %read-char-raw}/
 	 * {@code %read-byte-raw}/{@code %write-line-raw}/{@code %write-byte-raw}/
-	 * {@code %close-raw} aliases of the NATIVE stream built-ins on the
-	 * {@code --component} backend: the socket-dispatch defuns sockets.lisp splices
-	 * ({@code %io-read-line} &amp;c) fall back through these for a non-socket handle, so
-	 * the compile-time socket rewrite of the public names cannot recurse. Component-only.
+	 * {@code %close-raw}/{@code %open-stream-p-raw} aliases of the NATIVE stream
+	 * built-ins on the {@code --component} backend: the socket-dispatch defuns
+	 * sockets.lisp splices ({@code %io-read-line} &amp;c) fall back through these for a
+	 * non-socket handle, so the compile-time socket rewrite of the public names cannot
+	 * recurse. Component-only.
 	 */
 	public static final String READ_LINE_RAW_INTERNAL = "%READ-LINE-RAW";
 
@@ -5821,6 +5889,9 @@ public final class LispNames {
 
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String LISTEN_RAW_INTERNAL = "%LISTEN-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String OPEN_STREAM_P_RAW_INTERNAL = "%OPEN-STREAM-P-RAW";
 
 	/**
 	 * The compile paths' per-file-stream element-type registry: a prelude defun that
@@ -7445,6 +7516,12 @@ public final class LispNames {
 	public static final String JAVA_PROXY = "PROXY";
 
 	/**
+	 * {@code java:reify} -- implements a host interface with one function per method:
+	 * {@code (java:reify "fqcn" "method" function ...)}.
+	 */
+	public static final String JAVA_REIFY = "REIFY";
+
+	/**
 	 * {@code java:object} -- the type specifier {@code (java:object "fqcn")}: a value a
 	 * Java member answered as that class. In {@code the} and {@code declare} it types a
 	 * {@code java:} receiver or argument for static resolution
@@ -7473,6 +7550,9 @@ public final class LispNames {
 
 	/** {@code java:proxy}, qualified. */
 	public static final String JAVA_PROXY_QUALIFIED = JAVA_PKG + ":" + JAVA_PROXY;
+
+	/** {@code java:reify}, qualified. */
+	public static final String JAVA_REIFY_QUALIFIED = JAVA_PKG + ":" + JAVA_REIFY;
 
 	/** {@code java:object}, qualified. */
 	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;
@@ -8361,12 +8441,11 @@ public final class LispNames {
 	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
 
 	/**
-	 * The {@code make-broadcast-stream} built-in function. With NO component streams it
-	 * returns a discarding sink (a fresh string output stream nobody reads); with
-	 * components it returns a {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream
-	 * that fans every write out to each component in order. The two shapes are chosen by
-	 * the ARGUMENT COUNT at expansion time, which is why a component-less call keeps
-	 * emitting exactly the bytes it always did.
+	 * The {@code make-broadcast-stream} built-in function: a
+	 * {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream that fans every write
+	 * out to each component in order -- with no components, one over the empty list,
+	 * whose writes are dropped. The call position expands to it and the function value
+	 * calls it ({@code BuiltinFunctionWrappers}).
 	 */
 	public static final String MAKE_BROADCAST_STREAM = "MAKE-BROADCAST-STREAM";
 

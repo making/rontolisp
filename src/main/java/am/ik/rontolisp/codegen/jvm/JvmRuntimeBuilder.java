@@ -68,10 +68,11 @@ final class JvmRuntimeBuilder {
 			ClassConstant objectClass, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
 			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef,
-			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting) {
+			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
+			JvmUnsupplied unsupplied) {
 		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
 				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false, dispatchable,
-				arityReporting);
+				arityReporting, unsupplied);
 	}
 
 	/**
@@ -182,7 +183,8 @@ final class JvmRuntimeBuilder {
 			ClassConstant objectClass, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
 			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef, boolean spread,
-			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting) {
+			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, ArityReporting arityReporting,
+			JvmUnsupplied unsupplied) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object, or
 		// (Object funcval, Object argList) -> Object for the spread dispatcher.
 		int dispatchArgs = spread ? 1 : arity;
@@ -197,8 +199,10 @@ final class JvmRuntimeBuilder {
 		int maxLocals = dispatchArgs + 4;
 		// The matching callables: named functions plus lambdas (whose closure env is
 		// passed as the first argument). A variadic function (physical params =
-		// required + rest list) matches every dispatch arity >= required; its case
-		// links the surplus args into a cons list. Each case body is rendered ONCE,
+		// required + physical optionals + rest list) matches every dispatch arity >=
+		// required; its case passes the UNSUPPLIED marker for each optional the arity
+		// does not reach and links the args past the optionals into a cons list. Each
+		// case body is rendered ONCE,
 		// branch-free and ending in areturn, so it can be spliced anywhere; funcIds
 		// are globally unique (one shared counter over defuns and lambdas), so
 		// sorting by id gives the search tree below a total order to bisect.
@@ -217,10 +221,11 @@ final class JvmRuntimeBuilder {
 			// The spread dispatcher takes EVERY callable: its case reads the parameters
 			// out of the list, so no arity has to match and no ceiling applies.
 			if (spread) {
-				cases.add(renderSpreadCase(fi, entry.getKey(), -1, cp, objectArrayClass, arityReporting));
+				cases.add(renderSpreadCase(fi, entry.getKey(), -1, cp, thisClass, objectArrayClass, arityReporting,
+						unsupplied));
 			}
-			else if (dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
-				cases.add(renderCase(fi, arity, restSlot, -1, objectClass));
+			else if (dispatchMatches(fi.required(), fi.variadic(), arity)) {
+				cases.add(renderCase(fi, arity, restSlot, -1, objectClass, cp, thisClass, unsupplied));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
@@ -229,10 +234,12 @@ final class JvmRuntimeBuilder {
 				continue;
 			}
 			if (spread) {
-				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), null, fvSlot, cp, objectArrayClass, arityReporting));
+				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), null, fvSlot, cp, thisClass, objectArrayClass,
+						arityReporting, unsupplied));
 			}
-			else if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
-				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass));
+			else if (dispatchMatches(lambdaFuncInfos.get(i).required(), lambda.variadic(), arity)) {
+				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass, cp, thisClass,
+						unsupplied));
 			}
 		}
 		cases.sort(Comparator.comparingInt(Case::funcId));
@@ -552,8 +559,8 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ATHROW);
 	}
 
-	private static boolean dispatchMatches(int paramCount, boolean variadic, int arity) {
-		return variadic ? arity >= paramCount - 1 : paramCount == arity;
+	private static boolean dispatchMatches(int required, boolean variadic, int arity) {
+		return variadic ? arity >= required : required == arity;
 	}
 
 	/**
@@ -639,15 +646,14 @@ final class JvmRuntimeBuilder {
 			if (fi.isClosure() || (dispatchable != null && !dispatchable.contains(fi.funcId()))) {
 				continue;
 			}
-			shapes.put(fi.funcId(), operators.shape(fi.variadic() ? fi.paramCount() - 1 : fi.paramCount(),
-					fi.variadic(), entry.getKey()));
+			shapes.put(fi.funcId(), operators.shape(fi.required(), fi.variadic(), entry.getKey()));
 		}
 		for (JvmLispCompiler.LambdaInfo lambda : lambdaDecls) {
 			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
 				continue;
 			}
-			int params = lambda.paramNames().size();
-			shapes.put(lambda.funcId(), arityShape(lambda.variadic() ? params - 1 : params, lambda.variadic()));
+			int required = lambda.paramNames().size() - (lambda.variadic() ? 1 : 0) - lambda.optionals();
+			shapes.put(lambda.funcId(), arityShape(required, lambda.variadic()));
 		}
 		ClassConstant runtimeEx = cp.addClass(cp.addUtf8(ARITY_EXCEPTION_CLASS));
 		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
@@ -1040,10 +1046,6 @@ final class JvmRuntimeBuilder {
 		emitDispatchTree(code, cases, mid + 1, hi, idSlot, defaultJumps);
 	}
 
-	// Renders one dispatch case body: "...; return f(...)". For a variadic target the
-	// args beyond the required count are linked into a cons list (built in restSlot)
-	// passed as the trailing rest parameter; fvSlot >= 0 marks a closure whose env array
-	// is passed first.
 	/** The dispatcher method name: per-arity, or the single spread one. */
 	static String dispatcherName(int arity, boolean spread) {
 		return spread ? "_invoke_v" : "_invoke_" + arity;
@@ -1051,17 +1053,19 @@ final class JvmRuntimeBuilder {
 
 	/**
 	 * One case of the spread dispatcher {@code _invoke_v(funcval, argList)}: reads the
-	 * target's required parameters out of the argument list (slot 1) and hands a variadic
-	 * target the remaining tail, which IS its physical rest parameter. Needs no scratch
-	 * local -- each parameter is re-walked from the head of the list, which costs a few
-	 * instructions per parameter and keeps the case body self-contained so it can be
-	 * spliced into any segment.
+	 * target's required parameters out of the argument list (slot 1), each physical
+	 * optional its element or -- past the end of the list -- the UNSUPPLIED marker, and
+	 * hands a variadic target the tail past them, which IS its physical rest parameter.
+	 * Needs no scratch local -- each parameter is re-walked from the head of the list,
+	 * which costs a few instructions per parameter and keeps the case body self-contained
+	 * so it can be spliced into any segment.
 	 */
 	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi,
-			@org.jspecify.annotations.Nullable String name, int fvSlot, ConstantPool cp, ClassConstant objectArrayClass,
-			ArityReporting arityReporting) {
+			@org.jspecify.annotations.Nullable String name, int fvSlot, ConstantPool cp, ClassConstant thisClass,
+			ClassConstant objectArrayClass, ArityReporting arityReporting, JvmUnsupplied unsupplied) {
 		List<Integer> code = new ArrayList<>();
-		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
+		int required = fi.required();
+		int positional = fi.positional();
 		// The count guard. A short list would otherwise BIND nil for the parameters it
 		// does not reach and a long one would drop its tail, because the walk below is
 		// car/cdr and both answer nil past the end -- neither of which is a dispatch
@@ -1085,16 +1089,23 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.ALOAD);
 			code.add(fvSlot);
 		}
-		for (int i = 0; i < required; i++) {
+		for (int i = 0; i < positional; i++) {
 			code.add(Opcode.ALOAD_1);
 			for (int step = 0; step < i; step++) {
 				emitCell(code, objectArrayClass, 1);
 			}
-			emitCell(code, objectArrayClass, 0);
+			if (i < required) {
+				emitCell(code, objectArrayClass, 0);
+			}
+			else {
+				// cell == null ? UNSUPPLIED : car(cell), branch-free here
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, unsupplied.optArgRef(cp, thisClass).index());
+			}
 		}
 		if (fi.variadic()) {
 			code.add(Opcode.ALOAD_1);
-			for (int step = 0; step < required; step++) {
+			for (int step = 0; step < positional; step++) {
 				emitCell(code, objectArrayClass, 1);
 			}
 		}
@@ -1119,16 +1130,22 @@ final class JvmRuntimeBuilder {
 		patchBranch(code, ifNullPos, code.size());
 	}
 
+	// Renders one per-arity dispatch case body: "...; return f(...)". The arguments a
+	// parameter takes are passed as they are, each physical optional the arity does not
+	// reach as the UNSUPPLIED marker, and -- for a variadic target -- the args past the
+	// optionals linked into a cons list (built in restSlot) as the trailing rest
+	// parameter; fvSlot >= 0 marks a closure whose env array is passed first.
 	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot,
-			ClassConstant objectClass) {
+			ClassConstant objectClass, ConstantPool cp, ClassConstant thisClass, JvmUnsupplied unsupplied) {
 		List<Integer> code = new ArrayList<>();
-		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
-		if (fi.variadic()) {
-			// rest = null; for (j = arity-1 .. required) rest = new Object[]{a_j, rest}
+		int positional = fi.positional();
+		boolean surplus = fi.variadic() && arity > positional;
+		if (surplus) {
+			// rest = null; for (j = arity-1 .. positional) rest = new Object[]{a_j, rest}
 			code.add(Opcode.ACONST_NULL);
 			code.add(Opcode.ASTORE);
 			code.add(restSlot);
-			for (int j = arity - 1; j >= required; j--) {
+			for (int j = arity - 1; j >= positional; j--) {
 				code.add(Opcode.ICONST_2);
 				code.add(Opcode.ANEWARRAY);
 				emitU2(code, objectClass.index());
@@ -1150,13 +1167,23 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.ALOAD);
 			code.add(fvSlot);
 		}
-		for (int i = 0; i < required; i++) {
-			code.add(Opcode.ALOAD);
-			code.add(i + 1);
+		for (int i = 0; i < positional; i++) {
+			if (i < arity) {
+				code.add(Opcode.ALOAD);
+				code.add(i + 1);
+			}
+			else {
+				code.add(Opcode.INVOKESTATIC);
+				emitU2(code, unsupplied.ref(cp, thisClass).index());
+			}
 		}
-		if (fi.variadic()) {
+		if (surplus) {
 			code.add(Opcode.ALOAD);
 			code.add(restSlot);
+		}
+		else if (fi.variadic()) {
+			// nothing past the optionals: the empty rest list
+			code.add(Opcode.ACONST_NULL);
 		}
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, fi.methodref().index());
@@ -1360,7 +1387,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		emitHashTableBranch(code, hashPrint);
+		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
@@ -2235,7 +2262,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		emitHashTableBranch(code, hashPrint);
+		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
@@ -2450,12 +2477,15 @@ final class JvmRuntimeBuilder {
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
 	 * lisp-to-string builders only when the program uses {@code java:} interop -- which
-	 * is also when an {@code ArrayList} may be a host object rather than a Lisp array, so
-	 * the array branch checks for the array's header first.
+	 * is also when an {@code ArrayList} / {@code LinkedHashMap} may be a host object
+	 * rather than a Lisp array / hash table, so those branches ask the program's shared
+	 * tests ({@code lispArray} = {@code _jlarr}, {@code lispTable} = {@code _jltab})
+	 * first.
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
 			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix,
-			MethodrefConstant arrayListIsEmpty, MethodrefConstant arrayListGet, ClassConstant objectArrayClass) {
+			@org.jspecify.annotations.Nullable MethodrefConstant lispArray,
+			@org.jspecify.annotations.Nullable MethodrefConstant lispTable) {
 	}
 
 	/**
@@ -2477,10 +2507,11 @@ final class JvmRuntimeBuilder {
 	 *
 	 * <p>
 	 * {@code mapClass} is {@link JvmHashRuntimeBuilder#MAP_CLASS}, the runtime class a
-	 * COMPILED table has and a host {@code java:} map does not: without a branch of its
-	 * own a table used to fall through to {@code toString()} and print Java's own map
-	 * syntax -- container braces, the raw {@code Object[]} entry pair, and an IDENTITY
-	 * HASH, which made the same program print different text on two runs
+	 * COMPILED table has -- and a host {@code java:} map too, so a {@code java:} program
+	 * tests {@link JavaPrint#lispTable} instead: without a branch of its own a table used
+	 * to fall through to {@code toString()} and print Java's own map syntax -- container
+	 * braces, the raw {@code Object[]} entry pair, and an IDENTITY HASH, which made the
+	 * same program print different text on two runs
 	 * ({@code .kb/emitted-output-determinism.md}). The count comes from {@code mapSize},
 	 * the {@code _hashSize} helper {@code _hashCount} reads too, so the printed number
 	 * and {@code hash-table-count} cannot disagree.
@@ -3264,14 +3295,22 @@ final class JvmRuntimeBuilder {
 	// :COUNT ".concat(Integer.toString(map.size())).concat(">")" -- the interpreter's
 	// LispHashTable.print() answer, so all four backends print one table identically. A
 	// no-op in a program that never makes a table.
-	private static void emitHashTableBranch(List<Integer> code,
-			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
+	private static void emitHashTableBranch(List<Integer> code, @org.jspecify.annotations.Nullable HashPrint hashPrint,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		if (hashPrint == null) {
 			return;
 		}
 		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, hashPrint.mapClass().index());
+		if (javaPrint != null && javaPrint.lispTable() != null) {
+			// A java: call can answer a LinkedHashMap of its own: a host object, printed
+			// by the #<java ...> tail.
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispTable()).index());
+		}
+		else {
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, hashPrint.mapClass().index());
+		}
 		int skip = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
@@ -3580,25 +3619,11 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		if (javaPrint != null) {
-			// A java: call can answer an ArrayList of its own, which is a host object: a
-			// Lisp array's slot 0 is its Object[] header (the bridge's kindOf test), and
-			// anything else falls through to the #<java ...> tail.
+			// A java: call can answer an ArrayList of its own, which is a host object and
+			// falls through to the #<java ...> tail.
 			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, arrayListClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.arrayListIsEmpty().index());
-			notArray.add(code.size());
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, arrayListClass.index());
-			code.add(Opcode.ICONST_0);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.arrayListGet().index());
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, javaPrint.objectArrayClass().index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispArray()).index());
 			notArray.add(code.size());
 			code.add(Opcode.IFEQ);
 			emitU2(code, 0);

@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -214,7 +215,7 @@ public final class UserMacroExpander {
 			if (defsectionExport != null) {
 				result.add(defsectionExport);
 			}
-			LispVal expanded = expandAll(resolved, macroEval);
+			LispVal expanded = expandCompiling(resolved, macroEval);
 			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
 			// it here so the definition scanners downstream (WitExportInliner, the
 			// library pruner) see the canonical async-defun/async-lambda forms, exactly
@@ -307,7 +308,7 @@ public final class UserMacroExpander {
 			// expandAll like any generated expansion.
 			if (!mopSplice.isEmpty()) {
 				for (LispVal spliced : new ArrayList<>(mopSplice)) {
-					result.add(requalifyShadowedClNames(expandAll(spliced, macroEval), macroEval));
+					result.add(requalifyShadowedClNames(expandCompiling(spliced, macroEval), macroEval));
 				}
 				mopSplice.clear();
 			}
@@ -1033,7 +1034,7 @@ public final class UserMacroExpander {
 			"plusp", "minusp", "evenp", "oddp", "endp", "car", "cdr", "caar", "cadr", "cdar", "cddr", "caddr", "first",
 			"second", "third", "fourth", "rest", "last", "nth", "nthcdr", "elt", "length", "list", "list*", "cons",
 			"reverse", "append", "member", "assoc", "getf", "position", "find", "string", "symbol-name", "char-code",
-			"code-char");
+			"char-int", "code-char");
 
 	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
 	// the resolver consumes these, so they must be recognized BEFORE resolution to be
@@ -1320,6 +1321,10 @@ public final class UserMacroExpander {
 	 * lists, case keys), so a macro name reused there is left alone.
 	 */
 	static LispVal expandAll(LispVal form, LispEvaluator macroEval) {
+		// The innermost located form the walk is in: a warning a macro signals while it
+		// expands is placed -- and judged for --warnings-as-errors -- there, the macro
+		// call itself when it was read, the located form around it when a macro built it.
+		LispCons enclosing = form instanceof LispCons cons ? SourceProvenance.enterForm(cons) : null;
 		try {
 			return expandAllLocated(form, macroEval);
 		}
@@ -1329,6 +1334,34 @@ public final class UserMacroExpander {
 			// macro-time evaluator, whose forms were built by the macro. The innermost
 			// frame here that IS a read cons names the call site.
 			throw SourceProvenance.noteFailure(form, ex);
+		}
+		finally {
+			if (form instanceof LispCons) {
+				SourceProvenance.leaveForm(enclosing);
+			}
+		}
+	}
+
+	/**
+	 * {@link #expandAll} for a top-level form of the program being compiled: a warning
+	 * that reaches its report while the form's macros expand -- no handler muffled it --
+	 * is a compile-time warning at the enclosing located form rather than a line on
+	 * {@code *error-output*}, so {@code --warnings-as-errors} counts it by the rule every
+	 * compiler warning follows (the program's own source counts, a library's does not). A
+	 * {@code style-warning} is reported there too and never counts, as in SBCL's
+	 * {@code compile-file}.
+	 */
+	private static LispVal expandCompiling(LispVal form, LispEvaluator macroEval) {
+		return macroEval.reportingWarningsTo(UserMacroExpander::reportMacroTimeWarning,
+				() -> expandAll(form, macroEval));
+	}
+
+	private static void reportMacroTimeWarning(String text, boolean styleWarning) {
+		if (styleWarning) {
+			CompileWarnings.styleWarning(null, text);
+		}
+		else {
+			CompileWarnings.warn(null, text);
 		}
 	}
 

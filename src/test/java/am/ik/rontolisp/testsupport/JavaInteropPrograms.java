@@ -74,6 +74,319 @@ public final class JavaInteropPrograms {
 			  (print (list (drop a 1) (java:call a "toString"))))
 			""";
 
+	/**
+	 * Lisp values where a host object is expected -- at a site left to run time
+	 * ({@code size}), a dispatched one ({@code shown}), receivers declared a
+	 * {@code Collection} / {@code Map}, a falsely declared argument -- and
+	 * {@code BigInteger} results: every Lisp value is refused and shown as {@code prin1}
+	 * shows it, a host list and map are called, and a {@code BigInteger} is a Lisp
+	 * integer. Prints {@link #HOST_OBJECT_OUTPUT}.
+	 */
+	public static final String HOST_OBJECT_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun size (x) (java:call x "size"))
+			(defun sized (x)
+			  (declare (type (java:object "java.util.Collection") x))
+			  (java:call x "size"))
+			(defun entries (m)
+			  (declare (type (java:object "java.util.Map") m))
+			  (java:call m "size"))
+			(defun shown (x) (java:static "java.util.Objects" "toString" x))
+			(defun whole (x) (java:call x "toBigInteger"))
+			(dolist (x (list (list 1 2) 1.0e10 (expt 2 100) 1/3 (complex 1 2)
+			                 (make-array 2 :initial-element 0) (make-array 1 :fill-pointer 0)
+			                 (make-array 2 :element-type 'double-float :initial-element 1d0)
+			                 (make-hash-table)))
+			  (row (lambda () (size x)))
+			  (row (lambda () (shown x))))
+			(row (lambda () (sized (vector 1 2))))
+			(row (lambda () (entries (make-hash-table))))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap")))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (row (lambda () (list (size l) (sized l) (size m) (entries m) (shown l) (shown m)))))
+			(row (lambda () (java:static "java.lang.String" "valueOf"
+			                                 (the (java:object "java.util.LinkedHashMap" :exact) (make-hash-table)))))
+			(let ((b (java:new "java.math.BigInteger" "123456789012345678901234567890"))
+			      (s (java:static "java.math.BigInteger" "valueOf" 5)))
+			  (row (lambda () (list b (+ b 1) s (eql s 5) (typep s 'fixnum)
+			                        (java:call (java:new "java.math.BigDecimal" "1.5") "toBigInteger")
+			                        (whole (java:new "java.math.BigDecimal" "2.5")))))
+			  (row (lambda () (size s))))
+			""";
+
+	/**
+	 * A host {@code ArrayList} (holding a value, and empty) and a host
+	 * {@code LinkedHashMap} beside a Lisp vector and hash table, through every type
+	 * predicate, {@code typecase}, a method dispatch, {@code type-of} and every printer
+	 * entry: a host collection is no Lisp array or table and prints {@code #<java C>}.
+	 * Prints {@link #HOST_COLLECTION_OUTPUT}.
+	 */
+	public static final String HOST_COLLECTION_PROGRAM = """
+			(defgeneric kind (x))
+			(defmethod kind ((x hash-table)) 'table)
+			(defmethod kind ((x vector)) 'vector)
+			(defmethod kind (x) 'other)
+			(let ((l (java:new "java.util.ArrayList"))
+			      (e (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (vector 1 2))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash 'k h) m)
+			  (dolist (x (list l e m v h))
+			    (print (list (hash-table-p x) (vectorp x) (arrayp x) (stringp x) (typep x 'simple-vector)
+			                 (typep x 'sequence) (typep x 'hash-table) (typep x '(vector t))
+			                 (typecase x (hash-table 'table) (vector 'vector) (t 'other))
+			                 (kind x) (type-of x))))
+			  (print l) (print e) (print m)
+			  (terpri) (prin1 l) (prin1 m) (princ l) (princ m)
+			  (print (format nil "~a ~s ~a ~s" l l m m))
+			  (print (list (prin1-to-string l) (princ-to-string m) (write-to-string e)))
+			  (print (list l m v h (gethash 'k h)))
+			  (print (vector l m v h)))
+			""";
+
+	/**
+	 * A host {@code ArrayList} holding {@code 1} and a host {@code LinkedHashMap} holding
+	 * {@code "k"} through every array and hash-table accessor, directly and as a function
+	 * value: each is refused with the interpreter's type-error ({@code ARRAY} or
+	 * {@code HASH-TABLE}, named after the accessor when that is a named operator, and
+	 * {@code LENGTH}'s {@code SEQUENCE} one for {@code length}), an argument after the
+	 * table is evaluated first, and the host map is left untouched. A Lisp table and
+	 * vector beside them still answer. Prints {@link #HOST_ACCESSOR_OUTPUT}.
+	 */
+	public static final String HOST_ACCESSOR_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk))
+			    (type-error (e)
+			      (princ (list 'type-error (type-error-datum e) (type-error-expected-type e)))
+			      (princ " ")
+			      (princ e))
+			    (error (e) (princ e)))
+			  (terpri))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (make-array 2 :fill-pointer 1 :adjustable t :initial-element 7))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash "k" h) 1)
+			  (row (lambda () (gethash "k" m)))
+			  (row (lambda () (gethash "k" m (progn (princ "default ") 0))))
+			  (row (lambda () (setf (gethash "z" m) (progn (princ "value ") 2))))
+			  (row (lambda () (remhash "k" m)))
+			  (row (lambda () (clrhash m)))
+			  (row (lambda () (hash-table-count m)))
+			  (row (lambda () (hash-table-size m)))
+			  (row (lambda () (hash-table-test m)))
+			  (row (lambda () (hash-table-rehash-size m)))
+			  (row (lambda () (hash-table-rehash-threshold m)))
+			  (row (lambda () (maphash (lambda (k x) (print (list k x))) m)))
+			  (row (lambda () (loop for k being the hash-keys of m collect k)))
+			  (row (lambda () (funcall #'gethash "k" m)))
+			  (row (lambda () (java:call m "toString")))
+			  (row (lambda () (length l)))
+			  (row (lambda () (funcall #'length l)))
+			  (row (lambda () (coerce l 'list)))
+			  (row (lambda () (elt l 0)))
+			  (row (lambda () (aref l 0)))
+			  (row (lambda () (svref l 0)))
+			  (row (lambda () (setf (aref l 0) 2)))
+			  (row (lambda () (row-major-aref l 0)))
+			  (row (lambda () (array-dimensions l)))
+			  (row (lambda () (array-rank l)))
+			  (row (lambda () (array-element-type l)))
+			  (row (lambda () (adjustable-array-p l)))
+			  (row (lambda () (array-has-fill-pointer-p l)))
+			  (row (lambda () (fill-pointer l)))
+			  (row (lambda () (vector-push 2 l)))
+			  (row (lambda () (vector-push-extend 2 l)))
+			  (row (lambda () (vector-pop l)))
+			  (row (lambda () (java:call l "toString")))
+			  (row (lambda () (list (gethash "k" h) (hash-table-count h) (hash-table-test h) (length v) (aref v 0)
+			                        (vector-push-extend 8 v) (fill-pointer v) (array-element-type v)))))
+			""";
+
+	/** What {@link #HOST_ACCESSOR_PROGRAM} prints. */
+	public static final String HOST_ACCESSOR_OUTPUT = """
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			default (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			value (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) (SETF GETHASH): The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) REMHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) CLRHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-COUNT: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-TEST: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-THRESHOLD: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			"{k=1}"
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) COERCE: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) (SETF AREF): The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ROW-MAJOR-AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-ELEMENT-TYPE: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ADJUSTABLE-ARRAY-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-HAS-FILL-POINTER-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) FILL-POINTER: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH-EXTEND: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-POP: The value #<java java.util.ArrayList> is not of type ARRAY
+			"[1]"
+			(1 1 EQUAL 1 7 1 2 T)""";
+
+	/** What {@link #HOST_COLLECTION_PROGRAM} prints. */
+	public static final String HOST_COLLECTION_OUTPUT = """
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL T T NIL T T NIL T VECTOR VECTOR (SIMPLE-VECTOR 2))
+			(T NIL NIL NIL NIL NIL T NIL TABLE TABLE HASH-TABLE)
+			#<java java.util.ArrayList>
+			#<java java.util.ArrayList>
+			#<java java.util.LinkedHashMap>
+
+			#<java java.util.ArrayList>#<java java.util.LinkedHashMap>#<java java.util.ArrayList>#<java java.util.LinkedHashMap>\
+			"#<java java.util.ArrayList> #<java java.util.ArrayList> #<java java.util.LinkedHashMap> #<java java.util.LinkedHashMap>"
+			("#<java java.util.ArrayList>" "#<java java.util.LinkedHashMap>" "#<java java.util.ArrayList>")
+			(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1> #<java java.util.LinkedHashMap>)
+			#(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1>)""";
+
+	/** What {@link #HOST_OBJECT_PROGRAM} prints. */
+	public static final String HOST_OBJECT_OUTPUT = """
+			java:call expects a java object as the first argument, got (1 2)
+			"[1, 2]"
+			java:call expects a java object as the first argument, got 1.0e10
+			"1.0E10"
+			java:call expects a java object as the first argument, got 1267650600228229401496703205376
+			"1267650600228229401496703205376"
+			java:call expects a java object as the first argument, got 1/3
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #C(1 2)
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #(0 0)
+			"[0, 0]"
+			java:call expects a java object as the first argument, got #()
+			"[]"
+			java:call expects a java object as the first argument, got #d(1.0 1.0)
+			"[1.0, 1.0]"
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #(1 2)
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(1 1 1 1 "[1]" "{k=1}")
+			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
+			java:call expects a java object as the first argument, got 5""";
+
+	/**
+	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},
+	 * {@code val}), at a site left to run time (the class name in a variable: the
+	 * compiled program's bridge) and at resolved ones: every rank-1 packed float and
+	 * integer vector converts element-wise like a general vector, a rank-2 one does not;
+	 * a bignum is a {@code BigInteger} (or a supertype of one), a fixnum reaches a
+	 * {@code BigInteger} parameter, a ratio and a bignum where a {@code double} is
+	 * expected match nothing. Prints {@link #SPECIALIZED_AND_BIGNUM_OUTPUT}.
+	 */
+	public static final String SPECIALIZED_AND_BIGNUM_PROGRAM = """
+			(defvar *arrays* "java.util.Arrays")
+			(defvar *string* "java.lang.String")
+			(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+			(defun ts* (x) (java:static *arrays* "toString" x))
+			(defun val (x) (java:static "java.lang.String" "valueOf" x))
+			(defun val* (x) (java:static *string* "valueOf" x))
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(dolist (x (list (make-array 3 :element-type 'double-float :initial-contents '(1d0 2d0 3.5d0))
+			                 (make-array 2 :element-type 'single-float :initial-contents '(1.5 -2.0))
+			                 #f(6.0)
+			                 (make-array 2 :element-type 'bfloat16 :initial-contents '(1.5 -2.0))
+			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 255))
+			                 (make-array 2 :element-type '(unsigned-byte 16) :initial-contents '(7 65535))
+			                 (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(9 65536))))
+			  (row (lambda () (list (ts x) (ts* x) (val x) (val* x)))))
+			(dolist (x (list (make-array '(2 2) :element-type 'double-float :initial-element 0d0)
+			                 (expt 2 100) (- (expt 2 64)) 1/3))
+			  (row (lambda () (ts x)))
+			  (row (lambda () (ts* x)))
+			  (row (lambda () (list (val x) (val* x)))))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" 5 2) "toString")))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")))
+			(row (lambda () (java:static "java.lang.String" "valueOf" 1267650600228229401496703205376)))
+			(row (lambda () (java:static "java.util.Objects" "equals" (expt 2 100) (expt 2 100))))
+			(row (lambda () (+ 1 (java:call (java:new "java.math.BigDecimal" (expt 2 100) 0) "toBigInteger"))))
+			(row (lambda () (java:static "java.lang.Math" "sqrt" (expt 2 100))))
+			(row (lambda () (java:call (java:static "java.util.List" "of" (expt 2 100) 1) "toString")))
+			(row (lambda () (list (ts (list 1 (expt 2 100))) (ts* (vector (expt 2 100))))))
+			""";
+
+	/** What {@link #SPECIALIZED_AND_BIGNUM_PROGRAM} prints. */
+	public static final String SPECIALIZED_AND_BIGNUM_OUTPUT = """
+			("[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[6.0]" "[6.0]" "[6.0]" "[6.0]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]")
+			("[7, 65535]" "[7, 65535]" "[7, 65535]" "[7, 65535]")
+			("[9, 65536]" "[9, 65536]" "[9, 65536]" "[9, 65536]")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.lang.String.valueOf with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			("1267650600228229401496703205376" "1267650600228229401496703205376")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			("-18446744073709551616" "-18446744073709551616")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.lang.String.valueOf with 1 argument(s)
+			"0.05"
+			"100000000000000000.000"
+			"1267650600228229401496703205376"
+			T
+			1267650600228229401496703205377
+			No matching method java.lang.Math.sqrt with 1 argument(s)
+			"[1267650600228229401496703205376, 1]"
+			("[1, 1267650600228229401496703205376]" "[1267650600228229401496703205376]")""";
+
+	/**
+	 * {@code Object}'s methods called on a receiver whose static class is an interface --
+	 * one declared a {@code List}, which redeclares only {@code equals} and
+	 * {@code hashCode}, and a {@code java:reify} of {@code Runnable}, which redeclares
+	 * none: each site resolves before it runs (JLS 9.2). Prints
+	 * {@link #OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT}.
+	 */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE = """
+			(defun shown (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (list (java:call l "toString") (java:call l "hashCode") (java:call l "equals" l)
+			        (java:call (java:call l "getClass") "getName")))
+			(print (shown (java:static "java.util.List" "of" 1 2)))
+			(let ((r (java:reify "java.lang.Runnable" "run" (lambda () nil))))
+			  (print (list (java:call r "toString") (java:call r "equals" r)
+			               (eql (java:call r "hashCode") (java:call r "hashCode")))))
+			""";
+
+	/** What {@link #OBJECT_METHODS_ON_AN_INTERFACE} prints. */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT = """
+			("[1, 2]" 994 T "java.util.ImmutableCollections$List12")
+			("#<java-reify java.lang.Runnable>" T T)""";
+
 	private JavaInteropPrograms() {
 	}
 

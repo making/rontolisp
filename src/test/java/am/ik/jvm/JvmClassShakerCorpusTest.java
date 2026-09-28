@@ -161,9 +161,11 @@ class JvmClassShakerCorpusTest {
 	void theCorpusClassKeepsConstantPoolHeadroom() {
 		byte[] plain = classAt(OptimizeLevel.NONE);
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool
-		// ceiling. The LibraryDefunPruner keeps the pool small by dropping unreachable
-		// spliced library defuns; guard the headroom so a growing corpus or library fails
-		// loudly here, not with a corrupt class in CI.
+		// ceiling. Past it the compile now splits into $PartN classes instead of failing
+		// (.kb/jvm-method-size-limits.md), so the tripwire guards this class's coverage:
+		// a split corpus would take the splitter's shake, not JvmClassShaker's, and the
+		// decoder check in this class would stop covering the corpus. Measured 51,945
+		// before the quoted-datum table, 43,694 after (.kb/quoted-data.md).
 		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;
 		System.out.println("corpus class constant-pool entries: " + constantPoolEntries + " / 65534");
 		assertThat(constantPoolEntries)

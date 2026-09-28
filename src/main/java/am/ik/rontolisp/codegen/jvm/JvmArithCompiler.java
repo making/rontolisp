@@ -29,6 +29,11 @@ final class JvmArithCompiler {
 			JvmExprCompiler.compileExpr(ArithmeticIdentities.of(cons), ctx, className);
 			return;
 		}
+		LispVal checked = args.size() == 2 ? ArithmeticIdentities.oneArgument(cons) : null;
+		if (checked != null) {
+			JvmExprCompiler.compileExpr(checked, ctx, className);
+			return;
+		}
 		if (isComplexCapable(opKey) && JvmLispCompiler.hasComplexOperand(args)) {
 			compileComplex(args, ctx, opKey, className);
 			return;

@@ -42,6 +42,7 @@ import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
@@ -1139,6 +1140,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// APPENDED instead (extraCallArity), which moves nothing.
 	static final int MAX_CALLABLE_ARITY = 10;
 
+	static {
+		// A lambda list the flet/labels expansion desugars before the backend is known
+		// takes up to LambdaLists.MAX_PHYSICAL_PARAMS physical parameters, and this
+		// backend compiles every one it is handed as it is.
+		if (LambdaLists.MAX_PHYSICAL_PARAMS > MAX_CALLABLE_ARITY) {
+			throw new ExceptionInInitializerError("LambdaLists.MAX_PHYSICAL_PARAMS (" + LambdaLists.MAX_PHYSICAL_PARAMS
+					+ ") exceeds the WASM callable ceiling (" + MAX_CALLABLE_ARITY + ")");
+		}
+	}
+
 	// How far past MAX_CALLABLE_ARITY a call site may pull its own per-arity dispatcher
 	// in before the SPREAD dispatcher becomes the better answer. Evidence: across the 122
 	// systems of a populated Quicklisp cache (1,886 files) the widest funcall is uiop's
@@ -2030,6 +2041,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	// index above shifts, and shaken when no site reads through it.
 	static final int FUNC_IDX_REF = FUNC_IDX_BOUND + 1;
 
+	// _chr_code ((ref null eq) value, i32 operator id) -> i32: a character comparison's
+	// operand, EH mode only (WasmCharCompiler.buildCodeCheckBody): a character answers
+	// its code point; anything else is the operator's CHARACTER type-error. One call per
+	// operand keeps a site as small as the trapping cast it replaces. Reuses
+	// TYPE_STR_TO_MEM; appended after the last fixed helper so no index above shifts,
+	// and shaken when no site checks.
+	static final int FUNC_CHR_CODE = FUNC_IDX_REF + 1;
+
+	// _type_err_of ((ref null eq) culprit, (ref null eq) type) -> (ref null eq): the
+	// landing of an operand that is not of a COMPOUND type the caller builds -- the
+	// fill-pointer surface's (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)), a fill
+	// pointer's (INTEGER 0 dim) -- under the operator register, EH mode only
+	// (WasmOperandTypes.buildCompoundLandingBody). Never returns. Reuses the binary
+	// callable signature (TYPE_CALLABLE_BASE + 1); appended after the last fixed helper
+	// so no index above shifts, and shaken when nothing lands through it.
+	static final int FUNC_TYPE_ERR_OF = FUNC_CHR_CODE + 1;
+
+	// _fp_hdr ((ref null eq) value, (ref null eq) operator id as an i31) -> (ref null
+	// eq): the fill-pointer surface's operand check, EH mode only
+	// (WasmOperandTypes.buildFillPointerCheckBody): a general vector with a fill pointer
+	// answers its header; a non-array is the operator's ARRAY type-error, any other
+	// array its (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) one. Reuses the binary
+	// callable signature (TYPE_CALLABLE_BASE + 1); appended after the last fixed helper
+	// so no index above shifts, and shaken when no site checks.
+	static final int FUNC_FP_HDR = FUNC_TYPE_ERR_OF + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2060,7 +2097,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_IDX_REF + 1;
+	static final int FUNC_VEC_BASE = FUNC_FP_HDR + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2076,9 +2113,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
 	// landing body (_type_err), the text-control helper (_tilde) and the bound check
-	// (_idx_in, _idx_bound, _idx_ref) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_IDX_REF + 1;
+	// (_idx_in, _idx_bound, _idx_ref), the character check (_chr_code), the compound
+	// landing (_type_err_of) and the fill-pointer check (_fp_hdr) -- plus, under --simd,
+	// the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_FP_HDR + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2906,6 +2944,21 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	}
 
+	/**
+	 * An attempt decided EH mode -- and with it the entry function's uncaught-report
+	 * landing pad -- on a program the report pre-scan had judged unable to reach it, so
+	 * the expansion ran with signal messages narrowed away and the pad would print an
+	 * empty report. The next attempt runs the expansion as the pad requires. Never
+	 * escapes {@link #compile(List)}.
+	 */
+	private static final class UncaughtReportUnforeseen extends RuntimeException {
+
+		private UncaughtReportUnforeseen() {
+			super(null, null, false, false);
+		}
+
+	}
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
 		// The JVM backend's outlining loop (JvmLispCompiler.compile): a function
@@ -2913,17 +2966,23 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program compiled again. The map strictly grows -- a name is added, or its
 		// target shrinks toward the floor -- so the loop terminates. An attempt's
 		// warnings print only when it is the one that ships.
+		// The uncaught-report retry flips its flag once, so it adds at most one attempt.
 		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
+		boolean reportsUncaught = false;
 		while (true) {
 			CompileWarnings.startAttempt();
 			try {
-				byte[] bytes = compileProgram(program, outline);
+				byte[] bytes = compileProgram(program, outline, reportsUncaught);
 				CompileWarnings.flushAttempt();
 				return bytes;
 			}
 			catch (FunctionTooLarge signal) {
 				CompileWarnings.discardAttempt();
 				outline.putAll(signal.budgets);
+			}
+			catch (UncaughtReportUnforeseen signal) {
+				CompileWarnings.discardAttempt();
+				reportsUncaught = true;
 			}
 			catch (RuntimeException | Error ex) {
 				CompileWarnings.flushAttempt();
@@ -2936,7 +2995,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 	}
 
-	private byte[] compileProgram(List<LispVal> program, Map<String, AstOutliner.Budget> outlineBudgets) {
+	private byte[] compileProgram(List<LispVal> program, Map<String, AstOutliner.Budget> outlineBudgets,
+			boolean reportsUncaughtUnforeseen) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -2979,7 +3039,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean anySuspendingImportEscapes = (!suspendingImports.isEmpty() || this.hostFetch)
 				&& SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet(), this.hostFetch);
 		if (!suspendingImports.isEmpty()) {
-			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
+			CompileWarnings.note(":async t: this module imports " + String.join(", ", suspendingImports.values())
 					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
 					+ " exports that can reach one through WebAssembly.promising, and "
 					+ (this.reentrant ? "may OVERLAP calls (--reentrant: the module owns its per-call state; a"
@@ -2993,7 +3053,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (anySuspendingImportEscapes) {
 				// Whoever received it can call it, so the per-export answer below would
 				// under-report -- widen it to every export instead.
-				CompileWarnings.warn(":async t: a function that can reach a suspending import is taken as a value"
+				CompileWarnings.note(":async t: a function that can reach a suspending import is taken as a value"
 						+ " (#'name), so ANY export may reach one -- enter every export through"
 						+ " WebAssembly.promising");
 			}
@@ -3009,7 +3069,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 				}
 				if (!exportsReaching.isEmpty()) {
-					CompileWarnings.warn(":async t: the exports that can reach a suspending import -- enter each"
+					CompileWarnings.note(":async t: the exports that can reach a suspending import -- enter each"
 							+ " through WebAssembly.promising: " + String.join(", ", exportsReaching));
 				}
 			}
@@ -3077,8 +3137,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// so (the clock's line is a HOST OBLIGATION rather than a refusal: it names
 			// __ronto_set_time). Before the rewrite below, which is what takes the
 			// file-opening forms out of the program.
-			NoWasiLoadPathRefusals.report(program, this.hostRandom, this.hostFetch, this.component)
-				.forEach(CompileWarnings::warn);
+			NoWasiLoadPathRefusals.warn(program, this.hostRandom, this.hostFetch, this.component);
 			// --host-fetch states its host obligation once, whatever position fetch
 			// sits in: the compiler emits nothing for the suspension, so the BUILD is
 			// the only place that can say what the host now owes (the clock-hook
@@ -3091,7 +3150,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// one shape: with the reply body in band there is no second import, no
 				// pull and no mid-body failure to warn about.
 				boolean split = declaresImport(program, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
-				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> " + (split
+				CompileWarnings.note("--host-fetch: this module imports env.fetch(request-json) -> " + (split
 						? "response-head-json and env.readResponseBody(" + (this.reentrant ? "reply-id, " : "")
 								+ "ptr, cap) -> i32, and every rontolisp:fetch crosses both"
 								+ " -- the head with the call, the reply BODY pulled out of band afterwards (0 = end"
@@ -3229,15 +3288,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		// it (WasmUncaughtReportCompiler) -- which is exactly EH mode, decided below on
 		// the post-expansion program but needed here, because the report-routing gate is
 		// part of the expansion. The scan covers every trigger that can accompany a
-		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode. The one
-		// it cannot see is a cross-lambda return-from, which reaches ehMode through
-		// blockExitTag and is lowered only after this pass; a program whose SOLE EH
-		// trigger is one of those keeps the narrow gate, so its landing pad prints a
-		// plain %error's message and an empty report for a typed condition. Widening
-		// that means moving the lowering above this pass -- and the lowering has to run
-		// after it, or a generated dispatcher's return-from would not be lowered at all.
-		boolean ehFormReport = programUsesEhForm(program) || this.asyncMode || restartMode
-				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW);
+		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode, and the
+		// with-output-to-string the injected %error-runtime dispatch renders a lambda
+		// :report through (LispMacroExpander.runtimeErrorDispatchCatches) -- without it
+		// every computed-type (error ty initargs...) program was in EH mode with the
+		// narrow gate and reported `Unhandled condition: ` and nothing else. What it
+		// cannot see -- a cross-lambda return-from, which reaches ehMode through
+		// blockExitTag and is lowered only after this pass (it has to run after it, or a
+		// generated dispatcher's return-from would not be lowered at all), or any other
+		// trigger only the expansion produces -- is caught where ehMode is decided: the
+		// attempt is abandoned and the next one runs with reportsUncaughtUnforeseen, so
+		// every EH-mode module carries every signal's message.
+		boolean ehFormReport = reportsUncaughtUnforeseen || programUsesEhForm(program) || this.asyncMode || restartMode
+				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW)
+				|| LispMacroExpander.runtimeErrorDispatchCatches(program, closRegistry);
 		// --report-locations gives the report to a program with none of those, too: EH
 		// mode for the throw path and the landing pad, with nothing else in the module
 		// able to catch (SignalMessages.ENTRY_REPORT). Only where a form was read from a
@@ -3274,14 +3338,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
 		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
 				packageResolver.runtimePackagesMutable());
-		// Whether any signal's message string is observable: the narrowed routing answer
-		// (a message is read only through a HELD condition), forced on with it under
-		// restart mode / --dynamic, and in EH mode by the landing pad -- a plain %error
-		// carries its message in the payload cdr, which is the only text that landing
-		// has. Read by WasmErrorCompiler to decide whether a plain %error compiles its
-		// message operand.
-		boolean condMessagesObservable = closRegistry.routesConditionReports() || restartMode || this.dynamic
-				|| reportsUncaught;
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --
@@ -3368,9 +3424,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode below, which the expansions' unwind-protects need).
 		boolean blockExitTag = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
+		// Read before the lambda lists lose their &optional bounds.
+		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
-		program = LambdaLists.desugarProgram(program);
+		program = LambdaLists.desugarProgram(program, LambdaLists.MAX_PHYSICAL_PARAMS);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
@@ -3501,6 +3559,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// catching form. A program without one stays byte-identical and flag-free.
 		// --report-locations outside it turns it on as well (entryReportOnly above).
 		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly;
+		if (ehMode && !reportsUncaught) {
+			// The pad below reads every escaping condition, but the expansion above ran
+			// for a module that has none: its signals carry no message.
+			throw new UncaughtReportUnforeseen();
+		}
 		// Whether the entry function gets the uncaught-condition landing pad. It writes
 		// fd 2 through a %warn call the compiler SYNTHESIZES in pass 2, so it is a
 		// producer of the reserved *error-output* handle that no scan of the user's text
@@ -3853,6 +3916,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// too.
 		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
 		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
+		// (setf (apply #'aref ...) ...) / (setf (apply #'svref ...) ...) lowers lazily,
+		// during codegen (WasmExprCompiler's SETF case), to a (function
+		// array-row-major-index) reference no scan of the surface program above can see
+		// coming -- the scan has to be told (todo a66), the JVM gate mirrored.
+		if (LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+			takenAsValues.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		}
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
 			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
@@ -3873,12 +3943,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// name-registry gate below read the user's designators only
 		// (Ctx.injectedRuntimeBody).
 		Set<String> injectedRuntimeDefuns = new HashSet<>();
-		// gethash/find-symbol/... take their full lambda list and publish their second
-		// value only in a program that names them as a designator.
+		// gethash/find-symbol/... publish their second value only in a program that
+		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes,
-				designatedProducers);
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
@@ -3947,6 +4016,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				injectedRuntimeDefuns.add(decl.name);
 				defuns.add(decl);
 			}
+		}
+		// The shared sequence check every %check-sequence site calls: one vectorp for the
+		// whole module instead of one per site.
+		if (!userDefinedNames.contains(LispNames.CHECK_SEQUENCE_RUNTIME)
+				&& (LispMacroExpander.programUsesSequenceCheck(program)
+						|| LispMacroExpander.programUsesSequenceCheck(wrappers)
+						|| LispMacroExpander.programUsesSequenceCheck(seqOpHelpers))) {
+			DefunDecl decl = extractSetqLambda(LispMacroExpander.checkSequenceRuntimeWrapper());
+			injectedRuntimeDefuns.add(decl.name);
+			defuns.add(decl);
 		}
 
 		// Collect top-level global variables and give each its own module-level wasm
@@ -4039,7 +4118,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// private TYPE_CELL instance no user value can be ref.eq to; "shadow ==
 		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
 		// mark it, because nil IS null), always the LAST globals so every mode-gated
-		// index above keeps its value.
+		// index above keeps its value. The sentinel is also the UNSUPPLIED marker of a
+		// physical optional (WasmPhysicalArgs), and Ctx.tSymGlobalIndex() reads the t
+		// global as the one right before it.
 		int tSymGlobalIndex = Math.max(Math.max(reentryGuardGlobalIndex, reentrantTaskGlobalIndex), lastModeGlobalIndex)
 				+ 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
@@ -4130,6 +4211,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// bare `unreachable` that cites no bytes.
 		WasmOperandTypes.Texts operandTexts = ehMode
 				? WasmOperandTypes.Texts.intern(stringTable, operandTypeErrorPossible) : null;
+		// _subseq's bounds-error text (todo a42), interned HERE for the same reason as
+		// operandTexts above: buildSubseqBody runs after the data segment's content is
+		// fixed. EH mode only: outside it the check is a bare `unreachable`.
+		StringTable.StringEntry subseqBoundsPrefix = ehMode
+				? stringTable.addBodyString("\"" + LispNames.SUBSEQ + ": invalid bounds \"") : null;
+		StringTable.StringEntry subseqBoundsComma = ehMode ? stringTable.addBodyString("\", \"") : null;
+		StringTable.StringEntry subseqBoundsForLength = ehMode ? stringTable.addBodyString("\" for string of length \"")
+				: null;
 		final List<LispVal> spelledProgram = program;
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
@@ -4212,7 +4301,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ "': the WASM backend " + "supports at most " + MAX_CALLABLE_ARITY + " parameters, got "
 						+ arity + " (bundle the extra arguments into a list)");
 			}
-			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, funcId,
+			functions.put(defun.name, new WasmFunctionInfo(defun.name, arity, defun.variadic, defun.optionals, funcId,
 					TYPE_CALLABLE_BASE + arity, userFuncBase() + i));
 			if (Boolean.getBoolean("rontolisp.debug.functable")) {
 				// Profiling aid: map a perf "wasm[0]::function[N]" index back to its
@@ -4283,7 +4372,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (WasmFunctionInfo fi : functions.values()) {
 				if (fi.paramCount() <= MAX_CALLABLE_ARITY) {
 					if (fi.variadic()) {
-						for (int a = fi.paramCount() - 1; a <= MAX_CALLABLE_ARITY; a++) {
+						for (int a = fi.required(); a <= MAX_CALLABLE_ARITY; a++) {
 							indirectCallArities.add(a);
 						}
 					}
@@ -4317,7 +4406,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
-			.condMessagesObservable(condMessagesObservable)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
 			.signalClauseMatch(signalClauseMatch)
@@ -4373,6 +4461,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.importDecls(importWrappers)
 			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
@@ -5144,6 +5233,14 @@ public final class WasmLispCompiler implements LispCompiler {
 							"rontolisp:wasm-export names an unknown function (must be a top-level defun): "
 									+ decl.name());
 				}
+				if (target.variadic()) {
+					// Its physical parameters are no signature a host can fill: an
+					// optional is an argument or the UNSUPPLIED marker, the rest a list
+					// (the JVM backend's jvm-export refuses it with the same words).
+					throw new UnsupportedOperationException("rontolisp:wasm-export cannot export '" + decl.name()
+							+ "': its lambda list takes &optional/&rest/&key arguments, which have no fixed"
+							+ " host signature");
+				}
 				if (decl.paramTypes().size() != target.paramCount()) {
 					throw new UnsupportedOperationException("rontolisp:wasm-export arity mismatch for '" + decl.name()
 							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
@@ -5500,7 +5597,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+						rawSentinelGlobalIndex);
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -5524,7 +5622,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
 					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+					this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+					rawSentinelGlobalIndex);
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -5553,7 +5652,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables);
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport, this.usesIdentityHashTables,
+						rawSentinelGlobalIndex);
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -5769,13 +5869,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
 				.add(stringTable, LispNames.SYMBOL_FUNCTION);
-			for (String operator : WasmEvalRuntimeBuilder.COMPARISON_OPERATORS) {
-				offsetsBuilder.add(stringTable, operator);
-			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
-			// The shape an arm that checks its own count reports through names the
-			// operator when the report can: a comparison by its wrapper's funcId in the
-			// named set, eval -- which no wrapper backs -- by the id the report reserved.
+			// The shape the arm that checks its own count reports through: eval, which no
+			// wrapper backs, named by the id the report reserved.
 			Map<String, Integer> countShapes = new HashMap<>();
 			for (String operator : WasmEvalRuntimeBuilder.SELF_COUNTED_OPERATORS) {
 				int funcId = -1;
@@ -7157,6 +7253,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _idx_ref (array, subscript,
 															// op) -> subscript
 															// (FUNC_IDX_REF)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _chr_code (value, op) -> i32
+													// (FUNC_CHR_CODE)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _type_err_of (culprit,
+															// type) -> value
+															// (FUNC_TYPE_ERR_OF)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _fp_hdr (value, op) ->
+															// header (FUNC_FP_HDR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7814,7 +7917,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(true))
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
-					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables))
+					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables, ehMode,
+							subseqBoundsPrefix, subseqBoundsComma, subseqBoundsForLength))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
@@ -8054,7 +8158,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared :fill-pointer resolution body (FUNC_ARR_FP)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrFpBody());
 				// shared aref/%aset rank-check body (FUNC_ARR_CHECK_RANK)
-				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrCheckRankBody(operandOpGlobalIndex));
 				// shared displaced-view materialization body (FUNC_ARR_UNDISPLACE)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrUndisplaceBody(this.simd));
 				// exact float floor-family division body (FUNC_F64_FDIV)
@@ -8136,6 +8240,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the read's subscript check body (FUNC_IDX_REF): shaken with its sites.
 				code.addFunction(WasmArrayRuntimeBuilder
 					.buildIndexRefBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
+				// the character check body (FUNC_CHR_CODE): shaken with its sites.
+				code.addFunction(WasmCharCompiler.buildCodeCheckBody(ehMode ? operandOpGlobalIndex : -1));
+				// the compound landing body (FUNC_TYPE_ERR_OF), the operator table's
+				// other reader: shaken when nothing lands through it.
+				if (operandOperators.base() >= 0) {
+					stringTable.readBlob(operandOperators.base(), FUNC_TYPE_ERR_OF);
+				}
+				code.addFunction(WasmOperandTypes.buildCompoundLandingBody(operandTexts, operandOperators,
+						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
+				// the fill-pointer check body (FUNC_FP_HDR): shaken with its sites.
+				code.addFunction(WasmOperandTypes.buildFillPointerCheckBody(operandTexts, operandOpGlobalIndex,
+						this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -9517,17 +9633,31 @@ public final class WasmLispCompiler implements LispCompiler {
 		List<LispVal> parts = ((LispCons) expr).toList();
 		String funcName = ((LispSymbol) parts.get(1)).name();
 		List<LispVal> lambdaParts = ((LispCons) parts.get(2)).toList();
-		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
-				lambdaParts.subList(2, lambdaParts.size()));
-		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.body());
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, funcName);
+		return new DefunDecl(funcName, nf.paramNames(), nf.variadic(), nf.optionals(), nf.body());
 	}
 
 	/**
 	 * A parsed defun. {@code paramNames} are the physical parameters (when
 	 * {@code variadic}, the last one is the {@code &rest} parameter receiving the
-	 * remaining arguments as a cons list).
+	 * remaining arguments as a cons list, and the {@code optionals} names before it are
+	 * physical optionals, {@link LambdaLists.NativeForm}).
 	 */
-	record DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+	record DefunDecl(String name, List<String> paramNames, boolean variadic, int optionals, List<LispVal> bodyExprs) {
+
+		/** A defun without physical optionals. */
+		DefunDecl(String name, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs) {
+			this(name, paramNames, variadic, 0, bodyExprs);
+		}
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramNames.size() - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
 	}
 
 	/**
@@ -9545,10 +9675,28 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * Registry entry for a compiled function. {@code paramCount} is the physical WASM
 	 * parameter count (excluding the closure env); when {@code variadic}, the last
-	 * parameter is the rest list and the callable minimum is {@code paramCount - 1}
-	 * arguments.
+	 * parameter is the rest list, the {@code optionals} before it are physical optionals
+	 * (an argument or the UNSUPPLIED marker, {@link WasmPhysicalArgs}), and the callable
+	 * minimum is {@link #required()} arguments.
 	 */
-	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int funcId, int typeIndex, int funcIndex) {
+	record WasmFunctionInfo(String name, int paramCount, boolean variadic, int optionals, int funcId, int typeIndex,
+			int funcIndex) {
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramCount - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
+		/**
+		 * {@return the parameters before the rest list} -- the required ones and the
+		 * physical optionals
+		 */
+		int positional() {
+			return this.paramCount - (this.variadic ? 1 : 0);
+		}
+
 	}
 
 	/**
@@ -9556,13 +9704,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * entry/resume half ({@code WasmAsyncEmit}), whose body was compiled out of line;
 	 * Pass 2c then emits those bytes verbatim.
 	 */
-	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, int optionals,
+			List<LispVal> bodyExprs, List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+
+		LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
+				List<String> freeVarNames, int funcIndex, byte @Nullable [] precompiled) {
+			this(funcId, methodName, paramNames, variadic, 0, bodyExprs, freeVarNames, funcIndex, precompiled);
+		}
 
 		LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
 				List<String> freeVarNames, int funcIndex) {
-			this(funcId, methodName, paramNames, variadic, bodyExprs, freeVarNames, funcIndex, null);
+			this(funcId, methodName, paramNames, variadic, 0, bodyExprs, freeVarNames, funcIndex, null);
 		}
+
+		/**
+		 * {@return the arguments a call must pass at least}
+		 */
+		int required() {
+			return this.paramNames.size() - (this.variadic ? 1 : 0) - this.optionals;
+		}
+
 	}
 
 	/**
@@ -9882,9 +10043,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * The module global holding the raw-local sentinel (a private TYPE_CELL
 		 * instance): a shadow slot ref.eq to it means "the raw i64 is authoritative". A
 		 * null shadow cannot carry that meaning -- nil IS null, and a local holding nil
-		 * must read as nil, not as the stale raw slot.
+		 * must read as nil, not as the stale raw slot. It is also the UNSUPPLIED marker a
+		 * caller passes for a physical optional it has no argument for
+		 * ({@link WasmPhysicalArgs}); the global right before it caches the symbol
+		 * {@code t} ({@link #tSymGlobalIndex()}).
 		 */
 		int rawSentinelGlobalIndex = -1;
+
+		/**
+		 * {@return the module global caching the symbol t} -- a mutable
+		 * {@code (ref null eq)} that {@code _t_sym} fills on first use, allocated right
+		 * before the raw-local sentinel's
+		 */
+		int tSymGlobalIndex() {
+			return this.rawSentinelGlobalIndex - 1;
+		}
 
 		/**
 		 * Lexical variables in scope whose ARRAY representation a declaration (or an
@@ -10121,18 +10294,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * wasmtime 37+).
 		 */
 		boolean ehMode = false;
-
-		/**
-		 * True when program code can HOLD a condition value
-		 * ({@code LispMacroExpander.mayHoldConditions}; forced under restart mode and
-		 * {@code --dynamic}). Off, a plain {@code %error}'s message operand is not
-		 * compiled either -- the payload string's only reader is a handler clause that
-		 * binds the synthesized condition, and none exists -- so signal-site message
-		 * renders vanish from the artifact. {@code %error-cond}/{@code %signal-cond} skip
-		 * their message unconditionally (the payload cdr of a non-nil instance is never
-		 * read); this flag extends the skip to the instance-less throw.
-		 */
-		boolean condMessagesObservable = true;
 
 		/**
 		 * True when the program throws on the block-exit tag -- it lowers a cross-lambda
@@ -10458,6 +10619,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		@Nullable LispVal definerNameDropped;
 
 		Set<String> userDefunNames = Set.of();
+
+		/**
+		 * The defuns whose lambda list takes the counts of the built-in they are named
+		 * after (compiler/BuiltinCallArity#builtinShapedDefuns): a direct call of one is
+		 * judged, and reported, as the built-in rather than by the defun's own check.
+		 */
+		Set<String> builtinShapedDefuns = Set.of();
 
 		/**
 		 * Whether the program calls {@code fmakunbound} anywhere. When it does, a LITERAL
@@ -10843,7 +11011,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.hostFetch = builder.hostFetch;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
-			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
 			this.signalClauseMatch = builder.signalClauseMatch;
@@ -10877,6 +11044,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.importDecls = builder.importDecls;
 			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
+			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesProgv = builder.usesProgv;
@@ -10980,8 +11148,6 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean ehMode = false;
 
-			private boolean condMessagesObservable = true;
-
 			private boolean blockExitTag = false;
 
 			private boolean restartMode = false;
@@ -11047,6 +11213,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int numDefuns = 0;
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> builtinShapedDefuns = Set.of();
 
 			private boolean usesFmakunbound = false;
 
@@ -11262,11 +11430,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder condMessagesObservable(boolean condMessagesObservable) {
-				this.condMessagesObservable = condMessagesObservable;
-				return this;
-			}
-
 			Builder blockExitTag(boolean blockExitTag) {
 				this.blockExitTag = blockExitTag;
 				return this;
@@ -11429,6 +11592,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder builtinShapedDefuns(Set<String> builtinShapedDefuns) {
+				this.builtinShapedDefuns = builtinShapedDefuns;
 				return this;
 			}
 
@@ -11745,6 +11913,21 @@ public final class WasmLispCompiler implements LispCompiler {
 				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 				break;
 			}
+		}
+		// #'aref / #'array-row-major-index (todo a58) construct a type-error instance in
+		// the FUNCTION-VALUE wrapper's fold (BuiltinFunctionWrappers's row-major fold),
+		// never in ordinary call position -- whose own bound check is a separate bare
+		// backend trap -- so the bare symbol's presence TYPE_ERROR_SITES tests above is
+		// the wrong test for these two; take the same function-value reference the
+		// REFERENCE_GATED_FUNCTIONS wrapper gate itself keys on. (setf (apply #'aref
+		// ...) ...) / #'svref reaches the same fold through a (function
+		// array-row-major-index) reference injected lazily, after this scan, by the
+		// setf place's own expansion (todo a66) -- invisible to a plain symbol scan, so
+		// it needs its own check.
+		java.util.Set<String> arefFunctionValues = BuiltinFunctionWrappers.functionValueNames(program);
+		if (arefFunctionValues.contains(LispNames.AREF) || arefFunctionValues.contains(LispNames.ARRAY_ROW_MAJOR_INDEX)
+				|| LispMacroExpander.usesSetfApplyArrayRowMajorIndex(program)) {
+			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		}
 		// A %program-error signal constructs its program-error instance during BODY
 		// compilation (lowerProgramError) -- after this scan, and only behind a handler

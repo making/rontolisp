@@ -117,6 +117,26 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void aJoinHandledInACleanupLeavesTheConditionOnItsWayOut() throws Exception {
+		// _thread_join records the thread's condition under the throwable it rethrows:
+		// setting the one per-thread slot replaced the typed condition the cleanup's
+		// unwind-protect was carrying, and the outer handler-case caught a
+		// simple-error.
+		assertThat(compileAndRun("""
+				(define-condition jc-typed (error) ())
+				(define-condition jc-other (error) ())
+				(let ((th (rontolisp:make-thread (lambda () (error 'jc-other)))))
+				  (print (handler-case
+				             (unwind-protect (error 'jc-typed)
+				               (print (handler-case (rontolisp:join-thread th)
+				                        (jc-typed () :read-as-the-typed-one)
+				                        (jc-other () :other))))
+				           (jc-typed () :typed)
+				           (error () :lost-its-type))))
+				""", "ThreadCleanupProg")).isEqualTo(":OTHER\n:TYPED");
+	}
+
+	@Test
 	void makeThreadBindingsAreDynamicBindingsInTheSpawnedThreadOnly() throws Exception {
 		// The clack.handler shape: *standard-output* rebound BY NAME at runtime (the
 		// _dtl dispatch) in the spawned thread; the spawner's stream stays untouched.

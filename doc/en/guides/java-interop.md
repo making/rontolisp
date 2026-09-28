@@ -11,8 +11,9 @@ the screen without any bespoke Java glue.
 > JVM: it works under the **JVM-hosted interpreter** (`java -jar rontolisp.jar
 > program.lisp`) and in a **JVM-compiled program** (`-o Prog.class`, run with
 > `java Prog`) — a call the compiler resolves becomes a direct call in the
-> generated class, and for the calls left to run time the compiler writes a
-> small reflection bridge beside it (`Prog$JavaBridge.class`, or an entry
+> generated class, a `java:reify` or `java:proxy` a class generated for it, and
+> for the calls left to run time the compiler writes a small reflection bridge
+> beside it (`Prog$JavaBridge.class`, or an entry
 > inside `-o prog.jar`), which the program then needs on its class path (see
 > [Compiling against a Java release or a class
 > path](#compiling-against-a-java-release-or-a-class-path) for the JRE it needs).
@@ -36,6 +37,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:static` | Invoke a static method: `(java:static "fqcn" "method" args...)` |
 | `java:field` | Read a static or instance field: `(java:field class-or-obj "name")` |
 | `java:proxy` | Adapt a callable to an interface: `(java:proxy "iface" callable)` |
+| `java:reify` | Implement an interface one method at a time: `(java:reify "iface" "method" function ...)` |
 
 A constructed or returned object prints opaquely as `#<java <class-name>>` and
 can be passed back into `java:call`/`java:field`:
@@ -58,17 +60,19 @@ Arguments and results are converted between rontolisp and Java automatically:
 
 | rontolisp | Java (in) | Java (out) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes) | `int`/`long`/... → integer |
+| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes), `BigInteger` | `int`/`long`/.../`BigInteger` → integer |
+| bignum | `BigInteger` (or a supertype: `Number`, `Object`, ...) | `BigInteger` → integer |
 | float | `double`/`float` (and boxes) | `double`/`float` → float |
 | string | `String`, or `char` if length 1 | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
 | a `java` object | the wrapped host object | any other object → a `java` object |
-| a function/lambda | a `java:proxy` over the matching interface | — |
-| a proper list / a vector | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
+| a function/lambda | a `java:proxy` over the matching interface (an argument only) | — |
+| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
-rank-1 array made with `make-array` — passed where a Java array is expected is
+rank-1 array made with `make-array`, a specialized one included (`double-float`,
+`single-float`, `bfloat16`, `(unsigned-byte 8|16|32)`) — passed where a Java array is expected is
 converted element-wise to the component type (including primitive arrays like
 `int[]`), and where a `List`/`Collection`/`Iterable` is expected it becomes a
 `java.util.List`; nested lists convert recursively. In the other direction a
@@ -85,8 +89,26 @@ stays an opaque `java` object whose methods you call:
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
-arrays are **not** bridged.
+A bignum is passed as a `java.math.BigInteger` where one (or a supertype such as
+`Number` or `Object`) is expected, and nowhere narrower: not as a `long`, and not
+as a `double` -- convert it with `float` first. A fixnum reaches a `BigInteger`
+parameter too, when no primitive overload takes it. In the other direction a
+`java.math.BigInteger` result is a Lisp integer, not a `java` object: compute with
+it in Lisp rather than through `java:call`.
+
+```lisp
+;; in: a bignum -> BigInteger; a fixnum -> BigInteger where no primitive fits
+(java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
+```
+
+```lisp
+;; in: a specialized vector converts element-wise like any vector
+(java:static "java.util.Arrays" "toString"
+             (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
+```
+
+Symbols, ratios, hash tables, dotted (improper) lists and multidimensional
+(rank-2+) arrays are **not** bridged.
 
 ## Overload resolution
 
@@ -135,6 +157,15 @@ What the program text says about a value:
   in its scope assigns it (`setq`, `setf`, `incf`, ..., in a closure too);
 - `(declaim (type (java:object "C") v))` types the global `v` in the forms after it. A
   `defvar`'s initial value does not: any form may assign the variable.
+- `(java:reify "I" ...)` and `(java:proxy "I" ...)` with a literal interface make an object
+  of a class that implements `I` and nothing else a program can name: a call on it resolves
+  among `I`'s methods, and one that passes it resolves as its argument. A `let` variable
+  keeps that type, which `(java:object "I" :exact)` spells -- no object's class is exactly
+  an interface, so for one `:exact` means this.
+
+A call on a value whose known class is an interface also resolves to `Object`'s public
+methods the interface does not declare (`toString`, `getClass`, ...), as Java's own call
+`list.toString()` does.
 
 A declared type is trusted: a value that is not a `C` is an error where it meets the call,
 whether it is the receiver or an argument -- never converted for a method it was not chosen
@@ -250,11 +281,13 @@ $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
 ### Compiling without reflection
 
 `--java-static` makes every call that needs reflection a compile error: one left to run
-time, a `java:proxy`, and a function passed where an interface is expected (it becomes a
-`java.lang.reflect.Proxy`). An argument whose kind is known only when the call runs may be a
-function, so such a call needs reflection when one of its overloads expects an interface
-there, as `String.join(CharSequence, Iterable)` does. The compile lists them all at once. What compiles has no
-reflection in it, so GraalVM `native-image` builds the jar into an executable with no
+time, and a `java:reify` or `java:proxy` whose interface is named at run time or not found
+when compiling (it becomes a `java.lang.reflect.Proxy`). The compile lists them all at once.
+A `java:reify`, a `java:proxy` of a literal interface and a function passed where an
+interface is expected -- including an argument whose kind is known only when the call runs,
+where an overload expects an interface, as `String.join(CharSequence, Iterable)` does -- are
+classes generated at compile time and need no reflection. What compiles has no reflection in
+it, so GraalVM `native-image` builds the jar into an executable with no
 reachability metadata -- no `reflect-config.json`, no agent run:
 
 ```console
@@ -289,13 +322,51 @@ the varargs position can also supply the whole array itself:
 (java:static "java.lang.String" "join" "-" (list "a" "b" "c"))   ; => "a-b-c"
 ```
 
+## Implementing interfaces with java:reify
+
+`java:reify` implements a host interface one method at a time: each method name is
+followed by the function that implements it, called with the method's arguments. The
+object it makes can be passed wherever the interface is expected, and a Java caller calls
+it like any other implementation:
+
+```lisp
+(let ((support (java:new "java.beans.PropertyChangeSupport" "bean"))
+      (seen nil))
+  (let ((listener (java:reify "java.beans.PropertyChangeListener" "propertyChange"
+                    (lambda (e) (push (java:call e "getNewValue") seen)))))
+    (java:call support "addPropertyChangeListener" listener)
+    (java:call support "firePropertyChange" "size" 1 2)
+    (java:call support "removePropertyChangeListener" listener)
+    (java:call support "firePropertyChange" "size" 2 3))
+  seen)
+; => (2)
+```
+
+The methods are chosen before the form runs, by the same rule in the interpreter and a
+compiled program:
+
+- A name designates one method. One several methods share is tagged with the parameter
+  types, as a `java:call` name is (`"append(char)"`); a name that matches more than one
+  method, or none, is an error.
+- An abstract method no name designates throws `UnsupportedOperationException` when it is
+  called; a default method keeps the interface's body; `toString`, `equals` and `hashCode`
+  may be named, and are otherwise `#<java-reify I>` and identity.
+- A function's value is converted to the method's return type as an argument is, except
+  that a function is not made a proxy on the way back: return a `java:reify` or
+  `java:proxy` object where an interface is expected.
+
+A compiled program implements each `java:reify` whose names are literal strings with a
+class generated for it (`Prog$Reify0.class`), so it needs no reflection: see [Compiling
+without reflection](#compiling-without-reflection). The [reference
+page](../reference/functions/java-reify.md) has more examples.
+
 ## Callbacks via java:proxy
 
 `java:proxy` makes a host interface instance backed by a rontolisp callable. The
 callable is applied as `(callable "method-name" arg...)` for every interface
 method, so a single lambda can implement the whole interface and dispatch on the
 method name. Its return value is marshalled back to the method's return type
-(`void` methods ignore it):
+(`void` methods ignore it, and a function it returns is not made a proxy):
 
 ```lisp
 ;; A java.util.function.Supplier whose get() returns a rontolisp value.
@@ -310,6 +381,42 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
 ```
+
+## Errors and non-local exits
+
+An exception a Java member throws is signalled as a Lisp error that names the member and
+the exception:
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+A condition a rontolisp function signals while Java calls it back, and a `return-from`,
+`throw` or `go` out of that function, propagates through the Java frames in between as it
+does through Lisp frames, to the code that made the Java call:
+
+```lisp
+(block found
+  (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+             (lambda (method x) (when (= x 2) (return-from found x))))
+  nil)
+; => 2
+```
+
+```lisp
+(handler-case
+    (java:call (java:static "java.util.List" "of" 1) "forEach"
+               (lambda (method x) (error "bad element ~a" x)))
+  (error (e) (format nil "~a" e)))
+; => "bad element 1"
+```
+
+To the Java code in between it is an ordinary exception, and only what that code lets
+propagate arrives: one it catches and ignores never does, and one it wraps, or rethrows on
+another thread, arrives as the failure of the Java call (`FutureTask.get` wraps it in an
+`ExecutionException`).
 
 ## A Swing example
 
@@ -350,7 +457,9 @@ animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...)
 A compiled `java:` program builds into a GraalVM native image. One whose calls
 all resolve before they run needs nothing more: compile it with `--java-static`
 ([Compiling without reflection](#compiling-without-reflection)) and build the
-jar as it is. The calls left to run time are reflective and need reachability
+jar as it is -- its `java:reify` and `java:proxy` objects and the functions it
+passes where an interface is expected are classes generated at compile time,
+so they need nothing either. The calls left to run time are reflective and need reachability
 metadata, which the tracing agent records from a run:
 
 ```bash
@@ -373,7 +482,7 @@ shape the program uses, or declare the types so the calls resolve.
   the GraalVM native binary, whose image carries no reflection metadata for the
   interop classes (the native binary can still *compile* a `java:` program to a
   `.class`).
-- In a compiled class the five functions work in call position only: they have
+- In a compiled class the six functions work in call position only: they have
   no first-class value, so `#'java:call` or `(funcall 'java:new ...)` is a
   compile error (wrap them in your own `defun` instead), and the embedded
   `eval` runtime does not know them either. A compiled program that uses

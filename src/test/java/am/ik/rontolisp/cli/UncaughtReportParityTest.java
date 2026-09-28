@@ -441,6 +441,21 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void aComputedConditionTypeReportsTheInitargsTheCallPassed() throws Exception {
+		// The compile path reaches the class through the %error-runtime dispatch, whose
+		// helper reads every initarg slot; the interpreter rebuilds the literal call.
+		// Both report what the call passed.
+		int n = 0;
+		for (java.util.Map.Entry<String, String> source : am.ik.rontolisp.ComputedConditionTypeReportFixture.PROGRAMS
+			.entrySet()) {
+			Path program = write("computed-type-" + n++ + ".lisp", source.getKey());
+			Report interpreted = interpret(program);
+			assertThat(interpreted.err()).as(source.getKey()).first().isEqualTo(source.getValue());
+			assertThat(compileAndRun(program)).as(source.getKey()).isEqualTo(interpreted);
+		}
+	}
+
+	@Test
 	void aProgramWithNothingLocatedCompilesAsItAlwaysDid() throws Exception {
 		// -e names no file: the report is the line alone on both backends, and the class
 		// carries no line numbers, no site table and no report code.

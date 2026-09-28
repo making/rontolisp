@@ -142,6 +142,13 @@ public final class ClosRegistry {
 	public static final String DIVISION_BY_ZERO_CLASS_NAME = "DIVISION-BY-ZERO";
 
 	/**
+	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
+	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
+	 * {@code compile-file} leaves {@code failure-p} alone for it.
+	 */
+	public static final String STYLE_WARNING_CLASS_NAME = "STYLE-WARNING";
+
+	/**
 	 * The substring that tells a {@code division-by-zero} from any other arithmetic
 	 * failure, in the host exception's message ({@code "/ by zero"},
 	 * {@code "BigInteger divide by zero"}, rontolisp's own {@code "Division by zero"}).
@@ -289,7 +296,22 @@ public final class ClosRegistry {
 	 * @return the message
 	 */
 	public static String aritySurplusMessage(int max, int got) {
-		return ARITY_MESSAGE_PREFIX + ARITY_AT_MOST + arityExpectation(max, false) + ARITY_MESSAGE_INFIX + got;
+		return aritySurplusMessage(null, max, got);
+	}
+
+	/**
+	 * {@link #aritySurplusMessage(int, int)} naming the operator, as
+	 * {@link #arityMessage} does: a built-in's function value reports its surplus under
+	 * the built-in's name.
+	 * @param operator the operator's name, or {@code null} for
+	 * {@link #ARITY_ANONYMOUS_OPERATOR}
+	 * @param max the callee's required plus optional parameter count
+	 * @param got the number of arguments the call passed
+	 * @return the message
+	 */
+	public static String aritySurplusMessage(@Nullable String operator, int max, int got) {
+		return (operator == null ? ARITY_ANONYMOUS_OPERATOR : operator) + ARITY_VERB + ARITY_AT_MOST
+				+ arityExpectation(max, false) + ARITY_MESSAGE_INFIX + got;
 	}
 
 	/** What {@link #arityMessage} puts between the expectation and the actual count. */

@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.LispNames;
@@ -21,6 +22,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -58,12 +60,21 @@ final class JvmExprCompiler {
 	}
 
 	/**
-	 * {@code (%arity-surplus-message max required rest)}: the two literal counts and the
-	 * rest list handed to the shared {@code _aritySurplus} helper
-	 * ({@link JvmAritySurplusRuntimeBuilder}).
+	 * {@code (%arity-surplus-message max required rest [name])}: the operator the report
+	 * names ({@link BuiltinFunctionWrappers#arityOperator} of the function's name, null
+	 * for {@code Function}), the two literal counts and the rest list handed to the
+	 * shared {@code _aritySurplus} helper ({@link JvmAritySurplusRuntimeBuilder}).
 	 */
 	private static void compileAritySurplusMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		String operator = BuiltinFunctionWrappers
+			.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons));
+		if (operator == null) {
+			ctx.emit(Opcode.ACONST_NULL);
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+		}
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
 		compileExpr(args.get(3), ctx, className);
@@ -72,6 +83,51 @@ final class JvmExprCompiler {
 						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.DESC)));
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ref.index());
+	}
+
+	/**
+	 * {@code (%supplied-p param)} as a value: {@code t} unless the parameter holds the
+	 * UNSUPPLIED marker ({@link JvmPhysicalArgs}). The prologue's own test position --
+	 * {@code (if (%supplied-p p) p default)} -- branches on the reference comparison
+	 * directly ({@link #compileSuppliedPTest}).
+	 */
+	private static void compileSuppliedP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		int suppliedPos = compileSuppliedPTest(cons, ctx, className);
+		ctx.emit(Opcode.ACONST_NULL);
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, suppliedPos, ctx.code.size());
+		JvmEmitHelper.compileTrue(ctx);
+		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+	}
+
+	/**
+	 * Emits {@code (%supplied-p param)}'s comparison and a branch taken when the
+	 * parameter holds an argument, falling through when it holds the UNSUPPLIED marker.
+	 * @param cons the {@code %supplied-p} form
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @return the position of the branch to patch
+	 */
+	static int compileSuppliedPTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileExpr(cons.toList().get(1), ctx, className);
+		JvmPhysicalArgs.emitUnsupplied(ctx, className);
+		int branchPos = ctx.code.size();
+		ctx.emit(Opcode.IF_ACMPNE);
+		ctx.emitU2(0);
+		return branchPos;
+	}
+
+	/**
+	 * Whether a form is {@code (%supplied-p param)}.
+	 * @param form the form
+	 * @return whether it is the supplied-p test
+	 */
+	static boolean isSuppliedP(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SUPPLIED_P_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
+				&& args.cdr() instanceof LispNil;
 	}
 
 	/**
@@ -227,6 +283,12 @@ final class JvmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		if (ctx.mvChannel == null && LispNames.MV_SPILL.equals(name)) {
+			// A program without the spill global publishes nothing, so an expansion's
+			// read of the channel answers nil (.kb/multiple-values.md).
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
 		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
 		// never captured, never in ctx.locals -- resolved first. (A raw GLOBAL is
 		// resolved in compileSpecialRead, below every lexical binding of the name.)
@@ -361,6 +423,9 @@ final class JvmExprCompiler {
 		// The code this form compiles to reports the form's site when it fails
 		// (JvmSourceSites): the innermost located form wins, as in the interpreter.
 		int site = ctx.enterSite(cons);
+		// A warning about a form a macro built is placed at this one when it is the
+		// innermost located form around it (CompileWarnings).
+		LispCons enclosing = SourceProvenance.enterForm(cons);
 		try {
 			compileConsLocated(cons, ctx, className);
 		}
@@ -372,6 +437,7 @@ final class JvmExprCompiler {
 		finally {
 			ctx.operator = outerOperator;
 			ctx.leaveSite(site);
+			SourceProvenance.leaveForm(enclosing);
 		}
 	}
 
@@ -404,11 +470,22 @@ final class JvmExprCompiler {
 			// reaches a lowering, which would drop the surplus or index past the form: it
 			// evaluates its arguments and signals the interpreter's program-error
 			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
-			// its own call path.
-			LispVal wrongCount = ctx.userDefunNames.contains(sym.name()) ? null
-					: BuiltinCallArity.wrongCountSignal(cons);
+			// its own call path -- unless it is a native built-in's and its lambda list
+			// takes the built-in's own counts (a library's implementation of it), which
+			// reports as the built-in.
+			boolean builtinCall = !ctx.userDefunNames.contains(sym.name())
+					|| ctx.builtinShapedDefuns.contains(sym.name());
+			LispVal wrongCount = builtinCall ? BuiltinCallArity.wrongCountSignal(cons) : null;
 			if (wrongCount != null) {
 				compileExpr(wrongCount, ctx, className);
+				return;
+			}
+			// A count the shape admits that no lowering takes: the argument the operator
+			// accepts and ignores (read's recursive-p, subtypep's environment) is
+			// evaluated in its place and the call compiled without it.
+			LispVal withoutIgnored = builtinCall ? IgnoredArgument.drop(cons) : cons;
+			if (withoutIgnored != cons) {
+				compileExpr(withoutIgnored, ctx, className);
 				return;
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
@@ -1211,10 +1288,8 @@ final class JvmExprCompiler {
 					className);
 			case LispNames.SCHAR_SET ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
-			case LispNames.LOWER_CASE_P ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx, className);
-			case LispNames.UPPER_CASE_P ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
+			case LispNames.LOWER_CASE_P -> JvmCharCompiler.compileLowerCaseP(cons, ctx, className);
+			case LispNames.UPPER_CASE_P -> JvmCharCompiler.compileUpperCaseP(cons, ctx, className);
 			case LispNames.CONSTANTP ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
 			case LispNames.STREAMP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
@@ -1303,23 +1378,42 @@ final class JvmExprCompiler {
 				// arrives here with its (already evaluated) argument.
 				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 			case LispNames.STRING_UPCASE -> {
-				JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.STRING_DOWNCASE -> {
-				JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.STRING_CAPITALIZE -> {
-				JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
 			case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
 			case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
+			case LispNames.CHAR_INT -> JvmCharCompiler.compileCharInt(cons, ctx, className);
 			case LispNames.CODE_CHAR -> JvmCharCompiler.compileCodeChar(cons, ctx, className);
 			case LispNames.CHAR_UPCASE -> JvmCharCompiler.compileUpcase(cons, ctx, className);
 			case LispNames.CHAR_DOWNCASE -> JvmCharCompiler.compileDowncase(cons, ctx, className);
@@ -1329,13 +1423,10 @@ final class JvmExprCompiler {
 			case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
 			case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
 			case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
-			case LispNames.CHAR_GT -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LT), ctx, className);
-			case LispNames.CHAR_GE -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LE), ctx, className);
-			case LispNames.CHAR_NE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCharNe(cons), ctx, className);
-			case LispNames.CHAR_EQUAL ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandCharEqual(cons), ctx, className);
+			case LispNames.CHAR_GT -> JvmCharCompiler.compileGt(cons, ctx, className);
+			case LispNames.CHAR_GE -> JvmCharCompiler.compileGe(cons, ctx, className);
+			case LispNames.CHAR_NE -> JvmCharCompiler.compileNe(cons, ctx, className);
+			case LispNames.CHAR_EQUAL -> JvmCharCompiler.compileEqual(cons, ctx, className);
 			case LispNames.PARSE_INTEGER ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
 			case LispNames.VALUES_LIST ->
@@ -1477,6 +1568,7 @@ final class JvmExprCompiler {
 			case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
 			case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
 			case LispNames.NTHCDR -> JvmNthcdrCompiler.compile(cons, ctx, className);
+			case LispNames.ELT_CELL -> JvmEltCellCompiler.compile(cons, ctx, className);
 			case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
 			case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
 			case LispNames.SETF -> JvmExprCompiler
@@ -1612,13 +1704,15 @@ final class JvmExprCompiler {
 			case LispNames.PUTHASH -> JvmHashTableCompiler.compilePut(cons, ctx, className);
 			case LispNames.REMHASH -> JvmHashTableCompiler.compileRem(cons, ctx, className);
 			case LispNames.CLRHASH -> JvmHashTableCompiler.compileClr(cons, ctx, className);
-			case LispNames.HASH_TABLE_COUNT -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+			case LispNames.HASH_TABLE_COUNT ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_COUNT);
 			case LispNames.HASH_TABLE_TEST -> JvmHashTableCompiler.compileTest(cons, ctx, className);
-			case LispNames.HASH_TABLE_SIZE -> JvmHashTableCompiler.compileCount(cons, ctx, className);
+			case LispNames.HASH_TABLE_SIZE ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_SIZE);
 			case LispNames.HASH_TABLE_REHASH_SIZE ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx, className);
-			case LispNames.HASH_TABLE_REHASH_THRESHOLD ->
-				JvmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx, className);
+				JvmHashTableCompiler.compileGrowthConstant(cons, ctx, className, LispNames.HASH_TABLE_REHASH_SIZE, 1.5);
+			case LispNames.HASH_TABLE_REHASH_THRESHOLD -> JvmHashTableCompiler.compileGrowthConstant(cons, ctx,
+					className, LispNames.HASH_TABLE_REHASH_THRESHOLD, 1.0);
 			case LispNames.HASH_TABLE_P -> JvmHashTableCompiler.compileP(cons, ctx, className);
 			case LispNames.MAPHASH -> JvmHashTableCompiler.compileMaphash(cons, ctx, className);
 			case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
@@ -1668,7 +1762,12 @@ final class JvmExprCompiler {
 			case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
 			case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
 			case LispNames.ARRAY_ELEMENT_TYPE -> {
-				if (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray) {
+				// In a java: program the full form too, where an array can exist: its
+				// guard refuses a host ArrayList with the java: text. Without the array
+				// runtime nothing but a string is an array, which the lite expansion
+				// answers exactly (a host ArrayList fails its %arrayp).
+				if (ctx.usesArrays
+						&& (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray || ctx.javaSites != null)) {
 					JvmArrayCompiler.compileElementType(cons, ctx, className);
 				}
 				else {
@@ -1927,6 +2026,7 @@ final class JvmExprCompiler {
 			}
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
+			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);
 			case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 			case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 			case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);
@@ -2084,6 +2184,8 @@ final class JvmExprCompiler {
 			case LispNames.CHECK_LIST_INTERNAL -> JvmNullPredCompiler.compileCheckList(cons, ctx, className);
 			case LispNames.CHECK_STRING_INTERNAL -> JvmCharCompiler.compileCheckString(cons, ctx, className);
 			case LispNames.CHECK_INDEX_INTERNAL -> JvmCharCompiler.compileCheckIndex(cons, ctx, className);
+			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> JvmCharCompiler.compileOperandTypeError(cons, ctx, className);
+			case LispNames.CHECK_SEQUENCE_INTERNAL -> JvmCharCompiler.compileCheckSequence(cons, ctx, className);
 			case LispNames.CHECK_CHARACTER_INTERNAL -> JvmCharCompiler.compileCheckCharacter(cons, ctx, className);
 			case LispNames.ELT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons, ctx.usesArrays), ctx, className);
@@ -2225,7 +2327,7 @@ final class JvmExprCompiler {
 	 */
 	private static void warnClRedefinition(String name, LispCons cons, JvmLispCompiler.Ctx ctx) {
 		if (ctx.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 	}
 

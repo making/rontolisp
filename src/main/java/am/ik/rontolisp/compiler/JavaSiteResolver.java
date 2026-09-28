@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -111,14 +112,16 @@ public final class JavaSiteResolver {
 	 * member declared with that type answers ({@link JavaStaticType#ofDeclared}).
 	 */
 	private static final List<String> KIND_SPELLINGS = List.of("void", "int", "double", "char", "java.lang.Long",
-			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String");
+			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String", "java.math.BigInteger");
 
 	/**
 	 * What a {@code java:object} type specifier says about a value.
 	 * {@code (java:object "C")} is what a member declared to answer a {@code C} answers
 	 * ({@link JavaStaticType#ofDeclared}: a subclass of {@code C} or {@code nil}, a
 	 * primitive's Lisp kind, ...); {@code (java:object "C" :exact)} is what
-	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}).
+	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}) -- and of
+	 * an interface, whose instances are never exactly of it, what a {@code java:reify} or
+	 * {@code java:proxy} of it makes ({@link JavaImplementationType}).
 	 * @param spec a type specifier
 	 * @return its static type, or {@code null} when the specifier is not a
 	 * {@code java:object} one
@@ -133,6 +136,11 @@ public final class JavaSiteResolver {
 			return JavaStaticType.UNKNOWN;
 		}
 		boolean exact = ((LispCons) ((LispCons) spec).cdr()).cdr() instanceof LispCons;
+		if (exact && type.isInterface()) {
+			// No object's class is exactly an interface: (java:object "I" :exact) is the
+			// object a java:reify / java:proxy of I makes (JavaImplementationType).
+			return type.isLinkable() ? kinds(this.lookup.implementationOf(type)) : JavaStaticType.UNKNOWN;
+		}
 		return exact ? JavaStaticType.ofConstructed(type, this.lookup) : JavaStaticType.ofDeclared(type, this.lookup);
 	}
 
@@ -158,6 +166,10 @@ public final class JavaSiteResolver {
 		Set<JavaKind> kinds = known.kinds();
 		List<String> candidates = new ArrayList<>();
 		for (JavaKind kind : kinds) {
+			if (kind instanceof JavaImplementationType implementation) {
+				// What a java:reify / java:proxy of I makes: (java:object "I" :exact).
+				return kinds.size() == 1 ? javaObjectSpec(implementation.iface().name(), true) : null;
+			}
 			if (kind instanceof JavaType host) {
 				if (kinds.size() == 1) {
 					return javaObjectSpec(host.name(), true);
@@ -388,9 +400,53 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
 		}
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
-		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.methods(member.name()),
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(callableMethods(type, member.name()),
 				member.tag());
 		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
+	}
+
+	/**
+	 * The methods of this name a {@code java:call} on a receiver of this static class may
+	 * call: {@link JavaType#methods}, and of an interface also {@code Object}'s public
+	 * instance methods it does not redeclare. {@link Class#getMethods()} of an interface
+	 * lists none of those, yet they are its members (JLS 9.2) and an
+	 * {@code invokeinterface} of one links (JVMS 5.4.3.4) -- what javac emits for
+	 * {@code list.toString()}.
+	 */
+	private List<? extends JavaExecutable> callableMethods(JavaType type, String name) {
+		List<? extends JavaExecutable> declared = type.methods(name);
+		if (!type.isInterface()) {
+			return declared;
+		}
+		JavaType object = this.lookup.find("java.lang.Object");
+		if (object == null) {
+			return declared;
+		}
+		List<JavaExecutable> callable = new ArrayList<>(declared);
+		for (JavaExecutable inherited : object.methods(name)) {
+			if (!inherited.isStatic() && !redeclared(declared, inherited)) {
+				callable.add(inherited);
+			}
+		}
+		return callable;
+	}
+
+	private static boolean redeclared(List<? extends JavaExecutable> declared, JavaExecutable inherited) {
+		for (JavaExecutable method : declared) {
+			List<? extends JavaType> params = method.parameterTypes();
+			List<? extends JavaType> inheritedParams = inherited.parameterTypes();
+			if (params.size() != inheritedParams.size()) {
+				continue;
+			}
+			boolean same = true;
+			for (int i = 0; i < params.size() && same; i++) {
+				same = params.get(i).name().equals(inheritedParams.get(i).name());
+			}
+			if (same) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private JavaSite resolveField(List<LispVal> parts) {
@@ -702,6 +758,9 @@ public final class JavaSiteResolver {
 			case LispInteger ignored -> {
 				return kinds(JavaKind.Lisp.INTEGER);
 			}
+			case LispBigInteger ignored -> {
+				return kinds(JavaKind.Lisp.BIGNUM);
+			}
 			case LispDouble ignored -> {
 				return kinds(JavaKind.Lisp.FLOAT);
 			}
@@ -731,6 +790,13 @@ public final class JavaSiteResolver {
 		if (operatorOf(cons) != null) {
 			return resolve(cons).result();
 		}
+		if (JavaImplementations.isImplementationForm(cons)) {
+			// A java:reify / java:proxy whose interface resolves makes an object of a
+			// class no program names, whose kind is the interface's implementation type.
+			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
+			JavaType iface = implementation.iface();
+			return iface == null ? JavaStaticType.UNKNOWN : kinds(this.lookup.implementationOf(iface));
+		}
 		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
 			return JavaStaticType.UNKNOWN;
 		}
@@ -739,7 +805,8 @@ public final class JavaSiteResolver {
 			case LispNames.QUOTE -> {
 				if (parts.size() == 2) {
 					LispVal quoted = parts.get(1);
-					if (quoted instanceof LispInteger || quoted instanceof LispDouble || quoted instanceof LispString
+					if (quoted instanceof LispInteger || quoted instanceof LispBigInteger
+							|| quoted instanceof LispDouble || quoted instanceof LispString
 							|| quoted instanceof LispChar || quoted instanceof LispNil || quoted instanceof LispTrue) {
 						return typeOf(quoted);
 					}

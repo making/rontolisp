@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.io.ByteArrayOutputStream;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -57,6 +58,13 @@ import am.ik.wasm.WasmWriter;
  * the list arm calls (`.kb/array-literals.md` has the per-site bytes and the timings).
  */
 final class WasmArrayRuntimeBuilder {
+
+	/**
+	 * The rank byte of an EH-mode {@code _arr_check_rank} call that reads every rank
+	 * alike: the check is then that the value is an array at all
+	 * ({@link #buildArrCheckRankBody(int)}).
+	 */
+	static final int ANY_RANK = 0xFF;
 
 	private WasmArrayRuntimeBuilder() {
 	}
@@ -727,13 +735,63 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_BIG_SHIFT})
 	 */
 	static byte[] buildArrCheckRankBody() {
+		return buildArrCheckRankBody(-1);
+	}
+
+	/**
+	 * Builds {@code _arr_check_rank} for a module that does or does not report a
+	 * wrong-type operand ({@code operatorGlobal}, the operator register, or -1 outside EH
+	 * mode, where the body is {@link #buildArrCheckRankBody()}'s byte for byte).
+	 *
+	 * <p>
+	 * In EH mode {@code given} carries two fields: the low byte is the rank the site
+	 * spells, {@link #ANY_RANK} for a site that reads every rank alike
+	 * ({@code row-major-aref}, {@code array-dimensions}), and the bits above it the
+	 * site's operator id, which the check hands the operator register only when it fails
+	 * -- so a site pays no register write. A value that is no array (neither a
+	 * quote-framed string -- a symbol's name shares the string struct -- a packed array
+	 * nor a cell whose header car is the dims array -- a hash table shares the cell box
+	 * with an i31 count there) lands as the operator's {@code ARRAY} type-error
+	 * ({@code _type_err}); it trapped on the general arm's cast, and a symbol read as its
+	 * name.
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @return the function body
+	 */
+	static byte[] buildArrCheckRankBody(int operatorGlobal) {
+		boolean reports = operatorGlobal >= 0;
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		w.write(0); // no extra locals -- every value here lives on the operand stack
+		// EH mode: 2 = the general arm's header (eqref), 3 = the rank the site wants
+		int headerSlot = 2;
+		int wantSlot = 3;
+		if (reports) {
+			w.writeUnsignedLeb128(2);
+			w.writeUnsignedLeb128(1);
+			w.writeRefType(true, Type.EQ.code());
+			w.writeUnsignedLeb128(1);
+			w.write(Type.I32);
+		}
+		else {
+			w.write(0); // no extra locals -- every value here lives on the operand stack
+		}
 		get(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, Type.I32.code());
+		if (reports) {
+			// A string struct is a string only quote-framed: a symbol's name shares
+			// the type without the frame, and is no array (stringp's test).
+			get(w, 0);
+			WasmEmitHelper.emitStrBytesArray(w);
+			i32(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			i32(w, '"');
+			w.write(Instruction.I32_NE);
+			w.write(Instruction.IF, 0x40);
+			emitArrayLanding(w, operatorGlobal);
+			w.write(Instruction.END);
+		}
 		i32(w, 1);
 		w.write(Instruction.ELSE);
 		get(w, 0);
@@ -764,13 +822,52 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.IF, Type.I32.code());
 		i32(w, 1);
 		w.write(Instruction.ELSE);
-		// general: arr.field0 (the header cons) -> car (the dims buckets) -> its length.
-		get(w, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
-		w.writeUnsignedLeb128(0);
+		if (reports) {
+			// general: header = the cell's field 0, when the value is a cell at all
+			get(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			get(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.END);
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(headerSlot);
+			// ... a cons whose car is the dims array (a hash table's is an i31 count)
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			w.write(Instruction.IF, Type.I32.code());
+			get(w, headerSlot);
+			consGet(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			w.write(Instruction.ELSE);
+			i32(w, 0);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			emitArrayLanding(w, operatorGlobal);
+			w.write(Instruction.END);
+			get(w, headerSlot);
+		}
+		else {
+			// general: arr.field0 (the header cons) -> car (the dims buckets) -> its
+			// length.
+			get(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(0);
+		}
 		consGet(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
@@ -778,14 +875,43 @@ final class WasmArrayRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		get(w, 1);
-		w.write(Instruction.I32_NE);
+		if (reports) {
+			// rank != want, unless the site reads any rank
+			get(w, 1);
+			i32(w, ANY_RANK);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(wantSlot);
+			w.write(Instruction.I32_NE);
+			get(w, wantSlot);
+			i32(w, ANY_RANK);
+			w.write(Instruction.I32_NE);
+			w.write(Instruction.I32_AND);
+		}
+		else {
+			get(w, 1);
+			w.write(Instruction.I32_NE);
+		}
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		get(w, 0);
 		w.write(Instruction.END);
 		return out.toByteArray();
+	}
+
+	// _arr_check_rank's miss: the site's operator (the bits of `given` above the rank
+	// byte) into the register, then ARRAY's landing over the value, which never returns.
+	private static void emitArrayLanding(WasmWriter w, int operatorGlobal) {
+		get(w, 1);
+		i32(w, 8);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		get(w, 0);
+		i32(w, OperandTypes.Kind.ARRAY.ordinal() + 1);
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR);
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	/**

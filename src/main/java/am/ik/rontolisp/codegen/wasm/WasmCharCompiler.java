@@ -3,11 +3,16 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import am.ik.wasm.WasmWriter;
 
 /**
  * Compiles the character built-ins. A character is a {@code TYPE_CHAR} struct holding the
@@ -62,6 +67,60 @@ final class WasmCharCompiler {
 	}
 
 	/**
+	 * Compiles {@code (%operand-type-error x 'op 'kind)}: in EH mode {@code op}'s
+	 * {@code kind} type-error over {@code x} (unnamed when the operator table has no row
+	 * for it), outside it a trap -- the form never answers. In
+	 * {@code %check-sequence-runtime}'s body the operator is a run-time token instead:
+	 * the row id as an i31 ({@link #compileCheckSequence}), which goes into the operator
+	 * register as it is.
+	 */
+	static void compileOperandTypeError(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispMacroExpander.OperandTypeErrorForm form = LispMacroExpander.OperandTypeErrorForm.of(cons);
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		LispVal operatorForm = form.operatorForm();
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			if (operatorForm != null) {
+				WasmExprCompiler.compileExpr(operatorForm, ctx);
+				ctx.writer.write(Instruction.DROP);
+			}
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		OperandTypes.Kind kind = OperandTypes.Kind.named(form.kind());
+		if (operatorForm != null) {
+			WasmExprCompiler.compileExpr(operatorForm, ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			WasmOperandTypes.emitLanding(ctx.writer, kind);
+			return;
+		}
+		WasmOperandTypes.withOperator(ctx, form.operator(), () -> WasmOperandTypes.emitTypeError(ctx, slot, kind));
+	}
+
+	/**
+	 * Compiles {@code (%check-sequence x 'op)}: a call to the module's shared
+	 * {@code %check-sequence-runtime} with the operator's token -- its row id in the
+	 * operator table, 0 for none (and outside EH mode, where no table exists) -- and the
+	 * inline check when the module carries no such defun.
+	 */
+	static void compileCheckSequence(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.functions.containsKey(LispNames.CHECK_SEQUENCE_RUNTIME)) {
+			WasmExprCompiler.compileExpr(LispMacroExpander.checkSequenceInline(cons), ctx);
+			return;
+		}
+		int id = WasmOperandTypes.operatorId(ctx, LispMacroExpander.checkSequenceOperator(cons));
+		LispVal call = new LispCons(new LispSymbol(LispNames.CHECK_SEQUENCE_RUNTIME),
+				new LispCons(cons.toList().get(1), new LispCons(new LispInteger(id), LispNil.INSTANCE)));
+		WasmExprCompiler.compileExpr(call, ctx);
+	}
+
+	/**
 	 * Compiles a check form's operand and, in EH mode, lands it as the form's operator's
 	 * {@code kind} type-error when {@code test} (an i32 over the operand's local) fails.
 	 */
@@ -97,7 +156,16 @@ final class WasmCharCompiler {
 
 	/** {@code (char-code ch)}. */
 	static void compileCharCode(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/**
+	 * {@code (char-int ch)}: the same code point {@code char-code} answers -- with no
+	 * implementation-defined attributes beyond it, char-int has nothing else to encode.
+	 */
+	static void compileCharInt(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
@@ -133,7 +201,7 @@ final class WasmCharCompiler {
 	// inside
 	// TYPE_CHAR without allocating a string.
 	private static void compileCaseFold(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(funcIndex);
 		makeChar(ctx);
@@ -142,7 +210,7 @@ final class WasmCharCompiler {
 	/** {@code (alpha-char-p ch)} (ASCII letters). */
 	static void compileAlphaCharP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		int t = ctx.allocTemp();
-		pushCode(cons.toList().get(1), ctx);
+		pushCheckedCode(cons.toList().get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(t);
@@ -152,18 +220,58 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
+	/**
+	 * {@code (lower-case-p ch)}: whether upcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileLowerCaseP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCaseTest(cons, ctx, WasmLispCompiler.FUNC_CHAR_UPCASE);
+	}
+
+	/**
+	 * {@code (upper-case-p ch)}: whether downcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileUpperCaseP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCaseTest(cons, ctx, WasmLispCompiler.FUNC_CHAR_DOWNCASE);
+	}
+
+	// The checked code point against its fold through funcIndex: t when they differ.
+	private static void compileCaseTest(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
+		}
+		int t = ctx.allocTemp();
+		pushCheckedCode(args.get(1), ctx, false);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(t);
+		getI32(ctx, t);
+		getI32(ctx, t);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
+		ctx.writer.write(Instruction.I32_NE);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
 	/** {@code (digit-char-p ch [radix])}. */
 	static void compileDigitCharP(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		int c = ctx.allocTemp();
 		int r = ctx.allocTemp();
 		int d = ctx.allocTemp();
-		pushCode(args.get(1), ctx);
+		pushCheckedCode(args.get(1), ctx, false);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(c);
 		if (args.size() > 2) {
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			if (!(args.get(2) instanceof LispInteger)) {
+				// In EH mode a radix that is no integer is DIGIT-CHAR-P's INTEGER
+				// type-error.
+				WasmEmitHelper.emitIndexCheck(ctx);
+			}
 		}
 		else {
 			ctx.writer.write(Instruction.I32_CONST);
@@ -226,37 +334,60 @@ final class WasmCharCompiler {
 
 	/** {@code (char= ...)}. */
 	static void compileEq(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileChain(cons, ctx, Instruction.I32_EQ);
+		compileChain(cons, ctx, Instruction.I32_EQ, false, false);
 	}
 
 	/** {@code (char< ...)}. */
 	static void compileLt(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileChain(cons, ctx, Instruction.I32_LT_S);
+		compileChain(cons, ctx, Instruction.I32_LT_S, false, false);
 	}
 
 	/** {@code (char<= ...)}. */
 	static void compileLe(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileChain(cons, ctx, Instruction.I32_LE_S);
+		compileChain(cons, ctx, Instruction.I32_LE_S, false, false);
+	}
+
+	/** {@code (char> ...)}. */
+	static void compileGt(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileChain(cons, ctx, Instruction.I32_GT_S, false, false);
+	}
+
+	/** {@code (char>= ...)}. */
+	static void compileGe(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileChain(cons, ctx, Instruction.I32_GE_S, false, false);
+	}
+
+	/** {@code (char/= ...)}: every PAIR of arguments distinct, not just adjacent ones. */
+	static void compileNe(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileChain(cons, ctx, Instruction.I32_NE, false, true);
+	}
+
+	/** {@code (char-equal ...)}: {@code char=} over the downcased code points. */
+	static void compileEqual(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileChain(cons, ctx, Instruction.I32_EQ, true, false);
 	}
 
 	/**
-	 * A two-operand {@code char=}/{@code char<}/{@code char<=} as a raw i32 (0 = false,
-	 * non-0 = true): both code points pushed, one compare -- no temp, no i31 box. The
-	 * value-position compile boxes this into t/nil; {@link WasmConditionCompiler} tests
-	 * it directly.
+	 * A two-operand character comparison as a raw i32 (0 = false, non-0 = true): both
+	 * code points pushed, one compare -- no temp, no i31 box. The value-position compile
+	 * boxes this into t/nil; {@link WasmConditionCompiler} tests it directly, which is
+	 * why the operands are checked under the comparison's own operator here rather than
+	 * the innermost form's.
 	 * @param cons the comparison form, exactly two operands
 	 * @param ctx the function context
 	 * @param cmpOpcode the i32 comparison
 	 */
 	static void emitPairCompareI32(LispCons cons, WasmLispCompiler.Ctx ctx, int cmpOpcode) {
 		List<LispVal> args = cons.toList();
-		pushCode(args.get(1), ctx);
-		pushCode(args.get(2), ctx);
+		WasmOperandTypes.withOperator(ctx, ((LispSymbol) cons.car()).name(), () -> {
+			pushCheckedCode(args.get(1), ctx, false);
+			pushCheckedCode(args.get(2), ctx, false);
+		});
 		ctx.writer.write(cmpOpcode);
 	}
 
 	/**
-	 * The i32 comparison a {@code char=}/{@code char<}/{@code char<=} head names, or -1.
+	 * The i32 comparison a two-operand case-sensitive character comparison names, or -1.
 	 * @param name the operator name
 	 * @return the opcode, or -1 for any other name
 	 */
@@ -265,69 +396,135 @@ final class WasmCharCompiler {
 			case am.ik.rontolisp.LispNames.CHAR_EQ -> Instruction.I32_EQ;
 			case am.ik.rontolisp.LispNames.CHAR_LT -> Instruction.I32_LT_S;
 			case am.ik.rontolisp.LispNames.CHAR_LE -> Instruction.I32_LE_S;
+			case am.ik.rontolisp.LispNames.CHAR_GT -> Instruction.I32_GT_S;
+			case am.ik.rontolisp.LispNames.CHAR_GE -> Instruction.I32_GE_S;
+			case am.ik.rontolisp.LispNames.CHAR_NE -> Instruction.I32_NE;
 			default -> -1;
 		};
 	}
 
-	private static void compileChain(LispCons cons, WasmLispCompiler.Ctx ctx, int cmpOpcode) {
+	// A variadic character comparison: true only when every compared pair -- adjacent
+	// ones, or all of them with allPairs -- satisfies cmpOpcode. Every argument is
+	// evaluated and checked before any pair is compared, the lone argument of a
+	// one-argument call included (.kb/error-handling.md, "One argument is still
+	// checked").
+	private static void compileChain(LispCons cons, WasmLispCompiler.Ctx ctx, int cmpOpcode, boolean fold,
+			boolean allPairs) {
 		List<LispVal> args = cons.toList();
-		if (args.size() == 3) {
-			// The pair, which is nearly every site: the chain below spent three eqref
-			// temps and an i31 box per operand on it (a literal #\~ was built as a char
-			// struct, cast and read back, then boxed again -- 228 sites on the
-			// hello-clack Worker).
-			emitPairCompareI32(cons, ctx, cmpOpcode);
+		int n = args.size() - 1;
+		if (n < 1) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects at least one argument");
+		}
+		if (n == 1) {
+			pushCheckedCode(args.get(1), ctx, fold);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
 			WasmEmitHelper.emitBoolFromI32(ctx);
 			return;
 		}
-		int prev = ctx.allocTemp();
-		int cur = ctx.allocTemp();
-		int acc = ctx.allocTemp();
-		pushCode(args.get(1), ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(prev);
+		if (n == 2) {
+			// The pair, which is nearly every site: both code points on the stack, one
+			// compare (the chain below spent eqref temps and an i31 box per operand on
+			// it -- 228 sites on the hello-clack Worker).
+			pushCheckedCode(args.get(1), ctx, fold);
+			pushCheckedCode(args.get(2), ctx, fold);
+			ctx.writer.write(cmpOpcode);
+			WasmEmitHelper.emitBoolFromI32(ctx);
+			return;
+		}
+		int[] codes = new int[n];
+		for (int i = 0; i < n; i++) {
+			pushCheckedCode(args.get(i + 1), ctx, fold);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			codes[i] = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(codes[i]);
+		}
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(acc);
-		for (int i = 2; i < args.size(); i++) {
-			pushCode(args.get(i), ctx);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(cur);
-			getI32(ctx, acc);
-			getI32(ctx, prev);
-			getI32(ctx, cur);
-			ctx.writer.write(cmpOpcode);
-			ctx.writer.write(Instruction.I32_AND);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(acc);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(cur);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(prev);
+		for (int i = 0; i + 1 < n; i++) {
+			for (int j = i + 1; j < (allPairs ? n : i + 2); j++) {
+				getI32(ctx, codes[i]);
+				getI32(ctx, codes[j]);
+				ctx.writer.write(cmpOpcode);
+				ctx.writer.write(Instruction.I32_AND);
+			}
 		}
-		getI32(ctx, acc);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
-	// Pushes the i32 code point of the character produced by the argument expression --
-	// a literal's as the constant it is, not through a char struct.
-	private static void pushCode(LispVal arg, WasmLispCompiler.Ctx ctx) {
+	// Pushes the i32 code point of a character built-in's argument -- downcased with
+	// fold -- a literal's as the constant it is. In EH mode any other goes through
+	// _chr_code under the innermost named operator's id, so a non-character is that
+	// operator's CHARACTER type-error rather than the cast's trap; outside it the cast
+	// still traps.
+	private static void pushCheckedCode(LispVal arg, WasmLispCompiler.Ctx ctx, boolean fold) {
 		if (arg instanceof am.ik.rontolisp.LispChar c) {
 			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(c.codePoint());
+			ctx.writer.writeSignedLeb128(fold ? Character.toLowerCase(c.codePoint()) : c.codePoint());
 			return;
 		}
 		WasmExprCompiler.compileExpr(arg, ctx);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeUnsignedLeb128(0);
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHR_CODE);
+		}
+		else {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+			ctx.writer.writeUnsignedLeb128(0);
+		}
+		if (fold) {
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHAR_DOWNCASE);
+		}
+	}
+
+	/**
+	 * Builds {@code _chr_code(value, id) -> i32}: a character answers its code point at
+	 * once; anything else sets the operator register to {@code id} and lands as that
+	 * operator's {@code CHARACTER} type-error ({@code _type_err}, which never returns):
+	 * {@code local.get 0; block (eqref -> eqref) br_on_cast_fail 0 eqref $char;
+	 * struct.get $char 0; return end; local.get 1; global.set $op; <landing>}. A bare
+	 * {@code unreachable} outside EH mode, where nothing calls it.
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @return the function body
+	 */
+	static byte[] buildCodeCheckBody(int operatorGlobal) {
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals: the value and the operator id
+		if (operatorGlobal < 0) {
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.BLOCK);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(0);
+		w.writeHeapType(Type.EQ.code());
+		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		WasmOperandTypes.emitLanding(w, OperandTypes.Kind.CHARACTER);
+		w.write(Instruction.END);
+		return body.toByteArray();
 	}
 
 	// Boxes the i32 on the stack into a TYPE_CHAR struct.

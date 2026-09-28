@@ -29,7 +29,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, `%` prefix, JVM method mangling, WASM rec-groups
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
 - [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
-- [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`
+- [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`; on the compilers an optional travels as a parameter of its own (the UNSUPPLIED marker when absent), so passing one conses nothing
 - [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend
 - [do-return-block.md](do-return-block.md) -- `do`/`return`, `block`/`return-from` (lexical), `catch`/`throw`, `tagbody`/`go`, `prog`
 - [loop-iteration-heads.md](loop-iteration-heads.md) -- `loop` per-clause iteration heads: what is assigned before vs after the termination test
@@ -52,6 +52,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
 - [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours; `LocatedCons`, the interpreter's runtime positions; the JVM backend's site-numbered line tables
+- [compile-warnings.md](compile-warnings.md) -- `CompileWarnings`: warning vs note, attempt buffering, and what `--warnings-as-errors` counts (the seam-read program units, not a spliced library or a dist-installed system; macro-built code at the nearest located form; a `warn` while a macro expands, style-warnings excepted)
 - [source-language.md](source-language.md) -- the one seam from user source to core forms (`SourceLanguage`): per-file language pick, `--source-language`, the program-wide `SourceStandards`, what is NOT user source
 - [scheme-frontend.md](scheme-frontend.md) -- the EXPERIMENTAL Scheme front end: lowering table, library tags, `--scheme-standard`, destination-driven loops, tail-call groups of top-level procedures, identifier escaping, hygienic `syntax-rules` macros, `define-library` / `include`, `cond-expand` and its feature list, `(scheme char)`'s generated Unicode tables, ports and `(scheme file)` file ports, the `#f` / loop-shape / tail-depth / size measurements
 - [format.md](format.md) -- `format`'s two renderings of one directive set, and the shared Schubfach float printer
@@ -108,7 +109,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## Errors and concurrency
 
-- [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics; the uncaught report and wasm-GC's opt-in `--report-locations` frames with their measured cost
+- [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics (the JVM's condition and wrong-type records keyed by their throwable); the uncaught report and wasm-GC's opt-in `--report-locations` frames with their measured cost
 - [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams
 - [threads.md](threads.md) -- `rontolisp:make-thread` and friends
 - [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`with-mutex`
@@ -156,7 +157,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
 - [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter`
 - [template-class-embedding.md](template-class-embedding.md) -- when to use a Java template class, shipping it beside the program named after it, and class closures
-- [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), the reflection bridge for the rest
+- [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), `java:reify`/`java:proxy`/function arguments as generated classes, the reflection bridge for the rest, what a callback raises passing through the Java call
 
 ## WASM backends
 

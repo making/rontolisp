@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import java.util.List;
 
@@ -15,6 +16,7 @@ import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import am.ik.wasm.Instruction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
@@ -495,19 +497,23 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void tcpRejectsWrongArgCounts() {
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-CONNECT expects 2 arguments");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-listen)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-LISTEN expects at least 1 argument");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-accept)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-ACCEPT expects 1 argument");
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-local-port 1 2)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-LOCAL-PORT expects 1 argument");
+	void tcpWrongArgCountsAreCallTimeProgramErrors() {
+		// The component's tcp operators are sockets.lisp defuns with the built-ins' own
+		// lambda lists, so a wrong count is judged as the built-in: a program-error
+		// when it runs, under the interpreter's name for it, with a compile-time
+		// warning (compiler/BuiltinCallArity#builtinShapedDefuns), never a failed
+		// compile.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			assertThat(compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")")).isNotEmpty();
+			assertThat(compileComponent("(rontolisp:tcp-listen)")).isNotEmpty();
+			assertThat(compileComponent("(rontolisp:tcp-accept)")).isNotEmpty();
+			assertThat(compileComponent("(rontolisp:tcp-local-port 1 2)")).isNotEmpty();
+		}
+		assertThat(err.toString()).contains("warning: TCP-CONNECT expects 2 arguments, got 1")
+			.contains("warning: TCP-LISTEN expects at least 1 argument, got 0")
+			.contains("warning: TCP-ACCEPT expects 1 argument, got 0")
+			.contains("warning: TCP-LOCAL-PORT expects 1 argument, got 2");
 	}
 
 	@Test
@@ -530,9 +536,7 @@ class WasmLispCompilerTest {
 				  (print (rontolisp:tcp-peer-port client))
 				  (print (rontolisp:tcp-local-address listener)))
 				""")).isNotEmpty();
-		assertThatThrownBy(() -> compileComponent("(rontolisp:tcp-peer-address 1 2)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-PEER-ADDRESS expects 1 argument");
+		assertThat(compileComponent("(rontolisp:tcp-peer-address 1 2)")).isNotEmpty();
 	}
 
 	@Test

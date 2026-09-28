@@ -70,6 +70,18 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   questions about the same local (no assignment between the two reads) into one, so
   `emitIsExactInt`'s `x is i31 | x is bignum | x is bigint` decides as ONE question. Every
   other i32 is opaque.
+- **Singleton objects** (2026-09-27): an immutable reference global whose initializer's result
+  is an allocation holds ONE object that nothing but that initializer made, so it gets a
+  pseudo-member of its own (`Model.singletonSets`, after null / i31 / other). The global's
+  initializer answers that member instead of its type's class; `typeTestSet` (what a test,
+  cast or `br_on_cast` on the type admits) holds it, `typeClassSet` (what a constructor
+  makes) does not -- a fresh `struct.new` of the same type is never that object. `ref.eq`
+  is then a set question (`Walk.stepRefEq`): disjoint operand sets answer 0, and against a
+  value that can only be the singleton it is `Bool(local, {member})`, decided or refining
+  like a type test. The backend's one such global is the raw-local sentinel, which is also
+  the UNSUPPLIED marker of a physical optional (`.kb/lambda-lists.md`): the `%supplied-p`
+  prologue folds wherever every call passes the optional, or none does, and an unboxed
+  local's `shadow == sentinel` folds where the shadow never holds a boxed value.
 - **Refinement**: an `if` on a `Bool` narrows the local inside the arm it selects (and
   after an arm that never falls through; after a not-taken `br_if`; after a
   `br_on_cast`/`br_on_cast_fail` over a `local.get`, which leaves the local outside / inside the
@@ -146,6 +158,22 @@ overflow i64 and the language promotes rather than wraps (`.kb/wasm-bignum.md`);
 wrapped -- a measurement of the price of exactness, not a target. The fold decides
 representation questions, never range ones.
 
+## Measured 2026-09-27 (singleton objects; default level, Preview 1 / component; before -> after)
+
+| Program | Preview 1 | component |
+| --- | ---: | ---: |
+| `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 1,330 -> **981** | 2,477 -> 2,126 |
+| the same, `(f 1 3)` | 1,044 -> 981 | 2,197 -> 2,126 |
+| `pi_approx` (size-report) | 2,410 -> **1,543** | 3,565 -> 2,698 |
+| `(dotimes (i n) (setq s (+ s i)))` in a defun | 3,083 -> 2,662 | 4,230 -> 3,807 |
+| `(print (reduce #'+ '(1 2 3)))` | 4,697 -> 4,604 | 5,839 -> 5,746 |
+| `zlib` (size-report) | 127,867 -> 127,239 | 131,784 -> 131,156 |
+| `hello_world`, `(print (eval '(+ 1 2)))` | unchanged | unchanged |
+
+The first two are the physical optional's prologue; `pi_approx` and the `dotimes` loop are
+the raw-local sentinel -- `_ub_read` and the boxing arm of each `shadow == sentinel` test go
+where the unboxed counter is never boxed. Outputs identical on wasmtime.
+
 ## Traps
 
 - **The analysis must stay a superset at every point.** A `Val`'s set is never mutated;
@@ -173,7 +201,10 @@ representation questions, never range ones.
 under wasmtime: the one-question merge, the undecidable half kept, the arm refinement, the
 bare splice with reindexed branches, the targeted arm keeping its block, the always-failing
 cast, the cast branch never taken / always taken / undecided with its refinement / reindexed
-across a spliced arm, the declined boundary, the reactor's float tests gone and the fold's idempotence),
+across a spliced arm, the declined boundary, the reactor's float tests gone and the fold's idempotence;
+the identity test against a singleton global decided both ways and refining its arms, a type
+test still admitting the singleton, and the unpassed optional no larger than its
+two-required twin),
 `WasmCallForwardingTest`, `WasmLispCompilerIntegrationTest.theNarrowIntegerBoundaryCrossesEveryTierExactlyAtEveryLevel`
 and the mixed-tier programs in `.optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`
 (now at DEFAULT and SIZE), `WasmImportCompilerTest.twoMemoryTypedParamsStageOnDistinctRegions`

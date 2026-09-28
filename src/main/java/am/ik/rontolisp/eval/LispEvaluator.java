@@ -7,10 +7,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -55,11 +58,13 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
@@ -170,6 +175,14 @@ public final class LispEvaluator {
 	// their historical expansions until then (the interpreter re-expands per
 	// evaluation, so later signals pick the hook up).
 	private boolean restartRuntimeLoaded = false;
+
+	// The label every warn expansion puts in front of its report.
+	private static final String WARNING_LABEL = "WARNING: ";
+
+	// Where a warning that reaches its report goes instead of *error-output* while a
+	// macro expands on the compile path (reportingWarningsTo): the report's text and
+	// whether it is a style-warning. Null everywhere else.
+	private @Nullable BiConsumer<String, Boolean> macroTimeWarnings;
 
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
@@ -336,9 +349,9 @@ public final class LispEvaluator {
 	private final java.util.IdentityHashMap<LispVal, LispVal> compilerMacroExpansions = new java.util.IdentityHashMap<>();
 
 	/**
-	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity: the
-	 * rewrite is a pure function of the form, so like {@link #builtinMacroExpansions}
-	 * nothing invalidates it.
+	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity. Nothing
+	 * invalidates it: a lowered tail's value is the shared wrapper a later
+	 * {@code defmethod} on the producer rewrites in place ({@link #producerTailSites}).
 	 */
 	private final java.util.IdentityHashMap<LispVal, LispVal> lambdaTailSettlements = new java.util.IdentityHashMap<>();
 
@@ -679,6 +692,63 @@ public final class LispEvaluator {
 	 * forever. See {@link #builtinDefaultMethodFor}.
 	 */
 	private final Map<String, String> builtinDefaultMethods = new HashMap<>();
+
+	/** The initial {@link #methodedExpandedBuiltins}, compared by identity. */
+	private static final Set<String> NO_METHODED_BUILTINS = Set.of();
+
+	/**
+	 * The subset of {@link #builtinDefaultMethods}' names the compile paths dispatch too
+	 * ({@link ShadowedBuiltins#loweredBuiltinFunctions()}): a call of one of these goes
+	 * straight to the global binding -- the dispatcher -- in {@link #evalCons}, ahead of
+	 * the operator tables that would otherwise expand it without ever reading the binding
+	 * ({@code (byte-size x)} into {@code (car x)}). Replaced, never mutated, so the
+	 * per-call read needs no lock; {@link #NO_METHODED_BUILTINS} until a program methods
+	 * such a name, which the call path tests by identity.
+	 */
+	private volatile Set<String> methodedExpandedBuiltins = NO_METHODED_BUILTINS;
+
+	/**
+	 * The methoded names among {@link #methodedExpandedBuiltins} that the multiple-value
+	 * lowerings recognize as syntactic producers
+	 * ({@link LispMacroExpander#isSyntacticMultipleValueProducerName}), each mapped to
+	 * the alias its dispatcher is also bound under
+	 * ({@link LispMacroExpander#shadowedDispatcherName}). A form reaching a lowering is
+	 * renamed onto the alias first ({@link #dispatchingMethodedProducers}) -- the compile
+	 * paths' {@code ShadowedBuiltins} rename, applied where the interpreter lowers -- so
+	 * {@code (floor x)} in a tail or under {@code multiple-value-bind} is a call of the
+	 * dispatcher, not the built-in's quotient-and-remainder expansion. Replaced, never
+	 * mutated; empty in every program that methods no such name.
+	 */
+	private volatile Map<String, String> methodedProducerDispatch = Map.of();
+
+	/**
+	 * Every function-body tail a multiple-value producer was lowered into when its
+	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
+	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
+	 * comes later would be invisible to that body. When a producer gets its first method
+	 * ({@link #defineDispatcher}), {@link #relowerProducerTails} rewrites each live one
+	 * in place over the renamed form. Guarded by itself.
+	 */
+	private final List<ProducerTailSite> producerTailSites = new ArrayList<>();
+
+	/** The {@link #producerTailSites} size at which the next registration purges. */
+	private int producerTailSitePurgeAt = PRODUCER_TAIL_SITE_MIN_PURGE;
+
+	private static final int PRODUCER_TAIL_SITE_MIN_PURGE = 64;
+
+	/**
+	 * A lowered producer tail: the form a function body holds, rewritten in place when
+	 * the methoded producer set grows.
+	 *
+	 * @param holder the cons the function body holds -- a {@code defun}'s
+	 * {@code (block name ...)} form, or a lambda tail's {@code (progn settled)} wrapper
+	 * -- weakly, so a site dies with its function
+	 * @param raw the tail as written, before any rename or lowering
+	 * @param wrapped whether {@code holder} is a {@code progn} wrapper (its settled form
+	 * is its sole body form) rather than the settled form itself
+	 */
+	private record ProducerTailSite(java.lang.ref.WeakReference<LispCons> holder, LispVal raw, boolean wrapped) {
+	}
 
 	/**
 	 * The {@code compile} built-in's capture target when this evaluator is a compile
@@ -1197,10 +1267,7 @@ public final class LispEvaluator {
 		// subtypep over the built-in type lattice + the CLOS class registry. A single
 		// primary value: t when sub is known to be a subtype of super, nil otherwise.
 		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {
-			if (args.size() < 2) {
-				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.SUBTYPEP + " expects 2 arguments, got " + args.size());
-			}
+			Environment.requireCallShape(LispNames.SUBTYPEP, args);
 			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// subtypep's SECOND value, emitted beside the primary by the multiple-value
@@ -1744,6 +1811,9 @@ public final class LispEvaluator {
 		}));
 		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
 		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, rawArgs -> {
+			// Before any layer below answers: the base answers NIL without a stream, and
+			// a surplus would reach the set path, which drops a parked unread-char.
+			Environment.requireCallShape(LispNames.FILE_POSITION, rawArgs);
 			List<LispVal> args = resolveStreamArg(rawArgs, 0);
 			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
 				if (args.size() == 1) {
@@ -1802,7 +1872,18 @@ public final class LispEvaluator {
 		// any other write to the stream; the handle-based %warn signalled "not an output
 		// stream" there.
 		LispVal baseWarn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
-		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
+		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, rawArgs -> {
+			// The designator the interpreter's expansion adds names what was signalled
+			// (LispMacroExpander.expandWarnWithDesignator); only the macro-time report
+			// reads it, so the write below sees the message alone.
+			List<LispVal> args = rawArgs.size() == 2 ? rawArgs.subList(0, 1) : rawArgs;
+			BiConsumer<String, Boolean> macroTimeSink = this.macroTimeWarnings;
+			if (macroTimeSink != null && args.size() == 1) {
+				String message = args.get(0) instanceof LispString s ? s.value() : args.get(0).display();
+				String text = message.startsWith(WARNING_LABEL) ? message.substring(WARNING_LABEL.length()) : message;
+				macroTimeSink.accept(text, rawArgs.size() == 2 && designatesStyleWarning(rawArgs.get(1)));
+				return LispNil.INSTANCE;
+			}
 			LispVal destination = currentErrorOutput();
 			if (args.size() == 1 && destination != null) {
 				destination = resolveStreamArg(List.of(args.get(0), destination), 1).get(1);
@@ -1839,8 +1920,8 @@ public final class LispEvaluator {
 		// ignored, like the built-in's.
 		LispVal baseClose = this.globalEnv.lookupFunction(LispNames.CLOSE);
 		this.globalEnv.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
-			boolean closeable = args.size() == 1
-					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name()));
+			boolean closeable = args.size() == 1 || (args.size() == 3 && args.get(1) instanceof LispSymbol kw
+					&& LispNames.ABORT_KEYWORD.equals(kw.name()));
 			if (closeable && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
 				return applyGrayDispatch(GRAY_CLOSE_DISPATCH, List.of(args.get(0)));
 			}
@@ -2136,8 +2217,13 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
 			}
 			String name = sym.name();
+			// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until
+			// its
+			// first #' resolution evaluates the wrapper (resolveFunction), and is a
+			// function all the same.
 			boolean bound = SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
-					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name);
+					|| this.globalEnv.lookupFunctionOrNull(name) != null || LispNames.isCarCdrComposition(name)
+					|| BuiltinFunctionWrappers.names().contains(name);
 			return bound ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// fmakunbound: drop the global function binding AND any user macro of the same
@@ -2262,6 +2348,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOW, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOW, target);
+			}
 			this.packageResolver.shadowSymbols(names, packageName(LispNames.SHADOW, target));
 			return LispTrue.INSTANCE;
 		}));
@@ -2272,6 +2361,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOWING_IMPORT, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOWING_IMPORT, target);
+			}
 			target = packageName(LispNames.SHADOWING_IMPORT, target);
 			try {
 				this.packageResolver
@@ -2291,6 +2383,9 @@ public final class LispEvaluator {
 			}
 			String target = args.size() == 2 ? packageDesignator(LispNames.UNINTERN, args.get(1))
 					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.UNINTERN, target);
+			}
 			target = packageName(LispNames.UNINTERN, target);
 			String spelling = symbolSpelling(LispNames.UNINTERN, args.get(0), target);
 			try {
@@ -2931,7 +3026,7 @@ public final class LispEvaluator {
 						LispNames.MAPHASH + " expects 2 arguments, got " + args.size());
 			}
 			if (!(args.get(1) instanceof LispHashTable table)) {
-				throw new LispEvalException(LispNames.MAPHASH + " expects a hash table, got " + args.get(1).print());
+				throw Environment.accessorTypeError(LispNames.MAPHASH, args.get(1), OperandTypes.Kind.HASH_TABLE);
 			}
 			for (LispHashTable.Entry entry : new ArrayList<>(table.entries())) {
 				apply(args.get(0), List.of(entry.key(), entry.value()), this.globalEnv);
@@ -4926,6 +5021,8 @@ public final class LispEvaluator {
 			}
 			return JavaInterop.proxy(iface.value(), args.get(1), caller);
 		}));
+		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
+		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
 	}
 
 	/**
@@ -5057,6 +5154,15 @@ public final class LispEvaluator {
 					? located.file() + ":" + located.line() + ": " : "";
 			for (LispCons site : am.ik.rontolisp.compiler.JavaSiteResolver.sitesIn(lowered)) {
 				javaSite(site, location);
+			}
+			// A java:reify / java:proxy a compiled program implements by reflection too.
+			for (LispCons implementationForm : am.ik.rontolisp.compiler.JavaImplementations.formsIn(lowered)) {
+				am.ik.rontolisp.compiler.JavaImplementation implementation = am.ik.rontolisp.compiler.JavaImplementations
+					.resolve(implementationForm, am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance());
+				if (!implementation.resolved()) {
+					System.err.println(location + "warning: " + am.ik.rontolisp.compiler.JavaImplementations
+						.reflectionWarning(implementationForm, implementation));
+				}
 			}
 		}
 		return lowered;
@@ -6292,7 +6398,17 @@ public final class LispEvaluator {
 					}
 					LispVal function;
 					List<LispVal> args;
-					if (head instanceof LispSymbol sym) {
+					Set<String> methoded = this.methodedExpandedBuiltins;
+					if (methoded != NO_METHODED_BUILTINS && head instanceof LispSymbol sym
+							&& methoded.contains(sym.name())) {
+						// A built-in the program defined a method on: its global binding
+						// is now the generic's dispatcher (the built-in its default
+						// method), so the call goes there rather than through the
+						// operator table's expansion, which would never consult it.
+						function = resolveFunction(sym.name());
+						args = evalArgs(cons, env, properLength - 1);
+					}
+					else if (head instanceof LispSymbol sym) {
 						switch (sym.name()) {
 							case LispNames.QUOTE:
 							case LispNames.UNSPELLED_QUOTE:
@@ -6468,7 +6584,8 @@ public final class LispEvaluator {
 								}
 								ensureWitLoadedForConditionClass(cons);
 								ensureConditionReportRuntimeLoaded();
-								next = LispMacroExpander.expandWarn(cons, this.closRegistry, this.restartRuntimeLoaded);
+								next = LispMacroExpander.expandWarnWithDesignator(cons, this.closRegistry,
+										this.restartRuntimeLoaded);
 								break dispatch;
 							case LispNames.SIGNAL:
 								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
@@ -7285,10 +7402,6 @@ public final class LispEvaluator {
 			// successive replaces (cl-who's string-list-to-string) mutates in place.
 			// The compilers still expand it to a fresh concatenate (no runtime string
 			// mutation there; cl-who resolves it at macro-expansion time).
-			case LispNames.LOWER_CASE_P:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandLowerCaseP);
-			case LispNames.UPPER_CASE_P:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandUpperCaseP);
 			case LispNames.CONSTANTP:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandConstantp);
 			case LispNames.STREAMP:
@@ -7297,10 +7410,9 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
 			// use, so every broadcast stream -- with components or without -- is the
-			// Gray class on every backend from one definition. The Java built-in
-			// below stays only so #'make-broadcast-stream remains a value; it keeps
-			// the old sink shape (a zero-component broadcast as a VALUE is still
-			// the discarding sink -- .kb/read-load-streams.md).
+			// Gray class on every backend from one definition. #'make-broadcast-stream
+			// is the catalog wrapper (BuiltinFunctionWrappers), which calls the same
+			// prelude entry.
 			case LispNames.MAKE_BROADCAST_STREAM:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeBroadcastStream);
 			case LispNames.PROG2:
@@ -7364,17 +7476,17 @@ public final class LispEvaluator {
 			case LispNames.LABELS:
 				return LispMacroExpander.expandLabels(preExpandLocalMacros(cons));
 			case LispNames.MULTIPLE_VALUE_BIND:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueBind);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
 			case LispNames.MULTIPLE_VALUE_LIST:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueList);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueList);
 			case LispNames.MULTIPLE_VALUE_CALL:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueCall);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueCall);
 			case LispNames.NTH_VALUE:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandNthValue);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandNthValue);
 			case LispNames.MULTIPLE_VALUE_SETQ:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueSetq);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueSetq);
 			case LispNames.MULTIPLE_VALUE_PROG1:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandMultipleValueProg1);
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueProg1);
 			case LispNames.ROTATEF:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandRotatef);
 			case LispNames.SHIFTF:
@@ -7890,7 +8002,8 @@ public final class LispEvaluator {
 		// wrap the body in a block named after the function, so (return-from name v)
 		// exits the function even from inside a do/loop (whose %block does not catch
 		// the named signal).
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false);
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false,
+				setfPlace != null ? null : funcName);
 		LispSymbol blockNameSym = setfPlace != null ? setfPlace : (LispSymbol) nameForm;
 		List<LispVal> blockParts = new ArrayList<>();
 		blockParts.add(new LispSymbol(LispNames.BLOCK));
@@ -7905,8 +8018,16 @@ public final class LispEvaluator {
 		// so its secondary value survives the function return like a values tail
 		// does (defmethod bodies arrive here as defuns). The interpreter's spill
 		// global always exists, so no gate is needed; the compile paths run the same
-		// rewrite in LispMacroExpander.injectMvSpillGlobal.
-		blockForm = LispMacroExpander.spillEscapingMvProducers(blockForm);
+		// rewrite in LispMacroExpander.injectMvSpillGlobal. A lowered tail is registered
+		// so a later defmethod on the producer rewrites it (relowerProducerTails).
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal rawBlockForm = blockForm;
+		LispVal renamedBlockForm = dispatchingMethodedProducers(blockForm, dispatchers);
+		blockForm = LispMacroExpander.spillEscapingMvProducers(renamedBlockForm);
+		if (blockForm != renamedBlockForm && blockForm instanceof LispCons holder) {
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), rawBlockForm, false),
+					dispatchers);
+		}
 		// defun installs into the global function namespace, capturing the current
 		// lexical environment, and returns the function name like Common Lisp.
 		// The funcName rides on the value so it prints #<function NAME>, the text both
@@ -8106,8 +8227,110 @@ public final class LispEvaluator {
 			this.closRegistry.ensureNoApplicableErrorSeeded();
 			eval(LispMacroExpander.noApplicableMethodDefun(), env);
 		}
+		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+		String alias = this.methodedProducerDispatch.get(genericName);
+		if (alias != null) {
+			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
+			if (dispatcher != null) {
+				this.globalEnv.defineFunction(alias, dispatcher);
+			}
+			if (!producerWasMethoded) {
+				// The alias is bound: the tails lowered before this first method can
+				// now call it.
+				relowerProducerTails();
+			}
+		}
+	}
+
+	/**
+	 * The form with its calls of methoded multiple-value producers renamed onto their
+	 * dispatcher aliases ({@link #methodedProducerDispatch}); the form itself when the
+	 * program methods none. Applied to what a multiple-value lowering is about to read.
+	 * @param form the form a lowering will see
+	 * @return the form to hand it
+	 */
+	private LispVal dispatchingMethodedProducers(LispVal form) {
+		return dispatchingMethodedProducers(form, this.methodedProducerDispatch);
+	}
+
+	private static LispVal dispatchingMethodedProducers(LispVal form, Map<String, String> dispatchers) {
+		return dispatchers.isEmpty() ? form : ShadowedBuiltins.renameCallSites(form, dispatchers);
+	}
+
+	/**
+	 * Records a lowered producer tail ({@link #producerTailSites}). A site settled under
+	 * a methoded set that has grown since -- a {@code defmethod} ran between the lowering
+	 * and this registration -- is rewritten at once, so no interleaving leaves it on the
+	 * built-in's lowering.
+	 * @param site the site
+	 * @param settledUnder the {@link #methodedProducerDispatch} its form was settled
+	 * under
+	 */
+	private void registerProducerTail(ProducerTailSite site, Map<String, String> settledUnder) {
+		synchronized (this.producerTailSites) {
+			if (this.producerTailSites.size() >= this.producerTailSitePurgeAt) {
+				this.producerTailSites.removeIf(s -> s.holder().get() == null);
+				this.producerTailSitePurgeAt = Math.max(PRODUCER_TAIL_SITE_MIN_PURGE,
+						this.producerTailSites.size() * 2);
+			}
+			this.producerTailSites.add(site);
+			if (this.methodedProducerDispatch != settledUnder) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	/**
+	 * Rewrites every live lowered producer tail over the current
+	 * {@link #methodedProducerDispatch}: called once per producer name, when it gets its
+	 * first method and its dispatcher alias is bound, so a function defined before that
+	 * {@code defmethod} calls the dispatcher from its tail as one defined after it does.
+	 * The compile paths need none of this: they rename the whole program before lowering.
+	 */
+	private void relowerProducerTails() {
+		synchronized (this.producerTailSites) {
+			this.producerTailSites.removeIf(s -> s.holder().get() == null);
+			for (ProducerTailSite site : this.producerTailSites) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	private void relowerProducerTail(ProducerTailSite site) {
+		LispCons holder = site.holder().get();
+		if (holder == null) {
+			return;
+		}
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(site.raw()));
+		if (site.wrapped()) {
+			holder.setCdr(new LispCons(settled, LispNil.INSTANCE));
+		}
+		else if (settled instanceof LispCons settledCons) {
+			// The (block name ...) a defun's body holds: its head and name are the raw
+			// form's, so only the forms after them change.
+			holder.setCar(settledCons.car());
+			holder.setCdr(settledCons.cdr());
+		}
+	}
+
+	/**
+	 * A multiple-value consumer's expansion: memoized per call site
+	 * ({@link #builtinMacroExpansion}) while the program methods no producer, re-expanded
+	 * over the renamed form once it does -- the expansion then depends on
+	 * {@link #methodedProducerDispatch}, which a later {@code defmethod} can grow, and an
+	 * expansion memoized before that would keep the built-in's lowering.
+	 * @param cons the consumer form
+	 * @param expander its expansion
+	 * @return the expansion
+	 */
+	private LispVal multipleValueConsumerExpansion(LispCons cons,
+			java.util.function.Function<LispCons, LispVal> expander) {
+		if (this.methodedProducerDispatch.isEmpty()) {
+			return builtinMacroExpansion(cons, expander);
+		}
+		return expander.apply((LispCons) dispatchingMethodedProducers(cons));
 	}
 
 	/**
@@ -8140,6 +8363,16 @@ public final class LispEvaluator {
 		String internal = LispMacroExpander.builtinDefaultMethodName(genericName);
 		this.globalEnv.defineFunction(internal, builtin);
 		this.builtinDefaultMethods.put(genericName, internal);
+		if (ShadowedBuiltins.loweredBuiltinFunctions().contains(genericName)) {
+			Set<String> methoded = new HashSet<>(this.methodedExpandedBuiltins);
+			methoded.add(genericName);
+			this.methodedExpandedBuiltins = Set.copyOf(methoded);
+			if (LispMacroExpander.isSyntacticMultipleValueProducerName(genericName)) {
+				Map<String, String> producers = new HashMap<>(this.methodedProducerDispatch);
+				producers.put(genericName, LispMacroExpander.shadowedDispatcherName(genericName));
+				this.methodedProducerDispatch = Map.copyOf(producers);
+			}
+		}
 		return internal;
 	}
 
@@ -8573,6 +8806,48 @@ public final class LispEvaluator {
 				this.userMacroExpansions.clear();
 			}
 		}
+	}
+
+	/**
+	 * Runs {@code body} with every warning that reaches its report -- no handler muffled
+	 * it -- handed to {@code sink} instead of written to {@code *error-output*}: the
+	 * report's text (without the {@code WARNING: } label) and whether the condition is a
+	 * {@code style-warning}. The compile path's macro-time evaluator reports a warning a
+	 * macro signals while it expands this way, as a compile-time warning
+	 * ({@code UserMacroExpander}); the enclosing sink is restored afterwards.
+	 * @param <T> what the body produces
+	 * @param sink where the reports go
+	 * @param body the evaluation to run
+	 * @return what the body produced
+	 */
+	<T> T reportingWarningsTo(BiConsumer<String, Boolean> sink, java.util.function.Supplier<T> body) {
+		BiConsumer<String, Boolean> previous = this.macroTimeWarnings;
+		this.macroTimeWarnings = sink;
+		try {
+			return body.get();
+		}
+		finally {
+			this.macroTimeWarnings = previous;
+		}
+	}
+
+	/**
+	 * Whether a {@code %warn} designator
+	 * ({@link LispMacroExpander#expandWarnWithDesignator}) names a {@code style-warning}:
+	 * a class-name symbol by {@code subtypep}, a condition instance by {@code typep}; nil
+	 * or a string is a {@code simple-warning}.
+	 */
+	private boolean designatesStyleWarning(LispVal designator) {
+		LispSymbol styleWarning = new LispSymbol(ClosRegistry.STYLE_WARNING_CLASS_NAME);
+		if (designator instanceof LispNil || designator instanceof LispString) {
+			return false;
+		}
+		if (designator instanceof LispSymbol) {
+			return subtypep(designator, styleWarning);
+		}
+		LispVal test = new LispCons(new LispSymbol(LispNames.TYPEP),
+				new LispCons(quotedValue(designator), new LispCons(quotedValue(styleWarning), LispNil.INSTANCE)));
+		return !(eval(test, this.globalEnv) instanceof LispNil);
 	}
 
 	/**
@@ -9504,6 +9779,16 @@ public final class LispEvaluator {
 	 * @param designator the offending package designator as given
 	 * @return nothing (always throws)
 	 */
+	/**
+	 * The member-table operators' ({@code shadow} / {@code shadowing-import} /
+	 * {@code unintern}) answer to a designator naming no package: a catchable
+	 * {@code package-error} spelled as the compiled backends' {@code %runtime-package-op}
+	 * spells it.
+	 */
+	private LispVal signalNoSuchPackage(String operator, String designator) {
+		return signalPackageError(operator + ": no such package: " + designator, designator);
+	}
+
 	private LispVal signalPackageError(String message, String designator) {
 		return eval(packageErrorForm(message, designator, false), this.globalEnv);
 	}
@@ -9738,10 +10023,11 @@ public final class LispEvaluator {
 		// real lowering, so its body never resolves back to this branch.
 		// The lambda carries the operator's name, as the compiled backends' injected
 		// wrapper defun does: it prints as #<function NAME> and its wrong-count
-		// program-error names the operator (checkArity).
+		// program-error names the operator (checkArity, and the &optional surplus
+		// check its lambda list expands to).
 		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
 		if (wrapper != null) {
-			LispVal value = eval(wrapper, this.globalEnv);
+			LispVal value = evalLambdaForm((LispCons) wrapper, this.globalEnv, name);
 			return value instanceof LispLambda lambda
 					? new LispLambda(lambda.params(), lambda.rest(), lambda.body(), lambda.closure(), name, false)
 					: value;
@@ -11145,7 +11431,8 @@ public final class LispEvaluator {
 				// compiler's tail-position rewrite (spillEscapingMvProducers) so the
 				// protected form publishes them to spill just as the compile path does.
 				this.globalEnv.clearSpill();
-				LispVal protectedForEval = LispMacroExpander.spillEscapingMvProducers(protectedForm);
+				LispVal protectedForEval = LispMacroExpander
+					.spillEscapingMvProducers(dispatchingMethodedProducers(protectedForm));
 				value = eval(protectedForEval, env);
 				if (noErrorClause != null) {
 					allValues = consumeValues(value);
@@ -11240,8 +11527,9 @@ public final class LispEvaluator {
 	 * {@code handler-bind} expansion wraps its body in. On this backend the built-in seam
 	 * in {@link #apply} already runs handlers at the signal point, so the pad only
 	 * catches what never crossed that seam (an undefined function, an internal
-	 * {@code %error} form evaluated directly); the identity mark keeps the two from both
-	 * firing for one condition.
+	 * {@code %error} form evaluated directly); the error says when its handlers ran
+	 * ({@link LispEvalException#handlersRan}), which keeps the two from both firing for
+	 * one condition.
 	 */
 	private LispVal evalHbGuard(LispCons cons, Environment env) {
 		LispVal body = ((LispCons) cons.cdr()).car();
@@ -11255,10 +11543,10 @@ public final class LispEvaluator {
 
 	/**
 	 * Runs the {@code handler-bind} cluster stack for the condition an escaping error
-	 * carries (synthesizing the {@code simple-error} of a plain error first), unless
-	 * {@code %run-handlers} already completed a walk for the IDENTICAL instance (the
-	 * {@code %handlers-ran%} mark it sets at the end of a walk -- the signal hook and
-	 * this seam never both fire for one condition). Answers the exception to rethrow: the
+	 * carries (synthesizing the {@code simple-error} of a plain error first), unless the
+	 * error says its handlers already ran ({@link LispEvalException#handlersRan}: the
+	 * signal hook's terminal, or the first seam it crossed -- the two never both fire for
+	 * one condition). Answers the exception to rethrow, saying the handlers ran: the
 	 * original when it already carried the instance, otherwise a replacement carrying it,
 	 * so an outer {@code handler-case} dispatches on the same instance the handlers saw.
 	 * Runs through the same {@code %run-handlers} defun the signal hook calls, so the
@@ -11266,36 +11554,21 @@ public final class LispEvaluator {
 	 * {@code return-from}) throws its own signal out of here instead.
 	 */
 	private LispEvalException withHandlerBindHandlersRun(LispEvalException e) {
-		if (!this.restartRuntimeLoaded) {
+		if (!this.restartRuntimeLoaded || e.handlersRan()) {
 			return e;
 		}
 		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
-		if (condition != handlersRanMark()) {
-			LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
-			if (fn != null) {
-				apply(fn, List.of(condition), this.globalEnv);
-			}
+		LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
+		if (fn != null) {
+			apply(fn, List.of(condition), this.globalEnv);
 		}
 		if (e.condition() == condition) {
-			return e;
+			return e.markHandlersRan();
 		}
 		String message = e.getMessage();
 		LispEvalException typed = new LispEvalException(message == null ? "" : message, condition);
 		typed.initCause(e);
-		return typed;
-	}
-
-	/**
-	 * The current {@code %handlers-ran%} mark, read the way a symbol reference reads a
-	 * special (the active dynamic binding first, else the global default), or null when
-	 * the restart runtime has not defined it.
-	 */
-	private @Nullable LispVal handlersRanMark() {
-		String name = LispNames.HANDLERS_RAN_VAR;
-		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
-			return this.dynamicBindings.get(name);
-		}
-		return this.globalEnv.lookupOrNull(name);
+		return typed.markHandlersRan();
 	}
 
 	/**
@@ -11347,14 +11620,17 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalSignalCond(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() != 3) {
+		if (parts.size() != 3 && parts.size() != 4) {
 			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
 		}
 		LispVal condition = eval(parts.get(1), env);
 		LispVal message = eval(parts.get(2), env);
 		if (anyHandlerCaseMatches(condition)) {
-			throw new LispEvalException(message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(),
-					condition);
+			LispEvalException raised = new LispEvalException(
+					message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
+			// The signal hook's terminal: the handler-bind handlers ran at the signal
+			// point, and the throw says so to every pad on its way to the handler-case.
+			throw LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
 		}
 		return LispNil.INSTANCE;
 	}
@@ -11552,6 +11828,15 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
+		return evalLambdaForm(cons, env, null);
+	}
+
+	/**
+	 * A {@code lambda} form's closure; a function name, when it has one, rides into its
+	 * {@code &optional} surplus check
+	 * ({@link LambdaLists#expand(LispVal, List, boolean, String)}).
+	 */
+	private LispVal evalLambdaForm(LispCons cons, Environment env, @Nullable String functionName) {
 		checkAwaitPlacement(cons);
 		List<LispVal> parts = cons.toList();
 		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
@@ -11569,7 +11854,7 @@ public final class LispEvaluator {
 				body = settledBody;
 			}
 		}
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false);
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false, functionName);
 		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
 	}
 
@@ -11588,7 +11873,24 @@ public final class LispEvaluator {
 		if (cached != null) {
 			return cached;
 		}
-		LispVal settled = LispMacroExpander.spillEscapingMvProducers(tail);
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal renamed = dispatchingMethodedProducers(tail, dispatchers);
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(renamed);
+		if (settled != renamed) {
+			// A lowered producer: the closures share one (progn settled) wrapper, which
+			// a later defmethod on the producer rewrites in place (relowerProducerTails)
+			// -- a closure made before it must dispatch too.
+			LispCons holder = new LispCons(new LispSymbol(LispNames.PROGN), new LispCons(settled, LispNil.INSTANCE));
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), tail, true),
+					dispatchers);
+			settled = holder;
+		}
+		else {
+			// Nothing lowered, so no methoded set can lower anything here later either;
+			// a rename of a non-tail call only restates what evalCons does for a
+			// methoded name.
+			settled = renamed;
+		}
 		synchronized (this.lambdaTailSettlements) {
 			if (this.lambdaTailSettlements.size() < EXPANSION_MEMO_LIMIT) {
 				this.lambdaTailSettlements.put(tail, settled);
@@ -11955,9 +12257,13 @@ public final class LispEvaluator {
 			return new LispString(sb.toString());
 		}
 		if (!(value instanceof LispCons) && !(value instanceof LispNil) && !(value instanceof LispString)) {
-			// (coerce x 'vector) over anything that is neither a list nor a string is
-			// the identity, exactly as coerceToVectorBody's else arm is.
-			return value;
+			// (coerce x 'vector) over a vector is the identity, exactly as
+			// coerceToVectorBody's vectorp arm is; anything else -- no sequence, or an
+			// array of rank 2 or more -- is the expansion's COERCE type-error to raise.
+			boolean vector = value instanceof LispIntVector
+					|| value instanceof LispArray arr && arr.dimensions().length == 1
+					|| value instanceof LispFloatArray packed && packed.rank() == 1;
+			return vector ? value : null;
 		}
 		LispVal elements = (value instanceof LispString) ? sequenceElementsAsList(value) : value;
 		if (elements == null) {
@@ -12824,6 +13130,27 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * What a built-in's failure reports: the program-error its DIRECT call reports
+	 * ({@link BuiltinCallArity#wrongCountMessage}) when the count is one its call shape
+	 * rules out -- whatever the Java body said, its own range ({@code 1 to 2}), a
+	 * description, an index out of bounds -- and the failure itself otherwise. A direct
+	 * call was judged before its body ran; a function value (funcall, apply, a mapping
+	 * function, a methoded built-in's dispatcher) is judged here, as the compiled
+	 * wrapper's lambda list judges it. Only on the way out, so the success path pays
+	 * nothing: no body answers a count its shape rules out
+	 * ({@code LispEvaluatorTest.everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape}).
+	 * @param builtIn the built-in that failed
+	 * @param args its arguments
+	 * @param failure what its body raised
+	 * @return the condition to signal
+	 */
+	private static LispEvalException wrongCountOr(LispFunction builtIn, List<LispVal> args, LispEvalException failure) {
+		String wrongCount = BuiltinCallArity.wrongCountMessage(builtIn.name(), args.size());
+		return wrongCount == null ? failure
+				: LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, wrongCount);
+	}
+
+	/**
 	 * The elements of a lambda body that is nothing but ONE named {@code block} form --
 	 * what {@code evalDefun} and {@code expandDefmethod} wrap every function body in --
 	 * or {@code null} for any other body. See the call site in {@link #apply}.
@@ -12869,17 +13196,17 @@ public final class LispEvaluator {
 			catch (OperandTypeException e) {
 				// A coercion funnel cannot know which operator it serves; the built-in
 				// whose body raised the error does (OperandTypes).
-				throw withHandlerBindHandlersRun(e.named(builtIn.name()));
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e.named(builtIn.name())));
 			}
 			catch (LispEvalException e) {
-				throw withHandlerBindHandlersRun(e);
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, e));
 			}
 			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
 					| ClassCastException raw) {
 				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
 						builtinFailureMessage(builtIn.name(), raw));
 				wrapped.initCause(raw);
-				throw withHandlerBindHandlersRun(wrapped);
+				throw withHandlerBindHandlersRun(wrongCountOr(builtIn, args, wrapped));
 			}
 		}
 		if (function instanceof LispLambda lambda) {

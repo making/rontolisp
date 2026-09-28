@@ -1014,7 +1014,7 @@ cases:
       (print (coerce nil 'string))
       (print (coerce nil 'vector))
       (print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
-      (print (coerce 5 'vector))
+      (print (handler-case (coerce 5 'vector) (type-error (e) (type-error-expected-type e))))
       (print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
       (print (position #\Space "a b c"))
       (print (position #\Space "a b c" :from-end t))
@@ -1031,7 +1031,7 @@ cases:
       ""
       #()
       :NOT-A-CHARACTER
-      5
+      SEQUENCE
       SEQUENCE
       1
       3
@@ -1072,7 +1072,7 @@ cases:
       (print (search "bc" '(#\b #\c #\d)))
       (print (search '(1 2) '(1 2 3) :end2 99))
       (print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
-      (print (search '(1 2 3) '(1 2 3) :start2 -1))
+      (print (handler-case (search '(1 2 3) '(1 2 3) :start2 -1) (type-error (sm-e) (princ-to-string sm-e))))
       (print (handler-case (search '(1) '(1 2 . 3)) (type-error (sm-e) (princ-to-string sm-e))))
       (print (mismatch '(1 2 3) '(1 2 3) :end1 99))
       (print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
@@ -1113,7 +1113,7 @@ cases:
       0
       0
       NIL
-      0
+      "ELT: The value -1 is not of type (INTEGER 0 (3))"
       "LENGTH: The value 3 is not of type SEQUENCE"
       3
       NIL
@@ -5128,6 +5128,7 @@ cases:
   - name: characters-and-parsing-cross-backend
     source: |
       (print (char-code #\A))
+      (print (char-int #\A))
       (print (code-char 66))
       (print (char "hello" 1))
       (print (characterp #\a))
@@ -5153,6 +5154,7 @@ cases:
       (princ #\a)
       (terpri)
     expected: |
+      65
       65
       #\B
       #\e
@@ -10290,11 +10292,10 @@ cases:
                          :if-does-not-exist :create)
         (write-string "z" s))
       (print (with-open-file (s "made906.txt") (read-line s)))
-      ;; open-stream-p is NOT asked here: a closed handle answers t on both WASM
-      ;; backends (a WASI fd has no stream table behind it), which is a divergence
-      ;; of its own. The interpreter/JVM pins are the unit tests.
+      ;; A probe stream is closed from the start: the WASM backends read the
+      ;; stream value's closed mark, the interpreter/JVM their stream table.
       (let ((probed (open "ie906.txt" :direction :probe)))
-        (print (list (and probed t) (typep probed 'file-stream))))
+        (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
       (print (open "gone906.txt" :direction :probe))
       (print (and (open "gone906.txt" :direction :probe :if-does-not-exist :create) t))
       (print (and (probe-file "gone906.txt") t))
@@ -10307,7 +10308,7 @@ cases:
       NIL
       :FILE-ERROR
       "z"
-      (T T)
+      (T NIL T)
       NIL
       T
       T
@@ -10385,10 +10386,25 @@ cases:
       (let ((s (open "bytes906.dat")))
         (close s)
         (print (close s)))
+      ;; A closed string stream is closed too, and a second close of a file
+      ;; stream leaves alone the descriptor a newer open may have taken over.
+      (let ((o (make-string-output-stream)) (i (make-string-input-stream "a")))
+        (close o)
+        (close i)
+        (print (list (open-stream-p o) (open-stream-p i))))
+      (let ((a (open "bytes906.dat")))
+        (close a)
+        (let ((b (open "reuse906.txt" :direction :output :if-exists :supersede)))
+          (close a)
+          (write-string "kept" b)
+          (close b)))
+      (print (with-open-file (s "reuse906.txt") (read-line s)))
     expected: |
       (NIL NIL NIL :UTF-8 1 3 2 1)
       (65 65 :EOF)
       T
+      (NIL NIL)
+      "kept"
 
   - name: uiop-stream-file-contents-and-safe-io
     # .todo/359: the "give me the contents" half of uiop/stream -- write a file,
@@ -13851,6 +13867,108 @@ cases:
       :FROM-INNER
       :FROM-INNER
       :PAST-GUARD
+  - name: condition-on-its-way-out-keeps-its-record
+    source: |
+      ;; The condition twin of the case above: a failure handled inside an
+      ;; unwind-protect cleanup while another is on its way out neither reads the outer
+      ;; one's condition (or wrong-type datum) as its own nor takes it away. The JVM
+      ;; kept one per-thread slot for every throwable and printed
+      ;; :READ-AS-THE-TYPED-ONE / :LOST-ITS-TYPE here.
+      (define-condition cwo-typed (error) ())
+      (define-condition cwo-other (error) ())
+      (define-condition cwo-reporting (error) ()
+        (:report (lambda (c s)
+                   (declare (ignore c))
+                   (format s "reported ~a"
+                           (handler-case (error "inner")
+                             (cwo-reporting () :read-as-the-outer-one)
+                             (error () :plain))))))
+      (defvar *cwo-list* 5)
+      (defun cwo-bad (x) (+ 1 x))
+      (print (handler-case
+                 (unwind-protect (error 'cwo-typed)
+                   (print (handler-case (error "plain") (cwo-typed () :read-as-the-typed-one) (error () :plain))))
+               (cwo-typed () :typed)
+               (error () :lost-its-type)))
+      (print (handler-case
+                 (unwind-protect (error 'cwo-typed)
+                   (print (handler-case (car *cwo-list*) (cwo-typed () :read-as-the-typed-one) (error () :raw))))
+               (cwo-typed () :typed)
+               (error () :lost-its-type)))
+      (print (handler-case
+                 (unwind-protect (error 'cwo-typed)
+                   (print (handler-case (error 'cwo-other) (cwo-typed () :read-as-the-typed-one) (cwo-other () :other))))
+               (cwo-typed () :typed)
+               (error () :lost-its-type)))
+      (print (handler-case
+                 (unwind-protect (cwo-bad "a")
+                   (print (handler-case (error 'cwo-other) (cwo-other () :other))))
+               (cwo-other () :read-as-the-inner-one)
+               (type-error (e) (list :typed (type-error-datum e)))
+               (error () :lost-its-type)))
+      (print (handler-case
+                 (unwind-protect (cwo-bad "a")
+                   (print (handler-case (cwo-bad "b") (type-error (e) (list :inner (type-error-datum e))))))
+               (type-error (e) (list :typed (type-error-datum e)))
+               (error () :lost-its-type)))
+      (print (handler-case (error 'cwo-reporting)
+               (cwo-reporting (c) (format nil "~a" c))
+               (error () :lost-its-type)))
+    expected: |
+      :PLAIN
+      :TYPED
+      :RAW
+      :TYPED
+      :OTHER
+      :TYPED
+      :OTHER
+      (:TYPED "a")
+      (:INNER "b")
+      (:TYPED "a")
+      "reported PLAIN"
+  - name: handlers-run-once-while-a-cleanup-signals
+    source: |
+      ;; A handler-bind's handlers run once per condition however much else is signalled
+      ;; while it is on its way out: a condition handled, declined or abandoned in an
+      ;; unwind-protect cleanup, one handled between the two pads, a handler-case
+      ;; declining the first on its way. Whether the handlers ran rides the condition's own
+      ;; throw. One global mark held it until 2026-09-27, the other signal replaced it, and
+      ;; the outer pair ran twice on all four backends (the raw failure handled in a
+      ;; cleanup: on the interpreter). SBCL's output. One row per mechanism and no
+      ;; define-condition, for the JVM corpus class's constant pool
+      ;; (JvmClassShakerCorpusTest): the backend suites run every row, a report that
+      ;; handles an error of its own included, over am.ik.rontolisp.HandlersRunOnceFixture.
+      (defvar *ci-hr-log* nil)
+      (defun ci-hr-bad (x) (car x))
+      (defun ci-hr (n)
+        (setq *ci-hr-log* nil)
+        (print (list (handler-case
+                         (handler-bind ((error (lambda (c) (push (list :outer (type-of c)) *ci-hr-log*))))
+                           (unwind-protect
+                                (handler-bind ((error (lambda (c) (push (list :inner (type-of c)) *ci-hr-log*))))
+                                  (case n
+                                    (1 (unwind-protect (error 'program-error)
+                                         (handler-case (error 'control-error) (control-error () nil))))
+                                    (2 (unwind-protect (ci-hr-bad "a") (ignore-errors (ci-hr-bad "b"))))
+                                    (3 (unwind-protect (error 'program-error) (signal "note")))
+                                    (4 (unwind-protect (error 'program-error)
+                                         (block ci-hr-b
+                                           (unwind-protect (error 'control-error) (return-from ci-hr-b nil)))))
+                                    (5 (handler-case
+                                           (unwind-protect (error 'program-error) (ignore-errors (error 'control-error)))
+                                         (control-error () nil)))
+                                    (t (handler-case (ci-hr-bad "a") (control-error () nil)))))
+                             (when (= n 6) (ignore-errors (error "x")))))
+                       (error (e) (type-of e)))
+                     (reverse *ci-hr-log*))))
+      (dotimes (i 6) (ci-hr (+ i 1)))
+    expected: |
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (TYPE-ERROR ((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR) (:INNER CONTROL-ERROR) (:OUTER CONTROL-ERROR)))
+      (PROGRAM-ERROR ((:INNER PROGRAM-ERROR) (:OUTER PROGRAM-ERROR)))
+      (TYPE-ERROR ((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR)))
   - name: cross-lambda-go
     source: |
       ;; A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
@@ -18055,6 +18173,62 @@ cases:
       ("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
       ("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
       ("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+  # .kb/error-handling.md, "One argument is still checked": a one-argument call
+  # compares or folds nothing, but its argument is checked like any other -- the
+  # arithmetic and bitwise ones used to answer it unexamined on the compiled
+  # backends, the orderings and min/max on all four, and char= trapped on wasm.
+  - name: one-argument-calls-check-their-argument
+    source: |
+      (defun ci-one (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-one-x* 'ci-one-sym)
+      (defvar *ci-one-c* 1)
+      (print (ci-one (lambda () (+ *ci-one-x*))))
+      (print (ci-one (lambda () (logior *ci-one-x*))))
+      (print (ci-one (lambda () (< *ci-one-x*))))
+      (print (ci-one (lambda () (/= *ci-one-x*))))
+      (print (ci-one (lambda () (max #c(1 2)))))
+      (print (ci-one (lambda () (funcall #'min *ci-one-x*))))
+      (print (ci-one (lambda () (char= *ci-one-c*))))
+      (print (ci-one (lambda () (char> #\b *ci-one-c*))))
+      (print (ci-one (lambda () (char-lessp *ci-one-c*))))
+      (print (list (+ 5) (< 3) (min -0.0) (char= #\a) (char/= #\a #\b #\a) (char-equal #\A #\a)))
+    expected: |
+      ("+: The value CI-ONE-SYM is not of type NUMBER" NUMBER)
+      ("LOGIOR: The value CI-ONE-SYM is not of type INTEGER" INTEGER)
+      ("<: The value CI-ONE-SYM is not of type REAL" REAL)
+      ("=: The value CI-ONE-SYM is not of type NUMBER" NUMBER)
+      ("MAX: The value #C(1 2) is not of type REAL" REAL)
+      ("MIN: The value CI-ONE-SYM is not of type REAL" REAL)
+      ("CHAR=: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR>: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR-LESSP: The value 1 is not of type CHARACTER" CHARACTER)
+      (5 T -0.0 T NIL T)
+  # .kb/error-handling.md, "A character built-in checks its argument".
+  - name: character-built-ins-check-their-argument
+    source: |
+      (defun ci-chk (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-chk-c* 1)
+      (print (ci-chk (lambda () (char-code *ci-chk-c*))))
+      (print (ci-chk (lambda () (char-int *ci-chk-c*))))
+      (print (ci-chk (lambda () (upper-case-p *ci-chk-c*))))
+      (print (ci-chk (lambda () (digit-char-p #\7 'ci-chk-sym))))
+      (print (ci-chk (lambda () (alphanumericp *ci-chk-c*))))
+      (print (ci-chk (lambda () (char-name *ci-chk-c*))))
+      (print (list (char-code #\a) (char-int #\a) (upper-case-p #\A) (digit-char-p #\f 16) (char-name #\Space)))
+    expected: |
+      ("CHAR-CODE: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR-INT: The value 1 is not of type CHARACTER" CHARACTER)
+      ("UPPER-CASE-P: The value 1 is not of type CHARACTER" CHARACTER)
+      ("DIGIT-CHAR-P: The value CI-CHK-SYM is not of type INTEGER" INTEGER)
+      ("ALPHANUMERICP: The value 1 is not of type CHARACTER" CHARACTER)
+      ("CHAR-NAME: The value 1 is not of type CHARACTER" CHARACTER)
+      (97 97 T 15 "Space")
   # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
   # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
   # an integer or float limit <= 0 is out of range either way. Both report under
@@ -18240,6 +18414,86 @@ cases:
   # member/assoc/rassoc scans, list-length, a dotted list's tail under length and
   # the map* walks, a mapcan/mapcon piece that is no list, the multi-list map*
   # value path -- report OP: The value X is not of type T on every backend.
+  # A sequence operator, an array accessor and a hash-table accessor handed a value that
+  # is none of those: the operator's type-error naming SEQUENCE / ARRAY / HASH-TABLE --
+  # one row per mechanism (WrongTypeArgumentFixture holds the backend suites to every
+  # operator; the corpus class's constant pool has no room for all of them here).
+  - name: sequence-and-accessor-operators-name-their-wrong-type-argument
+    source: |
+      (defun ci-wt (thunk)
+        (handler-case (list :value (funcall thunk))
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-wt-five* 5)
+      (defvar *ci-wt-grid* (make-array '(2 2) :initial-element 0))
+      (defvar *ci-wt-table* (make-hash-table))
+      (print (ci-wt (lambda () (every #'numberp *ci-wt-five*))))
+      (print (ci-wt (lambda () (sort *ci-wt-five* #'< :key #'identity))))
+      (print (ci-wt (lambda () (find 1 *ci-wt-grid*))))
+      (print (ci-wt (lambda () (count-if-not #'numberp *ci-wt-five*))))
+      (print (ci-wt (lambda () (reduce #'+ *ci-wt-five* :start 0))))
+      (print (ci-wt (lambda () (copy-seq *ci-wt-five*))))
+      (print (ci-wt (lambda () (fill *ci-wt-five* 0))))
+      (print (ci-wt (lambda () (concatenate 'string *ci-wt-five*))))
+      (print (ci-wt (lambda () (coerce *ci-wt-five* '(vector (unsigned-byte 8))))))
+      (print (ci-wt (lambda () (map-into *ci-wt-five* #'identity))))
+      (print (ci-wt (lambda () (funcall #'map 'list #'+ '(1) *ci-wt-five*))))
+      (print (ci-wt (lambda () (setf (aref *ci-wt-five* 0) 1))))
+      (print (ci-wt (lambda () (array-rank *ci-wt-five*))))
+      (print (ci-wt (lambda () (+ 1 (aref *ci-wt-five* 0)))))
+      (print (ci-wt (lambda () (setf (gethash 1 *ci-wt-five*) 2))))
+      (print (ci-wt (lambda () (maphash #'list *ci-wt-five*))))
+      (print (ci-wt (lambda () (hash-table-rehash-size *ci-wt-five*))))
+      (print (ci-wt (lambda () (funcall #'gethash 1 *ci-wt-five*))))
+      (print (ci-wt (lambda () (setf (fill-pointer *ci-wt-five*) 0))))
+      (print (ci-wt (lambda () (adjustable-array-p 'ci-wt-symbol))))
+      (print (ci-wt (lambda () (aref 'ci-wt-symbol 0))))
+      (print (ci-wt (lambda () (array-displacement *ci-wt-five*))))
+      (print (ci-wt (lambda () (funcall #'adjust-array *ci-wt-five* 3))))
+      (print (list (find 2 (vector 1 2)) (coerce #(1 2) 'list) (sort (vector 3 1 2) #'<) (subseq "abc" 1)
+                   (coerce '(1 2) 'vector) (aref *ci-wt-grid* 1 1) (gethash 1 *ci-wt-table* :none)))
+    expected: |
+      ("EVERY: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("STABLE-SORT: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("FIND: The value #2A((0 0) (0 0)) is not of type SEQUENCE" #2A((0 0) (0 0)) SEQUENCE)
+      ("COUNT-IF-NOT: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("REDUCE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("SUBSEQ: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("FILL: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("CONCATENATE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("COERCE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("MAP-INTO: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("MAP: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("(SETF AREF): The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ARRAY-DIMENSIONS: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("AREF: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("(SETF GETHASH): The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("MAPHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("HASH-TABLE-REHASH-SIZE: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("GETHASH: The value 5 is not of type HASH-TABLE" 5 HASH-TABLE)
+      ("(SETF FILL-POINTER): The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ADJUSTABLE-ARRAY-P: The value CI-WT-SYMBOL is not of type ARRAY" CI-WT-SYMBOL ARRAY)
+      ("AREF: The value CI-WT-SYMBOL is not of type ARRAY" CI-WT-SYMBOL ARRAY)
+      ("ARRAY-DISPLACEMENT: The value 5 is not of type ARRAY" 5 ARRAY)
+      ("ADJUST-ARRAY: The value 5 is not of type ARRAY" 5 ARRAY)
+      (2 (1 2) #(1 2 3) "bc" #(1 2) 0 :NONE)
+  - name: fill-pointer-surface-refuses-a-vector-without-one
+    source: |
+      (defun ci-fp (thunk)
+        (handler-case (list :value (funcall thunk))
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-fp-string* "abc")
+      (defvar *ci-fp-vector* (make-array 2 :fill-pointer 0))
+      (print (ci-fp (lambda () (fill-pointer *ci-fp-string*))))
+      (print (ci-fp (lambda () (vector-pop (make-array 2 :element-type 'double-float)))))
+      (print (ci-fp (lambda () (setf (fill-pointer *ci-fp-vector*) 3))))
+      (print (ci-fp (lambda () (vector-pop *ci-fp-vector*))))
+    expected: |
+      ("FILL-POINTER: The value \"abc\" is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))" "abc" (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)))
+      ("VECTOR-POP: The value #d(0.0 0.0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))" #d(0.0 0.0) (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)))
+      ("(SETF FILL-POINTER): The value 3 is not of type (INTEGER 0 2)" 3 (INTEGER 0 2))
+      (:NOT-A-TYPE-ERROR "VECTOR-POP: there is nothing left to pop")
   - name: list-consumers-beyond-the-first-set-name-the-operator
     source: |
       (defun ci-lcb (thunk)
@@ -18424,6 +18678,8 @@ cases:
         (print (ci-oob (lambda () (aref v -1))))
         (print (ci-oob (lambda () (svref v 3))))
         (print (ci-oob (lambda () (elt v 3))))
+        (print (ci-oob (lambda () (elt (list 1 2 3) 3))))
+        (print (ci-oob (lambda () (setf (elt (list 1 2 3) -1) 0))))
         (print (ci-oob (lambda () (aref v *ci-oob-big*))))
         (print (ci-oob (lambda () (aref d 3))))
         (print (ci-oob (lambda () (aref d -1))))
@@ -18457,6 +18713,8 @@ cases:
       ("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
       ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
       ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
       ("AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
       ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
       ("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
@@ -18693,6 +18951,149 @@ cases:
       (:SIMPLE "APPLY: last argument must be a list")
       ((1 2 3) 10 NIL)
 
+  # A built-in's function VALUE takes the operator's standard lambda list: the optional
+  # and keyword arguments reach the call-position lowering through the wrapper, and a
+  # direct string-downcase :end / typep environment is lowered, not dropped or refused.
+  # (The comparisons' and logand's one- and zero-argument VALUE calls are left out: the
+  # compiled wrappers keep two required parameters, .kb/error-handling.md.)
+  - name: builtin-function-values-take-the-standard-lambda-list
+    source: |
+      (defun ci-wv-call (f &rest a) (apply f a))
+      (print (list (ci-wv-call #'< 1 2 3) (ci-wv-call #'< 1 3 2) (ci-wv-call #'/= 1 2 1) (ci-wv-call #'char< #\a #\b #\c)
+                   (ci-wv-call #'char-equal #\a #\A #\a) (ci-wv-call #'logand 1 3 7) (ci-wv-call #'logxor 1 2 4 8)))
+      (print (list (ci-wv-call #'digit-char-p #\f 16) (ci-wv-call #'float 1 1.0d0)
+                   (ci-wv-call #'gethash 1 (make-hash-table) 'none) (ci-wv-call #'pairlis '(a) '(1) '((b . 2)))
+                   (ci-wv-call #'typep 1 'integer nil) (ci-wv-call #'constantp 1 nil)
+                   (ci-wv-call #'upgraded-complex-part-type 'double-float nil)))
+      (print (list (ci-wv-call #'parse-integer "ff" :radix 16) (ci-wv-call #'parse-integer "a12b" :start 1 :end 3)
+                   (ci-wv-call #'make-string 2 :initial-element #\z) (ci-wv-call #'string-upcase "abcd" :start 1 :end 3)
+                   (ci-wv-call #'string-capitalize "one two" :start 4) (string-downcase "ABCD" :end 2)
+                   (typep 1 'integer nil)))
+      (print (list (let ((v (make-array 0 :fill-pointer 0 :adjustable t)))
+                     (ci-wv-call #'vector-push-extend 1 v 8)
+                     (array-total-size v))
+                   (ci-wv-call #'adjust-array (vector 1 2) 3 :initial-element 0)
+                   (ci-wv-call #'adjust-array (vector 1 2) 3 :initial-contents '(a b c))
+                   (ci-wv-call #'adjust-array (make-array 2 :adjustable t) 2 :displaced-to (vector 7 8 9)
+                               :displaced-index-offset 1)))
+      (print (list (with-output-to-string (s) (ci-wv-call #'write-string "abcdef" s :start 1 :end 3))
+                   (with-input-from-string (s "") (ci-wv-call #'read-char-no-hang s nil :eof))
+                   (symbolp (ci-wv-call #'gensym "WV")) (symbol-name (ci-wv-call #'intern "WV-SYM" "KEYWORD"))))
+      (print (list (ci-wv-call #'< 1) (ci-wv-call #'char= #\a) (ci-wv-call #'logand) (ci-wv-call #'logior 5)
+                   (ci-wv-call #'+) (ci-wv-call #'* 5) (ci-wv-call #'+ 1 2) (ci-wv-call #'max 3) (ci-wv-call #'- 3)
+                   (ci-wv-call #'append) (ci-wv-call #'nconc (list 1) nil (list 2))))
+    expected: |
+      (T NIL NIL T T 1 15)
+      (15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
+      (255 12 "zz" "aBCd" "one Two" "abCD" T)
+      (8 #(1 2 0) #(A B C) #(8 9))
+      ("bc" :EOF T "WV-SYM")
+      (T T -1 5 0 5 3 3 -3 NIL (1 2))
+
+  # The two function values that call a prelude helper: #'make-broadcast-stream builds
+  # the Gray broadcast stream the call position builds (components or none), and
+  # #'write-to-string binds the printer variables its runtime keyword tail names,
+  # rejecting a bad tail with the call position's report.
+  - name: helper-wrapped-function-values
+    source: |
+      (defun ci-hw-call (f &rest a) (apply f a))
+      (defun ci-hw-report (thunk)
+        (handler-case (funcall thunk) (program-error (e) (princ-to-string e))))
+      (let* ((a (make-string-output-stream))
+             (b (make-string-output-stream))
+             (s (ci-hw-call #'make-broadcast-stream a b)))
+        (format s "hi~a" 1)
+        (write-string "!" s)
+        (print (list (get-output-stream-string a) (get-output-stream-string b)
+                     (length (broadcast-stream-streams s)) (typep s 'broadcast-stream))))
+      (let ((s (funcall 'make-broadcast-stream)))
+        (write-string "dropped" s)
+        (print (list (typep s 'broadcast-stream) (broadcast-stream-streams s) (file-length s))))
+      (print (list (ci-hw-call #'write-to-string 10 :base 2) (ci-hw-call #'write-to-string 10 :base 16 :radix t)
+                   (ci-hw-call #'write-to-string '(a b c d) :length 2 :case :downcase)
+                   (ci-hw-call #'write-to-string "s" :escape nil) (ci-hw-call #'write-to-string "s")
+                   (ci-hw-call #'write-to-string 5 :bogus 1 :allow-other-keys t)
+                   (mapcar #'write-to-string '(1 x "y"))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string 10 :bogus 2))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string 10 :base))))
+      (print (ci-hw-report (lambda () (ci-hw-call #'write-to-string))))
+    expected: |
+      ("hi1!" "hi1!" 2 T)
+      (T NIL 0)
+      ("1010" "#xA" "(a b ...)" "s" "\"s\"" "5" ("1" "X" "\"y\""))
+      "WRITE-TO-STRING expects keyword arguments :ESCAPE/:READABLY/:PRETTY/:CIRCLE/:RIGHT-MARGIN/:MISER-WIDTH/:LINES/:PPRINT-DISPATCH/:LENGTH/:LEVEL/:BASE/:RADIX/:CASE/:GENSYM/:ARRAY, got: :BOGUS"
+      "WRITE-TO-STRING expects a value after :BASE"
+      "WRITE-TO-STRING expects at least 1 argument, got 0"
+
+  # An optional argument travels as a parameter of its own on every call path
+  # (LambdaLists.toNative): direct, a function value at each arity, a literal apply
+  # aligned and not, a computed apply, eval, an inline lambda -- a missing one is the
+  # UNSUPPLIED marker the prologue tests, a surplus past the last optional the rest list.
+  # A default never sees a LATER parameter, and a list wider than the physical budget
+  # keeps its trailing optionals on the rest list (ci-oa-wide, ci-oa-full).
+  - name: optional-arguments-travel-as-parameters
+    source: |
+      (defvar *ci-oa-special* :global)
+      (defun ci-oa-f (a &optional (b 10 bp) (c (+ a b))) (list a b bp c))
+      (defun ci-oa-g (a &optional b &rest r) (list a b r))
+      (defun ci-oa-k (&optional (x 1) &key (y 2)) (list x y))
+      (defun ci-oa-late (&optional (x *ci-oa-special*) (*ci-oa-special* :bound)) (list x *ci-oa-special*))
+      (defun ci-oa-test-only (&optional (a 1 ap)) (if ap (list :given a) (list :default a)))
+      (defun ci-oa-close (&optional (n 0)) (lambda () (incf n)))
+      (defun ci-oa-wide (p1 p2 p3 p4 p5 p6 p7 p8 &optional (o1 :d1) (o2 :d2) (o3 :d3))
+        (list p1 p8 o1 o2 o3))
+      (defun ci-oa-full (p1 p2 p3 p4 p5 p6 p7 p8 p9 &optional (o1 :d1)) (list p9 o1))
+      (defun ci-oa-count (n &optional (acc 0)) (if (= n 0) acc (ci-oa-count (- n 1) (+ acc 1))))
+      (print (list (ci-oa-f 1) (ci-oa-f 1 2) (ci-oa-f 1 2 3) (ci-oa-f 1 nil 0)))
+      (print (list (ci-oa-g 1) (ci-oa-g 1 2) (ci-oa-g 1 2 3 4)))
+      (print (list (ci-oa-k) (ci-oa-k 5) (ci-oa-k 5 :y 6)))
+      (print (list (ci-oa-late) (ci-oa-late :x) (ci-oa-late :x :y) *ci-oa-special*))
+      (print (list (ci-oa-test-only) (ci-oa-test-only nil) (ci-oa-test-only 7)))
+      (print (let ((c (ci-oa-close 5))) (funcall c) (list (funcall c) (funcall (ci-oa-close)))))
+      (print (list (ci-oa-wide 1 2 3 4 5 6 7 8) (ci-oa-wide 1 2 3 4 5 6 7 8 :a :b) (ci-oa-wide 1 2 3 4 5 6 7 8 :a :b :c)))
+      (print (list (ci-oa-full 1 2 3 4 5 6 7 8 9) (ci-oa-full 1 2 3 4 5 6 7 8 9 :x)))
+      (print (ci-oa-count 10000))
+      (let ((f #'ci-oa-f) (g #'ci-oa-g) (w #'ci-oa-wide))
+        (print (list (funcall f 1) (funcall f 1 2) (funcall f 1 2 3)))
+        (print (list (funcall g 1) (funcall g 1 2) (funcall g 1 2 3 4 5)))
+        (print (list (apply f '(1)) (apply f 1 '(2)) (apply f 1 2 '(3)) (apply g 1 2 3 '(4))))
+        (print (list (funcall w 1 2 3 4 5 6 7 8 :a) (apply w 1 2 3 4 5 6 7 8 '(:a :b :c)))))
+      (print (list (apply #'ci-oa-f '(1)) (apply #'ci-oa-f 1 '(2)) (apply #'ci-oa-f 1 2 3 nil) (apply #'ci-oa-g 1 2 3 '(4 5))
+                   (apply #'ci-oa-g 1 '(2 3))))
+      (print (list (eval '(ci-oa-f 7)) (eval '(ci-oa-f 7 8)) (eval '(ci-oa-g 1 2 3))))
+      (print (list ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1)
+                   ((lambda (a &optional (b 3) (c 4 cp)) (list a b c cp)) 1 2 5)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2) '(10 20)))
+      (print (mapcar (lambda (x &optional (y 100)) (+ x y)) '(1 2)))
+      (print (flet ((lf (a &optional (b 2)) (* a b))) (list (lf 3) (lf 3 4) (funcall #'lf 5))))
+      (print (labels ((lr (n &optional (acc 1)) (if (= n 0) acc (lr (- n 1) (* acc n))))) (lr 5)))
+      (print (list (handler-case (ci-oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (funcall #'ci-oa-f 1 2 3 4) (program-error (e) (princ-to-string e)))
+                   (handler-case (apply #'ci-oa-f '(1 2 3 4)) (program-error (e) (princ-to-string e)))
+                   (handler-case (ci-oa-full 1 2 3 4 5 6 7 8 9 10 11) (program-error (e) (princ-to-string e)))))
+    expected: |
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 NIL T 0))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4)))
+      ((1 2) (5 2) (5 6))
+      ((:GLOBAL :BOUND) (:X :BOUND) (:X :Y) :GLOBAL)
+      ((:DEFAULT 1) (:GIVEN NIL) (:GIVEN 7))
+      (7 1)
+      ((1 8 :D1 :D2 :D3) (1 8 :A :B :D3) (1 8 :A :B :C))
+      ((9 :D1) (9 :X))
+      10000
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3))
+      ((1 NIL NIL) (1 2 NIL) (1 2 (3 4 5)))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4)))
+      ((1 8 :A :D2 :D3) (1 8 :A :B :C))
+      ((1 10 NIL 11) (1 2 T 3) (1 2 T 3) (1 2 (3 4 5)) (1 2 (3)))
+      ((7 10 NIL 17) (7 8 T 15) (1 2 (3)))
+      ((1 3 4 NIL) (1 2 5 T))
+      (11 22)
+      (101 102)
+      (6 12 10)
+      120
+      ("Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 3 arguments, got 4" "Function expects at most 10 arguments, got 11")
+
   # A DIRECT call of a wrapped built-in with a count its call shape rules out is the
   # interpreter's program-error at run time, its arguments evaluated first, with a
   # compile-time warning (compiler/BuiltinCallArity): the compiled lowerings dropped a
@@ -18723,6 +19124,83 @@ cases:
       "FLOOR expects at most 2 arguments, got 3"
       "GETHASH expects at least 2 arguments, got 1"
       (T 3 1 T)
+
+  # A built-in's FUNCTION VALUE with a count its call shape rules out reports what its
+  # direct call reports: the interpreter's Java body spelled its own range ("1 to 2"),
+  # the compiled wrapper's &optional surplus check said Function.
+  - name: builtin-function-value-wrong-count-reports-the-call-shape
+    source: |
+      (defun ci-fv-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-fv-report (lambda () (apply #'floor 7 '(2 3)))))
+      (print (ci-fv-report (lambda () (apply #'gethash 1 '()))))
+      (print (ci-fv-report (lambda () (funcall 'subseq "abc" 1 2 3))))
+    expected: |
+      "FLOOR expects at most 2 arguments, got 3"
+      "GETHASH expects at least 2 arguments, got 1"
+      "SUBSEQ expects at most 3 arguments, got 4"
+
+  # A DIRECT call of the program's own function with a count its lambda list rules
+  # out is the interpreter's program-error at run time, its arguments evaluated first,
+  # with a compile-time warning (compiler/DefinedCallArity): both compiled backends
+  # failed the COMPILE, so a wrong call in a branch never taken or under a handler kept
+  # the program from compiling. A lambda form in call position is judged the same way,
+  # and the dispatcher a defmethod on a built-in is compiled to reports as the built-in
+  # (conjugate: shadowing it reroutes every call of it in this shared program, and
+  # one other case calls it).
+  - name: direct-defun-call-wrong-count-signals-program-error
+    source: |
+      (defun ci-dc-two (a b) (list a b))
+      (defun ci-dc-rest (a &rest r) (list a r))
+      (defun ci-dc-opt (a &optional b) (list a b))
+      (defclass ci-dc-box () ())
+      (defmethod conjugate ((b ci-dc-box)) 42)
+      (defun ci-dc-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-dc-report (lambda () (ci-dc-two 1))))
+      (print (let ((n 0)) (list (ci-dc-report (lambda () (ci-dc-two (incf n) (incf n) (incf n)))) n)))
+      (print (ci-dc-report (lambda () (ci-dc-rest))))
+      (print (ci-dc-report (lambda () (ci-dc-opt 1 2 3))))
+      (print (ci-dc-report (lambda () ((lambda (a) a) 1 2))))
+      (print (ci-dc-report (lambda () (conjugate 1 2))))
+      (print (ci-dc-report (lambda () (funcall #'conjugate 1 2))))
+      (print (list (ci-dc-two 1 2) (ci-dc-rest 1 2 3) (conjugate (make-instance 'ci-dc-box)) (conjugate #c(1 2))))
+    expected: |
+      "Function expects 2 arguments, got 1"
+      ("Function expects 2 arguments, got 3" 3)
+      "Function expects at least 1 argument, got 0"
+      "Function expects at most 2 arguments, got 3"
+      "Function expects 1 argument, got 2"
+      "CONJUGATE expects 1 argument, got 2"
+      "CONJUGATE expects 1 argument, got 2"
+      ((1 2) (1 (2 3)) 42 #C(1 -2))
+
+  # A DIRECT call of a native built-in OUTSIDE the wrapper catalog with a wrong count
+  # is the same run-time program-error, judged by its shape in
+  # compiler/NativeCallShapes: the compiled lowerings failed the compile ((boundp),
+  # (get-universal-time 1)), answered ((make-random-state nil 2) was NIL), or -- for a
+  # prelude defun (char-name, find-class) -- said Function, the surplus past an
+  # &optional tail from inside the callee.
+  - name: direct-native-builtin-call-wrong-count-signals-program-error
+    source: |
+      (defun ci-nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-nb-report (lambda () (boundp))))
+      (print (ci-nb-report (lambda () (get-universal-time 1))))
+      (print (ci-nb-report (lambda () (row-major-aref #(1)))))
+      (print (ci-nb-report (lambda () (make-random-state nil 2))))
+      (print (ci-nb-report (lambda () (rationalp))))
+      (print (ci-nb-report (lambda () (char-name))))
+      (print (ci-nb-report (lambda () (find-class 'ci-nb-x nil nil 4))))
+      (print (ci-nb-report (lambda () (rontolisp:version 1))))
+      (print (list (boundp 'ci-nb-unbound) (row-major-aref #(7) 0) (rationalp 1/2) (char-name #\Space)))
+    expected: |
+      "BOUNDP expects 1 argument, got 0"
+      "GET-UNIVERSAL-TIME expects 0 arguments, got 1"
+      "ROW-MAJOR-AREF expects 2 arguments, got 1"
+      "MAKE-RANDOM-STATE expects at most 1 argument, got 2"
+      "RATIONALP expects 1 argument, got 0"
+      "CHAR-NAME expects 1 argument, got 0"
+      "FIND-CLASS expects at most 3 arguments, got 4"
+      "VERSION expects 0 arguments, got 1"
+      (NIL 7 T "Space")
 
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
@@ -19474,7 +19952,10 @@ cases:
       ((3.0) 1)
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
-# subject a backend does not have at all. Each is compiled and run on its own.
+# subject a backend does not have at all, one whose subject is a gate the
+# concatenated program always opens (it has every multiple-value operator, so
+# a program WITHOUT the %mv-spill global exists only on its own). Each is
+# compiled and run on its own.
 # What an ending case asserts is the standard-error report plus a non-zero exit
 # (`fails: true`); `stderr` lines must APPEAR -- wasmtime wraps its own trap
 # backtrace around ours. `refusedOn` names the backends that must REFUSE to
@@ -19510,6 +19991,25 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
+    fails: true
+  - name: uncaught-nil-message-report
+    source: |
+      ;; A nil format-control supplied is the message itself: princ prints it NIL.
+      (print (handler-case (error "caught") (error (e) :ok)))
+      (error 'simple-error :format-control nil)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: NIL
+    fails: true
+  - name: uncaught-computed-condition-type-report
+    source: |
+      ;; A computed condition type with initargs, and nothing caught anywhere: the
+      ;; text names the initargs the call passed, as the literal call's does.
+      (defun ci-uc-boom (ty) (error ty :code 42))
+      (ci-uc-boom 'type-error)
+    stderr: |
+      Unhandled condition: Condition (TYPE-ERROR :CODE 42) was signalled.
     fails: true
   - name: failing-handler-bind-handler-report
     source: |
@@ -20469,6 +20969,69 @@ standalone:
       :CAUGHT
       NIL
       NIL
+  # A program whose ONLY package operation is delete-package / shadow /
+  # shadowing-import / unintern: the helpers their defuns reach (the baked package
+  # table, the string< the runtime list-all-packages lowering sorts with) used to
+  # arrive only with another package operation, which the corpus always has.
+  # LonePackageOperationFixture holds the same programs for the unit suites.
+  - name: lone-delete-package
+    source: |
+      (print (handler-case (delete-package "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+      (print (if (member :cl (list-all-packages)) t nil))
+    stdout: |
+      (:CI-LONE-NOPE "DELETE-PACKAGE: no such package: CI-LONE-NOPE")
+      T
+  - name: lone-shadow
+    source: |
+      (print (shadow 'ci-lone-foo))
+      (print (handler-case (shadow 'ci-lone-foo "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      T
+      (:CI-LONE-NOPE "SHADOW: no such package: CI-LONE-NOPE")
+  - name: lone-shadowing-import
+    source: |
+      (print (shadowing-import 'ci-lone-foo))
+      (print (handler-case (shadowing-import 'ci-lone-foo "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      T
+      (:CI-LONE-NOPE "SHADOWING-IMPORT: no such package: CI-LONE-NOPE")
+  - name: lone-unintern
+    source: |
+      (print (unintern 'car))
+      (print (handler-case (unintern 'car "CI-LONE-NOPE")
+               (package-error (c) (list (package-error-package c) (princ-to-string c)))))
+    stdout: |
+      NIL
+      (:CI-LONE-NOPE "UNINTERN: no such package: CI-LONE-NOPE")
+  # A restart-case inside a lambda, in a program with no multiple-value operator
+  # and so no %mv-spill global: the expansion's read of the channel is nil there,
+  # never a variable the lambda captures.
+  - name: restart-case-in-a-lambda-without-the-spill-global
+    source: |
+      (handler-bind ((error (lambda (c) (invoke-restart 'use-value 100))))
+        (print (funcall (lambda () (restart-case (error "bad") (use-value (v) v))))))
+      (defun ci-rl-h () 4)
+      (print (mapcar (lambda (x) (restart-case (ci-rl-h) (use-value (v) (+ v x)))) (list 1 2)))
+      (print (mapcar (lambda (x) (restart-case x (use-value (v) v))) (list 1 2)))
+      (print (funcall (lambda () (with-simple-restart (ci-rl-skip "s") (ci-rl-h)))))
+    stdout: |
+      100
+      (4 4)
+      (1 2)
+      4
+  # multiple-value-setq is the program's only multiple-value operator: it alone
+  # must give the program the spill channel a callee's secondary value rides.
+  - name: multiple-value-setq-as-the-only-multiple-value-operator
+    source: |
+      (defun ci-mvs-g () (floor 7 2))
+      (let (a b) (multiple-value-setq (a b) (ci-mvs-g)) (print (list a b)))
+      (print (funcall (lambda () (let (a b) (multiple-value-setq (a b) (ci-mvs-g)) (list a b)))))
+    stdout: |
+      (3 1)
+      (3 1)
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

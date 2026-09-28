@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -201,6 +202,12 @@ public final class UnreadCharLibrary {
 			// built-ins their bodies name.
 			if (LispNames.QUOTE.equals(opName) || isLibraryDefun(cons, opName)) {
 				return form;
+			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons, opName);
+			if (withoutIgnored != cons) {
+				return rewrite(withoutIgnored);
 			}
 			LispVal call = rewriteCall(cons, opName);
 			if (call != null) {

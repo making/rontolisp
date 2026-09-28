@@ -25,6 +25,14 @@ public class LispEvalException extends RuntimeException {
 	private transient @Nullable ConditionTrace trace;
 
 	/**
+	 * Whether the {@code handler-bind} handlers already ran for this error's condition --
+	 * at the signal point, or at the first seam or pad it crossed. Written by the thread
+	 * the error is raised on before it is thrown; an async body's error reaches its
+	 * awaiter through the future, which publishes it.
+	 */
+	private boolean handlersRan;
+
+	/**
 	 * Create a new evaluation exception with the given message.
 	 * @param message the error message
 	 */
@@ -79,6 +87,26 @@ public class LispEvalException extends RuntimeException {
 	 */
 	public @Nullable String conditionClassName() {
 		return this.conditionClassName;
+	}
+
+	/**
+	 * Whether the {@code handler-bind} handlers already ran for this error's condition,
+	 * so no seam or {@code %hb-guard} pad it crosses runs them again. The fact belongs to
+	 * this error alone: a condition signaled and handled while it is on its way out (in a
+	 * cleanup, in a report) cannot change it.
+	 * @return whether the handlers ran
+	 */
+	public boolean handlersRan() {
+		return this.handlersRan;
+	}
+
+	/**
+	 * Records that the {@code handler-bind} handlers ran for this error's condition.
+	 * @return this error, to be thrown
+	 */
+	LispEvalException markHandlersRan() {
+		this.handlersRan = true;
+		return this;
 	}
 
 	/**

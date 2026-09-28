@@ -206,8 +206,8 @@ final class JvmGeomKernelCompiler {
 			JvmLispCompiler.FunctionInfo defun, Map<String, MethodrefConstant> ops, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmLispCompiler.FunctionInfo builder = ctx.functions.get(SOLID_OF_VERTICES);
-		if (builder == null || !builder.variadic() || builder.paramCount() != 3 || !defun.variadic()
-				|| defun.paramCount() != 2 || !keywordTail(args)) {
+		if (builder == null || !builder.variadic() || builder.paramCount() != 3 || builder.optionals() != 0
+				|| !defun.variadic() || defun.paramCount() != 2 || defun.optionals() != 0 || !keywordTail(args)) {
 			JvmFunctionCallCompiler.compileDefault(READ_OBJ, cons, ctx, className);
 			return;
 		}

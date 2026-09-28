@@ -15,10 +15,14 @@ CONSTANT.
   datum back verbatim and MUST -- `(quote <value>)` is also the live-value splice
   (`quoteValue`). Fresh-per-evaluation is rejected, do not re-attempt: it breaks
   `read-sequence`.
-- **JVM** (`JvmQuoteCompiler` + `JvmLispCompiler.QuotePool`): one private static
-  **volatile** `Object` field `_qd$N` per datum, built lazily at the site (~12 bytes over
-  the build). Volatile so racing first evaluations cannot expose a half-written
-  `Object[]`.
+- **JVM** (`JvmQuoteCompiler` + `JvmQuotePool`): one SLOT per datum in a class-wide
+  `Object[] _qd`, named at the site by an int operand and built lazily there (~17 bytes
+  over the build): `_qd(slot)`, on null the build, then `_qdSet(datum, slot)`. A slot holds
+  the datum wrapped in a `java.util.Optional`: its final `value` publishes the whole
+  datum fully built to a thread that reads the slot without synchronizing (JLS 17.5), so
+  the read is a plain load. `_qdSet` is `synchronized`, creates the table on first use and
+  answers the datum already in the slot if a racing thread stored first, so every
+  evaluation sees one object even under a race. See "The JVM table" below.
 - **WASM, Preview 1 and component** (`WasmQuoteCompiler` +
   `WasmLispCompiler.QuoteGlobals`): one `(mut (ref null eq)) = null` global per datum,
   appended AFTER every fixed-index global, filled lazily (~10 bytes). The allocator is
@@ -27,7 +31,47 @@ CONSTANT.
 - **Trap: the JVM build must stay lazy at the site, not a `<clinit>` initializer.**
   `JvmClassShaker` runs on every build; with the injected wrapper defuns' package-registry
   constants pinned by `<clinit>` a three-defun program grew 5,898 -> 18,978 bytes. Do not
-  "simplify" this into the `LayoutPool`/`BigIntPool` `<clinit>` shape.
+  "simplify" this into the `LayoutPool`/`BigIntPool` `<clinit>` shape. The same holds for
+  the table itself: `_qdSet` creates it, so the field and both helpers go with the last
+  surviving site, where a `<clinit>` allocation would pin them in every class whose
+  quoted datums all sat in dropped wrappers.
+
+## The JVM table
+Until 2026-09-27 each datum was a volatile static field `_qd$N`, three constant-pool
+entries apiece (`Fieldref`, `NameAndType`, name). Those were the one per-SITE pool cost in
+the ci-spec corpus class (`JvmClassShakerCorpusTest`, `--optimize=off`), whose 52,000
+tripwire kept forcing ci-spec rows to be cut. Measured 2026-09-27, linux-x64, JDK 25:
+
+| corpus class | fields | table |
+| --- | ---: | ---: |
+| pool entries, `--optimize=off` | 51,945 | 43,694 |
+| pool entries, default | 51,823 | 43,572 |
+| class bytes, `--optimize=off` | 7,608,664 | 7,539,720 |
+| `_qd$N` fields | 2,755 | 0 |
+
+The pool at 51,945 held 19,358 `Utf8`, 10,258 `NameAndType`, 10,057 `String`, 6,462
+`Methodref`, 3,865 `Fieldref`. Nothing else in it is per site: the `String`s are symbol
+names and string literals, each deduped class-wide (3,548 are quote-framed string literals,
+the runtime's string representation, 907 of them spelling a symbol name that is also
+there bare -- a representation cost, not a site cost), and the 6,131 own-class
+`Methodref`s are one per callee (1,333 `_lambda_N`, 615 `_fx$N`, ...). The 52,000 tripwire
+stays: past 65,534 the class now splits instead of failing (`.kb/jvm-method-size-limits.md`),
+so what it guards is that the corpus keeps covering `JvmClassShaker` rather than the
+splitter.
+
+Other costs of the change:
+
+- **Speed.** The volatile field could not be hoisted; the plain read through the final
+  field can. `(defun hit (x) (if (member x '(a b c d)) 1 0))` called 50,000,000 times: 558
+  -> 420 ms steady state. `AtomicReferenceArray` was tried first and cost 663 ms; a bare
+  `Object[]` read with no wrapper (unsafe, measured only as the floor) was the same 420, so
+  the wrapper costs nothing and the volatile ordering was the expense.
+- **Small programs** pay the table's fixed part once: `(print (mapcar (lambda (x) (* x x))
+  '(1 2 3)))` 10,680 -> 11,035 bytes (+355), two quoted defuns 5,146 -> 5,451. A field
+  cost ~27 bytes a datum, so the table is smaller past ~15 datums; `(print (+ 1 2))` is
+  unchanged (4,773).
+- The site grew ~6 bytes (two `int` operands and two calls in place of `GETSTATIC` /
+  `DUP; PUTSTATIC`); the corpus class still shrank 69 KB with the fields gone.
 
 ## A BARE instance literal shares the same slot
 **Invariant: a `#P"..."` / `#S(...)` in CODE position -- outside any `quote` -- is one
@@ -102,5 +146,7 @@ ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-back
 `LispEvaluatorTest.{aQuotedDatum,anInstanceLiteral}IsOneSharedConstantOnEveryBackend`;
 `{aQuotedDatum,aBareInstanceLiteral}IsOneSharedConstantAcrossEvaluations` in
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 AND component).
+JVM table: `JvmLispCompilerTest.aQuotedDatumCostsNoConstantPoolEntryOfItsOwn` (3 and 300
+datums, one pool size), `aRacingFirstBuildOfAQuotedDatumAnswersTheDatumThatWon`.
 Runs: `WasmLispCompilerTest.aLongQuotedListKeepsNoMoreThanOneRunOfCellsOnTheOperandStack`,
 `WasmLispCompilerIntegrationTest.aQuotedListLongerThanOneRunIsTheSameListAndStillOneConstant`.

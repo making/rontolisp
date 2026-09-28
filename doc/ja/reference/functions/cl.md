@@ -75,7 +75,7 @@
 | `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — `:directory`/`:name`/`:type` からパス名を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |
 | `namestring` | `(namestring #P"/tmp/x")` | `"/tmp/x"` — パス名が保持する名前文字列。文字列 (指定子) はそのまま通り、それ以外はシグナルを発生させます。`uiop:namestring` と `uiop:native-namestring` も同じ関数です |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 のパス名の欠けている部分を第 2 のもので補います (どちらの綴りも受け付けます)。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
-| `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
+| `open-stream-p` | `(open-stream-p stream)` | ストリームが開いている間は `t`、`close` 後は `nil` |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
 | `clear-output` | `(clear-output stream)` | 出力ストリームの未書き込みバッファを捨てる。ここではその形でバッファしないため、指定子を検証して nil を返す |
@@ -94,6 +94,7 @@
 | `readtable-case` | `(readtable-case *readtable*)` | ライト版スタブ: 常に `:upcase` -- リーダーはエスケープされていないシンボル名を常に大文字化します。標準リードテーブルのモードです |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 (文字列でない値や整数でないインデックスは `type-error` を通知) |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
+| `char-int` | `(char-int #\A)` | `65` -- 文字を表す非負整数。実装固有の属性を持たないため、`char-code` と同じ値になります |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t`(大文字・小文字を区別しない比較の一群) |
@@ -267,7 +268,7 @@
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)`(先頭の引数を最後の引数の末尾にconsします) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))`(`(key . value)` ペアを連想リストの先頭に追加します) |
 | `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil`(リスト終端テスト。それ以外の値は `type-error` を通知します) |
-| `elt` | `(elt '(a b c) 1)` | `b`(0始まりの要素アクセス。リストのみで文字列インデックスはありません) |
+| `elt` | `(elt '(a b c) 1)` | `b`(0始まりの要素アクセス。リスト・文字列・ベクタに使え、範囲外のインデックスは `type-error`) |
 | `rassoc` | `(rassoc 2 '((a . 1) (b . 2)))` | `(b . 2)`(cdrが値に一致する最初のペア、またはnil。既定では `eql` で比較し、省略可能な `:test`/`:key` キーワードを取ります) |
 | `rassoc-if` | `(rassoc-if #'oddp '((a . 2) (b . 3)))` | `(b . 3)`(cdrが述語を満たす最初のペア、またはnil。省略可能な `:key`) |
 | `rassoc-if-not` | `(rassoc-if-not #'numberp '((a . 1) (b . c)))` | `(b . c)`(cdrが述語を満たさない最初のペア、またはnil。省略可能な `:key`) |

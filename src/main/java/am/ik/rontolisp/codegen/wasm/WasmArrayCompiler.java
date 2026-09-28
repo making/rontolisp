@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.DeclaredArrayTypes;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -990,14 +991,49 @@ final class WasmArrayCompiler {
 	// reads it from there -- so this is a call, not a per-site copy of the four-way
 	// representation dispatch (~90 bytes; see
 	// WasmLispCompilerTest#anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime).
-	// Never called from row-major-aref/%row-major-aset, which intentionally accept any
-	// rank.
+	// Called from row-major-aref/%row-major-aset/array-dimensions, which accept any
+	// rank, in EH mode only, with ANY_RANK (emitArrayCheck).
+	// In EH mode the call also names the site's operator for a value that is no array
+	// at all: its id rides above the rank byte (WasmArrayRuntimeBuilder
+	// #buildArrCheckRankBody(int)), 0 outside EH mode, so a module there is unchanged.
 	private static void emitArefCheckRank(WasmLispCompiler.Ctx ctx, int arrSlot, int given) {
 		getLocal(ctx, arrSlot);
-		i32Const(ctx, given);
+		i32Const(ctx, given | WasmOperandTypes.operatorId(ctx) << 8);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_CHECK_RANK);
 		ctx.writer.write(Instruction.DROP);
+	}
+
+	/**
+	 * EH mode only: checks that the value in {@code arrSlot} is an array of any rank
+	 * through {@code _arr_check_rank} ({@link WasmArrayRuntimeBuilder#ANY_RANK}), so a
+	 * value that is none is the site's operator's {@code ARRAY} type-error rather than a
+	 * trap on the first arm's cast. For the accessors that read every rank alike
+	 * ({@code row-major-aref}, {@code %row-major-aset}, {@code array-dimensions}); a
+	 * module outside EH mode emits nothing.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array operand
+	 */
+	private static void emitArrayCheck(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		emitArefCheckRank(ctx, arrSlot, WasmArrayRuntimeBuilder.ANY_RANK);
+	}
+
+	/**
+	 * EH mode only: the rank-1 {@code aref}'s own check over {@code arrSlot}, for a read
+	 * that reaches {@link #emitAref1FromSlots} without {@link #compileAref} -- the fused
+	 * integer tree's fallback ({@code WasmIntFusionCompiler}), whose fast path took only
+	 * a packed integer vector. A module outside EH mode emits nothing.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array operand
+	 */
+	static void emitRank1Check(WasmLispCompiler.Ctx ctx, int arrSlot) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		emitArefCheckRank(ctx, arrSlot, 1);
 	}
 
 	// The rank-1 aref dispatch over pre-evaluated slots (array as eq, index boxed):
@@ -1397,6 +1433,7 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		// A subscript that is no integer is ROW-MAJOR-AREF's type-error.
 		int idxSlot = compileReadSubscript(args.get(2), ctx, arrSlot);
 		emitAref1FromSlots(ctx, arrSlot, idxSlot, reportsBounds(ctx));
@@ -1412,6 +1449,7 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		boolean reports = reportsBounds(ctx);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
@@ -1473,6 +1511,7 @@ final class WasmArrayCompiler {
 		// header's car) in a temp; the cons-list build below is shared.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		emitArrayCheck(ctx, arrSlot);
 		// An immutable string carries no header at all, but it IS a rank-1 character
 		// array: its dimensions are its length in code points. Every other shape reader
 		// -- array-rank, array-dimension, array-total-size, array-row-major-index --
@@ -2210,6 +2249,9 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
+		// A value that is no array is the operator's type-error in EH mode, where the
+		// last arm below would answer the general array's t.
+		emitArrayCheck(ctx, arrSlot);
 		// A string answers character before the packed/general dispatch: the synthesized
 		// name is unspelled (real run-time data, and character is also a function name).
 		WasmStringpCompiler.emitStringpI32(ctx, arrSlot);
@@ -2470,11 +2512,11 @@ final class WasmArrayCompiler {
 	}
 
 	static void compileFillPointer(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		// (fill-pointer array): meta.car, trapping when the array has none.
+		// (fill-pointer array): meta.car, refused when the array has none.
 		requireArgs(cons, 2, "fill-pointer expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		castCellGet0(ctx);
+		emitFillPointerHeader(ctx);
 		getMeta(ctx);
 		int metaSlot = setTemp(ctx);
 		emitRequireFillPointer(ctx, metaSlot);
@@ -2488,7 +2530,7 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 3, "%set-fill-pointer expects an array and a value");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		castCellGet0(ctx);
+		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		getLocal(ctx, headerSlot);
 		getMeta(ctx);
@@ -2496,32 +2538,90 @@ final class WasmArrayCompiler {
 		emitRequireFillPointer(ctx, metaSlot);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		int valSlot = setTemp(ctx);
-		// 0 <= value <= dims[0], else trap
-		getLocal(ctx, valSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		i32Const(ctx, 0);
-		ctx.writer.write(Instruction.I32_LT_S);
-		ctx.writer.write(Instruction.IF, 0x40);
-		ctx.writer.write(Instruction.UNREACHABLE);
-		ctx.writer.write(Instruction.END);
-		getLocal(ctx, valSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 0);
-		castBuckets(ctx);
-		i32Const(ctx, 0);
-		arrayGet(ctx);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_GT_S);
-		ctx.writer.write(Instruction.IF, 0x40);
-		ctx.writer.write(Instruction.UNREACHABLE);
-		ctx.writer.write(Instruction.END);
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			emitFillPointerValueCheck(ctx, headerSlot, valSlot);
+		}
+		else {
+			// 0 <= value <= dims[0], else trap
+			getLocal(ctx, valSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			i32Const(ctx, 0);
+			ctx.writer.write(Instruction.I32_LT_S);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+			getLocal(ctx, valSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+			getLocal(ctx, headerSlot);
+			castConsGet(ctx, 0);
+			castBuckets(ctx);
+			i32Const(ctx, 0);
+			arrayGet(ctx);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I32_GT_S);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+		}
 		// meta.car = value
 		getLocal(ctx, metaSlot);
 		castCons(ctx);
 		getLocal(ctx, valSlot);
 		structSetCons(ctx, 0);
 		getLocal(ctx, valSlot);
+	}
+
+	/**
+	 * EH mode: a fill pointer store's value that is no fixnum in {@code [0, dims[0]]} is
+	 * the operator's type-error of {@code (INTEGER 0 dims[0])}
+	 * ({@code OperandTypes.fillPointerType}, through {@code _type_err_of}), a wrong-type
+	 * value included.
+	 */
+	private static void emitFillPointerValueCheck(WasmLispCompiler.Ctx ctx, int headerSlot, int valSlot) {
+		int capSlot = ctx.allocTemp();
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 0);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		arrayGet(ctx);
+		setLocal(ctx, capSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		getLocal(ctx, valSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		getLocal(ctx, valSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		getLocal(ctx, valSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, capSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.BR_IF, 0);
+		ctx.writer.write(Instruction.BR, 1);
+		ctx.writer.write(Instruction.END);
+		i32Const(ctx, WasmOperandTypes.operatorId(ctx));
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+		getLocal(ctx, valSlot);
+		// (INTEGER 0 dim)
+		WasmEmitHelper.compileUnspelledLiteral(OperandTypes.INTEGER_TYPE, ctx);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		getLocal(ctx, capSlot);
+		refNull(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_OF);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileHasFillPointer(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -2534,6 +2634,8 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = setTemp(ctx);
+		// A value that is no array at all is the operator's type-error in EH mode.
+		emitArrayCheck(ctx, valueSlot);
 		getLocal(ctx, valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -2569,6 +2671,8 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = setTemp(ctx);
+		// A value that is no array at all is the operator's type-error in EH mode.
+		emitArrayCheck(ctx, valueSlot);
 		getLocal(ctx, valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -2952,6 +3056,9 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dtSlot = setTemp(ctx);
+		// array-displacement's reported name (OperandTypes.reportedOperator): a value
+		// that is no array is its type-error in EH mode.
+		emitArrayCheck(ctx, dtSlot);
 		getLocal(ctx, dtSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
@@ -3059,7 +3166,7 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		castCellGet0(ctx);
+		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		int metaSlot = ctx.allocTemp();
 		getLocal(ctx, headerSlot);
@@ -3091,20 +3198,27 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 2, "vector-pop expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		castCellGet0(ctx);
+		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		int metaSlot = ctx.allocTemp();
 		getLocal(ctx, headerSlot);
 		getMeta(ctx);
 		setLocal(ctx, metaSlot);
 		emitRequireFillPointer(ctx, metaSlot);
-		// fp == 0 -> trap
+		// fp == 0 -> the simple-error every backend signals (a trap outside EH mode)
 		getLocal(ctx, metaSlot);
 		castConsGet(ctx, 0);
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.IF, 0x40);
-		ctx.writer.write(Instruction.UNREACHABLE);
+		if (ctx.ehMode) {
+			refNull(ctx);
+			WasmEmitHelper.compileUnspelledLiteral("\"" + OperandTypes.VECTOR_POP_EMPTY + "\"", ctx);
+			WasmErrorCompiler.emitThrowPayload(ctx);
+		}
+		else {
+			ctx.writer.write(Instruction.UNREACHABLE);
+		}
 		ctx.writer.write(Instruction.END);
 		// meta.car = fp - 1
 		int fpSlot = ctx.allocTemp();
@@ -3139,7 +3253,7 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		castCellGet0(ctx);
+		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		int extSlot = -1;
 		if (args.size() == 4) {
@@ -3279,8 +3393,12 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	// Traps unless the meta cons in metaSlot carries a fill pointer (an i31 car).
+	// Traps unless the meta cons in metaSlot carries a fill pointer (an i31 car). EH mode
+	// emits nothing: emitFillPointerHeader's _fp_hdr has checked it.
 	private static void emitRequireFillPointer(WasmLispCompiler.Ctx ctx, int metaSlot) {
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
 		getLocal(ctx, metaSlot);
 		castConsGet(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -3289,6 +3407,26 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Replaces the fill-pointer surface's vector operand on the stack with its header. In
+	 * EH mode through {@code _fp_hdr} under the innermost operator's id: a vector without
+	 * a fill pointer is that operator's {@code (AND VECTOR (SATISFIES
+	 * ARRAY-HAS-FILL-POINTER-P))} type-error and a non-array its {@code ARRAY} one;
+	 * outside it the cell cast, a trap for anything but a general array (a module keeps
+	 * its bytes).
+	 * @param ctx the compile context
+	 */
+	private static void emitFillPointerHeader(WasmLispCompiler.Ctx ctx) {
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			castCellGet0(ctx);
+			return;
+		}
+		i32Const(ctx, WasmOperandTypes.operatorId(ctx));
+		boxI31(ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FP_HDR);
 	}
 
 	// data[fp] = val; meta.car = fp + 1; leaves the i31 fp on the stack as the result.

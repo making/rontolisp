@@ -106,6 +106,12 @@ final class JvmSetqCompiler {
 	}
 
 	private static void compilePair(String name, LispVal valueExpr, JvmLispCompiler.Ctx ctx, String className) {
+		if (ctx.mvChannel == null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {
+			// No spill global: nothing can read what an expansion publishes, so the
+			// store is dropped and only the value remains (.kb/multiple-values.md).
+			JvmExprCompiler.compileExpr(valueExpr, ctx, className);
+			return;
+		}
 		// An unboxed dual representation (.kb/jvm-int-fusion.md) -- a let local, or a
 		// promoted top-level global no lexical binding shadows here: the store funnels
 		// through the fused raw-store path, and the setq's value is re-read boxed. A raw

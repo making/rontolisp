@@ -281,7 +281,8 @@ final class SequenceScanFast {
 		}
 	}
 
-	// A proper list, materialized once. (elt l i) lowers to (nth i l), an O(i) walk from
+	// A proper list, materialized once. (elt l i) lowers to (car (%elt-cell l i)), an
+	// O(i) walk from
 	// the head, so the prelude's inner loop over two lists is O(n^2*m) -- the same defect
 	// .kb/sequence-op-runtimes.md records fixing in replace's list source arm.
 	private record Items(LispVal[] items) implements Elements {

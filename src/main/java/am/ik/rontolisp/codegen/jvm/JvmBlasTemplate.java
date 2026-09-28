@@ -8,6 +8,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jspecify.annotations.Nullable;
@@ -87,6 +89,26 @@ final class JvmBlasTemplate {
 
 	private static final int ROW_MAJOR = 101, NO_TRANS = 111, TRANS = 112;
 
+	private static final FunctionDescriptor GEMM_D = FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P,
+			I), GEMM_F = FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I);
+
+	private static final FunctionDescriptor GEMV_D = FunctionDescriptor.ofVoid(I, I, I, I, D, P, I, P, I, D, P, I),
+			GEMV_F = FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I);
+
+	private static final FunctionDescriptor THREAD_COUNT = FunctionDescriptor.of(I);
+
+	/**
+	 * Every downcall SHAPE {@link #bind} asked for, plain and
+	 * {@linkplain Linker.Option#critical(boolean) critical}. A native image built from
+	 * the compiled program makes a handle only for a shape registered in the program's
+	 * own {@code META-INF/native-image/} ({@code JvmBlasRuntimeBuilder} ships the file),
+	 * and one refused handle sends the whole block below down its catch. So the shapes
+	 * are recorded as they are bound, and the registration test pins the shipped file
+	 * against them.
+	 */
+	private static final Set<FunctionDescriptor> SIGNATURES = ConcurrentHashMap.newKeySet(),
+			CRITICAL_SIGNATURES = ConcurrentHashMap.newKeySet();
+
 	private static final @Nullable MethodHandle DGEMM, SGEMM, DGEMV, SGEMV, DGEMM_STAGED, SGEMM_STAGED;
 
 	/** What the library said about its thread pool; 0 threads means it would not say. */
@@ -104,12 +126,6 @@ final class JvmBlasTemplate {
 		int threads = 0;
 		String threadLibrary = "", threadVariable = "";
 		try {
-			Linker linker = Linker.nativeLinker();
-			FunctionDescriptor gemmD = FunctionDescriptor.ofVoid(I, I, I, I, I, I, D, P, I, P, I, D, P, I);
-			FunctionDescriptor gemmF = FunctionDescriptor.ofVoid(I, I, I, I, I, I, F, P, I, P, I, F, P, I);
-			FunctionDescriptor gemvD = FunctionDescriptor.ofVoid(I, I, I, I, D, P, I, P, I, D, P, I);
-			FunctionDescriptor gemvF = FunctionDescriptor.ofVoid(I, I, I, I, F, P, I, P, I, F, P, I);
-			Linker.Option critical = Linker.Option.critical(true);
 			String forced = System.getenv("RONTOLISP_BLAS");
 			if (forced != null && forced.isEmpty()) {
 				forced = null;
@@ -117,10 +133,9 @@ final class JvmBlasTemplate {
 			String[] candidates = forced != null ? new String[] { forced } : CANDIDATES;
 			for (String candidate : candidates) {
 				SymbolLookup lookup;
-				MemorySegment gemm;
 				try {
 					lookup = SymbolLookup.libraryLookup(candidate, Arena.global());
-					gemm = lookup.find("cblas_dgemm").orElseThrow();
+					lookup.find("cblas_dgemm").orElseThrow();
 				}
 				catch (RuntimeException ex) {
 					continue;
@@ -129,22 +144,19 @@ final class JvmBlasTemplate {
 				if (identity == null) {
 					continue;
 				}
-				dgemm = linker.downcallHandle(gemm, gemmD, critical);
-				dgemmStaged = linker.downcallHandle(gemm, gemmD);
-				MemorySegment sgemmSym = lookup.find("cblas_sgemm").orElseThrow();
-				sgemm = linker.downcallHandle(sgemmSym, gemmF, critical);
-				sgemmStaged = linker.downcallHandle(sgemmSym, gemmF);
-				dgemv = linker.downcallHandle(lookup.find("cblas_dgemv").orElseThrow(), gemvD, critical);
-				sgemv = linker.downcallHandle(lookup.find("cblas_sgemv").orElseThrow(), gemvF, critical);
-				for (String[] query : THREAD_QUERIES) {
-					MemorySegment symbol = lookup.find(query[0]).orElse(null);
-					if (symbol != null) {
-						threads = threadCount(
-								linker.downcallHandle(symbol, FunctionDescriptor.of(ValueLayout.JAVA_INT)));
-						threadLibrary = query[1];
-						threadVariable = query[2];
-						break;
-					}
+				@Nullable MethodHandle[] handles = bind(lookup);
+				dgemm = handles[0];
+				dgemmStaged = handles[1];
+				sgemm = handles[2];
+				sgemmStaged = handles[3];
+				dgemv = handles[4];
+				sgemv = handles[5];
+				@Nullable MethodHandle query = handles[6];
+				if (query != null) {
+					String[] named = THREAD_QUERIES[threadQuery(lookup)];
+					threads = threadCount(query);
+					threadLibrary = named[1];
+					threadVariable = named[2];
 				}
 				description = candidate + " (" + identity + ")";
 				break;
@@ -176,6 +188,60 @@ final class JvmBlasTemplate {
 			System.err.println("rontolisp: --blas " + (dgemm != null ? "bound " : "declined: ") + description
 					+ (dgemm != null ? ", " + threads + " threads" : ""));
 		}
+	}
+
+	/**
+	 * Binds the handles out of one library: {@code dgemm}, {@code dgemm} staged,
+	 * {@code sgemm}, {@code sgemm} staged, {@code dgemv}, {@code sgemv}, and the
+	 * thread-count query -- {@code null} when the library exports none, which is not a
+	 * failure. It takes the LOOKUP so that the registration test can bind the same shapes
+	 * on a machine with no CBLAS at all (see {@link #SIGNATURES}).
+	 * @param lookup the library to bind, which must export all four entry points
+	 * @return the seven handles
+	 */
+	static @Nullable MethodHandle[] bind(SymbolLookup lookup) {
+		Linker linker = Linker.nativeLinker();
+		MemorySegment dgemm = lookup.find("cblas_dgemm").orElseThrow();
+		MemorySegment sgemm = lookup.find("cblas_sgemm").orElseThrow();
+		int query = threadQuery(lookup);
+		return new @Nullable MethodHandle[] { handle(linker, dgemm, GEMM_D, true), handle(linker, dgemm, GEMM_D, false),
+				handle(linker, sgemm, GEMM_F, true), handle(linker, sgemm, GEMM_F, false),
+				handle(linker, lookup.find("cblas_dgemv").orElseThrow(), GEMV_D, true),
+				handle(linker, lookup.find("cblas_sgemv").orElseThrow(), GEMV_F, true), query < 0 ? null
+						: handle(linker, lookup.find(THREAD_QUERIES[query][0]).orElseThrow(), THREAD_COUNT, false) };
+	}
+
+	/** The first {@link #THREAD_QUERIES} entry the library exports, or -1. */
+	private static int threadQuery(SymbolLookup lookup) {
+		for (int i = 0; i < THREAD_QUERIES.length; i++) {
+			if (lookup.find(THREAD_QUERIES[i][0]).isPresent()) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private static MethodHandle handle(Linker linker, MemorySegment symbol, FunctionDescriptor descriptor,
+			boolean critical) {
+		(critical ? CRITICAL_SIGNATURES : SIGNATURES).add(descriptor);
+		return critical ? linker.downcallHandle(symbol, descriptor, Linker.Option.critical(true))
+				: linker.downcallHandle(symbol, descriptor);
+	}
+
+	/**
+	 * The shapes bound WITHOUT {@code critical}, for the native-image registration test.
+	 * @return the plain downcall shapes this bridge asked the linker for
+	 */
+	static Set<FunctionDescriptor> signatures() {
+		return Set.copyOf(SIGNATURES);
+	}
+
+	/**
+	 * The shapes bound WITH {@code critical(true)}.
+	 * @return the critical downcall shapes this bridge asked the linker for
+	 */
+	static Set<FunctionDescriptor> criticalSignatures() {
+		return Set.copyOf(CRITICAL_SIGNATURES);
 	}
 
 	/** The thread count a library will admit to, or 0 when the call itself fails. */

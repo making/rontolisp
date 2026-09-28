@@ -75,7 +75,7 @@ page.
 | `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — composes a pathname from `:directory`/`:name`/`:type`, taking every UNSUPPLIED component from `:defaults`. Component-wise, NOT a merge: a supplied component replaces the defaults' one and an explicit `nil` means "no component". A real function on all four backends; literal calls are additionally folded at compile time |
 | `namestring` | `(namestring #P"/tmp/x")` | `"/tmp/x"` — the namestring a pathname carries; a string (a designator) passes through, anything else signals. `uiop:namestring` and `uiop:native-namestring` are the same function |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | Fills the gaps in the first pathname from the second (both spellings accepted): an absolute directory wins, a relative one is appended, an absent one is taken from the defaults. `uiop:merge-pathnames*` is the same merge |
-| `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
+| `open-stream-p` | `(open-stream-p stream)` | `t` while the stream is open, `nil` after `close` |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
 | `clear-output` | `(clear-output stream)` | Discard an output stream's unwritten buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
@@ -94,6 +94,7 @@ page.
 | `readtable-case` | `(readtable-case *readtable*)` | Lite stub: always `:upcase` -- the reader always upcases unescaped symbol names, the standard readtable's mode |
 | `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index (a non-string or a non-integer index signals a `type-error`) |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
+| `char-int` | `(char-int #\A)` | `65` -- a non-negative integer encoding the character; with no implementation-defined attributes, the same value `char-code` answers |
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
 | `char=` `char<` `char<=` `char>` `char>=` `char/=` `char-equal` | `(char< #\a #\b #\c)` | `t` (variadic comparison by code point; `char/=` = pairwise distinct, `char-equal` = case-insensitive `char=`) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t` (the case-INSENSITIVE ordering family) |
@@ -267,7 +268,7 @@ page.
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)` (cons the leading arguments onto the last one as the tail) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))` (prepend a `(key . value)` pair to an alist) |
 | `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil` (end-of-list test; any other value signals a `type-error`) |
-| `elt` | `(elt '(a b c) 1)` | `b` (0-based element access; lists only, no string indexing) |
+| `elt` | `(elt '(a b c) 1)` | `b` (0-based element access into a list, string or vector; an index outside it is a `type-error`) |
 | `rassoc` | `(rassoc 2 '((a . 1) (b . 2)))` | `(b . 2)` (first pair whose cdr matches the value, or nil; `eql` compare by default, optional `:test`/`:key` keywords) |
 | `rassoc-if` | `(rassoc-if #'oddp '((a . 2) (b . 3)))` | `(b . 3)` (first pair whose cdr satisfies the predicate, or nil; optional `:key`) |
 | `rassoc-if-not` | `(rassoc-if-not #'numberp '((a . 1) (b . c)))` | `(b . c)` (first pair whose cdr FAILS the predicate, or nil; optional `:key`) |

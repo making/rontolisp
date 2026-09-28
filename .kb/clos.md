@@ -199,18 +199,65 @@ dies with "No applicable method: CLOSE on INTEGER".
   silently drop the default method. A Java-backed built-in is a `LispFunction`; a
   user/prelude `defun` is a `LispLambda`, deliberately left to be shadowed — that type test is
   also why a MISS needs no memo.
+- **Interpreter, the call side** (2026-09-26): stashing is not dispatching. `evalCons`' operator
+  tables EXPAND many built-ins before the global binding is read (`(byte-size x)` -> `(car x)`),
+  and the multiple-value lowerings spell a producer's values BY NAME (`(floor x)` in a tail or
+  under a consumer -> quotient + `(- x q)`), so 45 of the 249 shadowable names ignored the user
+  method (byte family, `first`..`tenth`, `1+`, `zerop`, the floor family, `find-symbol`,
+  `read-from-string`, `values`, ...). Now a stash of a `ShadowedBuiltins.loweredBuiltinFunctions()`
+  name adds it to `methodedExpandedBuiltins`, and `evalCons` sends such a call straight to the
+  binding ahead of every table (one identity test per call while the set is the initial empty
+  one; fib 26 x12, steady state 178-198 -> 175-212 ms, noise at load 13). A methoded syntactic
+  producer (`LispMacroExpander.isSyntacticMultipleValueProducerName`) also gets its dispatcher
+  bound under `%<name>--dispatch`, and the defun body, lambda tail, `handler-case` protected
+  form and the six consumer arms are renamed onto it (`ShadowedBuiltins.renameCallSites`, the
+  compile paths' own walk) before they lower; those arms then re-expand instead of memoizing.
+  **Order independence** (2026-09-27): a `defun` (a `defmethod` body included) and a lambda tail
+  are lowered at DEFINITION, so one made before the first `defmethod` on its producer used to keep
+  the built-in's lowering (`(defun early (x) (floor x))` then a `floor` method: `-: The value #<BX>
+  is not of type NUMBER`) while the compile paths, whole-program, dispatched it. Every tail whose
+  lowering changed something is now registered (`LispEvaluator.producerTailSites`, weakly: the
+  defun's own `(block name ...)` cons, or the `(progn settled)` wrapper a lambda tail's memo entry
+  shares between its closures), and a producer's first method, once its alias is bound, re-lowers
+  each in place from the raw form. Zero call-time cost for a defun; a producer-tail lambda pays
+  one `progn` step (3M `funcall`s of `(lambda (k) (gethash k h))`, 5 alternating pairs: 7,508-7,667
+  -> 7,626-7,823 ms, medians 7,597 -> 7,639). Pinned by
+  `ShadowedBuiltinsTest.everyLoweredNameDispatchesAUserMethodOnTheInterpreter` (every name, four
+  call shapes), `everyLoweredNameDispatchesFromAFunctionDefinedBeforeTheMethod` (defun, method body,
+  closure, `labels`, all defined first) and `MethodedBuiltinFixture` on the interpreter, JVM and
+  WASM.
 - **Compile paths** (`compiler/ShadowedBuiltins`, run by BOTH backends right after
   `expandTopLevelDefinitions`): `(close X)` is compiler-lowered whatever defuns exist, so the
   spliced dispatcher defun is dead. Per name in the COMPUTED set: replace the dead dispatcher
   (found by structural equality against a regenerated 2-arg dispatcher, so a user defun of the
   same name is never mistaken for it) with the interpreter's body renamed `%<name>--dispatch`;
-  bind `%<name>--builtin` to a FORWARDER defun of the original built-in call (`&rest` tail
-  dropped); rewrite call sites and `#'name` references onto the dispatcher. The walker skips
+  bind `%<name>--builtin` to a FORWARDER defun of the original built-in call
+  (`ShadowedBuiltins.forwarderDefun`); rewrite call sites and `#'name` references onto the
+  dispatcher. The walker skips
   quoted data, `defmacro`/`macrolet` bodies, the generated defuns themselves (the Gray
   `DISPATCH_DEFUNS` rule — rewriting the forwarder's fallback would recurse) and the
-  non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/`handler-case`. When
+  non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/`handler-case`, and
+  keeps a PLACE's head (`setf`/`incf`/`push`/... -- `(setf (gethash k h) v)` of a methoded
+  `gethash` was rewritten to an unknown `%gethash--dispatch` place and failed the compile). When
   `close` is shadowed, `with-open-file`/`with-open-stream`/`with-*-to-string` are pre-expanded
   (`unwindProtect=true`) — side effect: such a WASM module is always in EH mode.
+- **The forwarder takes the whole tail** (2026-09-27; it used to drop the `&rest` tail, so a
+  methoded `floor` lost every divisor: `(floor 7 2)` was `(7 0)` on the JVM and wasm). A
+  variadic generic's forwarder cases over the tail's length into one DIRECT lowered call per
+  count the built-in's `BuiltinCallArity` shape accepts (`(floor p)`, `(floor p (car r))`);
+  past the positional counts an unbounded built-in is `(apply #'<name> p... r)` -- its
+  function-value wrapper, which re-extracts keywords the lowering needs as literals
+  (`write-line`'s `:start`/`:end`); `close`'s `(:abort v)` is checked at run time and dropped;
+  every other count is `(%program-error (%string-concat "<OP> expects ..., got " count))`, a
+  run-time message so no static warning fires for a count no call site passes. A backend alias
+  (`%io-write-line`) is called only for a count inside its `WasmSocketsRewrite.ARITIES` range
+  (`ShadowedBuiltins.BuiltinAlias`), as the pre-pass redirects only those. Pinned by
+  `MethodedBuiltinTailFixture` on three backends and
+  `ShadowedBuiltinsTest.everyForwarderCallsItsBuiltinWithACountTheCallShapeAccepts` (every
+  name x 0..4 required parameters). Residual: a count the built-in rejects through the
+  dispatcher reports the SHAPE's text (`FLOOR expects at most 2 arguments, got 3`), where the
+  interpreter applies its `LispFunction`, whose own text can differ (`1 to 2`) -- the
+  function-value message divergence `.kb/error-handling.md` already records.
 - **The name set**: `BuiltinFunctionWrappers.names()` minus `%`-internals, minus
   `NOT_SHADOWABLE` (signal operators plus `make-instance`/`class-of`), minus
   `EXPANSION_LOWERED`, plus `LOWERED_WITHOUT_WRAPPER` (`close` first). **Pinned by
@@ -222,7 +269,9 @@ dies with "No applicable method: CLOSE on INTEGER".
   `WasmSocketsRewrite` runs BEFORE this pass — the pass COMPOSES via
   `WasmSocketsRewrite.builtinDispatchAliases` (without it an instance reaching `%io-close` was
   a wasm CAST-FAILURE trap); still open, the ASYNC read promotions bypass a user method;
-  (4) a runtime designator (`(funcall 'close x)`) does not dispatch on the compile paths.
+  (4) a runtime designator (`(funcall 'close x)`) does not dispatch on the compile paths;
+  (5) the forwarder drops the `&rest` tail, so with a `floor` method `(floor 7 2)` is `(7 0)`
+  on the compile paths and `(3 1)` on the interpreter (measured 2026-09-26).
 
 ## The instance-initialization protocol
 `initialize-instance`, `reinitialize-instance`, `shared-initialize` are CL symbols

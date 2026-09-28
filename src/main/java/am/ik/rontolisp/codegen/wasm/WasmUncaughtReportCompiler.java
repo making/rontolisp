@@ -141,6 +141,10 @@ final class WasmUncaughtReportCompiler {
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		emitPayloadHalf(ctx, payloadSlot, 0, condSlot);
 		emitPayloadHalf(ctx, payloadSlot, 1, msgSlot);
+		if (ctx.restartMode) {
+			// A payload saying the handler-bind handlers ran holds (nil . message) there.
+			WasmErrorCompiler.emitUnwrapMessage(ctx, msgSlot);
+		}
 		String condVar = "__uc_cond$" + condSlot;
 		String msgVar = "__uc_msg$" + msgSlot;
 		ctx.locals.put(condVar, condSlot);
@@ -175,8 +179,9 @@ final class WasmUncaughtReportCompiler {
 	 * {@code (%warn (%string-concat "Unhandled condition: " text))}, where {@code text}
 	 * prefers the instance's report and falls back to the message -- the plain
 	 * {@code %error}'s text, or what a typed signal of a report-less class built at its
-	 * site ({@link WasmErrorCompiler#compileCond}) -- and an absent text contributes the
-	 * empty string rather than the value printer's {@code NIL}.
+	 * site ({@link WasmErrorCompiler#compileCond}). Every EH-mode signal carries its
+	 * message ({@code WasmLispCompiler.UncaughtReportUnforeseen}), so a nil one is the
+	 * message's VALUE and prints as {@code NIL}.
 	 *
 	 * <p>
 	 * The {@code %condition-report-str} arm is emitted only when the program HAS that
@@ -184,26 +189,22 @@ final class WasmUncaughtReportCompiler {
 	 * always nil and the arm would be dead code that drags the whole report machinery in.
 	 */
 	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx) {
-		LispVal text = msgVar;
+		// A message is a string, a character vector or nil, and %string-concat takes only
+		// the first two: a nil message renders as princ writes it, which is what the
+		// interpreter and the JVM print.
+		LispVal message = list(new LispSymbol(LispNames.IF), msgVar, msgVar, new LispString("NIL"));
+		LispVal text = message;
 		if (ctx.closRegistry.routesConditionReports()) {
-			// (if cond (let ((r (%condition-report-str cond))) (if r r msg)) msg)
+			// (if cond (let ((r (%condition-report-str cond))) (if r r message)) message)
 			LispSymbol report = new LispSymbol("__uc_report");
 			text = list(new LispSymbol(LispNames.IF), condVar,
 					list(new LispSymbol(LispNames.LET),
 							list(list(report, list(new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL), condVar))),
-							list(new LispSymbol(LispNames.IF), report, report, msgVar)),
-					msgVar);
+							list(new LispSymbol(LispNames.IF), report, report, message)),
+					message);
 		}
-		return list(new LispSymbol(LispNames.WARN_INTERNAL), list(new LispSymbol(LispNames.STRING_CONCAT),
-				new LispString(UncaughtReport.PREFIX), orEmpty("__uc_text", text)));
-	}
-
-	/** {@code (let ((v form)) (if v v ""))} -- nil renders as nothing, not as NIL. */
-	private static LispVal orEmpty(String varName, LispVal form) {
-		LispSymbol var = new LispSymbol(varName);
-		LispVal binding = list(list(var, form));
-		return list(new LispSymbol(LispNames.LET), binding,
-				list(new LispSymbol(LispNames.IF), var, var, new LispString("")));
+		return list(new LispSymbol(LispNames.WARN_INTERNAL),
+				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(UncaughtReport.PREFIX), text));
 	}
 
 	private static LispVal list(LispVal... items) {

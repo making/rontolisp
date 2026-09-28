@@ -13,6 +13,9 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
@@ -225,6 +228,104 @@ class JvmClassFileLookupTest {
 			}
 		}
 		assertThat(resolved).as("the corpus exercises resolution").isGreaterThan(40);
+	}
+
+	// Both lookups answer Class.getMethods() of an interface: none of Object's methods it
+	// does not redeclare. The resolver adds them for a java:call (JLS 9.2), so a site
+	// calling one on an interface receiver -- declared, or a java:reify object --
+	// resolves to Object's member through either lookup.
+	@Test
+	void anInterfaceReceiverReachesObjectsMethodsThroughTheResolver() {
+		for (JavaClassLookup lookup : List.of(REFLECTION, classFiles)) {
+			JavaType list = Objects.requireNonNull(lookup.find("java.util.List"));
+			assertThat(list.methods("toString")).as("%s", lookup).isEmpty();
+			assertThat(list.methods("getClass")).as("%s", lookup).isEmpty();
+			assertThat(signatures(list.methods("hashCode"))).as("%s", lookup)
+				.containsExactly("java.util.List.hashCode[]int");
+		}
+		String corpus = """
+				(java:call (the (java:object "java.util.List") x) "toString")
+				(java:call (the (java:object "java.util.List") x) "hashCode")
+				(java:call (the (java:object "java.util.List") x) "equals" "s")
+				(java:call (the (java:object "java.util.List") x) "getClass")
+				(java:call (the (java:object "java.util.List") x) "wait" 1)
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "toString")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "hashCode")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "equals" nil)
+				""";
+		List<String> expected = List.of("java.lang.Object.toString[]java.lang.String", "java.util.List.hashCode[]int",
+				"java.util.List.equals[java.lang.Object]boolean", "java.lang.Object.getClass[]java.lang.Class",
+				"java.lang.Object.wait[long]void", "java.lang.Object.toString[]java.lang.String",
+				"java.lang.Object.hashCode[]int", "java.lang.Object.equals[java.lang.Object]boolean");
+		JavaSiteResolver byReflection = new JavaSiteResolver(REFLECTION);
+		JavaSiteResolver byClassFiles = new JavaSiteResolver(classFiles);
+		List<LispVal> sites = LispReader.readAllFromString(corpus);
+		for (int i = 0; i < sites.size(); i++) {
+			LispCons site = (LispCons) sites.get(i);
+			JavaSite a = byReflection.resolve(site);
+			assertThat(describe(byClassFiles.resolve(site))).as(site.print()).isEqualTo(describe(a));
+			assertThat(a.executable()).as(site.print()).isNotNull();
+			assertThat(signature(Objects.requireNonNull(a.executable()))).as(site.print()).isEqualTo(expected.get(i));
+		}
+	}
+
+	// java:reify / java:proxy implement an interface by the methods Class.getMethods()
+	// lists: both lookups list the same ones, abstract where reflection says so, so a
+	// form declares the same slots interpreted and compiled -- and the object's kind is
+	// assignable to the same types.
+	@Test
+	void everyInterfaceIsImplementedTheSame() {
+		List<String> interfaces = List.of("java.lang.Runnable", "java.lang.CharSequence", "java.lang.Appendable",
+				"java.lang.Iterable", "java.lang.Comparable", "java.util.Comparator", "java.util.Iterator",
+				"java.util.Collection", "java.util.List", "java.util.Map", "java.util.function.Function",
+				"java.util.function.UnaryOperator", "java.util.function.Supplier", "java.util.function.Predicate",
+				"java.util.function.IntSupplier", "java.util.concurrent.Callable", "java.beans.PropertyChangeListener",
+				"java.awt.event.MouseListener", "javax.net.ssl.X509TrustManager");
+		for (String name : interfaces) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name), name);
+			JavaType read = Objects.requireNonNull(classFiles.find(name), name);
+			assertThat(abstractness(read.publicMethods())).as("%s methods", name)
+				.isEqualTo(abstractness(reflected.publicMethods()));
+			assertThat(slots(JavaImplementations.proxy(read, classFiles))).as("%s proxy", name)
+				.isEqualTo(slots(JavaImplementations.proxy(reflected, REFLECTION)));
+			JavaImplementationType readKind = classFiles.implementationOf(read);
+			JavaImplementationType reflectedKind = REFLECTION.implementationOf(reflected);
+			assertThat(classFiles.implementationOf(read)).isSameAs(readKind);
+			for (String target : CORPUS) {
+				assertThat(Objects.requireNonNull(classFiles.find(target)).isAssignableFrom(readKind))
+					.as("%s <- %s", target, readKind)
+					.isEqualTo(Objects.requireNonNull(REFLECTION.find(target)).isAssignableFrom(reflectedKind));
+			}
+		}
+		for (List<String> reify : List.of(List.of("java.util.Comparator", "compare"),
+				List.of("java.util.Iterator", "hasNext", "next"), List.of("java.lang.Appendable", "append(char)"),
+				List.of("java.lang.CharSequence", "length", "charAt", "toString", "hashCode"),
+				List.of("java.util.function.Function", "apply", "andThen"))) {
+			String name = reify.get(0);
+			List<String> designators = reify.subList(1, reify.size());
+			assertThat(slots(
+					JavaImplementations.reify(Objects.requireNonNull(classFiles.find(name)), designators, classFiles)))
+				.as("%s %s", name, designators)
+				.isEqualTo(slots(JavaImplementations.reify(Objects.requireNonNull(REFLECTION.find(name)), designators,
+						REFLECTION)));
+		}
+	}
+
+	private static List<String> abstractness(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e) + (e.isAbstract() ? " abstract" : ""));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	private static List<String> slots(JavaImplementation implementation) {
+		List<String> slots = new ArrayList<>();
+		for (JavaImplementation.Slot slot : implementation.slots()) {
+			slots.add(slot.dispatchKey() + "=" + slot.implementation());
+		}
+		return slots;
 	}
 
 	// A class-path root (here the project's own compiled classes, loaded in this JVM by

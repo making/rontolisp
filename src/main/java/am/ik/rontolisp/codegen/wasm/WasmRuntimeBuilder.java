@@ -2094,9 +2094,16 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * One callable a dispatcher can reach: which {@code br_table} slot selects it, which
-	 * module function it is, and how its parameters are filled.
+	 * module function it is, and how its parameters are filled -- {@code required}
+	 * arguments, then {@code optionals} physical optionals (an argument or the UNSUPPLIED
+	 * marker, {@link WasmPhysicalArgs}), then for a variadic callee the rest list.
 	 */
-	private record DispatchTarget(int funcId, int funcIndex, int required, boolean variadic) {
+	private record DispatchTarget(int funcId, int funcIndex, int required, int optionals, boolean variadic) {
+
+		int positional() {
+			return this.required + this.optionals;
+		}
+
 	}
 
 	/**
@@ -2109,7 +2116,7 @@ final class WasmRuntimeBuilder {
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean identityHash) {
 		DispatchFunctions built = buildDispatch(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase,
-				false, null, 0, null, -1, false, null, identityHash);
+				false, null, 0, null, -1, false, null, identityHash, -1);
 		if (!built.pages().isEmpty()) {
 			throw new IllegalStateException("dispatcher for arity " + arity + " needs pages; use buildDispatch");
 		}
@@ -2155,13 +2162,15 @@ final class WasmRuntimeBuilder {
 	 * dispatcher needs pages
 	 * @param notFunction what applying a non-function throws, or {@code null} outside EH
 	 * mode, where it traps
+	 * @param unsuppliedGlobal the module global holding the UNSUPPLIED marker a case
+	 * passes for a physical optional the call does not reach ({@link WasmPhysicalArgs})
 	 * @return the dispatcher body and its pages
 	 */
 	static DispatchFunctions buildDispatch(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable, int pageFuncBase,
 			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders,
-			@Nullable NotFunctionReport notFunction, boolean identityHash) {
+			@Nullable NotFunctionReport notFunction, boolean identityHash, int unsuppliedGlobal) {
 		int dispatchArgs = spread ? 1 : arity;
 		List<DispatchTarget> targets = dispatchTargets(arity, defuns, lambdaDecls, spread, dispatchable, userFuncBase);
 		// The callables this dispatcher CANNOT serve: their funcId reaching it is a call
@@ -2194,7 +2203,7 @@ final class WasmRuntimeBuilder {
 			WasmWriter w = new WasmWriter(body);
 			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
-					sharedConsReaders, identityHash);
+					sharedConsReaders, identityHash, unsuppliedGlobal);
 			emitDispatchEpilogue(w, dispatchArgs, notFunction);
 			w.write(Instruction.END); // end function
 			byte[] single = body.toByteArray();
@@ -2223,7 +2232,7 @@ final class WasmRuntimeBuilder {
 			SortedMap<Integer, Integer> pageMisses = missShapes.subMap(leaf.getKey() << DISPATCH_PAGE_BITS,
 					((leaf.getKey() + 1) << DISPATCH_PAGE_BITS));
 			pages.add(buildDispatchLeafPage(leaf.getValue(), pageMisses, leaf.getKey(), arity, dispatchArgs, spread,
-					report, arityChkIndex, sharedConsReaders, identityHash));
+					report, arityChkIndex, sharedConsReaders, identityHash, unsuppliedGlobal));
 		}
 		for (int level = 1; level <= levels - 2; level++) {
 			Map<Integer, Map<Integer, Integer>> parents = new TreeMap<>();
@@ -2604,8 +2613,7 @@ final class WasmRuntimeBuilder {
 			if (dispatchable != null && !dispatchable.contains(i)) {
 				continue;
 			}
-			int params = defun.paramNames().size();
-			int required = defun.variadic() ? params - 1 : params;
+			int required = defun.required();
 			if (!(defun.variadic() ? arity >= required : required == arity)) {
 				misses.put(i, required * 2 + (defun.variadic() ? 1 : 0));
 			}
@@ -2614,8 +2622,7 @@ final class WasmRuntimeBuilder {
 			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
 				continue;
 			}
-			int params = lambda.paramNames().size();
-			int required = lambda.variadic() ? params - 1 : params;
+			int required = lambda.required();
 			if (!(lambda.variadic() ? arity >= required : required == arity)) {
 				misses.put(lambda.funcId(), required * 2 + (lambda.variadic() ? 1 : 0));
 			}
@@ -3074,31 +3081,31 @@ final class WasmRuntimeBuilder {
 	private static List<DispatchTarget> dispatchTargets(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, boolean spread, @Nullable Set<Integer> dispatchable,
 			int userFuncBase) {
-		// A variadic function (physical params = required + rest list) matches every
-		// dispatch arity >= required; its case links the surplus args into a cons list
-		// before the call. The spread dispatcher takes them all: its cases read the
-		// parameters out of the list.
+		// A variadic function (physical params = required + physical optionals + rest
+		// list) matches every dispatch arity >= required; its case passes the
+		// UNSUPPLIED marker for each optional the arity does not reach and links the
+		// args past the optionals into a cons list before the call. The spread
+		// dispatcher takes them all: its cases read the parameters out of the list.
 		List<DispatchTarget> targets = new ArrayList<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			WasmLispCompiler.DefunDecl defun = defuns.get(i);
-			int paramCount = defun.paramNames().size();
 			if (dispatchable != null && !dispatchable.contains(i)) {
 				continue;
 			}
-			if (spread || (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
-				targets.add(new DispatchTarget(i, userFuncBase + i, defun.variadic() ? paramCount - 1 : paramCount,
-						defun.variadic()));
+			int required = defun.required();
+			if (spread || (defun.variadic() ? arity >= required : required == arity)) {
+				targets.add(new DispatchTarget(i, userFuncBase + i, required, defun.optionals(), defun.variadic()));
 			}
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			WasmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
-			int paramCount = lambda.paramNames().size();
 			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
 				continue;
 			}
-			if (spread || (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
-				targets.add(new DispatchTarget(lambda.funcId(), lambda.funcIndex(),
-						lambda.variadic() ? paramCount - 1 : paramCount, lambda.variadic()));
+			int required = lambda.required();
+			if (spread || (lambda.variadic() ? arity >= required : required == arity)) {
+				targets.add(new DispatchTarget(lambda.funcId(), lambda.funcIndex(), required, lambda.optionals(),
+						lambda.variadic()));
 			}
 		}
 		// One counter hands out every funcId -- the defuns first (index == funcId), then
@@ -3318,7 +3325,8 @@ final class WasmRuntimeBuilder {
 	 */
 	private static void emitDispatchCases(WasmWriter w, List<DispatchTarget> targets,
 			SortedMap<Integer, Integer> missShapes, int arity, int dispatchArgs, boolean spread, int funcIdBias,
-			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders, boolean identityHash) {
+			@Nullable ArityReport report, int arityChkIndex, boolean sharedConsReaders, boolean identityHash,
+			int unsuppliedGlobal) {
 		int funcIdLocal = dispatchArgs + 1;
 		int argListLocal = dispatchArgs + 2;
 		if (targets.isEmpty() && missShapes.isEmpty()) {
@@ -3439,13 +3447,13 @@ final class WasmRuntimeBuilder {
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
 			}
-			else if (target.variadic()) {
-				// Link args required+1..arity into a cons list (right to left)
+			else if (target.variadic() && arity > target.positional()) {
+				// Link args positional+1..arity into a cons list (right to left)
 				w.write(Instruction.REF_NULL);
 				w.writeHeapType(Type.EQ.code());
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(argListLocal);
-				for (int a = arity; a >= target.required() + 1; a--) {
+				for (int a = arity; a >= target.positional() + 1; a--) {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(a);
 					w.write(Instruction.GET_LOCAL);
@@ -3465,9 +3473,24 @@ final class WasmRuntimeBuilder {
 			w.writeUnsignedLeb128(1); // field 1: env
 			if (spread) {
 				// Push car(cursor) per required parameter, stepping the cursor; a short
-				// argument list yields nil rather than trapping, like car/cdr do.
-				for (int a = 0; a < target.required(); a++) {
-					emitNullSafeCell(w, argListLocal, true, sharedConsReaders);
+				// argument list yields nil rather than trapping, like car/cdr do. A
+				// physical optional takes car(cursor) while the list lasts and the
+				// UNSUPPLIED marker past its end.
+				for (int a = 0; a < target.positional(); a++) {
+					if (a < target.required()) {
+						emitNullSafeCell(w, argListLocal, true, sharedConsReaders);
+					}
+					else {
+						w.write(Instruction.GET_LOCAL);
+						w.writeUnsignedLeb128(argListLocal);
+						w.write(Instruction.REF_IS_NULL);
+						w.write(Instruction.IF);
+						w.writeRefType(true, Type.EQ.code());
+						WasmPhysicalArgs.emitUnsupplied(w, unsuppliedGlobal);
+						w.write(Instruction.ELSE);
+						emitNullSafeCell(w, argListLocal, true, sharedConsReaders);
+						w.write(Instruction.END);
+					}
 					emitNullSafeCell(w, argListLocal, false, sharedConsReaders);
 					w.write(Instruction.SET_LOCAL);
 					w.writeUnsignedLeb128(argListLocal);
@@ -3478,20 +3501,25 @@ final class WasmRuntimeBuilder {
 				}
 			}
 			else {
-				// Push args (for a variadic target, the required ones plus the rest list)
-				for (int a = 1; a <= target.required(); a++) {
-					w.write(Instruction.GET_LOCAL);
-					w.writeUnsignedLeb128(a);
-				}
-				if (target.variadic()) {
-					w.write(Instruction.GET_LOCAL);
-					w.writeUnsignedLeb128(argListLocal);
-				}
-				else {
-					for (int a = target.required() + 1; a <= arity; a++) {
+				// Push args: the ones a parameter takes, the UNSUPPLIED marker for each
+				// physical optional past this arity, and for a variadic target the rest
+				// list -- nil unless the args went past the optionals.
+				for (int a = 1; a <= target.positional(); a++) {
+					if (a <= arity) {
 						w.write(Instruction.GET_LOCAL);
 						w.writeUnsignedLeb128(a);
 					}
+					else {
+						WasmPhysicalArgs.emitUnsupplied(w, unsuppliedGlobal);
+					}
+				}
+				if (target.variadic() && arity > target.positional()) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeUnsignedLeb128(argListLocal);
+				}
+				else if (target.variadic()) {
+					w.write(Instruction.REF_NULL);
+					w.writeHeapType(Type.EQ.code());
 				}
 			}
 			// Tail-call the target: what it answers is the dispatcher's answer, and the
@@ -3526,13 +3554,13 @@ final class WasmRuntimeBuilder {
 	 */
 	private static byte[] buildDispatchLeafPage(List<DispatchTarget> targets, SortedMap<Integer, Integer> missShapes,
 			int page, int arity, int dispatchArgs, boolean spread, @Nullable ArityReport report, int arityChkIndex,
-			boolean sharedConsReaders, boolean identityHash) {
+			boolean sharedConsReaders, boolean identityHash, int unsuppliedGlobal) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		emitPageLocals(w, report != null);
 		emitPageFuncIdDigit(w, dispatchArgs, 0);
 		emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, page << DISPATCH_PAGE_BITS, report,
-				arityChkIndex, sharedConsReaders, identityHash);
+				arityChkIndex, sharedConsReaders, identityHash, unsuppliedGlobal);
 		w.write(Instruction.END); // end function
 		return body.toByteArray();
 	}

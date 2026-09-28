@@ -2,38 +2,38 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**16,000 / 19,526 tests pass (81.9%)** -- 1,422 fail, 2,104 signal an error.
+**16,122 / 19,528 tests pass (82.6%)** -- 1,377 fail, 2,029 signal an error.
 
-7 top-level forms could not be read, 378 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 378 could not be evaluated, 2 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
-| arrays | 1,356 | 1,280 | 22 | 54 | 94.4% | 11 |
-| characters | 259 | 213 | 6 | 40 | 82.2% | 11 |
+| arrays | 1,356 | 1,303 | 17 | 36 | 96.1% | 11 |
+| characters | 259 | 214 | 5 | 40 | 82.6% | 11 |
 | conditions | 673 | 553 | 58 | 62 | 82.2% | 11 |
-| cons | 1,881 | 1,722 | 93 | 66 | 91.5% | 11 |
-| data-and-control-flow | 1,428 | 1,225 | 72 | 131 | 85.8% | 12 |
+| cons | 1,882 | 1,742 | 77 | 63 | 92.6% | 11 |
+| data-and-control-flow | 1,428 | 1,232 | 72 | 124 | 86.3% | 12 |
 | environment | 210 | 132 | 11 | 67 | 62.9% | 11 |
-| eval-and-compile | 306 | 220 | 39 | 47 | 71.9% | 11 |
+| eval-and-compile | 306 | 222 | 39 | 45 | 72.5% | 11 |
 | files | 87 | 33 | 9 | 45 | 37.9% | 11 |
 | hash-tables | 157 | 130 | 21 | 6 | 82.8% | 13 |
 | iteration | 843 | 729 | 89 | 25 | 86.5% | 11 |
 | misc | 740 | 729 | 7 | 4 | 98.5% | 11 |
-| numbers | 1,444 | 1,254 | 52 | 138 | 86.8% | 15 |
-| objects | 846 | 343 | 200 | 303 | 40.5% | 37 |
+| numbers | 1,444 | 1,272 | 40 | 132 | 88.1% | 15 |
+| objects | 846 | 344 | 200 | 302 | 40.7% | 37 |
 | packages | 500 | 431 | 38 | 31 | 86.2% | 11 |
 | pathnames | 214 | 124 | 22 | 68 | 57.9% | 12 |
 | printer | 536 | 248 | 117 | 171 | 46.3% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 12 |
-| reader | 575 | 369 | 66 | 140 | 64.2% | 19 |
-| sequences | 3,287 | 3,024 | 94 | 169 | 92.0% | 11 |
-| streams | 797 | 652 | 75 | 70 | 81.8% | 16 |
-| strings | 509 | 404 | 56 | 49 | 79.4% | 12 |
+| reader | 576 | 370 | 66 | 140 | 64.2% | 18 |
+| sequences | 3,287 | 3,045 | 85 | 157 | 92.6% | 11 |
+| streams | 797 | 656 | 73 | 68 | 82.3% | 16 |
+| strings | 509 | 420 | 56 | 33 | 82.5% | 12 |
 | structures | 1,030 | 744 | 58 | 228 | 72.2% | 36 |
-| symbols | 1,145 | 1,080 | 25 | 40 | 94.3% | 11 |
-| system-construction | 77 | 26 | 1 | 50 | 33.8% | 11 |
-| types-and-classes | 626 | 335 | 191 | 100 | 53.5% | 13 |
-| **total** | **19,526** | **16,000** | **1,422** | **2,104** | **81.9%** | **388** |
+| symbols | 1,145 | 1,081 | 26 | 38 | 94.4% | 11 |
+| system-construction | 77 | 27 | 1 | 49 | 35.1% | 11 |
+| types-and-classes | 626 | 341 | 190 | 95 | 54.5% | 13 |
+| **total** | **19,528** | **16,122** | **1,377** | **2,029** | **82.6%** | **387** |
 
 ## Most frequent failure reasons
 
@@ -50,7 +50,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 29 | `The function DEFINE-METHOD-COMBINATION is undefined` |
 | 29 | `The function NAME-CHAR is undefined` |
 | 28 | `The function PPRINT-TABULAR is undefined` |
-| 27 | `LispEvalException: X expects (compile name definition), got 1 argument(s)` |
+| 27 | `LispEvalException: X expects 2 arguments, got 1` |
 | 27 | `The function READ-PRESERVING-WHITESPACE is undefined` |
 | 25 | `LispEvalException: X: unknown specializer X (a class must be defined by defclass before the method)` |
 | 25 | `The variable *CLASSES* is unbound` |
@@ -75,8 +75,8 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 12 | `The function ENSURE-GENERIC-FUNCTION is undefined` |
 | 12 | `The function MAKE-LOAD-FORM is undefined` |
 | 12 | `UnsupportedOperationException: X option is not supported: (:X X)` |
-| 12 | `X expects (reduce fn list) or (reduce fn list :initial-value init)` |
-| 12 | `X expects 1 arguments, got 5` |
 | 11 | `The function MAKE-STRUCT-TEST-06 is undefined` |
+| 11 | `X expects (reduce fn list) or (reduce fn list :initial-value init)` |
 | 11 | `X: no package named X` |
+| 11 | `X: unsupported option :X` |
 

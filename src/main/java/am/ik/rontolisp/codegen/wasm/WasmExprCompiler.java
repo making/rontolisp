@@ -4,6 +4,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.macro.IgnoredArgument;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -15,6 +16,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -240,6 +242,12 @@ final class WasmExprCompiler {
 
 	static void compileSymbolRef(LispSymbol sym, WasmLispCompiler.Ctx ctx) {
 		String name = sym.name();
+		if (LispNames.MV_SPILL.equals(name) && !ctx.globalIndices.containsKey(name)) {
+			// A module without the spill global publishes nothing, so an expansion's
+			// read of the channel answers nil (.kb/multiple-values.md).
+			compileExpr(LispNil.INSTANCE, ctx);
+			return;
+		}
 		// DYNAMIC-FIRST read of a dual-bound special (see WasmLetCompiler): in the
 		// binding function the lexical slot exists only so nested lambdas can capture
 		// it -- reads go to the module global, so a called function's dynamic
@@ -343,6 +351,9 @@ final class WasmExprCompiler {
 		// --report-locations: the frame's line local holds this form's line while it runs
 		// (WasmUncaughtLocations; a no-op outside a frame).
 		long located = WasmUncaughtLocations.enterForm(cons, ctx);
+		// A warning about a form a macro built is placed at this one when it is the
+		// innermost located form around it (CompileWarnings).
+		LispCons enclosing = SourceProvenance.enterForm(cons);
 		try {
 			compileConsLocated(cons, ctx, tail);
 		}
@@ -353,6 +364,7 @@ final class WasmExprCompiler {
 		}
 		finally {
 			ctx.operator = outerOperator;
+			SourceProvenance.leaveForm(enclosing);
 		}
 		WasmUncaughtLocations.leaveForm(located, cons, ctx);
 	}
@@ -379,11 +391,22 @@ final class WasmExprCompiler {
 			// reaches a lowering, which would drop the surplus or index past the form: it
 			// evaluates its arguments and signals the interpreter's program-error
 			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
-			// its own call path.
-			LispVal wrongCount = ctx.userDefunNames.contains(sym.name()) ? null
-					: BuiltinCallArity.wrongCountSignal(cons);
+			// its own call path -- unless it is a native built-in's and its lambda list
+			// takes the built-in's own counts (a library's implementation of it), which
+			// reports as the built-in.
+			boolean builtinCall = !ctx.userDefunNames.contains(sym.name())
+					|| ctx.builtinShapedDefuns.contains(sym.name());
+			LispVal wrongCount = builtinCall ? BuiltinCallArity.wrongCountSignal(cons) : null;
 			if (wrongCount != null) {
 				compileExpr(wrongCount, ctx);
+				return;
+			}
+			// A count the shape admits that no lowering takes: the argument the operator
+			// accepts and ignores (read's recursive-p, subtypep's environment) is
+			// evaluated in its place and the call compiled without it.
+			LispVal withoutIgnored = builtinCall ? IgnoredArgument.drop(cons) : cons;
+			if (withoutIgnored != cons) {
+				compileExpr(withoutIgnored, ctx);
 				return;
 			}
 			// --simd: the vectorizable vec: kernels are routed to the emitted v128
@@ -499,7 +522,8 @@ final class WasmExprCompiler {
 						|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())
-						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())) {
+						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.OPEN_STREAM_P_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
 					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
 					// these, so the compile-time socket rewrite of the public names
@@ -575,20 +599,8 @@ final class WasmExprCompiler {
 						// handle-typed close and TRAP. The read/write aliases need
 						// nothing -- they share the compilers whose designator seam
 						// already resolves it.
-						default -> {
-							LispVal forgetting = forgettingClose(cons, ctx);
-							if (forgetting != null) {
-								WasmExprCompiler.compileExpr(forgetting, ctx);
-							}
-							else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
-								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
-										ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)),
-										ctx);
-							}
-							else {
-								WasmCloseCompiler.compile(cons, ctx);
-							}
-						}
+						case LispNames.OPEN_STREAM_P_RAW_INTERNAL -> compileOpenStreamP(cons, ctx);
+						default -> compileClose(cons, ctx);
 					}
 					return;
 				}
@@ -1244,26 +1256,7 @@ final class WasmExprCompiler {
 					ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			case LispNames.PACKAGE_ERROR_INTERNAL -> WasmExprCompiler.compileExpr(LispMacroExpander
 				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
-			case LispNames.CLOSE -> {
-				// Closing a SYNONYM stream closes the synonym, not what it forwards
-				// to -- which is nothing to do; an OPEN stream resolves to its
-				// handle. The guard is emitted only when the program can build one
-				// of the two; %close is the raw-handle close it falls through to.
-				LispVal forgetting = forgettingClose(cons, ctx);
-				if (forgetting != null) {
-					// The element-type registry forgets the stream first
-					// (.kb/read-load-streams.md, "Element types wider and narrower
-					// than one octet").
-					WasmExprCompiler.compileExpr(forgetting, ctx);
-				}
-				else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons, ctx.usesSynonymStreams,
-							ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx);
-				}
-				else {
-					WasmCloseCompiler.compile(cons, ctx);
-				}
-			}
+			case LispNames.CLOSE -> compileClose(cons, ctx);
 			case LispNames.CLOSE_INTERNAL -> WasmCloseCompiler.compile(cons, ctx);
 			case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
 			// The host environment read behind uiop:getenv (the public name is Lisp
@@ -1473,11 +1466,7 @@ final class WasmExprCompiler {
 						: LispNil.INSTANCE;
 				WasmExprCompiler.compileExpr(foExpansion, ctx);
 			}
-			case LispNames.OPEN_STREAM_P ->
-				// Without the sockets library spliced (which rewrites this to its
-				// table-backed dispatch defun) there is no per-fd open/closed record
-				// here: a non-nil stream designator answers t.
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandOpenStreamPLite(cons), ctx);
+			case LispNames.OPEN_STREAM_P -> compileOpenStreamP(cons, ctx);
 			case LispNames.LISTEN -> WasmListenCompiler.compile(cons, ctx);
 			case LispNames.READ_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
 					LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
@@ -1502,8 +1491,8 @@ final class WasmExprCompiler {
 						routesToArrayArm(cons, LispNames.FILL_ARRAY_RUNTIME, ctx)), ctx);
 			case LispNames.SCHAR_SET ->
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
-			case LispNames.LOWER_CASE_P -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLowerCaseP(cons), ctx);
-			case LispNames.UPPER_CASE_P -> WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
+			case LispNames.LOWER_CASE_P -> WasmCharCompiler.compileLowerCaseP(cons, ctx);
+			case LispNames.UPPER_CASE_P -> WasmCharCompiler.compileUpperCaseP(cons, ctx);
 			case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
 			case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
 					ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx);
@@ -1655,8 +1644,15 @@ final class WasmExprCompiler {
 				// arrives here with its (already evaluated) argument.
 				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 			case LispNames.STRING_UPCASE -> {
-				WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			default -> {
 				return false;
@@ -1677,16 +1673,30 @@ final class WasmExprCompiler {
 	private static boolean compileOperator3(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
 			case LispNames.STRING_DOWNCASE -> {
-				WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			case LispNames.STRING_CAPITALIZE -> {
-				WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> WasmSubseqCompiler.compile(cons, ctx);
 			case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
 			case LispNames.CHAR_CODE -> WasmCharCompiler.compileCharCode(cons, ctx);
+			case LispNames.CHAR_INT -> WasmCharCompiler.compileCharInt(cons, ctx);
 			case LispNames.CODE_CHAR -> WasmCharCompiler.compileCodeChar(cons, ctx);
 			case LispNames.CHARACTERP -> WasmCharCompiler.compileCharacterp(cons, ctx);
 			case LispNames.CHAR_UPCASE -> WasmCharCompiler.compileUpcase(cons, ctx);
@@ -1696,12 +1706,10 @@ final class WasmExprCompiler {
 			case LispNames.CHAR_EQ -> WasmCharCompiler.compileEq(cons, ctx);
 			case LispNames.CHAR_LT -> WasmCharCompiler.compileLt(cons, ctx);
 			case LispNames.CHAR_LE -> WasmCharCompiler.compileLe(cons, ctx);
-			case LispNames.CHAR_GT ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LT), ctx);
-			case LispNames.CHAR_GE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandCharDescending(cons, LispNames.CHAR_LE), ctx);
-			case LispNames.CHAR_NE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCharNe(cons), ctx);
-			case LispNames.CHAR_EQUAL -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCharEqual(cons), ctx);
+			case LispNames.CHAR_GT -> WasmCharCompiler.compileGt(cons, ctx);
+			case LispNames.CHAR_GE -> WasmCharCompiler.compileGe(cons, ctx);
+			case LispNames.CHAR_NE -> WasmCharCompiler.compileNe(cons, ctx);
+			case LispNames.CHAR_EQUAL -> WasmCharCompiler.compileEqual(cons, ctx);
 			case LispNames.PARSE_INTEGER ->
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx);
 			case LispNames.VALUES_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx);
@@ -1830,9 +1838,15 @@ final class WasmExprCompiler {
 						ctx.hasLandingPad && ctx.instanceTypeIndex >= 0), ctx);
 			}
 			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL ->
-				WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons), ctx);
+				WasmExprCompiler
+					.compileExpr(
+							am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons,
+									BuiltinFunctionWrappers
+										.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons))),
+							ctx);
 			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL ->
 				WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerArityMissingMessage(cons), ctx);
+			case LispNames.SUPPLIED_P_INTERNAL -> WasmPhysicalArgs.compileSuppliedP(cons, ctx);
 			case LispNames.HANDLER_BIND ->
 				WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
 			case LispNames.IGNORE_ERRORS ->
@@ -1889,6 +1903,7 @@ final class WasmExprCompiler {
 			case LispNames.CDR -> WasmCdrCompiler.compile(cons, ctx);
 			case LispNames.CONS -> WasmConsCompiler.compile(cons, ctx);
 			case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
+			case LispNames.ELT_CELL -> WasmEltCellCompiler.compile(cons, ctx);
 			case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 			case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
 			case LispNames.SETF -> {
@@ -2033,10 +2048,10 @@ final class WasmExprCompiler {
 			case LispNames.HASH_TABLE_COUNT -> WasmHashTableCompiler.compileCount(cons, ctx);
 			case LispNames.HASH_TABLE_TEST -> WasmHashTableCompiler.compileTest(cons, ctx);
 			case LispNames.HASH_TABLE_SIZE -> WasmHashTableCompiler.compileCount(cons, ctx);
-			case LispNames.HASH_TABLE_REHASH_SIZE ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);
-			case LispNames.HASH_TABLE_REHASH_THRESHOLD ->
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx);
+			case LispNames.HASH_TABLE_REHASH_SIZE -> WasmHashTableCompiler
+				.compileTableThenConstant(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.5), ctx);
+			case LispNames.HASH_TABLE_REHASH_THRESHOLD -> WasmHashTableCompiler
+				.compileTableThenConstant(LispMacroExpander.expandHashTableGrowthConstant(cons, 1.0), ctx);
 			case LispNames.HASH_TABLE_P -> WasmHashTableCompiler.compileP(cons, ctx);
 			case LispNames.MAPHASH -> WasmHashTableCompiler.compileMaphash(cons, ctx);
 			case LispNames.MAKE_ARRAY -> WasmArrayCompiler.compileMake(cons, ctx);
@@ -2470,6 +2485,8 @@ final class WasmExprCompiler {
 			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);
 			case LispNames.CHECK_STRING_INTERNAL -> WasmCharCompiler.compileCheckString(cons, ctx);
 			case LispNames.CHECK_INDEX_INTERNAL -> WasmCharCompiler.compileCheckIndex(cons, ctx);
+			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> WasmCharCompiler.compileOperandTypeError(cons, ctx);
+			case LispNames.CHECK_SEQUENCE_INTERNAL -> WasmCharCompiler.compileCheckSequence(cons, ctx);
 			case LispNames.CHECK_CHARACTER_INTERNAL -> WasmCharCompiler.compileCheckCharacter(cons, ctx);
 			case LispNames.ELT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx);
 			case LispNames.RASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx);
@@ -2606,7 +2623,7 @@ final class WasmExprCompiler {
 	 */
 	private static void warnClRedefinition(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (ctx.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 	}
 
@@ -2699,6 +2716,45 @@ final class WasmExprCompiler {
 		return LispMacroExpander.directedOpen(
 				registered != null ? registered : LispMacroExpander.fileStreamValue(checked),
 				OpenModes.direction(OpenModes.staticMode(OpenModes.normalizeKeywordForm(cons).toList())));
+	}
+
+	/**
+	 * {@code close} and its component alias {@code %close-raw}. Closing a SYNONYM stream
+	 * closes the synonym, not what it forwards to -- which is nothing to do; an OPEN
+	 * stream resolves to its handle, after the registries forget it
+	 * (.kb/read-load-streams.md, "Element types wider and narrower than one octet"). The
+	 * guard is emitted only when the program can build one of the two; %close is the
+	 * raw-handle close it falls through to. A stream VALUE is marked closed first, and a
+	 * second close of it touches nothing (LispMacroExpander.markingClose): the WASI
+	 * descriptor may already belong to a newer stream.
+	 */
+	private static void compileClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)) {
+			WasmCloseCompiler.compile(cons, ctx);
+			return;
+		}
+		java.util.function.Function<LispCons, LispVal> close = c -> {
+			LispVal forgetting = forgettingClose(c, ctx);
+			return forgetting != null ? forgetting : LispMacroExpander.expandCloseOverStream(c, ctx.usesSynonymStreams,
+					ctx.functions.containsKey(LispNames.STREAM_TARGET));
+		};
+		WasmExprCompiler
+			.compileExpr(ctx.usesStreamValues
+					? LispMacroExpander.markingClose(cons,
+							am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE, close)
+					: close.apply(cons), ctx);
+	}
+
+	/**
+	 * {@code open-stream-p} and its component alias {@code %open-stream-p-raw}: off the
+	 * stream value's closed mark once the program can build one
+	 * (LispMacroExpander.expandOpenStreamPOnValue), the lite non-nil answer otherwise --
+	 * no stream value, so nothing can have been closed.
+	 */
+	private static void compileOpenStreamP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler
+			.compileExpr(ctx.usesStreamValues ? LispMacroExpander.expandOpenStreamPOnValue(cons, ctx.usesSynonymStreams)
+					: LispMacroExpander.expandOpenStreamPLite(cons), ctx);
 	}
 
 	/**

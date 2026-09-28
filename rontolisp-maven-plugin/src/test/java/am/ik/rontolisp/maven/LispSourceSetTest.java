@@ -99,6 +99,29 @@ class LispSourceSetTest {
 	}
 
 	@Test
+	void warningsAsErrorsFailsTheFileThatWarnsAndWritesNoClass() throws Exception {
+		Path source = this.project.resolve("src/main/lisp/com/example/Warned.lisp");
+		Files.createDirectories(source.getParent());
+		Files.writeString(source, """
+				(defun add (a b) (+ a b))
+				(defun warned (x) (add x))
+				(rontolisp:jvm-export 'warned :params '(:float) :returns :float)
+				""");
+		Path classes = this.project.resolve("target/classes");
+
+		assertThatThrownBy(() -> compile(classes, compiler -> compiler.warningsAsErrors(true)))
+			.isInstanceOf(LispCompilationException.class)
+			.hasMessageContaining("Warned.lisp")
+			.hasMessageContaining("1 warning about the program's source, treated as errors");
+		assertThat(classes.resolve("com/example/Warned.class")).doesNotExist();
+
+		// Off (the default), the same file compiles: the call is a run-time
+		// program-error.
+		assertThat(compile(classes, compiler -> {
+		}).classes()).containsExactly("com.example.Warned");
+	}
+
+	@Test
 	void aSourcePathThatIsNotAJavaIdentifierIsRefusedByNameOnceItExports() throws Exception {
 		Path source = this.project.resolve("src/main/lisp/my-kernels/Vec.lisp");
 		Files.createDirectories(source.getParent());

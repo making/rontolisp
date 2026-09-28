@@ -259,18 +259,20 @@ final class WasmHandlerCaseCompiler {
 	/**
 	 * Compiles the internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
 	 * expansion wraps its body in (EH mode is implied: restart mode forces it). A
-	 * {@code $lisp-cond} throw escaping the body lands here; the pad synthesizes the
-	 * {@code simple-error} of a plain {@code %error} payload, runs the
-	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless a walk
-	 * already completed for the identical instance (the {@code %handlers-ran%} mark set
-	 * by the restart-mode signal hook), and rethrows {@code (instance . message)} so an
-	 * outer catcher dispatches on the same instance the handlers saw. Unlike
-	 * {@code handler-case} it never touches the handler depth ({@code signal} semantics
-	 * unchanged), has no cleanup (no unwind scope, no return trampoline), and does not
-	 * catch the block-exit tag -- a cross-lambda exit passes through the
-	 * {@code try_table} untouched. Raw wasm TRAPS (a failed cast, integer division by
-	 * zero) do not ride the tag and stay uncatchable: the documented three-point-
-	 * spectrum divergence.
+	 * {@code $lisp-cond} throw escaping the body lands here. A payload saying the
+	 * handlers already ran ({@code (instance . (nil . message))}: the restart-mode signal
+	 * hook's terminal, or a pad nearer the signal --
+	 * {@link WasmErrorCompiler#emitThrowPayload(WasmLispCompiler.Ctx, boolean, Runnable)})
+	 * is rethrown as it came. Otherwise the pad synthesizes the {@code simple-error} of a
+	 * plain {@code %error} payload, runs the {@code handler-bind} cluster stack through
+	 * {@code %run-handlers}, and rethrows {@code (instance . (nil . message))}, so an
+	 * outer catcher dispatches on the same instance the handlers saw and no pad further
+	 * out runs them again. Unlike {@code handler-case} it never touches the handler depth
+	 * ({@code signal} semantics unchanged), has no cleanup (no unwind scope, no return
+	 * trampoline), and does not catch the block-exit tag -- a cross-lambda exit passes
+	 * through the {@code try_table} untouched. Raw wasm TRAPS (a failed cast, integer
+	 * division by zero) do not ride the tag and stay uncatchable: the documented
+	 * three-point-spectrum divergence.
 	 */
 	static void compileGuard(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
@@ -313,12 +315,24 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $h
-		// Landing pad: stash the payload, pop the kept locals back, split the payload,
+		// Landing pad: stash the payload, pop the kept locals back, pass on a payload
+		// saying the handlers ran -- its cdr is a cons -- as it came, split any other,
 		// synthesize when the instance is nil.
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		WasmLandingPad.refresh(ctx, kept);
 		WasmUncaughtLocations.notePad(ctx, payloadSlot);
+		emitPayloadHalf(payloadSlot, 1, ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.THROW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -336,8 +350,8 @@ final class WasmHandlerCaseCompiler {
 		emitSynthesizeSimpleError(payloadSlot, condSlot, ctx);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
-		// Run the cluster stack unless already run, as an ordinary Lisp form over the
-		// condition pseudo-local.
+		// Run the cluster stack, as an ordinary Lisp form over the condition
+		// pseudo-local.
 		String condVarName = "__hc_cond$" + condSlot;
 		ctx.locals.put(condVarName, condSlot);
 		try {
@@ -347,8 +361,10 @@ final class WasmHandlerCaseCompiler {
 			ctx.locals.remove(condVarName);
 		}
 		ctx.writer.write(Instruction.DROP);
-		// Rethrow (instance . message): the instance slot is filled (a synthesized one
-		// included) so an outer catcher sees the instance the handlers saw.
+		// Rethrow (instance . (nil . message)): the instance slot is filled (a
+		// synthesized one
+		// included) so an outer catcher sees the instance the handlers saw, and the
+		// cdr says they ran.
 		if (ctx.uncaughtLocations != null) {
 			// --report-locations keys what the frames noted by the payload's identity
 			// (WasmUncaughtLocations), so the payload itself carries the instance on:
@@ -364,20 +380,24 @@ final class WasmHandlerCaseCompiler {
 			ctx.writer.writeUnsignedLeb128(0);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(payloadSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			emitPayloadHalf(payloadSlot, 1, ctx);
+			WasmEmitHelper.emitNewCons(ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(payloadSlot);
 			ctx.writer.write(Instruction.THROW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		}
 		else {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(condSlot);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(payloadSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeUnsignedLeb128(1);
-			WasmErrorCompiler.emitThrowPayload(ctx);
+			WasmErrorCompiler.emitThrowPayload(ctx, true, () -> emitPayloadHalf(payloadSlot, 1, ctx));
 		}
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $done
@@ -526,10 +546,25 @@ final class WasmHandlerCaseCompiler {
 	}
 
 	/**
+	 * Emits {@code (car payload)} (field 0) or {@code (cdr payload)} (field 1) of the
+	 * payload in {@code payloadSlot} onto the stack.
+	 */
+	private static void emitPayloadHalf(int payloadSlot, int field, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
+	}
+
+	/**
 	 * Synthesizes the {@code simple-error} instance of a condition-less throw:
 	 * {@code (%obj-new '%class-SIMPLE-ERROR message nil)} over the payload's message (the
 	 * cdr, already a quote-framed runtime string -- or nil), stored into
-	 * {@code condSlot}.
+	 * {@code condSlot}. A condition-less payload never says the handlers ran: only a
+	 * payload with an instance does.
 	 */
 	private static void emitSynthesizeSimpleError(int payloadSlot, int condSlot, WasmLispCompiler.Ctx ctx) {
 		int msgSlot = ctx.allocTemp();

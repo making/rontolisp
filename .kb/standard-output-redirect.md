@@ -40,9 +40,9 @@ through `WasmEmitHelper.streamFdOrStdin`.
 - `listen` has no WASM implementation outside a string-stream record and a
   `--component` socket stream, so the input redirect covers it on interpreter + JVM only.
   `WasmSocketsRewrite` redirects `open-stream-p` and `listen` onto `%IO-OPEN-STREAM-P` /
-  `%IO-LISTEN` whenever it runs, so `stdin-dispatch.lisp` must define both; `%IO-LISTEN`
-  there falls through to the native `listen` under its `%LISTEN-RAW` alias (the
-  `%...-raw` family, so the rewrite cannot recurse), whose record probe answers a string input
+  `%IO-LISTEN` whenever it runs, so `stdin-dispatch.lisp` must define both; they fall
+  through to the native built-ins under `%OPEN-STREAM-P-RAW` / `%LISTEN-RAW` (the
+  `%...-raw` family, so the rewrite cannot recurse); `listen`'s record probe answers a string input
   stream and whose stub traps anything else (measured 2026-09-24: the earlier
   always-nil body made `(listen <string-input-stream>)` answer nil on `--component`
   while the other three backends answered t — ci-spec `listen-at-the-end-of-a-string-stream-and-echo-peek`).

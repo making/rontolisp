@@ -55,7 +55,9 @@ final class WasmAwaitAnalysis {
 					return 0;
 				}
 				case LispNames.AWAIT_QUALIFIED -> {
-					n = 1;
+					// An await with a wrong count is no suspend point: it compiles to the
+					// interpreter's program-error (compiler/BuiltinCallArity).
+					n = parts.size() == 2 ? 1 : 0;
 					for (int i = 1; i < parts.size(); i++) {
 						n += count(parts.get(i), memo);
 					}
