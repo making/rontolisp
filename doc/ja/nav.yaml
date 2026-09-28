@@ -54,6 +54,8 @@ sections:
             title: ffi パッケージの関数
           - file: reference/functions/objc.md
             title: objc パッケージの関数
+          - file: reference/functions/cocoa.md
+            title: cocoa パッケージの関数
           - file: reference/functions/appkit.md
             title: appkit パッケージの関数
           - file: reference/functions/checkpoint.md

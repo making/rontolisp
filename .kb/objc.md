@@ -73,7 +73,8 @@ layer: `objc::%get-class`, `%class-name`, `%object-class`, `%class-p`, `%registe
   (`q`/`d`/`@`), which is ABI-equivalent on both macOS ABIs and keeps the shape inside the native
   binary's variadic grid. The string form of a selector in `objc::*variadic-selectors*` (the same
   names `VariadicSelectors` holds for the old base) types its extra arguments by value and appends
-  the nil terminator. An integer argument past 2^63 travels as its two's complement
+  the nil terminator; a list-form variadic call gets the same trailing nil, which keeps its shape in
+  the native binary's grid (every entry there ends in `void*`). An integer argument past 2^63 travels as its two's complement
   (`objc::%bits64`: a wasm `:s64` import traps on a bignum); an unsigned 64-bit result or struct
   leaf comes back fixed up from the parsed type.
 - **Two expansion traps the built-in macro `objc:with-autorelease-pool` hit** (it expands to

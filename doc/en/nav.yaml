@@ -54,6 +54,8 @@ sections:
             title: ffi Package Functions
           - file: reference/functions/objc.md
             title: objc Package Functions
+          - file: reference/functions/cocoa.md
+            title: cocoa Package Functions
           - file: reference/functions/appkit.md
             title: appkit Package Functions
           - file: reference/functions/checkpoint.md

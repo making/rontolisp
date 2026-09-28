@@ -770,6 +770,13 @@
              (unless (= (length args) declared)
                (error "objc:invoke: ~a takes ~a argument(s), got ~a" name
                       declared (length args)))
+             ;; A list-form variadic call gets the same trailing nil: no callee reads
+             ;; past its own format or terminator, and a variadic list that ends in an
+             ;; address is a shape the native binary registers.
+             (when (and listed (>= fixed 0))
+               (setq types (concatenate 'string types "@"))
+               (setq params (append params (list :object)))
+               (setq args (append args (list nil))))
              (when (and objc::*tracing* (gethash name objc::*traced*))
                (objc::%trace target name args))
              (let* ((temps (list nil))
