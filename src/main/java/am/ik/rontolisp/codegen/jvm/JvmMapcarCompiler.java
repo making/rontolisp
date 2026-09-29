@@ -3,10 +3,10 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code mapcar} built-in function. Generates an inline loop that applies a
@@ -42,38 +42,27 @@ final class JvmMapcarCompiler {
 		for (int i = 0; i < nLists; i++) {
 			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
 			int listSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(listSlot);
+			ctx.body.astore(listSlot);
 			listSlots.add(listSlot);
 		}
 
 		// Create sentinel cons: new Object[2] {null, null}
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
+		ctx.body.iconst_2().anewarray(ctx.objectClass.entry());
 		int headSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(headSlot);
+		ctx.body.astore(headSlot);
 
 		// tail = head (initially points to sentinel)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(headSlot);
+		ctx.body.aload(headSlot);
 		int tailSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tailSlot);
+		ctx.body.astore(tailSlot);
 
 		// loop:
-		int loopPos = ctx.code.size();
+		MethodCode.Label loopPos = ctx.body.newBoundLabel();
 		// if any list is no cons, goto exit (stop at the shortest list)
-		List<Integer> exitBranches = new ArrayList<>();
+		MethodCode.Label exit = ctx.body.newLabel();
 		for (int listSlot : listSlots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).index());
-			exitBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ctx.body.aload(listSlot).invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).entry());
+			ctx.body.ifeq(exit);
 		}
 
 		// Call the function with the car of each list
@@ -85,84 +74,43 @@ final class JvmMapcarCompiler {
 
 		// Create new cons: new Object[2] {mapped, null}
 		int mappedSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(mappedSlot);
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(mappedSlot);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.astore(mappedSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.aload(mappedSlot).aastore();
 
 		int newConsSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(newConsSlot);
+		ctx.body.astore(newConsSlot);
 
 		// tail[1] = newCons (rplacd tail)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tailSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(newConsSlot);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aload(tailSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aload(newConsSlot).aastore();
 
 		// tail = newCons
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(newConsSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tailSlot);
+		ctx.body.aload(newConsSlot).astore(tailSlot);
 
 		// advance each list: list = cdr(list) = ((Object[]) list)[1]
 		for (int listSlot : listSlots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(listSlot);
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.astore(listSlot);
 		}
 
 		// goto loop
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		int offset = loopPos - gotoPos;
-		ctx.emitU2(offset & 0xFFFF);
+		ctx.body.goto_(loopPos);
 
 		// exit: load head[1] (cdr of sentinel = first real cons or null)
-		int exitPos = ctx.code.size();
-		for (int branchPos : exitBranches) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, exitPos);
-		}
+		ctx.body.labelBinding(exit);
 		// Every cursor must be a list: nil ends one, any other atom -- an argument that
 		// was no list, a dotted list's tail -- is the operator's type-error.
 		for (int listSlot : listSlots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
+			ctx.body.aload(listSlot);
 			JvmEmitHelper.emitListCheck(ctx);
-			ctx.emit(Opcode.POP);
+			ctx.body.pop();
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(headSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(headSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
 	}
 
 	// car(list) = ((Object[]) list)[0]
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 	}
 
 }

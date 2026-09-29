@@ -1,11 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.compiler.OperandTypes;
@@ -94,7 +96,7 @@ final class JvmHandlerCaseCompiler {
 		JvmLispCompiler.UnwindScope scope = new JvmLispCompiler.UnwindScope(List.of(depthDecForm),
 				ctx.blockTargets.size());
 		ctx.unwindScopes.push(scope);
-		int start = ctx.code.size();
+		int start = ctx.body.size();
 		// In restart mode -- and under the signal-point clause match -- the clause
 		// types also go on the DYNAMIC handler stack for the protected extent, so
 		// %run-handlers stops at this handler-case instead of running an enclosing
@@ -116,26 +118,23 @@ final class JvmHandlerCaseCompiler {
 			protectedForm = LispMacroExpander.settleMvTail(protectedForm);
 		}
 		JvmExprCompiler.compileExpr(protectedForm, ctx, className);
-		int end = ctx.code.size();
+		int end = ctx.body.size();
 		ctx.unwindScopes.pop();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(resultSlot);
+		ctx.body.astore(resultSlot);
 		// Normal completion: depth--, then the :no-error clause (outside the protected
 		// region -- an error signaled by it is not caught by this handler-case).
 		emitDepthAdjust(ctx, className, false);
 		if (noErrorClause != null) {
 			compileNoErrorClauseBody(noErrorClause, resultSlot, resultSlot, ctx, className);
 		}
-		int gotoDonePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.goto_(done);
 		// Handler: depth--, take the condition the caught throwable carries, synthesize a
 		// simple-error from the message when it carries none, dispatch through the
 		// clauses.
-		int handler = ctx.code.size();
+		int handler = ctx.body.size();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(excSlot);
+		ctx.body.astore(excSlot);
 		emitDepthAdjust(ctx, className, false);
 		// A cross-lambda non-local exit unwinding through this region rides a plain
 		// RuntimeException that this catch-any handler would otherwise swallow as a
@@ -154,34 +153,23 @@ final class JvmHandlerCaseCompiler {
 			// have carried the record slot in their stack-map frames (+804 B of
 			// StackMapTable on the ci-spec pin's program before the synthesis, +40 B
 			// after it, 2026-09-27).
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(condSlot);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(recordSlot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(channel.condOf).index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(condSlot);
+			ctx.body.aload(condSlot).dup().astore(recordSlot);
+			ctx.body.invokestatic(Objects.requireNonNull(channel.condOf)).astore(condSlot);
 		}
 		// Dispatch: the condition rides a pseudo-local so the type tests and clause
 		// bodies compile as ordinary Lisp forms.
 		String condVarName = "__hc_cond$" + condSlot;
 		LispSymbol condVarSym = new LispSymbol(condVarName);
 		ctx.locals.put(condVarName, condSlot);
-		List<Integer> donePatches = new ArrayList<>();
 		try {
 			for (List<LispVal> clauseParts : errorClauses) {
 				LispVal test = LispMacroExpander.makeHandlerTypeTest(condVarSym, clauseParts.get(0), ctx.closRegistry);
 				JvmExprCompiler.compileExpr(test, ctx, className);
-				int ifNoMatchPos = ctx.code.size();
-				ctx.emit(Opcode.IFNULL);
-				ctx.emitU2(0);
+				MethodCode.Label ifNoMatchPos = ctx.body.newLabel();
+				ctx.body.ifnull(ifNoMatchPos);
 				compileClauseBody(clauseParts, condSlot, resultSlot, ctx, className);
-				donePatches.add(ctx.code.size());
-				ctx.emit(Opcode.GOTO);
-				ctx.emitU2(0);
-				JvmEmitHelper.patchBranch(ctx, ifNoMatchPos, ctx.code.size());
+				ctx.body.goto_(done);
+				ctx.body.labelBinding(ifNoMatchPos);
 			}
 		}
 		finally {
@@ -190,24 +178,14 @@ final class JvmHandlerCaseCompiler {
 		// No clause matched: record the condition under the throwable again (an outer
 		// handler-case must see the typed instance, not a re-synthesized
 		// simple-error) and rethrow it.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(recordSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
-		ctx.emit(Opcode.ATHROW);
-		int done = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
-		for (int patch : donePatches) {
-			JvmEmitHelper.patchBranch(ctx, patch, done);
-		}
+		ctx.body.aload(excSlot).aload(recordSlot);
+		ctx.body.invokestatic(Objects.requireNonNull(channel.condPut)).athrow();
+		ctx.body.labelBinding(done);
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.pop();
 			spill.restore(ctx);
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(resultSlot);
+		ctx.body.aload(resultSlot);
 		addExceptionEntries(ctx, scope, start, end, handler);
 		ctx.nextLocal = savedNextLocal;
 	}
@@ -239,32 +217,25 @@ final class JvmHandlerCaseCompiler {
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
 		}
-		int start = ctx.code.size();
+		MethodCode.Label start = ctx.body.newBoundLabel();
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		int end = ctx.code.size();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(resultSlot);
-		int gotoDonePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label end = ctx.body.newBoundLabel();
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.astore(resultSlot).goto_(done);
 		// The pad itself is the shared method: it takes the caught throwable and answers
 		// it, so the site is a call and a rethrow whatever the program's condition
 		// classes are.
-		int handler = ctx.code.size();
+		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(landingPad.index());
-		ctx.emit(Opcode.ATHROW);
-		int done = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
+		ctx.body.invokestatic(landingPad.entry()).athrow();
+		ctx.body.labelBinding(done);
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.pop();
 			spill.restore(ctx);
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(resultSlot);
-		if (start < end) {
-			ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
+		ctx.body.aload(resultSlot);
+		if (start.position() < end.position()) {
+			ctx.body.exceptionCatch(start, end, handler, null);
 		}
 		ctx.nextLocal = savedNextLocal;
 	}
@@ -334,21 +305,12 @@ final class JvmHandlerCaseCompiler {
 		emitTakeRecord(excSlot, recordSlot, condSlot, ctx);
 		// A record that is not its own condition is a _condRan record: the handlers ran
 		// (at the signal point, or at a pad nearer it). Put it back and pass it on.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(recordSlot);
-		int ifNotRanPos = ctx.code.size();
-		ctx.emit(Opcode.IF_ACMPEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(recordSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condPut).index());
-		ctx.emit(Opcode.ARETURN);
-		JvmEmitHelper.patchBranch(ctx, ifNotRanPos, ctx.code.size());
+		ctx.body.aload(condSlot).aload(recordSlot);
+		MethodCode.Label ifNotRanPos = ctx.body.newLabel();
+		ctx.body.if_acmpeq(ifNotRanPos);
+		ctx.body.aload(excSlot).aload(recordSlot);
+		ctx.body.invokestatic(Objects.requireNonNull(channel.condPut)).areturn();
+		ctx.body.labelBinding(ifNotRanPos);
 		emitSynthesizeUnlessRecorded(excSlot, condSlot, ctx, className);
 		// Run the cluster stack, as an ordinary Lisp form over the condition
 		// pseudo-local.
@@ -361,17 +323,12 @@ final class JvmHandlerCaseCompiler {
 		finally {
 			ctx.locals.remove(condVarName);
 		}
-		ctx.emit(Opcode.POP);
+		ctx.body.pop();
 		// Record the instance under the throwable again, saying the handlers ran (the
 		// outer catcher must see the instance the handlers saw, a synthesized one
 		// included), and hand the throwable back to be rethrown.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.condRan).index());
-		ctx.emit(Opcode.ARETURN);
+		ctx.body.aload(excSlot).aload(condSlot);
+		ctx.body.invokestatic(Objects.requireNonNull(channel.condRan)).areturn();
 	}
 
 	/**
@@ -380,12 +337,8 @@ final class JvmHandlerCaseCompiler {
 	 * carries none, the instance {@link #emitSynthesizeCondition} makes of it.
 	 */
 	private static void emitTakeCondition(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condTake).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
+		ctx.body.aload(excSlot).invokestatic(Objects.requireNonNull(ctx.conditionChannel.condTake));
+		ctx.body.astore(condSlot);
 		emitSynthesizeUnlessRecorded(excSlot, condSlot, ctx, className);
 	}
 
@@ -396,17 +349,10 @@ final class JvmHandlerCaseCompiler {
 	 * null when there is none -- into {@code condSlot}.
 	 */
 	private static void emitTakeRecord(int excSlot, int recordSlot, int condSlot, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condTake).index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(recordSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ctx.conditionChannel.condOf).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
+		ctx.body.aload(excSlot);
+		ctx.body.invokestatic(Objects.requireNonNull(ctx.conditionChannel.condTake)).dup();
+		ctx.body.astore(recordSlot);
+		ctx.body.invokestatic(Objects.requireNonNull(ctx.conditionChannel.condOf)).astore(condSlot);
 	}
 
 	/**
@@ -417,18 +363,11 @@ final class JvmHandlerCaseCompiler {
 	private static void emitSynthesizeUnlessRecorded(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
 			String className) {
 		ConstantPool.MethodrefConstant synthesizer = conditionSynthesizer(ctx, className);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(condSlot);
-		int ifHaveCondPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(synthesizer.index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
-		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
+		ctx.body.aload(condSlot);
+		MethodCode.Label ifHaveCondPos = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifHaveCondPos);
+		ctx.body.aload(excSlot).invokestatic(synthesizer.entry()).astore(condSlot);
+		ctx.body.labelBinding(ifHaveCondPos);
 	}
 
 	/**
@@ -466,9 +405,7 @@ final class JvmHandlerCaseCompiler {
 		synth.maxLocals = 1;
 		int condSlot = synth.allocTemp();
 		emitSynthesizeCondition(0, condSlot, synth, className);
-		synth.emit(Opcode.ALOAD);
-		synth.emit(condSlot);
-		synth.emit(Opcode.ARETURN);
+		synth.body.aload(condSlot).areturn();
 		ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, synth));
 		return ref;
 	}
@@ -485,34 +422,14 @@ final class JvmHandlerCaseCompiler {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
 		int nleSlot = ctx.allocTemp();
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(nleSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nleSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nleSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		int ifNotSamePos = ctx.code.size();
-		ctx.emit(Opcode.IF_ACMPNE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.ATHROW);
-		int proceed = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, proceed);
-		JvmEmitHelper.patchBranch(ctx, ifNotSamePos, proceed);
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).astore(nleSlot);
+		MethodCode.Label proceed = ctx.body.newLabel();
+		ctx.body.aload(nleSlot).ifnull(proceed);
+		ctx.body.aload(nleSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(excSlot).if_acmpne(proceed);
+		ctx.body.aload(excSlot).athrow();
+		ctx.body.labelBinding(proceed);
 	}
 
 	/**
@@ -544,18 +461,17 @@ final class JvmHandlerCaseCompiler {
 		}
 		try {
 			if (clauseParts.size() <= 2) {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 			else {
 				for (int i = 2; i < clauseParts.size(); i++) {
 					if (i > 2) {
-						ctx.emit(Opcode.POP);
+						ctx.body.pop();
 					}
 					JvmExprCompiler.compileExpr(clauseParts.get(i), ctx, className);
 				}
 			}
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(resultSlot);
+			ctx.body.astore(resultSlot);
 		}
 		finally {
 			if (varName != null) {
@@ -607,14 +523,11 @@ final class JvmHandlerCaseCompiler {
 		JvmMvChannel spill = ctx.mvChannel;
 		if (spill != null) {
 			spill.emitLoad(ctx);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(spillSlot);
+			ctx.body.astore(spillSlot);
 			spill.emitClear(ctx);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(spillSlot);
+			ctx.body.aconst_null().astore(spillSlot);
 		}
 		String spillVarName = "__hc_ne_spill$" + spillSlot;
 		// Save any shadowed bindings (one per clause variable) and a fresh boxed-vars
@@ -646,8 +559,7 @@ final class JvmHandlerCaseCompiler {
 							new LispCons(new LispInteger(i - 1), new LispCons(
 									LispMacroExpander.spillAsList(new LispSymbol(spillVarName)), LispNil.INSTANCE)));
 					JvmExprCompiler.compileExpr(nthCall, ctx, className);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(slot);
+					ctx.body.astore(slot);
 				}
 				// Same shadowing discipline as the error-clause path: an outer unboxed /
 				// raw-double / boxed binding of the same name must not answer reads
@@ -666,18 +578,17 @@ final class JvmHandlerCaseCompiler {
 				}
 			}
 			if (clauseParts.size() <= 2) {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 			else {
 				for (int i = 2; i < clauseParts.size(); i++) {
 					if (i > 2) {
-						ctx.emit(Opcode.POP);
+						ctx.body.pop();
 					}
 					JvmExprCompiler.compileExpr(clauseParts.get(i), ctx, className);
 				}
 			}
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(resultSlot);
+			ctx.body.astore(resultSlot);
 		}
 		finally {
 			ctx.locals.remove(spillVarName);
@@ -717,41 +628,28 @@ final class JvmHandlerCaseCompiler {
 		ConstantPool.ClassConstant throwableClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Throwable"));
 		ConstantPool.MethodrefConstant getMessage = ctx.cp.addMethodref(throwableClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("getMessage"), ctx.cp.addUtf8("()Ljava/lang/String;")));
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+			.methodRefEntry();
 		int rawSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(getMessage.index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(rawSlot);
+		ctx.body.aload(excSlot).invokevirtual(getMessage.methodRefEntry()).astore(rawSlot);
 		emitHostTextOverride(excSlot, rawSlot, "java/lang/ClassCastException", ClosRegistry.TYPE_ERROR_MESSAGE, ctx);
 		emitHostTextOverride(excSlot, rawSlot, "java/lang/IndexOutOfBoundsException",
 				ClosRegistry.INDEX_OUT_OF_BOUNDS_MESSAGE, ctx);
 		int msgSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rawSlot);
-		ctx.emit(Opcode.DUP);
-		int ifNullMsgPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		ctx.body.aload(rawSlot).dup();
+		MethodCode.Label ifNullMsgPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullMsgPos);
 		// "\"" + msg + "\"" -- the quote-framed runtime string representation.
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.swap().invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
-		int gotoHavePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullMsgPos, ctx.code.size());
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoHavePos, ctx.code.size());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(msgSlot);
+		ctx.body.invokevirtual(concat);
+		MethodCode.Label gotoHavePos = ctx.body.newLabel();
+		ctx.body.goto_(gotoHavePos);
+		ctx.body.labelBinding(ifNullMsgPos);
+		ctx.body.pop().aconst_null();
+		ctx.body.labelBinding(gotoHavePos);
+		ctx.body.astore(msgSlot);
 		String msgVarName = "__hc_msg$" + msgSlot;
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
@@ -770,11 +668,11 @@ final class JvmHandlerCaseCompiler {
 	 */
 	private static void emitHostTextOverride(int excSlot, int rawSlot, String type, String text,
 			JvmLispCompiler.Ctx ctx) {
-		int skip = emitInstanceOfJump(excSlot, type, ctx, false);
+		MethodCode.Label skip = ctx.body.newLabel();
+		emitInstanceOfJump(excSlot, type, ctx, false, skip);
 		JvmEmitHelper.compileStringLiteral(text, ctx);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(rawSlot);
-		JvmEmitHelper.patchBranch(ctx, skip, ctx.code.size());
+		ctx.body.astore(rawSlot);
+		ctx.body.labelBinding(skip);
 	}
 
 	/**
@@ -788,9 +686,10 @@ final class JvmHandlerCaseCompiler {
 	private static void emitClassifiedConstruction(int excSlot, int rawSlot, int condSlot, LispSymbol msgVar,
 			JvmLispCompiler.Ctx ctx, String className) {
 		List<String> classes = LispMacroExpander.rawFailureConditionClasses();
-		List<Integer> joins = new ArrayList<>();
+		MethodCode.Label joins = ctx.body.newLabel();
 		for (int i = 0; i < classes.size(); i++) {
-			List<Integer> skips = emitRawFailureTest(i, excSlot, rawSlot, ctx);
+			MethodCode.Label skip = ctx.body.newLabel();
+			emitRawFailureTest(i, excSlot, rawSlot, ctx, skip);
 			if (i == 0 && ctx.numOps.containsKey(JvmOperandTypeRuntime.TE_SLOT)) {
 				// The type-error arm: a wrong-type operand's datum and expected type come
 				// from its record, nil for any other type failure.
@@ -800,15 +699,10 @@ final class JvmHandlerCaseCompiler {
 				JvmExprCompiler.compileExpr(
 						LispMacroExpander.reportingConditionForm(ctx.closRegistry, classes.get(i), msgVar), ctx,
 						className);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(condSlot);
+				ctx.body.astore(condSlot);
 			}
-			joins.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			for (int skip : skips) {
-				JvmEmitHelper.patchBranch(ctx, skip, ctx.code.size());
-			}
+			ctx.body.goto_(joins);
+			ctx.body.labelBinding(skip);
 		}
 		LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
 				new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
@@ -816,11 +710,8 @@ final class JvmHandlerCaseCompiler {
 				new LispCons(quotedTag, new LispCons(LispMacroExpander.textControlForm(msgVar),
 						new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 		JvmExprCompiler.compileExpr(instance, ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
-		for (int join : joins) {
-			JvmEmitHelper.patchBranch(ctx, join, ctx.code.size());
-		}
+		ctx.body.astore(condSlot);
+		ctx.body.labelBinding(joins);
 	}
 
 	/**
@@ -833,13 +724,9 @@ final class JvmHandlerCaseCompiler {
 		int datumSlot = ctx.allocTemp();
 		int typeSlot = ctx.allocTemp();
 		for (int[] slot : new int[][] { { 1, datumSlot }, { 2, typeSlot } }) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(excSlot);
+			ctx.body.aload(excSlot);
 			JvmEmitHelper.emitIntConst(ctx, slot[0]);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot[1]);
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).entry()).astore(slot[1]);
 		}
 		String datumVar = "__hc_datum$" + datumSlot;
 		String typeVar = "__hc_etype$" + typeSlot;
@@ -855,19 +742,19 @@ final class JvmHandlerCaseCompiler {
 			ctx.locals.remove(datumVar);
 			ctx.locals.remove(typeVar);
 		}
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
+		ctx.body.astore(condSlot);
 	}
 
 	/**
-	 * Emits the test guarding raw-failure arm {@code index}, and answers the branch
-	 * positions to patch to the arm's END (i.e. the "does not apply" exits). The order
-	 * mirrors {@link LispMacroExpander#rawFailureConditionClasses()}: type-error,
+	 * Emits the test guarding raw-failure arm {@code index}, its "does not apply" exits
+	 * jumping to {@code skip}, which the caller binds at the arm's END. The order mirrors
+	 * {@link LispMacroExpander#rawFailureConditionClasses()}: type-error,
 	 * division-by-zero, arithmetic-error, unbound-variable, undefined-function,
 	 * program-error.
 	 */
-	private static List<Integer> emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx) {
-		return switch (index) {
+	private static void emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx,
+			MethodCode.Label skip) {
+		switch (index) {
 			case 0 -> {
 				// A cast failure, an out-of-range index, a wrong-type operand (its
 				// exception recorded by identity, JvmOperandTypeRuntime), or a
@@ -876,116 +763,94 @@ final class JvmHandlerCaseCompiler {
 				// costs the arithmetic arms nothing. The message test exists because that
 				// throw site is a plain RuntimeException with no channel to carry a class
 				// (the unbound-variable precedent).
-				List<Integer> skips = new ArrayList<>();
-				List<Integer> hits = new ArrayList<>();
-				hits.add(emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true));
+				MethodCode.Label hits = ctx.body.newLabel();
+				emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true, hits);
 				if (ctx.numOps.containsKey(JvmOperandTypeRuntime.TE_SLOT)) {
 					// A wrong-type operand's exception is recorded under its identity
 					// (JvmOperandTypeRuntime), so no message is parsed here.
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(excSlot);
-					ctx.emit(Opcode.ICONST_0);
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).index());
-					hits.add(ctx.code.size());
-					ctx.emit(Opcode.IFNONNULL);
-					ctx.emitU2(0);
+					ctx.body.aload(excSlot).iconst_0();
+					ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).entry());
+					ctx.body.ifnonnull(hits);
 				}
 				else {
-					hits.add(emitMessagePrefixHit(rawSlot, OperandTypes.VALUE_PREFIX, ctx));
+					emitMessagePrefixHit(rawSlot, OperandTypes.VALUE_PREFIX, ctx, hits);
 				}
-				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX, ctx));
-				skips.add(emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false));
-				for (int hit : hits) {
-					JvmEmitHelper.patchBranch(ctx, hit, ctx.code.size());
-				}
-				yield skips;
+				emitMessagePrefixHit(rawSlot, ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX, ctx, hits);
+				emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false, skip);
+				ctx.body.labelBinding(hits);
 			}
 			case 1 -> {
-				List<Integer> skips = new ArrayList<>();
-				skips.add(emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false));
-				skips.add(emitMessageTest(rawSlot, "contains", ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN, ctx));
-				yield skips;
+				emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false, skip);
+				emitMessageTest(rawSlot, "contains", ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN, ctx, skip);
 			}
-			case 2 -> List.of(emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false));
-			case 3 -> List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX, ctx),
-					emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX, ctx));
-			case 4 ->
-				List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ctx),
-						emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx));
+			case 2 -> emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false, skip);
+			case 3 -> {
+				emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX, ctx, skip);
+				emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX, ctx, skip);
+			}
+			case 4 -> {
+				emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ctx, skip);
+				emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx, skip);
+			}
 			// A dispatcher's or a count guard's wrong-argument-count throw
 			// (JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS): recognized by its class, which
 			// no other throw site raises -- its text may name any operator, and a user
 			// error's may begin like it.
-			default -> List.of(emitInstanceOfJump(excSlot, JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS, ctx, false));
-		};
+			default -> emitInstanceOfJump(excSlot, JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS, ctx, false, skip);
+		}
 	}
 
 	/**
-	 * Emits {@code exc instanceof <type>} and a jump on the given outcome, answering the
-	 * branch position to patch.
+	 * Emits {@code exc instanceof <type>} and a jump to {@code target} on the given
+	 * outcome.
 	 */
-	private static int emitInstanceOfJump(int excSlot, String type, JvmLispCompiler.Ctx ctx, boolean jumpWhenTrue) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8(type)).index());
-		int pos = ctx.code.size();
-		ctx.emit(jumpWhenTrue ? Opcode.IFNE : Opcode.IFEQ);
-		ctx.emitU2(0);
-		return pos;
+	private static void emitInstanceOfJump(int excSlot, String type, JvmLispCompiler.Ctx ctx, boolean jumpWhenTrue,
+			MethodCode.Label target) {
+		ctx.body.aload(excSlot).instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(type)).entry());
+		if (jumpWhenTrue) {
+			ctx.body.ifne(target);
+		}
+		else {
+			ctx.body.ifeq(target);
+		}
 	}
 
 	/**
 	 * Emits a {@code startsWith} test over the RAW message and a jump taken when it HOLDS
 	 * (the OR-shaped twin of {@link #emitMessageTest}, whose jump is the does-not-hold
-	 * one) -- a null message falls through. Answers the branch position to patch to the
-	 * arm.
+	 * one), to {@code hit} -- a null message falls through.
 	 */
-	private static int emitMessagePrefixHit(int rawSlot, String prefix, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rawSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rawSlot);
+	private static void emitMessagePrefixHit(int rawSlot, String prefix, JvmLispCompiler.Ctx ctx,
+			MethodCode.Label hit) {
+		ctx.body.aload(rawSlot);
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.aload(rawSlot);
 		JvmEmitHelper.compileStringLiteral(prefix, ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z").index());
-		int pos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		return pos;
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z").methodRefEntry());
+		ctx.body.ifne(hit);
+		ctx.body.labelBinding(ifNullPos);
 	}
 
 	/**
 	 * Emits a {@code String} predicate over the RAW message ({@code startsWith} /
 	 * {@code endsWith} / {@code contains}) and a jump taken when it does NOT hold -- a
-	 * null message counts as not holding. Answers the branch position to patch.
+	 * null message counts as not holding. The jump goes to {@code fail}.
 	 */
-	private static int emitMessageTest(int rawSlot, String method, String argument, JvmLispCompiler.Ctx ctx) {
+	private static void emitMessageTest(int rawSlot, String method, String argument, JvmLispCompiler.Ctx ctx,
+			MethodCode.Label fail) {
 		String descriptor = "contains".equals(method) ? "(Ljava/lang/CharSequence;)Z" : "(Ljava/lang/String;)Z";
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rawSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rawSlot);
+		ctx.body.aload(rawSlot);
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.aload(rawSlot);
 		JvmEmitHelper.compileStringLiteral(argument, ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, method, descriptor).index());
-		int pos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		int fail = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		return fail;
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, method, descriptor).methodRefEntry());
+		MethodCode.Label pos = ctx.body.newLabel();
+		ctx.body.ifne(pos);
+		ctx.body.labelBinding(ifNullPos);
+		ctx.body.goto_(fail);
+		ctx.body.labelBinding(pos);
 	}
 
 	/**
@@ -996,15 +861,17 @@ final class JvmHandlerCaseCompiler {
 	static void emitDepthAdjust(JvmLispCompiler.Ctx ctx, String className, boolean up) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.depthTlField).index());
+		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField).entry());
 		emitReadDepth(ctx, className);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(up ? Opcode.IADD : Opcode.ISUB);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.integerValueOf.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		ctx.body.iconst_1();
+		if (up) {
+			ctx.body.iadd();
+		}
+		else {
+			ctx.body.isub();
+		}
+		ctx.body.invokestatic(ctx.integerValueOf.entry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
 	}
 
 	/**
@@ -1014,25 +881,16 @@ final class JvmHandlerCaseCompiler {
 	static void emitReadDepth(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.depthTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.DUP);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.integerClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.integerValue.index());
-		int gotoHavePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ICONST_0);
-		JvmEmitHelper.patchBranch(ctx, gotoHavePos, ctx.code.size());
+		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField).entry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).dup();
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.checkcast(ctx.integerClass.entry()).invokevirtual(ctx.integerValue.methodRefEntry());
+		MethodCode.Label gotoHavePos = ctx.body.newLabel();
+		ctx.body.goto_(gotoHavePos);
+		ctx.body.labelBinding(ifNullPos);
+		ctx.body.pop().iconst_0();
+		ctx.body.labelBinding(gotoHavePos);
 	}
 
 	/**
@@ -1041,7 +899,7 @@ final class JvmHandlerCaseCompiler {
 	 */
 	static void compileDepthDec(JvmLispCompiler.Ctx ctx, String className) {
 		emitDepthAdjust(ctx, className, false);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 	/**

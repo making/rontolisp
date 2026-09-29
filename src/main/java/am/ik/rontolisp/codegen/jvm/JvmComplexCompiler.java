@@ -5,7 +5,7 @@ import java.util.List;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
@@ -42,18 +42,13 @@ final class JvmComplexCompiler {
 
 	/**
 	 * Emits the holder-presence probe: falls through when a holder instance can exist,
-	 * and returns the branch position the caller patches to the arm's end otherwise --
-	 * then the holder-less shape that follows is exact, because no holder instance can
+	 * and jumps to {@code noHolder}, which the caller binds at the arm's end, otherwise
+	 * -- then the holder-less shape that follows is exact, because no holder instance can
 	 * exist without its class (.todo/757). Net zero on the operand stack (the flag is
 	 * pushed and popped above whatever is live).
 	 */
-	static int emitNoHolderJump(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(hasComplexField(ctx, className).index());
-		int pos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		return pos;
+	static void emitNoHolderJump(JvmLispCompiler.Ctx ctx, String className, MethodCode.Label noHolder) {
+		ctx.body.getstatic(hasComplexField(ctx, className).entry()).ifeq(noHolder);
 	}
 
 	/**
@@ -76,8 +71,7 @@ final class JvmComplexCompiler {
 	static void compileLiteral(LispComplex complex, JvmLispCompiler.Ctx ctx, String className) {
 		compileRealPart(complex.real(), ctx);
 		compileRealPart(complex.imag(), ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX).index());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX).entry());
 	}
 
 	private static void compileRealPart(LispVal part, JvmLispCompiler.Ctx ctx) {
@@ -107,11 +101,9 @@ final class JvmComplexCompiler {
 		// The constructor rejects a part that is no real: under the complex form it is
 		// named COMPLEX (a literal's parts are canonical and cannot fail).
 		String desc = JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.COMPLEX);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx
-			.wrapForOperator(JvmComplexRuntimeBuilder.COMPLEX, desc,
-					complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX))
-			.index());
+		ctx.body.invokestatic(ctx.wrapForOperator(JvmComplexRuntimeBuilder.COMPLEX, desc,
+				complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX))
+			.entry());
 	}
 
 	/** Compiles {@code (complexp x)}. */
@@ -124,25 +116,22 @@ final class JvmComplexCompiler {
 			// the travelling class stays out of the constant pool
 			// (`.kb/jvm-complex.md`).
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.POP);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.pop().aconst_null();
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// The presence probe first: a lone class run without the travelling file
 		// answers nil without resolving the holder class it then never touches
 		// (.todo/757) -- exact, since no holder can exist then.
-		int noHolderPos = emitNoHolderJump(ctx, className);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(complexClass(ctx).index());
+		MethodCode.Label notHolder = ctx.body.newLabel();
+		emitNoHolderJump(ctx, className, notHolder);
+		ctx.body.instanceOf(complexClass(ctx).entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
-		int donePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, noHolderPos, ctx.code.size());
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, donePos, ctx.code.size());
+		MethodCode.Label donePos = ctx.body.newLabel();
+		ctx.body.goto_(donePos);
+		ctx.body.labelBinding(notHolder);
+		ctx.body.pop().aconst_null();
+		ctx.body.labelBinding(donePos);
 	}
 
 	/** Compiles {@code (realp x)}: true for integers, ratios and floats. */
@@ -158,27 +147,10 @@ final class JvmComplexCompiler {
 	/** The four real representations as a boolean value. */
 	private static void compileIsReal(JvmLispCompiler.Ctx ctx) {
 		int temp = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.longClass.index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.bigIntegerClass(ctx).index());
-		ctx.emit(Opcode.IOR);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
-		ctx.emit(Opcode.IOR);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.doubleClass.index());
-		ctx.emit(Opcode.IOR);
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass.entry()).aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.bigIntegerClass(ctx).entry()).ior().aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry()).ior().aload(temp);
+		ctx.body.instanceOf(ctx.doubleClass.entry()).ior();
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -191,34 +163,21 @@ final class JvmComplexCompiler {
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int temp = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
+		ctx.body.astore(temp);
 		if (ctx.usesComplex) {
 			// The presence probe first: without the travelling file no holder
 			// can exist, so the real funnel below is the whole answer
 			// (.todo/757).
-			int noHolderPos = emitNoHolderJump(ctx, className);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(complexClass(ctx).index());
-			int ifRealPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(complexClass(ctx).index());
-			ctx.emit(Opcode.GETFIELD);
-			ctx.emitU2(realField(ctx).index());
-			int donePos = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			int realPos = ctx.code.size();
-			JvmEmitHelper.patchBranch(ctx, ifRealPos, realPos);
-			JvmEmitHelper.patchBranch(ctx, noHolderPos, realPos);
+			MethodCode.Label notHolder = ctx.body.newLabel();
+			emitNoHolderJump(ctx, className, notHolder);
+			ctx.body.aload(temp).instanceOf(complexClass(ctx).entry()).ifeq(notHolder);
+			ctx.body.aload(temp).checkcast(complexClass(ctx).entry());
+			ctx.body.getfield(realField(ctx).entry());
+			MethodCode.Label donePos = ctx.body.newLabel();
+			ctx.body.goto_(donePos);
+			ctx.body.labelBinding(notHolder);
 			emitRealCheck(ctx, temp);
-			JvmEmitHelper.patchBranch(ctx, donePos, ctx.code.size());
+			ctx.body.labelBinding(donePos);
 		}
 		else {
 			// No holder can exist here: the funnel validates and the value
@@ -236,12 +195,8 @@ final class JvmComplexCompiler {
 		// Not a holder: the _dbl funnel validates (signalling NUMBER operand-type report
 		// for a non-real, like the interpreter's requireReal) and the value
 		// itself is the answer.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DBL).index());
-		ctx.emit(Opcode.POP);
+		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
+		ctx.body.pop();
 	}
 
 	/**
@@ -253,34 +208,21 @@ final class JvmComplexCompiler {
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int temp = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
+		ctx.body.astore(temp);
 		if (ctx.usesComplex) {
 			// The presence probe first: without the travelling file no holder
 			// can exist, so the real zero below is the whole answer
 			// (.todo/757).
-			int noHolderPos = emitNoHolderJump(ctx, className);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(complexClass(ctx).index());
-			int ifRealPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(complexClass(ctx).index());
-			ctx.emit(Opcode.GETFIELD);
-			ctx.emitU2(imagField(ctx).index());
-			int donePos = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			int realPos = ctx.code.size();
-			JvmEmitHelper.patchBranch(ctx, ifRealPos, realPos);
-			JvmEmitHelper.patchBranch(ctx, noHolderPos, realPos);
+			MethodCode.Label notHolder = ctx.body.newLabel();
+			emitNoHolderJump(ctx, className, notHolder);
+			ctx.body.aload(temp).instanceOf(complexClass(ctx).entry()).ifeq(notHolder);
+			ctx.body.aload(temp).checkcast(complexClass(ctx).entry());
+			ctx.body.getfield(imagField(ctx).entry());
+			MethodCode.Label donePos = ctx.body.newLabel();
+			ctx.body.goto_(donePos);
+			ctx.body.labelBinding(notHolder);
 			emitZeroForReal(ctx, temp);
-			JvmEmitHelper.patchBranch(ctx, donePos, ctx.code.size());
+			ctx.body.labelBinding(donePos);
 		}
 		else {
 			// No holder can exist here: a float zero for a float, an integer
@@ -291,34 +233,23 @@ final class JvmComplexCompiler {
 
 	/** The imagpart answer for a real: (* 0 x) for a float, else int zero. */
 	private static void emitZeroForReal(JvmLispCompiler.Ctx ctx, int temp) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.doubleClass.index());
-		int ifNotDoublePos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.aload(temp).instanceOf(ctx.doubleClass.entry());
+		MethodCode.Label ifNotDoublePos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotDoublePos);
 		// CLHS: (imagpart x) of a real IS (* 0 x) -- multiply the unboxed value
 		// by 0.0 so a negative float answers -0.0. The value IS a Double here.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
+		ctx.body.aload(temp);
 		JvmEmitHelper.unboxDeclaredDouble(ctx);
 		JvmEmitHelper.emitRawDouble(0.0, ctx);
-		ctx.emit(Opcode.DMUL);
+		ctx.body.dmul();
 		JvmEmitHelper.boxDouble(ctx);
-		int done2Pos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotDoublePos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DBL).index());
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.POP);
+		MethodCode.Label done2Pos = ctx.body.newLabel();
+		ctx.body.goto_(done2Pos);
+		ctx.body.labelBinding(ifNotDoublePos);
+		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
+		ctx.body.pop().pop();
 		JvmEmitHelper.compileLong(0, ctx);
-		JvmEmitHelper.patchBranch(ctx, done2Pos, ctx.code.size());
+		ctx.body.labelBinding(done2Pos);
 	}
 
 	/** Compiles {@code (conjugate x)}. */
@@ -326,8 +257,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(complexOp(ctx, className, JvmComplexRuntimeBuilder.CONJUGATE).index());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CONJUGATE).entry());
 	}
 
 	/** Compiles {@code (phase x)}. */
@@ -335,8 +265,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(complexOp(ctx, className, JvmComplexRuntimeBuilder.CPHASE).index());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CPHASE).entry());
 	}
 
 	/**
@@ -347,8 +276,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(complexOp(ctx, className, JvmComplexRuntimeBuilder.SQRT).index());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.SQRT).entry());
 	}
 
 	private static void requireArity(LispCons cons, int arity) {

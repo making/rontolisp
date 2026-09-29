@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -9,9 +10,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -1201,7 +1202,7 @@ final class JvmTypedLoopCompiler {
 				return false;
 			}
 			int savedNextLocal = this.ctx.nextLocal;
-			List<Integer> bails = new ArrayList<>();
+			MethodCode.Label bails = this.ctx.body.newLabel();
 			// 1. read and guard every free variable
 			for (Var v : numbers) {
 				if (v.rawDouble) {
@@ -1213,8 +1214,7 @@ final class JvmTypedLoopCompiler {
 				}
 				v.refSlot = this.ctx.allocTemp();
 				JvmExprCompiler.compileSymbolRef(new LispSymbol(v.name), this.ctx);
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(v.refSlot);
+				this.ctx.body.astore(v.refSlot);
 				v.slot = allocWide();
 				if (v.type == T.LONG) {
 					guardLong(v, bails);
@@ -1229,8 +1229,7 @@ final class JvmTypedLoopCompiler {
 			for (Var v : arrays) {
 				v.refSlot = this.ctx.allocTemp();
 				JvmExprCompiler.compileSymbolRef(new LispSymbol(v.name), this.ctx);
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(v.refSlot);
+				this.ctx.body.astore(v.refSlot);
 				v.slot = this.ctx.allocTemp();
 				v.baseSlot = this.ctx.allocTemp();
 				v.dim0Slot = this.ctx.allocTemp();
@@ -1238,7 +1237,7 @@ final class JvmTypedLoopCompiler {
 					v.colsSlot = this.ctx.allocTemp();
 				}
 			}
-			List<Integer> joins = new ArrayList<>();
+			MethodCode.Label joins = this.ctx.body.newLabel();
 			int excSlot = anyAssigned ? this.ctx.allocTemp() : -1;
 			if (arrays.isEmpty()) {
 				this.single = false;
@@ -1247,44 +1246,29 @@ final class JvmTypedLoopCompiler {
 			else {
 				// 2. all arrays float[] -> the single variant; all double[] -> the
 				// double variant; anything else -> the boxed path
-				List<Integer> notSingle = new ArrayList<>();
+				MethodCode.Label notSingle = this.ctx.body.newLabel();
 				for (Var v : arrays) {
-					this.ctx.emit(Opcode.ALOAD);
-					this.ctx.emit(v.refSlot);
-					this.ctx.emit(Opcode.INSTANCEOF);
-					this.ctx.emitU2(this.floatArrayClass.index());
-					notSingle.add(branch(Opcode.IFEQ));
+					this.ctx.body.aload(v.refSlot).instanceOf(this.floatArrayClass.entry());
+					this.ctx.body.ifeq(notSingle);
 				}
 				this.single = true;
 				hoistArrays(arrays);
 				variant(numbers, joins, excSlot);
-				int tryDouble = this.ctx.code.size();
-				for (int pos : notSingle) {
-					JvmEmitHelper.patchBranch(this.ctx, pos, tryDouble);
-				}
+				this.ctx.body.labelBinding(notSingle);
 				for (Var v : arrays) {
-					this.ctx.emit(Opcode.ALOAD);
-					this.ctx.emit(v.refSlot);
-					this.ctx.emit(Opcode.INSTANCEOF);
-					this.ctx.emitU2(this.doubleArrayClass.index());
-					bails.add(branch(Opcode.IFEQ));
+					this.ctx.body.aload(v.refSlot).instanceOf(this.doubleArrayClass.entry());
+					this.ctx.body.ifeq(bails);
 				}
 				this.single = false;
 				hoistArrays(arrays);
 				variant(numbers, joins, excSlot);
 			}
 			// 3. the boxed path: exactly what the loop compiled to before
-			int bail = this.ctx.code.size();
-			for (int pos : bails) {
-				JvmEmitHelper.patchBranch(this.ctx, pos, bail);
-			}
+			this.ctx.body.labelBinding(bails);
 			this.ctx.nextLocal = savedNextLocal;
 			JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.expandDotimes(this.cons), this.ctx,
 					this.className);
-			int join = this.ctx.code.size();
-			for (int pos : joins) {
-				JvmEmitHelper.patchBranch(this.ctx, pos, join);
-			}
+			this.ctx.body.labelBinding(joins);
 			return true;
 		}
 
@@ -1294,82 +1278,36 @@ final class JvmTypedLoopCompiler {
 			return slot;
 		}
 
-		private int branch(int opcode) {
-			int pos = this.ctx.code.size();
-			this.ctx.emit(opcode);
-			this.ctx.emitU2(0);
-			return pos;
-		}
-
-		private void guardLong(Var v, List<Integer> bails) {
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.INSTANCEOF);
-			this.ctx.emitU2(this.ctx.longClass.index());
-			bails.add(branch(Opcode.IFEQ));
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.CHECKCAST);
-			this.ctx.emitU2(this.ctx.longClass.index());
-			this.ctx.emit(Opcode.INVOKEVIRTUAL);
-			this.ctx.emitU2(this.ctx.longValue.index());
-			this.ctx.emit(Opcode.LSTORE);
-			this.ctx.emit(v.slot);
+		private void guardLong(Var v, MethodCode.Label bails) {
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass.entry()).ifeq(bails);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass.entry());
+			this.ctx.body.invokevirtual(this.ctx.longValue.methodRefEntry()).lstore(v.slot);
 			// the magnitude bound the typing relies on: the value fits an int
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(v.slot);
-			this.ctx.emit(Opcode.L2I);
-			this.ctx.emit(Opcode.I2L);
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(v.slot);
-			this.ctx.emit(Opcode.LCMP);
-			bails.add(branch(Opcode.IFNE));
+			this.ctx.body.lload(v.slot).l2i().i2l().lload(v.slot).lcmp().ifne(bails);
 		}
 
-		private void guardDouble(Var v, List<Integer> bails) {
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.INSTANCEOF);
-			this.ctx.emitU2(this.ctx.doubleClass.index());
-			bails.add(branch(Opcode.IFEQ));
+		private void guardDouble(Var v, MethodCode.Label bails) {
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass.entry()).ifeq(bails);
 			unboxDoubleInto(v);
 		}
 
-		private void guardDoubleOrLong(Var v, List<Integer> bails) {
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.INSTANCEOF);
-			this.ctx.emitU2(this.ctx.doubleClass.index());
-			int notDouble = branch(Opcode.IFEQ);
+		private void guardDoubleOrLong(Var v, MethodCode.Label bails) {
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass.entry());
+			MethodCode.Label notDouble = this.ctx.body.newLabel();
+			MethodCode.Label done = this.ctx.body.newLabel();
+			this.ctx.body.ifeq(notDouble);
 			unboxDoubleInto(v);
-			int done = branch(Opcode.GOTO);
-			JvmEmitHelper.patchBranch(this.ctx, notDouble, this.ctx.code.size());
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.INSTANCEOF);
-			this.ctx.emitU2(this.ctx.longClass.index());
-			bails.add(branch(Opcode.IFEQ));
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.CHECKCAST);
-			this.ctx.emitU2(this.ctx.longClass.index());
-			this.ctx.emit(Opcode.INVOKEVIRTUAL);
-			this.ctx.emitU2(this.ctx.longValue.index());
-			this.ctx.emit(Opcode.L2D);
-			this.ctx.emit(Opcode.DSTORE);
-			this.ctx.emit(v.slot);
-			JvmEmitHelper.patchBranch(this.ctx, done, this.ctx.code.size());
+			this.ctx.body.goto_(done);
+			this.ctx.body.labelBinding(notDouble);
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass.entry()).ifeq(bails);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass.entry());
+			this.ctx.body.invokevirtual(this.ctx.longValue.methodRefEntry()).l2d().dstore(v.slot);
+			this.ctx.body.labelBinding(done);
 		}
 
 		private void unboxDoubleInto(Var v) {
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(v.refSlot);
-			this.ctx.emit(Opcode.CHECKCAST);
-			this.ctx.emitU2(this.ctx.doubleClass.index());
-			this.ctx.emit(Opcode.INVOKEVIRTUAL);
-			this.ctx.emitU2(this.ctx.numberDoubleValue.index());
-			this.ctx.emit(Opcode.DSTORE);
-			this.ctx.emit(v.slot);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.doubleClass.entry());
+			this.ctx.body.invokevirtual(this.ctx.numberDoubleValue.methodRefEntry()).dstore(v.slot);
 		}
 
 		/**
@@ -1385,42 +1323,26 @@ final class JvmTypedLoopCompiler {
 		private void hoistArrays(List<Var> arrays) {
 			ClassConstant cls = this.single ? this.floatArrayClass : this.doubleArrayClass;
 			for (Var v : arrays) {
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(v.refSlot);
+				this.ctx.body.aload(v.refSlot);
 				if (this.materialize != null) {
 					// The typed slot takes what the guard answers: the array, or a
 					// result stub's backing. The variable's own slot keeps the program's
 					// object, which is what the body's aset reports as written.
-					this.ctx.emit(Opcode.INVOKESTATIC);
-					this.ctx.emitU2(this.materialize.index());
+					this.ctx.body.invokestatic(this.materialize.entry());
 				}
-				this.ctx.emit(Opcode.CHECKCAST);
-				this.ctx.emitU2(cls.index());
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(v.slot);
+				this.ctx.body.checkcast(cls.entry()).astore(v.slot);
 				// base = 1 + rank, the data offset (_fvAref*'s `1 + rank`)
-				this.ctx.emit(Opcode.ICONST_1);
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(v.slot);
-				this.ctx.emit(Opcode.ICONST_0);
+				this.ctx.body.iconst_1().aload(v.slot).iconst_0();
 				loadHeaderInt();
-				this.ctx.emit(Opcode.IADD);
-				this.ctx.emit(Opcode.ISTORE);
-				this.ctx.emit(v.baseSlot);
+				this.ctx.body.iadd().istore(v.baseSlot);
 				// dimension 0 from the header, as _fvAref* bound subscript 0 by it
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(v.slot);
-				this.ctx.emit(Opcode.ICONST_1);
+				this.ctx.body.aload(v.slot).iconst_1();
 				loadHeaderInt();
-				this.ctx.emit(Opcode.ISTORE);
-				this.ctx.emit(v.dim0Slot);
+				this.ctx.body.istore(v.dim0Slot);
 				if (v.rank == 2) {
-					this.ctx.emit(Opcode.ALOAD);
-					this.ctx.emit(v.slot);
-					this.ctx.emit(Opcode.ICONST_2);
+					this.ctx.body.aload(v.slot).iconst_2();
 					loadHeaderInt();
-					this.ctx.emit(Opcode.ISTORE);
-					this.ctx.emit(v.colsSlot);
+					this.ctx.body.istore(v.colsSlot);
 				}
 			}
 			// After EVERY materialize, not interleaved with them: two of the loop's
@@ -1431,11 +1353,7 @@ final class JvmTypedLoopCompiler {
 			if (this.written != null) {
 				for (Var v : arrays) {
 					if (v.stored) {
-						this.ctx.emit(Opcode.ALOAD);
-						this.ctx.emit(v.refSlot);
-						this.ctx.emit(Opcode.INVOKESTATIC);
-						this.ctx.emitU2(this.written.index());
-						this.ctx.emit(Opcode.POP);
+						this.ctx.body.aload(v.refSlot).invokestatic(this.written.entry()).pop();
 					}
 				}
 			}
@@ -1443,12 +1361,10 @@ final class JvmTypedLoopCompiler {
 
 		private void loadHeaderInt() {
 			if (this.single) {
-				this.ctx.emit(Opcode.FALOAD);
-				this.ctx.emit(Opcode.F2I);
+				this.ctx.body.faload().f2i();
 			}
 			else {
-				this.ctx.emit(Opcode.DALOAD);
-				this.ctx.emit(Opcode.D2I);
+				this.ctx.body.daload().d2i();
 			}
 		}
 
@@ -1457,18 +1373,18 @@ final class JvmTypedLoopCompiler {
 		 * result value, and (when anything is written back) the handler that writes back
 		 * and rethrows.
 		 */
-		private void variant(List<Var> numbers, List<Integer> joins, int excSlot) {
+		private void variant(List<Var> numbers, MethodCode.Label joins, int excSlot) {
 			int savedNextLocal = this.ctx.nextLocal;
-			int start = this.ctx.code.size();
+			MethodCode.Label start = this.ctx.body.newBoundLabel();
 			loop(this.an.ctr(), this.an.count(), this.an.body());
-			int end = this.ctx.code.size();
+			MethodCode.Label end = this.ctx.body.newBoundLabel();
 			List<Var> assigned = numbers.stream().filter(v -> v.assigned && !v.rawDouble).toList();
 			writeBack(assigned);
 			// the value: nil, or the result form with the counter bound to its final
 			// value
 			LispVal resultForm = this.an.resultForm();
 			if (resultForm == null) {
-				this.ctx.emit(Opcode.ACONST_NULL);
+				this.ctx.body.aconst_null();
 			}
 			else {
 				Map<String, Integer> savedLocals = new HashMap<>(this.ctx.locals);
@@ -1476,27 +1392,20 @@ final class JvmTypedLoopCompiler {
 				this.ctx.boxedVars = new HashSet<>(this.ctx.boxedVars);
 				int slot = this.ctx.allocLocal(this.an.ctr().name);
 				this.ctx.boxedVars.remove(this.an.ctr().name);
-				this.ctx.emit(Opcode.LLOAD);
-				this.ctx.emit(this.an.ctr().slot);
-				this.ctx.emit(Opcode.INVOKESTATIC);
-				this.ctx.emitU2(this.ctx.longValueOf.index());
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(slot);
+				this.ctx.body.lload(this.an.ctr().slot).invokestatic(this.ctx.longValueOf.entry());
+				this.ctx.body.astore(slot);
 				JvmExprCompiler.compileExpr(resultForm, this.ctx, this.className);
 				this.ctx.locals = savedLocals;
 				this.ctx.boxedVars = savedBoxed;
 			}
-			joins.add(branch(Opcode.GOTO));
-			if (!assigned.isEmpty() && start < end) {
-				int handler = this.ctx.code.size();
+			this.ctx.body.goto_(joins);
+			if (!assigned.isEmpty() && start.position() < end.position()) {
+				MethodCode.Label handler = this.ctx.body.newBoundLabel();
 				this.ctx.stack.enterHandler();
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(excSlot);
+				this.ctx.body.astore(excSlot);
 				writeBack(assigned);
-				this.ctx.emit(Opcode.ALOAD);
-				this.ctx.emit(excSlot);
-				this.ctx.emit(Opcode.ATHROW);
-				this.ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
+				this.ctx.body.aload(excSlot).athrow();
+				this.ctx.body.exceptionCatch(start, end, handler, null);
 			}
 			this.ctx.nextLocal = savedNextLocal;
 		}
@@ -1505,19 +1414,12 @@ final class JvmTypedLoopCompiler {
 			for (Var v : assigned) {
 				int boxedSlot = java.util.Objects.requireNonNull(this.ctx.locals.get(v.name));
 				if (v.type == T.LONG) {
-					this.ctx.emit(Opcode.LLOAD);
-					this.ctx.emit(v.slot);
-					this.ctx.emit(Opcode.INVOKESTATIC);
-					this.ctx.emitU2(this.ctx.longValueOf.index());
+					this.ctx.body.lload(v.slot).invokestatic(this.ctx.longValueOf.entry());
 				}
 				else {
-					this.ctx.emit(Opcode.DLOAD);
-					this.ctx.emit(v.slot);
-					this.ctx.emit(Opcode.INVOKESTATIC);
-					this.ctx.emitU2(this.ctx.doubleValueOf.index());
+					this.ctx.body.dload(v.slot).invokestatic(this.ctx.doubleValueOf.entry());
 				}
-				this.ctx.emit(Opcode.ASTORE);
-				this.ctx.emit(boxedSlot);
+				this.ctx.body.astore(boxedSlot);
 			}
 		}
 
@@ -1526,30 +1428,15 @@ final class JvmTypedLoopCompiler {
 			int limSlot = allocWide();
 			ctr.slot = allocWide();
 			expr(count);
-			this.ctx.emit(Opcode.LSTORE);
-			this.ctx.emit(limSlot);
-			this.ctx.emit(Opcode.LCONST_0);
-			this.ctx.emit(Opcode.LSTORE);
-			this.ctx.emit(ctr.slot);
-			int loopStart = this.ctx.code.size();
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(ctr.slot);
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(limSlot);
-			this.ctx.emit(Opcode.LCMP);
-			int exit = branch(Opcode.IFGE);
+			this.ctx.body.lstore(limSlot).lconst_0().lstore(ctr.slot);
+			MethodCode.Label loopStart = this.ctx.body.newBoundLabel();
+			MethodCode.Label exit = this.ctx.body.newLabel();
+			this.ctx.body.lload(ctr.slot).lload(limSlot).lcmp().ifge(exit);
 			for (Node n : body) {
 				stmt(n);
 			}
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(ctr.slot);
-			this.ctx.emit(Opcode.LCONST_1);
-			this.ctx.emit(Opcode.LADD);
-			this.ctx.emit(Opcode.LSTORE);
-			this.ctx.emit(ctr.slot);
-			int back = branch(Opcode.GOTO);
-			JvmEmitHelper.patchBranch(this.ctx, back, loopStart);
-			JvmEmitHelper.patchBranch(this.ctx, exit, this.ctx.code.size());
+			this.ctx.body.lload(ctr.slot).lconst_1().ladd().lstore(ctr.slot).goto_(loopStart);
+			this.ctx.body.labelBinding(exit);
 			this.ctx.nextLocal = savedNextLocal;
 		}
 
@@ -1569,7 +1456,7 @@ final class JvmTypedLoopCompiler {
 				case Cmp ignored -> throw new IllegalStateException("a bare comparison is not a typed statement");
 				default -> {
 					expr(n);
-					this.ctx.emit(Opcode.POP2);
+					this.ctx.body.pop2();
 				}
 			}
 		}
@@ -1590,11 +1477,9 @@ final class JvmTypedLoopCompiler {
 					// _fvLength of a rank-1 packed array: header dimension 0, read from
 					// the header rather than the Java length (a lazy result stub is the
 					// header alone).
-					this.ctx.emit(Opcode.ALOAD);
-					this.ctx.emit(l.arr().slot);
-					this.ctx.emit(Opcode.ICONST_1);
+					this.ctx.body.aload(l.arr().slot).iconst_1();
 					loadHeaderInt();
-					this.ctx.emit(Opcode.I2L);
+					this.ctx.body.i2l();
 				}
 				case Aref a -> {
 					// An index out of range fails in its bound check: it reports the
@@ -1606,11 +1491,10 @@ final class JvmTypedLoopCompiler {
 					arrayIndex(a.arr(), subs, LispNames.AREF);
 					this.ctx.nextLocal = saved;
 					if (this.single) {
-						this.ctx.emit(Opcode.FALOAD);
-						this.ctx.emit(Opcode.F2D);
+						this.ctx.body.faload().f2d();
 					}
 					else {
-						this.ctx.emit(Opcode.DALOAD);
+						this.ctx.body.daload();
 					}
 					this.ctx.restoreSite(this.loopSite);
 				}
@@ -1618,41 +1502,45 @@ final class JvmTypedLoopCompiler {
 					if (a.type() == T.LONG) {
 						expr(a.a());
 						expr(a.b());
-						this.ctx.emit(switch (a.op()) {
-							case LispNames.ADD -> Opcode.LADD;
-							case LispNames.SUB -> Opcode.LSUB;
-							default -> Opcode.LMUL;
-						});
+						switch (a.op()) {
+							case LispNames.ADD -> this.ctx.body.ladd();
+							case LispNames.SUB -> this.ctx.body.lsub();
+							default -> this.ctx.body.lmul();
+						}
 					}
 					else {
 						exprAsDouble(a.a());
 						exprAsDouble(a.b());
-						this.ctx.emit(switch (a.op()) {
-							case LispNames.ADD -> Opcode.DADD;
-							case LispNames.SUB -> Opcode.DSUB;
-							case LispNames.MUL -> Opcode.DMUL;
-							default -> Opcode.DDIV;
-						});
+						switch (a.op()) {
+							case LispNames.ADD -> this.ctx.body.dadd();
+							case LispNames.SUB -> this.ctx.body.dsub();
+							case LispNames.MUL -> this.ctx.body.dmul();
+							default -> this.ctx.body.ddiv();
+						}
 					}
 				}
 				case Neg g -> {
 					expr(g.a());
-					this.ctx.emit(g.type() == T.LONG ? Opcode.LNEG : Opcode.DNEG);
+					if (g.type() == T.LONG) {
+						this.ctx.body.lneg();
+					}
+					else {
+						this.ctx.body.dneg();
+					}
 				}
 				case Recip r -> {
-					this.ctx.emit(Opcode.DCONST_1);
+					this.ctx.body.dconst_1();
 					expr(r.a());
-					this.ctx.emit(Opcode.DDIV);
+					this.ctx.body.ddiv();
 				}
 				case MathFn m -> {
 					exprAsDouble(m.a());
-					this.ctx.emit(Opcode.INVOKESTATIC);
-					this.ctx.emitU2(this.ctx.mathOp(m.name()).index());
+					this.ctx.body.invokestatic(this.ctx.mathOp(m.name()).entry());
 				}
 				case Aset a -> aset(a, true);
 				case Setq s -> {
 					expr(s.value());
-					this.ctx.emit(Opcode.DUP2);
+					this.ctx.body.dup2();
 					store(s.v());
 				}
 				case Let l -> let(l, true);
@@ -1663,15 +1551,13 @@ final class JvmTypedLoopCompiler {
 					expr(p.body().getLast());
 				}
 				case If i -> {
-					List<Integer> falses = cond(i.cond());
+					MethodCode.Label falses = cond(i.cond());
 					expr(i.then());
-					int end = branch(Opcode.GOTO);
-					int elseStart = this.ctx.code.size();
-					for (int pos : falses) {
-						JvmEmitHelper.patchBranch(this.ctx, pos, elseStart);
-					}
+					MethodCode.Label end = this.ctx.body.newLabel();
+					this.ctx.body.goto_(end);
+					this.ctx.body.labelBinding(falses);
 					expr(java.util.Objects.requireNonNull(i.els()));
-					JvmEmitHelper.patchBranch(this.ctx, end, this.ctx.code.size());
+					this.ctx.body.labelBinding(end);
 				}
 				default -> throw new IllegalStateException("not a typed expression: " + n);
 			}
@@ -1680,18 +1566,16 @@ final class JvmTypedLoopCompiler {
 		private void exprAsDouble(Node n) {
 			expr(n);
 			if (n.type() == T.LONG) {
-				this.ctx.emit(Opcode.L2D);
+				this.ctx.body.l2d();
 			}
 		}
 
 		private void load(Var v) {
-			this.ctx.emit(v.type == T.LONG ? Opcode.LLOAD : Opcode.DLOAD);
-			this.ctx.emit(v.slot);
+			this.ctx.body.loadLocal(v.type == T.LONG ? TypeKind.LONG : TypeKind.DOUBLE, v.slot);
 		}
 
 		private void store(Var v) {
-			this.ctx.emit(v.type == T.LONG ? Opcode.LSTORE : Opcode.DSTORE);
-			this.ctx.emit(v.slot);
+			this.ctx.body.storeLocal(v.type == T.LONG ? TypeKind.LONG : TypeKind.DOUBLE, v.slot);
 		}
 
 		/**
@@ -1704,8 +1588,7 @@ final class JvmTypedLoopCompiler {
 			for (int k = 0; k < slots.length; k++) {
 				expr(idx.get(k));
 				slots[k] = allocWide();
-				this.ctx.emit(Opcode.LSTORE);
-				this.ctx.emit(slots[k]);
+				this.ctx.body.lstore(slots[k]);
 			}
 			return slots;
 		}
@@ -1717,39 +1600,29 @@ final class JvmTypedLoopCompiler {
 		 * accessor throws ({@code JvmOperandTypeRuntime}).
 		 */
 		private void arrayIndex(Var arr, int[] subs, String operator) {
-			this.ctx.emit(Opcode.ALOAD);
-			this.ctx.emit(arr.slot);
-			this.ctx.emit(Opcode.ILOAD);
-			this.ctx.emit(arr.baseSlot);
+			this.ctx.body.aload(arr.slot).iload(arr.baseSlot);
 			bounded(subs[0], arr.dim0Slot, operator);
 			if (subs.length == 2) {
-				this.ctx.emit(Opcode.ILOAD);
-				this.ctx.emit(arr.colsSlot);
-				this.ctx.emit(Opcode.IMUL);
-				this.ctx.emit(Opcode.IADD);
+				this.ctx.body.iload(arr.colsSlot).imul().iadd();
 				bounded(subs[1], arr.colsSlot, operator);
 			}
-			this.ctx.emit(Opcode.IADD);
+			this.ctx.body.iadd();
 		}
 
 		/**
 		 * Pushes the long subscript in {@code slot} checked against the int {@code dim}.
 		 */
 		private void bounded(int slot, int dimSlot, String operator) {
-			this.ctx.emit(Opcode.LLOAD);
-			this.ctx.emit(slot);
-			this.ctx.emit(Opcode.ILOAD);
-			this.ctx.emit(dimSlot);
+			this.ctx.body.lload(slot).iload(dimSlot);
 			@Nullable String outer = this.ctx.operator;
 			this.ctx.operator = operator;
 			try {
-				this.ctx.emit(Opcode.INVOKESTATIC);
-				this.ctx.emitU2(
+				this.ctx.body.invokestatic(
 						this.ctx
 							.wrapForOperator(JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC,
 									java.util.Objects
 										.requireNonNull(this.ctx.numOps.get(JvmOperandTypeRuntime.CK_BOUND_J)))
-							.index());
+							.entry());
 			}
 			finally {
 				this.ctx.operator = outer;
@@ -1770,27 +1643,22 @@ final class JvmTypedLoopCompiler {
 			int[] subs = subscripts(a.idx());
 			exprAsDouble(a.value());
 			int tmp = allocWide();
-			this.ctx.emit(Opcode.DSTORE);
-			this.ctx.emit(tmp);
+			this.ctx.body.dstore(tmp);
 			atSite(a.site());
 			arrayIndex(a.arr(), subs, OperandTypes.SETF_AREF);
-			this.ctx.emit(Opcode.DLOAD);
-			this.ctx.emit(tmp);
+			this.ctx.body.dload(tmp);
 			if (this.single) {
-				this.ctx.emit(Opcode.D2F);
-				this.ctx.emit(Opcode.FASTORE);
+				this.ctx.body.d2f().fastore();
 			}
 			else {
-				this.ctx.emit(Opcode.DASTORE);
+				this.ctx.body.dastore();
 			}
 			this.ctx.restoreSite(this.loopSite);
 			if (valueNeeded) {
 				// the value of a store is the value AS STORED (narrowed for single)
-				this.ctx.emit(Opcode.DLOAD);
-				this.ctx.emit(tmp);
+				this.ctx.body.dload(tmp);
 				if (this.single) {
-					this.ctx.emit(Opcode.D2F);
-					this.ctx.emit(Opcode.F2D);
+					this.ctx.body.d2f().f2d();
 				}
 			}
 			this.ctx.nextLocal = saved;
@@ -1817,35 +1685,30 @@ final class JvmTypedLoopCompiler {
 		}
 
 		private void ifStmt(If i) {
-			List<Integer> falses = cond(i.cond());
+			MethodCode.Label falses = cond(i.cond());
 			stmt(i.then());
 			if (i.els() == null) {
-				int end = this.ctx.code.size();
-				for (int pos : falses) {
-					JvmEmitHelper.patchBranch(this.ctx, pos, end);
-				}
+				this.ctx.body.labelBinding(falses);
 				return;
 			}
-			int end = branch(Opcode.GOTO);
-			int elseStart = this.ctx.code.size();
-			for (int pos : falses) {
-				JvmEmitHelper.patchBranch(this.ctx, pos, elseStart);
-			}
+			MethodCode.Label end = this.ctx.body.newLabel();
+			this.ctx.body.goto_(end);
+			this.ctx.body.labelBinding(falses);
 			stmt(i.els());
-			JvmEmitHelper.patchBranch(this.ctx, end, this.ctx.code.size());
+			this.ctx.body.labelBinding(end);
 		}
 
 		/**
 		 * Emits the comparison as a conditional branch taken when the test is FALSE
-		 * (after negation), answering the branch positions to patch to the false target.
+		 * (after negation), answering the false target's label for the caller to bind.
 		 */
-		private List<Integer> cond(Cmp c) {
+		private MethodCode.Label cond(Cmp c) {
 			boolean longs = c.a().type() == T.LONG && c.b().type() == T.LONG;
 			String op = c.op();
 			if (longs) {
 				expr(c.a());
 				expr(c.b());
-				this.ctx.emit(Opcode.LCMP);
+				this.ctx.body.lcmp();
 			}
 			else {
 				exprAsDouble(c.a());
@@ -1856,7 +1719,12 @@ final class JvmTypedLoopCompiler {
 				// with DCMPL (NaN -> -1). A negated test (unless) keeps the SAME compare
 				// and flips the jump: "not (a < b)" is true for NaN on both paths.
 				boolean g = LispNames.LT.equals(op) || LispNames.LE.equals(op);
-				this.ctx.emit(g ? Opcode.DCMPG : Opcode.DCMPL);
+				if (g) {
+					this.ctx.body.dcmpg();
+				}
+				else {
+					this.ctx.body.dcmpl();
+				}
 			}
 			// the branch skips the body when the test (as written) is false
 			int whenFalse = switch (op) {
@@ -1873,8 +1741,8 @@ final class JvmTypedLoopCompiler {
 				case LispNames.GE -> Opcode.IFGE;
 				default -> Opcode.IFEQ;
 			};
-			List<Integer> out = new ArrayList<>();
-			out.add(branch(c.negate() ? whenTrue : whenFalse));
+			MethodCode.Label out = this.ctx.body.newLabel();
+			JvmEmitHelper.branch(this.ctx, c.negate() ? whenTrue : whenFalse, out);
 			return out;
 		}
 

@@ -1,8 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -66,69 +67,62 @@ final class JvmSymbolApiCompiler {
 		// the value parks in a temp both arms read back.
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		ctx.body.astore(tempSlot);
 		// stringp (proper or charvec)?
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
+		ctx.body.aload(tempSlot);
 		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1, helper -> {
 			// The helper Ctx shares the constant pool; the check is stringp's own.
 			JvmStringpCompiler.emitStringpCheck(helper, 0);
 		});
-		int notStringp = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int done = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notStringp, ctx.code.size());
+		MethodCode.Label notStringp = ctx.body.newLabel();
+		ctx.body.ifnull(notStringp);
+		ctx.body.aload(tempSlot);
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.goto_(done);
+		ctx.body.labelBinding(notStringp);
 		// Slow: the guarded coercion. A symbol (nil and every bare String --
 		// quoted ones stringp above) or a character renders through display and
 		// reframes; anything else signals exactly like the strict designator form
 		// this replaces.
 		// nil is a symbol, like every bare String.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int isNil = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int notSymbol = emitBranch(ctx, Opcode.IFEQ);
-		int coerceStr = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, isNil, ctx.code.size());
-		int coerceNil = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notSymbol, ctx.code.size());
+		ctx.body.aload(tempSlot);
+		MethodCode.Label isNil = ctx.body.newLabel();
+		ctx.body.ifnull(isNil);
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label notSymbol = ctx.body.newLabel();
+		ctx.body.ifeq(notSymbol);
+		MethodCode.Label coerceStr = ctx.body.newLabel();
+		ctx.body.goto_(coerceStr);
+		ctx.body.labelBinding(isNil);
+		MethodCode.Label coerceNil = ctx.body.newLabel();
+		ctx.body.goto_(coerceNil);
+		ctx.body.labelBinding(notSymbol);
 		// character?
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
-		int notChar = emitBranch(ctx, Opcode.IFEQ);
-		JvmEmitHelper.patchBranch(ctx, coerceStr, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, coerceNil, ctx.code.size());
+		ctx.body.aload(tempSlot).instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
+		MethodCode.Label notChar = ctx.body.newLabel();
+		ctx.body.ifeq(notChar);
+		ctx.body.labelBinding(coerceStr);
+		ctx.body.labelBinding(coerceNil);
 		// render and reframe: "\"" + display + "\""
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.lispToDisplayString.index());
+		ctx.body.aload(tempSlot).invokestatic(ctx.lispToDisplayString.entry());
 		emitRequote(ctx);
-		int done2 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notChar, ctx.code.size());
+		MethodCode.Label done2 = ctx.body.newLabel();
+		ctx.body.goto_(done2);
+		ctx.body.labelBinding(notChar);
 		emitStringDesignatorThrow(tempSlot, ctx);
-		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, done2, ctx.code.size());
+		ctx.body.labelBinding(done);
+		ctx.body.labelBinding(done2);
 	}
 
 	// "\"" + content + "\"", the quote frame a string VALUE carries. Display answers
 	// a String already, so this is two concats.
 	private static void emitRequote(JvmLispCompiler.Ctx ctx) {
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+			.methodRefEntry();
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.swap().invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.invokevirtual(concat);
 	}
 
 	// throw new RuntimeException("string expects a string designator, got: " + value)
@@ -141,22 +135,12 @@ final class JvmSymbolApiCompiler {
 			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
 		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.STRING + " expects a string designator, got: ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
+		ctx.body.aload(tempSlot);
 		// princ-render the value the way ~s would, so the report reads the same.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.lispToDisplayString.index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(valueOf.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.invokestatic(ctx.lispToDisplayString.entry()).invokestatic(valueOf.entry());
+		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(ctor.entry()).athrow();
 	}
 
 	/** intern: strip the surrounding quotes from the runtime string. */
@@ -176,7 +160,7 @@ final class JvmSymbolApiCompiler {
 		// the buffer is filled), so normalize before the quote strip casts to String.
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		JvmEmitHelper.emitSharedCall(ctx, className, "_internName", 1, helper -> {
-			helper.emit(Opcode.ALOAD_0);
+			helper.body.aload(0);
 			emitStripQuotes(helper);
 			emitNilSpellingToNil(helper);
 		});
@@ -189,29 +173,27 @@ final class JvmSymbolApiCompiler {
 	 * {@code eq} compares strings by content.
 	 */
 	private static void emitNilSpellingToNil(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		// The literal is compared, never produced, so it is no designator the
 		// dispatch gate's name probes must see.
 		JvmEmitHelper.compileUnspelledLiteral("NIL", ctx);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
-		int keep = emitBranch(ctx, Opcode.IFEQ);
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
+		ctx.body.swap().invokevirtual(ctx.objectEquals.methodRefEntry());
+		MethodCode.Label keep = ctx.body.newLabel();
+		ctx.body.ifeq(keep);
+		ctx.body.pop().aconst_null();
+		ctx.body.labelBinding(keep);
 	}
 
 	/** make-symbol: {@code "#:".concat(content)} -- the gensym uninterned convention. */
 	static void compileMakeSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.MAKE_SYMBOL);
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+			.methodRefEntry();
 		JvmEmitHelper.compileStringLiteral("#:", ctx);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		emitStripQuotes(ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.invokevirtual(concat);
 	}
 
 	/**
@@ -260,28 +242,31 @@ final class JvmSymbolApiCompiler {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.BOUNDP);
 		int tempSlot = compileArgToTemp(parts.get(1), ctx, className);
 		// nil -> t
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int ifNotNil = emitBranch(ctx, Opcode.IFNONNULL);
+		ctx.body.aload(tempSlot);
+		MethodCode.Label ifNotNil = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifNotNil);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd1 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, ifNotNil, ctx.code.size());
+		MethodCode.Label gotoEnd1 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd1);
+		ctx.body.labelBinding(ifNotNil);
 		// t / keyword -> t
-		int[] notSelfBound = emitSelfBoundCheck(tempSlot, ctx);
+		MethodCode.Label notSelfBound = emitSelfBoundCheck(tempSlot, ctx);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd2 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notSelfBound[0], ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, notSelfBound[1], ctx.code.size());
+		MethodCode.Label gotoEnd2 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd2);
+		ctx.body.labelBinding(notSelfBound);
 		// _envLookup(name, _genv) != null -> t
 		emitGenvLookup(tempSlot, ctx, className);
-		int ifUnbound = emitBranch(ctx, Opcode.IFNULL);
+		MethodCode.Label ifUnbound = ctx.body.newLabel();
+		ctx.body.ifnull(ifUnbound);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd3 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, ifUnbound, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd1, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd3, ctx.code.size());
+		MethodCode.Label gotoEnd3 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd3);
+		ctx.body.labelBinding(ifUnbound);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd1);
+		ctx.body.labelBinding(gotoEnd2);
+		ctx.body.labelBinding(gotoEnd3);
 	}
 
 	/**
@@ -310,34 +295,33 @@ final class JvmSymbolApiCompiler {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.SYMBOL_VALUE);
 		int tempSlot = compileArgToTemp(parts.get(1), ctx, className);
 		// nil -> nil
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int ifNotNil = emitBranch(ctx, Opcode.IFNONNULL);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEnd1 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, ifNotNil, ctx.code.size());
+		ctx.body.aload(tempSlot);
+		MethodCode.Label ifNotNil = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifNotNil);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEnd1 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd1);
+		ctx.body.labelBinding(ifNotNil);
 		// t / keyword -> the symbol itself
-		int[] notSelfBound = emitSelfBoundCheck(tempSlot, ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int gotoEnd2 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notSelfBound[0], ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, notSelfBound[1], ctx.code.size());
+		MethodCode.Label notSelfBound = emitSelfBoundCheck(tempSlot, ctx);
+		ctx.body.aload(tempSlot);
+		MethodCode.Label gotoEnd2 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd2);
+		ctx.body.labelBinding(notSelfBound);
 		// binding = _envLookup(name, _genv); null -> throw, else binding cdr
 		emitGenvLookup(tempSlot, ctx, className);
-		ctx.emit(Opcode.DUP);
-		int ifUnbound = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		int gotoEnd3 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, ifUnbound, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		ctx.body.dup();
+		MethodCode.Label ifUnbound = ctx.body.newLabel();
+		ctx.body.ifnull(ifUnbound);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		MethodCode.Label gotoEnd3 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd3);
+		ctx.body.labelBinding(ifUnbound);
+		ctx.body.pop();
 		emitUnboundThrow(tempSlot, ctx);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd1, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd3, ctx.code.size());
+		ctx.body.labelBinding(gotoEnd1);
+		ctx.body.labelBinding(gotoEnd2);
+		ctx.body.labelBinding(gotoEnd3);
 	}
 
 	/**
@@ -360,97 +344,89 @@ final class JvmSymbolApiCompiler {
 			boolean bound = PackageRegistry.specialOperatorNames().contains(name)
 					|| PackageRegistry.clFunctionNames().contains(name) || LispNames.isCarCdrComposition(name)
 					|| ctx.userDefunNames.contains(name) || ctx.functions.containsKey(name);
-			int[] foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
+			MethodCode.Label foldEnd = ctx.usesFmakunbound ? emitTombstoneGuard(name, ctx, className) : null;
 			if (bound) {
 				JvmEmitHelper.compileTrue(ctx);
 			}
 			else {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 			if (foldEnd != null) {
-				JvmEmitHelper.patchBranch(ctx, foldEnd[0], ctx.code.size());
-				JvmEmitHelper.patchBranch(ctx, foldEnd[1], ctx.code.size());
+				ctx.body.labelBinding(foldEnd);
 			}
 			return;
 		}
 		int tempSlot = compileArgToTemp(parts.get(1), ctx, className);
 		// nil -> nil
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int ifNotNil = emitBranch(ctx, Opcode.IFNONNULL);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEnd1 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, ifNotNil, ctx.code.size());
+		ctx.body.aload(tempSlot);
+		MethodCode.Label ifNotNil = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifNotNil);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEnd1 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd1);
+		ctx.body.labelBinding(ifNotNil);
 		// binding = _envLookup(name, _fenv). A binding decides the answer on its own --
 		// fmakunbound leaves a TOMBSTONE here (value cell null) that must SHADOW the
 		// compiled registry probed below, or a retired name would answer t again.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int fenvMiss = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		int tombstone = emitBranch(ctx, Opcode.IFNULL);
+		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		MethodCode.Label fenvMiss = ctx.body.newLabel();
+		ctx.body.ifnull(fenvMiss);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		MethodCode.Label tombstone = ctx.body.newLabel();
+		ctx.body.ifnull(tombstone);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd2 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, tombstone, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEnd4 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, fenvMiss, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		MethodCode.Label gotoEnd2 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd2);
+		ctx.body.labelBinding(tombstone);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEnd4 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd4);
+		ctx.body.labelBinding(fenvMiss);
+		ctx.body.pop();
 		// _lookup(name) != null -> t
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
+		ctx.body.aload(tempSlot);
 		ConstantPool.MethodrefConstant lookupRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("_lookup"),
 						ctx.cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(lookupRef.index());
-		int registryMiss = emitBranch(ctx, Opcode.IFNULL);
+		ctx.body.invokestatic(lookupRef.entry());
+		MethodCode.Label registryMiss = ctx.body.newLabel();
+		ctx.body.ifnull(registryMiss);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd3 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, registryMiss, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd1, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd3, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd4, ctx.code.size());
+		MethodCode.Label gotoEnd3 = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd3);
+		ctx.body.labelBinding(registryMiss);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd1);
+		ctx.body.labelBinding(gotoEnd2);
+		ctx.body.labelBinding(gotoEnd3);
+		ctx.body.labelBinding(gotoEnd4);
 	}
 
 	/**
 	 * Emits the tombstone half of {@code fboundp} for a literal name: when {@code _fenv}
 	 * holds a binding for it, the answer is decided here (t when the value cell is set,
 	 * nil when {@code fmakunbound} cleared it) and the caller's folded constant is
-	 * skipped. Returns the GOTO positions the caller must patch to the end of the fold.
+	 * skipped. Returns the label the caller binds at the end of the fold.
 	 */
-	private static int[] emitTombstoneGuard(String name, JvmLispCompiler.Ctx ctx, String className) {
+	private static MethodCode.Label emitTombstoneGuard(String name, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.compileStringLiteral(name, ctx);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int noBinding = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		int cleared = emitBranch(ctx, Opcode.IFNULL);
+		ctx.body.getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		MethodCode.Label noBinding = ctx.body.newLabel();
+		ctx.body.ifnull(noBinding);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		MethodCode.Label cleared = ctx.body.newLabel();
+		ctx.body.ifnull(cleared);
 		JvmEmitHelper.compileTrue(ctx);
-		int end = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, cleared, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		int end2 = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, noBinding, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.goto_(end);
+		ctx.body.labelBinding(cleared);
+		ctx.body.aconst_null().goto_(end);
+		ctx.body.labelBinding(noBinding);
+		ctx.body.pop();
 		// The caller's folded constant follows; both tombstone answers jump past it.
-		return new int[] { end, end2 };
+		return end;
 	}
 
 	/**
@@ -465,48 +441,23 @@ final class JvmSymbolApiCompiler {
 	static void compileFmakunbound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FMAKUNBOUND);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int create = emitBranch(ctx, Opcode.IFNULL);
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		MethodCode.Label create = ctx.body.newLabel();
+		ctx.body.ifnull(create);
 		// existing binding: clear its value cell
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.AASTORE);
-		int done = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, create, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aconst_null().aastore();
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.goto_(done);
+		ctx.body.labelBinding(create);
+		ctx.body.pop();
 		// _fenv = new Object[]{new Object[]{name, null}, _fenv}
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
+		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().iconst_2();
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(nameSlot).aastore();
+		ctx.body.aastore().dup().iconst_1().getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.aastore().putstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.labelBinding(done);
+		ctx.body.aload(nameSlot);
 	}
 
 	/**
@@ -521,54 +472,24 @@ final class JvmSymbolApiCompiler {
 		List<LispVal> parts = requireArgs(cons, 2, LispNames.SET_SYMBOL_FUNCTION_INTERNAL);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int create = emitBranch(ctx, Opcode.IFNULL);
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		MethodCode.Label create = ctx.body.newLabel();
+		ctx.body.ifnull(create);
 		// existing binding: overwrite its value cell
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueSlot);
-		ctx.emit(Opcode.AASTORE);
-		int done = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, create, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aload(valueSlot).aastore();
+		MethodCode.Label done = ctx.body.newLabel();
+		ctx.body.goto_(done);
+		ctx.body.labelBinding(create);
+		ctx.body.pop();
 		// _fenv = new Object[]{new Object[]{name, value}, _fenv}
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueSlot);
+		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().iconst_2();
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(nameSlot).aastore();
+		ctx.body.dup().iconst_1().aload(valueSlot).aastore().aastore().dup().iconst_1();
+		ctx.body.getstatic(evalField(ctx, className, "_fenv").entry()).aastore();
+		ctx.body.putstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.labelBinding(done);
+		ctx.body.aload(valueSlot);
 	}
 
 	/**
@@ -593,72 +514,52 @@ final class JvmSymbolApiCompiler {
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
 		// null (nil) -> throw
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		int notNil = emitBranch(ctx, Opcode.IFNONNULL);
+		ctx.body.aload(nameSlot);
+		MethodCode.Label notNil = ctx.body.newLabel();
+		ctx.body.ifnonnull(notNil);
 		emitSetConstantThrow("NIL", ctx);
-		JvmEmitHelper.patchBranch(ctx, notNil, ctx.code.size());
+		ctx.body.labelBinding(notNil);
 		// not a String (symbols are bare Strings, strings carry their quotes) -> throw
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int isString = emitBranch(ctx, Opcode.IFNE);
+		ctx.body.aload(nameSlot).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label isString = ctx.body.newLabel();
+		ctx.body.ifne(isString);
 		emitSetTypeThrow(nameSlot, ctx);
-		JvmEmitHelper.patchBranch(ctx, isString, ctx.code.size());
+		ctx.body.labelBinding(isString);
 		// T, NIL by computed name, keywords and the empty name are constants ->
 		// throw. The empty name would otherwise sail through both probes below and
 		// materialize a binding no read can spell.
 		emitSetConstantNameThrow(nameSlot, "T", ctx);
 		emitSetConstantNameThrow(nameSlot, "NIL", ctx);
 		emitSetEmptyNameThrow(nameSlot, ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
 		JvmEmitHelper.emitIntConst(ctx, ':');
-		int notKeyword = emitBranch(ctx, Opcode.IF_ICMPNE);
+		MethodCode.Label notKeyword = ctx.body.newLabel();
+		ctx.body.if_icmpne(notKeyword);
 		emitSetConstantNameThrowDynamic(nameSlot, ctx);
-		JvmEmitHelper.patchBranch(ctx, notKeyword, ctx.code.size());
+		ctx.body.labelBinding(notKeyword);
 		// backing stores first, in declaration order: a compiled read must see the
 		// store, not only the mirror below. Every taken arm lands on the mirror:
 		// the field IS the store, and the mirror keeps symbol-value and eval with
 		// it.
-		List<Integer> toMirror = new ArrayList<>();
+		MethodCode.Label toMirror = ctx.body.newLabel();
 		for (String global : ctx.globals) {
 			ConstantPool.FieldrefConstant field = ctx.globalFields.get(global);
 			if (field == null) {
 				continue;
 			}
 			JvmEmitHelper.compileStringLiteral(global, ctx);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(nameSlot);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(ctx.objectEquals.index());
-			int miss = emitBranch(ctx, Opcode.IFEQ);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(valueSlot);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(field.index());
-			toMirror.add(emitBranch(ctx, Opcode.GOTO));
-			JvmEmitHelper.patchBranch(ctx, miss, ctx.code.size());
+			ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+			MethodCode.Label miss = ctx.body.newLabel();
+			ctx.body.ifeq(miss);
+			ctx.body.aload(valueSlot).putstatic(field.entry()).goto_(toMirror);
+			ctx.body.labelBinding(miss);
 		}
 		// the mirror, unconditionally: _store creates the binding when no backing
 		// store took it, and answers the stored value, the set result.
-		int mirrorPos = ctx.code.size();
-		for (int target : toMirror) {
-			JvmEmitHelper.patchBranch(ctx, target, mirrorPos);
-		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueSlot);
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(java.util.Objects.requireNonNull(ctx.evalStoreRef).index());
+		ctx.body.labelBinding(toMirror);
+		ctx.body.aload(nameSlot).aload(valueSlot).aconst_null();
+		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef).entry());
 	}
 
 	// throw new RuntimeException("SET cannot set " + constant)
@@ -666,25 +567,19 @@ final class JvmSymbolApiCompiler {
 		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
 		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set " + constant, ctx);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.invokespecial(ctor.entry()).athrow();
 	}
 
 	// throw new RuntimeException("SET cannot set " + name) for a computed constant name
 	private static void emitSetConstantNameThrow(int nameSlot, String constant, JvmLispCompiler.Ctx ctx) {
 		JvmEmitHelper.compileStringLiteral(constant, ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
-		int keep = emitBranch(ctx, Opcode.IFEQ);
+		ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		MethodCode.Label keep = ctx.body.newLabel();
+		ctx.body.ifeq(keep);
 		emitSetConstantThrow(constant, ctx);
-		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
+		ctx.body.labelBinding(keep);
 	}
 
 	// throw new RuntimeException("SET cannot set " + name) for a keyword (the name is
@@ -695,19 +590,10 @@ final class JvmSymbolApiCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.invokespecial(ctor.entry()).athrow();
 	}
 
 	// throw new RuntimeException("SET cannot set ") for the empty name (the name is
@@ -718,15 +604,11 @@ final class JvmSymbolApiCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.MethodrefConstant isEmpty = ctx.cp.addMethodref(ctx.stringClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("isEmpty"), ctx.cp.addUtf8("()Z")));
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(isEmpty.index());
-		int keep = emitBranch(ctx, Opcode.IFEQ);
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(isEmpty.methodRefEntry());
+		MethodCode.Label keep = ctx.body.newLabel();
+		ctx.body.ifeq(keep);
 		emitSetConstantThrow("", ctx);
-		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
+		ctx.body.labelBinding(keep);
 	}
 
 	// throw new RuntimeException("SET expects a symbol, got " + value)
@@ -738,19 +620,10 @@ final class JvmSymbolApiCompiler {
 			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
 		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " expects a symbol, got ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(valueOf.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.aload(nameSlot).invokestatic(valueOf.entry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.invokespecial(ctor.entry()).athrow();
 	}
 
 	/**
@@ -763,26 +636,20 @@ final class JvmSymbolApiCompiler {
 	static void compileFenvFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FENV_FUNCTION_INTERNAL);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_fenv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int noBinding = emitBranch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.DUP);
-		int cleared = emitBranch(ctx, Opcode.IFNULL);
-		int end = emitBranch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, noBinding, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, cleared, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		MethodCode.Label noBinding = ctx.body.newLabel();
+		ctx.body.ifnull(noBinding);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload().dup();
+		MethodCode.Label cleared = ctx.body.newLabel();
+		ctx.body.ifnull(cleared);
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.goto_(end);
+		ctx.body.labelBinding(noBinding);
+		ctx.body.labelBinding(cleared);
+		ctx.body.pop();
 		emitUndefinedFunctionThrow(nameSlot, ctx);
-		JvmEmitHelper.patchBranch(ctx, end, ctx.code.size());
+		ctx.body.labelBinding(end);
 	}
 
 	// throw new RuntimeException("The function " + name + " is undefined") -- the
@@ -794,22 +661,11 @@ final class JvmSymbolApiCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral("The function ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
 		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(exCtor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(exCtor.entry()).athrow();
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {
@@ -824,60 +680,36 @@ final class JvmSymbolApiCompiler {
 	private static int compileArgToTemp(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(arg, ctx, className);
 		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		ctx.body.astore(tempSlot);
 		return tempSlot;
-	}
-
-	/** Emits a branch with a placeholder offset; returns the position for patchBranch. */
-	private static int emitBranch(JvmLispCompiler.Ctx ctx, int opcode) {
-		int pos = ctx.code.size();
-		ctx.emit(opcode);
-		ctx.emitU2(0);
-		return pos;
 	}
 
 	/**
 	 * Emits a check for the self-bound symbols {@code t} and keywords. Control falls
 	 * through into the caller's "self-bound" code when the value is {@code t} or a
-	 * keyword; the two returned branch positions must be patched by the caller to the
-	 * "not self-bound" continuation.
+	 * keyword; the caller binds the returned label at the "not self-bound" continuation.
 	 */
-	private static int[] emitSelfBoundCheck(int tempSlot, JvmLispCompiler.Ctx ctx) {
+	private static MethodCode.Label emitSelfBoundCheck(int tempSlot, JvmLispCompiler.Ctx ctx) {
 		// "T".equals(value) -> self-bound
 		JvmEmitHelper.compileStringLiteral("T", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
-		int isT = emitBranch(ctx, Opcode.IFNE);
+		ctx.body.aload(tempSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		MethodCode.Label isT = ctx.body.newLabel();
+		ctx.body.ifne(isT);
 		// keyword: a String whose first char is ':'
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int notString = emitBranch(ctx, Opcode.IFEQ);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
+		MethodCode.Label notSelfBound = ctx.body.newLabel();
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry()).ifeq(notSelfBound);
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
 		JvmEmitHelper.emitIntConst(ctx, ':');
-		int notKeyword = emitBranch(ctx, Opcode.IF_ICMPNE);
+		ctx.body.if_icmpne(notSelfBound);
 		// keyword falls through, t jumps here: both land in the self-bound code
-		JvmEmitHelper.patchBranch(ctx, isT, ctx.code.size());
-		return new int[] { notString, notKeyword };
+		ctx.body.labelBinding(isT);
+		return notSelfBound;
 	}
 
 	private static void emitGenvLookup(int tempSlot, JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(evalField(ctx, className, "_genv").index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_genv").entry());
+		ctx.body.invokestatic(envLookupRef(ctx, className).entry());
 	}
 
 	private static void emitUnboundThrow(int tempSlot, JvmLispCompiler.Ctx ctx) {
@@ -886,40 +718,22 @@ final class JvmSymbolApiCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+			.methodRefEntry();
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral("The variable ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(valueOf.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.aload(tempSlot).invokestatic(valueOf.entry()).invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral(" is unbound", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.invokevirtual(concat).invokespecial(ctor.entry()).athrow();
 	}
 
 	/** Strips the surrounding quotes: {@code s.substring(1, s.length() - 1)}. */
 	private static void emitStripQuotes(JvmLispCompiler.Ctx ctx) {
-		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
-		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(substring);
+		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I").methodRefEntry();
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;")
+			.methodRefEntry();
+		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length);
+		ctx.body.iconst_1().isub().iconst_1().swap().invokevirtual(substring);
 	}
 
 	private static ConstantPool.FieldrefConstant evalField(JvmLispCompiler.Ctx ctx, String className, String name) {

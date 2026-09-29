@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -9,7 +10,6 @@ import am.ik.rontolisp.LispVal;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -54,78 +54,41 @@ final class JvmIntConvCompiler {
 		// past the long range, like every other numeric operator) and the remainder
 		// beside it stays rem/mod. _fdiv declines with a null for every operand pair it
 		// does not improve on, which falls through to the ordinary division below.
-		int fusedEnd = -1;
+		MethodCode.Label fusedEnd = ctx.body.newLabel();
 		List<LispVal> divArgs = divisionOperands(args);
 		if (divArgs != null) {
 			int aSlot = ctx.allocTemp();
 			int bSlot = ctx.allocTemp();
 			JvmExprCompiler.compileExpr(divArgs.get(0), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(aSlot);
+			ctx.body.astore(aSlot);
 			JvmExprCompiler.compileExpr(divArgs.get(1), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(bSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(aSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(bSlot);
+			ctx.body.astore(bSlot).aload(aSlot).aload(bSlot);
 			JvmEmitHelper.emitIntConst(ctx, mode);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(temp);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			int ifDeclined = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			fusedEnd = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifDeclined, ctx.code.size());
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(aSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(bSlot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DIV).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).entry()).astore(temp);
+			ctx.body.aload(temp);
+			MethodCode.Label ifDeclined = ctx.body.newLabel();
+			ctx.body.ifnull(ifDeclined);
+			ctx.body.aload(temp).goto_(fusedEnd);
+			ctx.body.labelBinding(ifDeclined);
+			ctx.body.aload(aSlot).aload(bSlot);
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV).entry());
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		}
 		// An integer argument (Long or BigInteger) is already an integer: return it as-is
 		// to avoid truncating a BigInteger through a double.
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.longClass.index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(bigClass.index());
-		ctx.emit(Opcode.IOR);
-		int ifIntPos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass.entry()).aload(temp);
+		ctx.body.instanceOf(bigClass.entry()).ior();
+		MethodCode.Label ifIntPos = ctx.body.newLabel();
+		ctx.body.ifne(ifIntPos);
 		// Ratio path: exact integer conversion via the rational runtime helper.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
-		int ifNotRatioPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(ratioOpKey).index());
-		int gotoEnd2Pos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		MethodCode.Label ifNotRatioPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotRatioPos);
+		ctx.body.aload(temp).invokestatic(ctx.numOp(ratioOpKey).entry());
+		MethodCode.Label gotoEnd2Pos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd2Pos);
 		// Float path: convert through a double, which is exact inside the long range --
 		// a finite double past 2^52 IS a mathematical integer, so out there the answer is
 		// a bignum and _fdiv (over a divisor of 1) is what widens it exactly instead of
@@ -133,53 +96,39 @@ final class JvmIntConvCompiler {
 		// pair of instructions; a NaN fails it (DCMPG answers 1 for an unordered pair --
 		// DCMPL's -1 would pass it into D2L's 0) and reaches _fdiv with the infinities,
 		// where all three signal -- so _fdiv never answers null here.
-		JvmEmitHelper.patchBranch(ctx, ifNotRatioPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
+		ctx.body.labelBinding(ifNotRatioPos);
+		ctx.body.aload(temp);
 		JvmEmitHelper.unboxDouble(ctx);
 		if (mathMethod != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(mathMethod.index());
+			ctx.body.invokestatic(mathMethod.entry());
 		}
-		ctx.emit(Opcode.DUP2);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.cp
-			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math")),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("abs"), ctx.cp.addUtf8("(D)D")))
-			.index());
+		ctx.body.dup2();
+		ctx.body.invokestatic(
+				ctx.cp
+					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math")),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8("abs"), ctx.cp.addUtf8("(D)D")))
+					.entry());
 		JvmEmitHelper.emitRawDouble(LONG_LIMIT, ctx);
-		ctx.emit(Opcode.DCMPG);
-		int ifInLongRange = ctx.code.size();
-		ctx.emit(Opcode.IFLT);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP2);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.LCONST_1);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.longValueOf.index());
+		ctx.body.dcmpg();
+		MethodCode.Label ifInLongRange = ctx.body.newLabel();
+		ctx.body.iflt(ifInLongRange);
+		ctx.body.pop2().aload(temp).lconst_1().invokestatic(ctx.longValueOf.entry());
 		JvmEmitHelper.emitIntConst(ctx, mode);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).index());
-		int gotoEndWidened = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifInLongRange, ctx.code.size());
-		ctx.emit(Opcode.D2L);
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).entry());
+		MethodCode.Label gotoEndWidened = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndWidened);
+		ctx.body.labelBinding(ifInLongRange);
+		ctx.body.d2l();
 		JvmEmitHelper.boxLong(ctx);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
 		// Integer path: leave the original value on the stack.
-		JvmEmitHelper.patchBranch(ctx, ifIntPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEndWidened, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd2Pos, ctx.code.size());
-		if (fusedEnd >= 0) {
-			JvmEmitHelper.patchBranch(ctx, fusedEnd, ctx.code.size());
-		}
+		ctx.body.labelBinding(ifIntPos);
+		ctx.body.aload(temp);
+		ctx.body.labelBinding(gotoEndPos);
+		ctx.body.labelBinding(gotoEndWidened);
+		ctx.body.labelBinding(gotoEnd2Pos);
+		ctx.body.labelBinding(fusedEnd);
 	}
 
 	/**

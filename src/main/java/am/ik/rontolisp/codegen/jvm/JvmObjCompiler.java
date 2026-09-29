@@ -1,11 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLayout;
@@ -74,8 +73,7 @@ final class JvmObjCompiler {
 	/** Compiles the operand for its side effects and leaves nil on the stack. */
 	private static void evaluateForEffectThenNil(LispVal operand, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(operand, ctx, className);
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.pop().aconst_null();
 	}
 
 	private static LispLayout requireLayout(JvmLispCompiler.Ctx ctx, String tag) {
@@ -101,29 +99,24 @@ final class JvmObjCompiler {
 		// reader closure) is handed that cell as an ordinary trailing argument. Cells no
 		// argument reaches stay null (= nil).
 		JvmEmitHelper.emitIntConst(ctx, 1 + layout.capacity());
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(lf.index());
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.aastore();
 		for (int i = 0; i < slots; i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 1 + i);
 			if (2 + i < args.size()) {
 				JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
 			}
 			else {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
 		// Surplus arguments are still evaluated (for effect) and dropped, matching the
 		// interpreter, which evaluates every argument before taking the first slotCount.
 		for (int i = 2 + slots; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.emit(Opcode.POP);
+			ctx.body.pop();
 		}
 	}
 
@@ -141,27 +134,14 @@ final class JvmObjCompiler {
 		requireGate(ctx, LispNames.OBJ_NEW);
 		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, LispLayout.STREAM);
 		int handleSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(handleSlot);
+		ctx.body.astore(handleSlot);
 		JvmEmitHelper.emitIntConst(ctx, 1 + LispLayout.STREAM.capacity());
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(lf.index());
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(handleSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_2);
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.aastore().dup().iconst_1().aload(handleSlot).aastore().dup().iconst_2();
 		// Through the ordinary keyword compilation, so the KIND slot holds exactly what
 		// the makeTypeTest kind comparison reads back.
 		JvmExprCompiler.compileExpr(new LispSymbol(kind), ctx, className);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aastore();
 	}
 
 	/**
@@ -181,29 +161,24 @@ final class JvmObjCompiler {
 			}
 			else {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				ctx.emit(Opcode.POP);
+				ctx.body.pop();
 				JvmExprCompiler.compileExpr(failure, ctx, className);
 			}
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (failure == null) {
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.body.checkcast(ctx.objectArrayClass.entry());
 			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aaload();
 			return;
 		}
 		int objSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(objSlot);
+		ctx.body.astore(objSlot);
 		emitChecked(ctx, className, objSlot, failure, () -> {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(objSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry());
 			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aaload();
 		});
 	}
 
@@ -214,17 +189,14 @@ final class JvmObjCompiler {
 	private static void emitChecked(JvmLispCompiler.Ctx ctx, String className, int objSlot, LispVal failure,
 			Runnable access) {
 		int hdrSlot = ctx.allocTemp();
-		List<Integer> toFailure = new ArrayList<>();
+		MethodCode.Label toFailure = ctx.body.newLabel();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFailure);
 		access.run();
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int p : toFailure) {
-			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
-		}
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(toFailure);
 		JvmExprCompiler.compileExpr(failure, ctx, className);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 	private static MethodrefConstant arraysCopyOfMethod(JvmLispCompiler.Ctx ctx) {
@@ -248,12 +220,8 @@ final class JvmObjCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(arraysCopyOfMethod(ctx).index());
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).dup().arraylength();
+		ctx.body.invokestatic(arraysCopyOfMethod(ctx).entry());
 	}
 
 	/**
@@ -268,13 +236,8 @@ final class JvmObjCompiler {
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(2)));
 		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(lf.index());
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.aastore();
 	}
 
 	/**
@@ -288,74 +251,38 @@ final class JvmObjCompiler {
 		if (args.size() > 4) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			int objSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(objSlot);
+			ctx.body.astore(objSlot);
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 			int valSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(valSlot);
+			ctx.body.astore(valSlot);
 			emitChecked(ctx, className, objSlot, args.get(4), () -> {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(objSlot);
-				ctx.emit(Opcode.CHECKCAST);
-				ctx.emitU2(ctx.objectArrayClass.index());
+				ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry());
 				JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(valSlot);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(valSlot);
+				ctx.body.aload(valSlot).aastore().aload(valSlot);
 			});
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.body.checkcast(ctx.objectArrayClass.entry());
 		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		// [arr, idx, v] -> [v, arr, idx, v]: keeps left-to-right evaluation without a
 		// temp, so the object is evaluated before the value as in the interpreter.
-		ctx.emit(Opcode.DUP_X2);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.dup_x2().aastore();
 	}
 
 	/**
 	 * Emits the shared instance guard over the value already stored in {@code objSlot}:
 	 * it must be an {@code Object[]}, non-empty, with a {@code String[]} in slot 0. The
 	 * header is left in {@code hdrSlot} and the operand stack empty; every escape branch
-	 * position is appended to {@code toFalse}.
+	 * jumps to {@code toFalse}.
 	 */
-	private static void emitInstanceGuard(JvmLispCompiler.Ctx ctx, int objSlot, int hdrSlot, List<Integer> toFalse) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		toFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ARRAYLENGTH);
-		toFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(hdrSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(hdrSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
-		toFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+	private static void emitInstanceGuard(JvmLispCompiler.Ctx ctx, int objSlot, int hdrSlot, MethodCode.Label toFalse) {
+		ctx.body.aload(objSlot).instanceOf(ctx.objectArrayClass.entry()).ifeq(toFalse);
+		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry()).arraylength().ifeq(toFalse);
+		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.astore(hdrSlot).aload(hdrSlot);
+		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp).entry()).ifeq(toFalse);
 	}
 
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
@@ -367,44 +294,29 @@ final class JvmObjCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int objSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(objSlot);
+		ctx.body.astore(objSlot);
 		int hdrSlot = ctx.allocTemp();
-		List<Integer> toFalse = new ArrayList<>();
-		List<Integer> toTrue = new ArrayList<>();
+		MethodCode.Label toFalse = ctx.body.newLabel();
+		MethodCode.Label toTrue = ctx.body.newLabel();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
 		for (int i = 2; i < args.size(); i++) {
 			// Compares the tag TEXT, not layout-array identity: an instance may be built
 			// by the runtime reader or the embedded eval as well as by %obj-new here.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(hdrSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+			ctx.body.iconst_0().aaload();
 			JvmEmitHelper.compileStringLiteral(literalTag(args.get(i)), ctx);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(ctx.objectEquals.index());
-			toTrue.add(ctx.code.size());
-			ctx.emit(Opcode.IFNE);
-			ctx.emitU2(0);
+			ctx.body.invokevirtual(ctx.objectEquals.methodRefEntry()).ifne(toTrue);
 		}
-		int gotoFalsePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int p : toTrue) {
-			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
-		}
+		MethodCode.Label gotoFalsePos = ctx.body.newLabel();
+		ctx.body.goto_(gotoFalsePos);
+		ctx.body.labelBinding(toTrue);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, gotoFalsePos, ctx.code.size());
-		for (int p : toFalse) {
-			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(gotoFalsePos);
+		ctx.body.labelBinding(toFalse);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 	/**
@@ -427,10 +339,9 @@ final class JvmObjCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int objSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(objSlot);
+		ctx.body.astore(objSlot);
 		int hdrSlot = ctx.allocTemp();
-		List<Integer> toFalse = new ArrayList<>();
+		MethodCode.Label toFalse = ctx.body.newLabel();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
 		// list = null; for (i = layout.length - 3; i >= 1; i--) list = new
 		// Object[]{obj[i], list}. The cursor stops at 1, not 0: slot 0 of the instance
@@ -438,63 +349,27 @@ final class JvmObjCompiler {
 		// (its String[] is {tag, printName, kind, slot...}), not at the array length,
 		// because a change-class-reserved array is longer than the layout describes.
 		int listSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		ctx.body.aconst_null().astore(listSlot);
 		int idxSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(hdrSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
-		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.ICONST_3);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(idxSlot);
-		int loopTop = ctx.code.size();
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(idxSlot);
-		int exitLoop = ctx.code.size();
-		ctx.emit(Opcode.IFLE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(idxSlot);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+		ctx.body.arraylength().iconst_3().isub().istore(idxSlot);
+		MethodCode.Label loopTop = ctx.body.newBoundLabel();
+		ctx.body.iload(idxSlot);
+		MethodCode.Label exitLoop = ctx.body.newLabel();
+		ctx.body.ifle(exitLoop);
+		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(objSlot);
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iload(idxSlot).aaload().aastore().dup();
+		ctx.body.iconst_1().aload(listSlot).aastore().astore(listSlot);
 		// Through the typed layer: the byte emitter wrote iinc's slot in one byte, which
 		// past 255 named another local.
-		ctx.body.iinc(idxSlot, -1);
-		int gotoTop = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, gotoTop, loopTop);
-		JvmEmitHelper.patchBranch(ctx, exitLoop, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int p : toFalse) {
-			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.iinc(idxSlot, -1).goto_(loopTop);
+		ctx.body.labelBinding(exitLoop);
+		ctx.body.aload(listSlot);
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(toFalse);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */
@@ -520,30 +395,22 @@ final class JvmObjCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int objSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(objSlot);
+		ctx.body.astore(objSlot);
 		int hdrSlot = ctx.allocTemp();
-		List<Integer> toFalse = new ArrayList<>();
+		MethodCode.Label toFalse = ctx.body.newLabel();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
 		if (readTag) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(hdrSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+			ctx.body.iconst_0().aaload();
 		}
 		else {
 			JvmEmitHelper.compileTrue(ctx);
 		}
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int p : toFalse) {
-			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(toFalse);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

@@ -1,11 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispComplex;
@@ -66,18 +68,14 @@ final class JvmQuoteCompiler {
 		// <slot>; INVOKESTATIC _qd; DUP; IFNONNULL end; POP; <build>; <slot>;
 		// INVOKESTATIC _qdSet; end: -- one value on the stack on both paths.
 		JvmEmitHelper.emitIntConst(ctx, slot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(refs.get().index());
-		ctx.emit(Opcode.DUP);
-		int branchPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
+		ctx.body.invokestatic(refs.get().entry()).dup();
+		MethodCode.Label branchPos = ctx.body.newLabel();
+		ctx.body.ifnonnull(branchPos);
+		ctx.body.pop();
 		build.run();
 		JvmEmitHelper.emitIntConst(ctx, slot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(refs.set().index());
-		JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
+		ctx.body.invokestatic(refs.set().entry());
+		ctx.body.labelBinding(branchPos);
 	}
 
 	/**
@@ -120,9 +118,8 @@ final class JvmQuoteCompiler {
 	static void compileLiteralIntVector(am.ik.rontolisp.LispIntVector iv, JvmLispCompiler.Ctx ctx, String className) {
 		long[] data = iv.toLongArray();
 		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
-		ctx.emit(Opcode.NEWARRAY);
 		if (iv.width() == JvmIntArrayRuntimeBuilder.OCTET_TAG) {
-			ctx.emit(8); // T_BYTE
+			ctx.body.newarray(TypeKind.BYTE);
 			emitRawByteStore(ctx, 0, JvmIntArrayRuntimeBuilder.OCTET_TAG);
 			for (int i = 0; i < data.length; i++) {
 				if (data[i] != 0) {
@@ -131,7 +128,7 @@ final class JvmQuoteCompiler {
 			}
 			return;
 		}
-		ctx.emit(11); // T_LONG
+		ctx.body.newarray(TypeKind.LONG);
 		emitRawLongStore(ctx, 0, iv.width());
 		for (int i = 0; i < data.length; i++) {
 			emitRawLongStore(ctx, 1 + i, data[i]);
@@ -141,29 +138,28 @@ final class JvmQuoteCompiler {
 	// Assumes the byte[] is on top of the stack; stores the octet at index (DUP; index;
 	// the octet as a signed byte; BASTORE), leaving the array on the stack.
 	private static void emitRawByteStore(JvmLispCompiler.Ctx ctx, int index, int octet) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		JvmEmitHelper.emitIntConst(ctx, (byte) octet);
-		ctx.emit(Opcode.BASTORE);
+		ctx.body.bastore();
 	}
 
 	// Assumes the long[] is on top of the stack; stores value at index (DUP; index;
 	// raw long; LASTORE), leaving the array on the stack.
 	private static void emitRawLongStore(JvmLispCompiler.Ctx ctx, int index, long value) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		if (value == 0L) {
-			ctx.emit(Opcode.LCONST_0);
+			ctx.body.lconst_0();
 		}
 		else if (value == 1L) {
-			ctx.emit(Opcode.LCONST_1);
+			ctx.body.lconst_1();
 		}
 		else {
 			am.ik.jvm.ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-			ctx.emit(Opcode.LDC2_W);
-			ctx.emitU2(lc.index());
+			ctx.body.ldc(lc.entry());
 		}
-		ctx.emit(Opcode.LASTORE);
+		ctx.body.lastore();
 	}
 
 	/**
@@ -186,8 +182,7 @@ final class JvmQuoteCompiler {
 		int off = 1 + rank;
 		int len = off + data.length;
 		JvmEmitHelper.emitIntConst(ctx, len);
-		ctx.emit(Opcode.NEWARRAY);
-		ctx.emit(7); // T_DOUBLE
+		ctx.body.newarray(TypeKind.DOUBLE); // T_DOUBLE
 		emitRawDoubleStore(ctx, 0, rank);
 		for (int d = 0; d < rank; d++) {
 			emitRawDoubleStore(ctx, 1 + d, dims[d]);
@@ -200,10 +195,10 @@ final class JvmQuoteCompiler {
 	// Assumes the double[] is on top of the stack; stores value at index (DUP; index;
 	// raw double; DASTORE), leaving the array on the stack.
 	private static void emitRawDoubleStore(JvmLispCompiler.Ctx ctx, int index, double value) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		emitRawDouble(ctx, value);
-		ctx.emit(Opcode.DASTORE);
+		ctx.body.dastore();
 	}
 
 	/**
@@ -226,8 +221,7 @@ final class JvmQuoteCompiler {
 		int off = 1 + rank;
 		int len = off + data.length;
 		JvmEmitHelper.emitIntConst(ctx, len);
-		ctx.emit(Opcode.NEWARRAY);
-		ctx.emit(6); // T_FLOAT
+		ctx.body.newarray(TypeKind.FLOAT); // T_FLOAT
 		emitRawFloatHeaderStore(ctx, 0, rank);
 		for (int d = 0; d < rank; d++) {
 			emitRawFloatHeaderStore(ctx, 1 + d, dims[d]);
@@ -241,11 +235,10 @@ final class JvmQuoteCompiler {
 	// of
 	// the stack (DUP; index; int; I2F; FASTORE), leaving the array on the stack.
 	private static void emitRawFloatHeaderStore(JvmLispCompiler.Ctx ctx, int index, int value) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		JvmEmitHelper.emitIntConst(ctx, value);
-		ctx.emit(Opcode.I2F);
-		ctx.emit(Opcode.FASTORE);
+		ctx.body.i2f().fastore();
 	}
 
 	// Stores a float data value at index into the float[] on top of the stack, emitting
@@ -253,11 +246,10 @@ final class JvmQuoteCompiler {
 	// value as its widening double constant narrowed back with D2F (exact) so no float
 	// constant pool entry is needed (DUP; index; double; D2F; FASTORE).
 	private static void emitRawFloatDataStore(JvmLispCompiler.Ctx ctx, int index, float value) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		emitRawDouble(ctx, value);
-		ctx.emit(Opcode.D2F);
-		ctx.emit(Opcode.FASTORE);
+		ctx.body.d2f().fastore();
 	}
 
 	/**
@@ -276,8 +268,7 @@ final class JvmQuoteCompiler {
 		int[] header = JvmPackedFloatWidth.BFLOAT16.headerWords(fa.dims());
 		int off = header.length;
 		JvmEmitHelper.emitIntConst(ctx, off + data.length);
-		ctx.emit(Opcode.NEWARRAY);
-		ctx.emit(9); // T_SHORT
+		ctx.body.newarray(TypeKind.SHORT); // T_SHORT
 		for (int h = 0; h < off; h++) {
 			emitRawShortStore(ctx, h, (short) header[h]);
 		}
@@ -289,25 +280,24 @@ final class JvmQuoteCompiler {
 	// Stores a short at index into the short[] on top of the stack (DUP; index; value;
 	// SASTORE), leaving the array on the stack.
 	private static void emitRawShortStore(JvmLispCompiler.Ctx ctx, int index, short value) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitIntConst(ctx, index);
 		JvmEmitHelper.emitIntConst(ctx, value);
-		ctx.emit(Opcode.SASTORE);
+		ctx.body.sastore();
 	}
 
 	// Pushes an unboxed double constant (no Double.valueOf), the raw value to store into
 	// a double[].
 	private static void emitRawDouble(JvmLispCompiler.Ctx ctx, double value) {
 		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
-			ctx.emit(Opcode.DCONST_0);
+			ctx.body.dconst_0();
 		}
 		else if (value == 1.0) {
-			ctx.emit(Opcode.DCONST_1);
+			ctx.body.dconst_1();
 		}
 		else {
 			am.ik.jvm.ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
-			ctx.emit(Opcode.LDC2_W);
-			ctx.emitU2(dc.index());
+			ctx.body.ldc(dc.entry());
 		}
 	}
 
@@ -318,7 +308,7 @@ final class JvmQuoteCompiler {
 			case am.ik.rontolisp.LispRatio r -> JvmEmitHelper.compileRatio(r, ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispComplex c -> JvmComplexCompiler.compileLiteral(c, ctx, className);
-			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
+			case LispNil ignored -> ctx.body.aconst_null();
 			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
 			case LispString s -> JvmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case am.ik.rontolisp.LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
@@ -383,18 +373,13 @@ final class JvmQuoteCompiler {
 		am.ik.jvm.ConstantPool.FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
 		int slots = inst.slotCount();
 		JvmEmitHelper.emitIntConst(ctx, 1 + slots);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(lf.index());
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.aastore();
 		for (int i = 0; i < slots; i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 1 + i);
 			compileQuotedVal(inst.slot(i), ctx, className);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
 	}
 
@@ -411,11 +396,7 @@ final class JvmQuoteCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
 		MethodrefConstant alAdd = ctx.cp.addMethodref(arrayListClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("add"), ctx.cp.addUtf8("(Ljava/lang/Object;)Z")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(arrayListClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(alInit.index());
+		ctx.body.new_(arrayListClass.entry()).dup().invokespecial(alInit.entry());
 		// A bit-vector literal (#*1011) is stamped with the remembered element type
 		// bit: the header grows to the length-5 shape _arrayMakeTyped builds, carrying
 		// the name in slot 4, so array-element-type and bit-vector-p read it back.
@@ -425,25 +406,22 @@ final class JvmQuoteCompiler {
 		boolean stampedBit = array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT;
 		addElement(ctx, alAdd, () -> {
 			JvmEmitHelper.emitIntConst(ctx, stampedBit ? 5 : 3);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
+			ctx.body.anewarray(ctx.objectClass.entry()).dup();
 			JvmEmitHelper.emitIntConst(ctx, 0);
 			JvmEmitHelper.emitIntConst(ctx, dims.length);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
+			ctx.body.anewarray(ctx.objectClass.entry());
 			for (int d = 0; d < dims.length; d++) {
-				ctx.emit(Opcode.DUP);
+				ctx.body.dup();
 				JvmEmitHelper.emitIntConst(ctx, d);
 				JvmEmitHelper.compileLong(dims[d], ctx);
-				ctx.emit(Opcode.AASTORE);
+				ctx.body.aastore();
 			}
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 			if (stampedBit) {
-				ctx.emit(Opcode.DUP);
+				ctx.body.dup();
 				JvmEmitHelper.emitIntConst(ctx, 4);
 				JvmEmitHelper.compileUnspelledLiteral(am.ik.rontolisp.LispNames.BIT, ctx);
-				ctx.emit(Opcode.AASTORE);
+				ctx.body.aastore();
 			}
 		});
 		for (LispVal element : array.data()) {
@@ -455,11 +433,9 @@ final class JvmQuoteCompiler {
 	// Assumes the ArrayList is on top of the stack; appends one element (pushed by
 	// pushValue) and leaves the list on the stack.
 	private static void addElement(JvmLispCompiler.Ctx ctx, MethodrefConstant alAdd, Runnable pushValue) {
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		pushValue.run();
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(alAdd.index());
-		ctx.emit(Opcode.POP);
+		ctx.body.invokevirtual(alAdd.methodRefEntry()).pop();
 	}
 
 	/**
@@ -508,13 +484,11 @@ final class JvmQuoteCompiler {
 			builder.evalStoreRef = ctx.evalStoreRef;
 			builder.nextLocal = 1;
 			builder.maxLocals = 1;
-			builder.emit(Opcode.ALOAD);
-			builder.emit(0);
+			builder.body.aload(0);
 			emitSpineCells(cars, chunk[0], chunk[1], builder, className);
-			builder.emit(Opcode.ARETURN);
+			builder.body.areturn();
 			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, builder));
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ref.index());
+			ctx.body.invokestatic(ref.entry());
 		}
 	}
 
@@ -532,20 +506,10 @@ final class JvmQuoteCompiler {
 		int savedNextLocal = ctx.nextLocal;
 		int tempSlot = ctx.allocTemp();
 		for (int i = to - 1; i >= from; i--) {
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.ICONST_2);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
+			ctx.body.astore(tempSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup();
+			ctx.body.iconst_0();
 			compileQuotedVal(cars.get(i), ctx, className);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore().dup().iconst_1().aload(tempSlot).aastore();
 		}
 		ctx.nextLocal = savedNextLocal;
 	}

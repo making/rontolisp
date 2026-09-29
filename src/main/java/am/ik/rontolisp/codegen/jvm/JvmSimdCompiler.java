@@ -1,18 +1,18 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
+import java.lang.classfile.constantpool.ClassEntry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
@@ -176,8 +176,7 @@ final class JvmSimdCompiler {
 		// Make sure the bridge class is initialized -- or, on a runtime without
 		// jdk.incubator.vector, that _simdReady() below reads false -- before anything
 		// decides which path to take.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 		// Under --gpu the lane kernel reads its arguments on the host, so each is
 		// materialized first (a result the device still holds comes home) and the kernel
 		// is handed what the guard answers -- the array, or a result stub's backing; an
@@ -202,63 +201,43 @@ final class JvmSimdCompiler {
 				boolean destination = into && i == 1;
 				if (destination) {
 					original = ctx.allocTemp();
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(original);
+					ctx.body.dup().astore(original);
 				}
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(Objects
+				ctx.body.invokestatic(Objects
 					.requireNonNull(
 							gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
-					.index());
+					.entry());
 				if (destination) {
 					handed = ctx.allocTemp();
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(handed);
+					ctx.body.dup().astore(handed);
 				}
 			}
 			slots[i - 1] = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slots[i - 1]);
+			ctx.body.astore(slots[i - 1]);
 		}
 		// if (!_simdReady()) goto fallback; if (!laneWidth(array args)) goto fallback;
 		// Bridge(slots...); goto end; fallback: defun(slots...); end: -- the fallback
 		// lands exactly where a declined linalg: attempt would, so the gpu unswap below
 		// applies uniformly to either answer.
-		List<Integer> fallbackBranches = new ArrayList<>();
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
-		fallbackBranches.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		emitLaneWidthGuard(ctx, member, slots, fallbackBranches);
+		MethodCode.Label fallback = ctx.body.newLabel();
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+		ctx.body.ifeq(fallback);
+		emitLaneWidthGuard(ctx, member, slots, fallback);
 		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
+			ctx.body.aload(slot);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(member)).index());
-		int skipFallback = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int fallbackBranch : fallbackBranches) {
-			JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
-		}
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(member)).entry());
+		MethodCode.Label skipFallback = ctx.body.newLabel();
+		ctx.body.goto_(skipFallback);
+		ctx.body.labelBinding(fallback);
 		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
+			ctx.body.aload(slot);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(defun.methodref().index());
-		JvmEmitHelper.patchBranch(ctx, skipFallback, ctx.code.size());
+		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.labelBinding(skipFallback);
 		if (gpuOps != null && into) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(original);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(handed);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)).index());
+			ctx.body.aload(original).aload(handed);
+			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)).entry());
 		}
 	}
 
@@ -320,13 +299,12 @@ final class JvmSimdCompiler {
 		for (int i = 0; i < arity; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
 			slots[i] = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slots[i]);
+			ctx.body.astore(slots[i]);
 		}
 		// r = <Program>$GpuBridge.gpuMatvec(w, x); if (r != null) goto end;
-		List<Integer> deviceBranches = new ArrayList<>();
+		MethodCode.Label deviceAnswered = ctx.body.newLabel();
 		if (gpu != null) {
-			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceBranches);
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceAnswered);
 		}
 		// Every rung below reads its arguments on the host, so each is materialized first
 		// (a result the device still holds the only copy of comes home); the -into form
@@ -339,72 +317,51 @@ final class JvmSimdCompiler {
 			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
 			for (int i = 0; i < arity; i++) {
 				boolean destination = into && i == 0;
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
+				ctx.body.aload(slots[i]);
 				if (destination) {
 					destinationOriginal = ctx.allocTemp();
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(destinationOriginal);
+					ctx.body.dup().astore(destinationOriginal);
 				}
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(destination ? report.index() : materialize.index());
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(slots[i]);
+				ctx.body.invokestatic((destination ? report : materialize).entry());
+				ctx.body.astore(slots[i]);
 			}
 		}
 		// The host rungs, each answering into the common end below the unswap.
-		List<Integer> hostBranches = new ArrayList<>();
+		MethodCode.Label hostAnswered = ctx.body.newLabel();
 		if (blasKey != null) {
-			emitAttempt(ctx, Objects.requireNonNull(blas), blasKey, slots, hostBranches);
+			emitAttempt(ctx, Objects.requireNonNull(blas), blasKey, slots, hostAnswered);
 		}
 		if (simd != null) {
 			// if (!_simdReady()) goto fallback -- a runtime without jdk.incubator.vector
 			// (JvmSimdRuntimeBuilder) takes the scalar defun instead, the same decline
 			// every other accelerated vec:/linalg: call site gives -- and so does an
 			// operand of a width the lane kernels do not carry (emitLaneWidthGuard).
-			List<Integer> fallbackBranches = new ArrayList<>();
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
-			fallbackBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			emitLaneWidthGuard(ctx, member, slots, fallbackBranches);
+			MethodCode.Label fallback = ctx.body.newLabel();
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+			ctx.body.ifeq(fallback);
+			emitLaneWidthGuard(ctx, member, slots, fallback);
 			loadAll(ctx, slots);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(simd.get(member)).index());
-			int skipFallback = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			for (int fallbackBranch : fallbackBranches) {
-				JvmEmitHelper.patchBranch(ctx, fallbackBranch, ctx.code.size());
-			}
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(member)).entry());
+			MethodCode.Label skipFallback = ctx.body.newLabel();
+			ctx.body.goto_(skipFallback);
+			ctx.body.labelBinding(fallback);
 			loadAll(ctx, slots);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(defun.methodref().index());
-			JvmEmitHelper.patchBranch(ctx, skipFallback, ctx.code.size());
+			ctx.body.invokestatic(defun.methodref().entry());
+			ctx.body.labelBinding(skipFallback);
 		}
 		else {
 			loadAll(ctx, slots);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(defun.methodref().index());
+			ctx.body.invokestatic(defun.methodref().entry());
 		}
-		for (int branchPos : hostBranches) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
+		ctx.body.labelBinding(hostAnswered);
 		if (destinationOriginal >= 0) {
 			// A host rung answered the destination backing it was handed: answer the
 			// caller's own object instead.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(destinationOriginal);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[0]);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)).index());
+			ctx.body.aload(destinationOriginal).aload(slots[0]);
+			ctx.body.invokestatic(
+					Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)).entry());
 		}
-		for (int branchPos : deviceBranches) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
+		ctx.body.labelBinding(deviceAnswered);
 	}
 
 	/**
@@ -417,8 +374,7 @@ final class JvmSimdCompiler {
 	 * the same decline the interpreter's {@code VecSimd} chain gives. Asking "is it the
 	 * unsupported one?" would let the next unsupported width fall through to the cast. A
 	 * scalar position ({@link #SCALAR_TAIL}) is not an array and is not asked. Each
-	 * failing test branches to the caller's fallback; the positions are appended to
-	 * {@code fallbackBranches} for the caller to patch.
+	 * failing test branches to the caller's {@code fallback} label.
 	 *
 	 * <p>
 	 * The FIRST array operand decides the width and every other one must match it: a
@@ -458,180 +414,99 @@ final class JvmSimdCompiler {
 	 * each ends at the kernel call.
 	 */
 	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
-			List<Integer> fallbackBranches) {
+			MethodCode.Label fallback) {
 		int arrays = slots.length - SCALAR_TAIL.getOrDefault(member, 0);
-		int doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).index();
-		int floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).index();
+		ClassEntry doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).entry();
+		ClassEntry floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).entry();
 		Integer bf16Operand = BF16_OPERAND.get(member);
 		Integer quantizedOperand = QUANTIZED_OPERAND.get(member);
-		List<Integer> skipGenerals = new ArrayList<>();
+		MethodCode.Label skipGenerals = ctx.body.newLabel();
 		if (quantizedOperand != null) {
 			// if (!(slot_q instanceof byte[])) goto next arm; then the other array
 			// operands are all float[] or all double[] (decided by the first of them),
 			// else fallback.
-			int byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B")).index();
-			List<Integer> notQuantized = new ArrayList<>();
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[quantizedOperand]);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(byteArrayClass);
-			notQuantized.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ClassEntry byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B")).entry();
+			MethodCode.Label notQuantized = ctx.body.newLabel();
+			ctx.body.aload(slots[quantizedOperand]).instanceOf(byteArrayClass).ifeq(notQuantized);
 			if (ctx.usesIntArray) {
 				// An (unsigned-byte 8) vector is the other byte[]: its slot 0 is the tag.
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[quantizedOperand]);
-				ctx.emit(Opcode.CHECKCAST);
-				ctx.emitU2(byteArrayClass);
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.BALOAD);
-				ctx.emit(Opcode.BIPUSH);
-				ctx.emit(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				notQuantized.add(ctx.code.size());
-				ctx.emit(Opcode.IF_ICMPEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[quantizedOperand]).checkcast(byteArrayClass);
+				ctx.body.iconst_0().baload().loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				ctx.body.if_icmpeq(notQuantized);
 			}
 			int first = quantizedOperand == 0 ? 1 : 0;
 			// if (slot_first instanceof float[]) { others float[] } else { first
 			// double[]; others double[] }
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[first]);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(floatArrayClass);
-			int notFloat = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ctx.body.aload(slots[first]).instanceOf(floatArrayClass);
+			MethodCode.Label notFloat = ctx.body.newLabel();
+			ctx.body.ifeq(notFloat);
 			for (int i = 0; i < arrays; i++) {
 				if (i == quantizedOperand || i == first) {
 					continue;
 				}
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(floatArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
 			}
-			skipGenerals.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, notFloat, ctx.code.size());
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(notFloat);
 			for (int i = 0; i < arrays; i++) {
 				if (i == quantizedOperand) {
 					continue;
 				}
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(doubleArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(doubleArrayClass).ifeq(fallback);
 			}
-			skipGenerals.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			for (int pos : notQuantized) {
-				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-			}
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(notQuantized);
 		}
 		if (bf16Operand != null) {
 			// if (!(slot_p instanceof short[])) goto general;
-			int shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).index();
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[bf16Operand]);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(shortArrayClass);
-			int general = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ClassEntry shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).entry();
+			ctx.body.aload(slots[bf16Operand]).instanceOf(shortArrayClass);
+			MethodCode.Label general = ctx.body.newLabel();
+			ctx.body.ifeq(general);
 			for (int i = 0; i < arrays; i++) {
 				if (i == bf16Operand) {
 					continue;
 				}
 				// if (!(slot_i instanceof float[])) goto fallback
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(floatArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
 			}
-			skipGenerals.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, general, ctx.code.size());
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(general);
 		}
 		if (BF16_ELEMENTWISE.contains(member)) {
 			// if (!(slot_0 instanceof short[])) goto general;
-			int shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).index();
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[0]);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(shortArrayClass);
-			int generalBf16 = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ClassEntry shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).entry();
+			ctx.body.aload(slots[0]).instanceOf(shortArrayClass);
+			MethodCode.Label generalBf16 = ctx.body.newLabel();
+			ctx.body.ifeq(generalBf16);
 			for (int i = 1; i < arrays; i++) {
 				// if (!(slot_i instanceof short[])) goto fallback
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(shortArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(shortArrayClass).ifeq(fallback);
 			}
-			skipGenerals.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, generalBf16, ctx.code.size());
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(generalBf16);
 		}
 		if (arrays > 0) {
 			// if (slot_0 instanceof double[]) { every array operand double[] }
 			// else { every array operand float[] } -- anything else falls back.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[0]);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(doubleArrayClass);
-			int notDouble = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
+			ctx.body.aload(slots[0]).instanceOf(doubleArrayClass);
+			MethodCode.Label notDouble = ctx.body.newLabel();
+			ctx.body.ifeq(notDouble);
 			for (int i = 1; i < arrays; i++) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(doubleArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(doubleArrayClass).ifeq(fallback);
 			}
-			skipGenerals.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, notDouble, ctx.code.size());
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(notDouble);
 			for (int i = 0; i < arrays; i++) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(floatArrayClass);
-				fallbackBranches.add(ctx.code.size());
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
 			}
 		}
-		for (int skipGeneral : skipGenerals) {
-			JvmEmitHelper.patchBranch(ctx, skipGeneral, ctx.code.size());
-		}
+		ctx.body.labelBinding(skipGenerals);
 	}
 
 	/** Sets a bridge up before its first call. */
 	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 	}
 
 	/**
@@ -639,21 +514,16 @@ final class JvmSimdCompiler {
 	 * it answered, leaving the stack as it was found when it declined.
 	 */
 	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
-			int[] slots, List<Integer> takenBranches) {
+			int[] slots, MethodCode.Label answered) {
 		loadAll(ctx, slots);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(kernelKey)).index());
-		ctx.emit(Opcode.DUP);
-		takenBranches.add(ctx.code.size());
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry()).dup();
+		ctx.body.ifnonnull(answered);
+		ctx.body.pop();
 	}
 
 	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots) {
 		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
+			ctx.body.aload(slot);
 		}
 	}
 

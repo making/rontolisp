@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -13,7 +13,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the four {@code geom:} members a model FILE spends its whole load time in --
@@ -174,14 +173,11 @@ final class JvmGeomKernelCompiler {
 		}
 		emitInit(ctx, ops);
 		int[] slots = compileArgsIntoTemps(args, supplied, ctx, className);
-		List<Integer> taken = new ArrayList<>();
+		MethodCode.Label taken = ctx.body.newLabel();
 		emitAttempt(ctx, ops, qualified, slots, arity, taken);
 		loadAll(ctx, slots, arity);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(defun.methodref().index());
-		for (int branchPos : taken) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
+		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.labelBinding(taken);
 	}
 
 	/**
@@ -216,52 +212,31 @@ final class JvmGeomKernelCompiler {
 		// The keyword tail as one cons list, built once and handed to whichever of the
 		// two variadic defuns runs: both declare exactly (&key color label).
 		int restSlot = emitRestList(ctx, slots, 1, supplied);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).index());
-		int skipPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slots[0]);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(READ_OBJ)).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).entry());
+		MethodCode.Label skipPos = ctx.body.newLabel();
+		ctx.body.ifeq(skipPos);
+		ctx.body.aload(slots[0]).invokestatic(Objects.requireNonNull(ops.get(READ_OBJ)).entry());
 		int scanSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(scanSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(scanSlot);
-		int declinedPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		ctx.body.astore(scanSlot).aload(scanSlot);
+		MethodCode.Label declinedPos = ctx.body.newLabel();
+		ctx.body.ifnull(declinedPos);
 		// %solid-of-vertices(scan[0], scan[1], rest)
 		emitScanElement(ctx, scanSlot, 0);
 		emitScanElement(ctx, scanSlot, 1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(restSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(builder.methodref().index());
-		int takenPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, skipPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, declinedPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slots[0]);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(restSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(defun.methodref().index());
-		JvmEmitHelper.patchBranch(ctx, takenPos, ctx.code.size());
+		ctx.body.aload(restSlot).invokestatic(builder.methodref().entry());
+		MethodCode.Label takenPos = ctx.body.newLabel();
+		ctx.body.goto_(takenPos);
+		ctx.body.labelBinding(skipPos);
+		ctx.body.labelBinding(declinedPos);
+		ctx.body.aload(slots[0]).aload(restSlot).invokestatic(defun.methodref().entry());
+		ctx.body.labelBinding(takenPos);
 	}
 
 	/** {@code (Object[]) scan}{@code [index]}, as one expression on the stack. */
 	private static void emitScanElement(JvmLispCompiler.Ctx ctx, int scanSlot, int index) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(scanSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.body.aload(scanSlot).checkcast(ctx.objectArrayClass.entry());
 		JvmEmitHelper.emitIntConst(ctx, index);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aaload();
 	}
 
 	/**
@@ -289,8 +264,7 @@ final class JvmGeomKernelCompiler {
 		for (int i = 0; i < supplied; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
 			slots[i] = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slots[i]);
+			ctx.body.astore(slots[i]);
 		}
 		return slots;
 	}
@@ -302,25 +276,10 @@ final class JvmGeomKernelCompiler {
 	 */
 	private static int emitRestList(JvmLispCompiler.Ctx ctx, int[] slots, int from, int to) {
 		int restSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(restSlot);
+		ctx.body.aconst_null().astore(restSlot);
 		for (int k = to - 1; k >= from; k--) {
-			ctx.emit(Opcode.ICONST_2);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[k]);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(restSlot);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(restSlot);
+			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(slots[k]);
+			ctx.body.aastore().dup().iconst_1().aload(restSlot).aastore().astore(restSlot);
 		}
 		return restSlot;
 	}
@@ -329,8 +288,7 @@ final class JvmGeomKernelCompiler {
 	private static final String AVAILABLE_KEY = JvmGeomRuntimeBuilder.AVAILABLE;
 
 	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 	}
 
 	/**
@@ -339,28 +297,21 @@ final class JvmGeomKernelCompiler {
 	 * a declined kernel would, on the spliced defun.
 	 */
 	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
-			int[] slots, int arity, List<Integer> takenBranches) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).index());
-		int skipPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+			int[] slots, int arity, MethodCode.Label answered) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).entry());
+		MethodCode.Label skipPos = ctx.body.newLabel();
+		ctx.body.ifeq(skipPos);
 		loadAll(ctx, slots, arity);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(kernelKey)).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry());
 		// if (result != null) goto end; else fall through to the defun.
-		ctx.emit(Opcode.DUP);
-		takenBranches.add(ctx.code.size());
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
-		JvmEmitHelper.patchBranch(ctx, skipPos, ctx.code.size());
+		ctx.body.dup().ifnonnull(answered);
+		ctx.body.pop();
+		ctx.body.labelBinding(skipPos);
 	}
 
 	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots, int count) {
 		for (int i = 0; i < count; i++) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slots[i]);
+			ctx.body.aload(slots[i]);
 		}
 	}
 

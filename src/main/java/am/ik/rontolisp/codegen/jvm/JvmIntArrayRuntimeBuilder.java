@@ -9,7 +9,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 
 /**
@@ -173,35 +172,19 @@ final class JvmIntArrayRuntimeBuilder {
 
 	/**
 	 * Emits the octet vector test over the value on top of the stack, leaving it there:
-	 * falls through when it is an {@code (unsigned-byte 8)} vector, and answers the
-	 * branches (to patch at the "not one" target, where the value is still on the stack)
-	 * taken otherwise. The inline twin of {@link Octets#emitTest}, for the site-emitted
-	 * predicates.
+	 * falls through when it is an {@code (unsigned-byte 8)} vector, and jumps to
+	 * {@code notOctets} (where the value is still on the stack) otherwise. The inline
+	 * twin of {@link Octets#emitTest}, for the site-emitted predicates.
 	 * @param ctx the compilation context
-	 * @return the positions of the branches taken for any other value
+	 * @param notOctets where any other value jumps
 	 */
-	static List<Integer> emitOctetTestOnStack(JvmLispCompiler.Ctx ctx) {
+	static void emitOctetTestOnStack(JvmLispCompiler.Ctx ctx, MethodCode.Label notOctets) {
 		ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
-		List<Integer> notOctets = new ArrayList<>();
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(byteArrayClass.index());
-		notOctets.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.dup().instanceOf(byteArrayClass).ifeq(notOctets);
 		if (ctx.usesQuantized) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(byteArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.BALOAD);
-			ctx.emit(Opcode.BIPUSH);
-			ctx.emit(OCTET_TAG);
-			notOctets.add(ctx.code.size());
-			ctx.emit(Opcode.IF_ICMPNE);
-			ctx.emitU2(0);
+			ctx.body.dup().checkcast(byteArrayClass).iconst_0().baload().loadConstant(OCTET_TAG);
+			ctx.body.if_icmpne(notOctets);
 		}
-		return notOctets;
 	}
 
 	/**

@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -308,34 +307,28 @@ final class JvmIntFusionCompiler {
 	/** Pushes the raw {@code long} half of the triple. */
 	private static void emitRawLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(raw.longField()).index());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.longField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(raw.longSlot());
+		ctx.body.lload(raw.longSlot());
 	}
 
 	/** Pushes the boxed shadow half of the triple. */
 	private static void emitShadowLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(raw.shadowField()).index());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.shadowField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(raw.shadowSlot());
+		ctx.body.aload(raw.shadowSlot());
 	}
 
 	/** Pushes the {@code int} flag half of the triple. */
 	private static void emitFlagLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(raw.flagField()).index());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.flagField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(raw.flagSlot());
+		ctx.body.iload(raw.flagSlot());
 	}
 
 	/**
@@ -472,8 +465,7 @@ final class JvmIntFusionCompiler {
 		}
 		MethodrefConstant ref = methodFor(root, site.leaves, -1, ctx);
 		pushLeaves(site.leaves, ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 		return true;
 	}
 
@@ -549,8 +541,7 @@ final class JvmIntFusionCompiler {
 		Node root = new OpNode(CMP_ROOT, List.of(left, right), sourceSite(cons, ctx, site));
 		MethodrefConstant ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
 		pushLeaves(site.leaves, ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 		return true;
 	}
 
@@ -770,41 +761,30 @@ final class JvmIntFusionCompiler {
 			}
 			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
 					&& site.leaves.size() <= MAX_EXPR_LEAVES) {
-				int @Nullable [] step = emitRawStepFastPath(root, ctx, target);
+				MethodCode.Label @Nullable [] step = emitRawStepFastPath(root, ctx, target);
 				MethodrefConstant ref = methodFor(root, site.leaves, -1, ctx);
 				if (step != null) {
-					JvmEmitHelper.patchBranch(ctx, step[0], ctx.code.size());
-					JvmEmitHelper.patchBranch(ctx, step[1], ctx.code.size());
+					ctx.body.labelBinding(step[0]);
 				}
 				pushLeaves(site.leaves, ctx, className);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ref.index());
+				ctx.body.invokestatic(ref.entry());
 				// Dispatch on the VALUE's type, not on which path computed it: a Long
 				// is the raw representation whichever path answered it.
 				int tmp = ctx.allocTemp();
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(tmp);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(tmp);
-				ctx.emit(Opcode.INSTANCEOF);
-				ctx.emitU2(ctx.longClass.index());
-				int notLong = ctx.code.size();
-				ctx.emit(Opcode.IFEQ);
-				ctx.emitU2(0);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(tmp);
+				ctx.body.astore(tmp).aload(tmp).instanceOf(ctx.longClass.entry());
+				MethodCode.Label notLong = ctx.body.newLabel();
+				ctx.body.ifeq(notLong);
+				ctx.body.aload(tmp);
 				JvmEmitHelper.unboxLong(ctx);
 				emitRawSlotStore(target, ctx);
-				int done = ctx.code.size();
-				ctx.emit(Opcode.GOTO);
-				ctx.emitU2(0);
-				JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(tmp);
+				MethodCode.Label done = ctx.body.newLabel();
+				ctx.body.goto_(done);
+				ctx.body.labelBinding(notLong);
+				ctx.body.aload(tmp);
 				emitShadowSlotStore(target, ctx);
-				JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+				ctx.body.labelBinding(done);
 				if (step != null) {
-					JvmEmitHelper.patchBranch(ctx, step[2], ctx.code.size());
+					ctx.body.labelBinding(step[1]);
 				}
 				return;
 			}
@@ -839,11 +819,11 @@ final class JvmIntFusionCompiler {
 	 * The overflow guard is {@code Math.addExact}'s condition spelled out for a constant
 	 * addend, so the fallback sees exactly the cases the outlined method's
 	 * {@code addExact} would have thrown on.
-	 * @return the two branch positions to patch to the fallback's first instruction,
-	 * followed by the position of the jump past it, or {@code null} when the shape does
-	 * not apply
+	 * @return the label to bind at the fallback's first instruction, followed by the one
+	 * to bind past it, or {@code null} when the shape does not apply
 	 */
-	private static int @Nullable [] emitRawStepFastPath(Node root, JvmLispCompiler.Ctx ctx, RawLocal target) {
+	private static MethodCode.Label @Nullable [] emitRawStepFastPath(Node root, JvmLispCompiler.Ctx ctx,
+			RawLocal target) {
 		if (!(root instanceof OpNode op) || op.args().size() != 2) {
 			return null;
 		}
@@ -871,71 +851,66 @@ final class JvmIntFusionCompiler {
 		if (addend == 0) {
 			return null;
 		}
+		MethodCode.Label fallback = ctx.body.newLabel();
+		MethodCode.Label joins = ctx.body.newLabel();
 		emitFlagLoad(leaf.src, ctx);
-		int notRaw = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.ifeq(fallback);
 		emitRawLoad(leaf.src, ctx);
 		JvmEmitHelper.emitRawLong(addend > 0 ? Long.MAX_VALUE - addend : Long.MIN_VALUE - addend, ctx);
-		ctx.emit(Opcode.LCMP);
-		int overflows = ctx.code.size();
-		ctx.emit(addend > 0 ? Opcode.IFGT : Opcode.IFLT);
-		ctx.emitU2(0);
+		ctx.body.lcmp();
+		if (addend > 0) {
+			ctx.body.ifgt(fallback);
+		}
+		else {
+			ctx.body.iflt(fallback);
+		}
 		emitRawLoad(leaf.src, ctx);
 		JvmEmitHelper.emitRawLong(addend, ctx);
-		ctx.emit(Opcode.LADD);
+		ctx.body.ladd();
 		emitRawSlotStore(target, ctx);
-		int joins = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		return new int[] { notRaw, overflows, joins };
+		ctx.body.goto_(joins);
+		return new MethodCode.Label[] { fallback, joins };
 	}
 
 	/** Raw {@code long} on the stack -> the raw slot; the flag marks it authoritative. */
 	private static void emitRawSlotStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		emitRawHalfStore(target, ctx);
-		ctx.emit(Opcode.ICONST_1);
+		ctx.body.iconst_1();
 		emitFlagStore(target, ctx);
 	}
 
 	/** Boxed value on the stack -> the shadow slot; the flag marks the raw slot stale. */
 	private static void emitShadowSlotStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		emitShadowHalfStore(target, ctx);
-		ctx.emit(Opcode.ICONST_0);
+		ctx.body.iconst_0();
 		emitFlagStore(target, ctx);
 	}
 
 	/** Raw {@code long} on the stack -> the raw half; the flag is NOT touched. */
 	private static void emitRawHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(target.longField()).index());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.longField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.LSTORE);
-		ctx.emit(target.longSlot());
+		ctx.body.lstore(target.longSlot());
 	}
 
 	/** Boxed value on the stack -> the shadow half; the flag is NOT touched. */
 	private static void emitShadowHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(target.shadowField()).index());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.shadowField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(target.shadowSlot());
+		ctx.body.astore(target.shadowSlot());
 	}
 
 	/** {@code int} on the stack -> the flag half. */
 	private static void emitFlagStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(target.flagField()).index());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.flagField()).entry());
 			return;
 		}
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(target.flagSlot());
+		ctx.body.istore(target.flagSlot());
 	}
 
 	/**
@@ -948,8 +923,7 @@ final class JvmIntFusionCompiler {
 		emitShadowLoad(raw, ctx);
 		emitRawLoad(raw, ctx);
 		emitFlagLoad(raw, ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ubReadRef(ctx, state).index());
+		ctx.body.invokestatic(ubReadRef(ctx, state).entry());
 	}
 
 	private static MethodrefConstant ubReadRef(JvmLispCompiler.Ctx ctx, State state) {
@@ -1664,7 +1638,7 @@ final class JvmIntFusionCompiler {
 		}
 		ctx.nextLocal = slot;
 		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
-		List<Integer> bails = new ArrayList<>();
+		MethodCode.Label bails = ctx.body.newLabel();
 		ClassConstant longArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[J"));
 		// Every random leaf draws ONCE, here, before any guard and without any bail of
 		// its own: a leaf whose limit is not a Long takes its draw through _random and
@@ -1681,9 +1655,7 @@ final class JvmIntFusionCompiler {
 				limitScratch = ctx.allocTemp();
 				ctx.allocTemp();
 				bailFlag = ctx.allocTemp();
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.ISTORE);
-				ctx.emit(bailFlag);
+				ctx.body.iconst_0().istore(bailFlag);
 				break;
 			}
 		}
@@ -1710,44 +1682,30 @@ final class JvmIntFusionCompiler {
 			}
 		}
 		if (bailFlag >= 0) {
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(bailFlag);
-			bails.add(branch(ctx, Opcode.IFNE));
+			ctx.body.iload(bailFlag).ifne(bails);
 		}
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.paramSlot);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(ctx.longClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.paramSlot);
+					ctx.body.aload(l.paramSlot).instanceOf(ctx.longClass.entry()).ifeq(bails);
+					ctx.body.aload(l.paramSlot);
 					JvmEmitHelper.unboxLong(ctx);
 					l.longSlot = ctx.allocTemp();
 					ctx.allocTemp();
-					ctx.emit(Opcode.LSTORE);
-					ctx.emit(l.longSlot);
+					ctx.body.lstore(l.longSlot);
 				}
 				case RawLeaf l -> {
 					// Flag set: the raw param already holds the value. A Long shadow:
 					// unbox into the raw param's slot (same numeric). Anything else:
 					// bail.
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(l.flagParam);
-					int isRaw = branch(ctx, Opcode.IFNE);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.shadowParam);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(ctx.longClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.shadowParam);
+					ctx.body.iload(l.flagParam);
+					MethodCode.Label isRaw = ctx.body.newLabel();
+					ctx.body.ifne(isRaw);
+					ctx.body.aload(l.shadowParam).instanceOf(ctx.longClass.entry()).ifeq(bails);
+					ctx.body.aload(l.shadowParam);
 					JvmEmitHelper.unboxLong(ctx);
-					ctx.emit(Opcode.LSTORE);
-					ctx.emit(l.rawParam);
-					JvmEmitHelper.patchBranch(ctx, isRaw, ctx.code.size());
+					ctx.body.lstore(l.rawParam);
+					ctx.body.labelBinding(isRaw);
 					l.longSlot = l.rawParam;
 				}
 				case ArefLeaf ignored -> {
@@ -1773,31 +1731,28 @@ final class JvmIntFusionCompiler {
 		// _fxAsh, a zero divisor) discards the partial operand stack and lands in the
 		// bail, whose fallback recomputes generically -- including the generic error
 		// shape for the zero divisor.
-		int tryStart = ctx.code.size();
+		MethodCode.Label tryStart = ctx.body.newBoundLabel();
 		if (pending.isCompare()) {
 			OpNode root = (OpNode) pending.root();
 			emitFast(root.args().get(0), ctx, state);
 			emitFast(root.args().get(1), ctx, state);
-			ctx.emit(Opcode.LCMP);
+			ctx.body.lcmp();
 			emitCompareResult(branchForMask(pending.cmpMask()), ctx);
 		}
 		else {
 			emitFast(pending.root(), ctx, state);
 			JvmEmitHelper.boxLong(ctx);
-			ctx.emit(Opcode.ARETURN);
+			ctx.body.areturn();
 		}
-		int tryEnd = ctx.code.size();
+		MethodCode.Label tryEnd = ctx.body.newBoundLabel();
 		// The IEEE double fast path: the same tree over leaves that are all Doubles,
 		// tried when the Long guards fail. It sits OUTSIDE the checked region -- an
 		// overflow means the exact integer result did not fit, which the fallback owns,
 		// not the doubles.
-		List<Integer> fallbackBails = bails;
+		MethodCode.Label fallbackBails = bails;
 		if (doubleEligible(pending.root(), pending.leaves()) && ctx.nextLocal + 2 * pending.leaves().size() <= 250) {
-			int doubleEntry = ctx.code.size();
-			for (int pos : bails) {
-				JvmEmitHelper.patchBranch(ctx, pos, doubleEntry);
-			}
-			List<Integer> doubleBails = new ArrayList<>();
+			ctx.body.labelBinding(bails);
+			MethodCode.Label doubleBails = ctx.body.newLabel();
 			emitDoubleGuards(pending.leaves(), ctx, doubleBails);
 			if (pending.isCompare()) {
 				OpNode root = (OpNode) pending.root();
@@ -1807,13 +1762,18 @@ final class JvmIntFusionCompiler {
 				// javac's NaN rule, which is exactly the bitmask _cmpb answers: DCMPG
 				// for < and <= (unordered falls out as +1, failing IFLT/IFLE), DCMPL
 				// for the rest (unordered falls out as -1, failing IFEQ/IFGT/IFGE).
-				ctx.emit(branchOpcode == Opcode.IFLT || branchOpcode == Opcode.IFLE ? Opcode.DCMPG : Opcode.DCMPL);
+				if (branchOpcode == Opcode.IFLT || branchOpcode == Opcode.IFLE) {
+					ctx.body.dcmpg();
+				}
+				else {
+					ctx.body.dcmpl();
+				}
 				emitCompareResult(branchOpcode, ctx);
 			}
 			else {
 				emitFastDouble(pending.root(), ctx);
 				JvmEmitHelper.boxDouble(ctx);
-				ctx.emit(Opcode.ARETURN);
+				ctx.body.areturn();
 			}
 			fallbackBails = doubleBails;
 		}
@@ -1836,61 +1796,38 @@ final class JvmIntFusionCompiler {
 			int limitScratch, int bailFlag) {
 		if (leaf.limitExpr == null) {
 			emitDrawTimesDouble(ctx, -1, leaf.limitConst);
-			ctx.emit(Opcode.LSTORE);
-			ctx.emit(leaf.longSlot);
+			ctx.body.lstore(leaf.longSlot);
 			return;
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(leaf.limitParam);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.longClass.index());
-		int notLong = branch(ctx, Opcode.IFEQ);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(leaf.limitParam);
+		ctx.body.aload(leaf.limitParam).instanceOf(ctx.longClass.entry());
+		MethodCode.Label notLong = ctx.body.newLabel();
+		ctx.body.ifeq(notLong);
+		ctx.body.aload(leaf.limitParam);
 		JvmEmitHelper.unboxLong(ctx);
-		ctx.emit(Opcode.LSTORE);
-		ctx.emit(limitScratch);
+		ctx.body.lstore(limitScratch);
 		// A non-positive Long limit is _random's domain violation too (.todo/981): join
 		// the not-a-Long trampoline below instead of drawing, so the boxed helper call
 		// throws (its own check runs before any draw, so this never draws twice).
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(limitScratch);
-		ctx.emit(Opcode.LCONST_0);
-		ctx.emit(Opcode.LCMP);
-		int notPositive = branch(ctx, Opcode.IFLE);
+		ctx.body.lload(limitScratch).lconst_0().lcmp();
+		MethodCode.Label notPositive = ctx.body.newLabel();
+		ctx.body.ifle(notPositive);
 		emitDrawTimesDouble(ctx, limitScratch, 0);
-		ctx.emit(Opcode.LSTORE);
-		ctx.emit(leaf.longSlot);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(leaf.flagSlot);
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(leaf.boxSlot);
-		int drawn = branch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, notPositive, ctx.code.size());
+		ctx.body.lstore(leaf.longSlot).iconst_1().istore(leaf.flagSlot).aconst_null();
+		ctx.body.astore(leaf.boxSlot);
+		MethodCode.Label drawn = ctx.body.newLabel();
+		ctx.body.goto_(drawn);
+		ctx.body.labelBinding(notLong);
+		ctx.body.labelBinding(notPositive);
 		// _random may reject the limit: its throw reports the random form, whatever line
 		// the tree around it started on.
 		int outerSite = ctx.siteCurrent;
 		ctx.restoreSite(leaf.site);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(leaf.limitParam);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(randomHelper.index());
+		ctx.body.aload(leaf.limitParam).invokestatic(randomHelper.entry());
 		ctx.restoreSite(outerSite);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(leaf.boxSlot);
+		ctx.body.astore(leaf.boxSlot);
 		JvmEmitHelper.emitRawLong(0, ctx);
-		ctx.emit(Opcode.LSTORE);
-		ctx.emit(leaf.longSlot);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(leaf.flagSlot);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(bailFlag);
-		JvmEmitHelper.patchBranch(ctx, drawn, ctx.code.size());
+		ctx.body.lstore(leaf.longSlot).iconst_0().istore(leaf.flagSlot).iconst_1().istore(bailFlag);
+		ctx.body.labelBinding(drawn);
 	}
 
 	/**
@@ -1898,20 +1835,15 @@ final class JvmIntFusionCompiler {
 	 * _random}'s own Long-limit expression, over a raw slot or a constant.
 	 */
 	private static void emitDrawTimesDouble(JvmLispCompiler.Ctx ctx, int limitSlot, long limitConst) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).index());
+		ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).entry());
+		ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).methodRefEntry());
 		if (limitSlot >= 0) {
-			ctx.emit(Opcode.LLOAD);
-			ctx.emit(limitSlot);
-			ctx.emit(Opcode.L2D);
+			ctx.body.lload(limitSlot).l2d();
 		}
 		else {
 			JvmEmitHelper.emitRawDouble(limitConst, ctx);
 		}
-		ctx.emit(Opcode.DMUL);
-		ctx.emit(Opcode.D2L);
+		ctx.body.dmul().d2l();
 	}
 
 	/**
@@ -1923,7 +1855,7 @@ final class JvmIntFusionCompiler {
 	 * out-of-range index, a nil element -- bails into the same {@code _aref1} the unfused
 	 * emission would have called.
 	 */
-	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, List<Integer> bails,
+	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
 			ClassConstant longArrayClass, ArefScratch scratch) {
 		// idx = (int) <index>, an index past the int range bailing: _aref1 checks the
 		// whole value against the bound, so no truncation may read an element.
@@ -1931,112 +1863,47 @@ final class JvmIntFusionCompiler {
 		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
 		if (index instanceof ConstLeaf c) {
 			if (c.value() != (int) c.value()) {
-				bails.add(branch(ctx, Opcode.GOTO));
+				ctx.body.goto_(bails);
 			}
 			JvmEmitHelper.emitIntConst(ctx, (int) c.value());
-			ctx.emit(Opcode.ISTORE);
-			ctx.emit(idxSlot);
+			ctx.body.istore(idxSlot);
 		}
 		else {
 			emitLongLoad(rawSlotOf(index), ctx);
-			ctx.emit(Opcode.L2I);
-			ctx.emit(Opcode.ISTORE);
-			ctx.emit(idxSlot);
+			ctx.body.l2i().istore(idxSlot);
 			emitLongLoad(rawSlotOf(index), ctx);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.I2L);
-			ctx.emit(Opcode.LCMP);
-			bails.add(branch(ctx, Opcode.IFNE));
+			ctx.body.iload(idxSlot).i2l().lcmp().ifne(bails);
 		}
 		leaf.longSlot = ctx.allocTemp();
 		ctx.allocTemp();
-		List<Integer> done = new ArrayList<>();
+		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.usesIntArray) {
 			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF. Where a
 			// quantized matrix (also a byte[]) can exist, the tag in slot 0 tells them
 			// apart, and the matrix bails to _aref1 like any other shape.
 			ClassConstant byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B"));
-			List<Integer> notOctets = new ArrayList<>();
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(byteArrayClass.index());
-			notOctets.add(branch(ctx, Opcode.IFEQ));
+			MethodCode.Label notOctets = ctx.body.newLabel();
+			ctx.body.aload(leaf.arrParam).instanceOf(byteArrayClass.entry()).ifeq(notOctets);
 			if (ctx.usesQuantized) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(leaf.arrParam);
-				ctx.emit(Opcode.CHECKCAST);
-				ctx.emitU2(byteArrayClass.index());
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.BALOAD);
-				ctx.emit(Opcode.BIPUSH);
-				ctx.emit(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				notOctets.add(branch(ctx, Opcode.IF_ICMPNE));
+				ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass.entry()).iconst_0().baload();
+				ctx.body.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG).if_icmpne(notOctets);
 			}
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			bails.add(branch(ctx, Opcode.IFLT));
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(byteArrayClass.index());
-			ctx.emit(Opcode.ARRAYLENGTH);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ISUB);
-			bails.add(branch(ctx, Opcode.IF_ICMPGE));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(byteArrayClass.index());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.IADD);
-			ctx.emit(Opcode.BALOAD);
-			ctx.emit(Opcode.SIPUSH);
-			ctx.emitU2(0xFF);
-			ctx.emit(Opcode.IAND);
-			ctx.emit(Opcode.I2L);
-			ctx.emit(Opcode.LSTORE);
-			ctx.emit(leaf.longSlot);
-			done.add(branch(ctx, Opcode.GOTO));
-			for (int pos : notOctets) {
-				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-			}
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(longArrayClass.index());
-			int notPackedVector = branch(ctx, Opcode.IFEQ);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			bails.add(branch(ctx, Opcode.IFLT));
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(longArrayClass.index());
-			ctx.emit(Opcode.ARRAYLENGTH);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ISUB);
-			bails.add(branch(ctx, Opcode.IF_ICMPGE));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(longArrayClass.index());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.IADD);
-			ctx.emit(Opcode.LALOAD);
-			ctx.emit(Opcode.LSTORE);
-			ctx.emit(leaf.longSlot);
-			done.add(branch(ctx, Opcode.GOTO));
-			JvmEmitHelper.patchBranch(ctx, notPackedVector, ctx.code.size());
+			ctx.body.iload(idxSlot).iflt(bails);
+			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(byteArrayClass.entry());
+			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass.entry()).iconst_1();
+			ctx.body.iload(idxSlot).iadd().baload().loadConstant(0xFF).iand().i2l();
+			ctx.body.lstore(leaf.longSlot).goto_(done);
+			ctx.body.labelBinding(notOctets);
+			ctx.body.aload(leaf.arrParam).instanceOf(longArrayClass.entry());
+			MethodCode.Label notPackedVector = ctx.body.newLabel();
+			ctx.body.ifeq(notPackedVector);
+			ctx.body.iload(idxSlot).iflt(bails);
+			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(longArrayClass.entry());
+			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(longArrayClass.entry()).iconst_1();
+			ctx.body.iload(idxSlot).iadd().laload().lstore(leaf.longSlot).goto_(done);
+			ctx.body.labelBinding(notPackedVector);
 		}
 		if (ctx.usesArrays) {
 			ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
@@ -2047,82 +1914,32 @@ final class JvmIntFusionCompiler {
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
 			int headerSlot = scratch.headerSlot();
 			int dataSlot = scratch.dataSlot();
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(arrayListClass.index());
-			bails.add(branch(ctx, Opcode.IFEQ));
+			ctx.body.aload(leaf.arrParam).instanceOf(arrayListClass.entry()).ifeq(bails);
 			// The same "is this an array?" shape test _arrayp makes, so get(0) on an
 			// ArrayList that is not one cannot throw past the bail.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alSize.index());
-			bails.add(branch(ctx, Opcode.IFEQ));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(leaf.arrParam);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alGet.index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(headerSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(headerSlot);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(objectArrayClass.index());
-			bails.add(branch(ctx, Opcode.IFEQ));
+			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass.entry());
+			ctx.body.invokevirtual(alSize.methodRefEntry()).ifeq(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass.entry()).iconst_0();
+			ctx.body.invokevirtual(alGet.methodRefEntry()).astore(headerSlot).aload(headerSlot);
+			ctx.body.instanceOf(objectArrayClass.entry()).ifeq(bails);
 			// Header length 6 IS the packed shape: 4 is a character vector, 5 a
 			// displaced array, 3 the boxed general array -- all of them _aref1's.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(headerSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(objectArrayClass.index());
-			ctx.emit(Opcode.ARRAYLENGTH);
+			ctx.body.aload(headerSlot).checkcast(objectArrayClass.entry()).arraylength();
 			JvmEmitHelper.emitIntConst(ctx, 6);
-			bails.add(branch(ctx, Opcode.IF_ICMPNE));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(headerSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_5);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(longArrayClass.index());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(dataSlot);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			bails.add(branch(ctx, Opcode.IFLT));
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(dataSlot);
-			ctx.emit(Opcode.ARRAYLENGTH);
-			bails.add(branch(ctx, Opcode.IF_ICMPGE));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(dataSlot);
-			ctx.emit(Opcode.ILOAD);
-			ctx.emit(idxSlot);
-			ctx.emit(Opcode.LALOAD);
-			ctx.emit(Opcode.LSTORE);
-			ctx.emit(leaf.longSlot);
+			ctx.body.if_icmpne(bails);
+			ctx.body.aload(headerSlot).checkcast(objectArrayClass.entry()).iconst_5().aaload();
+			ctx.body.checkcast(longArrayClass.entry()).astore(dataSlot).iload(idxSlot).iflt(bails);
+			ctx.body.iload(idxSlot).aload(dataSlot).arraylength().if_icmpge(bails);
+			ctx.body.aload(dataSlot).iload(idxSlot).laload().lstore(leaf.longSlot);
 			// The nil sentinel is not an integer: the fallback reads it back as nil.
-			ctx.emit(Opcode.LLOAD);
-			ctx.emit(leaf.longSlot);
+			ctx.body.lload(leaf.longSlot);
 			JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
-			ctx.emit(Opcode.LCMP);
-			bails.add(branch(ctx, Opcode.IFEQ));
+			ctx.body.lcmp().ifeq(bails);
 		}
 		else {
-			bails.add(branch(ctx, Opcode.GOTO));
+			ctx.body.goto_(bails);
 		}
-		for (int pos : done) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
+		ctx.body.labelBinding(done);
 	}
 
 	/**
@@ -2148,12 +1965,11 @@ final class JvmIntFusionCompiler {
 
 	/** The compare methods' tail: 0 or 1 on the operand stack, returned. */
 	private static void emitCompareResult(int branchOpcode, JvmLispCompiler.Ctx ctx) {
-		int isTrue = branch(ctx, branchOpcode);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.IRETURN);
-		JvmEmitHelper.patchBranch(ctx, isTrue, ctx.code.size());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.IRETURN);
+		MethodCode.Label isTrue = ctx.body.newLabel();
+		JvmEmitHelper.branch(ctx, branchOpcode, isTrue);
+		ctx.body.iconst_0().ireturn();
+		ctx.body.labelBinding(isTrue);
+		ctx.body.iconst_1().ireturn();
 	}
 
 	private static int branchForMask(int mask) {
@@ -2209,35 +2025,23 @@ final class JvmIntFusionCompiler {
 	 * {@code instanceof Double}; anything else -- a Long, a BigInteger, a ratio, nil, an
 	 * unboxed local whose raw slot is authoritative -- branches to the generic fallback.
 	 */
-	private static void emitDoubleGuards(List<Node> leaves, JvmLispCompiler.Ctx ctx, List<Integer> bails) {
+	private static void emitDoubleGuards(List<Node> leaves, JvmLispCompiler.Ctx ctx, MethodCode.Label bails) {
 		ClassConstant doubleClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Double"));
 		MethodrefConstant doubleValue = ctx.cp.addMethodref(doubleClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("doubleValue"), ctx.cp.addUtf8("()D")));
 		for (Node leaf : leaves) {
 			switch (leaf) {
 				case ExprLeaf l -> {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.paramSlot);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(doubleClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.paramSlot);
+					ctx.body.aload(l.paramSlot).instanceOf(doubleClass.entry()).ifeq(bails);
+					ctx.body.aload(l.paramSlot);
 					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
 				}
 				case RawLeaf l -> {
 					// The flag set means the raw long slot is authoritative -- an
 					// integer, which this path does not mix in.
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(l.flagParam);
-					bails.add(branch(ctx, Opcode.IFNE));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.shadowParam);
-					ctx.emit(Opcode.INSTANCEOF);
-					ctx.emitU2(doubleClass.index());
-					bails.add(branch(ctx, Opcode.IFEQ));
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(l.shadowParam);
+					ctx.body.iload(l.flagParam).ifne(bails);
+					ctx.body.aload(l.shadowParam).instanceOf(doubleClass.entry()).ifeq(bails);
+					ctx.body.aload(l.shadowParam);
 					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
 				}
 				default -> throw new IllegalStateException("not a double-path leaf: " + leaf);
@@ -2247,14 +2051,10 @@ final class JvmIntFusionCompiler {
 
 	/** Unboxes the reference on the stack into a fresh {@code double} local. */
 	private static int storeDouble(JvmLispCompiler.Ctx ctx, ClassConstant doubleClass, MethodrefConstant doubleValue) {
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(doubleClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(doubleValue.index());
+		ctx.body.checkcast(doubleClass.entry()).invokevirtual(doubleValue.methodRefEntry());
 		int slot = ctx.allocTemp();
 		ctx.allocTemp();
-		ctx.emit(Opcode.DSTORE);
-		ctx.emit(slot);
+		ctx.body.dstore(slot);
 		return slot;
 	}
 
@@ -2275,60 +2075,48 @@ final class JvmIntFusionCompiler {
 				emitFastDouble(op.args().get(0), ctx);
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFastDouble(op.args().get(i), ctx);
-					ctx.emit(switch (op.op()) {
-						case LispNames.ADD -> Opcode.DADD;
-						case LispNames.SUB -> Opcode.DSUB;
-						case LispNames.MUL -> Opcode.DMUL;
+					switch (op.op()) {
+						case LispNames.ADD -> ctx.body.dadd();
+						case LispNames.SUB -> ctx.body.dsub();
+						case LispNames.MUL -> ctx.body.dmul();
 						default -> throw new IllegalStateException("not a double-path operator: " + op.op());
-					});
+					}
 				}
 			}
 		}
 	}
 
 	private static void emitDoubleLoad(int slot, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.DLOAD);
-		ctx.emit(slot);
+		ctx.body.dload(slot);
 	}
 
-	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, State state, List<Integer> bails,
-			int tryStart, int tryEnd, String className) {
-		int handler = ctx.code.size();
+	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, State state,
+			MethodCode.Label bails, MethodCode.Label tryStart, MethodCode.Label tryEnd, String className) {
+		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.POP);
-		int bail = ctx.code.size();
-		for (int pos : bails) {
-			JvmEmitHelper.patchBranch(ctx, pos, bail);
-		}
+		ctx.body.pop();
+		ctx.body.labelBinding(bails);
 		if (pending.isCompare()) {
 			OpNode root = (OpNode) pending.root();
 			emitFallback(root.args().get(0), ctx, className);
 			emitFallback(root.args().get(1), ctx, className);
 			ctx.restoreSite(root.site());
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx).index());
+			ctx.body
+				.invokestatic(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx).entry());
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
-			ctx.emit(Opcode.IAND);
-			ctx.emit(Opcode.IRETURN);
+			ctx.body.iand().ireturn();
 		}
 		else {
 			emitFallback(pending.root(), ctx, className);
-			ctx.emit(Opcode.ARETURN);
+			ctx.body.areturn();
 		}
 		ClassConstant arithEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/ArithmeticException"));
-		ctx.exceptionTable.add(new ClassDefinition.Handler(tryStart, tryEnd, handler, arithEx.index()));
+		ctx.body.exceptionCatch(tryStart, tryEnd, handler, arithEx.entry());
 	}
 
 	private static MethodrefConstant longIntValue(JvmLispCompiler.Ctx ctx) {
 		return ctx.cp.addMethodref(ctx.longClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("intValue"), ctx.cp.addUtf8("()I")));
-	}
-
-	private static int branch(JvmLispCompiler.Ctx ctx, int opcode) {
-		int pos = ctx.code.size();
-		ctx.emit(opcode);
-		ctx.emitU2(0);
-		return pos;
 	}
 
 	// ------------------------------------------------------------------ the fast path
@@ -2354,7 +2142,7 @@ final class JvmIntFusionCompiler {
 						&& Long.bitCount(c.value()) == 1) {
 					emitFastWrapped(op.args().get(0), ctx, state);
 					JvmEmitHelper.emitRawLong(c.value() - 1, ctx);
-					ctx.emit(Opcode.LAND);
+					ctx.body.land();
 					return;
 				}
 				// (ash x -k) with a literal non-positive count is a plain arithmetic
@@ -2362,7 +2150,7 @@ final class JvmIntFusionCompiler {
 				if (LispNames.ASH.equals(op.op()) && op.args().get(1) instanceof ConstLeaf c && c.value() <= 0) {
 					emitFast(op.args().get(0), ctx, state);
 					JvmEmitHelper.emitIntConst(ctx, c.value() <= -63 ? 63 : (int) -c.value());
-					ctx.emit(Opcode.LSHR);
+					ctx.body.lshr();
 					return;
 				}
 				// (logand X mask) with a non-negative literal: the masked result keeps
@@ -2375,7 +2163,7 @@ final class JvmIntFusionCompiler {
 					if (mask != null) {
 						emitFastWrapped(op.args().get(op.args().get(1) == mask ? 0 : 1), ctx, state);
 						JvmEmitHelper.emitRawLong(mask.value(), ctx);
-						ctx.emit(Opcode.LAND);
+						ctx.body.land();
 						return;
 					}
 				}
@@ -2386,15 +2174,14 @@ final class JvmIntFusionCompiler {
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
 					JvmEmitHelper.emitRawLong(-1, ctx);
-					ctx.emit(Opcode.LXOR);
+					ctx.body.lxor();
 				}
 			}
 		}
 	}
 
 	private static void emitLongLoad(int slot, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.LLOAD);
-		ctx.emit(slot);
+		ctx.body.lload(slot);
 	}
 
 	/**
@@ -2415,34 +2202,34 @@ final class JvmIntFusionCompiler {
 				emitFastWrapped(op.args().get(0), ctx, state);
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFastWrapped(op.args().get(i), ctx, state);
-					ctx.emit(switch (op.op()) {
-						case LispNames.ADD -> Opcode.LADD;
-						case LispNames.SUB -> Opcode.LSUB;
-						default -> Opcode.LMUL;
-					});
+					switch (op.op()) {
+						case LispNames.ADD -> ctx.body.ladd();
+						case LispNames.SUB -> ctx.body.lsub();
+						default -> ctx.body.lmul();
+					}
 				}
 			}
 			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR -> {
 				emitFastWrapped(op.args().get(0), ctx, state);
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFastWrapped(op.args().get(i), ctx, state);
-					ctx.emit(switch (op.op()) {
-						case LispNames.LOGAND -> Opcode.LAND;
-						case LispNames.LOGIOR -> Opcode.LOR;
-						default -> Opcode.LXOR;
-					});
+					switch (op.op()) {
+						case LispNames.LOGAND -> ctx.body.land();
+						case LispNames.LOGIOR -> ctx.body.lor();
+						default -> ctx.body.lxor();
+					}
 				}
 			}
 			case LispNames.LOGNOT -> {
 				emitFastWrapped(op.args().get(0), ctx, state);
 				JvmEmitHelper.emitRawLong(-1, ctx);
-				ctx.emit(Opcode.LXOR);
+				ctx.body.lxor();
 			}
 			case LispNames.ASH -> {
 				if (op.args().get(1) instanceof ConstLeaf c && c.value() > 0 && c.value() < 64) {
 					emitFastWrapped(op.args().get(0), ctx, state);
 					JvmEmitHelper.emitIntConst(ctx, (int) c.value());
-					ctx.emit(Opcode.LSHL);
+					ctx.body.lshl();
 				}
 				else {
 					emitFast(node, ctx, state);
@@ -2454,17 +2241,16 @@ final class JvmIntFusionCompiler {
 
 	private static void emitFastOp(String op, JvmLispCompiler.Ctx ctx, State state) {
 		switch (op) {
-			case LispNames.LOGAND -> ctx.emit(Opcode.LAND);
-			case LispNames.LOGIOR -> ctx.emit(Opcode.LOR);
-			case LispNames.LOGXOR -> ctx.emit(Opcode.LXOR);
-			case LispNames.REM -> ctx.emit(Opcode.LREM);
+			case LispNames.LOGAND -> ctx.body.land();
+			case LispNames.LOGIOR -> ctx.body.lor();
+			case LispNames.LOGXOR -> ctx.body.lxor();
+			case LispNames.REM -> ctx.body.lrem();
 			case LispNames.ADD -> emitMathCall(ctx, "addExact");
 			case LispNames.SUB -> emitMathCall(ctx, "subtractExact");
 			case LispNames.MUL -> emitMathCall(ctx, "multiplyExact");
 			case LispNames.MOD -> emitMathCall(ctx, "floorMod");
 			case LispNames.ASH -> {
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(fxAshRef(ctx, state).index());
+				ctx.body.invokestatic(fxAshRef(ctx, state).entry());
 			}
 			default -> throw new IllegalStateException("Not a fusable operator: " + op);
 		}
@@ -2473,8 +2259,7 @@ final class JvmIntFusionCompiler {
 	private static void emitMathCall(JvmLispCompiler.Ctx ctx, String name) {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math")),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8("(JJ)J")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 	// ------------------------------------------------------------------ the fallback
@@ -2489,57 +2274,51 @@ final class JvmIntFusionCompiler {
 		switch (node) {
 			case ConstLeaf c -> JvmEmitHelper.compileLong(c.value(), ctx);
 			case ExprLeaf leaf -> {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(leaf.paramSlot);
+				ctx.body.aload(leaf.paramSlot);
 			}
 			// The ordinary rank-1 aref dispatch from the SAME arguments: strings,
 			// packed and general arrays all behave exactly as an unfused (aref a i)
 			// would, including its error shapes.
 			case ArefLeaf leaf -> {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(leaf.arrParam);
+				ctx.body.aload(leaf.arrParam);
 				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
 				ctx.restoreSite(leaf.site);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(namedAref1Helper(ctx, className).index());
+				ctx.body.invokestatic(namedAref1Helper(ctx, className).entry());
 			}
 			// The ONE draw the prologue took, re-boxed: raw from the slot, or the
 			// boxed value _random answered for a limit the raw path could not take.
 			// Never a draw -- this emission repeats for a node used twice.
 			case RandomLeaf leaf -> {
 				if (leaf.limitExpr == null) {
-					ctx.emit(Opcode.LLOAD);
-					ctx.emit(leaf.longSlot);
+					ctx.body.lload(leaf.longSlot);
 					JvmEmitHelper.boxLong(ctx);
 				}
 				else {
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(leaf.flagSlot);
-					int boxed = branch(ctx, Opcode.IFEQ);
-					ctx.emit(Opcode.LLOAD);
-					ctx.emit(leaf.longSlot);
+					ctx.body.iload(leaf.flagSlot);
+					MethodCode.Label boxed = ctx.body.newLabel();
+					ctx.body.ifeq(boxed);
+					ctx.body.lload(leaf.longSlot);
 					JvmEmitHelper.boxLong(ctx);
-					int done = branch(ctx, Opcode.GOTO);
-					JvmEmitHelper.patchBranch(ctx, boxed, ctx.code.size());
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(leaf.boxSlot);
-					JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+					MethodCode.Label done = ctx.body.newLabel();
+					ctx.body.goto_(done);
+					ctx.body.labelBinding(boxed);
+					ctx.body.aload(leaf.boxSlot);
+					ctx.body.labelBinding(done);
 				}
 			}
 			// The snapshot re-boxed: the raw param when the flag is set, else the
 			// shadow.
 			case RawLeaf leaf -> {
-				ctx.emit(Opcode.ILOAD);
-				ctx.emit(leaf.flagParam);
-				int notRaw = branch(ctx, Opcode.IFEQ);
-				ctx.emit(Opcode.LLOAD);
-				ctx.emit(leaf.rawParam);
+				ctx.body.iload(leaf.flagParam);
+				MethodCode.Label notRaw = ctx.body.newLabel();
+				ctx.body.ifeq(notRaw);
+				ctx.body.lload(leaf.rawParam);
 				JvmEmitHelper.boxLong(ctx);
-				int done = branch(ctx, Opcode.GOTO);
-				JvmEmitHelper.patchBranch(ctx, notRaw, ctx.code.size());
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(leaf.shadowParam);
-				JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+				MethodCode.Label done = ctx.body.newLabel();
+				ctx.body.goto_(done);
+				ctx.body.labelBinding(notRaw);
+				ctx.body.aload(leaf.shadowParam);
+				ctx.body.labelBinding(done);
 			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx, className);
@@ -2548,13 +2327,11 @@ final class JvmIntFusionCompiler {
 					// A wrong-type operand fails in this call: it reports this node's
 					// form.
 					ctx.restoreSite(op.site());
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(numOpFor(op.op(), fallbackKey(op.op()), ctx).index());
+					ctx.body.invokestatic(numOpFor(op.op(), fallbackKey(op.op()), ctx).entry());
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
 					ctx.restoreSite(op.site());
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx).index());
+					ctx.body.invokestatic(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx).entry());
 				}
 			}
 		}
