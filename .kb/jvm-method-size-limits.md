@@ -11,15 +11,17 @@ the write phase's time and every written class's size and pool count.
   (`goto_w`, or an inverted short branch over one) by `am.ik.jvm.CodeReplay.Layout`, a fixpoint
   over the method (widening one branch moves every later instruction). The emitters feed it
   through `MethodCode`'s labels -> `MethodCode.longBranches` (placeholder offset bytes, true
-  target recorded); the raw-list `JvmRuntimeBuilder.patchBranch` still throws. NOT the writer's
+  target recorded); every emitter branches through them (the raw-list `patchBranch`, which
+  threw, is gone). NOT the writer's
   own relaxation: see "Emission on java.lang.classfile" below.
 - **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `JvmClassSplitter` rejects the emitted body
   loudly, naming the method, and the API rejects a written one the relaxation grew past it. A
   single enormous USER defun cannot be outlined.
 - **`sipush` operand is signed 16 bits.** `JvmEmitHelper.emitIntConst` used to truncate
   silently into a class that VERIFIES and computes the wrong number — reachable via a character
-  above the BMP (`.kb/characters-code-points.md`). Now `ldc`/`ldc_w`; the pool-free
-  `JvmRuntimeBuilder.emitIntConstStatic` cannot mint a constant and throws.
+  above the BMP (`.kb/characters-code-points.md`). Now `ldc`/`ldc_w`; `MethodCode.loadConstant`
+  refuses a value past the short range (the caller `ldc`s an Integer entry, as `JvmQuotePool`'s
+  table size does).
 - **65534 constant-pool entries per CLASS** (`ConstantPool.MAX_INDEX`). Every distinct integer
   literal costs TWO entries (boxed `long` = `CONSTANT_Long`); ~25,000 distinct numbers suffice.
   Not a program limit: past it the program is SPLIT (below). The limit is checked where a class
@@ -33,8 +35,8 @@ bodies are the emitters' code lists with their handler, line and long-branch tab
 
 - **One master pool.** `ConstantPool` wraps one `java.lang.classfile` `ConstantPoolBuilder`
   for the whole program; the emitters' u2 operands are its indexes, kept whole past 65535 (every
-  u2 writer keeps the high part: `JvmRuntimeBuilder.emitU2`, `MethodCode`, the private copies
-  delegate; `OperandStack` reads a pool operand uncut). The builder refuses nothing as entries
+  u2 writer keeps the high part: `MethodCode`'s, the one left; `OperandStack` reads a pool
+  operand uncut). The builder refuses nothing as entries
   are added -- only a pool being WRITTEN is held to 65535 (`Constant pool is too large`).
 - **The scan** (`JvmClassSplitter.Scan`) reads every body's pool operands once: the own-call
   graph (`OwnCallGraph`) answers `unresolvedSelfMethods` (the gate check, on every build) and
@@ -205,12 +207,13 @@ CLI compile above) plus programs reaching `%random-byte`, `tls-connect :insecure
 is one `MethodCode`; its pieces minted before the class assembly (the layout and bignum
 initializers, the reader's struct directory, the `_d$` ThreadLocals) are fragments built apart
 and `append`ed, because the MINT order decides every pool index and so the bytes. The `_hasComplex`
-probe's handler is labels. Left on pool wrappers: the bridge builders' `ops` maps (they join
-`Ctx` beside the BLAS, numeric and math maps) and the `ffi:` bridge's refs, which the printer's
-`JvmRuntimeBuilder.BridgePrint` still writes as code bytes; `JvmUnsupplied` keeps
-`ClassConstant` overloads of `ref`/`optArgRef` for the dispatchers `JvmRuntimeBuilder` writes as
-bytes. Those go after a87 (`.todo/a93`). `emitStreamDefault`'s "LDC_W, not the narrow LDC" pin is gone: the writer
-re-decides `ldc` by the index, so the form emitted never reached the class.
+probe's handler is labels. The bridge builders' `ops` maps and the `ffi:` bridge's refs stay
+pool wrappers, as a87's builders keep theirs (they join `Ctx` beside the BLAS, numeric and math
+maps, and `JvmRuntimeBuilder.BridgePrint` takes the `ffi:` ones): `.entry()` at each typed call.
+With the last byte writers gone, so are `JvmRuntimeBuilder`'s shared `emitU2`/`emitLdc`/
+`emitIntConstStatic`/`patchBranch`, `codeBytes`, and the sized `addMethod`.
+`emitStreamDefault`'s "LDC_W, not the narrow LDC" pin is gone too: the writer re-decides `ldc` by
+the index, so the form emitted never reached the class.
 
 **How a slice moves** (the recipe every slice used; tools in
 `.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, for a raw list
@@ -231,10 +234,8 @@ re-decides `ldc` by the index, so the form emitted never reached the class.
 - A handler range is labels: `newBoundLabel()` where a position was read, then
   `exceptionCatch` once the handler's label is bound. A method record carries the body
   (`record XMethod(name, desc, MethodCode code)`) and `code.addTo(definition, access, name,
-  desc)` adds it; the declared max_stack/max_locals go. A record still carrying bytes (the
-  numeric builder's) takes `JvmRuntimeBuilder.codeBytes(body)`, which refuses a long branch or
-  a handler it could not carry. A piece of another body (a `<clinit>` fragment) is a
-  `MethodCode` of its own, `append`ed where it goes.
+  desc)` adds it; the declared max_stack/max_locals go. A piece of another body (a dispatch
+  case, a `<clinit>` fragment) is a `MethodCode` of its own, `append`ed where it goes.
 - A trap the pass does not see: an operand byte written with `op(n)` after an opcode
   (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
   `aconst_null` compiles and emits the wrong code. javac catches the opcode half
@@ -247,7 +248,7 @@ re-decides `ldc` by the index, so the form emitted never reached the class.
   an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
   the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
   code already on the layer called on a field that became an entry. A file spelling the
-  helpers qualified (`JvmRuntimeBuilder.emitU2`) goes through a88's `prep.py` first
+  helpers qualified (`JvmRuntimeBuilder.emitU2`) went through a88's `prep.py` first
   (`.todo/artefacts/a88-jvm-small-runtime-builders-and-the-compilers-own-code-move-onto-methodcode/`,
   with its gate programs); a builder whose exported refs feed code still on the wrappers skips
   `pool.py`.

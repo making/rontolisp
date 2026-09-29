@@ -281,24 +281,6 @@ public final class ClassDefinition {
 		}
 
 		/**
-		 * Adds a method. The declared {@code max_stack} and {@code max_locals} are
-		 * accepted for the generators' convenience and ignored: the writer derives both
-		 * from the code.
-		 * @param access the method's access flags
-		 * @param name its name
-		 * @param descriptor its descriptor
-		 * @param maxStack the generator's {@code max_stack} (unused)
-		 * @param maxLocals the generator's {@code max_locals} (unused)
-		 * @param code the body, one element per byte
-		 * @param exceptionTable the handlers, in dispatch order
-		 * @return this builder
-		 */
-		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, int maxStack, int maxLocals,
-				List<Integer> code, List<Handler> exceptionTable) {
-			return this.addMethod(access, name, descriptor, code, exceptionTable, List.of(), List.of());
-		}
-
-		/**
 		 * @param access the method's access flags
 		 * @param name its name
 		 * @param descriptor its descriptor

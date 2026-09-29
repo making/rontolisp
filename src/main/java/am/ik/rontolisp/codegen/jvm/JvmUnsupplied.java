@@ -115,17 +115,6 @@ final class JvmUnsupplied {
 		return created;
 	}
 
-	// The two below serve the dispatchers JvmRuntimeBuilder still writes as code bytes
-	// over the pool wrappers; they go when those move onto MethodCode.
-
-	MethodRefEntry ref(ConstantPool cp, ConstantPool.ClassConstant owner) {
-		return ref(cp, owner.entry());
-	}
-
-	MethodRefEntry optArgRef(ConstantPool cp, ConstantPool.ClassConstant owner) {
-		return optArgRef(cp, owner.entry());
-	}
-
 	/**
 	 * Closes the marker to a FIRST reference: the class assembly calls it where it emits
 	 * the helpers, so a call site built later than that -- which would call a method the

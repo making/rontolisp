@@ -102,9 +102,7 @@ final class JvmFfiRuntimeBuilder {
 	 * The ready-to-emit {@code _ffiInit} method, its guard field, and the constant-pool
 	 * references the {@code ffi:} call-site compiler needs ({@code ops} keys:
 	 * {@code init}, one per verb, {@value #PRINT}). The class files that travel beside
-	 * the program are keyed by their paths within an output tree. The references stay
-	 * pool wrappers while the printer ({@code JvmRuntimeBuilder.BridgePrint}) writes code
-	 * bytes over them.
+	 * the program are keyed by their paths within an output tree.
 	 */
 	record FfiRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
 			Utf8Constant initedFieldDesc, FieldrefConstant initedField, Map<String, MethodrefConstant> ops,

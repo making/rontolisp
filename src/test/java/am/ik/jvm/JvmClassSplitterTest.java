@@ -255,7 +255,8 @@ class JvmClassSplitterTest {
 		}
 
 		void method(int access, String name, String desc, Code code) {
-			this.definition.addMethod(access, this.utf8(name), this.utf8(desc), 4, 1, code.bytes, List.of());
+			this.definition.addMethod(access, this.utf8(name), this.utf8(desc), code.bytes, List.of(), List.of(),
+					List.of());
 		}
 
 		ClassDefinition build() {

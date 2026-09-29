@@ -1,7 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.MemberRefEntry;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -16,7 +15,6 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.RenderCycleGuard;
@@ -3072,39 +3070,6 @@ final class JvmRuntimeBuilder {
 		code.areturn();
 	}
 
-	/**
-	 * The code bytes of a body assembled on {@link MethodCode}, for a method record that
-	 * still carries bytes. Such a record has nowhere to put a branch past the signed
-	 * 16-bit offset or an exception handler, so the body may have neither.
-	 * @param body the body, every label bound
-	 * @return its code bytes
-	 * @throws IllegalStateException when a label is unbound, or the body has a long
-	 * branch or a handler
-	 */
-	static List<Integer> codeBytes(MethodCode body) {
-		body.checkComplete();
-		if (!body.longBranches().isEmpty() || !body.handlers().isEmpty()) {
-			throw new IllegalStateException("a body carried as code bytes has a long branch or a handler");
-		}
-		return body.code();
-	}
-
-	/**
-	 * Appends a two-byte operand. The high part is kept whole rather than cut to a byte:
-	 * the class file only ever receives its low eight bits (so an operand that fits is
-	 * written exactly as before), while a constant-pool index past 65535 -- which an
-	 * unbounded pool hands out once a program outgrows one class file -- survives in the
-	 * code list until {@link am.ik.jvm.JvmClassSplitter} re-points it into the pool of
-	 * the class the method lands in. Every emitter's u2 goes through here or through
-	 * {@link am.ik.jvm.MethodCode}, which keeps the same rule.
-	 * @param code the method body, one element per byte
-	 * @param value the operand
-	 */
-	static void emitU2(List<Integer> code, int value) {
-		code.add(value >> 8);
-		code.add(value & 0xFF);
-	}
-
 	// Emits one packed-array print branch: "if (val instanceof <arrayClass>) return
 	// arrayToString(_fvToGeneral(val)).replaceFirst("^#\\d*A?\\(", <prefixRepl>);". The
 	// element data is rendered exactly as the general array counterpart (single-float
@@ -3255,61 +3220,6 @@ final class JvmRuntimeBuilder {
 		code.invokestatic(arrayToStringMethod.entry());
 		code.areturn();
 		code.labelBinding(notArray);
-	}
-
-	static void emitLdc(List<Integer> code, int cpIndex) {
-		if (cpIndex <= 255) {
-			code.add(Opcode.LDC);
-			code.add(cpIndex);
-		}
-		else {
-			code.add(Opcode.LDC_W);
-			emitU2(code, cpIndex);
-		}
-	}
-
-	/**
-	 * The pool-free variant of {@link JvmEmitHelper#emitIntConst}, for the runtime
-	 * builders that assemble a body as a raw byte list. Its callers push funcIds and
-	 * character codes that are bounded by the program's own function count, so the
-	 * {@code sipush} range is enough -- but a value past it would truncate and
-	 * sign-extend SILENTLY into a class that verifies and computes the wrong number, so
-	 * it fails loudly here instead, the way {@link #patchBranch} does for an overflowing
-	 * branch offset. The fix if it ever fires: hand this builder a constant pool and use
-	 * the {@code ldc} arm {@code JvmEmitHelper.emitIntConst} has.
-	 */
-	static void emitIntConstStatic(List<Integer> code, int value) {
-		if (value >= 0 && value <= 5) {
-			code.add(Opcode.ICONST_0 + value);
-		}
-		else if (value >= -128 && value <= 127) {
-			code.add(Opcode.BIPUSH);
-			code.add(value & 0xFF);
-		}
-		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			code.add(Opcode.SIPUSH);
-			emitU2(code, value);
-		}
-		else {
-			throw new IllegalStateException(
-					"int constant " + value + " overflows the signed 16-bit sipush encoding in a pool-free builder");
-		}
-	}
-
-	static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
-		int offset = targetPos - branchPos;
-		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
-			// A silently wrapped offset produces a class the verifier rejects with an
-			// unrelated-looking error (or worse, wrong control flow); fail loudly at
-			// the source instead. A body this large needs its dispatch outlined or
-			// split -- see the shared %typep-runtime/%subtypep-runtime/%error-runtime
-			// defuns and the segmented _invoke_N/_lookup builders.
-			throw new IllegalStateException("branch offset " + offset + " at position " + branchPos
-					+ " overflows the signed 16-bit branch encoding (method body too large)");
-		}
-		byte[] bytes = ByteBuffer.allocate(2).putShort((short) offset).array();
-		code.set(branchPos + 1, (int) bytes[0]);
-		code.set(branchPos + 2, (int) bytes[1]);
 	}
 
 }
