@@ -44130,7 +44130,7 @@ public final class LispMacroExpander {
 	 * @return the normalized binding list
 	 */
 	public static LispVal normalizeBindingList(LispVal bindings) {
-		if (!(bindings instanceof LispCons cons) || !cons.isProperList()) {
+		if (!(bindings instanceof LispCons cons) || !cons.isProperList() || !hasShorthandBinding(cons)) {
 			return bindings;
 		}
 		List<LispVal> entries = cons.toList();
@@ -44152,6 +44152,18 @@ public final class LispMacroExpander {
 			}
 		}
 		return changed ? listToCons(out) : bindings;
+	}
+
+	// Whether any entry is a bare symbol or (x): the interpreter asks on every let it
+	// evaluates, and nearly every binding list has neither, so it answers without
+	// allocating.
+	private static boolean hasShorthandBinding(LispCons bindings) {
+		for (LispVal cell = bindings; cell instanceof LispCons c; cell = c.cdr()) {
+			if (c.car() instanceof LispSymbol || c.car() instanceof LispCons pair && pair.cdr() instanceof LispNil) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

@@ -170,9 +170,18 @@ every pool made after it.
 the interpreter and the JVM do. `with-dynamic-foreign-objects` allocates on the heap (LispWorks:
 the stack) and frees on every exit.
 
-- **A foreign pointer is `fli::pointer`**: address, FLI type, the pointee's encoding (what
-  `%peek` / `%poke` take: the FLI type's own, else `%unparse` of the parsed pointee). Not interned,
-  not `eql` by address -- `fli:pointer-eq` is.
+- **A foreign pointer is `fli::pointer`**: address, FLI type, the pointee's ELEMENT -- its
+  layout worked out once (`objc::%element-type`): `#(size alignment parsed encoding access
+  slots)`, the encoding what `%peek` / `%poke` take (the FLI type's own, else `%unparse` of the
+  parsed pointee, then with no size: indexing it signals as `fli:size-of` does), `access` one
+  of `:void :aggregate :boolean :real :other`, `slots` a named structure's
+  `((name-string offset fli-type) ...)`. Not interned, not `eql` by address --
+  `fli:pointer-eq` is.
+- **One element per FLI type**, in `objc::*elements*` (`equal`), which is REPLACED on a miss,
+  never changed in place (a render block reads it on the audio thread), and dropped by
+  `define-objc-struct` / `-typedef` (`objc::%forget-elements`; `ObjcClassTest#aRedefinedStructureIsLaidOutAgain`).
+  `fli:size-of`, `%fli-layout`, `%slot`'s offsets and a `:type` access all read it; an
+  access is then arithmetic plus one `%peek` / `%poke`.
 - **Every pointer Objective-C hands Lisp is one**, typed by its declaration: an `invoke` / C
   function result (`%result`'s `:pointer` arm), a callback argument declared `(:pointer T)`
   (`%convert-argument`), a dereferenced pointer. Everything taking an address takes one
@@ -202,9 +211,8 @@ the stack) and frees on every exit.
 - **Not `ffi:`'s pointer**: `ffi` is interpreter/JVM only (a Java `LispForeignPointer`), `fli` must
   run on `--native`; one value would need a wasm-GC representation of a Java value. The bridge is
   the integer (`fli:pointer-address`).
-- Cost: `(setf fli:dereference)` re-derives the element size (`%element` -> `%fli-layout`, which
-  re-parses the encoding) and `%store` re-parses it again -- too slow for a per-sample loop when
-  interpreted ("Measurements").
+- Cost: ~3 us for a `(setf fli:dereference)` interpreted, ~0.05 us compiled
+  ("Measurements"); what is left interpreted is the evaluator's own per-form cost.
 
 ## Bytes: `objc:data`, `objc:bytes`
 `objc:data` answers an **`NSMutableData`** (one value serves `bytes` for a `^v` parameter and
@@ -715,12 +723,25 @@ browser build carries no FFM. `cli` reaches the hand-over through `ObjcInterop`,
   22.6-23.5 / 27.6-28.7 us, after 23.4-24.4 / 22.8-23.7 / 28.1-29.7, the same with
   `-Drontolisp.objc.catch=0` -- the frame costs nothing measurable; the ~0.5 us is `objc.lisp`'s.
 - **`audio.lisp` live** (2026-09-29, macOS 26, M4 Max): the deadline is ~22.7 us a sample at
-  44.1 kHz; frames rendered in 2 s (88,200 due): `-o X.class` / `.jar` 88,436; `java -jar`
-  30,106-42,807 (the higher once the block's time was a double, not a ratio); native binary
-  23,050-28,695. The per-sample `(setf fli:dereference)` costs ~35 us interpreted (JVM class
-  ~0.7 us, `--native` ~1.7 us): `%fli-layout` ~15 us, `%parse-type` alone ~8.5 us for "f".
-  Memoizing both measured 15-19 us -- still near the deadline, so not done; a live render on the
-  interpreter stutters and the example prints the frame count.
+  44.1 kHz; frames rendered in 2 s (88,200 due; the engine takes a moment to start pulling):
+
+  | target | one `(setf fli:dereference)` of a `:float` | frames |
+  |---|---|---|
+  | `java -jar` | 35 us -> 3.1 | 30,106-42,807 -> 87,495 (x3) |
+  | native binary | 35 us -> 4.2 | 23,050-28,695 -> 87,495 (x3) |
+  | JVM class | 0.195 us -> 0.051 | 88,436 / 87,965 |
+  | `--native` | 1.39 us -> 0.34 | (live refused: a value-answering block off thread 0) |
+
+  Method: 1,000,000 writes at `(logand i 1023)` after 200,000 warm-up, `get-internal-real-time`.
+  Before, `%element` re-derived the size (`fli:size-of` -> `%fli-layout` -> `%parse-type`, ~15
+  us; `%parse-type "f"` alone ~8.5 us, 6.7 of it one interpreted `find` over `"rnNoORVA"`) and
+  `%store` parsed again. Now the pointer carries its element ("FLI"), the interpreter's keyword
+  helpers are Java ([lambda-lists.md](lambda-lists.md)): 35 -> 3.5 us, and two per-call costs
+  went ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)): -> 3.1. What remains
+  (JFR) is the evaluator's per-form work -- environments, dispatch, `setf` re-expanded per
+  evaluation (~0.45 us). Measured and not taken: a `%peek` / `%poke` by kind code instead of
+  encoding -- the primitive is ~0.1 us of the write interpreted (0.24 on the native binary), not
+  worth three hosts' primitive layers.
 - **Runner stub** (`cargo build --profile release-runner -p rlrun`, 2026-09-29): 1,849,072 B; the
   primitive layer's `p_*` imports cost 115,904 of it.
 
@@ -788,5 +809,6 @@ methods use registered shapes so the native binary can run them.
   Objective-C exception inside a call still ends the process.
 - `--native`: a macos-x86_64 runner has no Objective-C host (`call.rs` is Apple's AArch64
   convention, and there is no release stub).
-- The interpreter and the native binary cannot feed a live audio render block: `(setf
-  fli:dereference)` is ~35 us against a 22.7 us budget ("Measurements").
+- An interpreted render block writes sample by sample: `(setf fli:dereference)` is ~3 us
+  (~4 on the native binary) of a 22.7 us budget ("Measurements"); a one-call copy of a Lisp
+  array (~0.01 us a float) has no public spelling yet.

@@ -22,6 +22,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispFloatArray;
@@ -7080,7 +7081,7 @@ public final class LispEvaluator {
 						// here spares BOTH probes' splitQualified for (char s j) and (+ j
 						// 1) alike (4% of run-time
 						// samples in the todo-598 profile).
-						if (sym.name().indexOf(':') > 0) {
+						if (sym.name().indexOf(':') > 0 && isUiopOperator(sym.name())) {
 							// First the ones with a real expansion -- the one dispatcher
 							// both compilers and
 							// FreeVarAnalyzer also call, which is what makes the four
@@ -10047,6 +10048,104 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Whether a package-qualified operator name is in the uiop family, per name: every
+	 * qualified call that reaches the uiop probes asked it through two
+	 * {@link PackageRegistry#splitQualified} splits, about 5% of an interpreted
+	 * {@code objc.lisp} loop. The answer is a function of the name alone (built-in
+	 * nicknames only).
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> UIOP_OPERATORS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static boolean isUiopOperator(String name) {
+		Boolean known = UIOP_OPERATORS.get(name);
+		if (known == null) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			known = qn != null && UiopExports.isUiopFamily(qn.pkg());
+			UIOP_OPERATORS.put(name, known);
+		}
+		return known;
+	}
+
+	/**
+	 * A keyword helper of a desugared {@code &key} prologue
+	 * ({@link LambdaLists#runtimeDefun}) as a built-in: every keyword parameter of every
+	 * call runs one, and the interpreted loop of the Lisp body cost about 1 us each. The
+	 * Java scan answers only what it settles on a well-formed tail with no error;
+	 * anything else -- a malformed tail, a key the check must look further into, a signal
+	 * -- runs the Lisp body itself, so what a call answers or signals is still that
+	 * body's.
+	 * @param name {@link LispNames#LL_KEY_CELL} or {@link LispNames#LL_CHECK_KEYS}
+	 * @return the built-in
+	 */
+	private LispFunction keywordHelper(String name) {
+		LispCons defun = (LispCons) LambdaLists.runtimeDefun(name);
+		LispVal lambdaTail = ((LispCons) defun.cdr()).cdr();
+		LispVal body = evalLambdaForm(new LispCons(new LispSymbol(LispNames.LAMBDA), lambdaTail), this.globalEnv, name);
+		boolean keyCell = LispNames.LL_KEY_CELL.equals(name);
+		return new LispFunction(name, args -> {
+			LispVal answer = (args.size() != (keyCell ? 3 : 2)) ? null
+					: keyCell ? keyCell(args.get(0), args.get(1), args.get(2)) : checkKeys(args.get(0), args.get(1));
+			return answer != null ? answer : apply(body, args, this.globalEnv);
+		});
+	}
+
+	// (%ll-key-cell plist key upper): the cell whose car is KEY or UPPER, nil at the
+	// end; null where (cddr cur) would take the cdr of an atom.
+	private static @Nullable LispVal keyCell(LispVal plist, LispVal key, LispVal upper) {
+		boolean twin = !(upper instanceof LispNil);
+		LispVal cur = plist;
+		while (cur instanceof LispCons cell) {
+			LispVal indicator = cell.car();
+			if (LispEquality.eql(indicator, key) || (twin && LispEquality.eql(indicator, upper))) {
+				return cell;
+			}
+			if (cell.cdr() instanceof LispCons value) {
+				cur = value.cdr();
+			}
+			else if (cell.cdr() instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			else {
+				return null;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// (%ll-check-keys plist known): nil when every indicator is a known key or
+	// :allow-other-keys and has a value; null for anything the Lisp body must decide.
+	private static @Nullable LispVal checkKeys(LispVal plist, LispVal known) {
+		LispVal cur = plist;
+		while (cur instanceof LispCons cell) {
+			LispVal indicator = cell.car();
+			if (!(indicator instanceof LispSymbol sym && (isAllowOtherKeys(sym.name()) || memberEql(sym, known)))) {
+				return null;
+			}
+			if (!(cell.cdr() instanceof LispCons value)) {
+				return null;
+			}
+			cur = value.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Both spellings, as the Lisp body tests them.
+	private static boolean isAllowOtherKeys(String name) {
+		return LispNames.ALLOW_OTHER_KEYS_KEYWORD.equals(name) || ":allow-other-keys".equals(name);
+	}
+
+	private static boolean memberEql(LispVal item, LispVal list) {
+		LispVal cur = list;
+		while (cur instanceof LispCons cell) {
+			if (LispEquality.eql(item, cell.car())) {
+				return true;
+			}
+			cur = cell.cdr();
+		}
+		return false;
+	}
+
+	/**
 	 * Resolves a function designator name against the global function namespace.
 	 * @param name the function name
 	 * @return the function value
@@ -10106,11 +10205,9 @@ public final class LispEvaluator {
 			// the first call -- a lambda-creation-time expansion is what introduces the
 			// reference, so no earlier hook can see it coming.
 			if (LambdaLists.isRuntimeHelper(name)) {
-				eval(LambdaLists.runtimeDefun(name), this.globalEnv);
-				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
-				if (loaded != null) {
-					return loaded;
-				}
+				LispFunction helper = keywordHelper(name);
+				this.globalEnv.defineFunction(name, helper);
+				return helper;
 			}
 			// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
 			// definitions into the global environment the first time a linalg:-qualified

@@ -78,6 +78,19 @@ class ObjcClassTest {
 	}
 
 	@Test
+	void aRedefinedStructureIsLaidOutAgain() {
+		// A layout is worked out once per type (objc::*elements*); defining a type again
+		// must not leave the old one behind, for the type or for one that nests it.
+		assertThat(eval("""
+				(objc:define-objc-struct (inner (:foreign-name "_Inner")) (:a :char))
+				(objc:define-objc-struct (outer (:foreign-name "_Outer")) (:i inner) (:b :char))
+				(let ((before (list (fli:size-of 'inner) (fli:size-of 'outer))))
+				  (objc:define-objc-struct (inner (:foreign-name "_Inner")) (:a :double))
+				  (list before (fli:size-of 'inner) (fli:size-of 'outer)))
+				""")).isEqualTo("((1 2) 8 16)");
+	}
+
+	@Test
 	void theLibraryNeverDefinesAPrimitive() {
 		// A defun in the library under a primitive's name replaces the backend's own on
 		// the interpreter and the JVM (a class-half helper once shadowed %method-types).

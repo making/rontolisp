@@ -34,6 +34,14 @@ parameters"). User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   `do`-over-a-list loops with the same head shape
   ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)). Pinned by
   `LambdaListsTest`.
+- **The interpreter answers both helpers in Java** (`LispEvaluator.keywordHelper`, installed at
+  the same first resolution): a scan over a well-formed tail with nothing to signal, and
+  anything else -- a malformed tail, an unknown indicator (the `getf :allow-other-keys` rule),
+  an odd tail -- runs the `runtimeDefun` body itself, so answers and messages stay that body's.
+  Interpreted, the Lisp loop cost ~0.9 us a helper call: a call of `(a &key (index 0) type)`
+  passing `:index` 3.0 -> 0.78 us, of `(a &key (index 0))` 2.0 -> 0.58 (2026-09-29, `java -cp
+  target/classes`, M4 Max). Pinned by
+  `LispEvaluatorTest#theKeywordHelpersAreBuiltInsThatAnswerAsTheirLispBody`.
 - **Trap**: `&key` with NO key params still switches the tail to keyword convention
   (`Parsed.sawKey`); losing that marker makes the function fixed-arity.
 - Helpers use the `__ll_` prefix; `PackageResolver` passes `&`-prefixed symbols through

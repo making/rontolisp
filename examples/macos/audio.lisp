@@ -26,11 +26,11 @@
 ;;;; for the main thread, and `-[AVAudioEngine stop]`, sent on the main thread, waits for
 ;;;; the render thread, so the two would wait for each other. That is why the samples
 ;;;; are written with `fli:`, which touches memory on the calling thread. And it has a
-;;;; deadline, about 23 us a sample at 44.1 kHz. Measured (M4 Max, two seconds): a
-;;;; compiled class or jar renders every frame; the interpreter, whose `fli:` write
-;;;; costs about 35 us, renders a third to a half of them under `java -jar` and a
-;;;; quarter to a third in the rontolisp binary, which is heard as a stutter. Section 5
-;;;; prints the count.
+;;;; deadline, about 23 us a sample at 44.1 kHz. Measured (M4 Max, two seconds): the
+;;;; interpreter's `fli:` write costs about 3 us under `java -jar` and 4 us in the
+;;;; rontolisp binary (a compiled class, 0.05 us), and all three keep up. Section 5
+;;;; prints the count: a little under the 88,200 two seconds hold, since the engine
+;;;; takes a moment to start pulling.
 ;;;;
 ;;;; macOS only: on the interpreter, compiled to a JVM class or jar, and as a --native
 ;;;; executable on Apple silicon (offline only); never as WASM.

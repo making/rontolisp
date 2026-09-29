@@ -22,7 +22,15 @@ compile-time-constant flags.**
 What re-expanding `setf` costs, measured 2026-09-24 (JFR, `linalg:arange` over 520000
 elements, i.e. a `(setf (aref out i) x)` loop): **24%** of the samples, 8 points of it
 `UiopLibrary.tables()` joining a cache key per call; with that held once, **14.5%**. A memo
-would need a version bumped by every state read above; not done.
+would need a version bumped by every state read above; not done. Measured again 2026-09-29 on
+`(setf (fli:dereference p :index 3) x)`: 3.13 us against 2.70 for the `funcall` of the setf
+function, ~14%.
+
+Two per-EVALUATION costs of every call, not memos, found in the same profile: a
+package-qualified operator asked the two uiop probes through two `splitQualified` splits
+(~5% of an `objc.lisp` loop; now `LispEvaluator.isUiopOperator`, a per-name answer), and
+`normalizeBindingList` rebuilt every `let`'s binding list (~4%; now it returns the list
+itself unless an entry is a bare symbol or `(x)`).
 
 Place-writing macros (`push`, `pop`, `incf`, `decf`, `pushnew`, `remf`, `psetf`, `rotatef`,
 `shiftf`) ARE memoized: they lower to `(setf place ...)` and that arm re-expands.

@@ -544,12 +544,14 @@
       (when typedef-name
         (setf (gethash typedef-name objc::*type-encodings*) encoding)
         (setf (gethash typedef-name objc::*struct-slots*) slots))
+      (objc::%forget-elements)
       name)))
 
 (defun objc::%define-objc-typedef (name options type)
   (let ((c-type (assoc :c-type options)))
     (setf (gethash name objc::*type-encodings*)
           (objc::%type-encoding (if c-type (second c-type) type)))
+    (objc::%forget-elements)
     name))
 
 ;; A declaration of a protocol the runtime already has: the manual's rule since macOS

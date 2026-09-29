@@ -18048,6 +18048,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theKeywordHelpersAreBuiltInsThatAnswerAsTheirLispBody() {
+		// A built-in, not the interpreted loop (about 1 us a keyword argument)...
+		assertThat(eval("(function %ll-key-cell)")).isInstanceOf(LispFunction.class);
+		assertThat(eval("(function %ll-check-keys)")).isInstanceOf(LispFunction.class);
+		// ...answering what LambdaLists.runtimeDefun's body answers, the tails the scan
+		// hands to that body included.
+		assertThat(eval("(%ll-key-cell '(:a 1 :b 2) :b nil)").print()).isEqualTo("(:B 2)");
+		assertThat(eval("(%ll-key-cell '(:a 1 :b 2) :c nil)").print()).isEqualTo("NIL");
+		assertThat(eval("(%ll-key-cell '(:a 1 :b 2) :|b| :b)").print()).isEqualTo("(:B 2)");
+		assertThat(eval("(%ll-key-cell '(:a 1 . 5) :b nil)").print()).isEqualTo("NIL");
+		assertThat(eval("(%ll-key-cell '(:a) :b nil)").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(%ll-key-cell '(:a . 5) :b nil)")).isInstanceOf(LispEvalException.class);
+		assertThat(eval("(%ll-check-keys '(:a 1 :allow-other-keys nil) '(:a))").print()).isEqualTo("NIL");
+		assertThat(eval("(%ll-check-keys '(:x 1 :allow-other-keys t) '(:a))").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(%ll-check-keys '(:x 1) '(:a))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unknown keyword argument: :X");
+		assertThatThrownBy(() -> eval("(%ll-check-keys '(:a 1 :a) '(:a))")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Odd number of keyword arguments: :A");
+	}
+
+	@Test
 	void defunEmptyKeySection() {
 		// &key with NO key parameters must still accept a keyword tail: trivia's
 		// :trivial optimizer is (lambda (clauses &key &allow-other-keys) clauses)

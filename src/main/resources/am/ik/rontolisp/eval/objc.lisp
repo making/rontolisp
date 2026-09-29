@@ -62,14 +62,15 @@
 ;; at. Every pointer-typed value Objective-C hands Lisp is one (an invoke result, a
 ;; callback's argument, a dereferenced pointer), typed by the encoding's pointee, and
 ;; fli:allocate-foreign-object makes one over calloc'd memory -- the host's, never a wasm
-;; module's linear memory. ENCODING is the pointee's, what %peek and %poke read and write
-;; it by. Not interned and not compared by address: fli:pointer-eq does that.
+;; module's linear memory. ELEMENT is the pointee's layout (objc::%element-type), worked
+;; out when the pointer is made, so an access is arithmetic and one %peek or %poke. Not
+;; interned and not compared by address: fli:pointer-eq does that.
 (defstruct (fli::pointer
-            (:constructor objc::%make-foreign-pointer (address type encoding))
+            (:constructor objc::%make-foreign-pointer (address type element))
             (:predicate fli:pointerp) (:conc-name fli::%pointer-) (:copier nil))
   address
   type
-  encoding)
+  element)
 
 ;; The definition half (objc-class.lisp) plugs in here: a standard-objc-object or a Lisp
 ;; class that implements an Objective-C class stands for its pointer wherever one is
@@ -116,6 +117,10 @@
 
 (setf (gethash 'cocoa:ns-range objc::*struct-slots*)
       '((:location (:unsigned :long-long)) (:length (:unsigned :long-long))))
+
+;; An FLI type -> its layout (objc::%element-type). Replaced, never changed in place: a
+;; render block reads it on the audio thread while the main thread may add a type.
+(defvar objc::*elements* (make-hash-table :test 'equal))
 
 ;; LispWorks' printed form of a foreign pointer. The address only: printing must never
 ;; be what touches a freed object (the message of a refused release prints the pointer).
@@ -585,19 +590,71 @@
                (t nil))))
     (and name (gethash name objc::*struct-slots*))))
 
-;; (size . alignment) of an FLI type, by the C rule: a structure with named slots slot by
-;; slot, anything else by its parsed encoding.
-(defun objc::%fli-layout (fli)
-  (let ((slots (objc::%struct-slots fli)))
+;; The layout of an FLI type, worked out once: #(size alignment parsed encoding access
+;; slots). SIZE and ALIGNMENT follow the C rule -- a structure with named slots slot by
+;; slot, anything else by its parsed encoding; ENCODING is what %peek and %poke take;
+;; ACCESS is how a value is read and written (objc::%access); SLOTS, for a structure with
+;; named slots, is ((name-string offset fli-type) ...). SIZE is nil for a pointee
+;; Objective-C described whose FLI type has no encoding (objc::%described-element).
+(defun objc::%element-or-nil (fli)
+  (or (gethash fli objc::*elements*)
+      (let ((encoding (objc::%encoding-or-nil fli)))
+        (and encoding
+             (let ((element (objc::%make-element fli encoding))
+                   (table (make-hash-table :test 'equal)))
+               (maphash (lambda (k v) (setf (gethash k table) v))
+                        objc::*elements*)
+               (setf (gethash fli table) element)
+               (setq objc::*elements* table)
+               element)))))
+
+(defun objc::%element-type (fli)
+  (or (objc::%element-or-nil fli)
+      (error "objc: ~s is not an FLI type this interface can call" fli)))
+
+(defun objc::%make-element (fli encoding)
+  (let ((parsed (car (objc::%parse-type encoding 0)))
+        (slots (objc::%struct-slots fli)))
     (if slots
-        (let ((offset 0) (align 1))
+        (let ((offset 0) (align 1) (placed nil))
           (dolist (slot slots)
-            (let* ((layout (objc::%fli-layout (second slot))) (a (cdr layout)))
-              (setq offset (+ (* a (ceiling offset a)) (car layout)))
+            (let* ((element (objc::%element-type (second slot)))
+                   (a (svref element 1)))
+              (setq offset (* a (ceiling offset a)))
+              (push (list (string (first slot)) offset (second slot)) placed)
+              (setq offset (+ offset (svref element 0)))
               (setq align (max align a))))
-          (cons (* align (ceiling offset align)) align))
-        (let ((parsed (car (objc::%parse-type (objc::%type-encoding fli) 0))))
-          (cons (objc::%type-size parsed) (objc::%type-alignment parsed))))))
+          (vector (* align (ceiling offset align)) align parsed encoding
+                  (objc::%access fli parsed) (nreverse placed)))
+        (vector (objc::%type-size parsed) (objc::%type-alignment parsed) parsed
+                encoding (objc::%access fli parsed) nil))))
+
+;; The layout of a pointee Objective-C described (PARSED) as the FLI type FLI: the type's
+;; own when it has one, else read by the parsed encoding with no size -- indexing it
+;; signals as fli:size-of does.
+(defun objc::%described-element (fli parsed)
+  (or (objc::%element-or-nil fli)
+      (vector nil nil parsed (objc::%unparse parsed) (objc::%access fli parsed)
+              nil)))
+
+;; :void, :aggregate, :boolean, :real (a float read raw and written as a double) or
+;; :other (through %result and %raw-arg).
+(defun objc::%access (fli parsed)
+  (cond ((eq parsed :void) :void)
+        ((and (consp parsed) (member (car parsed) '(:struct :array :union)))
+         :aggregate)
+        ((objc::%boolean-type-p fli) :boolean)
+        ((or (eq parsed :float) (eq parsed :double)) :real)
+        (t :other)))
+
+;; A type (re)defined: every layout may have changed, so the table starts again.
+(defun objc::%forget-elements ()
+  (setq objc::*elements* (make-hash-table :test 'equal)))
+
+;; (size . alignment) of an FLI type.
+(defun objc::%fli-layout (fli)
+  (let ((element (objc::%element-type fli)))
+    (cons (svref element 0) (svref element 1))))
 
 ;; A variadic argument's encoding: C's default promotions (a float travels as a
 ;; double), and then every integer in a whole 64-bit slot -- a variadic argument takes
@@ -1482,13 +1539,13 @@
 
 ;; A pointer to ADDRESS of an FLI type the program names.
 (defun objc::%foreign-pointer (address type)
-  (objc::%make-foreign-pointer address type (objc::%type-encoding type)))
+  (objc::%make-foreign-pointer address type (objc::%element-type type)))
 
 ;; A pointer to ADDRESS whose pointee Objective-C described: its FLI type, and the
-;; encoding it is read by -- the type's own when it has one, else the parsed PARSED.
+;; layout it is read by -- the type's own when it has one, else the parsed PARSED's.
 (defun objc::%foreign-pointer-to (address type parsed)
   (objc::%make-foreign-pointer address type
-   (or (objc::%encoding-or-nil type) (objc::%unparse parsed))))
+                               (objc::%described-element type parsed)))
 
 (defun objc::%check-pointer (pointer who)
   (unless (fli:pointerp pointer)
@@ -1496,7 +1553,9 @@
   pointer)
 
 (defun objc::%non-null (pointer who)
-  (let ((address (fli::%pointer-address (objc::%check-pointer pointer who))))
+  (unless (fli:pointerp pointer)
+    (error "~a: ~s is not a foreign pointer" who pointer))
+  (let ((address (fli::%pointer-address pointer)))
     (when (= address 0) (error "~a: ~s is a null pointer" who pointer))
     address))
 
@@ -1504,7 +1563,7 @@
   (or (eq fli 'objc:objc-bool) (eq fli 'objc:objc-c++-bool) (eq fli :boolean)
       (and (consp fli) (eq (car fli) :boolean))))
 
-(defun fli:size-of (type-name) (car (objc::%fli-layout type-name)))
+(defun fli:size-of (type-name) (svref (objc::%element-type type-name) 0))
 
 (defun fli:allocate-foreign-object
     (&key type pointer-type (nelems 1) initial-element initial-contents fill)
@@ -1546,70 +1605,76 @@
     (objc::%free (fli::%pointer-address pointer)))
   nil)
 
-;; (values address type encoding) of element INDEX of what POINTER points at, read as TYPE
-;; when one is given.
-(defun objc::%element (pointer index type who)
-  (let ((address (objc::%non-null pointer who)))
-    (if type
-        (values (+ address (* index (fli:size-of type))) type
-                (objc::%type-encoding type))
-        (values (+ address (* index (fli:size-of (fli::%pointer-type pointer))))
-                (fli::%pointer-type pointer)
-                (fli::%pointer-encoding pointer)))))
-
-;; The value of TYPE at ADDRESS. An aggregate is not a Lisp value here: COPY nil answers a
-;; pointer to it, t a copy in a fresh foreign object, :error (LispWorks' default) signals.
-(defun objc::%load (address type encoding copy who)
-  (let ((parsed (car (objc::%parse-type encoding 0))))
-    (cond ((eq parsed :void)
+;; The value at ADDRESS of TYPE, laid out as ELEMENT. An aggregate is not a Lisp value
+;; here: COPY nil answers a pointer to it, t a copy in a fresh foreign object, :error
+;; (LispWorks' default) signals.
+(defun objc::%load (address type element copy who)
+  (let ((access (svref element 4)))
+    (cond ((eq access :real) (objc::%peek address (svref element 3)))
+          ((eq access :other)
+           (objc::%result (svref element 2)
+                          (objc::%peek address (svref element 3))))
+          ((eq access :boolean) (/= (objc::%peek address (svref element 3)) 0))
+          ((eq access :void)
            (error "~a: a pointer to :void has nothing to read; give a :type"
                   who))
-          ((and (consp parsed) (member (car parsed) '(:struct :array :union)))
-           (cond
-            ((null copy) (objc::%make-foreign-pointer address type encoding))
-            ((eq copy :error)
-             (error "~a: ~s is an aggregate; pass :copy-foreign-object nil for a pointer to it or t for a copy"
-                    who type))
-            (t (let ((new (fli:allocate-foreign-object :type type))
-                     (size (fli:size-of type)))
-                 (objc::%write-octets (fli::%pointer-address new)
-                                      (objc::%read-octets address size))
-                 new))))
-          ((objc::%boolean-type-p type) (/= (objc::%peek address encoding) 0))
-          (t (objc::%result parsed (objc::%peek address encoding))))))
+          ((null copy) (objc::%make-foreign-pointer address type element))
+          ((eq copy :error)
+           (error "~a: ~s is an aggregate; pass :copy-foreign-object nil for a pointer to it or t for a copy"
+                  who type))
+          (t (let ((new (fli:allocate-foreign-object :type type)))
+               (objc::%write-octets (fli::%pointer-address new)
+                (objc::%read-octets address (svref element 0)))
+               new)))))
 
-;; Writes VALUE as TYPE at ADDRESS: a foreign pointer's memory for an aggregate, else
-;; what an argument of the type takes -- except what would not outlive the write (a Lisp
-;; string or vector made into an Objective-C object for the call only).
-(defun objc::%store (address type encoding value who)
-  (let ((parsed (car (objc::%parse-type encoding 0))))
-    (cond ((eq parsed :void)
+;; Writes VALUE at ADDRESS, laid out as ELEMENT: a foreign pointer's memory for an
+;; aggregate, else what an argument of the type takes -- except what would not outlive
+;; the write (a Lisp string or vector made into an Objective-C object for the call only).
+(defun objc::%store (address element value who)
+  (let ((access (svref element 4)))
+    (cond ((eq access :real)
+           (objc::%poke address (svref element 3)
+                        (if (realp value)
+                            (float value 1d0)
+                            (objc::%raw-arg (svref element 2) value who 0
+                                            (list nil)))))
+          ((eq access :void)
            (error "~a: a pointer to :void has nothing to write; give a :type"
                   who))
-          ((and (fli:pointerp value) (consp parsed)
-                (member (car parsed) '(:struct :array :union)))
+          ((and (eq access :aggregate) (fli:pointerp value))
            (objc::%write-octets address
-                                (objc::%read-octets (objc::%non-null value who)
-                                                    (fli:size-of type))))
-          ((and (member parsed '(:object :cstring))
+            (objc::%read-octets (objc::%non-null value who) (svref element 0))))
+          ((and (member (svref element 2) '(:object :cstring))
                 (or (stringp value) (vectorp value)))
            (error "~a: ~s would not outlive the write; store an object pointer"
                   who value))
-          (t (objc::%poke address encoding
-                          (objc::%raw-arg parsed value who 0 (list nil)))))
+          (t (objc::%poke address (svref element 3)
+              (objc::%raw-arg (svref element 2) value who 0 (list nil)))))
     value))
 
+;; Element INDEX sits INDEX sizes of the pointee past the pointer; a pointee with no size
+;; signals as fli:size-of does.
 (defun fli:dereference
     (pointer &key (index 0) type (copy-foreign-object :error))
-  (multiple-value-bind (address element encoding)
-      (objc::%element pointer index type "fli:dereference")
-    (objc::%load address element encoding copy-foreign-object
-                 "fli:dereference")))
+  (let* ((address (objc::%non-null pointer "fli:dereference"))
+         (element
+          (if type (objc::%element-type type) (fli::%pointer-element pointer))))
+    (objc::%load (+ address
+                    (* index
+                       (or (svref element 0)
+                           (fli:size-of (fli::%pointer-type pointer)))))
+                 (or type (fli::%pointer-type pointer)) element
+                 copy-foreign-object "fli:dereference")))
 
 (defun (setf fli:dereference) (value pointer &key (index 0) type)
-  (multiple-value-bind (address element encoding)
-      (objc::%element pointer index type "(setf fli:dereference)")
-    (objc::%store address element encoding value "(setf fli:dereference)")))
+  (let* ((address (objc::%non-null pointer "(setf fli:dereference)"))
+         (element
+          (if type (objc::%element-type type) (fli::%pointer-element pointer))))
+    (objc::%store (+ address
+                     (* index
+                        (or (svref element 0)
+                            (fli:size-of (fli::%pointer-type pointer)))))
+                  element value "(setf fli:dereference)")))
 
 ;; (values address type) of the slot SLOT-NAME -- a symbol, or a list naming a slot of a
 ;; slot -- of the structure POINTER points at (OBJECT-TYPE when given).
@@ -1617,21 +1682,19 @@
   (let ((address (objc::%non-null pointer who))
         (type (or object-type (fli::%pointer-type pointer))))
     (dolist (name (if (listp slot-name) slot-name (list slot-name)))
-      (let ((slots (objc::%struct-slots type)) (offset 0) (found nil))
+      (let ((slots (objc::%struct-slots type))
+            (wanted (string name))
+            (found nil))
         (unless slots
           (error "~a: ~s is not a structure type with named slots" who type))
-        (dolist (slot slots)
-          (unless found
-            (let* ((layout (objc::%fli-layout (second slot))) (a (cdr layout)))
-              (setq offset (* a (ceiling offset a)))
-              (if (string= (string (first slot)) (string name))
-                  (setq found slot)
-                  (setq offset (+ offset (car layout)))))))
+        (dolist (slot (svref (objc::%element-type type) 5))
+          (when (and (null found) (string= (first slot) wanted))
+            (setq found slot)))
         (unless found
           (error "~a: ~s has no slot ~s; its slots are ~{~a~^, ~}" who type name
                  (mapcar #'first slots)))
-        (setq address (+ address offset))
-        (setq type (second found))))
+        (setq address (+ address (second found)))
+        (setq type (third found))))
     (values address type)))
 
 (defun fli:foreign-slot-value
@@ -1639,7 +1702,7 @@
   (multiple-value-bind (address slot-type)
       (objc::%slot pointer slot-name object-type "fli:foreign-slot-value")
     (let ((read-as (or type slot-type)))
-      (objc::%load address read-as (objc::%type-encoding read-as)
+      (objc::%load address read-as (objc::%element-type read-as)
                    copy-foreign-object "fli:foreign-slot-value"))))
 
 (defun (setf fli:foreign-slot-value)
@@ -1647,9 +1710,8 @@
   (multiple-value-bind (address slot-type) (objc::%slot pointer slot-name
                                             object-type
                                             "(setf fli:foreign-slot-value)")
-    (let ((write-as (or type slot-type)))
-      (objc::%store address write-as (objc::%type-encoding write-as) value
-                    "(setf fli:foreign-slot-value)"))))
+    (objc::%store address (objc::%element-type (or type slot-type)) value
+                  "(setf fli:foreign-slot-value)")))
 
 (defun fli:make-pointer (&key address type pointer-type)
   (unless (integerp address)
@@ -1803,7 +1865,7 @@
 (defun objc::%fill-foreign (pointer values verb)
   (let* ((who (concatenate 'string "cocoa:" verb))
          (address (objc::%non-null pointer who))
-         (parsed (car (objc::%parse-type (fli::%pointer-encoding pointer) 0))))
+         (parsed (svref (fli::%pointer-element pointer) 2)))
     (unless (and (consp parsed) (eq (car parsed) :struct)
                  (= (length (objc::%leaves parsed)) (length values)))
       (error "~a: ~s does not point at a structure of ~a fields" who pointer
