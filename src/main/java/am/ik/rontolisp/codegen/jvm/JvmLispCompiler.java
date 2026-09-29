@@ -3157,11 +3157,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables
-				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
-						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
-						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)), strvMethod,
-						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables,
-						javaSites != null ? javaSites.direct().lispTable() : null)
+				? JvmHashRuntimeBuilder.build(cp, thisClass.entry(), objectClass.entry(), objectArrayClass.entry(),
+						longValueOf.entry(),
+						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)).entry(),
+						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)).entry(),
+						strvMethod != null ? strvMethod.entry() : null,
+						instanceLayoutClass != null ? instanceLayoutClass.entry() : null, usesEqualpHashTables,
+						usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable().entry() : null)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -4634,8 +4636,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					rm.maxLocals(), rm.code(), List.of());
 		}
 		for (JvmHashRuntimeBuilder.HashMethod hm : hashMethods) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc(), hm.maxStack(),
-					hm.maxLocals(), hm.code(), List.of());
+			hm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc());
 		}
 		for (JvmArrayRuntimeBuilder.ArrayMethod am : arrayMethods) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(), am.maxStack(),
@@ -6477,6 +6478,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final OperandStack stack;
 
+		/**
+		 * The typed layer over this body ({@link am.ik.jvm.MethodCode}, the words of
+		 * {@code java.lang.classfile}'s {@code CodeBuilder}): it writes into
+		 * {@link #code} and feeds {@link #stack} exactly as {@link #emit} does, so one
+		 * body mixes the two freely while the emitters move onto it
+		 * (.kb/jvm-method-size-limits.md, "Emission on java.lang.classfile").
+		 */
+		final am.ik.jvm.MethodCode body;
+
 		Map<String, Integer> locals = new HashMap<>();
 
 		Map<String, FunctionInfo> functions;
@@ -7272,6 +7282,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack(this.cp);
+			this.body = new am.ik.jvm.MethodCode(this.code, this.stack, this.deferredBranches, this.exceptionTable);
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
 			this.lispToString = Objects.requireNonNull(builder.lispToString);
@@ -7447,6 +7458,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param descriptor its descriptor
 		 */
 		void addTo(ClassDefinition.Builder definition, int access, Utf8Constant name, Utf8Constant descriptor) {
+			this.body.checkComplete();
 			definition.addMethod(access, name, descriptor, this.code, this.exceptionTable, this.lines(),
 					this.deferredBranches);
 		}

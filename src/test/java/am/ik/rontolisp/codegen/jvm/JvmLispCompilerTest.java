@@ -2866,6 +2866,62 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aMaphashWhoseCounterLandsPastSlot255IncrementsItsOwnLocal() throws Exception {
+		// maphash counts its pairs in a temporary int local. Its increment was written
+		// with a one-byte slot whatever the slot, so past 255 it named slot N mod 256 --
+		// here a reference, which the verifier refused ("Bad local variable type");
+		// landing on an int it would have looped forever. The same unsplittable frame as
+		// above puts the counter past 255.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun tree (x)
+				  (let ((acc 0) (hit nil) (h (make-hash-table)))
+				    (setf (gethash 'a h) 10)
+				    (setf (gethash 'b h) 20)
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (maphash (lambda (k v) (setq hit (cons k hit)) (setq acc (+ acc v))) h)
+				                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc (length hit)))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(30 2)");
+	}
+
+	@Test
+	void anObjSlotsWalkWhoseCursorLandsPastSlot255DecrementsItsOwnLocal() throws Exception {
+		// %obj-slots (equalp's instance walk) counts its cursor down with iinc, written
+		// with the same one-byte slot as maphash's counter above.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defstruct pt x y)
+				(defun tree (x)
+				  (let ((acc 0) (hit nil) (p (make-pt :x 1 :y 2)))
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (setq hit (%%obj-slots p))
+				                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc hit))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(0 (1 2))");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseAsTheMessageOfAnError() throws Exception {
 		// The throw shape allocates the exception before evaluating its message, so this
 		// pins that the message is bound to a local first: an object under construction

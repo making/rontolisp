@@ -4,8 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispNames;
@@ -44,13 +43,12 @@ final class JvmHashTableCompiler {
 		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
 		String reported = OperandTypes.reportedOperator(lispName);
 		if (reported == null) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		else {
 			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(javaSites.direct().tableGuard().index());
+		ctx.body.invokestatic(javaSites.direct().tableGuard().entry());
 	}
 
 	/**
@@ -66,8 +64,7 @@ final class JvmHashTableCompiler {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = lispName;
 		try {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_TAB).index());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_TAB).entry());
 		}
 		finally {
 			ctx.operator = outer;
@@ -79,11 +76,9 @@ final class JvmHashTableCompiler {
 	// table is refused, as the interpreter does.
 	private static void emitHostTableGuardUnderOne(JvmLispCompiler.Ctx ctx, String lispName) {
 		int top = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(top);
+		ctx.body.astore(top);
 		emitHostTableGuard(ctx, lispName);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(top);
+		ctx.body.aload(top);
 	}
 
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -127,16 +122,14 @@ final class JvmHashTableCompiler {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			emitHostTableGuard(ctx, LispNames.HASH_TABLE_TEST);
 			invokeHelper(ctx, className, JvmHashRuntimeBuilder.EQUALP_P, JvmHashRuntimeBuilder.EQUALP_P_DESC);
-			int ifNotEqualp = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
+			MethodCode.Label notEqualp = ctx.body.newLabel();
+			MethodCode.Label end = ctx.body.newLabel();
+			ctx.body.ifnull(notEqualp);
 			JvmEmitHelper.compileStringLiteral(LispNames.EQUALP, ctx);
-			int gotoEnd = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotEqualp, ctx.code.size());
+			ctx.body.goto_(end);
+			ctx.body.labelBinding(notEqualp);
 			JvmEmitHelper.compileStringLiteral(LispNames.EQUAL, ctx);
-			JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+			ctx.body.labelBinding(end);
 			return;
 		}
 		List<LispVal> args = cons.toList();
@@ -145,46 +138,27 @@ final class JvmHashTableCompiler {
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.TEST, JvmHashRuntimeBuilder.TEST_DESC);
 		// The test code goes into a temp: each comparison below consumes its own copy
 		// (3 eq, 2 eql, 1 equalp, else equal).
+		MethodCode c = ctx.body;
 		int testSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(testSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(testSlot);
-		ctx.emit(Opcode.ICONST_2);
-		int ifEql = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(testSlot);
-		ctx.emit(Opcode.ICONST_3);
-		int ifEq = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(testSlot);
-		ctx.emit(Opcode.ICONST_1);
-		int ifEqualp = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPEQ);
-		ctx.emitU2(0);
+		MethodCode.Label eql = c.newLabel();
+		MethodCode.Label eq = c.newLabel();
+		MethodCode.Label equalp = c.newLabel();
+		MethodCode.Label end = c.newLabel();
+		c.istore(testSlot);
+		c.iload(testSlot).loadConstant(2).if_icmpeq(eql);
+		c.iload(testSlot).loadConstant(3).if_icmpeq(eq);
+		c.iload(testSlot).loadConstant(1).if_icmpeq(equalp);
 		JvmEmitHelper.compileStringLiteral(LispNames.EQUAL, ctx);
-		int gotoEnd = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifEql, ctx.code.size());
+		c.goto_(end);
+		c.labelBinding(eql);
 		JvmEmitHelper.compileStringLiteral(LispNames.EQL, ctx);
-		int gotoEnd2 = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifEq, ctx.code.size());
+		c.goto_(end);
+		c.labelBinding(eq);
 		JvmEmitHelper.compileStringLiteral(LispNames.EQ_GENERAL, ctx);
-		int gotoEnd3 = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifEqualp, ctx.code.size());
+		c.goto_(end);
+		c.labelBinding(equalp);
 		JvmEmitHelper.compileStringLiteral(LispNames.EQUALP, ctx);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd2, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEnd3, ctx.code.size());
+		c.labelBinding(end);
 	}
 
 	/**
@@ -212,7 +186,7 @@ final class JvmHashTableCompiler {
 		List<LispVal> forms = ((LispCons) expansion).toList();
 		JvmExprCompiler.compileExpr(forms.get(1), ctx, className);
 		emitHostTableGuard(ctx, lispName);
-		ctx.emit(Opcode.POP);
+		ctx.body.pop();
 		JvmExprCompiler.compileExpr(forms.get(2), ctx, className);
 	}
 
@@ -224,7 +198,7 @@ final class JvmHashTableCompiler {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		emitHostTableGuardUnderOne(ctx, LispNames.GETHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.GET, JvmHashRuntimeBuilder.GET_DESC);
@@ -278,91 +252,54 @@ final class JvmHashTableCompiler {
 	private static void compileMaphashLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		ctx.indirectCallArities.add(2);
+		MethodCode c = ctx.body;
 
 		// func = args[1]; pairs = _hashValues(args[2])
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
 		int funcSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(funcSlot);
+		c.astore(funcSlot);
 
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		emitHostTableGuard(ctx, LispNames.MAPHASH);
 		invokeHelper(ctx, className, JvmHashRuntimeBuilder.VALUES, JvmHashRuntimeBuilder.VALUES_DESC);
 		int arrSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(arrSlot);
+		c.astore(arrSlot);
 
 		// len = arr.length
 		int lenSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(arrSlot);
-		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(lenSlot);
+		c.aload(arrSlot).arraylength().istore(lenSlot);
 
 		// i = 0
 		int iSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(iSlot);
+		c.iconst_0().istore(iSlot);
 
 		int pairSlot = ctx.allocTemp();
 
 		// loop: if i >= len goto end
-		int loopPos = ctx.code.size();
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(iSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(lenSlot);
-		int ifGePos = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPGE);
-		ctx.emitU2(0);
+		MethodCode.Label loop = c.newBoundLabel();
+		MethodCode.Label end = c.newLabel();
+		c.iload(iSlot).iload(lenSlot).if_icmpge(end);
 
 		// pair = (Object[]) arr[i]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(arrSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(iSlot);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(pairSlot);
+		c.aload(arrSlot).iload(iSlot).aaload().checkcast(ctx.objectArrayClass.entry()).astore(pairSlot);
 
 		// _invoke_2(func, pair[0], pair[1]); pop
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(funcSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(pairSlot);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(pairSlot);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
+		c.aload(funcSlot);
+		c.aload(pairSlot).iconst_0().aaload();
+		c.aload(pairSlot).iconst_1().aaload();
 		JvmFunctionCallCompiler.emitDispatchCall(2, ctx, className);
-		ctx.emit(Opcode.POP);
+		c.pop();
 
-		// i++
-		ctx.emit(Opcode.IINC);
-		ctx.emit(iSlot);
-		ctx.emit(1);
-
-		// goto loop
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2((loopPos - gotoPos) & 0xFFFF);
+		// i++, and again
+		c.iinc(iSlot, 1).goto_(loop);
 
 		// end: maphash returns nil
-		JvmEmitHelper.patchBranch(ctx, ifGePos, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
+		c.labelBinding(end);
+		c.aconst_null();
 	}
 
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ctx.cp.methodRef(className, name, desc));
 	}
 
 }

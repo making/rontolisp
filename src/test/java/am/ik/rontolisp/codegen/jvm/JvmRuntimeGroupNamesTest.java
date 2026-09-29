@@ -65,8 +65,9 @@ class JvmRuntimeGroupNamesTest {
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
-		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, false, null);
+		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass.entry(),
+				objectClass.entry(), objectArrayClass.entry(), longValueOf.entry(), equal.entry(), eqv.entry(),
+				strv.entry(), stringArrayClass.entry(), false, false, null);
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmHashRuntimeBuilder.METHOD_NAMES));
@@ -86,8 +87,9 @@ class JvmRuntimeGroupNamesTest {
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
-		List<JvmHashRuntimeBuilder.HashMethod> folding = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, true, false, null);
+		List<JvmHashRuntimeBuilder.HashMethod> folding = JvmHashRuntimeBuilder.build(cp, selfClass.entry(),
+				objectClass.entry(), objectArrayClass.entry(), longValueOf.entry(), equal.entry(), eqv.entry(),
+				strv.entry(), stringArrayClass.entry(), true, false, null);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES);
@@ -109,8 +111,9 @@ class JvmRuntimeGroupNamesTest {
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
-		List<JvmHashRuntimeBuilder.HashMethod> identity = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, true, null);
+		List<JvmHashRuntimeBuilder.HashMethod> identity = JvmHashRuntimeBuilder.build(cp, selfClass.entry(),
+				objectClass.entry(), objectArrayClass.entry(), longValueOf.entry(), equal.entry(), eqv.entry(),
+				strv.entry(), stringArrayClass.entry(), false, true, null);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.IDENTITY_METHOD_NAMES);

@@ -43,10 +43,13 @@ import org.jspecify.annotations.Nullable;
  * The bytes are read as the generators write them: a constant-pool operand's high part
  * arrives whole, so an index past 65535 still names its master-pool entry, and the
  * operand is resolved through the caller's function -- which is where a call to a method
- * that moved to another class is re-pointed. Every other instruction keeps the exact form
- * it was written in (an {@code aload 2} stays two bytes, a {@code wide} load stays wide),
- * so the written code is the code a generator measured, but for the {@code ldc} widths
- * and the relaxed branches.
+ * that moved to another class is re-pointed. A local's load or store, an {@code iinc} and
+ * a small int constant are written in their SHORTEST form whichever one was emitted
+ * ({@code aload 2} becomes {@code aload_2}, {@code bipush 3} {@code iconst_3}), as
+ * {@code CodeBuilder} writes them: a generator on {@link MethodCode} and one still on
+ * code bytes then write the same class. Every other instruction keeps its form, so the
+ * written code is never longer than the code a generator measured but for the {@code ldc}
+ * widths and the relaxed branches.
  */
 final class CodeReplay {
 
@@ -56,6 +59,10 @@ final class CodeReplay {
 
 	/** The one-byte, operand-free instructions, shared: they are immutable. */
 	private static final @Nullable Instruction[] SIMPLE = new Instruction[256];
+
+	/** The kind of local each {@code xload}/{@code xstore} moves, in opcode order. */
+	private static final TypeKind[] LOCAL_KINDS = { TypeKind.INT, TypeKind.LONG, TypeKind.FLOAT, TypeKind.DOUBLE,
+			TypeKind.REFERENCE };
 
 	static {
 		for (Opcode op : Opcode.values()) {
@@ -197,14 +204,14 @@ final class CodeReplay {
 			return pc + 1;
 		}
 		switch (op) {
-			case 0x10 -> cb.bipush((byte) (int) code.get(pc + 1));
-			case 0x11 -> cb.sipush((short) u2(code, pc + 1));
+			case 0x10 -> cb.loadConstant((int) (byte) (int) code.get(pc + 1));
+			case 0x11 -> cb.loadConstant((int) (short) u2(code, pc + 1));
 			case 0x12 -> cb.with(ConstantInstruction.ofLoad(Opcode.LDC,
 					(LoadableConstantEntry) operand.apply(oneByteIndex(code.get(pc + 1)))));
 			case 0x13, 0x14 -> cb.with(ConstantInstruction.ofLoad(OPCODES[op],
 					(LoadableConstantEntry) operand.apply(index(code, pc + 1))));
-			case 0x15, 0x16, 0x17, 0x18, 0x19 -> cb.with(LoadInstruction.of(OPCODES[op], code.get(pc + 1) & 0xFF));
-			case 0x36, 0x37, 0x38, 0x39, 0x3A -> cb.with(StoreInstruction.of(OPCODES[op], code.get(pc + 1) & 0xFF));
+			case 0x15, 0x16, 0x17, 0x18, 0x19 -> cb.loadLocal(LOCAL_KINDS[op - 0x15], code.get(pc + 1) & 0xFF);
+			case 0x36, 0x37, 0x38, 0x39, 0x3A -> cb.storeLocal(LOCAL_KINDS[op - 0x36], code.get(pc + 1) & 0xFF);
 			case 0x84 -> cb.iinc(code.get(pc + 1) & 0xFF, (byte) (int) code.get(pc + 2));
 			case 0xB2, 0xB3, 0xB4, 0xB5 ->
 				cb.fieldAccess(OPCODES[op], (FieldRefEntry) operand.apply(index(code, pc + 1)));
@@ -220,8 +227,8 @@ final class CodeReplay {
 				int slot = u2(code, pc + 2);
 				Opcode wide = WIDE_OPCODES[widened];
 				switch (wide == null ? Opcode.Kind.NOP : wide.kind()) {
-					case LOAD -> cb.with(LoadInstruction.of(wide, slot));
-					case STORE -> cb.with(StoreInstruction.of(wide, slot));
+					case LOAD -> cb.loadLocal(LOCAL_KINDS[widened - 0x15], slot);
+					case STORE -> cb.storeLocal(LOCAL_KINDS[widened - 0x36], slot);
 					case INCREMENT -> cb.iinc(slot, (short) u2(code, pc + 4));
 					default -> throw new IllegalStateException(
 							String.format("wide 0x%02X at %d is not a load, store or iinc", widened, pc));

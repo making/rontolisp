@@ -14,8 +14,6 @@ import java.lang.classfile.constantpool.NameAndTypeEntry;
 import java.lang.classfile.constantpool.PoolEntry;
 import java.lang.classfile.constantpool.StringEntry;
 import java.lang.classfile.constantpool.Utf8Entry;
-import java.util.HashSet;
-import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
@@ -46,8 +44,6 @@ public final class ConstantPool {
 	private static final int MAX_UTF8_BYTES = 0xFFFF;
 
 	private final ConstantPoolBuilder entries = ConstantPoolBuilder.of();
-
-	private final Set<String> stringValues = new HashSet<>();
 
 	/** Creates a new empty pool whose first entry takes index 1. */
 	public ConstantPool() {
@@ -212,20 +208,71 @@ public final class ConstantPool {
 	 * @return the string constant entry
 	 */
 	public StringConstant addString(Utf8Constant utf8) {
-		this.stringValues.add(utf8.entry().stringValue());
 		return new StringConstant(this.entries.stringEntry(utf8.entry()));
 	}
 
+	// --- entries for an emitter on MethodCode
+	// --------------------------------------------
+
 	/**
-	 * Whether a {@code CONSTANT_String} with this value has been added. Deliberately NOT
-	 * a Utf8 probe: every method and field name is a Utf8, but only a value the emitted
-	 * code can actually LOAD ({@code ldc}) is a String constant. A generator that has to
-	 * know which of its own names the compiled program can produce at run time asks this.
-	 * @param s the string value to probe
-	 * @return true when the pool holds a string constant with that value
+	 * @param internalName a class's internal name ({@code java/util/Map}) or an array
+	 * descriptor
+	 * @return its Class entry
 	 */
-	public boolean hasStringConstant(String s) {
-		return this.stringValues.contains(s);
+	public ClassEntry classEntry(String internalName) {
+		return this.entries.classEntry(this.addUtf8(internalName).entry());
+	}
+
+	/**
+	 * @param owner the declaring class
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return the Methodref
+	 */
+	public MethodRefEntry methodRef(ClassEntry owner, String name, String descriptor) {
+		return this.entries.methodRefEntry(owner, this.nameAndType(name, descriptor));
+	}
+
+	/**
+	 * @param owner the declaring class's internal name
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return the Methodref
+	 */
+	public MethodRefEntry methodRef(String owner, String name, String descriptor) {
+		return this.methodRef(this.classEntry(owner), name, descriptor);
+	}
+
+	/**
+	 * @param owner the declaring interface's internal name
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return the InterfaceMethodref
+	 */
+	public InterfaceMethodRefEntry interfaceMethodRef(String owner, String name, String descriptor) {
+		return this.entries.interfaceMethodRefEntry(this.classEntry(owner), this.nameAndType(name, descriptor));
+	}
+
+	/**
+	 * @param owner the declaring class
+	 * @param name the field's name
+	 * @param descriptor its descriptor
+	 * @return the Fieldref
+	 */
+	public FieldRefEntry fieldRef(ClassEntry owner, String name, String descriptor) {
+		return this.entries.fieldRefEntry(owner, this.nameAndType(name, descriptor));
+	}
+
+	/**
+	 * @param value the string
+	 * @return its String entry
+	 */
+	public StringEntry stringEntry(String value) {
+		return this.entries.stringEntry(this.addUtf8(value).entry());
+	}
+
+	private NameAndTypeEntry nameAndType(String name, String descriptor) {
+		return this.entries.nameAndTypeEntry(this.addUtf8(name).entry(), this.addUtf8(descriptor).entry());
 	}
 
 	/**

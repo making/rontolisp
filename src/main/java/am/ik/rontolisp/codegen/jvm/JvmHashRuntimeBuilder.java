@@ -1,5 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MemberRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -7,11 +12,8 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.runtime.RontoHashTable;
 
@@ -214,7 +216,7 @@ final class JvmHashRuntimeBuilder {
 	static final String EQL_KEY = "#eql";
 
 	/** A hash-table helper method body ready to be emitted into the generated class. */
-	record HashMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record HashMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	private JvmHashRuntimeBuilder() {
@@ -249,120 +251,100 @@ final class JvmHashRuntimeBuilder {
 	 * alone decides
 	 * @return the helper methods
 	 */
-	static List<HashMethod> build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, MethodrefConstant longValueOf, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, @Nullable MethodrefConstant strvMethod,
-			@Nullable ClassConstant stringArrayClass, boolean equalpFold, boolean identityTables,
-			@Nullable MethodrefConstant lispTable) {
-		ClassConstant mapClass = cp.addClass(cp.addUtf8(MAP_CLASS));
-		ClassConstant listClass = cp.addClass(cp.addUtf8(LIST_CLASS));
-		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
-		ClassConstant ratArrClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		ClassConstant intArrClass = cp.addClass(cp.addUtf8("[I"));
-		MethodrefConstant mapInit = cp.addMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant mapGet = cp.addMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant mapPut = cp.addMethodref(mapClass, cp.addNameAndType(cp.addUtf8("put"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant mapRemove = cp.addMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant mapClear = cp.addMethodref(mapClass,
-				cp.addNameAndType(cp.addUtf8("clear"), cp.addUtf8("()V")));
+	static List<HashMethod> build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			ClassEntry objectArrayClass, MemberRefEntry longValueOf, MemberRefEntry equalMethod,
+			MemberRefEntry eqvMethod, @Nullable MemberRefEntry strvMethod, @Nullable ClassEntry stringArrayClass,
+			boolean equalpFold, boolean identityTables, @Nullable MemberRefEntry lispTable) {
+		ClassEntry mapClass = cp.classEntry(MAP_CLASS);
+		ClassEntry listClass = cp.classEntry(LIST_CLASS);
+		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
+		ClassEntry ratArrClass = cp.classEntry("[Ljava/math/BigInteger;");
+		ClassEntry intArrClass = cp.classEntry("[I");
+		MethodRefEntry mapInit = cp.methodRef(mapClass, "<init>", "()V");
+		MethodRefEntry mapGet = cp.methodRef(mapClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry mapPut = cp.methodRef(mapClass, "put",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry mapRemove = cp.methodRef(mapClass, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry mapClear = cp.methodRef(mapClass, "clear", "()V");
 		// A BUCKET is created with room for one entry, not with ArrayList's default
 		// ten: a bucket holds exactly one pair unless two structurally distinct keys
 		// hash alike, and the default backing array is 56 bytes per bucket against 24
 		// -- on a table with a million keys that difference IS the allocation profile.
 		// The insertion-order list keeps the no-argument constructor (it grows to the
 		// table's whole size).
-		MethodrefConstant listInitCapacity = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
-		MethodrefConstant listInit = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant listAdd = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant listGet = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant listSize = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant listRemoveAt = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant listClear = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("clear"), cp.addUtf8("()V")));
-		MethodrefConstant integerValueOf = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/Integer;")));
-		MethodrefConstant identityHashCode = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
-				cp.addNameAndType(cp.addUtf8("identityHashCode"), cp.addUtf8("(Ljava/lang/Object;)I")));
-		MethodrefConstant objectHashCode = cp.addMethodref(objectClass,
-				cp.addNameAndType(cp.addUtf8("hashCode"), cp.addUtf8("()I")));
-		MethodrefConstant hashRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC)));
-		MethodrefConstant ordRef = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC)));
-		StringConstant orderKey = cp.addString(ORDER_KEY);
-		StringConstant deadKey = cp.addString(RontoHashTable.DEAD_KEY);
-		ClassConstant rontoHashTableClass = cp.addClass(cp.addUtf8(RontoHashTable.class.getName().replace('.', '/')));
-		ClassConstant mapInterface = cp.addClass(cp.addUtf8("java/util/Map"));
+		MethodRefEntry listInitCapacity = cp.methodRef(listClass, "<init>", "(I)V");
+		MethodRefEntry listInit = cp.methodRef(listClass, "<init>", "()V");
+		MethodRefEntry listAdd = cp.methodRef(listClass, "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry listGet = cp.methodRef(listClass, "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry listSize = cp.methodRef(listClass, "size", "()I");
+		MethodRefEntry listRemoveAt = cp.methodRef(listClass, "remove", "(I)Ljava/lang/Object;");
+		MethodRefEntry listClear = cp.methodRef(listClass, "clear", "()V");
+		MethodRefEntry integerValueOf = cp.methodRef(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+		MethodRefEntry identityHashCode = cp.methodRef(cp.classEntry("java/lang/System"), "identityHashCode",
+				"(Ljava/lang/Object;)I");
+		MethodRefEntry objectHashCode = cp.methodRef(objectClass, "hashCode", "()I");
+		MethodRefEntry hashRef = cp.methodRef(thisClass, HASH, HASH_DESC);
+		MethodRefEntry ordRef = cp.methodRef(thisClass, ORD, ORD_DESC);
+		StringEntry orderKey = cp.stringEntry(ORDER_KEY);
+		StringEntry deadKey = cp.stringEntry(RontoHashTable.DEAD_KEY);
+		ClassEntry rontoHashTableClass = cp.classEntry(RontoHashTable.class.getName().replace('.', '/'));
+		ClassEntry mapInterface = cp.classEntry("java/util/Map");
 		// The tombstone machinery
 		// (RontoHashTable.tombstone/liveCount/liveValues/maybeCompact):
 		// removals null the pair's key slot instead of unlinking the order list.
-		MethodrefConstant tombstoneRef = cp.addMethodref(rontoHashTableClass,
-				cp.addNameAndType(cp.addUtf8("tombstone"), cp.addUtf8("(Ljava/util/Map;[Ljava/lang/Object;)V")));
-		MethodrefConstant liveCountRef = cp.addMethodref(rontoHashTableClass,
-				cp.addNameAndType(cp.addUtf8("liveCount"), cp.addUtf8("(Ljava/util/Map;)I")));
-		MethodrefConstant liveValuesRef = cp.addMethodref(rontoHashTableClass,
-				cp.addNameAndType(cp.addUtf8("liveValues"), cp.addUtf8("(Ljava/util/Map;)[Ljava/lang/Object;")));
-		MethodrefConstant maybeCompactRef = cp.addMethodref(rontoHashTableClass,
-				cp.addNameAndType(cp.addUtf8("maybeCompact"), cp.addUtf8("(Ljava/util/Map;)V")));
+		MethodRefEntry tombstoneRef = cp.methodRef(rontoHashTableClass, "tombstone",
+				"(Ljava/util/Map;[Ljava/lang/Object;)V");
+		MethodRefEntry liveCountRef = cp.methodRef(rontoHashTableClass, "liveCount", "(Ljava/util/Map;)I");
+		MethodRefEntry liveValuesRef = cp.methodRef(rontoHashTableClass, "liveValues",
+				"(Ljava/util/Map;)[Ljava/lang/Object;");
+		MethodRefEntry maybeCompactRef = cp.methodRef(rontoHashTableClass, "maybeCompact", "(Ljava/util/Map;)V");
 		// The compiled representation of the boolean t is the symbol "T" (a bare String).
-		StringConstant trueStr = cp.addString("T");
+		StringEntry trueStr = cp.stringEntry("T");
 		// The equalp fold: the key each of get/put/remove places by, and the marker the
 		// table carries. Null in a program that writes no equalp table, which is then
 		// emitted exactly as it was before the fold existed.
-		final @Nullable MethodrefConstant keyRef = equalpFold
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC))) : null;
+		final @Nullable MethodRefEntry keyRef = equalpFold ? cp.methodRef(thisClass, KEY, KEY_DESC) : null;
 
 		List<HashMethod> methods = new ArrayList<>();
-		methods
-			.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass, strvMethod,
-					objectHashCode, hashRef, listClass, cp.addClass(cp.addUtf8("java/util/Map")), identityHashCode));
+		methods.add(buildHash(cp, objectArrayClass, ratArrClass, intArrClass, integerClass, stringArrayClass,
+				strvMethod, objectHashCode, hashRef, listClass, cp.classEntry("java/util/Map"), identityHashCode));
 
 		// _hashMake(): m = new LinkedHashMap(); m.put(ORDER_KEY, new ArrayList());
 		// m.put(DEAD_KEY, 0); return m
-		JvmAsm make = new JvmAsm();
-		make.anew(mapClass);
+		MethodCode make = new MethodCode();
+		make.new_(mapClass);
 		make.dup();
 		make.invokespecial(mapInit);
 		make.dup();
-		make.ldcString(orderKey);
-		make.anew(listClass);
+		make.ldc(orderKey);
+		make.new_(listClass);
 		make.dup();
 		make.invokespecial(listInit);
 		make.invokevirtual(mapPut);
 		make.pop();
 		make.dup();
-		make.ldcString(deadKey);
-		make.iconst(0);
+		make.ldc(deadKey);
+		make.loadConstant(0);
 		make.invokestatic(integerValueOf);
 		make.invokevirtual(mapPut);
 		make.pop();
 		make.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 1, make.code));
+		methods.add(new HashMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), make));
 
 		// _hashOrd(table): return (ArrayList) ((LinkedHashMap) table).get(ORDER_KEY)
-		JvmAsm ord = new JvmAsm();
+		MethodCode ord = new MethodCode();
 		ord.aload(0);
 		ord.checkcast(mapClass);
-		ord.ldcString(orderKey);
+		ord.ldc(orderKey);
 		ord.invokevirtual(mapGet);
 		ord.checkcast(listClass);
 		ord.areturn();
-		methods.add(new HashMethod(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC), 2, 1, ord.code));
+		methods.add(new HashMethod(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC), ord));
 
 		// The test reader the identity dispatch below branches on. Emitted only for a
 		// program that can build an identity table; every other program keeps the
 		// bodies it had.
-		final @Nullable MethodrefConstant testRef = identityTables
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC))) : null;
+		final @Nullable MethodRefEntry testRef = identityTables ? cp.methodRef(thisClass, TEST, TEST_DESC) : null;
 
 		methods.add(buildGet(cp, mapClass, listClass, objectArrayClass, mapGet, listGet, listSize, integerValueOf,
 				hashRef, equalMethod, eqvMethod, ratArrClass, integerClass, identityHashCode, keyRef, testRef,
@@ -387,16 +369,15 @@ final class JvmHashRuntimeBuilder {
 		// folds or keys by identity, so does its TEST: the markers are read before the
 		// clear and hung back beside the order list, or an emptied equalp table would
 		// place structurally from there on.
-		JvmAsm clr = new JvmAsm();
+		MethodCode clr = new MethodCode();
 		if (identityTables) {
 			clr.aload(0);
-			clr.invokestatic(cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC))));
+			clr.invokestatic(cp.methodRef(thisClass, TEST, TEST_DESC));
 			clr.istore(2);
 		}
 		else if (equalpFold) {
 			clr.aload(0);
-			clr.invokestatic(
-					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC))));
+			clr.invokestatic(cp.methodRef(thisClass, EQUALP_P, EQUALP_P_DESC));
 			clr.astore(2);
 		}
 		clr.aload(0);
@@ -409,94 +390,93 @@ final class JvmHashRuntimeBuilder {
 		clr.invokevirtual(mapClear);
 		clr.aload(0);
 		clr.checkcast(mapClass);
-		clr.ldcString(orderKey);
+		clr.ldc(orderKey);
 		clr.aload(1);
 		clr.invokevirtual(mapPut);
 		clr.pop();
 		clr.aload(0);
 		clr.checkcast(mapClass);
-		clr.ldcString(deadKey);
-		clr.iconst(0);
+		clr.ldc(deadKey);
+		clr.loadConstant(0);
 		clr.invokestatic(integerValueOf);
 		clr.invokevirtual(mapPut);
 		clr.pop();
 		if (identityTables) {
 			// Re-hang the test the table carried: 1 equalp, 2 eql, 3 eq.
-			int rehangEqualp = clr.label();
-			int rehangDone = clr.label();
+			MethodCode.Label rehangEqualp = clr.newLabel();
+			MethodCode.Label rehangDone = clr.newLabel();
 			clr.iload(2);
-			clr.iconst(1);
-			clr.branch(Opcode.IF_ICMPNE, rehangEqualp);
+			clr.loadConstant(1);
+			clr.if_icmpne(rehangEqualp);
 			clr.aload(0);
 			clr.checkcast(mapClass);
-			clr.ldcString(cp.addString(RontoHashTable.EQUALP_KEY));
-			clr.ldcString(trueStr);
+			clr.ldc(cp.stringEntry(RontoHashTable.EQUALP_KEY));
+			clr.ldc(trueStr);
 			clr.invokevirtual(mapPut);
 			clr.pop();
-			clr.branch(Opcode.GOTO, rehangDone);
-			clr.bind(rehangEqualp);
-			int rehangEql = clr.label();
+			clr.goto_(rehangDone);
+			clr.labelBinding(rehangEqualp);
+			MethodCode.Label rehangEql = clr.newLabel();
 			clr.iload(2);
-			clr.iconst(2);
-			clr.branch(Opcode.IF_ICMPNE, rehangEql);
+			clr.loadConstant(2);
+			clr.if_icmpne(rehangEql);
 			clr.aload(0);
 			clr.checkcast(mapClass);
-			clr.ldcString(cp.addString(EQL_KEY));
-			clr.ldcString(trueStr);
+			clr.ldc(cp.stringEntry(EQL_KEY));
+			clr.ldc(trueStr);
 			clr.invokevirtual(mapPut);
 			clr.pop();
-			clr.branch(Opcode.GOTO, rehangDone);
-			clr.bind(rehangEql);
-			int rehangPlain = clr.label();
+			clr.goto_(rehangDone);
+			clr.labelBinding(rehangEql);
+			MethodCode.Label rehangPlain = clr.newLabel();
 			clr.iload(2);
-			clr.iconst(3);
-			clr.branch(Opcode.IF_ICMPNE, rehangPlain);
+			clr.loadConstant(3);
+			clr.if_icmpne(rehangPlain);
 			clr.aload(0);
 			clr.checkcast(mapClass);
-			clr.ldcString(cp.addString(EQ_KEY));
-			clr.ldcString(trueStr);
+			clr.ldc(cp.stringEntry(EQ_KEY));
+			clr.ldc(trueStr);
 			clr.invokevirtual(mapPut);
 			clr.pop();
-			clr.bind(rehangPlain);
-			clr.bind(rehangDone);
+			clr.labelBinding(rehangPlain);
+			clr.labelBinding(rehangDone);
 		}
 		else if (equalpFold) {
-			int notFolding = clr.label();
+			MethodCode.Label notFolding = clr.newLabel();
 			clr.aload(2);
-			clr.branch(Opcode.IFNULL, notFolding);
+			clr.ifnull(notFolding);
 			clr.aload(0);
 			clr.checkcast(mapClass);
-			clr.ldcString(cp.addString(RontoHashTable.EQUALP_KEY));
+			clr.ldc(cp.stringEntry(RontoHashTable.EQUALP_KEY));
 			clr.aload(2);
 			clr.invokevirtual(mapPut);
 			clr.pop();
-			clr.bind(notFolding);
+			clr.labelBinding(notFolding);
 		}
 		clr.aload(0);
 		clr.areturn();
-		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), identityTables ? 4 : (equalpFold ? 4 : 3),
-				identityTables ? 3 : (equalpFold ? 3 : 2), clr.code));
+		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), clr));
 
 		// _hashCount(table): return Long.valueOf(liveCount(table))
-		JvmAsm count = new JvmAsm();
+		MethodCode count = new MethodCode();
 		count.aload(0);
 		count.invokestatic(liveCountRef);
-		count.op(Opcode.I2L);
+		count.i2l();
 		count.invokestatic(longValueOf);
 		count.areturn();
-		methods.add(new HashMethod(cp.addUtf8(COUNT), cp.addUtf8(COUNT_DESC), 2, 1, count.code));
+		methods.add(new HashMethod(cp.addUtf8(COUNT), cp.addUtf8(COUNT_DESC), count));
 
 		// _hashSize(table): the same count as a bare int (the printer's :COUNT field)
-		JvmAsm size = new JvmAsm();
+		MethodCode size = new MethodCode();
 		size.aload(0);
 		size.invokestatic(liveCountRef);
 		size.ireturn();
-		methods.add(new HashMethod(cp.addUtf8(SIZE), cp.addUtf8(SIZE_DESC), 1, 1, size.code));
+		methods.add(new HashMethod(cp.addUtf8(SIZE), cp.addUtf8(SIZE_DESC), size));
 
 		// _hashP(x): return (x instanceof LinkedHashMap) ? "T" : null -- in a java:
 		// program
 		// _jltab(x), since a host map is a LinkedHashMap too.
-		JvmAsm hp = new JvmAsm();
+		MethodCode hp = new MethodCode();
 		hp.aload(0);
 		if (lispTable != null) {
 			hp.invokestatic(lispTable);
@@ -504,22 +484,22 @@ final class JvmHashRuntimeBuilder {
 		else {
 			hp.instanceOf(mapClass);
 		}
-		int hpFalse = hp.label();
-		hp.branch(Opcode.IFEQ, hpFalse);
-		hp.ldcString(trueStr);
+		MethodCode.Label hpFalse = hp.newLabel();
+		hp.ifeq(hpFalse);
+		hp.ldc(trueStr);
 		hp.areturn();
-		hp.bind(hpFalse);
-		hp.aconstNull();
+		hp.labelBinding(hpFalse);
+		hp.aconst_null();
 		hp.areturn();
-		methods.add(new HashMethod(cp.addUtf8(P), cp.addUtf8(P_DESC), 2, 1, hp.code));
+		methods.add(new HashMethod(cp.addUtf8(P), cp.addUtf8(P_DESC), hp));
 
 		// _hashValues(table): the live pairs in insertion order, compacting first when
 		// half dead -- what maphash walks.
-		JvmAsm values = new JvmAsm();
+		MethodCode values = new MethodCode();
 		values.aload(0);
 		values.invokestatic(liveValuesRef);
 		values.areturn();
-		methods.add(new HashMethod(cp.addUtf8(VALUES), cp.addUtf8(VALUES_DESC), 1, 1, values.code));
+		methods.add(new HashMethod(cp.addUtf8(VALUES), cp.addUtf8(VALUES_DESC), values));
 
 		return methods;
 	}
@@ -534,41 +514,41 @@ final class JvmHashRuntimeBuilder {
 	// never by anything order- or address-dependent, so two equal keys still fold
 	// identically: they have the same shape, so this traversal visits them in the same
 	// order and runs out of gas in the same place.
-	private static HashMethod buildHash(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant ratArrClass,
-			ClassConstant intArrClass, ClassConstant integerClass, @Nullable ClassConstant stringArrayClass,
-			@Nullable MethodrefConstant strvMethod, MethodrefConstant objectHashCode, MethodrefConstant hashRef,
-			ClassConstant listClass, ClassConstant mapInterface, MethodrefConstant identityHashCode) {
-		JvmAsm a = new JvmAsm();
+	private static HashMethod buildHash(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry ratArrClass,
+			ClassEntry intArrClass, ClassEntry integerClass, @Nullable ClassEntry stringArrayClass,
+			@Nullable MemberRefEntry strvMethod, MethodRefEntry objectHashCode, MethodRefEntry hashRef,
+			ClassEntry listClass, ClassEntry mapInterface, MethodRefEntry identityHashCode) {
+		MethodCode a = new MethodCode();
 		// if (d <= 0) return 0
 		a.iload(1);
-		int haveDepth = a.label();
-		a.branch(Opcode.IFGT, haveDepth);
-		a.iconst(0);
+		MethodCode.Label haveDepth = a.newLabel();
+		a.ifgt(haveDepth);
+		a.loadConstant(0);
 		a.ireturn();
-		a.bind(haveDepth);
+		a.labelBinding(haveDepth);
 		// if (gas[0] <= 0) return 0; else gas[0]--
 		a.aload(2);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iaload();
-		int haveGas = a.label();
-		a.branch(Opcode.IFGT, haveGas);
-		a.iconst(0);
+		MethodCode.Label haveGas = a.newLabel();
+		a.ifgt(haveGas);
+		a.loadConstant(0);
 		a.ireturn();
-		a.bind(haveGas);
+		a.labelBinding(haveGas);
 		a.aload(2);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.dup2();
 		a.iaload();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.iastore();
 		// if (v == null) return 0 -- nil
 		a.aload(0);
-		int notNull = a.label();
-		a.branch(Opcode.IFNONNULL, notNull);
-		a.iconst(0);
+		MethodCode.Label notNull = a.newLabel();
+		a.ifnonnull(notNull);
+		a.loadConstant(0);
 		a.ireturn();
-		a.bind(notNull);
+		a.labelBinding(notNull);
 		// A mutable character vector folds as the string with the same content, which
 		// is how _eqv compares it.
 		if (strvMethod != null) {
@@ -580,164 +560,163 @@ final class JvmHashRuntimeBuilder {
 		// identity hash agrees) and then every slot. Checked BEFORE the cons arm, whose
 		// Object[] shape an instance would otherwise satisfy.
 		if (stringArrayClass != null) {
-			int notInstance = a.label();
+			MethodCode.Label notInstance = a.newLabel();
 			a.aload(0);
 			a.instanceOf(objectArrayClass);
-			a.branch(Opcode.IFEQ, notInstance);
+			a.ifeq(notInstance);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.arraylength();
-			a.branch(Opcode.IFEQ, notInstance);
+			a.ifeq(notInstance);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.instanceOf(stringArrayClass);
-			a.branch(Opcode.IFEQ, notInstance);
+			a.ifeq(notInstance);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
 			a.astore(3);
 			a.aload(3);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.invokevirtual(objectHashCode);
 			a.istore(5);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.istore(4);
-			int slotTop = a.label();
-			int slotDone = a.label();
-			a.bind(slotTop);
+			MethodCode.Label slotTop = a.newLabel();
+			MethodCode.Label slotDone = a.newLabel();
+			a.labelBinding(slotTop);
 			a.iload(4);
 			a.aload(3);
 			a.arraylength();
-			a.branch(Opcode.IF_ICMPGE, slotDone);
+			a.if_icmpge(slotDone);
 			a.iload(5);
-			a.iconst(31);
-			a.op(Opcode.IMUL);
+			a.loadConstant(31);
+			a.imul();
 			a.aload(3);
 			a.iload(4);
 			a.aaload();
 			a.iload(1);
-			a.iconst(1);
-			a.op(Opcode.ISUB);
+			a.loadConstant(1);
+			a.isub();
 			a.aload(2);
 			a.invokestatic(hashRef);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.istore(5);
 			a.iinc(4, 1);
-			a.branch(Opcode.GOTO, slotTop);
-			a.bind(slotDone);
+			a.goto_(slotTop);
+			a.labelBinding(slotDone);
 			a.iload(5);
 			a.ireturn();
-			a.bind(notInstance);
+			a.labelBinding(notInstance);
 		}
 		// A cons folds 31 * hash(car) + hash(cdr) + 1. The guard is _equal's: an
 		// Object[] that is neither a ratio nor an array (whose header slot is an
 		// Integer).
-		int notCons = a.label();
+		MethodCode.Label notCons = a.newLabel();
 		a.aload(0);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, notCons);
+		a.ifeq(notCons);
 		a.aload(0);
 		a.instanceOf(ratArrClass);
-		a.branch(Opcode.IFNE, notCons);
+		a.ifne(notCons);
 		a.aload(0);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(integerClass);
-		a.branch(Opcode.IFNE, notCons);
-		a.iconst(31);
+		a.ifne(notCons);
+		a.loadConstant(31);
 		a.aload(0);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.aload(2);
 		a.invokestatic(hashRef);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.aload(0);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.aload(2);
 		a.invokestatic(hashRef);
-		a.op(Opcode.IADD);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.iadd();
+		a.loadConstant(1);
+		a.iadd();
 		a.ireturn();
-		a.bind(notCons);
+		a.labelBinding(notCons);
 		// A character is an int[]{codepoint}; _eqv compares that code point.
-		int notChar = a.label();
+		MethodCode.Label notChar = a.newLabel();
 		a.aload(0);
 		a.instanceOf(intArrClass);
-		a.branch(Opcode.IFEQ, notChar);
+		a.ifeq(notChar);
 		a.aload(0);
 		a.checkcast(intArrClass);
-		a.iconst(0);
-		a.op(Opcode.IALOAD);
+		a.loadConstant(0);
+		a.iaload();
 		a.ireturn();
-		a.bind(notChar);
+		a.labelBinding(notChar);
 		// A ratio is a BigInteger[]{num, den}; _eqv compares both components.
-		int notRatio = a.label();
+		MethodCode.Label notRatio = a.newLabel();
 		a.aload(0);
 		a.instanceOf(ratArrClass);
-		a.branch(Opcode.IFEQ, notRatio);
+		a.ifeq(notRatio);
 		a.aload(0);
 		a.checkcast(ratArrClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.invokevirtual(objectHashCode);
-		a.iconst(31);
-		a.op(Opcode.IMUL);
+		a.loadConstant(31);
+		a.imul();
 		a.aload(0);
 		a.checkcast(ratArrClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.invokevirtual(objectHashCode);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.ireturn();
-		a.bind(notRatio);
+		a.labelBinding(notRatio);
 		// A general vector is an ArrayList and a hash table a Map, whose own hashCodes
 		// walk their contents: equal on either is identity, so is its hash -- a key
 		// filled after it was stored keeps its bucket, and a vector holding itself (a
 		// cycle a Scheme printer's eq table meets) would otherwise never finish.
-		int identity = a.label();
-		int notAggregate = a.label();
+		MethodCode.Label identity = a.newLabel();
+		MethodCode.Label notAggregate = a.newLabel();
 		a.aload(0);
 		a.instanceOf(listClass);
-		a.branch(Opcode.IFNE, identity);
+		a.ifne(identity);
 		a.aload(0);
 		a.instanceOf(mapInterface);
-		a.branch(Opcode.IFEQ, notAggregate);
-		a.bind(identity);
+		a.ifeq(notAggregate);
+		a.labelBinding(identity);
 		a.aload(0);
 		a.invokestatic(identityHashCode);
 		a.ireturn();
-		a.bind(notAggregate);
+		a.labelBinding(notAggregate);
 		// Everything else answers with its own hashCode, which its equals agrees with
 		// by the Java contract -- and which is identity exactly where _eqv's final
 		// Object.equals is identity (a closure).
 		a.aload(0);
 		a.invokevirtual(objectHashCode);
 		a.ireturn();
-		return new HashMethod(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC), 6, 6, a.code);
+		return new HashMethod(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC), a);
 	}
 
 	// _hashGet(key, table, default): scan the key's bucket with the table's own test --
 	// _equal, or _eqv/_eq for an eql/eq table (identity for aggregates).
-	private static HashMethod buildGet(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
-			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant listGet,
-			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant equalMethod, MethodrefConstant eqvMethod, ClassConstant ratArrClass,
-			ClassConstant integerClass, MethodrefConstant identityHashCode, @Nullable MethodrefConstant keyRef,
-			@Nullable MethodrefConstant testRef, boolean identityTables) {
-		JvmAsm a = new JvmAsm();
+	private static HashMethod buildGet(ConstantPool cp, ClassEntry mapClass, ClassEntry listClass,
+			ClassEntry objectArrayClass, MethodRefEntry mapGet, MethodRefEntry listGet, MethodRefEntry listSize,
+			MethodRefEntry integerValueOf, MethodRefEntry hashRef, MemberRefEntry equalMethod, MemberRefEntry eqvMethod,
+			ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry identityHashCode,
+			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables) {
+		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
 			a.aload(1);
@@ -751,55 +730,54 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(mapGet);
 		a.checkcast(listClass);
 		a.astore(3);
-		int haveBucket = a.label();
+		MethodCode.Label haveBucket = a.newLabel();
 		a.aload(3);
-		a.branch(Opcode.IFNONNULL, haveBucket);
+		a.ifnonnull(haveBucket);
 		a.aload(2);
 		a.areturn();
-		a.bind(haveBucket);
-		a.iconst(0);
+		a.labelBinding(haveBucket);
+		a.loadConstant(0);
 		a.istore(4);
-		int top = a.label();
-		int miss = a.label();
-		int next = a.label();
-		a.bind(top);
+		MethodCode.Label top = a.newLabel();
+		MethodCode.Label miss = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		a.labelBinding(top);
 		a.iload(4);
 		a.aload(3);
 		a.invokevirtual(listSize);
-		a.branch(Opcode.IF_ICMPGE, miss);
+		a.if_icmpge(miss);
 		a.aload(3);
 		a.iload(4);
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(5);
 		emitTestCompare(a, 5, 6, equalMethod, eqvMethod, identityTables);
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		a.aload(5);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, top);
-		a.bind(miss);
+		a.goto_(top);
+		a.labelBinding(miss);
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), 7, identityTables ? 7 : 6, a.code);
+		return new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), a);
 	}
 
 	// _hashPut(key, table, value): replace the value of the equal key in the bucket, or
 	// append a fresh pair to the bucket AND to the insertion-order list. Re-storing an
 	// existing key mutates the pair in place, so the order list needs no maintenance and
 	// the entry keeps the position it was first stored at -- what maphash walks.
-	private static HashMethod buildPut(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
-			ClassConstant objectClass, ClassConstant objectArrayClass, MethodrefConstant mapGet,
-			MethodrefConstant mapPut, MethodrefConstant listInit, MethodrefConstant listAdd, MethodrefConstant listGet,
-			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant ordRef, MethodrefConstant equalMethod, MethodrefConstant eqvMethod,
-			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant identityHashCode,
-			@Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef, boolean identityTables,
-			MethodrefConstant maybeCompactRef) {
-		JvmAsm a = new JvmAsm();
+	private static HashMethod buildPut(ConstantPool cp, ClassEntry mapClass, ClassEntry listClass,
+			ClassEntry objectClass, ClassEntry objectArrayClass, MethodRefEntry mapGet, MethodRefEntry mapPut,
+			MethodRefEntry listInit, MethodRefEntry listAdd, MethodRefEntry listGet, MethodRefEntry listSize,
+			MethodRefEntry integerValueOf, MethodRefEntry hashRef, MethodRefEntry ordRef, MemberRefEntry equalMethod,
+			MemberRefEntry eqvMethod, ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry identityHashCode,
+			@Nullable MethodRefEntry keyRef, @Nullable MethodRefEntry testRef, boolean identityTables,
+			MethodRefEntry maybeCompactRef) {
+		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
 			a.aload(1);
@@ -815,12 +793,12 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(mapGet);
 		a.checkcast(listClass);
 		a.astore(3);
-		int haveBucket = a.label();
+		MethodCode.Label haveBucket = a.newLabel();
 		a.aload(3);
-		a.branch(Opcode.IFNONNULL, haveBucket);
-		a.anew(listClass);
+		a.ifnonnull(haveBucket);
+		a.new_(listClass);
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokespecial(listInit);
 		a.astore(3);
 		a.aload(1);
@@ -829,49 +807,49 @@ final class JvmHashRuntimeBuilder {
 		a.aload(3);
 		a.invokevirtual(mapPut);
 		a.pop();
-		a.bind(haveBucket);
-		a.iconst(0);
+		a.labelBinding(haveBucket);
+		a.loadConstant(0);
 		a.istore(4);
-		int top = a.label();
-		int fresh = a.label();
-		int next = a.label();
-		a.bind(top);
+		MethodCode.Label top = a.newLabel();
+		MethodCode.Label fresh = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		a.labelBinding(top);
 		a.iload(4);
 		a.aload(3);
 		a.invokevirtual(listSize);
-		a.branch(Opcode.IF_ICMPGE, fresh);
+		a.if_icmpge(fresh);
 		a.aload(3);
 		a.iload(4);
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(5);
 		emitTestCompare(a, 5, 7, equalMethod, eqvMethod, identityTables);
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		// The stored key becomes the key just handed in, matching the interpreter (its
 		// entry record is replaced), so maphash hands back the newest key object.
 		a.aload(5);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.aastore();
 		a.aload(5);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(2);
 		a.aastore();
 		a.aload(2);
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, top);
-		a.bind(fresh);
-		a.iconst(2);
+		a.goto_(top);
+		a.labelBinding(fresh);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.astore(5);
 		a.aload(5);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.aastore();
 		a.aload(5);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(2);
 		a.aastore();
 		a.aload(3);
@@ -889,21 +867,20 @@ final class JvmHashRuntimeBuilder {
 		a.invokestatic(maybeCompactRef);
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), 7, identityTables ? 8 : 7, a.code);
+		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), a);
 	}
 
 	// _hashRem(key, table): drop the pair from its bucket and tombstone it in the order
 	// list (null the key slot, count one more dead) instead of unlinking it there --
 	// unlinking scans and memmoves, O(n) per removal. An emptied bucket goes with the
 	// pair, so a put/remove cycle does not leak bucket objects.
-	private static HashMethod buildRem(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
-			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant mapRemove,
-			MethodrefConstant listGet, MethodrefConstant listSize, MethodrefConstant listRemoveAt,
-			MethodrefConstant integerValueOf, MethodrefConstant hashRef, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, ClassConstant ratArrClass, ClassConstant integerClass,
-			MethodrefConstant identityHashCode, StringConstant trueStr, @Nullable MethodrefConstant keyRef,
-			@Nullable MethodrefConstant testRef, boolean identityTables, MethodrefConstant tombstoneRef) {
-		JvmAsm a = new JvmAsm();
+	private static HashMethod buildRem(ConstantPool cp, ClassEntry mapClass, ClassEntry listClass,
+			ClassEntry objectArrayClass, MethodRefEntry mapGet, MethodRefEntry mapRemove, MethodRefEntry listGet,
+			MethodRefEntry listSize, MethodRefEntry listRemoveAt, MethodRefEntry integerValueOf, MethodRefEntry hashRef,
+			MemberRefEntry equalMethod, MemberRefEntry eqvMethod, ClassEntry ratArrClass, ClassEntry integerClass,
+			MethodRefEntry identityHashCode, StringEntry trueStr, @Nullable MethodRefEntry keyRef,
+			@Nullable MethodRefEntry testRef, boolean identityTables, MethodRefEntry tombstoneRef) {
+		MethodCode a = new MethodCode();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
 			a.aload(1);
@@ -919,30 +896,30 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(mapGet);
 		a.checkcast(listClass);
 		a.astore(2);
-		int haveBucket = a.label();
+		MethodCode.Label haveBucket = a.newLabel();
 		a.aload(2);
-		a.branch(Opcode.IFNONNULL, haveBucket);
-		a.aconstNull();
+		a.ifnonnull(haveBucket);
+		a.aconst_null();
 		a.areturn();
-		a.bind(haveBucket);
-		a.iconst(0);
+		a.labelBinding(haveBucket);
+		a.loadConstant(0);
 		a.istore(3);
-		int top = a.label();
-		int miss = a.label();
-		int next = a.label();
-		int keepBucket = a.label();
-		a.bind(top);
+		MethodCode.Label top = a.newLabel();
+		MethodCode.Label miss = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		MethodCode.Label keepBucket = a.newLabel();
+		a.labelBinding(top);
 		a.iload(3);
 		a.aload(2);
 		a.invokevirtual(listSize);
-		a.branch(Opcode.IF_ICMPGE, miss);
+		a.if_icmpge(miss);
 		a.aload(2);
 		a.iload(3);
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(4);
 		emitTestCompare(a, 4, 6, equalMethod, eqvMethod, identityTables);
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		a.aload(2);
 		a.iload(3);
 		a.invokevirtual(listRemoveAt);
@@ -952,22 +929,22 @@ final class JvmHashRuntimeBuilder {
 		a.invokestatic(tombstoneRef);
 		a.aload(2);
 		a.invokevirtual(listSize);
-		a.branch(Opcode.IFNE, keepBucket);
+		a.ifne(keepBucket);
 		a.aload(1);
 		a.checkcast(mapClass);
 		a.aload(5);
 		a.invokevirtual(mapRemove);
 		a.pop();
-		a.bind(keepBucket);
-		a.ldcString(trueStr);
+		a.labelBinding(keepBucket);
+		a.ldc(trueStr);
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 		a.iinc(3, 1);
-		a.branch(Opcode.GOTO, top);
-		a.bind(miss);
-		a.aconstNull();
+		a.goto_(top);
+		a.labelBinding(miss);
+		a.aconst_null();
 		a.areturn();
-		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), 7, identityTables ? 7 : 6, a.code);
+		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), a);
 	}
 
 	// The equalp trio, emitted only for a program that writes :test 'equalp.
@@ -978,53 +955,49 @@ final class JvmHashRuntimeBuilder {
 	// _hashKey(key, table) folds a key through the travelling RontoHashTable.equalpKey
 	// when the table carries the marker. Placement stays ONE structural table: equalp on
 	// two values is equal on their folds, so _hash and _equal are untouched.
-	private static List<HashMethod> buildEqualpFold(ConstantPool cp, ClassConstant thisClass, ClassConstant mapClass,
-			MethodrefConstant mapGet, MethodrefConstant mapPut, StringConstant trueStr,
-			@Nullable MethodrefConstant strvMethod) {
-		StringConstant equalpKey = cp.addString(RontoHashTable.EQUALP_KEY);
-		MethodrefConstant makeRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
-		MethodrefConstant equalpPRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC)));
-		MethodrefConstant foldRef = cp.addMethodref(
-				cp.addClass(cp.addUtf8(RontoHashTable.class.getName().replace('.', '/'))),
-				cp.addNameAndType(cp.addUtf8("equalpKey"), cp.addUtf8("(Ljava/lang/Object;I)Ljava/lang/Object;")));
+	private static List<HashMethod> buildEqualpFold(ConstantPool cp, ClassEntry thisClass, ClassEntry mapClass,
+			MethodRefEntry mapGet, MethodRefEntry mapPut, StringEntry trueStr, @Nullable MemberRefEntry strvMethod) {
+		StringEntry equalpKey = cp.stringEntry(RontoHashTable.EQUALP_KEY);
+		MethodRefEntry makeRef = cp.methodRef(thisClass, MAKE, MAKE_DESC);
+		MethodRefEntry equalpPRef = cp.methodRef(thisClass, EQUALP_P, EQUALP_P_DESC);
+		MethodRefEntry foldRef = cp.methodRef(RontoHashTable.class.getName().replace('.', '/'), "equalpKey",
+				"(Ljava/lang/Object;I)Ljava/lang/Object;");
 
 		List<HashMethod> methods = new ArrayList<>();
 
-		JvmAsm make = new JvmAsm();
+		MethodCode make = new MethodCode();
 		make.invokestatic(makeRef);
 		make.astore(0);
 		make.aload(0);
 		make.checkcast(mapClass);
-		make.ldcString(equalpKey);
-		make.ldcString(trueStr);
+		make.ldc(equalpKey);
+		make.ldc(trueStr);
 		make.invokevirtual(mapPut);
 		make.pop();
 		make.aload(0);
 		make.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQUALP), cp.addUtf8(MAKE_EQUALP_DESC), 4, 1, make.code));
+		methods.add(new HashMethod(cp.addUtf8(MAKE_EQUALP), cp.addUtf8(MAKE_EQUALP_DESC), make));
 
-		JvmAsm eqp = new JvmAsm();
+		MethodCode eqp = new MethodCode();
 		eqp.aload(0);
 		eqp.instanceOf(mapClass);
-		int notTable = eqp.label();
-		eqp.branch(Opcode.IFEQ, notTable);
+		MethodCode.Label notTable = eqp.newLabel();
+		eqp.ifeq(notTable);
 		eqp.aload(0);
 		eqp.checkcast(mapClass);
-		eqp.ldcString(equalpKey);
+		eqp.ldc(equalpKey);
 		eqp.invokevirtual(mapGet);
 		eqp.areturn();
-		eqp.bind(notTable);
-		eqp.aconstNull();
+		eqp.labelBinding(notTable);
+		eqp.aconst_null();
 		eqp.areturn();
-		methods.add(new HashMethod(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC), 2, 1, eqp.code));
+		methods.add(new HashMethod(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC), eqp));
 
-		JvmAsm key = new JvmAsm();
+		MethodCode key = new MethodCode();
 		key.aload(1);
 		key.invokestatic(equalpPRef);
-		int unfolded = key.label();
-		key.branch(Opcode.IFNULL, unfolded);
+		MethodCode.Label unfolded = key.newLabel();
+		key.ifnull(unfolded);
 		key.aload(0);
 		// A mutable character vector renders to its quote-framed string BEFORE the
 		// travelling fold: RontoHashTable.equalpKey knows the compiled value model but
@@ -1034,13 +1007,13 @@ final class JvmHashRuntimeBuilder {
 		if (strvMethod != null) {
 			key.invokestatic(strvMethod);
 		}
-		key.iconst(RontoHashTable.FOLD_DEPTH_CAP);
+		key.loadConstant(RontoHashTable.FOLD_DEPTH_CAP);
 		key.invokestatic(foldRef);
 		key.areturn();
-		key.bind(unfolded);
+		key.labelBinding(unfolded);
 		key.aload(0);
 		key.areturn();
-		methods.add(new HashMethod(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC), 2, 2, key.code));
+		methods.add(new HashMethod(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC), key));
 
 		return methods;
 	}
@@ -1053,85 +1026,84 @@ final class JvmHashRuntimeBuilder {
 	// like ORDER_KEY); _hashTest(table) answers the test code the table's lookups
 	// implement (0 equal, 1 equalp, 2 eql, 3 eq), which is what the get/put/remove
 	// dispatch, the printer and hash-table-test read.
-	private static List<HashMethod> buildIdentityTables(ConstantPool cp, ClassConstant thisClass,
-			ClassConstant mapClass, MethodrefConstant mapGet, MethodrefConstant mapPut, StringConstant trueStr) {
-		StringConstant eqKey = cp.addString(EQ_KEY);
-		StringConstant eqlKey = cp.addString(EQL_KEY);
-		StringConstant equalpKey = cp.addString(RontoHashTable.EQUALP_KEY);
-		MethodrefConstant makeRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
+	private static List<HashMethod> buildIdentityTables(ConstantPool cp, ClassEntry thisClass, ClassEntry mapClass,
+			MethodRefEntry mapGet, MethodRefEntry mapPut, StringEntry trueStr) {
+		StringEntry eqKey = cp.stringEntry(EQ_KEY);
+		StringEntry eqlKey = cp.stringEntry(EQL_KEY);
+		StringEntry equalpKey = cp.stringEntry(RontoHashTable.EQUALP_KEY);
+		MethodRefEntry makeRef = cp.methodRef(thisClass, MAKE, MAKE_DESC);
 
 		List<HashMethod> methods = new ArrayList<>();
 
-		JvmAsm makeEq = new JvmAsm();
+		MethodCode makeEq = new MethodCode();
 		makeEq.invokestatic(makeRef);
 		makeEq.astore(0);
 		makeEq.aload(0);
 		makeEq.checkcast(mapClass);
-		makeEq.ldcString(eqKey);
-		makeEq.ldcString(trueStr);
+		makeEq.ldc(eqKey);
+		makeEq.ldc(trueStr);
 		makeEq.invokevirtual(mapPut);
 		makeEq.pop();
 		makeEq.aload(0);
 		makeEq.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQ), cp.addUtf8(MAKE_EQ_DESC), 4, 1, makeEq.code));
+		methods.add(new HashMethod(cp.addUtf8(MAKE_EQ), cp.addUtf8(MAKE_EQ_DESC), makeEq));
 
-		JvmAsm makeEql = new JvmAsm();
+		MethodCode makeEql = new MethodCode();
 		makeEql.invokestatic(makeRef);
 		makeEql.astore(0);
 		makeEql.aload(0);
 		makeEql.checkcast(mapClass);
-		makeEql.ldcString(eqlKey);
-		makeEql.ldcString(trueStr);
+		makeEql.ldc(eqlKey);
+		makeEql.ldc(trueStr);
 		makeEql.invokevirtual(mapPut);
 		makeEql.pop();
 		makeEql.aload(0);
 		makeEql.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQL), cp.addUtf8(MAKE_EQL_DESC), 4, 1, makeEql.code));
+		methods.add(new HashMethod(cp.addUtf8(MAKE_EQL), cp.addUtf8(MAKE_EQL_DESC), makeEql));
 
-		JvmAsm test = new JvmAsm();
+		MethodCode test = new MethodCode();
 		test.aload(0);
 		test.instanceOf(mapClass);
-		int notTable = test.label();
-		test.branch(Opcode.IFEQ, notTable);
-		int notEq = test.label();
-		int notEql = test.label();
-		int notEqualp = test.label();
+		MethodCode.Label notTable = test.newLabel();
+		test.ifeq(notTable);
+		MethodCode.Label notEq = test.newLabel();
+		MethodCode.Label notEql = test.newLabel();
+		MethodCode.Label notEqualp = test.newLabel();
 		test.aload(0);
 		test.checkcast(mapClass);
-		test.ldcString(eqKey);
+		test.ldc(eqKey);
 		test.invokevirtual(mapGet);
-		test.branch(Opcode.IFNULL, notEq);
-		test.iconst(3);
+		test.ifnull(notEq);
+		test.loadConstant(3);
 		test.ireturn();
-		test.bind(notEq);
+		test.labelBinding(notEq);
 		test.aload(0);
 		test.checkcast(mapClass);
-		test.ldcString(eqlKey);
+		test.ldc(eqlKey);
 		test.invokevirtual(mapGet);
-		test.branch(Opcode.IFNULL, notEql);
-		test.iconst(2);
+		test.ifnull(notEql);
+		test.loadConstant(2);
 		test.ireturn();
-		test.bind(notEql);
+		test.labelBinding(notEql);
 		test.aload(0);
 		test.checkcast(mapClass);
-		test.ldcString(equalpKey);
+		test.ldc(equalpKey);
 		test.invokevirtual(mapGet);
-		test.branch(Opcode.IFNULL, notEqualp);
-		test.iconst(1);
+		test.ifnull(notEqualp);
+		test.loadConstant(1);
 		test.ireturn();
-		test.bind(notEqualp);
-		test.bind(notTable);
-		test.iconst(0);
+		test.labelBinding(notEqualp);
+		test.labelBinding(notTable);
+		test.loadConstant(0);
 		test.ireturn();
-		methods.add(new HashMethod(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC), 2, 1, test.code));
+		methods.add(new HashMethod(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC), test));
 
 		return methods;
 	}
 
 	// Replaces local 0 (the key) with its equalp fold when the table in local 1 asks for
 	// one. A no-op -- not one instruction -- in a program with no equalp table.
-	private static void emitFoldKey(JvmAsm a, @Nullable MethodrefConstant keyRef) {
+	private static void emitFoldKey(MethodCode a, @Nullable MethodRefEntry keyRef) {
 		if (keyRef == null) {
 			return;
 		}
@@ -1145,34 +1117,34 @@ final class JvmHashRuntimeBuilder {
 	// in local 0: _eqv for an eql or eq table (eq IS eql, .kb/eq-numbers.md), _equal
 	// otherwise. The table's test code sits in testSlot; without identity tables this is
 	// the _equal call it always was, not one instruction more.
-	private static void emitTestCompare(JvmAsm a, int pairSlot, int testSlot, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, boolean identityTables) {
+	private static void emitTestCompare(MethodCode a, int pairSlot, int testSlot, MemberRefEntry equalMethod,
+			MemberRefEntry eqvMethod, boolean identityTables) {
 		if (!identityTables) {
 			a.aload(pairSlot);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.aload(0);
 			a.invokestatic(equalMethod);
 			return;
 		}
-		int eqlArm = a.label();
-		int done = a.label();
+		MethodCode.Label eqlArm = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.iload(testSlot);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPGE, eqlArm);
+		a.loadConstant(2);
+		a.if_icmpge(eqlArm);
 		a.aload(pairSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aload(0);
 		a.invokestatic(equalMethod);
-		a.branch(Opcode.GOTO, done);
-		a.bind(eqlArm);
+		a.goto_(done);
+		a.labelBinding(eqlArm);
 		a.aload(pairSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aload(0);
 		a.invokestatic(eqvMethod);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	// Pushes Integer.valueOf(_hash(local 0, HASH_DEPTH_CAP, new int[]{HASH_WORK_CAP})) --
@@ -1181,55 +1153,55 @@ final class JvmHashRuntimeBuilder {
 	// eql/eq table (testSlot >= 2) an aggregate key -- a cons or an instance, the values
 	// _equal would fold structurally -- hashes by identity instead, so mutating it after
 	// insertion keeps its bucket; every other key hashes exactly as before.
-	private static void emitKeyHash(JvmAsm a, MethodrefConstant hashRef, MethodrefConstant integerValueOf,
-			ClassConstant objectArrayClass, ClassConstant listClass, ClassConstant ratArrClass,
-			ClassConstant integerClass, MethodrefConstant identityHashCode, int testSlot, boolean identityTables) {
+	private static void emitKeyHash(MethodCode a, MethodRefEntry hashRef, MethodRefEntry integerValueOf,
+			ClassEntry objectArrayClass, ClassEntry listClass, ClassEntry ratArrClass, ClassEntry integerClass,
+			MethodRefEntry identityHashCode, int testSlot, boolean identityTables) {
 		if (!identityTables) {
 			emitStructuralKeyHash(a, hashRef, integerValueOf);
 			return;
 		}
-		int structural = a.label();
-		int done = a.label();
-		int identity = a.label();
+		MethodCode.Label structural = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label identity = a.newLabel();
 		a.iload(testSlot);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPLT, structural);
+		a.loadConstant(2);
+		a.if_icmplt(structural);
 		// An array (a List) -- a mutable character vector included, which _hash would
 		// fold by content -- is identity under eql/eq, so is its hash: a fill-pointer
 		// string grown after it was stored keeps its bucket.
 		a.aload(0);
 		a.instanceOf(listClass);
-		a.branch(Opcode.IFNE, identity);
+		a.ifne(identity);
 		a.aload(0);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, structural);
+		a.ifeq(structural);
 		a.aload(0);
 		a.instanceOf(ratArrClass);
-		a.branch(Opcode.IFNE, structural);
+		a.ifne(structural);
 		a.aload(0);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(integerClass);
-		a.branch(Opcode.IFNE, structural);
-		a.bind(identity);
+		a.ifne(structural);
+		a.labelBinding(identity);
 		a.aload(0);
 		a.invokestatic(identityHashCode);
 		a.invokestatic(integerValueOf);
-		a.branch(Opcode.GOTO, done);
-		a.bind(structural);
+		a.goto_(done);
+		a.labelBinding(structural);
 		emitStructuralKeyHash(a, hashRef, integerValueOf);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
-	private static void emitStructuralKeyHash(JvmAsm a, MethodrefConstant hashRef, MethodrefConstant integerValueOf) {
+	private static void emitStructuralKeyHash(MethodCode a, MethodRefEntry hashRef, MethodRefEntry integerValueOf) {
 		a.aload(0);
-		a.iconst(LispEquality.HASH_DEPTH_CAP);
-		a.iconst(1);
-		a.newarrayInt();
+		a.loadConstant(LispEquality.HASH_DEPTH_CAP);
+		a.loadConstant(1);
+		a.newarray(TypeKind.INT);
 		a.dup();
-		a.iconst(0);
-		a.iconst(LispEquality.HASH_WORK_CAP);
+		a.loadConstant(0);
+		a.loadConstant(LispEquality.HASH_WORK_CAP);
 		a.iastore();
 		a.invokestatic(hashRef);
 		a.invokestatic(integerValueOf);

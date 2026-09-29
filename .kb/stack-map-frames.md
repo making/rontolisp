@@ -115,7 +115,10 @@ the rewrite only extends the TAIL, so earlier labels stay valid. `JvmAsm.localOp
 blocks spliced whole by `Ctx.emitBlock` (`JvmStringCaseFold`, `JvmSubseqCompiler`,
 `JvmStringTrimCompiler`, `JvmIntFusionCompiler` -- they look hand-assembled but their slots come from
 `Ctx.allocTemp`). Everything else is a `Jvm*RuntimeBuilder` with literal slots, plus
-`JvmUncaughtHandler` (slot 1; now a loud check).
+`JvmUncaughtHandler` (slot 1; now a loud check). The rewrite sees loads and stores only: an `iinc`
+emitted as bytes kept a one-byte slot (the `maphash` and `%obj-slots` cursors until 2026-09-29).
+`am.ik.jvm.MethodCode` encodes every local instruction's `wide` form itself, `iinc` included,
+feeding the model the four- or six-byte instruction whole.
 
 **Trap: truncation is SILENT.** `astore 300` written as `astore 44` is caught by the verifier
 only when the wrapped slot holds a DIFFERENT verification type; when the types agree the program

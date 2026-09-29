@@ -1,6 +1,7 @@
 package am.ik.jvm;
 
 import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 
 import org.junit.jupiter.api.Test;
@@ -89,13 +90,20 @@ class ConstantPoolTest {
 			.withMessageContaining("65538");
 	}
 
+	// The typed entries an emitter on MethodCode names are the entries the byte emitters'
+	// wrappers name: one pool, one entry per content.
 	@Test
-	void answersWhichStringConstantsItHolds() {
+	void typedEntriesAreTheWrappersEntries() {
 		ConstantPool cp = new ConstantPool();
-		cp.addUtf8("name-only");
-		cp.addString("loadable");
-		assertThat(cp.hasStringConstant("loadable")).isTrue();
-		assertThat(cp.hasStringConstant("name-only")).as("a Utf8 alone is not a String constant").isFalse();
+		ConstantPool.MethodrefConstant wrapped = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Map")),
+				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
+		assertThat(cp.methodRef("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;"))
+			.isSameAs(wrapped.entry());
+		assertThat(cp.stringEntry("s")).isSameAs(cp.addString("s").entry());
+		assertThat(cp.fieldRef(cp.classEntry("A"), "f", "I").index())
+			.isEqualTo(cp.addFieldref(cp.addClass(cp.addUtf8("A")), cp.addNameAndType(cp.addUtf8("f"), cp.addUtf8("I")))
+				.index());
+		assertThat(cp.interfaceMethodRef("java/util/List", "size", "()I")).isInstanceOf(InterfaceMethodRefEntry.class);
 	}
 
 }

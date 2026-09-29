@@ -477,9 +477,9 @@ final class JvmObjCompiler {
 		ctx.emit(Opcode.AASTORE);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(listSlot);
-		ctx.emit(Opcode.IINC);
-		ctx.emit(idxSlot);
-		ctx.emit(0xff);
+		// Through the typed layer: the byte emitter wrote iinc's slot in one byte, which
+		// past 255 named another local.
+		ctx.body.iinc(idxSlot, -1);
 		int gotoTop = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);

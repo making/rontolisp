@@ -17,9 +17,13 @@ generated at compile time, `.kb/java-interop.md`, "Implementing interfaces"), so
 the am.ik.jvm indy infrastructure is this item's alone.
 
 Plan:
-- am.ik.jvm: add CONSTANT_MethodHandle / CONSTANT_InvokeDynamic entries and the
-  BootstrapMethods class attribute; teach JvmClassShaker, JvmClassSplitter
-  (carry bootstrap entries into $PartN) about them.
+- am.ik.jvm (rewritten 2026-09-29 after a84, which wrote every class through
+  java.lang.classfile): the master pool is a ConstantPoolBuilder, so it mints
+  MethodHandle / InvokeDynamic / BootstrapMethod entries already, and the writer
+  re-mints an entry in each class it lands in, the BootstrapMethods attribute
+  with it. What is missing is an `invokedynamic` on MethodCode, its replay in
+  CodeReplay (0xBA is refused today), and JvmClassSplitter's closure walk over
+  the new entry kinds (a split class's pool count).
 - Bootstrap in the bridge template: MutableCallSite + guardWithTest on
   (receiver class, argument kinds), fallback relinks through the shared
   selection; per-argument marshal filters and a return filter specialized to
