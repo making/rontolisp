@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code equal} built-in function (structural equality). Cons cells are
@@ -22,8 +21,7 @@ final class JvmEqualCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.EQUAL).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQUAL).entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

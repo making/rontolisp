@@ -10,7 +10,6 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles function calls: direct calls, indirect calls, general indirect calls, and
@@ -83,8 +82,7 @@ final class JvmFunctionCallCompiler {
 				emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 			}
 			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(fi.methodref().index());
+			ctx.body.invokestatic(fi.methodref().entry());
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -123,8 +121,7 @@ final class JvmFunctionCallCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(dispatchDesc);
 		MethodrefConstant methodref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(methodref.index());
+		ctx.body.invokestatic(methodref.entry());
 	}
 
 }

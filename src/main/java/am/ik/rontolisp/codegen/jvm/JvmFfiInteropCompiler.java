@@ -10,7 +10,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code ffi:} verbs ({@code ffi:open}, {@code ffi:symbol},
@@ -52,8 +51,7 @@ final class JvmFfiInteropCompiler {
 		List<LispVal> args = cons.toList();
 		String spelled = "ffi:" + member.toLowerCase(Locale.ROOT);
 		// Make sure the bridge holds the program's _apply before any verb runs.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 		switch (member) {
 			case LispNames.FFI_OPEN -> {
 				requireArity(args.size() <= 2, "ffi:open expects at most 1 argument, got " + (args.size() - 1));
@@ -129,7 +127,7 @@ final class JvmFfiInteropCompiler {
 				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			}
 			else {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 		}
 	}
@@ -137,19 +135,17 @@ final class JvmFfiInteropCompiler {
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
+		ctx.body.anewarray(ctx.objectClass.entry());
 		for (int i = from; i < args.size(); i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - from);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
 	}
 
 	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String key) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(key)).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)).entry());
 	}
 
 }

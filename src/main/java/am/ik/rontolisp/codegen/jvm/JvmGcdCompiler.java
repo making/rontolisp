@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code gcd} built-in: the greatest common divisor of two integers via
@@ -21,9 +20,9 @@ final class JvmGcdCompiler {
 		JvmEmitHelper.toBigInteger(ctx);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(
-				JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;").index());
+		ctx.body
+			.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;")
+				.methodRefEntry());
 		JvmEmitHelper.normalizeBigInteger(ctx);
 	}
 

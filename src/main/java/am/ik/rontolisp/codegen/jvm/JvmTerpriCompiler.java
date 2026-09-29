@@ -1,7 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code terpri} built-in function. Prints a newline only.
@@ -25,16 +24,12 @@ final class JvmTerpriCompiler {
 			JvmEmitHelper.compileStringLiteral("\"\n\"", ctx);
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 			JvmStringStreamCompiler.emitWriteString(ctx, className);
-			ctx.emit(Opcode.POP);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.pop().aconst_null();
 			return;
 		}
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ctx.systemOut.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.printlnVoid.index());
+		ctx.body.getstatic(ctx.systemOut.entry()).invokevirtual(ctx.printlnVoid.methodRefEntry());
 		JvmFreshLineCompiler.emitSetLineStart(ctx, className);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 }

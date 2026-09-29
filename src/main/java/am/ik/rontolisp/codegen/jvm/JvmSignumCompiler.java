@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code signum} built-in: the sign of a number as -1/0/1. A floating-point
@@ -24,8 +23,7 @@ final class JvmSignumCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (!JvmLispCompiler.hasComplexOperand(args) && JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmEmitHelper.unboxDouble(ctx);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.SIGNUM_D).index());
+			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.SIGNUM_D).entry());
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
@@ -33,8 +31,7 @@ final class JvmSignumCompiler {
 			// float
 			// reaching signum through a variable works), otherwise the integer sign as a
 			// Long (the numerator's sign for a ratio).
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.SIGNUM).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.SIGNUM).entry());
 		}
 	}
 

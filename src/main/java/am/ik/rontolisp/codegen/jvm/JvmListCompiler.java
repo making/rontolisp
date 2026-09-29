@@ -6,7 +6,6 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.ArgumentOrder;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -37,35 +36,23 @@ final class JvmListCompiler {
 			}
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			int slot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+			ctx.body.astore(slot);
 			slots.add(slot);
 		}
 		// One reused accumulator slot holds the tail while the next cons cell is built.
 		int tailSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 		for (int i = args.size() - 1; i >= 1; i--) {
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tailSlot);
-			ctx.emit(Opcode.ICONST_2);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
+			ctx.body.astore(tailSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup();
+			ctx.body.iconst_0();
 			Integer pre = slots.get(i);
 			if (pre == null) {
 				JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			}
 			else {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(pre);
+				ctx.body.aload(pre);
 			}
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tailSlot);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore().dup().iconst_1().aload(tailSlot).aastore();
 		}
 	}
 

@@ -5,7 +5,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -13,10 +13,9 @@ import org.jspecify.annotations.Nullable;
  * block that catches plain {@code return} ({@code %block} or {@code (block nil ...)};
  * named blocks in between are skipped -- on the interpreter the plain signal passes
  * through them the same way). The optional value (default nil) is stored into the block's
- * value slot and an unconditional {@code goto} jumps to the block's exit; the jump's
- * position is recorded so {@link JvmBlockCompiler} can patch it. The same emit sequence,
- * generalized to a target anywhere in the block stack, is shared with
- * {@link JvmReturnFromCompiler}.
+ * value slot and an unconditional {@code goto} jumps to the block's exit label, which
+ * {@link JvmBlockCompiler} binds. The same emit sequence, generalized to a target
+ * anywhere in the block stack, is shared with {@link JvmReturnFromCompiler}.
  *
  * <p>
  * When the jump escapes one or more protected regions (the scope was entered inside the
@@ -63,7 +62,7 @@ final class JvmReturnCompiler {
 	 * bottom of the block stack): the value (nil when {@code valueForm} is null) is
 	 * stored into the target's slot, the cleanups of every escaped {@code unwind-protect}
 	 * scope run inline, the operand stack is unwound to the target's entry shape and a
-	 * {@code goto} (patched by {@link JvmBlockCompiler}) jumps to the target's exit.
+	 * {@code goto} jumps to the target's exit label (bound by {@link JvmBlockCompiler}).
 	 */
 	static void emitExit(@Nullable LispVal valueForm, JvmLispCompiler.Ctx ctx, String className, int targetDepth) {
 		JvmLispCompiler.BlockTarget target = targetAt(ctx, targetDepth);
@@ -71,16 +70,12 @@ final class JvmReturnCompiler {
 			JvmExprCompiler.compileExpr(valueForm, ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(target.rvSlot());
+		ctx.body.astore(target.rvSlot());
 		compileEscapedCleanups(ctx, className, targetDepth);
 		emitStackUnwind(ctx, target, targetDepth);
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		target.exitPatches().add(gotoPos);
+		ctx.body.goto_(target.exit());
 	}
 
 	private static JvmLispCompiler.BlockTarget targetAt(JvmLispCompiler.Ctx ctx, int targetDepth) {
@@ -143,14 +138,14 @@ final class JvmReturnCompiler {
 		if (escaped.isEmpty()) {
 			return;
 		}
-		int[] holeStarts = new int[escaped.size()];
+		MethodCode.Label[] holeStarts = new MethodCode.Label[escaped.size()];
 		for (int i = 0; i < escaped.size(); i++) {
-			holeStarts[i] = ctx.code.size();
+			holeStarts[i] = ctx.body.newBoundLabel();
 			JvmUnwindProtectCompiler.compileCleanups(escaped.get(i).cleanupForms, ctx, className);
 		}
-		int sequenceEnd = ctx.code.size();
+		MethodCode.Label sequenceEnd = ctx.body.newBoundLabel();
 		for (int i = 0; i < escaped.size(); i++) {
-			escaped.get(i).holes.add(new int[] { holeStarts[i], sequenceEnd });
+			escaped.get(i).holes.add(new JvmLispCompiler.Hole(holeStarts[i], sequenceEnd));
 		}
 	}
 

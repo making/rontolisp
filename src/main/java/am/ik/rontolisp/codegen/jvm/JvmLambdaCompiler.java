@@ -15,7 +15,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.macro.LispMacroExpander;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code lambda} expressions (both value creation and inline calls).
@@ -62,17 +61,12 @@ final class JvmLambdaCompiler {
 				asyncHead == null ? ctx.writtenIn : null));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0();
 		JvmEmitHelper.emitIntConst(ctx, funcId);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.integerValueOf.index());
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.invokestatic(ctx.integerValueOf.entry()).aastore();
 		int captureIdx = 0;
 		for (String freeVar : freeVars) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
 			Integer slot = ctx.locals.get(freeVar);
 			if (slot != null) {
@@ -90,19 +84,17 @@ final class JvmLambdaCompiler {
 							+ " whose binding left it unboxed: the capture analysis and the closure emitter"
 							+ " disagree about this name (FreeVarAnalyzer.findCapturedVars)");
 				}
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
+				ctx.body.aload(slot);
 			}
 			else if (ctx.captures.containsKey(freeVar)) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(ctx.closureEnvSlot);
+				ctx.body.aload(ctx.closureEnvSlot);
 				JvmEmitHelper.emitIntConst(ctx, 1 + ctx.captures.get(freeVar));
-				ctx.emit(Opcode.AALOAD);
+				ctx.body.aaload();
 			}
 			else {
 				throw new UnsupportedOperationException("Cannot capture variable: " + freeVar);
 			}
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 			captureIdx++;
 		}
 	}
@@ -153,18 +145,14 @@ final class JvmLambdaCompiler {
 			// body's prologue tests (JvmPhysicalArgs).
 			boolean passed = i < supplied;
 			if (capturedParams.contains(name)) {
-				ctx.emit(Opcode.ICONST_1);
-				ctx.emit(Opcode.ANEWARRAY);
-				ctx.emitU2(ctx.objectClass.index());
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_0);
+				ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
 				if (passed) {
 					JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
 				}
 				else {
 					JvmPhysicalArgs.emitUnsupplied(ctx, className);
 				}
-				ctx.emit(Opcode.AASTORE);
+				ctx.body.aastore();
 			}
 			else if (passed) {
 				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
@@ -173,8 +161,7 @@ final class JvmLambdaCompiler {
 				JvmPhysicalArgs.emitUnsupplied(ctx, className);
 			}
 			int slot = ctx.allocLocal(name);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+			ctx.body.astore(slot);
 			bindName(name, capturedParams.contains(name), ctx);
 		}
 		if (nf.variadic()) {
@@ -184,45 +171,22 @@ final class JvmLambdaCompiler {
 			for (int i = positional; i < supplied; i++) {
 				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
 				int s = ctx.allocTemp();
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(s);
+				ctx.body.astore(s);
 				extraSlots.add(s);
 			}
 			String restName = paramNames.get(positional);
 			int restSlot = ctx.allocLocal(restName);
-			ctx.emit(Opcode.ACONST_NULL);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(restSlot);
+			ctx.body.aconst_null().astore(restSlot);
 			for (int k = extraSlots.size() - 1; k >= 0; k--) {
-				ctx.emit(Opcode.ICONST_2);
-				ctx.emit(Opcode.ANEWARRAY);
-				ctx.emitU2(ctx.objectClass.index());
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(extraSlots.get(k));
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_1);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restSlot);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(restSlot);
+				ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+				ctx.body.aload(extraSlots.get(k)).aastore().dup().iconst_1().aload(restSlot);
+				ctx.body.aastore().astore(restSlot);
 			}
 			if (capturedParams.contains(restName)) {
 				// The list is built in place, so the cell is wrapped around the
 				// finished value rather than around the build.
-				ctx.emit(Opcode.ICONST_1);
-				ctx.emit(Opcode.ANEWARRAY);
-				ctx.emitU2(ctx.objectClass.index());
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(restSlot);
-				ctx.emit(Opcode.AASTORE);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(restSlot);
+				ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+				ctx.body.aload(restSlot).aastore().astore(restSlot);
 			}
 			bindName(restName, capturedParams.contains(restName), ctx);
 		}
@@ -240,7 +204,7 @@ final class JvmLambdaCompiler {
 		ctx.declaredDoubles = bodyDeclaredDoubles;
 		for (int i = 0; i < bodyExprs.size(); i++) {
 			if (i > 0) {
-				ctx.emit(Opcode.POP);
+				ctx.body.pop();
 			}
 			JvmExprCompiler.compileExpr(bodyExprs.get(i), ctx, className);
 		}

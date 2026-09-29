@@ -1,6 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 
 /**
@@ -28,32 +28,20 @@ final class JvmTextControlCompiler {
 	 * leaves them alone.
 	 */
 	private static void emitBody(JvmLispCompiler.Ctx ctx, String className, boolean undo) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
+		ctx.body.aload(0);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int notString = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		ctx.body.astore(0).aload(0).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label notString = ctx.body.newLabel();
+		ctx.body.ifeq(notString);
+		ctx.body.aload(0).checkcast(ctx.stringClass.entry());
 		JvmEmitHelper.compileUnspelledLiteral(undo ? "~~" : "~", ctx);
 		JvmEmitHelper.compileUnspelledLiteral(undo ? "~" : "~~", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper
+		ctx.body.invokevirtual(JvmEmitHelper
 			.stringMethod(ctx, "replace", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")
-			.index());
-		ctx.emit(Opcode.ARETURN);
-		JvmEmitHelper.patchBranch(ctx, notString, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
+			.methodRefEntry());
+		ctx.body.areturn();
+		ctx.body.labelBinding(notString);
+		ctx.body.aload(0);
 	}
 
 }

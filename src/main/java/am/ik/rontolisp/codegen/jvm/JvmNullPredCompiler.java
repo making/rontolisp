@@ -2,11 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -30,8 +30,7 @@ final class JvmNullPredCompiler {
 	 */
 	static void compileEndp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.ENDP).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP).entry());
 		emitNullTest(ctx);
 	}
 
@@ -45,8 +44,7 @@ final class JvmNullPredCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		String operator = LispMacroExpander.checkListOperator(cons);
 		if (LispNames.ENDP.equals(operator)) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.ENDP).index());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP).entry());
 			return;
 		}
 		@Nullable String outer = ctx.operator;
@@ -61,16 +59,14 @@ final class JvmNullPredCompiler {
 
 	/** Replaces the value on the stack with {@code t} when it is nil, else nil. */
 	private static void emitNullTest(JvmLispCompiler.Ctx ctx) {
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(ifNullPos);
 		JvmEmitHelper.compileTrue(ctx);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

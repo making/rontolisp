@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -37,16 +36,11 @@ final class JvmSleepCompiler {
 		// anybody wants out of (sleep <huge>).
 		MethodrefConstant longValue = ctx.cp.addMethodref(ctx.numberClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("longValue"), ctx.cp.addUtf8("()J")));
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.numberClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(longValue.index());
+		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(longValue.methodRefEntry());
 		ClassConstant threadClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Thread"));
 		MethodrefConstant sleep = ctx.cp.addMethodref(threadClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("sleep"), ctx.cp.addUtf8("(J)V")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(sleep.index());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.invokestatic(sleep.entry()).aconst_null();
 	}
 
 }

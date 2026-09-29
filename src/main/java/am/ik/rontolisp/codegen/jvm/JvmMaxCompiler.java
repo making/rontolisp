@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code max} built-in function.
@@ -21,15 +20,13 @@ final class JvmMaxCompiler {
 				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FMAX).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMAX).entry());
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.MAX).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.MAX).entry());
 		}
 	}
 

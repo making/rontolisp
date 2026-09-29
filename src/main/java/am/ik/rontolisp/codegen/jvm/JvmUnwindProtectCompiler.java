@@ -2,8 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
-import am.ik.jvm.ClassDefinition;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -99,7 +98,7 @@ final class JvmUnwindProtectCompiler {
 
 		private final JvmLispCompiler.UnwindScope scope;
 
-		private final int start;
+		private final MethodCode.Label start;
 
 		private Region(List<LispVal> cleanups, JvmLispCompiler.Ctx ctx, String className, boolean hasValue) {
 			this.cleanups = cleanups;
@@ -115,7 +114,7 @@ final class JvmUnwindProtectCompiler {
 			this.excSlot = ctx.allocTemp();
 			this.scope = new JvmLispCompiler.UnwindScope(cleanups, ctx.blockTargets.size());
 			ctx.unwindScopes.push(this.scope);
-			this.start = ctx.code.size();
+			this.start = ctx.body.newBoundLabel();
 		}
 
 		static Region open(List<LispVal> cleanups, JvmLispCompiler.Ctx ctx, String className, boolean hasValue) {
@@ -124,36 +123,30 @@ final class JvmUnwindProtectCompiler {
 
 		void close() {
 			JvmLispCompiler.Ctx ctx = this.ctx;
-			int end = ctx.code.size();
+			MethodCode.Label end = ctx.body.newBoundLabel();
 			ctx.unwindScopes.pop();
 			if (this.resultSlot >= 0) {
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(this.resultSlot);
+				ctx.body.astore(this.resultSlot);
 			}
 			// Normal exit: run the cleanups, jump over the handler.
 			compileCleanups(this.cleanups, ctx, this.className);
-			int gotoPos = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
+			MethodCode.Label gotoPos = ctx.body.newLabel();
+			ctx.body.goto_(gotoPos);
 			// Error unwind: store the throwable (the handler's operand stack holds only
 			// it), run the cleanups, rethrow. A cleanup that itself throws replaces the
 			// pending unwind (CL semantics: the newer exit wins). This path never merges
 			// back into the normal one -- it ends in a throw -- so operands live across
 			// the protected region survive on the normal path and need no spill.
-			int handler = ctx.code.size();
+			MethodCode.Label handler = ctx.body.newBoundLabel();
 			ctx.stack.enterHandler();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(this.excSlot);
+			ctx.body.astore(this.excSlot);
 			compileCleanups(this.cleanups, ctx, this.className);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(this.excSlot);
-			ctx.emit(Opcode.ATHROW);
-			JvmEmitHelper.patchBranch(ctx, gotoPos, ctx.code.size());
+			ctx.body.aload(this.excSlot).athrow();
+			ctx.body.labelBinding(gotoPos);
 			if (this.resultSlot >= 0) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(this.resultSlot);
+				ctx.body.aload(this.resultSlot);
 			}
-			addExceptionEntries(ctx, this.scope, this.start, end, handler);
+			this.scope.catchAny(ctx.body, this.start, end, handler);
 			ctx.nextLocal = this.savedNextLocal;
 		}
 
@@ -206,15 +199,13 @@ final class JvmUnwindProtectCompiler {
 		if (spill != null) {
 			spillSlot = ctx.allocTemp();
 			spill.emitLoad(ctx);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(spillSlot);
+			ctx.body.astore(spillSlot);
 		}
 		for (LispVal form : cleanups) {
 			JvmExprCompiler.compileForEffect(form, ctx, className);
 		}
 		if (spill != null) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(spillSlot);
+			ctx.body.aload(spillSlot);
 			spill.emitStore(ctx);
 			ctx.nextLocal = savedNextLocal;
 		}
@@ -240,27 +231,6 @@ final class JvmUnwindProtectCompiler {
 			}
 		}
 		return true;
-	}
-
-	/**
-	 * Appends the scope's catch-any exception-table entries: {@code [start, end)} minus
-	 * the recorded holes (the cleanup sequences inlined at {@code return} escape sites,
-	 * which lie inside the protected region but must not be covered by this scope's own
-	 * handler). The holes are recorded in code order, so a single left-to-right sweep
-	 * suffices.
-	 */
-	private static void addExceptionEntries(JvmLispCompiler.Ctx ctx, JvmLispCompiler.UnwindScope scope, int start,
-			int end, int handler) {
-		int cur = start;
-		for (int[] hole : scope.holes) {
-			if (hole[0] > cur) {
-				ctx.exceptionTable.add(new ClassDefinition.Handler(cur, hole[0], handler, 0));
-			}
-			cur = Math.max(cur, hole[1]);
-		}
-		if (cur < end) {
-			ctx.exceptionTable.add(new ClassDefinition.Handler(cur, end, handler, 0));
-		}
 	}
 
 }

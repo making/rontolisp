@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * The argument sequence a compiled callee takes, emitted where a call's argument count is
@@ -26,8 +26,7 @@ final class JvmPhysicalArgs {
 	 * @param className the class being emitted
 	 */
 	static void emitUnsupplied(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.unsupplied.ref(ctx.cp, className).index());
+		ctx.body.invokestatic(ctx.unsupplied.ref(ctx.cp, className).entry());
 	}
 
 	/**
@@ -64,7 +63,7 @@ final class JvmPhysicalArgs {
 				emitUnsupplied(ctx, className);
 			}
 			if (variadic) {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 			return;
 		}
@@ -75,33 +74,17 @@ final class JvmPhysicalArgs {
 		for (int i = positional; i < supplied; i++) {
 			args.get(i).run();
 			int slot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+			ctx.body.astore(slot);
 			extraSlots.add(slot);
 		}
 		int restSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(restSlot);
+		ctx.body.aconst_null().astore(restSlot);
 		for (int k = extraSlots.size() - 1; k >= 0; k--) {
-			ctx.emit(Opcode.ICONST_2);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(extraSlots.get(k));
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(restSlot);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(restSlot);
+			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+			ctx.body.aload(extraSlots.get(k)).aastore().dup().iconst_1().aload(restSlot).aastore();
+			ctx.body.astore(restSlot);
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(restSlot);
+		ctx.body.aload(restSlot);
 	}
 
 	/**
@@ -119,8 +102,7 @@ final class JvmPhysicalArgs {
 	static void emitFromList(JvmLispCompiler.Ctx ctx, String className, JvmLispCompiler.FunctionInfo fi, int listSlot) {
 		int positional = fi.positional();
 		for (int i = 0; i < positional; i++) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
+			ctx.body.aload(listSlot);
 			for (int step = 0; step < i; step++) {
 				emitNullSafeCell(ctx, 1);
 			}
@@ -129,13 +111,12 @@ final class JvmPhysicalArgs {
 			}
 			else {
 				// cell == null ? UNSUPPLIED : car(cell)
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.unsupplied.optArgRef(ctx.cp, ctx.cp.addClass(ctx.cp.addUtf8(className))).index());
+				ctx.body
+					.invokestatic(ctx.unsupplied.optArgRef(ctx.cp, ctx.cp.addClass(ctx.cp.addUtf8(className))).entry());
 			}
 		}
 		if (fi.variadic()) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
+			ctx.body.aload(listSlot);
 			for (int step = 0; step < positional; step++) {
 				emitNullSafeCell(ctx, 1);
 			}
@@ -145,15 +126,13 @@ final class JvmPhysicalArgs {
 	// Replaces the cons on the stack with its car (field 0) or cdr (field 1); nil
 	// passes through, like the car/cdr built-ins.
 	private static void emitNullSafeCell(JvmLispCompiler.Ctx ctx, int field) {
-		ctx.emit(Opcode.DUP);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(field == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		ctx.body.dup();
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.checkcast(ctx.objectArrayClass.entry());
+		ctx.body.loadConstant(field);
+		ctx.body.aaload();
+		ctx.body.labelBinding(ifNullPos);
 	}
 
 }

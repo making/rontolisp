@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code princ} built-in function. Prints without quotes and without
@@ -28,37 +27,19 @@ final class JvmPrincCompiler {
 		if (stream != null) {
 			// (princ value stream): render, then route through _writeStr.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(objSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(objSlot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.lispToDisplayString.index());
+			ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToDisplayString.entry());
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 			JvmStringStreamCompiler.emitWriteStr(ctx, className);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(objSlot);
+			ctx.body.aload(objSlot);
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.lispToDisplayString.index());
+		ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToDisplayString.entry());
 		int slot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ctx.systemOut.index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.printStr.index());
+		ctx.body.astore(slot).getstatic(ctx.systemOut.entry()).aload(slot);
+		ctx.body.invokevirtual(ctx.printStr.methodRefEntry());
 		JvmFreshLineCompiler.emitTrackLocal(ctx, className, slot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(objSlot);
+		ctx.body.aload(objSlot);
 	}
 
 }

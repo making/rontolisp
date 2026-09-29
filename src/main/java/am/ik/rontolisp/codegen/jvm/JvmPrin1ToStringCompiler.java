@@ -16,7 +16,7 @@ final class JvmPrin1ToStringCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		JvmPrincToStringCompiler.emitToString(args.get(1), ctx.lispToString.index(), ctx, className);
+		JvmPrincToStringCompiler.emitToString(args.get(1), ctx.lispToString, ctx, className);
 	}
 
 }

@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code symbolp} predicate.
@@ -18,41 +18,27 @@ final class JvmSymbolpCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		ctx.body.astore(tempSlot);
 		// nil (and t, a plain string) are symbols in CL.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int ifNotStringPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
+		ctx.body.aload(tempSlot);
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label ifNotStringPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotStringPos);
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
 		JvmEmitHelper.emitIntConst(ctx, 34);
-		int ifQuotePos = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPEQ);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		MethodCode.Label ifQuotePos = ctx.body.newLabel();
+		ctx.body.if_icmpeq(ifQuotePos);
+		ctx.body.labelBinding(ifNullPos);
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotStringPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, ifQuotePos, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(ifNotStringPos);
+		ctx.body.labelBinding(ifQuotePos);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

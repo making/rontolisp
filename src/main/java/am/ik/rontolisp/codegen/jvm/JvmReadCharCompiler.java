@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
@@ -36,14 +35,13 @@ final class JvmReadCharCompiler {
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_CHAR_METHOD);
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_CHAR_DESC);
 		MethodrefConstant readCharRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(readCharRef.index());
+		ctx.body.invokestatic(readCharRef.entry());
 	}
 
 }

@@ -18,8 +18,7 @@ final class JvmFloatConvCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// _dbl handles Long, BigInteger, Double and ratios (BigInteger[]).
-		ctx.emit(am.ik.jvm.Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DBL).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
 	}
 
 }

@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the bitwise integer built-ins ({@code logand}, {@code logior}, {@code logxor},
@@ -37,30 +36,26 @@ final class JvmBitwiseCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(op).index());
+		ctx.body.invokestatic(ctx.numOp(op).entry());
 	}
 
 	static void compileLognot(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.LOGNOT).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGNOT).entry());
 	}
 
 	static void compileAsh(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.ASH).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.ASH).entry());
 	}
 
 	static void compileIntegerLength(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.INTEGER_LENGTH).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.INTEGER_LENGTH).entry());
 	}
 
 	static void compileLogbitp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -68,8 +63,7 @@ final class JvmBitwiseCompiler {
 		// (logbitp index integer): the helper takes the integer first, the index second.
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.LOGBITP).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGBITP).entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

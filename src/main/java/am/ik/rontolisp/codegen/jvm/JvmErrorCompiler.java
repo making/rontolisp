@@ -3,9 +3,9 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the internal {@code %error} primitive: it evaluates its single string argument
@@ -70,8 +70,10 @@ final class JvmErrorCompiler {
 		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		boolean condition = conditionSlot >= 0;
-		int length = condition ? -1 : JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
-		int substring = condition ? -1 : JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
+		ConstantPool.@Nullable MethodrefConstant length = condition ? null
+				: JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		ConstantPool.@Nullable MethodrefConstant substring = condition ? null
+				: JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
 		// The message is computed into a local BEFORE the allocation. The verifier tracks
 		// a half-constructed object apart from an ordinary reference and no local can
 		// hold
@@ -83,8 +85,7 @@ final class JvmErrorCompiler {
 		if (condition) {
 			// _lispToDisplayString: a string's text without its frame quotes, a mutable
 			// character vector's characters, NIL for nil.
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.lispToDisplayString.index());
+			ctx.body.invokestatic(ctx.lispToDisplayString.entry());
 		}
 		else {
 			// message: arg.substring(1, arg.length() - 1). A message built by a flipped
@@ -92,38 +93,25 @@ final class JvmErrorCompiler {
 			// capture) can be a mutable character vector: render it before the (String)
 			// cast (a no-op without the array runtime).
 			JvmArrayCompiler.emitStrvNormalize(ctx, className);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.stringClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(length);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ISUB);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.SWAP);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(substring);
+			ctx.body.checkcast(ctx.stringClass.entry())
+				.dup()
+				.invokevirtual(java.util.Objects.requireNonNull(length).methodRefEntry())
+				.iconst_1()
+				.isub()
+				.iconst_1()
+				.swap()
+				.invokevirtual(java.util.Objects.requireNonNull(substring).methodRefEntry());
 		}
 		int messageSlot = ctx.errorMessageSlot();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(messageSlot);
+		ctx.body.astore(messageSlot);
 		// throw new RuntimeException(message)
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(messageSlot);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(ctor.index());
+		ctx.body.new_(runtimeEx.entry()).dup().aload(messageSlot).invokespecial(ctor.entry());
 		if (condition) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(conditionSlot);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(java.util.Objects
-				.requireNonNull(handlersRan ? ctx.conditionChannel.condRan : ctx.conditionChannel.condPut)
-				.index());
+			ctx.body.aload(conditionSlot);
+			ctx.body.invokestatic(java.util.Objects
+				.requireNonNull(handlersRan ? ctx.conditionChannel.condRan : ctx.conditionChannel.condPut));
 		}
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.athrow();
 	}
 
 }

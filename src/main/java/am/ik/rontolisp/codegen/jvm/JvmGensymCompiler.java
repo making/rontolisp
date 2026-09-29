@@ -9,7 +9,6 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code gensym} built-in function. The compiled class holds a static
@@ -62,17 +61,8 @@ final class JvmGensymCompiler {
 		String prefix = args.size() == 2 ? ((LispString) args.get(1)).value() : "G";
 		// "#:prefix".concat(Integer.toString(++_gensymCtr))
 		JvmEmitHelper.compileStringLiteral("#:" + prefix, ctx);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ctr.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.IADD);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(ctr.index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(intToString.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
+		ctx.body.getstatic(ctr.entry()).iconst_1().iadd().dup().putstatic(ctr.entry());
+		ctx.body.invokestatic(intToString.entry()).invokevirtual(concat.methodRefEntry());
 	}
 
 }

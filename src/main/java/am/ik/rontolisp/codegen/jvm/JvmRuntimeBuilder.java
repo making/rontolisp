@@ -3534,7 +3534,7 @@ final class JvmRuntimeBuilder {
 	 * unbounded pool hands out once a program outgrows one class file -- survives in the
 	 * code list until {@link am.ik.jvm.JvmClassSplitter} re-points it into the pool of
 	 * the class the method lands in. Every emitter's u2 goes through here or through
-	 * {@code Ctx.emitU2}, which keeps the same rule.
+	 * {@link am.ik.jvm.MethodCode}, which keeps the same rule.
 	 * @param code the method body, one element per byte
 	 * @param value the operand
 	 */

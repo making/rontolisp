@@ -12,7 +12,6 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the runtime symbol API: {@code symbol-name}, {@code intern},
@@ -39,7 +38,7 @@ final class JvmSymbolApiCompiler {
 	/** symbol-name: the display text wrapped in quotes (same emission as princ). */
 	static void compileSymbolName(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.SYMBOL_NAME);
-		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString.index(), ctx, className);
+		JvmPrincToStringCompiler.emitToString(parts.get(1), ctx.lispToDisplayString, ctx, className);
 	}
 
 	/**

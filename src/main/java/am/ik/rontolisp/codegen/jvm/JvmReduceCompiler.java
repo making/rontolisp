@@ -2,11 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code reduce} built-in function. Generates an inline loop that applies a
@@ -40,85 +40,51 @@ final class JvmReduceCompiler {
 		if (withInit) {
 			// (reduce fn list :initial-value init)
 			JvmExprCompiler.compileExpr(args.get(4), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(accSlot);
+			ctx.body.astore(accSlot);
 
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(listSlot);
+			ctx.body.astore(listSlot);
 		}
 		else {
 			// 2-arg: (reduce fn list) - first element becomes accumulator
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(listSlot);
+			ctx.body.astore(listSlot);
 
 			// acc = car(list)
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(accSlot);
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			ctx.body.astore(accSlot);
 
 			// list = cdr(list)
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(listSlot);
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.astore(listSlot);
 		}
 
 		// loop:
-		int loopPos = ctx.code.size();
+		MethodCode.Label loopPos = ctx.body.newBoundLabel();
 		// if list == null, goto exit
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		ctx.body.aload(listSlot);
+		MethodCode.Label ifNullPos = ctx.body.newLabel();
+		ctx.body.ifnull(ifNullPos);
 
 		// acc = func(acc, car(list))
 		call.emitCall(ctx, className, List.of(() -> {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(accSlot);
+			ctx.body.aload(accSlot);
 		}, () -> {
 			// car(list) = ((Object[]) list)[0]
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 		}));
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(accSlot);
+		ctx.body.astore(accSlot);
 
 		// list = cdr(list) = ((Object[]) list)[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.astore(listSlot);
 
 		// goto loop
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		int offset = loopPos - gotoPos;
-		ctx.emitU2(offset & 0xFFFF);
+		ctx.body.goto_(loopPos);
 
 		// exit: load accumulator
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(accSlot);
+		ctx.body.labelBinding(ifNullPos);
+		ctx.body.aload(accSlot);
 	}
 
 	/**

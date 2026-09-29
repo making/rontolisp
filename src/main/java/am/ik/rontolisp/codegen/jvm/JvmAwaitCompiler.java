@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code rontolisp:await}: resolves a future to its settled value (blocking the
@@ -37,8 +36,7 @@ final class JvmAwaitCompiler {
 		if (ctx.awaitHelper == null) {
 			throw new IllegalStateException("await helper method was not emitted");
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.awaitHelper.index());
+		ctx.body.invokestatic(ctx.awaitHelper.entry());
 	}
 
 }

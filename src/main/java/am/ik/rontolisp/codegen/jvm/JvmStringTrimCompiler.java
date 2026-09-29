@@ -2,11 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code string-trim} / {@code string-left-trim} / {@code string-right-trim}.
@@ -41,11 +41,11 @@ final class JvmStringTrimCompiler {
 	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean left,
 			boolean right) {
 		List<LispVal> args = cons.toList();
-		int strClass = ctx.stringClass.index();
+		ClassConstant strClass = ctx.stringClass;
 		MethodrefConstant lengthRef = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		int length = lengthRef.index();
-		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		MethodrefConstant length = lengthRef;
+		MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		MethodrefConstant indexOf = JvmEmitHelper.stringMethod(ctx, "indexOf", "(I)I");
 
 		int bagRawSlot = ctx.allocTemp();
@@ -57,44 +57,18 @@ final class JvmStringTrimCompiler {
 		// bagRaw = (String) char-bag
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(strClass);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(bagRawSlot);
+		ctx.body.checkcast(strClass.entry()).astore(bagRawSlot);
 		// bag = bagRaw.substring(1, bagRaw.length() - 1)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(bagRawSlot);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(bagRawSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(substring);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(bagSlot);
+		ctx.body.aload(bagRawSlot).iconst_1().aload(bagRawSlot).invokevirtual(length.methodRefEntry());
+		ctx.body.iconst_1().isub().invokevirtual(substring.methodRefEntry()).astore(bagSlot);
 		// s = (String) string
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(strClass);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(sSlot);
+		ctx.body.checkcast(strClass.entry()).astore(sSlot);
 		// start = 1
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(startSlot);
+		ctx.body.iconst_1().istore(startSlot);
 		// end = s.length() - 1
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(sSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(endSlot);
+		ctx.body.aload(sSlot).invokevirtual(length.methodRefEntry()).iconst_1().isub().istore(endSlot);
 
 		MethodCode asm = ctx.body;
 		if (left) {
@@ -136,19 +110,10 @@ final class JvmStringTrimCompiler {
 
 		// "\"" + s.substring(start, end) + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(sSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(startSlot);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(endSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(substring);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.aload(sSlot).iload(startSlot).iload(endSlot).invokevirtual(substring.methodRefEntry());
+		ctx.body.invokevirtual(concat.methodRefEntry());
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat);
+		ctx.body.invokevirtual(concat.methodRefEntry());
 	}
 
 }

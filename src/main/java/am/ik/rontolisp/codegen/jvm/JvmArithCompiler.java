@@ -48,22 +48,19 @@ final class JvmArithCompiler {
 		if (unaryDiv) {
 			JvmEmitHelper.compileLong(1, ctx);
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DIV).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV).entry());
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// Unary subtraction is negation; the other operators leave a single argument
 		// as-is.
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.NEG).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NEG).entry());
 			return;
 		}
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(opKey).index());
+			ctx.body.invokestatic(ctx.numOp(opKey).entry());
 		}
 	}
 
@@ -90,21 +87,18 @@ final class JvmArithCompiler {
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
 			JvmEmitHelper.compileLong(1, ctx);
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, complexOp).index());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp).entry());
 			return;
 		}
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.NEG).index());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.NEG).entry());
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, complexOp).index());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp).entry());
 		}
 	}
 
@@ -121,16 +115,16 @@ final class JvmArithCompiler {
 		boolean isRem = JvmNumericRuntimeBuilder.REM.equals(opKey);
 		// Unary (/ x) is the reciprocal: 1.0 / x.
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
-			ctx.emit(Opcode.DCONST_1);
+			ctx.body.dconst_1();
 			compileUnboxedOperand(args.get(1), ctx, className);
-			ctx.emit(doubleOpcode);
+			emitDoubleOp(ctx, doubleOpcode);
 			return;
 		}
 		// Unary (- x) is IEEE negation: DNEG. (Falling through to the loop below
 		// would return x unchanged, and 0 - x would turn -0.0 into +0.0.)
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
 			compileUnboxedOperand(args.get(1), ctx, className);
-			ctx.emit(Opcode.DNEG);
+			ctx.body.dneg();
 			return;
 		}
 		compileUnboxedOperand(args.get(1), ctx, className);
@@ -141,12 +135,27 @@ final class JvmArithCompiler {
 				// of which is a bare DREM: _fmod corrects the sign of a nonzero result
 				// to the divisor's, and both take CLHS's sign for a ZERO result from
 				// _frem rather than IEEE fmod's sign-of-the-dividend.
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.numOp(isMod ? JvmNumericRuntimeBuilder.FMOD : JvmNumericRuntimeBuilder.FREM).index());
+				ctx.body.invokestatic(
+						ctx.numOp(isMod ? JvmNumericRuntimeBuilder.FMOD : JvmNumericRuntimeBuilder.FREM).entry());
 			}
 			else {
-				ctx.emit(doubleOpcode);
+				emitDoubleOp(ctx, doubleOpcode);
 			}
+		}
+	}
+
+	/**
+	 * The machine form of a double-literal operation's step.
+	 * @param ctx the compile context
+	 * @param doubleOpcode {@code DADD}, {@code DSUB}, {@code DMUL} or {@code DDIV}
+	 */
+	private static void emitDoubleOp(JvmLispCompiler.Ctx ctx, int doubleOpcode) {
+		switch (doubleOpcode) {
+			case Opcode.DADD -> ctx.body.dadd();
+			case Opcode.DSUB -> ctx.body.dsub();
+			case Opcode.DMUL -> ctx.body.dmul();
+			case Opcode.DDIV -> ctx.body.ddiv();
+			default -> throw new IllegalArgumentException("no double operation: " + doubleOpcode);
 		}
 	}
 
@@ -177,8 +186,7 @@ final class JvmArithCompiler {
 		if (arg instanceof LispSymbol sym) {
 			Integer rawDoubleSlot = ctx.rawDoubleLocals.get(sym.name());
 			if (rawDoubleSlot != null) {
-				ctx.emit(Opcode.DLOAD);
-				ctx.emit(rawDoubleSlot);
+				ctx.body.dload(rawDoubleSlot);
 				return;
 			}
 			if (ctx.declaredDoubles.contains(sym.name())) {

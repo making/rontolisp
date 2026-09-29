@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code load} built-in. The path argument is compiled to a runtime string
@@ -40,8 +39,7 @@ final class JvmLoadCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
 		MethodrefConstant loadRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(loadRef.index());
+		ctx.body.invokestatic(loadRef.entry());
 	}
 
 }

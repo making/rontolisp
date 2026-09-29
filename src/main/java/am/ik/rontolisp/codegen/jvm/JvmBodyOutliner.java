@@ -10,7 +10,6 @@ import java.util.TreeSet;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -153,7 +152,7 @@ final class JvmBodyOutliner {
 			Entry entry = tail.queue.removeFirst();
 			ctx.restoreSite(entry.site());
 			switch (entry.item()) {
-				case PopValue ignored -> ctx.emit(Opcode.POP);
+				case PopValue ignored -> ctx.body.pop();
 				case Cleanup cleanup -> cleanup.action().run();
 				case EffectForm effect -> {
 					// "Value, then pop" is what compileForEffect does for everything
@@ -173,7 +172,7 @@ final class JvmBodyOutliner {
 	}
 
 	private static boolean readyToSplit(Tail tail, JvmLispCompiler.Ctx ctx) {
-		if (ctx.code.size() < CODE_BUDGET) {
+		if (ctx.body.size() < CODE_BUDGET) {
 			return false;
 		}
 		// Every remaining Cleanup must be a suffix: an item AFTER one belongs to a scope
@@ -240,8 +239,7 @@ final class JvmBodyOutliner {
 		MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc.toString());
 		// The call: the live environment, in the continuation's parameter order.
 		if (hasEnv) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(ctx.closureEnvSlot);
+			ctx.body.aload(ctx.closureEnvSlot);
 		}
 		for (String name : names) {
 			JvmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
@@ -254,17 +252,14 @@ final class JvmBodyOutliner {
 			else if (rawDouble != null) {
 				// A raw double local crosses boxed the same way; the continuation
 				// holds it as an ordinary Object local (.kb/jvm-double-arithmetic.md).
-				ctx.emit(Opcode.DLOAD);
-				ctx.emit(rawDouble);
+				ctx.body.dload(rawDouble);
 				JvmEmitHelper.boxDouble(ctx);
 			}
 			else {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(java.util.Objects.requireNonNull(ctx.locals.get(name)));
+				ctx.body.aload(java.util.Objects.requireNonNull(ctx.locals.get(name)));
 			}
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
 		// The continuation is the same function, part way through: the uncaught report
@@ -293,7 +288,7 @@ final class JvmBodyOutliner {
 		Tail contTail = new Tail();
 		contTail.queue.addAll(moved);
 		run(contTail, cont, className);
-		cont.emit(Opcode.ARETURN);
+		cont.body.areturn();
 		ctx.outlinedBodies.add(new OutlinedBody(methodName, nameUtf8, descUtf8, cont));
 	}
 

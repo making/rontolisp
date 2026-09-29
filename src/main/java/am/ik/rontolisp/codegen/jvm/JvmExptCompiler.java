@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code expt} built-in. When a floating-point literal is involved it
@@ -24,8 +23,7 @@ final class JvmExptCompiler {
 		if (JvmLispCompiler.hasComplexOperand(args)) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.POW).index());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.POW).entry());
 			return;
 		}
 		if (am.ik.rontolisp.macro.LispMacroExpander.escapesToComplex(am.ik.rontolisp.LispNames.EXPT, args)) {
@@ -34,15 +32,14 @@ final class JvmExptCompiler {
 			// there and delegates everything else to the _pow below.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.POW_REAL).index());
+			ctx.body
+				.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.POW_REAL).entry());
 			return;
 		}
 		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.POW).index());
+			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.POW).entry());
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
@@ -53,8 +50,7 @@ final class JvmExptCompiler {
 			// (a variable, a call, a float coercion) takes Math.pow there.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.POW).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.POW).entry());
 		}
 	}
 

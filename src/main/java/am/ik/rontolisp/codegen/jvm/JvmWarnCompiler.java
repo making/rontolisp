@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -50,8 +50,7 @@ final class JvmWarnCompiler {
 								new LispCons(args.get(1),
 										new LispCons(StreamDesignators.errorOutput(), LispNil.INSTANCE))),
 						ctx, className);
-			ctx.emit(Opcode.POP);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.pop().aconst_null();
 			return;
 		}
 		if (ctx.globals.contains(LispNames.ERROR_OUTPUT_VAR)) {
@@ -64,42 +63,28 @@ final class JvmWarnCompiler {
 					ctx.cp.addClass(ctx.cp.addUtf8(className)),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_METHOD),
 							ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_DESC)));
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(writeLineRef.index());
+			ctx.body.invokestatic(writeLineRef.entry());
 			// _writeLine answers the string; %warn answers nil.
-			ctx.emit(Opcode.POP);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.pop().aconst_null();
 			return;
 		}
 		ConstantPool.ClassConstant systemClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System"));
 		ConstantPool.FieldrefConstant systemErr = ctx.cp.addFieldref(systemClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("err"), ctx.cp.addUtf8("Ljava/io/PrintStream;")));
-		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
-		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
+		MethodrefConstant length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
 		// System.err
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(systemErr.index());
+		ctx.body.getstatic(systemErr.entry());
 		// message: arg.substring(1, arg.length() - 1)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// A warning message can be a mutable character vector (a flipped producer's
 		// result): render it before the (String) cast (a no-op without the array
 		// runtime).
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(substring);
+		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length.methodRefEntry());
+		ctx.body.iconst_1().isub().iconst_1().swap().invokevirtual(substring.methodRefEntry());
 		// System.err.println(message); result is nil
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.printlnStr.index());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.invokevirtual(ctx.printlnStr.methodRefEntry()).aconst_null();
 	}
 
 }

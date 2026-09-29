@@ -2,7 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -49,16 +49,13 @@ final class JvmSignalCondCompiler {
 		int condSlot = ctx.allocTemp();
 		int msgSlot = ctx.allocTemp();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
+		ctx.body.astore(condSlot);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(msgSlot);
+		ctx.body.astore(msgSlot);
 		JvmHandlerCaseCompiler.emitReadDepth(ctx, className);
-		int ifUnhandledPos = ctx.code.size();
-		ctx.emit(Opcode.IFLE);
-		ctx.emitU2(0);
-		int ifNoMatchPos = -1;
+		MethodCode.Label ifUnhandledPos = ctx.body.newLabel();
+		ctx.body.ifle(ifUnhandledPos);
+		MethodCode.Label ifNoMatchPos = ctx.body.newLabel();
 		if (ctx.signalClauseMatch) {
 			// Ask the clause-type stack whether any armed handler-case clause matches;
 			// the condition rides a pseudo-local so the call compiles as ordinary Lisp.
@@ -76,9 +73,7 @@ final class JvmSignalCondCompiler {
 					ctx.locals.remove(condVarName);
 				}
 			}
-			ifNoMatchPos = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
+			ctx.body.ifnull(ifNoMatchPos);
 		}
 		// A handler that will handle the condition exists: raise like %error-cond (throw,
 		// the condition recorded under the thrown exception).
@@ -96,11 +91,9 @@ final class JvmSignalCondCompiler {
 				ctx.locals.remove(msgVarName);
 			}
 		}
-		JvmEmitHelper.patchBranch(ctx, ifUnhandledPos, ctx.code.size());
-		if (ifNoMatchPos >= 0) {
-			JvmEmitHelper.patchBranch(ctx, ifNoMatchPos, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.labelBinding(ifUnhandledPos);
+		ctx.body.labelBinding(ifNoMatchPos);
+		ctx.body.aconst_null();
 		ctx.nextLocal = savedNextLocal;
 	}
 

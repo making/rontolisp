@@ -1,11 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.OperandStack;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -28,8 +29,8 @@ import org.jspecify.annotations.Nullable;
  * (a {@code go} discards whatever the abandoned expression had pushed on top of it), so
  * each label position declares that shape to the operand-stack model: a backward
  * {@code go}'s target must already have a fixed shape, and a label whose predecessors are
- * all {@code go}s would otherwise be modeled unreachable. Forward {@code go}s are
- * back-patched when their label is emitted; falling off the end yields nil.
+ * all {@code go}s would otherwise be modeled unreachable. A forward {@code go} is
+ * resolved when its label is bound; falling off the end yields nil.
  *
  * <p>
  * That entry stack is spilled to locals FIRST, so every label -- and therefore the target
@@ -50,12 +51,11 @@ final class JvmTagbodyCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		Map<String, Integer> labelPositions = new LinkedHashMap<>();
-		Map<String, List<Integer>> pendingGos = new LinkedHashMap<>();
+		Map<String, MethodCode.Label> labels = new LinkedHashMap<>();
 		for (int i = 1; i < parts.size(); i++) {
 			String label = labelName(parts.get(i));
 			if (label != null) {
-				pendingGos.put(label, new ArrayList<>());
+				labels.put(label, ctx.body.newLabel());
 			}
 		}
 		// Entered BEFORE the TagbodyScope records its spill depth, so a go to one of this
@@ -65,20 +65,19 @@ final class JvmTagbodyCompiler {
 		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
 		List<OperandStack.Slot> entryStack = ctx.stack.snapshot();
 		JvmLispCompiler.TagbodyScope scope = new JvmLispCompiler.TagbodyScope(entryStack, ctx.unwindScopes.size(),
-				ctx.spillScopes.size(), labelPositions, pendingGos);
+				ctx.spillScopes.size(), labels);
+		Set<String> bound = new HashSet<>();
 		ctx.tagbodyScopes.push(scope);
 		for (int i = 1; i < parts.size(); i++) {
 			LispVal part = parts.get(i);
 			String label = labelName(part);
 			if (label != null) {
-				int pos = ctx.code.size();
-				labelPositions.put(label, pos);
 				ctx.stack.joinShape(entryStack);
-				List<Integer> pending = pendingGos.computeIfAbsent(label, k -> new ArrayList<>());
-				for (int patchPos : pending) {
-					JvmEmitHelper.patchBranch(ctx, patchPos, pos);
+				if (!bound.add(label)) {
+					// A tag standing twice: a go past its second place jumps there.
+					labels.put(label, ctx.body.newLabel());
 				}
-				pending.clear();
+				ctx.body.labelBinding(labels.get(label));
 			}
 			else {
 				JvmExprCompiler.compileForEffect(part, ctx, className);
@@ -86,7 +85,7 @@ final class JvmTagbodyCompiler {
 		}
 		ctx.tagbodyScopes.pop();
 		JvmEmitHelper.leaveLoopScope(ctx, spill);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 	/** The label name of a tagbody body atom, or null when the element is a form. */

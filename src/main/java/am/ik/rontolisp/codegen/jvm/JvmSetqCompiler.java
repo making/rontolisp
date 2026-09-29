@@ -2,10 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.ConstantPool.FieldrefConstant;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code setq} special form.
@@ -22,7 +23,7 @@ final class JvmSetqCompiler {
 		}
 		if (parts.size() == 1) {
 			// (setq) -> nil
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		int pairCount = (parts.size() - 1) / 2;
@@ -31,7 +32,7 @@ final class JvmSetqCompiler {
 			if (p < pairCount - 1) {
 				// Discard the intermediate value; only the last pair's value is the
 				// result
-				ctx.emit(Opcode.POP);
+				ctx.body.pop();
 			}
 		}
 	}
@@ -76,8 +77,7 @@ final class JvmSetqCompiler {
 				// with: the value lands raw and NOTHING is re-read for the caller to
 				// pop (.kb/jvm-double-arithmetic.md).
 				compileRawDoubleValue(parts.get(2 + 2 * p), ctx, className);
-				ctx.emit(Opcode.DSTORE);
-				ctx.emit(rawDoubleSlot);
+				ctx.body.dstore(rawDoubleSlot);
 				continue;
 			}
 			JvmIntFusionCompiler.compileRawStore(parts.get(2 + 2 * p), ctx, className,
@@ -123,10 +123,7 @@ final class JvmSetqCompiler {
 		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
 		if (rawDoubleSlot != null) {
 			compileRawDoubleValue(valueExpr, ctx, className);
-			ctx.emit(Opcode.DSTORE);
-			ctx.emit(rawDoubleSlot);
-			ctx.emit(Opcode.DLOAD);
-			ctx.emit(rawDoubleSlot);
+			ctx.body.dstore(rawDoubleSlot).dload(rawDoubleSlot);
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
@@ -140,36 +137,16 @@ final class JvmSetqCompiler {
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {
 			int tempSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
+			ctx.body.astore(tempSlot).aload(slot).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.iconst_0().aload(tempSlot).aastore().aload(tempSlot);
 		}
 		else if (ctx.captures.containsKey(name)) {
 			int captureIdx = ctx.captures.get(name);
 			int tempSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(ctx.closureEnvSlot);
+			ctx.body.astore(tempSlot).aload(ctx.closureEnvSlot);
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
+			ctx.body.aaload().checkcast(ctx.objectArrayClass.entry()).iconst_0().aload(tempSlot);
+			ctx.body.aastore().aload(tempSlot);
 		}
 		else if (slot == null && ctx.globals.contains(name)) {
 			// A top-level global variable (not shadowed by a lexical here): store into
@@ -187,12 +164,11 @@ final class JvmSetqCompiler {
 			// form can name a top-level let/loop/do variable -- nor the temporaries the
 			// macro expanders generate (__loop_acc0, the while cursor, __nrev_*), which
 			// are not symbols in any package at all.
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			if (slot == null) {
 				slot = ctx.allocLocal(name);
 			}
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+			ctx.body.astore(slot);
 		}
 		// A special that is dual-bound here (a lexical slot/capture established by a
 		// special-named let, see JvmLetCompiler): the assignment must reach the DYNAMIC
@@ -213,33 +189,23 @@ final class JvmSetqCompiler {
 	 */
 	private static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
 		if (ctx.mvChannel != null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			ctx.mvChannel.emitStore(ctx);
 			return;
 		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 		am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
-		int globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index();
+		FieldrefConstant globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name));
 		if (dyn == null || tlField == null) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(globalFieldIndex);
+			ctx.body.dup().putstatic(globalFieldIndex.entry());
 			return;
 		}
 		// stack: v -> v v tl -> v tl v -> v wrote? ; when 0, fall through to the global.
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(tlField.index());
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(dyn.dset().index());
-		int ifWrotePos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(globalFieldIndex);
-		JvmEmitHelper.patchBranch(ctx, ifWrotePos, ctx.code.size());
+		ctx.body.dup().getstatic(tlField.entry()).swap().invokestatic(dyn.dset().entry());
+		MethodCode.Label ifWrotePos = ctx.body.newLabel();
+		ctx.body.ifne(ifWrotePos);
+		ctx.body.dup().putstatic(globalFieldIndex.entry());
+		ctx.body.labelBinding(ifWrotePos);
 	}
 
 	/**
@@ -256,10 +222,8 @@ final class JvmSetqCompiler {
 		}
 		// stack: value -> _store(name, value, null) -> value
 		JvmEmitHelper.compileStringLiteral(name, ctx);
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.ACONST_NULL);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(java.util.Objects.requireNonNull(ctx.evalStoreRef).index());
+		ctx.body.swap().aconst_null();
+		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef).entry());
 	}
 
 	/**

@@ -6,7 +6,6 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
-import am.ik.jvm.Opcode;
 
 /**
  * The call emitted by an operator that FUNCALLS a function argument: {@code funcall}
@@ -65,8 +64,7 @@ final class JvmDesignatorCall {
 		ctx.indirectCallArities.add(arity);
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(fnForm), ctx, className);
 		int slot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slot);
+		ctx.body.astore(slot);
 		return new JvmDesignatorCall(null, slot, arity);
 	}
 
@@ -99,8 +97,7 @@ final class JvmDesignatorCall {
 	 */
 	void emitCall(JvmLispCompiler.Ctx ctx, String className, List<Runnable> args) {
 		if (this.target == null) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(this.funcSlot);
+			ctx.body.aload(this.funcSlot);
 			args.forEach(Runnable::run);
 			JvmFunctionCallCompiler.emitDispatchCall(this.arity, ctx, className);
 			return;
@@ -109,8 +106,7 @@ final class JvmDesignatorCall {
 		// parameter takes, the UNSUPPLIED marker for an optional not passed, and a
 		// surplus linked into the rest list (JvmPhysicalArgs).
 		JvmPhysicalArgs.emit(ctx, className, this.target, args);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(this.target.methodref().index());
+		ctx.body.invokestatic(this.target.methodref().entry());
 	}
 
 }

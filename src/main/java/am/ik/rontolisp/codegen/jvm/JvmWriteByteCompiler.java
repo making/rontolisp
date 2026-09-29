@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -34,8 +33,7 @@ final class JvmWriteByteCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_BYTE_DESC);
 		MethodrefConstant writeByteRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(writeByteRef.index());
+		ctx.body.invokestatic(writeByteRef.entry());
 	}
 
 }

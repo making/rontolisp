@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -12,8 +12,8 @@ import am.ik.rontolisp.LispVal;
 /**
  * Compiles the {@code go} special form: an unconditional jump to a label of the innermost
  * lexically enclosing {@code tagbody} that declares the tag (see
- * {@link JvmTagbodyCompiler}). A backward jump is patched immediately; a forward jump is
- * recorded on the tagbody scope and patched when the label is emitted. Like
+ * {@link JvmTagbodyCompiler}), a {@code goto} to the tag's label on the tagbody scope --
+ * resolved at once when the label is already bound, when it is bound otherwise. Like
  * {@code return}, the jump discards the operands of any expression it abandons
  * mid-evaluation and compiles the cleanup forms of every {@code unwind-protect} scope it
  * escapes (the scopes entered after the tagbody), innermost first, with the same
@@ -34,7 +34,7 @@ final class JvmGoCompiler {
 		}
 		JvmLispCompiler.TagbodyScope scope = null;
 		for (JvmLispCompiler.TagbodyScope s : ctx.tagbodyScopes) {
-			if (s.pendingGos().containsKey(tag)) {
+			if (s.labels().containsKey(tag)) {
 				scope = s;
 				break;
 			}
@@ -55,16 +55,7 @@ final class JvmGoCompiler {
 		}
 		compileEscapedCleanups(ctx, className, scope);
 		emitStackUnwind(ctx, scope);
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		Integer labelPos = scope.labelPositions().get(tag);
-		if (labelPos != null) {
-			JvmEmitHelper.patchBranch(ctx, gotoPos, labelPos);
-		}
-		else {
-			scope.pendingGos().computeIfAbsent(tag, k -> new ArrayList<>()).add(gotoPos);
-		}
+		ctx.body.goto_(java.util.Objects.requireNonNull(scope.labels().get(tag)));
 	}
 
 	/**
@@ -113,14 +104,14 @@ final class JvmGoCompiler {
 		if (escaped.isEmpty()) {
 			return;
 		}
-		int[] holeStarts = new int[escaped.size()];
+		MethodCode.Label[] holeStarts = new MethodCode.Label[escaped.size()];
 		for (int j = 0; j < escaped.size(); j++) {
-			holeStarts[j] = ctx.code.size();
+			holeStarts[j] = ctx.body.newBoundLabel();
 			JvmUnwindProtectCompiler.compileCleanups(escaped.get(j).cleanupForms, ctx, className);
 		}
-		int sequenceEnd = ctx.code.size();
+		MethodCode.Label sequenceEnd = ctx.body.newBoundLabel();
 		for (int j = 0; j < escaped.size(); j++) {
-			escaped.get(j).holes.add(new int[] { holeStarts[j], sequenceEnd });
+			escaped.get(j).holes.add(new JvmLispCompiler.Hole(holeStarts[j], sequenceEnd));
 		}
 	}
 

@@ -477,26 +477,6 @@ final class JvmEmitHelper {
 	}
 
 	/**
-	 * Binds a forward branch to its target -- the position about to be emitted. The
-	 * operand-stack model adopts the shape the branch jumped with, which is how the merge
-	 * points of {@code if}/{@code %block}/the predicate guards stay tracked.
-	 */
-	static void patchBranch(JvmLispCompiler.Ctx ctx, int branchPos, int targetPos) {
-		int offset = targetPos - branchPos;
-		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
-			// Past the signed 16-bit encoding: leave the placeholder bytes and let the
-			// class writer place this branch in its goto_w form
-			// (.kb/jvm-method-size-limits.md). Only the raw-list patchBranch of the
-			// self-budgeted runtime builders still throws.
-			ctx.deferredBranches.add(new am.ik.jvm.ClassDefinition.Branch(branchPos, targetPos));
-		}
-		else {
-			JvmRuntimeBuilder.patchBranch(ctx.code, branchPos, targetPos);
-		}
-		ctx.stack.reconcile(branchPos, targetPos, ctx.code.size());
-	}
-
-	/**
 	 * Checks the value on the stack is a list, leaving it there: nil or a cons passes,
 	 * anything else is the innermost named operator's {@code LIST} type-error
 	 * ({@code _ckList} through the operator's wrapper, {@link JvmOperandTypeRuntime}).

@@ -4,7 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Compiles the {@code lcm} built-in: the least common multiple of two integers, computed
@@ -27,56 +27,35 @@ final class JvmLcmCompiler {
 		// A = _big(a); B = _big(b); G = A.gcd(B)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slotA);
+		ctx.body.astore(slotA);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slotB);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotA);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotB);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(" + BIG + ")" + BIG).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slotG);
+		ctx.body.astore(slotB).aload(slotA).aload(slotB);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(" + BIG + ")" + BIG).methodRefEntry());
+		ctx.body.astore(slotG);
 
 		// if (G.signum() != 0) goto notZero
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotG);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "signum", "()I").index());
-		int ifnePos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
+		ctx.body.aload(slotG);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "signum", "()I").methodRefEntry());
+		MethodCode.Label notZero = ctx.body.newLabel();
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.ifne(notZero);
 
 		// zero case: result is 0
-		ctx.emit(Opcode.LCONST_0);
+		ctx.body.lconst_0();
 		JvmEmitHelper.boxLong(ctx);
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.goto_(end);
 
 		// notZero: abs((A / G) * B)
-		int notZero = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, ifnePos, notZero);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotA);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotG);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "divide", "(" + BIG + ")" + BIG).index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slotB);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "multiply", "(" + BIG + ")" + BIG).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "abs", "()" + BIG).index());
+		ctx.body.labelBinding(notZero);
+		ctx.body.aload(slotA).aload(slotG);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "divide", "(" + BIG + ")" + BIG).methodRefEntry());
+		ctx.body.aload(slotB);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "multiply", "(" + BIG + ")" + BIG).methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "abs", "()" + BIG).methodRefEntry());
 		JvmEmitHelper.normalizeBigInteger(ctx);
 
-		int end = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoPos, end);
+		ctx.body.labelBinding(end);
 		ctx.nextLocal = savedNextLocal;
 	}
 

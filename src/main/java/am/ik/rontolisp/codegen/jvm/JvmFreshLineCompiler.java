@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code fresh-line} built-in function and provides the column-tracking
@@ -34,9 +34,7 @@ final class JvmFreshLineCompiler {
 
 	/** Emits {@code _col = 0} (the output ended at the start of a line). */
 	static void emitSetLineStart(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(colField(ctx, className).index());
+		ctx.body.iconst_0().putstatic(colField(ctx, className).entry());
 	}
 
 	/**
@@ -47,38 +45,21 @@ final class JvmFreshLineCompiler {
 	static void emitTrackLocal(JvmLispCompiler.Ctx ctx, String className, int slot) {
 		FieldrefConstant col = colField(ctx, className);
 		MethodrefConstant length = stringLength(ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length.index());
-		int ifEmpty = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
-		ctx.emit(Opcode.BIPUSH);
-		ctx.emit(10);
-		int ifNotNewline = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPNE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ICONST_0);
-		int gotoStore = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotNewline, ctx.code.size());
-		ctx.emit(Opcode.ICONST_1);
-		JvmEmitHelper.patchBranch(ctx, gotoStore, ctx.code.size());
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(col.index());
-		JvmEmitHelper.patchBranch(ctx, ifEmpty, ctx.code.size());
+		ctx.body.aload(slot).invokevirtual(length.methodRefEntry());
+		MethodCode.Label ifEmpty = ctx.body.newLabel();
+		ctx.body.ifeq(ifEmpty);
+		ctx.body.aload(slot).aload(slot).invokevirtual(length.methodRefEntry()).iconst_1().isub();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry()).loadConstant(10);
+		MethodCode.Label ifNotNewline = ctx.body.newLabel();
+		ctx.body.if_icmpne(ifNotNewline);
+		ctx.body.iconst_0();
+		MethodCode.Label gotoStore = ctx.body.newLabel();
+		ctx.body.goto_(gotoStore);
+		ctx.body.labelBinding(ifNotNewline);
+		ctx.body.iconst_1();
+		ctx.body.labelBinding(gotoStore);
+		ctx.body.putstatic(col.entry());
+		ctx.body.labelBinding(ifEmpty);
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -93,23 +74,17 @@ final class JvmFreshLineCompiler {
 			MethodrefConstant freshLineRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_METHOD),
 							ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_DESC)));
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(freshLineRef.index());
+			ctx.body.invokestatic(freshLineRef.entry());
 			return;
 		}
 		FieldrefConstant col = colField(ctx, className);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(col.index());
-		int ifAtStart = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ctx.systemOut.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.printlnVoid.index());
+		ctx.body.getstatic(col.entry());
+		MethodCode.Label ifAtStart = ctx.body.newLabel();
+		ctx.body.ifeq(ifAtStart);
+		ctx.body.getstatic(ctx.systemOut.entry()).invokevirtual(ctx.printlnVoid.methodRefEntry());
 		emitSetLineStart(ctx, className);
-		JvmEmitHelper.patchBranch(ctx, ifAtStart, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.labelBinding(ifAtStart);
+		ctx.body.aconst_null();
 	}
 
 }

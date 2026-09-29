@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -50,11 +49,7 @@ final class JvmProgvCompiler {
 							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
 		}
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(tl.index());
-		ctx.emit(Opcode.SWAP);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(dyn.dbind().index());
+		ctx.body.getstatic(tl.entry()).swap().invokestatic(dyn.dbind().entry());
 	}
 
 	/** {@code (%progv-dyn-unbind NAME prev)}: restore the saved cell; answers nil. */
@@ -68,27 +63,21 @@ final class JvmProgvCompiler {
 					"special variable " + name + " has no thread-local store for the progv lowering"
 							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
 		}
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(tl.index());
+		ctx.body.getstatic(tl.entry());
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(dyn.tlSet().index());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.invokevirtual(dyn.tlSet().methodRefEntry()).aconst_null();
 	}
 
 	/** {@code (%progv-genv)}: the eval runtime's global env mirror, as a Lisp alist. */
 	static void compileGenvRead(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(genvField(ctx, className).index());
+		ctx.body.getstatic(genvField(ctx, className).entry());
 	}
 
 	/** {@code (%progv-genv-set x)}: replace the mirror alist; answers nil. */
 	static void compileGenvWrite(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(genvField(ctx, className).index());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.putstatic(genvField(ctx, className).entry()).aconst_null();
 	}
 
 	private static ConstantPool.FieldrefConstant genvField(JvmLispCompiler.Ctx ctx, String className) {

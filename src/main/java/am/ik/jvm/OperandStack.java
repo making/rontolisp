@@ -32,9 +32,7 @@ import org.jspecify.annotations.Nullable;
  * The model is exact for the instruction set an emitter can produce through this library;
  * an instruction it cannot model ({@code tableswitch}/{@code lookupswitch}/{@code jsr})
  * raises rather than silently desynchronizing. The {@code wide} prefix IS modelled: a
- * local index past 255 has no other encoding, and an emitter rewrites the pending
- * instruction into that form through {@link #awaitingLocalIndex()} /
- * {@link #widenPendingLocalIndex()}.
+ * local index past 255 has no other encoding.
  */
 public final class OperandStack {
 
@@ -160,41 +158,6 @@ public final class OperandStack {
 		if (this.operandsExpected == 0) {
 			this.apply();
 		}
-	}
-
-	/**
-	 * {@return true when the last byte fed was a load/store opcode still waiting for its
-	 * one-byte local index} An emitter that is about to write an index past 255 asks
-	 * this, rewrites the instruction into its {@code wide} form, and reports it with
-	 * {@link #widenPendingLocalIndex()}.
-	 */
-	public boolean awaitingLocalIndex() {
-		return !this.pendingWide && this.operandsExpected == 1 && this.operandCount == 0
-				&& isOneByteLocalOp(this.opcode);
-	}
-
-	/**
-	 * Accounts for the pending load/store having been rewritten into its {@code wide}
-	 * form: the one opcode byte already fed became four ({@code wide}, the opcode, and a
-	 * two-byte local index). The instruction's operand-stack effect is unchanged -- a
-	 * load pushes and a store pops whatever slot number it names -- so only the model's
-	 * position bookkeeping moves.
-	 * @throws IllegalStateException when no such instruction is pending
-	 */
-	public void widenPendingLocalIndex() {
-		if (!this.awaitingLocalIndex()) {
-			throw new IllegalStateException("operand-stack model: no one-byte local index is pending at " + this.pc);
-		}
-		this.pc += 3;
-		this.opcodePc--;
-		this.operandCount = 1;
-		this.operandsExpected = 0;
-		this.apply();
-	}
-
-	private static boolean isOneByteLocalOp(int opcode) {
-		return (opcode >= Opcode.ILOAD && opcode <= Opcode.ALOAD)
-				|| (opcode >= Opcode.ISTORE && opcode <= Opcode.ASTORE);
 	}
 
 	/**

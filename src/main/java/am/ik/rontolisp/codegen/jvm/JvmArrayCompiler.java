@@ -5,7 +5,7 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.LispBFloat16Array;
@@ -88,13 +88,12 @@ final class JvmArrayCompiler {
 		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
 		String reported = OperandTypes.reportedOperator(lispName);
 		if (reported == null) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		else {
 			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(javaSites.direct().arrayGuard().index());
+		ctx.body.invokestatic(javaSites.direct().arrayGuard());
 	}
 
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -473,7 +472,7 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(value, ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 	}
 
@@ -579,35 +578,26 @@ final class JvmArrayCompiler {
 		// answers t for whatever it is handed.
 		emitArrayOperandCheck(ctx, className);
 		int tempSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tempSlot);
+		ctx.body.astore(tempSlot);
 		// a string answers character; the synthesized name is unspelled (real run-time
 		// data, and character is also a function name)
 		JvmStringpCompiler.emitStringpCheck(ctx, tempSlot);
-		int branchPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		List<Integer> gotoEnds = new java.util.ArrayList<>();
+		MethodCode.Label characterPos = ctx.body.newLabel();
+		MethodCode.Label endPos = ctx.body.newLabel();
+		ctx.body.ifnonnull(characterPos);
 		if (ctx.usesTypedArray) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
-			int notListPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
+			ctx.body.aload(tempSlot);
+			ctx.body.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry());
+			MethodCode.Label notListPos = ctx.body.newLabel();
+			ctx.body.ifeq(notListPos);
+			ctx.body.aload(tempSlot);
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ELEMENT_TYPE, JvmArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
-			gotoEnds.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, notListPos, ctx.code.size());
+			ctx.body.goto_(endPos);
+			ctx.body.labelBinding(notListPos);
 		}
 		if (ctx.usesIntArray || ctx.usesFloatArray) {
 			// not a string, not a general array: the packed dispatch
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
+			ctx.body.aload(tempSlot);
 			if (ctx.usesIntArray) {
 				invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
 						JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
@@ -620,16 +610,10 @@ final class JvmArrayCompiler {
 		else {
 			JvmEmitHelper.compileTrue(ctx);
 		}
-		gotoEnds.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		int characterPos = ctx.code.size();
+		ctx.body.goto_(endPos);
+		ctx.body.labelBinding(characterPos);
 		JvmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
-		int endPos = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, branchPos, characterPos);
-		for (int gotoEnd : gotoEnds) {
-			JvmEmitHelper.patchBranch(ctx, gotoEnd, endPos);
-		}
+		ctx.body.labelBinding(endPos);
 	}
 
 	static void compileArrayAlike(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -709,13 +693,12 @@ final class JvmArrayCompiler {
 	private static void emitSubscriptArray(List<LispVal> args, int firstSub, int rank, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmEmitHelper.emitIntConst(ctx, rank);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
+		ctx.body.anewarray(ctx.objectClass.entry());
 		for (int i = 0; i < rank; i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i);
 			compileSubscript(args.get(firstSub + i), ctx, className);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
 	}
 
@@ -796,8 +779,7 @@ final class JvmArrayCompiler {
 	 */
 	private static void compileSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(subscript, ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
 	}
 
 	/**
@@ -808,15 +790,13 @@ final class JvmArrayCompiler {
 	private static void invokeNamedHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.wrapForOperator(name, desc, ref).index());
+		ctx.body.invokestatic(ctx.wrapForOperator(name, desc, ref).entry());
 	}
 
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

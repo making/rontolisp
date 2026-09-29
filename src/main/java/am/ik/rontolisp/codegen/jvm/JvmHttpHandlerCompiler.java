@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileWarnings;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code (rontolisp:http-handler 'name [port])} directive on the JVM
@@ -65,8 +64,7 @@ final class JvmHttpHandlerCompiler {
 		}
 		// _httpHandlerFn = #'name
 		JvmFunctionFormCompiler.compileNamed(nameSym.name(), ctx, className);
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(runtime.handlerField().index());
+		ctx.body.putstatic(runtime.handlerField().entry());
 		if (ctx.servletMode) {
 			// Servlet mode (-o app.war): register and RETURN. The container owns the
 			// port and calls handle(Request) through the travelling RontoHttpServlet;
@@ -77,30 +75,20 @@ final class JvmHttpHandlerCompiler {
 				CompileWarnings.warn(cons, LispNames.HTTP_HANDLER + " port " + portExpr.print()
 						+ " is ignored in a war: the servlet container owns the port");
 			}
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		// port (int); default 8080
 		if (portExpr != null) {
 			JvmExprCompiler.compileExpr(portExpr, ctx, className);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.longClass.index());
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(ctx.longValue.index());
-			ctx.emit(Opcode.L2I);
+			ctx.body.checkcast(ctx.longClass.entry()).invokevirtual(ctx.longValue.methodRefEntry()).l2i();
 		}
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 8080);
 		}
 		// RontoHttpServer.serve(port, new Prog())
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtime.progClass().index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(runtime.progInit().index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(runtime.serve().index());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.new_(runtime.progClass().entry()).dup().invokespecial(runtime.progInit().entry());
+		ctx.body.invokestatic(runtime.serve().entry()).aconst_null();
 	}
 
 }

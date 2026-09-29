@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code rontolisp:fetch}: starts an outgoing HTTP request (JavaScript
@@ -33,13 +32,12 @@ final class JvmFetchCompiler {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		if (ctx.fetchHelper == null) {
 			throw new IllegalStateException("http-get helper method was not emitted");
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.fetchHelper.index());
+		ctx.body.invokestatic(ctx.fetchHelper.entry());
 	}
 
 }

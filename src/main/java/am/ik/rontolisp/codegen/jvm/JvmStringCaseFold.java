@@ -4,7 +4,6 @@ import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * The shared code-point walk behind {@code string-upcase} / {@code string-downcase} /
@@ -67,11 +66,9 @@ final class JvmStringCaseFold {
 		// character vector still normalizes here.
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		ctx.body.checkcast(ctx.stringClass.entry());
 		int sSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(sSlot);
+		ctx.body.astore(sSlot);
 
 		boolean capitalize = mode == Mode.CAPITALIZE;
 		int sbSlot = ctx.allocTemp();

@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -28,8 +27,7 @@ final class JvmArgvCompiler {
 		}
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp
 			.addNameAndType(ctx.cp.addUtf8(JvmArgvRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmArgvRuntimeBuilder.DESC)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

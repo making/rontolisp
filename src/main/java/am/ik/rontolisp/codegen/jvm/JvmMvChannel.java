@@ -175,7 +175,7 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 
 	/** Clears the calling thread's channel: the value just produced is one value. */
 	void emitClear(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 		emitStore(ctx);
 	}
 
@@ -189,10 +189,8 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 		if (this.perThread == null) {
 			return;
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(this.perThread.currentThread().index());
-		ctx.emit(Opcode.PUTSTATIC);
-		ctx.emitU2(this.perThread.owner().index());
+		ctx.body.invokestatic(this.perThread.currentThread().entry());
+		ctx.body.putstatic(this.perThread.owner().entry());
 	}
 
 }
