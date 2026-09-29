@@ -99,17 +99,17 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
 ## Emission on `java.lang.classfile`
 **Where it stands (2026-09-29):** every class is WRITTEN by the API (above). Every method body
 has a typed, `CodeBuilder`-shaped layer, `am.ik.jvm.MethodCode` (`Ctx.body` for a compile
-context; a builder makes its own). On it: the hash-table slice, and every builder that had an
+context; a builder makes its own). On it: the hash-table slice, every builder that had an
 assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thread, fetch,
 HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
-`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); and the largest expression
+`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
 compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
-predicates sharing its exclusion helpers). The rest still write code bytes (`Ctx.emit`/
+predicates sharing its exclusion helpers); and the I/O and socket runtimes with
+`_flushStreams`, the first raw lists (a86). The rest still write code bytes (`Ctx.emit`/
 `emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining slices are
-`.todo/a86`-`a88`, `a90`, `a91`: the I/O and socket builders, the core runtime builders, the
-small builders with `JvmLispCompiler`'s own code, the rest of the expression compilers, then
-`MethodCode` storing instruction records so the code bytes, their decoders and
-`am.ik.jvm.Opcode` go.
+`.todo/a87`, `a88`, `a90`, `a91`: the core runtime builders, the small builders with
+`JvmLispCompiler`'s own code, the rest of the expression compilers, then `MethodCode` storing
+instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
@@ -151,9 +151,21 @@ with `$Part1`, jose, 28 examples) -- the build timestamp in the version string a
 emitted forms changed without changing a class: `emitIntConst(-1)` is `iconst_m1` (was
 `bipush -1`) and a helper body's `aload_0` is `aload 0`; the writer writes both shortest.
 
-**How a slice moves** (the recipe both slices used; tools in
-`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, `README.md`
-there):
+**The first raw-list slice** (2026-09-29): `JvmIoRuntimeBuilder`, `JvmSocketRuntimeBuilder` and
+`JvmFlushStreamsBuilder`, byte-identical by the same comparisons (the 4,857 programs and every
+CLI compile above; the difference is the build timestamp in the version strings) plus programs
+switching on every gate of the two runtimes at once. The raw lists wrote the one-byte local
+forms (`aload_1`) the layer writes as `aload 1`, so these bodies measure a little LARGER than
+they did; no budget reads a runtime helper, and the written class is the same. The premise
+"a position read can be a source, a target or a handler bound" measured on the three files:
+203 reads, 192 branch sources patched to the current position, 4 backward-branch targets, 6
+handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions held in an
+`int p = -1` sentinel and 7 lists of positions each patched by one loop.
+
+**How a slice moves** (the recipe every slice used; tools in
+`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, and for a raw list
+`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/`, each with a
+`README.md`):
 
 - Calls map one to one: `label()`/`bind` -> `newLabel()`/`labelBinding`, `branch(Opcode.X, l)`
   -> `x(l)`, `op(Opcode.X)` -> `x()`, `op(X); u2(e.index())` -> the typed call on `e`, `iconst`
@@ -175,6 +187,14 @@ there):
   (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
   `aconst_null` compiles and emits the wrong code. javac catches the opcode half
   (`lstore()` has no zero-argument form) -- fix the pair by hand.
+- A raw list: `raw.py` rewrites the instructions (a pool operand loses its `.index()`), a
+  position read right before a branch to a label bound where `patchBranch(code, p,
+  code.size())` stood, a list of positions patched by one loop to one label, and a backward
+  branch to a label bound at its target (`newBoundLabel()`). Left to a hand: a handler bound
+  (`newBoundLabel()`, then `exceptionCatch`), a sentinel `int p = -1` (a `@Nullable` label),
+  an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
+  the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
+  code already on the layer called on a field that became an entry.
 - An expression compiler (tools in `.todo/artefacts/a89-jvm-large-expression-compilers-move-onto-ctx-body/`):
   `ctxmig.py` maps `ctx.emit(Opcode.X)` + operands one to one (a `bipush`/`sipush` becomes
   `loadConstant` only where that is the same bytes) and turns a position into a label where it

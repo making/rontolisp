@@ -3488,8 +3488,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
-				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
-						stringLengthForIo, stringSubstring, stringConcat, usesArrays)
+				? JvmSocketRuntimeBuilder.build(cp, thisClass.entry(), stringClass.entry(), longClass.entry(),
+						longValueOf.methodRefEntry(), longValue.methodRefEntry(), stringLengthForIo.methodRefEntry(),
+						stringSubstring.methodRefEntry(), stringConcat.methodRefEntry(), usesArrays)
 				: null;
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
@@ -3538,13 +3539,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.needsIoStreamRuntime = LispMacroExpander.opensBidirectionally(program);
 		this.needsStringInputRuntime = fileMeta.stringInputs();
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
-			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
-					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
-					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
-					usesQuantized, this.needsIoStreamRuntime)
+			.create(cp, thisClass.entry(), objectClass.entry(), stringClass.entry(), longClass.entry(),
+					longValueOf.methodRefEntry(), longValue.methodRefEntry(), stringLengthForIo.methodRefEntry(),
+					stringSubstring.methodRefEntry(), stringConcat.methodRefEntry(), systemOut.entry(),
+					printlnStr.methodRefEntry(), readLineHelperMethod.methodRefEntry(), socketRuntime, usesErrorOutput,
+					usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays, usesQuantized,
+					this.needsIoStreamRuntime)
 			.methods();
 		if (flushStreamsMethod != null) {
-			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));
+			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass.entry()));
 		}
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -4416,8 +4419,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc, 5,
 				1, readLineCode, List.of());
 		for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
-					im.maxStack(), im.maxLocals(), im.code(), im.exceptionTable());
+			im.code()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(),
+						im.desc());
 		}
 		// The lazy _*Init methods below bind a callback, hand over kernel text or
 		// initialize a bridge behind a plain int guard, and a served program runs
@@ -4559,8 +4563,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (socketRuntime != null) {
 			for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
-						sm.maxStack(), sm.maxLocals(), sm.code(), List.of());
+				sm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc());
 			}
 		}
 		if (ctorName != null) {

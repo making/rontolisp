@@ -5,9 +5,9 @@ Difficulty: Medium
 ## The problem
 
 What remains of raw `List<Integer>` code outside a86-a87 (2026-09-29 site counts): the bridge and
-feature runtimes -- `JvmDynVarRuntimeBuilder` 55, `JvmFlushStreamsBuilder` 40 (6 patches),
-`JvmGpuRuntimeBuilder` 25, `JvmSimdRuntimeBuilder` 24, `JvmSecureRandomRuntimeBuilder` 22,
-`JvmQuotePool` 21, `JvmGeomRuntimeBuilder` 16, `JvmUnsupplied` 11, `JvmFfiRuntimeBuilder`, `JvmJavaRuntimeBuilder`,
+feature runtimes -- `JvmDynVarRuntimeBuilder` 55, `JvmGpuRuntimeBuilder` 25,
+`JvmSimdRuntimeBuilder` 24, `JvmSecureRandomRuntimeBuilder` 22, `JvmQuotePool` 21,
+`JvmGeomRuntimeBuilder` 16, `JvmUnsupplied` 11, `JvmFfiRuntimeBuilder`, `JvmJavaRuntimeBuilder`,
 `JvmObjcRuntimeBuilder`, `JvmMutexRuntimeBuilder` 10 each, `JvmMvChannel` 30,
 `JvmUncaughtHandler` 25 (its `appendAsyncCrossing` block) -- and `JvmLispCompiler`
 itself (65 raw sites: `<clinit>`, the probes, `_funName`, the TLS trust stubs), which hands the

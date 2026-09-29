@@ -1,14 +1,16 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -29,17 +31,17 @@ import org.jspecify.annotations.Nullable;
 final class JvmSocketRuntimeBuilder {
 
 	/** A socket-runtime method body ready to be emitted into the generated class. */
-	record SocketMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record SocketMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
 	 * The emitted method bodies plus the constants {@link JvmIoRuntimeBuilder} needs to
 	 * add the socket branches to the shared stream built-ins.
 	 */
-	record SocketRuntime(List<SocketMethod> methods, ClassConstant socketClass, ClassConstant serverSocketClass,
-			MethodrefConstant socketGetInputStream, MethodrefConstant socketGetOutputStream,
-			MethodrefConstant socketClose, MethodrefConstant serverSocketClose, MethodrefConstant sockReadLine,
-			MethodrefConstant sockWriteLine, MethodrefConstant sockWriteString, MethodrefConstant sockReadChar) {
+	record SocketRuntime(List<SocketMethod> methods, ClassEntry socketClass, ClassEntry serverSocketClass,
+			MethodRefEntry socketGetInputStream, MethodRefEntry socketGetOutputStream, MethodRefEntry socketClose,
+			MethodRefEntry serverSocketClose, MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine,
+			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -108,163 +110,163 @@ final class JvmSocketRuntimeBuilder {
 
 	private final ConstantPool cp;
 
-	private final FieldrefConstant streamsField;
+	private final FieldRefEntry streamsField;
 
-	private final ClassConstant stringClass;
+	private final ClassEntry stringClass;
 
-	private final ClassConstant longClass;
+	private final ClassEntry longClass;
 
-	private final MethodrefConstant longValueOf;
+	private final MethodRefEntry longValueOf;
 
-	private final MethodrefConstant longValue;
+	private final MethodRefEntry longValue;
 
-	private final MethodrefConstant stringLength;
+	private final MethodRefEntry stringLength;
 
-	private final MethodrefConstant stringSubstring;
+	private final MethodRefEntry stringSubstring;
 
-	private final MethodrefConstant stringConcat;
+	private final MethodRefEntry stringConcat;
 
-	private final ClassConstant socketClass;
+	private final ClassEntry socketClass;
 
-	private final ClassConstant serverSocketClass;
+	private final ClassEntry serverSocketClass;
 
-	private final MethodrefConstant socketInit;
+	private final MethodRefEntry socketInit;
 
-	private final ClassConstant sslSocketClass;
+	private final ClassEntry sslSocketClass;
 
-	private final MethodrefConstant sslContextGetInstance;
+	private final MethodRefEntry sslContextGetInstance;
 
-	private final MethodrefConstant sslContextInit;
+	private final MethodRefEntry sslContextInit;
 
-	private final MethodrefConstant sslContextGetSocketFactory;
+	private final MethodRefEntry sslContextGetSocketFactory;
 
-	private final MethodrefConstant socketFactoryCreateSocket;
+	private final MethodRefEntry socketFactoryCreateSocket;
 
-	private final ClassConstant sslSocketFactoryClass;
+	private final ClassEntry sslSocketFactoryClass;
 
-	private final MethodrefConstant sslSocketFactoryCreateOverSocket;
+	private final MethodRefEntry sslSocketFactoryCreateOverSocket;
 
-	private final MethodrefConstant sslSocketGetSSLParameters;
+	private final MethodRefEntry sslSocketGetSSLParameters;
 
-	private final MethodrefConstant sslSocketSetSSLParameters;
+	private final MethodRefEntry sslSocketSetSSLParameters;
 
-	private final MethodrefConstant sslSocketStartHandshake;
+	private final MethodRefEntry sslSocketStartHandshake;
 
-	private final MethodrefConstant sslParametersSetEndpointIdAlg;
+	private final MethodRefEntry sslParametersSetEndpointIdAlg;
 
-	private final ClassConstant trustManagerClass;
+	private final ClassEntry trustManagerClass;
 
-	private final ClassConstant thisClassRef;
+	private final ClassEntry thisClassRef;
 
-	private final MethodrefConstant thisClassInit;
+	private final MethodRefEntry thisClassInit;
 
-	private final ConstantPool.StringConstant tlsStr;
+	private final StringEntry tlsStr;
 
-	private final ConstantPool.StringConstant httpsStr;
+	private final StringEntry httpsStr;
 
-	private final ConstantPool.StringConstant pkcs12Str;
+	private final StringEntry pkcs12Str;
 
-	private final MethodrefConstant base64GetDecoder;
+	private final MethodRefEntry base64GetDecoder;
 
-	private final MethodrefConstant base64Decode;
+	private final MethodRefEntry base64Decode;
 
-	private final ClassConstant byteArrayInputStreamClass;
+	private final ClassEntry byteArrayInputStreamClass;
 
-	private final MethodrefConstant byteArrayInputStreamInit;
+	private final MethodRefEntry byteArrayInputStreamInit;
 
-	private final MethodrefConstant keyStoreGetInstance;
+	private final MethodRefEntry keyStoreGetInstance;
 
-	private final MethodrefConstant keyStoreLoad;
+	private final MethodRefEntry keyStoreLoad;
 
-	private final ClassConstant fileInputStreamClass;
+	private final ClassEntry fileInputStreamClass;
 
-	private final MethodrefConstant fileInputStreamInit;
+	private final MethodRefEntry fileInputStreamInit;
 
-	private final MethodrefConstant fileInputStreamClose;
+	private final MethodRefEntry fileInputStreamClose;
 
-	private final MethodrefConstant kmfGetDefaultAlgorithm;
+	private final MethodRefEntry kmfGetDefaultAlgorithm;
 
-	private final MethodrefConstant kmfGetInstance;
+	private final MethodRefEntry kmfGetInstance;
 
-	private final MethodrefConstant kmfInit;
+	private final MethodRefEntry kmfInit;
 
-	private final MethodrefConstant kmfGetKeyManagers;
+	private final MethodRefEntry kmfGetKeyManagers;
 
-	private final MethodrefConstant sslContextGetServerSocketFactory;
+	private final MethodRefEntry sslContextGetServerSocketFactory;
 
-	private final MethodrefConstant serverSocketFactoryCreate;
+	private final MethodRefEntry serverSocketFactoryCreate;
 
-	private final MethodrefConstant serverSocketFactoryCreateHost;
+	private final MethodRefEntry serverSocketFactoryCreateHost;
 
-	private final MethodrefConstant stringToCharArray;
+	private final MethodRefEntry stringToCharArray;
 
-	private final MethodrefConstant serverSocketInitPort;
+	private final MethodRefEntry serverSocketInitPort;
 
-	private final MethodrefConstant serverSocketInitHost;
+	private final MethodRefEntry serverSocketInitHost;
 
-	private final MethodrefConstant inetGetByName;
+	private final MethodRefEntry inetGetByName;
 
-	private final MethodrefConstant socketGetInputStream;
+	private final MethodRefEntry socketGetInputStream;
 
-	private final MethodrefConstant socketGetOutputStream;
+	private final MethodRefEntry socketGetOutputStream;
 
-	private final MethodrefConstant socketGetLocalPort;
+	private final MethodRefEntry socketGetLocalPort;
 
-	private final MethodrefConstant serverSocketGetLocalPort;
+	private final MethodRefEntry serverSocketGetLocalPort;
 
-	private final MethodrefConstant socketGetLocalAddress;
+	private final MethodRefEntry socketGetLocalAddress;
 
-	private final MethodrefConstant socketGetInetAddress;
+	private final MethodRefEntry socketGetInetAddress;
 
-	private final MethodrefConstant socketGetPort;
+	private final MethodRefEntry socketGetPort;
 
-	private final MethodrefConstant socketSetSoTimeout;
+	private final MethodRefEntry socketSetSoTimeout;
 
-	private final MethodrefConstant serverSocketGetInetAddress;
+	private final MethodRefEntry serverSocketGetInetAddress;
 
-	private final MethodrefConstant inetGetHostAddress;
+	private final MethodRefEntry inetGetHostAddress;
 
-	private final MethodrefConstant serverSocketAccept;
+	private final MethodRefEntry serverSocketAccept;
 
-	private final MethodrefConstant socketClose;
+	private final MethodRefEntry socketClose;
 
-	private final MethodrefConstant serverSocketClose;
+	private final MethodRefEntry serverSocketClose;
 
-	private final MethodrefConstant inputStreamRead;
+	private final MethodRefEntry inputStreamRead;
 
-	private final MethodrefConstant outputStreamWriteBytes;
+	private final MethodRefEntry outputStreamWriteBytes;
 
-	private final ClassConstant baosClass;
+	private final ClassEntry baosClass;
 
-	private final MethodrefConstant baosInit;
+	private final MethodRefEntry baosInit;
 
-	private final MethodrefConstant baosWrite;
+	private final MethodRefEntry baosWrite;
 
-	private final MethodrefConstant baosToByteArray;
+	private final MethodRefEntry baosToByteArray;
 
-	private final ClassConstant stringClassRef;
+	private final ClassEntry stringClassRef;
 
-	private final MethodrefConstant stringInitBytes;
+	private final MethodRefEntry stringInitBytes;
 
-	private final MethodrefConstant stringGetBytes;
+	private final MethodRefEntry stringGetBytes;
 
-	private final FieldrefConstant utf8Field;
+	private final FieldRefEntry utf8Field;
 
-	private final MethodrefConstant addStreamRef;
+	private final MethodRefEntry addStreamRef;
 
-	private final MethodrefConstant sockReadLineRef;
+	private final MethodRefEntry sockReadLineRef;
 
-	private final MethodrefConstant sockWriteLineRef;
+	private final MethodRefEntry sockWriteLineRef;
 
-	private final MethodrefConstant sockWriteStringRef;
+	private final MethodRefEntry sockWriteStringRef;
 
-	private final MethodrefConstant sockReadCharRef;
+	private final MethodRefEntry sockReadCharRef;
 
-	private final MethodrefConstant stringCodePointAt;
+	private final MethodRefEntry stringCodePointAt;
 
-	private final ConstantPool.StringConstant quoteStr;
+	private final StringEntry quoteStr;
 
-	private final ConstantPool.StringConstant newlineStr;
+	private final StringEntry newlineStr;
 
 	/**
 	 * {@code _strv}, minted only when the array runtime exists: a string reaching a
@@ -273,16 +275,14 @@ final class JvmSocketRuntimeBuilder {
 	 * needs the rendered form. Without the array runtime no character vector can exist
 	 * and the reference must not be minted -- the method it names is not emitted.
 	 */
-	private final ConstantPool.@Nullable MethodrefConstant strvRef;
+	private final @Nullable MethodRefEntry strvRef;
 
-	private JvmSocketRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
-			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
-			boolean arrayRuntime) {
+	private JvmSocketRuntimeBuilder(ConstantPool cp, ClassEntry thisClass, ClassEntry stringClass, ClassEntry longClass,
+			MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime) {
 		this.cp = cp;
-		this.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
-			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
-				: null;
+		this.strvRef = arrayRuntime
+				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null;
 		this.stringClass = stringClass;
 		this.longClass = longClass;
 		this.longValueOf = longValueOf;
@@ -290,188 +290,149 @@ final class JvmSocketRuntimeBuilder {
 		this.stringLength = stringLength;
 		this.stringSubstring = stringSubstring;
 		this.stringConcat = stringConcat;
-		this.streamsField = cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD),
-				cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC)));
-		this.socketClass = cp.addClass(cp.addUtf8("java/net/Socket"));
-		this.serverSocketClass = cp.addClass(cp.addUtf8("java/net/ServerSocket"));
-		this.socketInit = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V")));
-		ClassConstant sslContextClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLContext"));
-		this.sslSocketClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLSocket"));
-		ClassConstant sslParametersClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLParameters"));
-		this.sslContextGetInstance = cp.addMethodref(sslContextClass, cp.addNameAndType(cp.addUtf8("getInstance"),
-				cp.addUtf8("(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;")));
-		this.sslContextInit = cp.addMethodref(sslContextClass, cp.addNameAndType(cp.addUtf8("init"),
-				cp.addUtf8("([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V")));
-		this.sslContextGetSocketFactory = cp.addMethodref(sslContextClass,
-				cp.addNameAndType(cp.addUtf8("getSocketFactory"), cp.addUtf8("()Ljavax/net/ssl/SSLSocketFactory;")));
-		ClassConstant socketFactoryClass = cp.addClass(cp.addUtf8("javax/net/SocketFactory"));
-		this.socketFactoryCreateSocket = cp.addMethodref(socketFactoryClass,
-				cp.addNameAndType(cp.addUtf8("createSocket"), cp.addUtf8("(Ljava/lang/String;I)Ljava/net/Socket;")));
+		this.streamsField = cp.fieldRef(thisClass, JvmIoRuntimeBuilder.STREAMS_FIELD, JvmIoRuntimeBuilder.STREAMS_DESC);
+		this.socketClass = cp.classEntry("java/net/Socket");
+		this.serverSocketClass = cp.classEntry("java/net/ServerSocket");
+		this.socketInit = cp.methodRef(this.socketClass, "<init>", "(Ljava/lang/String;I)V");
+		ClassEntry sslContextClass = cp.classEntry("javax/net/ssl/SSLContext");
+		this.sslSocketClass = cp.classEntry("javax/net/ssl/SSLSocket");
+		ClassEntry sslParametersClass = cp.classEntry("javax/net/ssl/SSLParameters");
+		this.sslContextGetInstance = cp.methodRef(sslContextClass, "getInstance",
+				"(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;");
+		this.sslContextInit = cp.methodRef(sslContextClass, "init",
+				"([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V");
+		this.sslContextGetSocketFactory = cp.methodRef(sslContextClass, "getSocketFactory",
+				"()Ljavax/net/ssl/SSLSocketFactory;");
+		ClassEntry socketFactoryClass = cp.classEntry("javax/net/SocketFactory");
+		this.socketFactoryCreateSocket = cp.methodRef(socketFactoryClass, "createSocket",
+				"(Ljava/lang/String;I)Ljava/net/Socket;");
 		// The layered createSocket overload (_tlsUpgrade's transport) is declared on
 		// SSLSocketFactory, not on the javax.net.SocketFactory base.
-		this.sslSocketFactoryClass = cp.addClass(cp.addUtf8("javax/net/ssl/SSLSocketFactory"));
-		this.sslSocketFactoryCreateOverSocket = cp.addMethodref(this.sslSocketFactoryClass, cp.addNameAndType(
-				cp.addUtf8("createSocket"), cp.addUtf8("(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;")));
-		this.sslSocketGetSSLParameters = cp.addMethodref(this.sslSocketClass,
-				cp.addNameAndType(cp.addUtf8("getSSLParameters"), cp.addUtf8("()Ljavax/net/ssl/SSLParameters;")));
-		this.sslSocketSetSSLParameters = cp.addMethodref(this.sslSocketClass,
-				cp.addNameAndType(cp.addUtf8("setSSLParameters"), cp.addUtf8("(Ljavax/net/ssl/SSLParameters;)V")));
-		this.sslSocketStartHandshake = cp.addMethodref(this.sslSocketClass,
-				cp.addNameAndType(cp.addUtf8("startHandshake"), cp.addUtf8("()V")));
-		this.sslParametersSetEndpointIdAlg = cp.addMethodref(sslParametersClass, cp
-			.addNameAndType(cp.addUtf8("setEndpointIdentificationAlgorithm"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.trustManagerClass = cp.addClass(cp.addUtf8("javax/net/ssl/TrustManager"));
+		this.sslSocketFactoryClass = cp.classEntry("javax/net/ssl/SSLSocketFactory");
+		this.sslSocketFactoryCreateOverSocket = cp.methodRef(this.sslSocketFactoryClass, "createSocket",
+				"(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;");
+		this.sslSocketGetSSLParameters = cp.methodRef(this.sslSocketClass, "getSSLParameters",
+				"()Ljavax/net/ssl/SSLParameters;");
+		this.sslSocketSetSSLParameters = cp.methodRef(this.sslSocketClass, "setSSLParameters",
+				"(Ljavax/net/ssl/SSLParameters;)V");
+		this.sslSocketStartHandshake = cp.methodRef(this.sslSocketClass, "startHandshake", "()V");
+		this.sslParametersSetEndpointIdAlg = cp.methodRef(sslParametersClass, "setEndpointIdentificationAlgorithm",
+				"(Ljava/lang/String;)V");
+		this.trustManagerClass = cp.classEntry("javax/net/ssl/TrustManager");
 		this.thisClassRef = thisClass;
-		this.thisClassInit = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		this.tlsStr = cp.addString("TLS");
-		this.httpsStr = cp.addString("HTTPS");
-		this.pkcs12Str = cp.addString("PKCS12");
-		ClassConstant base64Class = cp.addClass(cp.addUtf8("java/util/Base64"));
-		ClassConstant base64DecoderClass = cp.addClass(cp.addUtf8("java/util/Base64$Decoder"));
-		this.base64GetDecoder = cp.addMethodref(base64Class,
-				cp.addNameAndType(cp.addUtf8("getDecoder"), cp.addUtf8("()Ljava/util/Base64$Decoder;")));
-		this.base64Decode = cp.addMethodref(base64DecoderClass,
-				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/lang/String;)[B")));
-		this.byteArrayInputStreamClass = cp.addClass(cp.addUtf8("java/io/ByteArrayInputStream"));
-		this.byteArrayInputStreamInit = cp.addMethodref(this.byteArrayInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("([B)V")));
-		ClassConstant keyStoreClass = cp.addClass(cp.addUtf8("java/security/KeyStore"));
-		this.keyStoreGetInstance = cp.addMethodref(keyStoreClass, cp.addNameAndType(cp.addUtf8("getInstance"),
-				cp.addUtf8("(Ljava/lang/String;)Ljava/security/KeyStore;")));
-		this.keyStoreLoad = cp.addMethodref(keyStoreClass,
-				cp.addNameAndType(cp.addUtf8("load"), cp.addUtf8("(Ljava/io/InputStream;[C)V")));
-		this.fileInputStreamClass = cp.addClass(cp.addUtf8("java/io/FileInputStream"));
-		this.fileInputStreamInit = cp.addMethodref(this.fileInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileInputStreamClose = cp.addMethodref(this.fileInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		ClassConstant kmfClass = cp.addClass(cp.addUtf8("javax/net/ssl/KeyManagerFactory"));
-		this.kmfGetDefaultAlgorithm = cp.addMethodref(kmfClass,
-				cp.addNameAndType(cp.addUtf8("getDefaultAlgorithm"), cp.addUtf8("()Ljava/lang/String;")));
-		this.kmfGetInstance = cp.addMethodref(kmfClass, cp.addNameAndType(cp.addUtf8("getInstance"),
-				cp.addUtf8("(Ljava/lang/String;)Ljavax/net/ssl/KeyManagerFactory;")));
-		this.kmfInit = cp.addMethodref(kmfClass,
-				cp.addNameAndType(cp.addUtf8("init"), cp.addUtf8("(Ljava/security/KeyStore;[C)V")));
-		this.kmfGetKeyManagers = cp.addMethodref(kmfClass,
-				cp.addNameAndType(cp.addUtf8("getKeyManagers"), cp.addUtf8("()[Ljavax/net/ssl/KeyManager;")));
-		this.sslContextGetServerSocketFactory = cp.addMethodref(sslContextClass, cp.addNameAndType(
-				cp.addUtf8("getServerSocketFactory"), cp.addUtf8("()Ljavax/net/ssl/SSLServerSocketFactory;")));
-		ClassConstant serverSocketFactoryClass = cp.addClass(cp.addUtf8("javax/net/ServerSocketFactory"));
-		this.serverSocketFactoryCreate = cp.addMethodref(serverSocketFactoryClass,
-				cp.addNameAndType(cp.addUtf8("createServerSocket"), cp.addUtf8("(II)Ljava/net/ServerSocket;")));
-		this.serverSocketFactoryCreateHost = cp.addMethodref(serverSocketFactoryClass, cp.addNameAndType(
-				cp.addUtf8("createServerSocket"), cp.addUtf8("(IILjava/net/InetAddress;)Ljava/net/ServerSocket;")));
-		this.stringToCharArray = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("toCharArray"), cp.addUtf8("()[C")));
-		this.serverSocketInitPort = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
-		this.serverSocketInitHost = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(IILjava/net/InetAddress;)V")));
-		ClassConstant inetAddressClass = cp.addClass(cp.addUtf8("java/net/InetAddress"));
-		this.inetGetByName = cp.addMethodref(inetAddressClass,
-				cp.addNameAndType(cp.addUtf8("getByName"), cp.addUtf8("(Ljava/lang/String;)Ljava/net/InetAddress;")));
-		this.socketGetInputStream = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getInputStream"), cp.addUtf8("()Ljava/io/InputStream;")));
-		this.socketGetOutputStream = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getOutputStream"), cp.addUtf8("()Ljava/io/OutputStream;")));
-		this.socketGetLocalPort = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getLocalPort"), cp.addUtf8("()I")));
-		this.serverSocketGetLocalPort = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("getLocalPort"), cp.addUtf8("()I")));
-		this.socketGetLocalAddress = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getLocalAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
-		this.socketGetInetAddress = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
-		this.socketGetPort = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("getPort"), cp.addUtf8("()I")));
-		this.socketSetSoTimeout = cp.addMethodref(this.socketClass,
-				cp.addNameAndType(cp.addUtf8("setSoTimeout"), cp.addUtf8("(I)V")));
-		this.serverSocketGetInetAddress = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("getInetAddress"), cp.addUtf8("()Ljava/net/InetAddress;")));
-		this.inetGetHostAddress = cp.addMethodref(inetAddressClass,
-				cp.addNameAndType(cp.addUtf8("getHostAddress"), cp.addUtf8("()Ljava/lang/String;")));
-		this.serverSocketAccept = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("accept"), cp.addUtf8("()Ljava/net/Socket;")));
-		this.socketClose = cp.addMethodref(this.socketClass, cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		this.serverSocketClose = cp.addMethodref(this.serverSocketClass,
-				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		ClassConstant inputStreamClass = cp.addClass(cp.addUtf8("java/io/InputStream"));
-		this.inputStreamRead = cp.addMethodref(inputStreamClass,
-				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
-		ClassConstant outputStreamClass = cp.addClass(cp.addUtf8("java/io/OutputStream"));
-		this.outputStreamWriteBytes = cp.addMethodref(outputStreamClass,
-				cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("([B)V")));
-		this.baosClass = cp.addClass(cp.addUtf8("java/io/ByteArrayOutputStream"));
-		this.baosInit = cp.addMethodref(this.baosClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		this.baosWrite = cp.addMethodref(this.baosClass, cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(I)V")));
-		this.baosToByteArray = cp.addMethodref(this.baosClass,
-				cp.addNameAndType(cp.addUtf8("toByteArray"), cp.addUtf8("()[B")));
+		this.thisClassInit = cp.methodRef(thisClass, "<init>", "()V");
+		this.tlsStr = cp.stringEntry("TLS");
+		this.httpsStr = cp.stringEntry("HTTPS");
+		this.pkcs12Str = cp.stringEntry("PKCS12");
+		ClassEntry base64Class = cp.classEntry("java/util/Base64");
+		ClassEntry base64DecoderClass = cp.classEntry("java/util/Base64$Decoder");
+		this.base64GetDecoder = cp.methodRef(base64Class, "getDecoder", "()Ljava/util/Base64$Decoder;");
+		this.base64Decode = cp.methodRef(base64DecoderClass, "decode", "(Ljava/lang/String;)[B");
+		this.byteArrayInputStreamClass = cp.classEntry("java/io/ByteArrayInputStream");
+		this.byteArrayInputStreamInit = cp.methodRef(this.byteArrayInputStreamClass, "<init>", "([B)V");
+		ClassEntry keyStoreClass = cp.classEntry("java/security/KeyStore");
+		this.keyStoreGetInstance = cp.methodRef(keyStoreClass, "getInstance",
+				"(Ljava/lang/String;)Ljava/security/KeyStore;");
+		this.keyStoreLoad = cp.methodRef(keyStoreClass, "load", "(Ljava/io/InputStream;[C)V");
+		this.fileInputStreamClass = cp.classEntry("java/io/FileInputStream");
+		this.fileInputStreamInit = cp.methodRef(this.fileInputStreamClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileInputStreamClose = cp.methodRef(this.fileInputStreamClass, "close", "()V");
+		ClassEntry kmfClass = cp.classEntry("javax/net/ssl/KeyManagerFactory");
+		this.kmfGetDefaultAlgorithm = cp.methodRef(kmfClass, "getDefaultAlgorithm", "()Ljava/lang/String;");
+		this.kmfGetInstance = cp.methodRef(kmfClass, "getInstance",
+				"(Ljava/lang/String;)Ljavax/net/ssl/KeyManagerFactory;");
+		this.kmfInit = cp.methodRef(kmfClass, "init", "(Ljava/security/KeyStore;[C)V");
+		this.kmfGetKeyManagers = cp.methodRef(kmfClass, "getKeyManagers", "()[Ljavax/net/ssl/KeyManager;");
+		this.sslContextGetServerSocketFactory = cp.methodRef(sslContextClass, "getServerSocketFactory",
+				"()Ljavax/net/ssl/SSLServerSocketFactory;");
+		ClassEntry serverSocketFactoryClass = cp.classEntry("javax/net/ServerSocketFactory");
+		this.serverSocketFactoryCreate = cp.methodRef(serverSocketFactoryClass, "createServerSocket",
+				"(II)Ljava/net/ServerSocket;");
+		this.serverSocketFactoryCreateHost = cp.methodRef(serverSocketFactoryClass, "createServerSocket",
+				"(IILjava/net/InetAddress;)Ljava/net/ServerSocket;");
+		this.stringToCharArray = cp.methodRef(stringClass, "toCharArray", "()[C");
+		this.serverSocketInitPort = cp.methodRef(this.serverSocketClass, "<init>", "(I)V");
+		this.serverSocketInitHost = cp.methodRef(this.serverSocketClass, "<init>", "(IILjava/net/InetAddress;)V");
+		ClassEntry inetAddressClass = cp.classEntry("java/net/InetAddress");
+		this.inetGetByName = cp.methodRef(inetAddressClass, "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;");
+		this.socketGetInputStream = cp.methodRef(this.socketClass, "getInputStream", "()Ljava/io/InputStream;");
+		this.socketGetOutputStream = cp.methodRef(this.socketClass, "getOutputStream", "()Ljava/io/OutputStream;");
+		this.socketGetLocalPort = cp.methodRef(this.socketClass, "getLocalPort", "()I");
+		this.serverSocketGetLocalPort = cp.methodRef(this.serverSocketClass, "getLocalPort", "()I");
+		this.socketGetLocalAddress = cp.methodRef(this.socketClass, "getLocalAddress", "()Ljava/net/InetAddress;");
+		this.socketGetInetAddress = cp.methodRef(this.socketClass, "getInetAddress", "()Ljava/net/InetAddress;");
+		this.socketGetPort = cp.methodRef(this.socketClass, "getPort", "()I");
+		this.socketSetSoTimeout = cp.methodRef(this.socketClass, "setSoTimeout", "(I)V");
+		this.serverSocketGetInetAddress = cp.methodRef(this.serverSocketClass, "getInetAddress",
+				"()Ljava/net/InetAddress;");
+		this.inetGetHostAddress = cp.methodRef(inetAddressClass, "getHostAddress", "()Ljava/lang/String;");
+		this.serverSocketAccept = cp.methodRef(this.serverSocketClass, "accept", "()Ljava/net/Socket;");
+		this.socketClose = cp.methodRef(this.socketClass, "close", "()V");
+		this.serverSocketClose = cp.methodRef(this.serverSocketClass, "close", "()V");
+		ClassEntry inputStreamClass = cp.classEntry("java/io/InputStream");
+		this.inputStreamRead = cp.methodRef(inputStreamClass, "read", "()I");
+		ClassEntry outputStreamClass = cp.classEntry("java/io/OutputStream");
+		this.outputStreamWriteBytes = cp.methodRef(outputStreamClass, "write", "([B)V");
+		this.baosClass = cp.classEntry("java/io/ByteArrayOutputStream");
+		this.baosInit = cp.methodRef(this.baosClass, "<init>", "()V");
+		this.baosWrite = cp.methodRef(this.baosClass, "write", "(I)V");
+		this.baosToByteArray = cp.methodRef(this.baosClass, "toByteArray", "()[B");
 		this.stringClassRef = stringClass;
-		this.stringInitBytes = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("([BIILjava/nio/charset/Charset;)V")));
-		this.stringGetBytes = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("getBytes"), cp.addUtf8("(Ljava/nio/charset/Charset;)[B")));
-		ClassConstant standardCharsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
-		this.utf8Field = cp.addFieldref(standardCharsetsClass,
-				cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
+		this.stringInitBytes = cp.methodRef(stringClass, "<init>", "([BIILjava/nio/charset/Charset;)V");
+		this.stringGetBytes = cp.methodRef(stringClass, "getBytes", "(Ljava/nio/charset/Charset;)[B");
+		ClassEntry standardCharsetsClass = cp.classEntry("java/nio/charset/StandardCharsets");
+		this.utf8Field = cp.fieldRef(standardCharsetsClass, "UTF_8", "Ljava/nio/charset/Charset;");
 		// The stream table's ONE allocator, emitted by JvmIoRuntimeBuilder
 		// (synchronized):
 		// every socket constructor here registers its socket through it.
-		this.addStreamRef = cp.addMethodref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmIoRuntimeBuilder.ADD_STREAM_METHOD), cp.addUtf8(JvmIoRuntimeBuilder.ADD_STREAM_DESC)));
-		this.sockReadLineRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC)));
-		this.sockWriteLineRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC)));
-		this.sockWriteStringRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC)));
-		this.sockReadCharRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC)));
-		this.stringCodePointAt = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
-		this.quoteStr = cp.addString("\"");
-		this.newlineStr = cp.addString("\n");
+		this.addStreamRef = cp.methodRef(thisClass, JvmIoRuntimeBuilder.ADD_STREAM_METHOD,
+				JvmIoRuntimeBuilder.ADD_STREAM_DESC);
+		this.sockReadLineRef = cp.methodRef(thisClass, SOCK_READ_LINE_METHOD, SOCK_READ_LINE_DESC);
+		this.sockWriteLineRef = cp.methodRef(thisClass, SOCK_WRITE_LINE_METHOD, SOCK_WRITE_LINE_DESC);
+		this.sockWriteStringRef = cp.methodRef(thisClass, SOCK_WRITE_STRING_METHOD, SOCK_WRITE_STRING_DESC);
+		this.sockReadCharRef = cp.methodRef(thisClass, SOCK_READ_CHAR_METHOD, SOCK_READ_CHAR_DESC);
+		this.stringCodePointAt = cp.methodRef(stringClass, "codePointAt", "(I)I");
+		this.quoteStr = cp.stringEntry("\"");
+		this.newlineStr = cp.stringEntry("\n");
 	}
 
-	static SocketRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant stringClass,
-			ClassConstant longClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
-			boolean arrayRuntime) {
+	static SocketRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry stringClass, ClassEntry longClass,
+			MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime) {
 		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
 				longValueOf, longValue, stringLength, stringSubstring, stringConcat, arrayRuntime);
 		List<SocketMethod> methods = new ArrayList<>();
-		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC), 5, 3,
+		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC),
 				builder.buildTcpConnect()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_CONNECT_METHOD), cp.addUtf8(TLS_CONNECT_DESC), 8, 6,
+		methods.add(new SocketMethod(cp.addUtf8(TLS_CONNECT_METHOD), cp.addUtf8(TLS_CONNECT_DESC),
 				builder.buildTlsConnect()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_UPGRADE_METHOD), cp.addUtf8(TLS_UPGRADE_DESC), 8, 7,
+		methods.add(new SocketMethod(cp.addUtf8(TLS_UPGRADE_METHOD), cp.addUtf8(TLS_UPGRADE_DESC),
 				builder.buildTlsUpgrade()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_METHOD), cp.addUtf8(TLS_LISTEN_DESC), 5, 13,
-				builder.buildTlsListen()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_P12_METHOD), cp.addUtf8(TLS_LISTEN_P12_DESC), 5, 13,
+		methods.add(
+				new SocketMethod(cp.addUtf8(TLS_LISTEN_METHOD), cp.addUtf8(TLS_LISTEN_DESC), builder.buildTlsListen()));
+		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_P12_METHOD), cp.addUtf8(TLS_LISTEN_P12_DESC),
 				builder.buildTlsListenP12()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_LISTEN_METHOD), cp.addUtf8(TCP_LISTEN_DESC), 5, 4,
-				builder.buildTcpListen()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_ACCEPT_METHOD), cp.addUtf8(TCP_ACCEPT_DESC), 3, 1,
-				builder.buildTcpAccept()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_PORT_METHOD), cp.addUtf8(TCP_LOCAL_PORT_DESC), 3, 2,
+		methods.add(
+				new SocketMethod(cp.addUtf8(TCP_LISTEN_METHOD), cp.addUtf8(TCP_LISTEN_DESC), builder.buildTcpListen()));
+		methods.add(
+				new SocketMethod(cp.addUtf8(TCP_ACCEPT_METHOD), cp.addUtf8(TCP_ACCEPT_DESC), builder.buildTcpAccept()));
+		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_PORT_METHOD), cp.addUtf8(TCP_LOCAL_PORT_DESC),
 				builder.buildTcpLocalPort()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_ADDRESS_METHOD), cp.addUtf8(TCP_LOCAL_ADDRESS_DESC), 3, 2,
+		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_ADDRESS_METHOD), cp.addUtf8(TCP_LOCAL_ADDRESS_DESC),
 				builder.buildTcpLocalAddress()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_ADDRESS_METHOD), cp.addUtf8(TCP_PEER_ADDRESS_DESC), 3, 2,
+		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_ADDRESS_METHOD), cp.addUtf8(TCP_PEER_ADDRESS_DESC),
 				builder.buildTcpPeerAddress()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC), 3, 2,
+		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC),
 				builder.buildTcpPeerPort()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_SET_TIMEOUT_METHOD), cp.addUtf8(TCP_SET_TIMEOUT_DESC), 3, 2,
+		methods.add(new SocketMethod(cp.addUtf8(TCP_SET_TIMEOUT_METHOD), cp.addUtf8(TCP_SET_TIMEOUT_DESC),
 				builder.buildTcpSetTimeout()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC), 7, 6,
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC),
 				builder.buildSockReadLine()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC), 4, 3,
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC),
 				builder.buildSockWriteLine()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC), 4, 3,
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC),
 				builder.buildSockWriteString()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC), 6, 6,
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC),
 				builder.buildSockReadChar()));
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
 				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,
@@ -483,22 +444,19 @@ final class JvmSocketRuntimeBuilder {
 	 * surrounding quotes from the host string, opens a blocking {@code Socket} and stores
 	 * it in the stream table.
 	 */
-	private List<Integer> buildTcpConnect() {
+	private MethodCode buildTcpConnect() {
 		// Slots: 0=host, 1=port, 2=h (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 2);
 		// new Socket(h, (int) ((Long) port).longValue())
-		code.add(Opcode.NEW);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ALOAD_1);
+		code.new_(this.socketClass);
+		code.dup();
+		code.aload(2);
+		code.aload(1);
 		emitUnboxInt(code);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.socketInit.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.invokespecial(this.socketInit);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -515,83 +473,67 @@ final class JvmSocketRuntimeBuilder {
 	 * a {@code Socket}, so every socket branch of the stream built-ins works on the entry
 	 * unchanged.
 	 */
-	private List<Integer> buildTlsConnect() {
+	private MethodCode buildTlsConnect() {
 		// Slots: 0=host, 1=port, 2=insecure, 3=h (String), 4=socket (SSLSocket),
 		// 5=params
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 3);
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
-		emitLdc(code, this.tlsStr.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.sslContextGetInstance.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ALOAD_2);
-		int ifSecurePos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.trustManagerClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.thisClassRef.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.thisClassInit.index());
-		code.add(Opcode.AASTORE);
-		int gotoInitPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifSecurePos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		patchBranch(code, gotoInitPos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextInit.index());
+		code.ldc(this.tlsStr);
+		code.invokestatic(this.sslContextGetInstance);
+		code.dup();
+		code.aconst_null();
+		code.aload(2);
+		MethodCode.Label ifSecure = code.newLabel();
+		code.ifnull(ifSecure);
+		code.iconst_1();
+		code.anewarray(this.trustManagerClass);
+		code.dup();
+		code.iconst_0();
+		code.new_(this.thisClassRef);
+		code.dup();
+		code.invokespecial(this.thisClassInit);
+		code.aastore();
+		MethodCode.Label gotoInit = code.newLabel();
+		code.goto_(gotoInit);
+		code.labelBinding(ifSecure);
+		code.aconst_null();
+		code.labelBinding(gotoInit);
+		code.aconst_null();
+		code.invokevirtual(this.sslContextInit);
 		// socket = (SSLSocket) ctx.getSocketFactory().createSocket(h, (int) port)
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextGetSocketFactory.index());
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.ALOAD_1);
+		code.invokevirtual(this.sslContextGetSocketFactory);
+		code.aload(3);
+		code.aload(1);
 		emitUnboxInt(code);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketFactoryCreateSocket.index());
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.sslSocketClass.index());
-		emitAstore(code, 4);
+		code.invokevirtual(this.socketFactoryCreateSocket);
+		code.checkcast(this.sslSocketClass);
+		code.astore(4);
 		// endpoint identification only on the verifying path:
 		// if (insecure == null) { params = socket.getSSLParameters();
 		// params.setEndpointIdentificationAlgorithm("HTTPS");
 		// socket.setSSLParameters(params); }
-		code.add(Opcode.ALOAD_2);
-		int ifInsecurePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitAload(code, 4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketGetSSLParameters.index());
-		emitAstore(code, 5);
-		emitAload(code, 5);
-		emitLdc(code, this.httpsStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslParametersSetEndpointIdAlg.index());
-		emitAload(code, 4);
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketSetSSLParameters.index());
-		patchBranch(code, ifInsecurePos, code.size());
+		code.aload(2);
+		MethodCode.Label ifInsecure = code.newLabel();
+		code.ifnonnull(ifInsecure);
+		code.aload(4);
+		code.invokevirtual(this.sslSocketGetSSLParameters);
+		code.astore(5);
+		code.aload(5);
+		code.ldc(this.httpsStr);
+		code.invokevirtual(this.sslParametersSetEndpointIdAlg);
+		code.aload(4);
+		code.aload(5);
+		code.invokevirtual(this.sslSocketSetSSLParameters);
+		code.labelBinding(ifInsecure);
 		// socket.startHandshake();
-		emitAload(code, 4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketStartHandshake.index());
-		emitAload(code, 4);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.aload(4);
+		code.invokevirtual(this.sslSocketStartHandshake);
+		code.aload(4);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -608,91 +550,72 @@ final class JvmSocketRuntimeBuilder {
 	 * stream-table entry (a plain {@code Socket} subclass, so every socket branch of the
 	 * stream built-ins works on it unchanged).
 	 */
-	private List<Integer> buildTlsUpgrade() {
+	private MethodCode buildTlsUpgrade() {
 		// Slots: 0=handle, 1=host, 2=insecure, 3=h (String), 4=sock (Socket),
 		// 5=tls (SSLSocket), 6=params
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 1, 3);
 		// sock = (Socket) _streams[(int) handle];
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		emitAstore(code, 4);
+		code.checkcast(this.socketClass);
+		code.astore(4);
 		// SSLContext ctx = SSLContext.getInstance("TLS");
 		// ctx.init(null, insecure != null ? new TrustManager[]{new Prog()} : null,
 		// null);
-		emitLdc(code, this.tlsStr.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.sslContextGetInstance.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ALOAD_2);
-		int ifSecurePos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.trustManagerClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.thisClassRef.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.thisClassInit.index());
-		code.add(Opcode.AASTORE);
-		int gotoInitPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifSecurePos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		patchBranch(code, gotoInitPos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextInit.index());
+		code.ldc(this.tlsStr);
+		code.invokestatic(this.sslContextGetInstance);
+		code.dup();
+		code.aconst_null();
+		code.aload(2);
+		MethodCode.Label ifSecure = code.newLabel();
+		code.ifnull(ifSecure);
+		code.iconst_1();
+		code.anewarray(this.trustManagerClass);
+		code.dup();
+		code.iconst_0();
+		code.new_(this.thisClassRef);
+		code.dup();
+		code.invokespecial(this.thisClassInit);
+		code.aastore();
+		MethodCode.Label gotoInit = code.newLabel();
+		code.goto_(gotoInit);
+		code.labelBinding(ifSecure);
+		code.aconst_null();
+		code.labelBinding(gotoInit);
+		code.aconst_null();
+		code.invokevirtual(this.sslContextInit);
 		// tls = (SSLSocket) ((SSLSocketFactory) ctx.getSocketFactory())
 		// .createSocket(sock, h, sock.getPort(), true)
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextGetSocketFactory.index());
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.sslSocketFactoryClass.index());
-		emitAload(code, 4);
-		code.add(Opcode.ALOAD_3);
-		emitAload(code, 4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetPort.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketFactoryCreateOverSocket.index());
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.sslSocketClass.index());
-		emitAstore(code, 5);
+		code.invokevirtual(this.sslContextGetSocketFactory);
+		code.checkcast(this.sslSocketFactoryClass);
+		code.aload(4);
+		code.aload(3);
+		code.aload(4);
+		code.invokevirtual(this.socketGetPort);
+		code.iconst_1();
+		code.invokevirtual(this.sslSocketFactoryCreateOverSocket);
+		code.checkcast(this.sslSocketClass);
+		code.astore(5);
 		// endpoint identification only on the verifying path (see buildTlsConnect)
-		code.add(Opcode.ALOAD_2);
-		int ifInsecurePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketGetSSLParameters.index());
-		emitAstore(code, 6);
-		emitAload(code, 6);
-		emitLdc(code, this.httpsStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslParametersSetEndpointIdAlg.index());
-		emitAload(code, 5);
-		emitAload(code, 6);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketSetSSLParameters.index());
-		patchBranch(code, ifInsecurePos, code.size());
+		code.aload(2);
+		MethodCode.Label ifInsecure = code.newLabel();
+		code.ifnonnull(ifInsecure);
+		code.aload(5);
+		code.invokevirtual(this.sslSocketGetSSLParameters);
+		code.astore(6);
+		code.aload(6);
+		code.ldc(this.httpsStr);
+		code.invokevirtual(this.sslParametersSetEndpointIdAlg);
+		code.aload(5);
+		code.aload(6);
+		code.invokevirtual(this.sslSocketSetSSLParameters);
+		code.labelBinding(ifInsecure);
 		// tls.startHandshake();
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslSocketStartHandshake.index());
-		emitAload(code, 5);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.aload(5);
+		code.invokevirtual(this.sslSocketStartHandshake);
+		code.aload(5);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -704,40 +627,34 @@ final class JvmSocketRuntimeBuilder {
 	 * unchanged); a {@code null} host (nil) binds all interfaces. An accepted socket
 	 * performs its TLS handshake lazily on the first read/write.
 	 */
-	private List<Integer> buildTlsListen() {
+	private MethodCode buildTlsListen() {
 		// Slots: 0=keystore, 1=password, 2=port, 3=host, 4=path (String),
 		// 5=pw (String, then char[]), 6=store (KeyStore), 7=in (FileInputStream),
 		// 8=kms (KeyManager[]), 9=ctx (SSLContext), 10=factory, 11=p (int),
 		// 12=h (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 4);
 		emitStripQuotes(code, 1, 5);
 		// pw = pw.toCharArray()
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringToCharArray.index());
-		emitAstore(code, 5);
+		code.aload(5);
+		code.invokevirtual(this.stringToCharArray);
+		code.astore(5);
 		// store = KeyStore.getInstance("PKCS12");
-		emitLdc(code, this.pkcs12Str.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.keyStoreGetInstance.index());
-		emitAstore(code, 6);
+		code.ldc(this.pkcs12Str);
+		code.invokestatic(this.keyStoreGetInstance);
+		code.astore(6);
 		// in = new FileInputStream(path); store.load(in, pw); in.close();
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileInputStreamClass.index());
-		code.add(Opcode.DUP);
-		emitAload(code, 4);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInputStreamInit.index());
-		emitAstore(code, 7);
-		emitAload(code, 6);
-		emitAload(code, 7);
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.keyStoreLoad.index());
-		emitAload(code, 7);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.fileInputStreamClose.index());
+		code.new_(this.fileInputStreamClass);
+		code.dup();
+		code.aload(4);
+		code.invokespecial(this.fileInputStreamInit);
+		code.astore(7);
+		code.aload(6);
+		code.aload(7);
+		code.aload(5);
+		code.invokevirtual(this.keyStoreLoad);
+		code.aload(7);
+		code.invokevirtual(this.fileInputStreamClose);
 		emitKmfToServerSocket(code);
 		return code;
 	}
@@ -749,41 +666,34 @@ final class JvmSocketRuntimeBuilder {
 	 * ByteArrayInputStream} and otherwise behaves exactly like {@link #buildTlsListen}
 	 * (same {@code SSLContext}/server-socket tail).
 	 */
-	private List<Integer> buildTlsListenP12() {
+	private MethodCode buildTlsListenP12() {
 		// Slots: 0=base64, 1=password, 2=port, 3=host, 4=b64 (String),
 		// 5=pw (String, then char[]), 6=store (KeyStore), 7=in (ByteArrayInputStream),
 		// 8=kms, 9=ctx, 10=factory, 11=p (int), 12=h (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 4);
 		emitStripQuotes(code, 1, 5);
 		// pw = pw.toCharArray()
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringToCharArray.index());
-		emitAstore(code, 5);
+		code.aload(5);
+		code.invokevirtual(this.stringToCharArray);
+		code.astore(5);
 		// store = KeyStore.getInstance("PKCS12");
-		emitLdc(code, this.pkcs12Str.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.keyStoreGetInstance.index());
-		emitAstore(code, 6);
+		code.ldc(this.pkcs12Str);
+		code.invokestatic(this.keyStoreGetInstance);
+		code.astore(6);
 		// in = new ByteArrayInputStream(Base64.getDecoder().decode(b64));
-		code.add(Opcode.NEW);
-		emitU2(code, this.byteArrayInputStreamClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.base64GetDecoder.index());
-		emitAload(code, 4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.base64Decode.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.byteArrayInputStreamInit.index());
-		emitAstore(code, 7);
+		code.new_(this.byteArrayInputStreamClass);
+		code.dup();
+		code.invokestatic(this.base64GetDecoder);
+		code.aload(4);
+		code.invokevirtual(this.base64Decode);
+		code.invokespecial(this.byteArrayInputStreamInit);
+		code.astore(7);
 		// store.load(in, pw);
-		emitAload(code, 6);
-		emitAload(code, 7);
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.keyStoreLoad.index());
+		code.aload(6);
+		code.aload(7);
+		code.aload(5);
+		code.invokevirtual(this.keyStoreLoad);
 		emitKmfToServerSocket(code);
 		return code;
 	}
@@ -795,72 +705,54 @@ final class JvmSocketRuntimeBuilder {
 	 * interfaces), builds the {@code SSLContext} over the keystore's key managers and
 	 * binds the TLS server socket, storing it in the stream table.
 	 */
-	private void emitKmfToServerSocket(List<Integer> code) {
+	private void emitKmfToServerSocket(MethodCode code) {
 		// kms = KeyManagerFactory.getInstance(getDefaultAlgorithm()) initialized with
 		// (store, pw)
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.kmfGetDefaultAlgorithm.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.kmfGetInstance.index());
-		code.add(Opcode.DUP);
-		emitAload(code, 6);
-		emitAload(code, 5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.kmfInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.kmfGetKeyManagers.index());
-		emitAstore(code, 8);
+		code.invokestatic(this.kmfGetDefaultAlgorithm);
+		code.invokestatic(this.kmfGetInstance);
+		code.dup();
+		code.aload(6);
+		code.aload(5);
+		code.invokevirtual(this.kmfInit);
+		code.invokevirtual(this.kmfGetKeyManagers);
+		code.astore(8);
 		// ctx = SSLContext.getInstance("TLS"); ctx.init(kms, null, null);
-		emitLdc(code, this.tlsStr.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.sslContextGetInstance.index());
-		emitAstore(code, 9);
-		emitAload(code, 9);
-		emitAload(code, 8);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextInit.index());
+		code.ldc(this.tlsStr);
+		code.invokestatic(this.sslContextGetInstance);
+		code.astore(9);
+		code.aload(9);
+		code.aload(8);
+		code.aconst_null();
+		code.aconst_null();
+		code.invokevirtual(this.sslContextInit);
 		// factory = ctx.getServerSocketFactory(); p = (int) port;
-		emitAload(code, 9);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.sslContextGetServerSocketFactory.index());
-		emitAstore(code, 10);
-		code.add(Opcode.ALOAD_2);
+		code.aload(9);
+		code.invokevirtual(this.sslContextGetServerSocketFactory);
+		code.astore(10);
+		code.aload(2);
 		emitUnboxInt(code);
-		code.add(Opcode.ISTORE);
-		code.add(11);
-		code.add(Opcode.ALOAD_3);
-		int ifHostPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
+		code.istore(11);
+		code.aload(3);
+		MethodCode.Label ifHost = code.newLabel();
+		code.ifnonnull(ifHost);
 		// factory.createServerSocket(p, 50)
-		emitAload(code, 10);
-		code.add(Opcode.ILOAD);
-		code.add(11);
-		code.add(Opcode.BIPUSH);
-		code.add(50);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.serverSocketFactoryCreate.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifHostPos, code.size());
+		code.aload(10);
+		code.iload(11);
+		code.loadConstant(50);
+		code.invokevirtual(this.serverSocketFactoryCreate);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
+		code.labelBinding(ifHost);
 		// factory.createServerSocket(p, 50, InetAddress.getByName(h))
 		emitStripQuotes(code, 3, 12);
-		emitAload(code, 10);
-		code.add(Opcode.ILOAD);
-		code.add(11);
-		code.add(Opcode.BIPUSH);
-		code.add(50);
-		emitAload(code, 12);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.inetGetByName.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.serverSocketFactoryCreateHost.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.aload(10);
+		code.iload(11);
+		code.loadConstant(50);
+		code.aload(12);
+		code.invokestatic(this.inetGetByName);
+		code.invokevirtual(this.serverSocketFactoryCreateHost);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 	}
 
 	/**
@@ -868,43 +760,34 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code ServerSocket} on the port (0 picks an ephemeral port); a {@code null} host
 	 * (nil) binds all interfaces.
 	 */
-	private List<Integer> buildTcpListen() {
+	private MethodCode buildTcpListen() {
 		// Slots: 0=port, 1=host, 2=p (int), 3=h (String)
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.ALOAD_0);
+		MethodCode code = new MethodCode();
+		code.aload(0);
 		emitUnboxInt(code);
-		code.add(Opcode.ISTORE_2);
-		code.add(Opcode.ALOAD_1);
-		int ifHostPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
+		code.istore(2);
+		code.aload(1);
+		MethodCode.Label ifHost = code.newLabel();
+		code.ifnonnull(ifHost);
 		// new ServerSocket(p)
-		code.add(Opcode.NEW);
-		emitU2(code, this.serverSocketClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.serverSocketInitPort.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifHostPos, code.size());
+		code.new_(this.serverSocketClass);
+		code.dup();
+		code.iload(2);
+		code.invokespecial(this.serverSocketInitPort);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
+		code.labelBinding(ifHost);
 		// new ServerSocket(p, 50, InetAddress.getByName(h))
 		emitStripQuotes(code, 1, 3);
-		code.add(Opcode.NEW);
-		emitU2(code, this.serverSocketClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.BIPUSH);
-		code.add(50);
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.inetGetByName.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.serverSocketInitHost.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.new_(this.serverSocketClass);
+		code.dup();
+		code.iload(2);
+		code.loadConstant(50);
+		code.aload(3);
+		code.invokestatic(this.inetGetByName);
+		code.invokespecial(this.serverSocketInitHost);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -912,16 +795,13 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _tcpAccept(Object handle) -> Long handle}. Blocks in
 	 * {@code ServerSocket.accept()} and stores the accepted socket in the stream table.
 	 */
-	private List<Integer> buildTcpAccept() {
-		List<Integer> code = new ArrayList<>();
+	private MethodCode buildTcpAccept() {
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.serverSocketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.serverSocketAccept.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.checkcast(this.serverSocketClass);
+		code.invokevirtual(this.serverSocketAccept);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -929,32 +809,26 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _tcpLocalPort(Object handle) -> Long}. Returns the local port of a listener
 	 * or socket entry.
 	 */
-	private List<Integer> buildTcpLocalPort() {
+	private MethodCode buildTcpLocalPort() {
 		// Slots: 0=handle, 1=entry
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.serverSocketClass.index());
-		int ifSockPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.serverSocketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.serverSocketGetLocalPort.index());
+		code.astore(1);
+		code.aload(1);
+		code.instanceOf(this.serverSocketClass);
+		MethodCode.Label ifSock = code.newLabel();
+		code.ifeq(ifSock);
+		code.aload(1);
+		code.checkcast(this.serverSocketClass);
+		code.invokevirtual(this.serverSocketGetLocalPort);
 		emitBoxLong(code);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifSockPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetLocalPort.index());
+		code.areturn();
+		code.labelBinding(ifSock);
+		code.aload(1);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetLocalPort);
 		emitBoxLong(code);
-		code.add(Opcode.ARETURN);
+		code.areturn();
 		return code;
 	}
 
@@ -965,28 +839,24 @@ final class JvmSocketRuntimeBuilder {
 	 * non-socket entry fails on the {@code CHECKCAST} (a {@code ClassCastException},
 	 * catchable like the other runtime failures).
 	 */
-	private List<Integer> buildTcpSetTimeout() {
+	private MethodCode buildTcpSetTimeout() {
 		// Slots: 0=handle, 1=ms
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.ALOAD_1);
-		int ifNilPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
+		code.checkcast(this.socketClass);
+		code.aload(1);
+		MethodCode.Label ifNil = code.newLabel();
+		code.ifnull(ifNil);
+		code.aload(1);
 		emitUnboxInt(code);
-		int gotoSetPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNilPos, code.size());
-		code.add(Opcode.ICONST_0);
-		patchBranch(code, gotoSetPos, code.size());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketSetSoTimeout.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARETURN);
+		MethodCode.Label gotoSet = code.newLabel();
+		code.goto_(gotoSet);
+		code.labelBinding(ifNil);
+		code.iconst_0();
+		code.labelBinding(gotoSet);
+		code.invokevirtual(this.socketSetSoTimeout);
+		code.aload(1);
+		code.areturn();
 		return code;
 	}
 
@@ -994,32 +864,26 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _tcpLocalAddress(Object handle) -> String}. Returns the local/bound IP
 	 * address of a listener or socket entry, quote-framed like every runtime string.
 	 */
-	private List<Integer> buildTcpLocalAddress() {
+	private MethodCode buildTcpLocalAddress() {
 		// Slots: 0=handle, 1=entry
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.serverSocketClass.index());
-		int ifSockPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.astore(1);
+		code.aload(1);
+		code.instanceOf(this.serverSocketClass);
+		MethodCode.Label ifSock = code.newLabel();
+		code.ifeq(ifSock);
 		// "\"".concat(((ServerSocket) entry).getInetAddress().getHostAddress()) + "\""
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.serverSocketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.serverSocketGetInetAddress.index());
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.checkcast(this.serverSocketClass);
+		code.invokevirtual(this.serverSocketGetInetAddress);
 		emitHostAddressReturn(code);
-		patchBranch(code, ifSockPos, code.size());
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetLocalAddress.index());
+		code.labelBinding(ifSock);
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetLocalAddress);
 		emitHostAddressReturn(code);
 		return code;
 	}
@@ -1028,17 +892,15 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _tcpPeerAddress(Object handle) -> String}. Returns the remote IP address of
 	 * a connected socket entry, quote-framed like every runtime string.
 	 */
-	private List<Integer> buildTcpPeerAddress() {
+	private MethodCode buildTcpPeerAddress() {
 		// Slots: 0=handle, 1=entry
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.ASTORE_1);
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetInetAddress.index());
+		code.astore(1);
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetInetAddress);
 		emitHostAddressReturn(code);
 		return code;
 	}
@@ -1047,15 +909,13 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _tcpPeerPort(Object handle) -> Long}. Returns the remote port of a connected
 	 * socket entry.
 	 */
-	private List<Integer> buildTcpPeerPort() {
-		List<Integer> code = new ArrayList<>();
+	private MethodCode buildTcpPeerPort() {
+		MethodCode code = new MethodCode();
 		emitLoadStreamEntry(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetPort.index());
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetPort);
 		emitBoxLong(code);
-		code.add(Opcode.ARETURN);
+		code.areturn();
 		return code;
 	}
 
@@ -1064,15 +924,12 @@ final class JvmSocketRuntimeBuilder {
 	 * an {@code InetAddress} on the stack, appends
 	 * {@code .getHostAddress()}-concat-closing-quote and returns.
 	 */
-	private void emitHostAddressReturn(List<Integer> code) {
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inetGetHostAddress.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		code.add(Opcode.ARETURN);
+	private void emitHostAddressReturn(MethodCode code) {
+		code.invokevirtual(this.inetGetHostAddress);
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		code.areturn();
 	}
 
 	/**
@@ -1081,118 +938,85 @@ final class JvmSocketRuntimeBuilder {
 	 * with the internal {@code '"'} prefix/suffix; returns {@code null} (nil) when the
 	 * peer closed before any byte arrived.
 	 */
-	private List<Integer> buildSockReadLine() {
+	private MethodCode buildSockReadLine() {
 		// Slots: 0=socket, 1=in (InputStream), 2=baos, 3=b (int), 4=bytes, 5=len (int)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// in = ((Socket) socket).getInputStream();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetInputStream.index());
-		code.add(Opcode.ASTORE_1);
+		code.aload(0);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetInputStream);
+		code.astore(1);
 		// baos = new ByteArrayOutputStream();
-		code.add(Opcode.NEW);
-		emitU2(code, this.baosClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.baosInit.index());
-		code.add(Opcode.ASTORE_2);
+		code.new_(this.baosClass);
+		code.dup();
+		code.invokespecial(this.baosInit);
+		code.astore(2);
 		// b = in.read(); if (b < 0) return null;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamRead.index());
-		code.add(Opcode.ISTORE_3);
-		code.add(Opcode.ILOAD_3);
-		int ifDataPos = code.size();
-		code.add(Opcode.IFGE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifDataPos, code.size());
+		code.aload(1);
+		code.invokevirtual(this.inputStreamRead);
+		code.istore(3);
+		code.iload(3);
+		MethodCode.Label ifData = code.newLabel();
+		code.ifge(ifData);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifData);
 		// while (b >= 0 && b != '\n') { baos.write(b); b = in.read(); }
-		int loopStart = code.size();
-		code.add(Opcode.ILOAD_3);
-		int ifEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.BIPUSH);
-		code.add((int) '\n');
-		int ifNlPos = code.size();
-		code.add(Opcode.IF_ICMPEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.baosWrite.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamRead.index());
-		code.add(Opcode.ISTORE_3);
-		int gotoLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoLoopPos, loopStart);
-		patchBranch(code, ifEofPos, code.size());
-		patchBranch(code, ifNlPos, code.size());
+		MethodCode.Label loopStart = code.newBoundLabel();
+		code.iload(3);
+		MethodCode.Label ifEof = code.newLabel();
+		code.iflt(ifEof);
+		code.iload(3);
+		code.loadConstant('\n');
+		MethodCode.Label ifNl = code.newLabel();
+		code.if_icmpeq(ifNl);
+		code.aload(2);
+		code.iload(3);
+		code.invokevirtual(this.baosWrite);
+		code.aload(1);
+		code.invokevirtual(this.inputStreamRead);
+		code.istore(3);
+		code.goto_(loopStart);
+		code.labelBinding(ifEof);
+		code.labelBinding(ifNl);
 		// bytes = baos.toByteArray(); len = bytes.length;
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.baosToByteArray.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ISTORE);
-		code.add(5);
+		code.aload(2);
+		code.invokevirtual(this.baosToByteArray);
+		code.astore(4);
+		code.aload(4);
+		code.arraylength();
+		code.istore(5);
 		// if (len > 0 && bytes[len - 1] == '\r') len--;
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		int ifEmptyPos = code.size();
-		code.add(Opcode.IFLE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.BALOAD);
-		code.add(Opcode.BIPUSH);
-		code.add((int) '\r');
-		int ifNoCrPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(5);
-		patchBranch(code, ifEmptyPos, code.size());
-		patchBranch(code, ifNoCrPos, code.size());
+		code.iload(5);
+		MethodCode.Label ifEmpty = code.newLabel();
+		code.ifle(ifEmpty);
+		code.aload(4);
+		code.iload(5);
+		code.iconst_1();
+		code.isub();
+		code.baload();
+		code.loadConstant('\r');
+		MethodCode.Label ifNoCr = code.newLabel();
+		code.if_icmpne(ifNoCr);
+		code.iload(5);
+		code.iconst_1();
+		code.isub();
+		code.istore(5);
+		code.labelBinding(ifEmpty);
+		code.labelBinding(ifNoCr);
 		// return "\"".concat(new String(bytes, 0, len, UTF_8)).concat("\"");
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.NEW);
-		emitU2(code, this.stringClassRef.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.utf8Field.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.stringInitBytes.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		code.add(Opcode.ARETURN);
+		code.ldc(this.quoteStr);
+		code.new_(this.stringClassRef);
+		code.dup();
+		code.aload(4);
+		code.iconst_0();
+		code.iload(5);
+		code.getstatic(this.utf8Field);
+		code.invokespecial(this.stringInitBytes);
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		code.areturn();
 		return code;
 	}
 
@@ -1201,31 +1025,25 @@ final class JvmSocketRuntimeBuilder {
 	 * (without the surrounding quotes) plus a newline to the socket, UTF-8, sent
 	 * immediately (socket output streams are unbuffered).
 	 */
-	private List<Integer> buildSockWriteLine() {
+	private MethodCode buildSockWriteLine() {
 		// Slots: 0=str, 1=socket, 2=content (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 2);
 		// content = content.concat("\n");
-		code.add(Opcode.ALOAD_2);
-		emitLdc(code, this.newlineStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		code.add(Opcode.ASTORE_2);
+		code.aload(2);
+		code.ldc(this.newlineStr);
+		code.invokevirtual(this.stringConcat);
+		code.astore(2);
 		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetOutputStream.index());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.utf8Field.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringGetBytes.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamWriteBytes.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetOutputStream);
+		code.aload(2);
+		code.getstatic(this.utf8Field);
+		code.invokevirtual(this.stringGetBytes);
+		code.invokevirtual(this.outputStreamWriteBytes);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -1236,25 +1054,20 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code _writeString} -- and therefore from {@code write-char}, which lowers to
 	 * {@code write-string} on every backend.
 	 */
-	private List<Integer> buildSockWriteString() {
+	private MethodCode buildSockWriteString() {
 		// Slots: 0=str, 1=socket, 2=content (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitStripQuotes(code, 0, 2);
 		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetOutputStream.index());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.utf8Field.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringGetBytes.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamWriteBytes.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetOutputStream);
+		code.aload(2);
+		code.getstatic(this.utf8Field);
+		code.invokevirtual(this.stringGetBytes);
+		code.invokevirtual(this.outputStreamWriteBytes);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -1270,103 +1083,75 @@ final class JvmSocketRuntimeBuilder {
 	 * answer as the interpreter's {@code SocketSupport.readChar} and the component's
 	 * {@code %sock-read-char-f}.
 	 */
-	private List<Integer> buildSockReadChar() {
+	private MethodCode buildSockReadChar() {
 		// Slots: 0=socket, 1=in (InputStream), 2=b0 (int), 3=n (int), 4=baos, 5=b (int)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// in = ((Socket) socket).getInputStream();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.socketClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.socketGetInputStream.index());
-		code.add(Opcode.ASTORE_1);
+		code.aload(0);
+		code.checkcast(this.socketClass);
+		code.invokevirtual(this.socketGetInputStream);
+		code.astore(1);
 		// b0 = in.read(); if (b0 < 0) return null;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamRead.index());
-		code.add(Opcode.ISTORE_2);
-		code.add(Opcode.ILOAD_2);
-		int ifDataPos = code.size();
-		code.add(Opcode.IFGE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifDataPos, code.size());
+		code.aload(1);
+		code.invokevirtual(this.inputStreamRead);
+		code.istore(2);
+		code.iload(2);
+		MethodCode.Label ifData = code.newLabel();
+		code.ifge(ifData);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifData);
 		// if (b0 >= 128) goto MULTI; return int[1]{b0};
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.SIPUSH);
-		emitU2(code, 128);
-		int ifMultiPos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.iload(2);
+		code.loadConstant(128);
+		MethodCode.Label ifMulti = code.newLabel();
+		code.if_icmpge(ifMulti);
 		emitBoxCodePoint(code, 2);
 		// MULTI: n = b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3;
-		patchBranch(code, ifMultiPos, code.size());
+		code.labelBinding(ifMulti);
 		emitContinuationCount(code);
-		code.add(Opcode.ISTORE_3);
+		code.istore(3);
 		// baos = new ByteArrayOutputStream(); baos.write(b0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.baosClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.baosInit.index());
-		emitAstore(code, 4);
-		emitAload(code, 4);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.baosWrite.index());
+		code.new_(this.baosClass);
+		code.dup();
+		code.invokespecial(this.baosInit);
+		code.astore(4);
+		code.aload(4);
+		code.iload(2);
+		code.invokevirtual(this.baosWrite);
 		// while (n > 0) { b = in.read(); if (b < 0) break; baos.write(b); n--; }
-		int loopStart = code.size();
-		code.add(Opcode.ILOAD_3);
-		int ifDonePos = code.size();
-		code.add(Opcode.IFLE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(5);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		int ifEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		emitAload(code, 4);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.baosWrite.index());
-		code.add(Opcode.IINC);
-		code.add(3);
-		code.add(0xFF); // -1
-		int gotoLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoLoopPos, loopStart);
-		patchBranch(code, ifDonePos, code.size());
-		patchBranch(code, ifEofPos, code.size());
+		MethodCode.Label loopStart = code.newBoundLabel();
+		code.iload(3);
+		MethodCode.Label ifDone = code.newLabel();
+		code.ifle(ifDone);
+		code.aload(1);
+		code.invokevirtual(this.inputStreamRead);
+		code.istore(5);
+		code.iload(5);
+		MethodCode.Label ifEof = code.newLabel();
+		code.iflt(ifEof);
+		code.aload(4);
+		code.iload(5);
+		code.invokevirtual(this.baosWrite);
+		code.iinc(3, -1); // -1
+		code.goto_(loopStart);
+		code.labelBinding(ifDone);
+		code.labelBinding(ifEof);
 		// b0 = new String(baos.toByteArray(), 0, length, UTF_8).codePointAt(0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.stringClassRef.index());
-		code.add(Opcode.DUP);
-		emitAload(code, 4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.baosToByteArray.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ASTORE);
-		code.add(5);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.utf8Field.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.stringInitBytes.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringCodePointAt.index());
-		code.add(Opcode.ISTORE_2);
+		code.new_(this.stringClassRef);
+		code.dup();
+		code.aload(4);
+		code.invokevirtual(this.baosToByteArray);
+		code.dup();
+		code.astore(5);
+		code.iconst_0();
+		code.aload(5);
+		code.arraylength();
+		code.getstatic(this.utf8Field);
+		code.invokespecial(this.stringInitBytes);
+		code.iconst_0();
+		code.invokevirtual(this.stringCodePointAt);
+		code.istore(2);
 		emitBoxCodePoint(code, 2);
 		return code;
 	}
@@ -1376,147 +1161,86 @@ final class JvmSocketRuntimeBuilder {
 	 * {@code b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3} (an invalid lead byte -- a
 	 * stray continuation -- counts 0 and stands alone).
 	 */
-	private void emitContinuationCount(List<Integer> code) {
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.SIPUSH);
-		emitU2(code, 192);
-		int ifNot0Pos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_0);
-		int goto0Pos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNot0Pos, code.size());
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.SIPUSH);
-		emitU2(code, 224);
-		int ifNot1Pos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_1);
-		int goto1Pos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNot1Pos, code.size());
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.SIPUSH);
-		emitU2(code, 240);
-		int ifNot2Pos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_2);
-		int goto2Pos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNot2Pos, code.size());
-		code.add(Opcode.ICONST_3);
-		patchBranch(code, goto0Pos, code.size());
-		patchBranch(code, goto1Pos, code.size());
-		patchBranch(code, goto2Pos, code.size());
+	private void emitContinuationCount(MethodCode code) {
+		code.iload(2);
+		code.loadConstant(192);
+		MethodCode.Label ifNot0 = code.newLabel();
+		code.if_icmpge(ifNot0);
+		code.iconst_0();
+		MethodCode.Label done = code.newLabel();
+		code.goto_(done);
+		code.labelBinding(ifNot0);
+		code.iload(2);
+		code.loadConstant(224);
+		MethodCode.Label ifNot1 = code.newLabel();
+		code.if_icmpge(ifNot1);
+		code.iconst_1();
+		code.goto_(done);
+		code.labelBinding(ifNot1);
+		code.iload(2);
+		code.loadConstant(240);
+		MethodCode.Label ifNot2 = code.newLabel();
+		code.if_icmpge(ifNot2);
+		code.iconst_2();
+		code.goto_(done);
+		code.labelBinding(ifNot2);
+		code.iconst_3();
+		code.labelBinding(done);
 	}
 
 	/** Emits {@code return int[1]{slot}} -- the runtime CHARACTER representation. */
-	private static void emitBoxCodePoint(List<Integer> code, int slot) {
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.NEWARRAY);
-		code.add(10); // T_INT
-		code.add(Opcode.DUP);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ILOAD);
-		code.add(slot);
-		code.add(Opcode.IASTORE);
-		code.add(Opcode.ARETURN);
+	private static void emitBoxCodePoint(MethodCode code, int slot) {
+		code.iconst_1();
+		code.newarray(TypeKind.INT);
+		code.dup();
+		code.iconst_0();
+		code.iload(slot);
+		code.iastore();
+		code.areturn();
 	}
 
 	/** Emits {@code slot<target> = ((String) slot<src>).substring(1, length() - 1)}. */
-	private void emitStripQuotes(List<Integer> code, int srcSlot, int targetSlot) {
-		emitAload(code, srcSlot);
+	private void emitStripQuotes(MethodCode code, int srcSlot, int targetSlot) {
+		code.aload(srcSlot);
 		// A mutable character vector renders to its quote-framed string first; any
 		// other value passes through (null without the array runtime -- no character
 		// vector can exist then).
 		if (this.strvRef != null) {
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.strvRef.index());
+			code.invokestatic(this.strvRef);
 		}
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		emitAstore(code, targetSlot);
-		emitAload(code, targetSlot);
-		code.add(Opcode.ICONST_1);
-		emitAload(code, targetSlot);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		emitAstore(code, targetSlot);
+		code.checkcast(this.stringClass);
+		code.astore(targetSlot);
+		code.aload(targetSlot);
+		code.iconst_1();
+		code.aload(targetSlot);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(targetSlot);
 	}
 
 	/**
 	 * Emits {@code _streams[(int) ((Long) slot<handleSlot>).longValue()]} (an Object).
 	 */
-	private void emitLoadStreamEntry(List<Integer> code, int handleSlot) {
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		emitAload(code, handleSlot);
+	private void emitLoadStreamEntry(MethodCode code, int handleSlot) {
+		code.getstatic(this.streamsField);
+		code.aload(handleSlot);
 		emitUnboxInt(code);
-		code.add(Opcode.AALOAD);
+		code.aaload();
 	}
 
 	/** Emits {@code (int) ((Long) <stack top>).longValue()}. */
-	private void emitUnboxInt(List<Integer> code) {
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
+	private void emitUnboxInt(MethodCode code) {
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
 	}
 
 	/** Emits {@code Long.valueOf((long) <stack top int>)}. */
-	private void emitBoxLong(List<Integer> code) {
-		code.add(Opcode.I2L);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
-	}
-
-	private static void emitAload(List<Integer> code, int slot) {
-		switch (slot) {
-			case 0 -> code.add(Opcode.ALOAD_0);
-			case 1 -> code.add(Opcode.ALOAD_1);
-			case 2 -> code.add(Opcode.ALOAD_2);
-			case 3 -> code.add(Opcode.ALOAD_3);
-			default -> {
-				code.add(Opcode.ALOAD);
-				code.add(slot);
-			}
-		}
-	}
-
-	private static void emitAstore(List<Integer> code, int slot) {
-		switch (slot) {
-			case 0 -> code.add(Opcode.ASTORE_0);
-			case 1 -> code.add(Opcode.ASTORE_1);
-			case 2 -> code.add(Opcode.ASTORE_2);
-			case 3 -> code.add(Opcode.ASTORE_3);
-			default -> {
-				code.add(Opcode.ASTORE);
-				code.add(slot);
-			}
-		}
-	}
-
-	private static void emitU2(List<Integer> code, int value) {
-		JvmRuntimeBuilder.emitU2(code, value);
-	}
-
-	private static void emitLdc(List<Integer> code, int cpIndex) {
-		JvmRuntimeBuilder.emitLdc(code, cpIndex);
-	}
-
-	private static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
-		JvmRuntimeBuilder.patchBranch(code, branchPos, targetPos);
+	private void emitBoxLong(MethodCode code) {
+		code.i2l();
+		code.invokestatic(this.longValueOf);
 	}
 
 }

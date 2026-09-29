@@ -17,7 +17,10 @@ through `JvmRuntimeBuilder.codeBytes`.
 
 As a86, builder by builder: each helper a `MethodCode`, each position/patch a label, byte-for-byte
 comparison of the corpus, mito and jose classes before and after (recipe:
-`.kb/jvm-method-size-limits.md`, "How a slice moves"). `buildDispatchMethods`
+`.kb/jvm-method-size-limits.md`, "How a slice moves"; the raw-list tools are
+`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/`, whose
+`raw.py` knows `code.add`/`emitU2`/`patchBranch` -- the numeric builder's own helpers need
+teaching). `buildDispatchMethods`
 segments by an ESTIMATED size and stays under 32 KB by construction because its raw patch throws;
 on `MethodCode` a long branch is written in its `goto_w` form instead, so keep the segment budget
 (HugeMethodLimit, `.kb/hot-path-method-size.md`) and drop only the branch-reach reason. Split by
