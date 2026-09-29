@@ -9,8 +9,9 @@
 `docs-tool/`, `rontolisp-maven-plugin/` and `rontolisp-native/` are outside the root reactor
 (`.kb/session-workflow.md`).
 
+**Before changing any code, read `.kb/architecture.md`** (pipeline, package graph, import rules).
 **Before changing behavior in any area, grep `.kb/` for the topic and read the matching file**
-(index: `.kb/README.md`; architecture, package graph and import rules: `.kb/architecture.md`).
+(index: `.kb/README.md`).
 User-facing behavior lives in `doc/en/**` + `doc/ja/**`, mirrored in the same commit
 (`.kb/documentation-site.md`). A `.kb` premise is a measurement, not a law: when a new
 measurement contradicts it, write the new numbers and date into that file; a change the
