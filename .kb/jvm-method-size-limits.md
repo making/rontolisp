@@ -46,8 +46,9 @@ stays the answer for the rest.
   or when the frame pass's own frame-type entries overflow (`ConstantPoolOverflowException`),
   `writeSplit` hands the definition to `am.ik.jvm.JvmClassSplitter`.
 - **The split**: `unresolvedSelfMethods` and the shake are `JvmClassShaker`'s rules on the
-  definition (a definition that then fits one class comes out byte-identical to the shaker's
-  output -- pinned). The class keeps every field and each method found by name or by class
+  definition (`am.ik.jvm.OwnCallGraph`, one class for both; a definition that then fits one
+  class declares the shaker output's members with the same instructions -- pinned -- but keeps
+  the definition's pool order where the shaker writes a fresh pool). The class keeps every field and each method found by name or by class
   identity: `main`, jvm-export wrappers and their defuns, `REFLECTIVELY_FOUND_METHODS`
   (`_apply`/`_strv` for the bridges' `getDeclaredMethod`, `_gpuMaterialize`/`_gpuWritten` for
   `RontoFloatArray`'s MethodHandles), plus by the splitter's own rule every instance method and
@@ -125,7 +126,7 @@ only grows. Past 255 a load/store takes the `wide` prefix
   `#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`,
   `#anUnboundedPoolKeepsFullWidthComponentIndexesPastTheFormatLimit`
 - The split: `am.ik.jvm.JvmClassSplitterTest` (parts run, what cannot move stays, indexes past
-  65535, byte-identity with the shaker), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
+  65535, the shaker's members and instructions), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
   class for real, forced splits at both optimize levels, an export library),
   `RontoLispCliTest#aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape`, and the
   three JVM legs of `MitoE2eTest`

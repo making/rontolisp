@@ -1,13 +1,10 @@
 package am.ik.jvm;
 
 import java.io.ByteArrayOutputStream;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,9 +34,12 @@ import org.jspecify.annotations.Nullable;
  * is what that needs.
  * <p>
  * The same walk answers {@link #unresolvedSelfMethods} and, when asked, tree-shakes the
- * definition with exactly {@link JvmClassShaker}'s rules before placing anything: a
- * method unreachable from the roots, and a field no surviving method references, are not
- * written at all.
+ * definition before placing anything, by the call graph {@link JvmClassShaker} shakes by
+ * ({@code OwnCallGraph}): a method unreachable from the roots, and a field no surviving
+ * method references, are not written at all. A definition that then fits one class
+ * declares what the shaker's output declares, with the same instructions; the bytes
+ * differ, since the shaker writes a fresh pool and this class keeps the definition's
+ * entry order.
  * <p>
  * Every class keeps the definition's instruction bytes: an operand is re-pointed in place
  * (a u2 stays a u2), and an {@code ldc}'s one-byte operand stays in range because each
@@ -78,24 +78,7 @@ public final class JvmClassSplitter {
 	 * @return the unresolved calls, in first-reference order
 	 */
 	public static List<JvmClassShaker.UnresolvedSelfMethod> unresolvedSelfMethods(ClassDefinition definition) {
-		Scan scan = new Scan(definition);
-		Map<String, Set<String>> missing = new LinkedHashMap<>();
-		for (int m = 0; m < scan.methods.size(); m++) {
-			for (int index : scan.sites.get(m).indexes) {
-				String key = scan.ownMethodKey(index);
-				if (key != null && !scan.methodByKey.containsKey(key)) {
-					missing.computeIfAbsent(key, k -> new LinkedHashSet<>())
-						.add(scan.cp.utf8At(scan.methods.get(m).name().index()));
-				}
-			}
-		}
-		List<JvmClassShaker.UnresolvedSelfMethod> result = new ArrayList<>(missing.size());
-		missing.forEach((key, callers) -> {
-			int colon = key.indexOf(':');
-			result.add(new JvmClassShaker.UnresolvedSelfMethod(key.substring(0, colon), key.substring(colon + 1),
-					List.copyOf(callers)));
-		});
-		return List.copyOf(result);
+		return JvmClassShaker.unresolved(new Scan(definition).graph);
 	}
 
 	/**
@@ -129,7 +112,7 @@ public final class JvmClassSplitter {
 	public static Split split(ClassDefinition definition, @Nullable Set<String> shakeRoots,
 			Predicate<ClassDefinition.Method> pinned, int budget) {
 		Scan scan = new Scan(definition);
-		boolean[] keptMethod = scan.reachable(shakeRoots);
+		boolean[] keptMethod = scan.graph.reachable(shakeRoots);
 		boolean[] keptField = scan.usedFields(keptMethod, shakeRoots != null);
 
 		// The main class's fixed part: its header, every kept field, every pinned method.
@@ -184,11 +167,11 @@ public final class JvmClassSplitter {
 			}
 		}
 
-		Map<String, Integer> ownerByKey = new HashMap<>();
+		Map<OwnCallGraph.Member, Integer> ownerByKey = new HashMap<>();
 		for (int m = 0; m < scan.methods.size(); m++) {
 			if (keptMethod[m]) {
 				ownerByKey.put(
-						scan.memberKey(scan.methods.get(m).name().index(), scan.methods.get(m).descriptor().index()),
+						scan.member(scan.methods.get(m).name().index(), scan.methods.get(m).descriptor().index()),
 						owner[m]);
 			}
 		}
@@ -218,7 +201,7 @@ public final class JvmClassSplitter {
 
 		final List<Sites> sites = new ArrayList<>();
 
-		final Map<String, Integer> methodByKey = new HashMap<>();
+		final OwnCallGraph graph = new OwnCallGraph();
 
 		final int thisClass;
 
@@ -232,21 +215,34 @@ public final class JvmClassSplitter {
 			this.thisClass = definition.thisClass().index();
 			for (int m = 0; m < this.methods.size(); m++) {
 				ClassDefinition.Method method = this.methods.get(m);
-				this.sites.add(Sites.of(method.code()));
-				this.methodByKey.putIfAbsent(this.memberKey(method.name().index(), method.descriptor().index()), m);
+				Sites sites = Sites.of(method.code());
+				this.sites.add(sites);
+				List<OwnCallGraph.Member> calls = new ArrayList<>();
+				List<OwnCallGraph.Member> fieldUses = new ArrayList<>();
+				for (int index : sites.indexes) {
+					OwnCallGraph.Member call = this.ownMethod(index);
+					if (call != null) {
+						calls.add(call);
+					}
+					OwnCallGraph.Member field = this.ownField(index);
+					if (field != null) {
+						fieldUses.add(field);
+					}
+				}
+				this.graph.method(this.member(method.name().index(), method.descriptor().index()), calls, fieldUses);
 			}
 			this.closures = new BitSet[this.methods.size()];
 		}
 
-		String memberKey(int nameIndex, int descriptorIndex) {
-			return this.cp.utf8At(nameIndex) + ":" + this.cp.utf8At(descriptorIndex);
+		OwnCallGraph.Member member(int nameIndex, int descriptorIndex) {
+			return new OwnCallGraph.Member(this.cp.utf8At(nameIndex), this.cp.utf8At(descriptorIndex));
 		}
 
 		/**
-		 * The {@code name:descriptor} of the own-class method a site's entry invokes, or
-		 * null when the entry is not a method reference to the definition's own class.
+		 * The own-class method a site's entry invokes, or null when the entry is not a
+		 * method reference to the definition's own class.
 		 */
-		@Nullable String ownMethodKey(int index) {
+		OwnCallGraph.@Nullable Member ownMethod(int index) {
 			ConstantType type = this.cp.typeAt(index);
 			if (type != ConstantType.METHODREF && type != ConstantType.INTERFACE_METHODREF) {
 				return null;
@@ -255,15 +251,15 @@ public final class JvmClassSplitter {
 				return null;
 			}
 			int nameAndType = this.cp.secondComponentAt(index);
-			return this.memberKey(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
+			return this.member(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
 		}
 
-		@Nullable String ownFieldKey(int index) {
+		OwnCallGraph.@Nullable Member ownField(int index) {
 			if (this.cp.typeAt(index) != ConstantType.FIELDREF || !this.isThisClass(this.cp.firstComponentAt(index))) {
 				return null;
 			}
 			int nameAndType = this.cp.secondComponentAt(index);
-			return this.memberKey(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
+			return this.member(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
 		}
 
 		// Identity by NAME, never by index: the pool may hold two Class entries that
@@ -275,58 +271,15 @@ public final class JvmClassSplitter {
 				.equals(this.cp.utf8At(this.cp.firstComponentAt(this.thisClass)));
 		}
 
-		/** {@link JvmClassShaker#shake}'s reachability; every method when not shaking. */
-		boolean[] reachable(@Nullable Set<String> roots) {
-			boolean[] kept = new boolean[this.methods.size()];
-			if (roots == null) {
-				java.util.Arrays.fill(kept, true);
-				return kept;
-			}
-			Deque<Integer> work = new ArrayDeque<>();
-			for (int m = 0; m < this.methods.size(); m++) {
-				String name = this.cp.utf8At(this.methods.get(m).name().index());
-				if (roots.contains(name) || "<init>".equals(name) || "<clinit>".equals(name)) {
-					kept[m] = true;
-					work.push(m);
-				}
-			}
-			while (!work.isEmpty()) {
-				int m = work.pop();
-				for (int index : this.sites.get(m).indexes) {
-					String key = this.ownMethodKey(index);
-					Integer target = key == null ? null : this.methodByKey.get(key);
-					if (target != null && !kept[target]) {
-						kept[target] = true;
-						work.push(target);
-					}
-				}
-			}
-			return kept;
-		}
-
 		/**
 		 * A field survives when a surviving method references it (or nothing is shaken).
 		 */
 		boolean[] usedFields(boolean[] keptMethod, boolean shaking) {
 			boolean[] kept = new boolean[this.fields.size()];
-			if (!shaking) {
-				java.util.Arrays.fill(kept, true);
-				return kept;
-			}
-			Set<String> used = new java.util.HashSet<>();
-			for (int m = 0; m < this.methods.size(); m++) {
-				if (keptMethod[m]) {
-					for (int index : this.sites.get(m).indexes) {
-						String key = this.ownFieldKey(index);
-						if (key != null) {
-							used.add(key);
-						}
-					}
-				}
-			}
+			Set<OwnCallGraph.Member> used = this.graph.usedFields(keptMethod);
 			for (int f = 0; f < this.fields.size(); f++) {
 				ClassDefinition.Field field = this.fields.get(f);
-				kept[f] = used.contains(this.memberKey(field.name().index(), field.descriptor().index()));
+				kept[f] = !shaking || used.contains(this.member(field.name().index(), field.descriptor().index()));
 			}
 			return kept;
 		}
@@ -460,8 +413,8 @@ public final class JvmClassSplitter {
 		 * uses, in the definition's order, then the Class entries of the parts it calls
 		 * into (and, for a part, its own) appended last.
 		 */
-		byte[] write(ClassDefinition definition, List<Part> parts, Map<String, Integer> ownerByKey, boolean[] keptField,
-				boolean split) {
+		byte[] write(ClassDefinition definition, List<Part> parts, Map<OwnCallGraph.Member, Integer> ownerByKey,
+				boolean[] keptField, boolean split) {
 			ConstantPool cp = this.scan.cp;
 			boolean isMain = parts.getFirst() == this;
 			int self = parts.indexOf(this);
@@ -603,11 +556,11 @@ public final class JvmClassSplitter {
 		 * The part (1..) that declares the own-class method a Methodref entry names, or 0
 		 * when the entry is something else or the method stayed in the main class.
 		 */
-		private int methodOwner(int index, Map<String, Integer> ownerByKey) {
+		private int methodOwner(int index, Map<OwnCallGraph.Member, Integer> ownerByKey) {
 			if (this.scan.cp.typeAt(index) != ConstantType.METHODREF) {
 				return 0;
 			}
-			String key = this.scan.ownMethodKey(index);
+			OwnCallGraph.Member key = this.scan.ownMethod(index);
 			Integer owner = key == null ? null : ownerByKey.get(key);
 			return owner == null ? 0 : owner;
 		}

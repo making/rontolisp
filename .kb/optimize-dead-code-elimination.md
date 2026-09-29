@@ -1080,16 +1080,16 @@ region on both compile paths (`.kb/dynamic-special-variables.md`), at +4.1% on c
 and +1.0% on its wasm module.
 
 ## JVM
-`am.ik.jvm.JvmClassShaker` runs at the end of `JvmLispCompiler.compile`: parses the finished class,
-builds the call graph from `invoke*` constant-pool immediates, keeps methods reachable from `main`
+`am.ik.jvm.JvmClassShaker` runs at the end of `JvmLispCompiler.compile`: parses the finished class
+with `java.lang.classfile`, builds the call graph from its `invoke*` instructions
+(`am.ik.jvm.OwnCallGraph`, shared with `JvmClassSplitter`), keeps methods reachable from `main`
 (plus `_apply` as an extra root when the program uses `java:` interop -- the embedded bridge looks
 `_apply` up REFLECTIVELY, an edge bytecode cannot show; under `--no-main` there is no `main` root at
-all), drops unreachable methods and any static field only they referenced, and **compacts the
-constant pool**, rewriting every CP index immediate in the surviving bytecode in place. Sizes never
-change (u2 stays u2; an `ldc` u1 index only shrinks because compaction preserves order), so
-exception-table pcs and switch padding stay valid, and no method renumbering is needed since JVM
-methods are referenced by name. The shaker throws on anything it does not recognize (unknown
-opcode/constant tag, any attribute other than a single `Code` per method).
+all), drops unreachable methods and any field only they referenced, and **compacts the constant
+pool** by writing the class with a fresh one (`NEW_POOL`). No method renumbering is needed since
+JVM methods are referenced by name; an `ldc` whose constant moved past 255 widens to `ldc_w`.
+Mechanics and cost: [stack-map-frames.md](stack-map-frames.md), "The readers and the shaker on the
+API".
 
 **A `rontolisp:jvm-export` wrapper is a third liveness source**, next to `main` and the
 dispatchable-funcId set: every export's Java method name joins the roots (its caller is Java code

@@ -15,8 +15,8 @@ import org.jspecify.annotations.Nullable;
  * methods, each method body a list of code bytes whose constant-pool operands are kept at
  * full width. The shape is the one every generated class has -- attribute-free fields,
  * one {@code Code} attribute per method whose only sub-attribute is an optional
- * {@code LineNumberTable}, no class attributes -- which is also what
- * {@link JvmClassShaker} and {@link StackMapFrames} accept.
+ * {@code LineNumberTable}, no class attributes -- the one shape {@link JvmClassSplitter}
+ * writes.
  * <p>
  * A definition whose pool fits one class file is written by {@link #toBytes()}; one whose
  * pool outgrew it is handed to {@link JvmClassSplitter}, which spreads its methods over

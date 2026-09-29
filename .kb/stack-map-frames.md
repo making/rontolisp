@@ -43,10 +43,9 @@ the shipped class, so an under-declared one is no longer a `VerifyError`.
   ([jvm-osr-backedges.md](jvm-osr-backedges.md)). Input below version 51 is framed first.
 
 **Pipeline order is fixed**: optional `JvmClassShaker.shake` FIRST, then frames. The shaker
-DROPS a `StackMapTable` (so shake stays callable on framed bytes), and the frames reference
-constant-pool entries the pass appends, which the shaker's compaction could not rewrite. A
-`LineNumberTable` (the uncaught report's site ids, [error-handling.md](error-handling.md)) is
-the one other `Code` sub-attribute either accepts.
+DROPS a `StackMapTable` (`StackMapsOption.DROP_STACK_MAPS`, so shake stays callable on framed
+bytes). A `LineNumberTable` (the uncaught report's site ids, [error-handling.md](error-handling.md))
+passes through both, its entries riding the instructions they label.
 
 Version 61 unlocks not yet used: `invokedynamic` (v51+) for the `_invoke_N` linear if-else id
 dispatch (nothing models `tableswitch` either); interface-static `invokestatic` (v52+), for which the
@@ -76,13 +75,51 @@ Image cost of `java.lang.classfile`: `-Pweb` playground `rontoplayground.js.wasm
 28,640,483 B (+3.3%), a JVM compile in it still verifies and runs; `-Pnative` CLI binary
 96,143,624 -> 97,192,200 B (+1.1%), `-o X.class` from it verifies and runs.
 
+## The readers and the shaker on the API (2026-09-29)
+
+`ClassFileInfo.parse` reads a `ClassModel`; `JvmClassShaker` builds its call graph from
+`InvokeInstruction`/`FieldInstruction` elements and writes through a `ClassTransform` dropping
+unreached methods and unused fields under `ConstantPoolSharingOption.NEW_POOL` (the compaction)
+and `DROP_STACK_MAPS`. The reachability rules live in `am.ik.jvm.OwnCallGraph`, which
+`JvmClassSplitter` fills from its `ClassDefinition` scan, so the two cannot drift.
+`am.ik.jvm` main source 5,627 -> 4,993 lines (-634).
+
+- **A fresh pool is laid out in write order**, not the input's: a constant below index 256 can
+  land above it, and its `ldc` becomes `ldc_w` with the branches around it re-offset by the API
+  (`JvmClassShakerTest.anLdcWhoseConstantMovesPastIndex255WidensAndTheBranchOverItFollows`). The
+  old in-place compaction could only shrink an index.
+- **The split no longer matches the shaker byte for byte**: it keeps the definition's pool order.
+  `JvmClassSplitterTest.aDefinitionThatFitsIsWrittenAsTheShakerWritesIt` pins the same members
+  and the same symbolic instructions instead.
+- **The parser refuses a major version above `ClassFile.latestMajorVersion()`**; the hand reader
+  did not care. `ClassFileInfo` lowers the version in a copy, so a `--java-classpath` jar built
+  for a newer Java still resolves (`JvmClassPathTest.aClassFileNewerThanTheRunningJdkReadsItsDeclaredShape`).
+
+Pass alone, frame-free v50 input (a `--optimize=off` class with its table stripped), roots
+`main`/`run`/`_apply`/`_lispToString`/`call`, mean of 20 after 10 warm-up runs:
+
+| input | shaken bytes old -> new | shake ms old -> new | `unresolvedSelfMethods` ms old -> new |
+|---|---|---|---|
+| fib/hash/defstruct/handler-case/sort sample | 45,751 -> 45,663 | 4.9-5.4 -> 14.9-17.3 | 4.9-5.2 -> 4.5-4.8 |
+| `examples/console/contact-book.lisp` | 24,709 -> 24,630 | 1.9-2.0 -> 5.0-5.2 | 8.3-9.2 -> 6.5-6.7 |
+| `examples/console/error-handling.lisp` | 47,535 -> 47,495 | 2.5-2.6 -> 5.8 | 2.9-4.0 -> 3.4 |
+| ci-spec corpus | 5,682,117 -> 5,682,117 | 209-240 -> 317-326 | 81-90 -> 104-115 |
+
+The frame pass after it costs the same on either output (corpus 464-479 ms). So a compile pays
++3-12 ms on a small program and ~+0.1 s on the corpus (~15 s CLI compile). `ClassFileInfo` over
+3,000 `ct.sym` signature files: 9.6-11.6 ms both. Not taken: one transform doing the shake and
+the frames (`NEW_POOL` + `GENERATE_STACK_MAPS`) wrote the corpus in 557-569 ms against ~720 ms
+for the two writes, but couples the two passes' API for a gain the move of emission onto
+`CodeBuilder` (which shakes before writing and frames while emitting) makes moot.
+
 ## The `wide` prefix
 
-A local slot past 255 takes a `wide` prefix and a two-byte index. **Every reader of the finished
-bytes must MEASURE it: `wide` is 4 bytes (6 for `iinc`), not 2** -- `BranchRelaxer.operandLength`
+A local slot past 255 takes a `wide` prefix and a two-byte index. **Every hand-written reader of
+the code must MEASURE it: `wide` is 4 bytes (6 for `iinc`), not 2** -- `BranchRelaxer.operandLength`
 (a mis-measurement shifts every later branch offset; it takes the code list now, since the widened
-opcode is a byte of the instruction), `JvmClassShaker`, `OperandStack.feed`. The frame pass reads
-through `java.lang.classfile`, which measures it itself.
+opcode is a byte of the instruction), `JvmClassSplitter.Sites`, `OperandStack.feed`. The frame
+pass, `JvmClassShaker` and `ClassFileInfo` read through `java.lang.classfile`, which measures it
+itself.
 
 EMISSION is one chokepoint per code list: `JvmLispCompiler.Ctx.emit` sees `emit(opcode)` then
 `emit(slot)` as two calls, asks `OperandStack.awaitingLocalIndex()`, and for a slot past 255

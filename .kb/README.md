@@ -155,7 +155,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-method-size-limits.md](jvm-method-size-limits.md) -- the 64 KB method code limit, the signed-16-bit branch offset, and the split of a program past one class's 65534-entry constant pool into `$PartN` classes (`JvmClassSplitter`)
 - [jvm-osr-backedges.md](jvm-osr-backedges.md) -- no backward branch may target a bci with a non-empty operand stack
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
-- [stack-map-frames.md](stack-map-frames.md) -- class version 61 via `am.ik.jvm.StackMapFrames` (`java.lang.classfile`'s frame generator); its resolver, failures, measured cost
+- [stack-map-frames.md](stack-map-frames.md) -- class version 61 via `am.ik.jvm.StackMapFrames` (`java.lang.classfile`'s frame generator); its resolver, failures, measured cost; `ClassFileInfo` and `JvmClassShaker` on the same API
 - [template-class-embedding.md](template-class-embedding.md) -- when to use a Java template class, shipping it beside the program named after it, and class closures
 - [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), `java:reify`/`java:proxy`/function arguments as generated classes, the reflection bridge for the rest, what a callback raises passing through the Java call
 

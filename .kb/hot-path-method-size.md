@@ -24,9 +24,9 @@ divisor, `reduce`, `sort`). Both halves near 4 KB.
 - Within a segment a **binary search tree** over sorted funcIds (`emitDispatchTree`) replaces the
   linear chain; past one segment `_invoke_<arity>` becomes a router bisecting segment boundaries
   and tail-calling `_invoke_<arity>$<k>` (`emitSegmentRouter`).
-- A `tableswitch`/`lookupswitch` is deliberately NOT used: the emitters, `JvmClassShaker` and
-  `BranchRelaxer` would have to decode variable-length instructions (the frame pass,
-  `.kb/stack-map-frames.md`, already does).
+- A `tableswitch`/`lookupswitch` is deliberately NOT used: the emitters and `BranchRelaxer`
+  would have to decode variable-length instructions (the frame pass and `JvmClassShaker`, on
+  `java.lang.classfile` -- `.kb/stack-map-frames.md` -- already do).
 
 ## The body splitter (`_k$N` tail continuations)
 `JvmBodyOutliner` drives every defun and lambda body from a QUEUE, so the whole TAIL SPINE (its

@@ -244,7 +244,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   ARGUMENT is only an upper bound, and a `java:proxy` argument).
 - Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init; canonical Type per
   Class via ClassValue). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
-  (`ClassFileInfo` reader): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else
+  (`ClassFileInfo` reader, a `java.lang.classfile` `ClassModel`; a class newer than the running
+  JDK is read with its version lowered in a copy): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else
   `java` on PATH; works in the native CLI, no reflection) + `--java-classpath` dirs/jars. It
   re-implements `Class.getMethods()` (the `PublicMethods` merge; interface statics not inherited;
   an interface has no superclass), `getMethod` (most specific return), `getField` (declared,

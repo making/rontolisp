@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 /**
  * The class-file reader and the class path a compile-time resolver reads classes from: a
@@ -42,6 +43,26 @@ class JvmClassPathTest {
 		assertThat(info.methods()).filteredOn(m -> "find".equals(m.name()))
 			.extracting(ClassFileInfo.Member::descriptor)
 			.containsExactly("(Ljava/lang/String;)Lam/ik/jvm/JvmClassPath$Entry;");
+	}
+
+	// A class path jar may be built for a Java newer than the one compiling: its shape
+	// still reads, as it did before the reader went through java.lang.classfile, which
+	// refuses a version it does not know.
+	@Test
+	void aClassFileNewerThanTheRunningJdkReadsItsDeclaredShape() throws IOException {
+		byte[] future = classBytes(JvmClassPath.class);
+		future[6] = 0;
+		future[7] = (byte) 99;
+		ClassFileInfo info = ClassFileInfo.parse(future);
+		assertThat(info.name()).isEqualTo("am/ik/jvm/JvmClassPath");
+		assertThat(info.methods()).extracting(ClassFileInfo.Member::name).contains("find");
+	}
+
+	@Test
+	void aNonClassFileIsRefused() {
+		assertThatIllegalArgumentException().isThrownBy(() -> ClassFileInfo.parse(new byte[] { 1, 2, 3, 4, 5, 6 }));
+		assertThatIllegalArgumentException()
+			.isThrownBy(() -> ClassFileInfo.parse(new byte[] { (byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE }));
 	}
 
 	@Test

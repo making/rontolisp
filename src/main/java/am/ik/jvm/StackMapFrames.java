@@ -49,9 +49,9 @@ import org.jspecify.annotations.Nullable;
  * to {@code Object}.
  * <p>
  * The pass must run after {@link JvmClassShaker} when both apply: the shaker drops a
- * {@code StackMapTable}, whose frames reference constant-pool entries this pass appends
- * and the shaker's compaction would not know how to rewrite. A {@code LineNumberTable}
- * passes through both untouched.
+ * {@code StackMapTable} rather than keep frames whose merges it did not check. A
+ * {@code LineNumberTable} passes through both, its entries riding the instructions they
+ * label.
  * <p>
  * {@link #osrHostileBackedges} reads the frames back: which backward branches target a
  * position whose operand stack is non-empty -- the one loop shape HotSpot refuses to

@@ -1,5 +1,12 @@
 package am.ik.jvm;
 
+import java.lang.classfile.ClassFile;
+import java.lang.classfile.ClassModel;
+import java.lang.classfile.FieldModel;
+import java.lang.classfile.Instruction;
+import java.lang.classfile.MethodModel;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -19,8 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The splitter against hand-built definitions, where every entry and every byte is known:
  * a chain of static methods too large for one tiny class spreads over parts and still
  * runs, what cannot move stays, what the shaker would drop is not written, and a
- * definition that fits comes out exactly as the shaker writes it. The whole compiler's
- * use of it -- programs, output shapes, the forced split -- is
+ * definition that fits declares and runs what the shaker's output does. The whole
+ * compiler's use of it -- programs, output shapes, the forced split -- is
  * {@code JvmLispCompilerSplitTest}.
  */
 class JvmClassSplitterTest {
@@ -108,11 +115,11 @@ class JvmClassSplitterTest {
 	}
 
 	// Asked to shake, the split drops exactly what JvmClassShaker drops -- and a
-	// definition
-	// that then fits one class comes out byte for byte as the shaker writes it, so the
-	// split route cannot make a class that fits any different.
+	// definition that then fits one class declares what the shaker's output declares,
+	// with the same instructions, so the split route cannot make a class that fits any
+	// different. Only the pool's order differs: the shaker writes a fresh one.
 	@Test
-	void aDefinitionThatFitsIsWrittenExactlyAsTheShakerWritesIt() {
+	void aDefinitionThatFitsIsWrittenAsTheShakerWritesIt() {
 		ConstantPool cp = ConstantPool.unbounded();
 		Builder b = new Builder(cp);
 		ConstantPool.MethodrefConstant used = b.ref("used", "()V");
@@ -125,7 +132,10 @@ class JvmClassSplitterTest {
 		ClassDefinition definition = b.build();
 		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, Set.of("main"), method -> false);
 		assertThat(split.parts()).isEmpty();
-		assertThat(split.mainClass()).isEqualTo(JvmClassShaker.shake(definition.toBytes(), Set.of("main")));
+		List<String> shaken = shape(JvmClassShaker.shake(definition.toBytes(), Set.of("main")));
+		assertThat(shaken).contains("method main:([Ljava/lang/String;)V", "method used:()V")
+			.doesNotContain("method unused:()V");
+		assertThat(shape(split.mainClass())).isEqualTo(shaken);
 	}
 
 	@Test
@@ -181,6 +191,31 @@ class JvmClassSplitterTest {
 		classes.put("SplitMe", StackMapFrames.generate(split.mainClass(), 61));
 		split.parts().forEach((name, bytes) -> classes.put(name, StackMapFrames.generate(bytes, 61)));
 		return classes;
+	}
+
+	// Header, members and each method's instructions, symbolically: what a class
+	// declares and runs, whatever order its pool is in.
+	private static List<String> shape(byte[] classFile) {
+		ClassModel model = ClassFile.of().parse(classFile);
+		List<String> shape = new ArrayList<>();
+		shape.add("class " + model.thisClass().asInternalName() + " " + model.flags().flagsMask() + " extends "
+				+ model.superclass().map(ClassEntry::asInternalName).orElse("-"));
+		for (FieldModel field : model.fields()) {
+			shape.add("field " + field.fieldName() + ":" + field.fieldType() + " " + field.flags().flagsMask());
+		}
+		for (MethodModel method : model.methods()) {
+			shape.add("method " + method.methodName() + ":" + method.methodType());
+			shape.add("flags " + method.flags().flagsMask());
+			method.code().ifPresent(code -> code.forEach(element -> {
+				if (element instanceof ConstantInstruction.LoadConstantInstruction ldc) {
+					shape.add("ldc " + ldc.constantEntry().constantValue());
+				}
+				else if (element instanceof Instruction instruction) {
+					shape.add(instruction.toString());
+				}
+			}));
+		}
+		return shape;
 	}
 
 	private static int poolCount(byte[] classFile) {

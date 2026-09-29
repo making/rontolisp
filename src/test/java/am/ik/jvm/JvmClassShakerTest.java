@@ -340,6 +340,55 @@ class JvmClassShakerTest {
 		assertThat(twice).isEqualTo(once);
 	}
 
+	// The shaker writes a fresh pool in the order it writes the class, so a constant the
+	// input had below 256 can land above it: its ldc becomes an ldc_w, a byte longer,
+	// and the branch over it has to follow.
+	@Test
+	void anLdcWhoseConstantMovesPastIndex255WidensAndTheBranchOverItFollows() throws Exception {
+		ConstantPool cp = new ConstantPool();
+		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8("Widen"));
+		ConstantPool.StringConstant hello = cp.addString(cp.addUtf8("hello"));
+		ClassDefinition.Builder b = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass,
+				cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
+		ConstantPool.Utf8Constant voidDesc = cp.addUtf8("()V");
+		Set<String> roots = new java.util.HashSet<>(Set.of("run"));
+		for (int k = 0; k < 200; k++) {
+			ConstantPool.StringConstant filler = cp.addString(cp.addUtf8("filler-" + k));
+			b.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("f" + k), voidDesc, 1, 0,
+					List.of(Opcode.LDC_W, filler.index() >> 8, filler.index() & 0xFF, Opcode.POP, Opcode.RETURN),
+					List.of());
+			roots.add("f" + k);
+		}
+		// iconst_0; ifne +6 (to aconst_null); ldc hello; areturn; aconst_null; areturn
+		b.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("run"),
+				cp.addUtf8("()Ljava/lang/Object;"), 1, 0, List.of(Opcode.ICONST_0, Opcode.IFNE, 0, 6, Opcode.LDC,
+						hello.index(), Opcode.ARETURN, Opcode.ACONST_NULL, Opcode.ARETURN),
+				List.of());
+		byte[] input = b.build().toBytes();
+		assertThat(hello.index()).isLessThan(256);
+
+		byte[] shaken = JvmClassShaker.shake(input, roots);
+		java.lang.classfile.MethodModel run = java.lang.classfile.ClassFile.of()
+			.parse(shaken)
+			.methods()
+			.stream()
+			.filter(m -> m.methodName().equalsString("run"))
+			.findFirst()
+			.orElseThrow();
+		assertThat(run.code().orElseThrow().elementStream())
+			.filteredOn(e -> e instanceof java.lang.classfile.instruction.ConstantInstruction.LoadConstantInstruction)
+			.singleElement()
+			.satisfies(ldc -> assertThat(((java.lang.classfile.Instruction) ldc).opcode())
+				.isEqualTo(java.lang.classfile.Opcode.LDC_W));
+		byte[] framed = StackMapFrames.generate(shaken, 61);
+		Class<?> widen = new ClassLoader(JvmClassShakerTest.class.getClassLoader()) {
+			Class<?> define() {
+				return defineClass("Widen", framed, 0, framed.length);
+			}
+		}.define();
+		assertThat(widen.getMethod("run").invoke(null)).isEqualTo("hello");
+	}
+
 	@Test
 	void aWellFormedClassHasNoUnresolvedSelfMethods() {
 		// The compiler runs this check on every build (an unresolved own-class call is

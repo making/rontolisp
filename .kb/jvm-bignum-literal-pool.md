@@ -12,8 +12,8 @@ unobservable (`_equal`/`_hash`/`eql` go through `BigInteger.equals`/`compareTo`)
 - Its initializers go FIRST inside `<clinit>`, before layouts, stream seeds and the top-level
   runner.
 - `max_stack` 3 per initializer (the frame pass recomputes the shipped `max_stack`).
-- Plain `private static`, no `ACC_FINAL`+`ConstantValue`: `JvmClassShaker` rejects field
-  attributes.
+- Plain `private static`, no `ACC_FINAL`+`ConstantValue`: a `ClassDefinition` field carries no
+  attributes (the one shape `JvmClassSplitter` writes).
 - `compileRatio`'s `BigInteger[2]` stays per-use (mutable array); its elements are pooled.
 - `runtime` gains no class (`.kb/jvm-export.md`); a bignum-free program is byte-identical to
   pre-pool output. WASM literals are separate (`.kb/wasm-bignum.md`).

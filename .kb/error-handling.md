@@ -536,8 +536,9 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   a direct `JvmLispCompiler.compile` with no recording scope) has no line numbers, no site table,
   no `_where` and its pool in the old order -- the bytes it always had
   (`UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid`). The line numbers
-  survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassShaker`,
-  `JvmClassSplitter` and `StackMapFrames` carry the attribute (no instruction moves there).
+  survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassSplitter` carries the
+  attribute (no instruction moves there), and `JvmClassShaker` and `StackMapFrames` rewrite the
+  class through `java.lang.classfile`, whose line entries ride the instructions they label.
 - **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
   plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
   1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
