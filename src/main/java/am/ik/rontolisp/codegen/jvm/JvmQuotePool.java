@@ -1,17 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.IdentityHashMap;
-import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -79,7 +77,7 @@ final class JvmQuotePool {
 
 	private @Nullable ConstantPool cp;
 
-	private @Nullable ClassConstant owner;
+	private @Nullable ClassEntry owner;
 
 	private boolean frozen;
 
@@ -113,10 +111,9 @@ final class JvmQuotePool {
 		if (existing != null) {
 			return existing;
 		}
-		ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-		Refs created = new Refs(
-				cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(GET_NAME), cp.addUtf8(GET_DESC))),
-				cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(SET_NAME), cp.addUtf8(SET_DESC))));
+		ClassEntry thisClass = cp.classEntry(className);
+		Refs created = new Refs(cp.methodRef(thisClass, GET_NAME, GET_DESC),
+				cp.methodRef(thisClass, SET_NAME, SET_DESC));
 		this.cp = cp;
 		this.owner = thisClass;
 		this.refs = created;
@@ -152,104 +149,76 @@ final class JvmQuotePool {
 	 */
 	Members members() {
 		ConstantPool pool = java.util.Objects.requireNonNull(this.cp);
-		ClassConstant thisClass = java.util.Objects.requireNonNull(this.owner);
+		ClassEntry thisClass = java.util.Objects.requireNonNull(this.owner);
 		Utf8Constant fieldName = pool.addUtf8(FIELD_NAME);
-		ClassConstant tableClass = pool.addClass(pool.addUtf8(TABLE_DESC));
+		ClassEntry tableClass = pool.classEntry(TABLE_DESC);
 		// The table's class name IS its descriptor: an array type costs no second Utf8.
 		Utf8Constant fieldDesc = pool.addUtf8(TABLE_DESC);
-		FieldrefConstant field = pool.addFieldref(thisClass, pool.addNameAndType(fieldName, fieldDesc));
-		ClassConstant objectClass = pool.addClass(pool.addUtf8("java/lang/Object"));
-		ClassConstant boxClass = pool.addClass(pool.addUtf8(BOX_CLASS));
-		MethodrefConstant boxGet = pool.addMethodref(boxClass,
-				pool.addNameAndType(pool.addUtf8("get"), pool.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant boxOf = pool.addMethodref(boxClass,
-				pool.addNameAndType(pool.addUtf8("of"), pool.addUtf8("(Ljava/lang/Object;)L" + BOX_CLASS + ";")));
+		FieldRefEntry field = pool.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
+		ClassEntry objectClass = pool.classEntry("java/lang/Object");
+		ClassEntry boxClass = pool.classEntry(BOX_CLASS);
+		MethodRefEntry boxGet = pool.methodRef(boxClass, "get", "()Ljava/lang/Object;");
+		MethodRefEntry boxOf = pool.methodRef(boxClass, "of", "(Ljava/lang/Object;)L" + BOX_CLASS + ";");
 
 		// _qd(i): Object[] t = _qd; if (t == null) return null;
 		// Optional b = t[i]; return b == null ? null : b.get();
-		List<Integer> getCode = new ArrayList<>();
-		getCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(getCode, field.index());
-		getCode.add(Opcode.DUP);
-		int ifNoTablePos = getCode.size();
-		getCode.add(Opcode.IFNULL);
-		JvmRuntimeBuilder.emitU2(getCode, 0);
-		getCode.add(Opcode.ILOAD_0);
-		getCode.add(Opcode.AALOAD);
-		getCode.add(Opcode.DUP);
-		int ifEmptyPos = getCode.size();
-		getCode.add(Opcode.IFNULL);
-		JvmRuntimeBuilder.emitU2(getCode, 0);
-		getCode.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(getCode, boxClass.index());
-		getCode.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(getCode, boxGet.index());
-		JvmRuntimeBuilder.patchBranch(getCode, ifNoTablePos, getCode.size());
-		JvmRuntimeBuilder.patchBranch(getCode, ifEmptyPos, getCode.size());
-		getCode.add(Opcode.ARETURN);
+		MethodCode getCode = new MethodCode();
+		getCode.getstatic(field);
+		getCode.dup();
+		MethodCode.Label ifNoTable = getCode.newLabel();
+		getCode.ifnull(ifNoTable);
+		getCode.iload(0);
+		getCode.aaload();
+		getCode.dup();
+		MethodCode.Label ifEmpty = getCode.newLabel();
+		getCode.ifnull(ifEmpty);
+		getCode.checkcast(boxClass);
+		getCode.invokevirtual(boxGet);
+		getCode.labelBinding(ifNoTable);
+		getCode.labelBinding(ifEmpty);
+		getCode.areturn();
 
 		// synchronized _qdSet(v, i):
 		// Object[] t = _qd; if (t == null) _qd = t = new Object[size];
 		// Optional b = t[i]; if (b != null) return b.get();
 		// t[i] = Optional.of(v); return v;
-		List<Integer> setCode = new ArrayList<>();
-		setCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(setCode, field.index());
-		setCode.add(Opcode.DUP);
-		int ifMadePos = setCode.size();
-		setCode.add(Opcode.IFNONNULL);
-		JvmRuntimeBuilder.emitU2(setCode, 0);
-		setCode.add(Opcode.POP);
-		emitIntConst(setCode, pool, Math.max(1, size()));
-		setCode.add(Opcode.ANEWARRAY);
-		JvmRuntimeBuilder.emitU2(setCode, objectClass.index());
-		setCode.add(Opcode.DUP);
-		setCode.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(setCode, field.index());
-		JvmRuntimeBuilder.patchBranch(setCode, ifMadePos, setCode.size());
-		setCode.add(Opcode.ILOAD_1);
-		setCode.add(Opcode.AALOAD);
-		setCode.add(Opcode.DUP);
-		int ifFreePos = setCode.size();
-		setCode.add(Opcode.IFNULL);
-		JvmRuntimeBuilder.emitU2(setCode, 0);
-		setCode.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(setCode, boxClass.index());
-		setCode.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(setCode, boxGet.index());
-		setCode.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(setCode, ifFreePos, setCode.size());
-		setCode.add(Opcode.POP);
-		setCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(setCode, field.index());
-		setCode.add(Opcode.ILOAD_1);
-		setCode.add(Opcode.ALOAD_0);
-		setCode.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(setCode, boxOf.index());
-		setCode.add(Opcode.AASTORE);
-		setCode.add(Opcode.ALOAD_0);
-		setCode.add(Opcode.ARETURN);
+		MethodCode setCode = new MethodCode();
+		setCode.getstatic(field);
+		setCode.dup();
+		MethodCode.Label ifMade = setCode.newLabel();
+		setCode.ifnonnull(ifMade);
+		setCode.pop();
+		int slots = Math.max(1, size());
+		if (slots <= Short.MAX_VALUE) {
+			setCode.loadConstant(slots);
+		}
+		else {
+			setCode.ldc(pool.entries().intEntry(slots));
+		}
+		setCode.anewarray(objectClass);
+		setCode.dup();
+		setCode.putstatic(field);
+		setCode.labelBinding(ifMade);
+		setCode.iload(1);
+		setCode.aaload();
+		setCode.dup();
+		MethodCode.Label ifFree = setCode.newLabel();
+		setCode.ifnull(ifFree);
+		setCode.checkcast(boxClass);
+		setCode.invokevirtual(boxGet);
+		setCode.areturn();
+		setCode.labelBinding(ifFree);
+		setCode.pop();
+		setCode.getstatic(field);
+		setCode.iload(1);
+		setCode.aload(0);
+		setCode.invokestatic(boxOf);
+		setCode.aastore();
+		setCode.aload(0);
+		setCode.areturn();
 
 		return new Members(fieldName, fieldDesc, pool.addUtf8(GET_NAME), pool.addUtf8(GET_DESC), getCode,
 				pool.addUtf8(SET_NAME), pool.addUtf8(SET_DESC), setCode);
-	}
-
-	private static void emitIntConst(List<Integer> code, ConstantPool pool, int value) {
-		if (value <= 5) {
-			code.add(Opcode.ICONST_0 + value);
-		}
-		else if (value <= 127) {
-			code.add(Opcode.BIPUSH);
-			code.add(value);
-		}
-		else if (value <= Short.MAX_VALUE) {
-			code.add(Opcode.SIPUSH);
-			JvmRuntimeBuilder.emitU2(code, value);
-		}
-		else {
-			code.add(Opcode.LDC_W);
-			JvmRuntimeBuilder.emitU2(code, pool.addInteger(value).index());
-		}
 	}
 
 	/**
@@ -259,7 +228,7 @@ final class JvmQuotePool {
 	 * @param set {@code _qdSet(Object, int)}: fills the slot, answering the datum that
 	 * won
 	 */
-	record Refs(MethodrefConstant get, MethodrefConstant set) {
+	record Refs(MethodRefEntry get, MethodRefEntry set) {
 	}
 
 	/**
@@ -269,13 +238,13 @@ final class JvmQuotePool {
 	 * @param fieldDesc its descriptor
 	 * @param getName {@code _qd}
 	 * @param getDesc {@code (I)Object}
-	 * @param getCode its bytecode (two stack slots, one local)
+	 * @param getCode its body
 	 * @param setName {@code _qdSet}
 	 * @param setDesc its descriptor
-	 * @param setCode its bytecode (three stack slots, two locals; {@code synchronized})
+	 * @param setCode its body ({@code synchronized})
 	 */
 	record Members(Utf8Constant fieldName, Utf8Constant fieldDesc, Utf8Constant getName, Utf8Constant getDesc,
-			List<Integer> getCode, Utf8Constant setName, Utf8Constant setDesc, List<Integer> setCode) {
+			MethodCode getCode, Utf8Constant setName, Utf8Constant setDesc, MethodCode setCode) {
 	}
 
 }

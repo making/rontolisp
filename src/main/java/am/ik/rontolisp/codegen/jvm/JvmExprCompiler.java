@@ -383,11 +383,11 @@ final class JvmExprCompiler {
 		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 		if (dyn != null) {
-			am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn.fields().get(name);
+			java.lang.classfile.constantpool.FieldRefEntry tlField = dyn.fields().get(name);
 			if (tlField != null) {
-				ctx.body.getstatic(tlField.entry());
+				ctx.body.getstatic(tlField);
 				ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).entry());
-				ctx.body.invokestatic(dyn.dget().entry());
+				ctx.body.invokestatic(dyn.dget());
 				return;
 			}
 		}

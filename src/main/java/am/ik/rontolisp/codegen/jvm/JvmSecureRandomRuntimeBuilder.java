@@ -1,15 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
-import java.util.List;
-
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code _randomByte} runtime helper backing the internal
@@ -34,9 +31,9 @@ final class JvmSecureRandomRuntimeBuilder {
 
 	static final String DESC = "()Ljava/lang/Object;";
 
-	/** The emitted helper: its name/descriptor plus the code and frame sizes. */
-	record SecureRandomRuntime(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			Utf8Constant fieldName, Utf8Constant fieldDesc) {
+	/** The emitted helper: its name/descriptor plus the body. */
+	record SecureRandomRuntime(Utf8Constant name, Utf8Constant desc, MethodCode code, Utf8Constant fieldName,
+			Utf8Constant fieldDesc) {
 	}
 
 	private JvmSecureRandomRuntimeBuilder() {
@@ -46,54 +43,31 @@ final class JvmSecureRandomRuntimeBuilder {
 		return AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC;
 	}
 
-	static SecureRandomRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant longValueOf) {
+	static SecureRandomRuntime build(ConstantPool cp, ClassEntry thisClass, MethodRefEntry longValueOf) {
 		Utf8Constant fieldName = cp.addUtf8(FIELD);
 		Utf8Constant fieldDesc = cp.addUtf8(FIELD_DESC);
-		FieldrefConstant field = cp.addFieldref(thisClass, cp.addNameAndType(fieldName, fieldDesc));
-		ClassConstant secureRandomClass = cp.addClass(cp.addUtf8("java/security/SecureRandom"));
-		MethodrefConstant init = cp.addMethodref(secureRandomClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant nextInt = cp.addMethodref(secureRandomClass,
-				cp.addNameAndType(cp.addUtf8("nextInt"), cp.addUtf8("(I)I")));
-		List<Integer> code = new ArrayList<>();
+		FieldRefEntry field = cp.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
+		ClassEntry secureRandomClass = cp.classEntry("java/security/SecureRandom");
+		MethodRefEntry init = cp.methodRef(secureRandomClass, "<init>", "()V");
+		MethodRefEntry nextInt = cp.methodRef(secureRandomClass, "nextInt", "(I)I");
+		MethodCode code = new MethodCode();
 		// if (_secureRandom == null) _secureRandom = new SecureRandom();
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, field.index());
-		int ifInitPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.NEW);
-		emitU2(code, secureRandomClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, init.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, field.index());
-		patchBranch(code, ifInitPos, code.size());
+		code.getstatic(field);
+		MethodCode.Label ifInit = code.newLabel();
+		code.ifnonnull(ifInit);
+		code.new_(secureRandomClass);
+		code.dup();
+		code.invokespecial(init);
+		code.putstatic(field);
+		code.labelBinding(ifInit);
 		// return Long.valueOf(_secureRandom.nextInt(256));
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, field.index());
-		code.add(Opcode.SIPUSH);
-		emitU2(code, 256);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, nextInt.index());
-		code.add(Opcode.I2L);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, longValueOf.index());
-		code.add(Opcode.ARETURN);
-		return new SecureRandomRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 0, code, fieldName, fieldDesc);
-	}
-
-	private static void emitU2(List<Integer> code, int value) {
-		// The shared writer keeps a pool index past 65535 whole
-		// (JvmRuntimeBuilder.emitU2).
-		JvmRuntimeBuilder.emitU2(code, value);
-	}
-
-	private static void patchBranch(List<Integer> code, int branchPos, int target) {
-		int offset = target - branchPos;
-		code.set(branchPos + 1, (offset >> 8) & 0xFF);
-		code.set(branchPos + 2, offset & 0xFF);
+		code.getstatic(field);
+		code.loadConstant(256);
+		code.invokevirtual(nextInt);
+		code.i2l();
+		code.invokestatic(longValueOf);
+		code.areturn();
+		return new SecureRandomRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), code, fieldName, fieldDesc);
 	}
 
 }

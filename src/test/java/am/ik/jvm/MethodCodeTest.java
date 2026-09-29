@@ -152,6 +152,46 @@ class MethodCodeTest {
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 0)).isEqualTo(-1);
 	}
 
+	// A fragment built apart runs where it is appended: its branch and its handler range
+	// move with it.
+	@Test
+	void anAppendedFragmentKeepsItsBranchesAndHandlers() throws Exception {
+		Fixture f = new Fixture("Append");
+		ClassEntry arithmetic = f.cp.classEntry("java/lang/ArithmeticException");
+		// int run(int d) { int r = 1; try { r = 10 / d; } catch (ArithmeticException e) {
+		// r = -1; } if (r > 3) r = 3; return r; } -- the try and the if in a fragment.
+		MethodCode fragment = new MethodCode();
+		MethodCode.Label start = fragment.newBoundLabel();
+		fragment.loadConstant(10).iload(0).idiv().istore(1);
+		MethodCode.Label end = fragment.newBoundLabel();
+		MethodCode.Label after = fragment.newLabel();
+		fragment.goto_(after);
+		MethodCode.Label handler = fragment.newBoundLabel();
+		fragment.pop().iconst_m1().istore(1);
+		fragment.labelBinding(after);
+		MethodCode.Label small = fragment.newLabel();
+		fragment.iload(1).iconst_3().if_icmple(small).iconst_3().istore(1);
+		fragment.labelBinding(small);
+		fragment.exceptionCatch(start, end, handler, arithmetic);
+		MethodCode c = new MethodCode();
+		c.iconst_1().istore(1);
+		c.append(fragment);
+		c.iload(1).ireturn();
+		assertThat(c.handlers()).singleElement().satisfies(h -> assertThat(h.startPc()).isEqualTo(3));
+		f.add("run", "(I)I", c);
+		assertThat(f.load().getMethod("run", int.class).invoke(null, 5)).isEqualTo(2);
+		assertThat(f.load().getMethod("run", int.class).invoke(null, 1)).isEqualTo(3);
+		assertThat(f.load().getMethod("run", int.class).invoke(null, 0)).isEqualTo(-1);
+	}
+
+	@Test
+	void aFragmentWithABranchWaitingForItsLabelIsNotAppended() {
+		MethodCode fragment = new MethodCode();
+		fragment.iconst_0().ifeq(fragment.newLabel());
+		assertThatIllegalStateException().isThrownBy(() -> new MethodCode().append(fragment))
+			.withMessageContaining("never bound");
+	}
+
 	// Over a compile context's body, every byte reaches its operand-stack model, and a
 	// branch patched at its label reconciles the model the way the byte emitter's does.
 	@Test

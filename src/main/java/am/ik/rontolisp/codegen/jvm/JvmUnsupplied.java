@@ -1,16 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * The UNSUPPLIED marker of one compiled class: the value a caller passes for a physical
@@ -50,13 +48,13 @@ final class JvmUnsupplied {
 
 	private static final String ACCESSOR_DESC = "()Ljava/lang/Object;";
 
-	private @Nullable MethodrefConstant accessor;
+	private @Nullable MethodRefEntry accessor;
 
-	private @Nullable MethodrefConstant optArg;
+	private @Nullable MethodRefEntry optArg;
 
 	private @Nullable ConstantPool cp;
 
-	private @Nullable ClassConstant owner;
+	private @Nullable ClassEntry owner;
 
 	private boolean frozen;
 
@@ -66,8 +64,8 @@ final class JvmUnsupplied {
 	 * @param className the internal name of the class being emitted
 	 * @return the methodref of {@code _unsupp()}
 	 */
-	MethodrefConstant ref(ConstantPool cp, String className) {
-		return ref(cp, cp.addClass(cp.addUtf8(className)));
+	MethodRefEntry ref(ConstantPool cp, String className) {
+		return ref(cp, cp.classEntry(className));
 	}
 
 	/**
@@ -76,8 +74,8 @@ final class JvmUnsupplied {
 	 * @param owner the class being emitted
 	 * @return the methodref of {@code _unsupp()}
 	 */
-	MethodrefConstant ref(ConstantPool cp, ClassConstant owner) {
-		MethodrefConstant existing = this.accessor;
+	MethodRefEntry ref(ConstantPool cp, ClassEntry owner) {
+		MethodRefEntry existing = this.accessor;
 		if (existing != null) {
 			return existing;
 		}
@@ -85,8 +83,7 @@ final class JvmUnsupplied {
 			throw new IllegalStateException("the UNSUPPLIED marker was first referenced after the class's methods"
 					+ " were assembled: a caller of a callee with physical optionals was built too late");
 		}
-		MethodrefConstant created = cp.addMethodref(owner,
-				cp.addNameAndType(cp.addUtf8(ACCESSOR_NAME), cp.addUtf8(ACCESSOR_DESC)));
+		MethodRefEntry created = cp.methodRef(owner, ACCESSOR_NAME, ACCESSOR_DESC);
 		this.cp = cp;
 		this.owner = owner;
 		this.accessor = created;
@@ -104,19 +101,29 @@ final class JvmUnsupplied {
 	 * @param owner the class being emitted
 	 * @return the methodref of {@code _optArg(Object)}
 	 */
-	MethodrefConstant optArgRef(ConstantPool cp, ClassConstant owner) {
+	MethodRefEntry optArgRef(ConstantPool cp, ClassEntry owner) {
 		ref(cp, owner);
-		MethodrefConstant existing = this.optArg;
+		MethodRefEntry existing = this.optArg;
 		if (existing != null) {
 			return existing;
 		}
 		if (this.frozen) {
 			throw new IllegalStateException("_optArg was first referenced after the class's methods were assembled");
 		}
-		MethodrefConstant created = cp.addMethodref(owner,
-				cp.addNameAndType(cp.addUtf8(OPT_ARG_NAME), cp.addUtf8(OPT_ARG_DESC)));
+		MethodRefEntry created = cp.methodRef(owner, OPT_ARG_NAME, OPT_ARG_DESC);
 		this.optArg = created;
 		return created;
+	}
+
+	// The two below serve the dispatchers JvmRuntimeBuilder still writes as code bytes
+	// over the pool wrappers; they go when those move onto MethodCode.
+
+	MethodRefEntry ref(ConstantPool cp, ConstantPool.ClassConstant owner) {
+		return ref(cp, owner.entry());
+	}
+
+	MethodRefEntry optArgRef(ConstantPool cp, ConstantPool.ClassConstant owner) {
+		return optArgRef(cp, owner.entry());
 	}
 
 	/**
@@ -142,69 +149,57 @@ final class JvmUnsupplied {
 	 */
 	Members members() {
 		ConstantPool pool = java.util.Objects.requireNonNull(this.cp);
-		ClassConstant thisClass = java.util.Objects.requireNonNull(this.owner);
+		ClassEntry thisClass = java.util.Objects.requireNonNull(this.owner);
 		Utf8Constant fieldName = pool.addUtf8(FIELD_NAME);
 		Utf8Constant fieldDesc = pool.addUtf8(OBJECT_DESC);
-		FieldrefConstant field = pool.addFieldref(thisClass, pool.addNameAndType(fieldName, fieldDesc));
+		FieldRefEntry field = pool.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
 		Utf8Constant initName = pool.addUtf8(INIT_NAME);
 		Utf8Constant accessorDesc = pool.addUtf8(ACCESSOR_DESC);
-		MethodrefConstant init = pool.addMethodref(thisClass, pool.addNameAndType(initName, accessorDesc));
-		ClassConstant objectClass = pool.addClass(pool.addUtf8("java/lang/Object"));
-		MethodrefConstant objectCtor = pool.addMethodref(objectClass,
-				pool.addNameAndType(pool.addUtf8("<init>"), pool.addUtf8("()V")));
+		MethodRefEntry init = pool.methodRef(thisClass, initName.entry(), accessorDesc.entry());
+		ClassEntry objectClass = pool.classEntry("java/lang/Object");
+		MethodRefEntry objectCtor = pool.methodRef(objectClass, "<init>", "()V");
 		// _unsupp(): Object m = _unsupplied; return m != null ? m : _unsuppInit();
-		List<Integer> accessorCode = new ArrayList<>();
-		accessorCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(accessorCode, field.index());
-		accessorCode.add(Opcode.DUP);
-		int ifNullPos = accessorCode.size();
-		accessorCode.add(Opcode.IFNULL);
-		JvmRuntimeBuilder.emitU2(accessorCode, 0);
-		accessorCode.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(accessorCode, ifNullPos, accessorCode.size());
-		accessorCode.add(Opcode.POP);
-		accessorCode.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(accessorCode, init.index());
-		accessorCode.add(Opcode.ARETURN);
+		MethodCode accessorCode = new MethodCode();
+		accessorCode.getstatic(field);
+		accessorCode.dup();
+		MethodCode.Label ifNull = accessorCode.newLabel();
+		accessorCode.ifnull(ifNull);
+		accessorCode.areturn();
+		accessorCode.labelBinding(ifNull);
+		accessorCode.pop();
+		accessorCode.invokestatic(init);
+		accessorCode.areturn();
 		// synchronized _unsuppInit(): the re-check under the class monitor, so a race
 		// creates one object; a racing reader that saw null lands here and gets it.
-		List<Integer> initCode = new ArrayList<>();
-		initCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(initCode, field.index());
-		initCode.add(Opcode.DUP);
-		int ifSetPos = initCode.size();
-		initCode.add(Opcode.IFNONNULL);
-		JvmRuntimeBuilder.emitU2(initCode, 0);
-		initCode.add(Opcode.POP);
-		initCode.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(initCode, objectClass.index());
-		initCode.add(Opcode.DUP);
-		initCode.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(initCode, objectCtor.index());
-		initCode.add(Opcode.DUP);
-		initCode.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(initCode, field.index());
-		JvmRuntimeBuilder.patchBranch(initCode, ifSetPos, initCode.size());
-		initCode.add(Opcode.ARETURN);
+		MethodCode initCode = new MethodCode();
+		initCode.getstatic(field);
+		initCode.dup();
+		MethodCode.Label ifSet = initCode.newLabel();
+		initCode.ifnonnull(ifSet);
+		initCode.pop();
+		initCode.new_(objectClass);
+		initCode.dup();
+		initCode.invokespecial(objectCtor);
+		initCode.dup();
+		initCode.putstatic(field);
+		initCode.labelBinding(ifSet);
+		initCode.areturn();
 		// _optArg(cell): cell == null ? _unsupp() : ((Object[]) cell)[0]
-		List<Integer> optArgCode = null;
+		MethodCode optArgCode = null;
 		if (this.optArg != null) {
-			ClassConstant objectArray = pool.addClass(pool.addUtf8("[Ljava/lang/Object;"));
-			optArgCode = new ArrayList<>();
-			optArgCode.add(Opcode.ALOAD_0);
-			int ifNonNullPos = optArgCode.size();
-			optArgCode.add(Opcode.IFNONNULL);
-			JvmRuntimeBuilder.emitU2(optArgCode, 0);
-			optArgCode.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(optArgCode, java.util.Objects.requireNonNull(this.accessor).index());
-			optArgCode.add(Opcode.ARETURN);
-			JvmRuntimeBuilder.patchBranch(optArgCode, ifNonNullPos, optArgCode.size());
-			optArgCode.add(Opcode.ALOAD_0);
-			optArgCode.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(optArgCode, objectArray.index());
-			optArgCode.add(Opcode.ICONST_0);
-			optArgCode.add(Opcode.AALOAD);
-			optArgCode.add(Opcode.ARETURN);
+			ClassEntry objectArray = pool.classEntry("[Ljava/lang/Object;");
+			optArgCode = new MethodCode();
+			optArgCode.aload(0);
+			MethodCode.Label ifNonNull = optArgCode.newLabel();
+			optArgCode.ifnonnull(ifNonNull);
+			optArgCode.invokestatic(java.util.Objects.requireNonNull(this.accessor));
+			optArgCode.areturn();
+			optArgCode.labelBinding(ifNonNull);
+			optArgCode.aload(0);
+			optArgCode.checkcast(objectArray);
+			optArgCode.iconst_0();
+			optArgCode.aaload();
+			optArgCode.areturn();
 		}
 		return new Members(fieldName, fieldDesc, pool.addUtf8(ACCESSOR_NAME), initName, accessorDesc, accessorCode,
 				initCode, this.optArg == null ? null : pool.addUtf8(OPT_ARG_NAME),
@@ -219,17 +214,16 @@ final class JvmUnsupplied {
 	 * @param accessorName {@code _unsupp}
 	 * @param initName {@code _unsuppInit}
 	 * @param methodDesc both helpers' descriptor
-	 * @param accessorCode {@code _unsupp}'s bytecode, two stack slots, no locals
-	 * @param initCode {@code _unsuppInit}'s bytecode, two stack slots, no locals
+	 * @param accessorCode {@code _unsupp}'s body
+	 * @param initCode {@code _unsuppInit}'s body
 	 * @param optArgName {@code _optArg}, or {@code null} when nothing reads an optional
 	 * out of an argument list
 	 * @param optArgDesc its descriptor, or {@code null} with it
-	 * @param optArgCode its bytecode (two stack slots, one local), or {@code null} with
-	 * it
+	 * @param optArgCode its body, or {@code null} with it
 	 */
 	record Members(Utf8Constant fieldName, Utf8Constant fieldDesc, Utf8Constant accessorName, Utf8Constant initName,
-			Utf8Constant methodDesc, List<Integer> accessorCode, List<Integer> initCode,
-			@Nullable Utf8Constant optArgName, @Nullable Utf8Constant optArgDesc, @Nullable List<Integer> optArgCode) {
+			Utf8Constant methodDesc, MethodCode accessorCode, MethodCode initCode, @Nullable Utf8Constant optArgName,
+			@Nullable Utf8Constant optArgDesc, @Nullable MethodCode optArgCode) {
 	}
 
 }

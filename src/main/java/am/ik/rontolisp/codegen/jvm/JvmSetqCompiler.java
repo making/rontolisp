@@ -194,14 +194,14 @@ final class JvmSetqCompiler {
 			return;
 		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
+		java.lang.classfile.constantpool.FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
 		FieldrefConstant globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name));
 		if (dyn == null || tlField == null) {
 			ctx.body.dup().putstatic(globalFieldIndex.entry());
 			return;
 		}
 		// stack: v -> v v tl -> v tl v -> v wrote? ; when 0, fall through to the global.
-		ctx.body.dup().getstatic(tlField.entry()).swap().invokestatic(dyn.dset().entry());
+		ctx.body.dup().getstatic(tlField).swap().invokestatic(dyn.dset());
 		MethodCode.Label ifWrotePos = ctx.body.newLabel();
 		ctx.body.ifne(ifWrotePos);
 		ctx.body.dup().putstatic(globalFieldIndex.entry());

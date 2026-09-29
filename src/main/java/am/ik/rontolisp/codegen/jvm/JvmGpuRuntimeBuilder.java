@@ -14,7 +14,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code --gpu} device bridge for the generated {@code .class}: the
@@ -249,11 +249,11 @@ final class JvmGpuRuntimeBuilder {
 	 * program -- plus the library's native-image downcall registration -- keyed by their
 	 * paths within an output tree.
 	 */
-	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack, int maxLocals,
-			Utf8Constant initedFieldName, Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops,
-			Utf8Constant writtenName, Utf8Constant writtenDesc, List<Integer> writtenCode, Utf8Constant materializeName,
-			Utf8Constant materializeDesc, List<Integer> materializeCode, Utf8Constant unswapName,
-			Utf8Constant unswapDesc, List<Integer> unswapCode, Map<String, byte[]> classFiles) {
+	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
+			Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops, Utf8Constant writtenName,
+			Utf8Constant writtenDesc, MethodCode writtenCode, Utf8Constant materializeName,
+			Utf8Constant materializeDesc, MethodCode materializeCode, Utf8Constant unswapName, Utf8Constant unswapDesc,
+			MethodCode unswapCode, Map<String, byte[]> classFiles) {
 	}
 
 	/**
@@ -398,44 +398,37 @@ final class JvmGpuRuntimeBuilder {
 
 		// --- _gpuInit body ---------------------------------------------------------
 		// if (_gpuInited != 0) return;
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		int guardPos = code.size();
-		code.add(Opcode.IFNE);
-		JvmRuntimeBuilder.emitU2(code, 0);
+		MethodCode code = new MethodCode();
+		code.getstatic(initedField.entry());
+		MethodCode.Label guard = code.newLabel();
+		code.ifne(guard);
 		// <Program>$GpuBridge.gpuKernels(<the PTX text>) -- the bridge loads from the
 		// program's own class loader like any other class beside it.
 		emitConcatenated(code, ptx, stringConcat);
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, kernels.index());
+		code.invokestatic(kernels.entry());
 		emitConcatenated(code, msl, stringConcat);
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, metalKernels.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
-		code.add(Opcode.RETURN);
+		code.invokestatic(metalKernels.entry());
+		code.iconst_1();
+		code.putstatic(initedField.entry());
+		code.labelBinding(guard);
+		code.return_();
 
 		// --- _gpuWritten body ------------------------------------------------------
 		// return _gpuInited != 0 ? <Program>$GpuBridge.gpuWritten(array) : array;
-		List<Integer> written = guard(initedField, bridgeWritten, 1);
+		MethodCode written = guard(initedField, bridgeWritten, 1);
 
 		// --- _gpuMaterialize body --------------------------------------------------
 		// return _gpuInited != 0 ? <Program>$GpuBridge.gpuMaterialize(array) : array;
-		List<Integer> materialize = guard(initedField, bridgeMaterialize, 1);
+		MethodCode materialize = guard(initedField, bridgeMaterialize, 1);
 
 		// --- _gpuUnswap body -------------------------------------------------------
 		// return _gpuInited != 0 ? <Program>$GpuBridge.gpuUnswap(result, original,
 		// handed)
 		// : result;
-		List<Integer> unswap = guard(initedField, bridgeUnswap, 3);
+		MethodCode unswap = guard(initedField, bridgeUnswap, 3);
 
-		// The deepest stack is [chunk, chunk] while a kernel text is concatenated.
-		return new GpuRuntime(initName, initDesc, code, 2, 0, initedFieldName, initedFieldDesc, ops, writtenName,
-				writtenDesc, written, materializeName, materializeDesc, materialize, unswapName, unswapDesc, unswap,
-				classFiles);
+		return new GpuRuntime(initName, initDesc, code, initedFieldName, initedFieldDesc, ops, writtenName, writtenDesc,
+				written, materializeName, materializeDesc, materialize, unswapName, unswapDesc, unswap, classFiles);
 	}
 
 	/**
@@ -444,34 +437,29 @@ final class JvmGpuRuntimeBuilder {
 	 * that the first argument is answered untouched, which is the right answer for all
 	 * three guards (nothing can be resident, so nothing is swapped).
 	 */
-	private static List<Integer> guard(FieldrefConstant initedField, MethodrefConstant bridge, int arity) {
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		int skip = code.size();
-		code.add(Opcode.IFEQ);
-		JvmRuntimeBuilder.emitU2(code, 0);
+	private static MethodCode guard(FieldrefConstant initedField, MethodrefConstant bridge, int arity) {
+		MethodCode code = new MethodCode();
+		code.getstatic(initedField.entry());
+		MethodCode.Label skip = code.newLabel();
+		code.ifeq(skip);
 		for (int i = 0; i < arity; i++) {
-			code.add(Opcode.ALOAD);
-			code.add(i);
+			code.aload(i);
 		}
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, bridge.index());
-		code.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(code, skip, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.invokestatic(bridge.entry());
+		code.areturn();
+		code.labelBinding(skip);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
 	/** Loads one chunk sequence onto the stack, concatenated back into one string. */
-	private static void emitConcatenated(List<Integer> code, List<ConstantPool.StringConstant> chunks,
+	private static void emitConcatenated(MethodCode code, List<ConstantPool.StringConstant> chunks,
 			MethodrefConstant stringConcat) {
-		JvmRuntimeBuilder.emitLdc(code, chunks.get(0).index());
+		code.ldc(chunks.get(0).entry());
 		for (int i = 1; i < chunks.size(); i++) {
-			JvmRuntimeBuilder.emitLdc(code, chunks.get(i).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, stringConcat.index());
+			code.ldc(chunks.get(i).entry());
+			code.invokevirtual(stringConcat.methodRefEntry());
 		}
 	}
 

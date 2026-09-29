@@ -19,7 +19,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LetBoundDesignators;
 import am.ik.rontolisp.compiler.ParallelLetStaging;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -131,7 +130,7 @@ final class JvmLetCompiler {
 					// Body reads resolve dynamic-first; a setq of the name writes BOTH
 					// (JvmSetqCompiler).
 					JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-					FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
+					FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
 					if (dyn == null || tlField == null) {
 						// The pre-pass promised every dynamically-bound special a
 						// ThreadLocal; a miss here must fail the compile loudly, never
@@ -141,8 +140,8 @@ final class JvmLetCompiler {
 										+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
 					}
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
-					ctx.body.dup().getstatic(tlField.entry()).swap();
-					ctx.body.invokestatic(dyn.dbind().entry());
+					ctx.body.dup().getstatic(tlField).swap();
+					ctx.body.invokestatic(dyn.dbind());
 					int saveSlot = ctx.allocTemp();
 					ctx.body.astore(saveSlot);
 					if (dynamicRestores == null) {
@@ -378,7 +377,7 @@ final class JvmLetCompiler {
 	private static void emitRestore(int tlFieldIndex, int saveSlot, JvmLispCompiler.Ctx ctx) {
 		ctx.body.getstatic((FieldRefEntry) ctx.cp.entryAt(tlFieldIndex))
 			.aload(saveSlot)
-			.invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet().methodRefEntry());
+			.invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet());
 	}
 
 	/**

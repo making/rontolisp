@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
@@ -38,7 +39,7 @@ final class JvmProgvCompiler {
 		List<LispVal> parts = cons.toList();
 		String name = ((LispSymbol) parts.get(1)).name();
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		ConstantPool.FieldrefConstant tl = dyn == null ? null : dyn.fields().get(name);
+		FieldRefEntry tl = dyn == null ? null : dyn.fields().get(name);
 		if (dyn == null || tl == null) {
 			// The lowering only generates arms for the program's specials, and a
 			// progv-using program forces every special into the dynamically-bound set
@@ -49,7 +50,7 @@ final class JvmProgvCompiler {
 							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
 		}
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.body.getstatic(tl.entry()).swap().invokestatic(dyn.dbind().entry());
+		ctx.body.getstatic(tl).swap().invokestatic(dyn.dbind());
 	}
 
 	/** {@code (%progv-dyn-unbind NAME prev)}: restore the saved cell; answers nil. */
@@ -57,15 +58,15 @@ final class JvmProgvCompiler {
 		List<LispVal> parts = cons.toList();
 		String name = ((LispSymbol) parts.get(1)).name();
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
-		ConstantPool.FieldrefConstant tl = dyn == null ? null : dyn.fields().get(name);
+		FieldRefEntry tl = dyn == null ? null : dyn.fields().get(name);
 		if (dyn == null || tl == null) {
 			throw new IllegalStateException(
 					"special variable " + name + " has no thread-local store for the progv lowering"
 							+ " (SpecialVarCollector.collectDynamicallyBound missed the progv)");
 		}
-		ctx.body.getstatic(tl.entry());
+		ctx.body.getstatic(tl);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		ctx.body.invokevirtual(dyn.tlSet().methodRefEntry()).aconst_null();
+		ctx.body.invokevirtual(dyn.tlSet()).aconst_null();
 	}
 
 	/** {@code (%progv-genv)}: the eval runtime's global env mirror, as a Lisp alist. */

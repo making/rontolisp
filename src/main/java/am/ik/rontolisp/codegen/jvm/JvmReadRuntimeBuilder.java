@@ -377,8 +377,7 @@ final class JvmReadRuntimeBuilder {
 	 * {@code Object[]{pkg, member, layout, initTexts}} entry per registered layout, in
 	 * registration order (classes carry null layout/initTexts -- they exist only for the
 	 * "it names a class" hint). The struct layouts must already be interned in the layout
-	 * pool. The chunk's operand stack peaks at 9; the caller's declared {@code <clinit>}
-	 * max_stack must cover it.
+	 * pool.
 	 * @param cp the constant pool (still open -- this mints CONSTANT_String entries)
 	 * @param thisClass the generated class
 	 * @param pool the layout pool holding the interned struct layout fields
@@ -388,7 +387,7 @@ final class JvmReadRuntimeBuilder {
 	 * @param stringClass {@code java/lang/String}
 	 * @return the code chunk (no trailing RETURN)
 	 */
-	static List<Integer> structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
+	static MethodCode structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
 			ClosRegistry registry, ClassEntry objectClass, ClassEntry objectArrayClass, ClassEntry stringClass) {
 		FieldRefEntry field = cp.fieldRef(thisClass, STRUCT_TABLE_FIELD, STRUCT_TABLE_DESC);
 		// The PATHNAME layout is not a #S-readable type (its literal syntax is #P,
@@ -448,7 +447,7 @@ final class JvmReadRuntimeBuilder {
 			a.aastore();
 		}
 		a.putstatic(field);
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	private static FieldRefEntry layoutFieldFor(JvmLispCompiler.LayoutPool pool, String tag) {

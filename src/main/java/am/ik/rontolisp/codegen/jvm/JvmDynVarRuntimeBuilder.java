@@ -1,5 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -8,11 +11,8 @@ import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the thread-scoped dynamic-binding runtime for special variables that are
@@ -62,14 +62,13 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param methods the three helper method bodies to register
 	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal
 	 */
-	record DynVarRuntime(Map<String, FieldrefConstant> fields, List<Utf8Constant> fieldNameUtfs,
-			Utf8Constant fieldDescUtf, MethodrefConstant tlSet, MethodrefConstant dget, MethodrefConstant dbind,
-			MethodrefConstant dset, List<HelperMethod> methods, List<Integer> clinitCode, Utf8Constant clinitName,
-			Utf8Constant clinitDesc) {
+	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Constant> fieldNameUtfs, Utf8Constant fieldDescUtf,
+			MethodRefEntry tlSet, MethodRefEntry dget, MethodRefEntry dbind, MethodRefEntry dset,
+			List<HelperMethod> methods, MethodCode clinitCode, Utf8Constant clinitName, Utf8Constant clinitDesc) {
 	}
 
-	/** One helper method body: name/descriptor constants, code, and its stack shape. */
-	record HelperMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxStack, int maxLocals) {
+	/** One helper method: its name/descriptor constants and body. */
+	record HelperMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
 	}
 
 	// `boundSpecials` is a SequencedSet, not a plain Set: its iteration order is the mint
@@ -77,31 +76,25 @@ final class JvmDynVarRuntimeBuilder {
 	// so
 	// an unordered one emits a different-but-equivalent class per JVM run
 	// (.kb/emitted-output-determinism.md).
-	static DynVarRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
+	static DynVarRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
 			SequencedSet<String> boundSpecials) {
-		ClassConstant threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
-		MethodrefConstant tlCtor = cp.addMethodref(threadLocalClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant tlGet = cp.addMethodref(threadLocalClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant tlSet = cp.addMethodref(threadLocalClass,
-				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		ClassEntry threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
+		MethodRefEntry tlCtor = cp.methodRef(threadLocalClass, "<init>", "()V");
+		MethodRefEntry tlGet = cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;");
+		MethodRefEntry tlSet = cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V");
 		Utf8Constant fieldDescUtf = cp.addUtf8("Ljava/lang/ThreadLocal;");
-		Map<String, FieldrefConstant> fields = new LinkedHashMap<>();
+		Map<String, FieldRefEntry> fields = new LinkedHashMap<>();
 		List<Utf8Constant> fieldNameUtfs = new ArrayList<>();
-		List<Integer> clinitCode = new ArrayList<>();
+		MethodCode clinitCode = new MethodCode();
 		for (String name : boundSpecials) {
 			Utf8Constant nameUtf = cp.addUtf8("_d$" + JvmLispCompiler.mangleMethodName(name));
 			fieldNameUtfs.add(nameUtf);
-			FieldrefConstant field = cp.addFieldref(thisClass, cp.addNameAndType(nameUtf, fieldDescUtf));
+			FieldRefEntry field = cp.fieldRef(thisClass, nameUtf.entry(), fieldDescUtf.entry());
 			fields.put(name, field);
-			clinitCode.add(Opcode.NEW);
-			JvmRuntimeBuilder.emitU2(clinitCode, threadLocalClass.index());
-			clinitCode.add(Opcode.DUP);
-			clinitCode.add(Opcode.INVOKESPECIAL);
-			JvmRuntimeBuilder.emitU2(clinitCode, tlCtor.index());
-			clinitCode.add(Opcode.PUTSTATIC);
-			JvmRuntimeBuilder.emitU2(clinitCode, field.index());
+			clinitCode.new_(threadLocalClass);
+			clinitCode.dup();
+			clinitCode.invokespecial(tlCtor);
+			clinitCode.putstatic(field);
 		}
 		String refDesc = "(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Ljava/lang/Object;";
 		Utf8Constant dgetName = cp.addUtf8("_dget");
@@ -109,85 +102,72 @@ final class JvmDynVarRuntimeBuilder {
 		Utf8Constant dsetName = cp.addUtf8("_dset");
 		Utf8Constant refDescUtf = cp.addUtf8(refDesc);
 		Utf8Constant boolDescUtf = cp.addUtf8("(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Z");
-		MethodrefConstant dget = cp.addMethodref(thisClass, cp.addNameAndType(dgetName, refDescUtf));
-		MethodrefConstant dbind = cp.addMethodref(thisClass, cp.addNameAndType(dbindName, refDescUtf));
-		MethodrefConstant dset = cp.addMethodref(thisClass, cp.addNameAndType(dsetName, boolDescUtf));
-		List<HelperMethod> methods = List.of(
-				new HelperMethod(dgetName, refDescUtf, dgetCode(tlGet, objectArrayClass), 2, 2),
-				new HelperMethod(dbindName, refDescUtf, dbindCode(tlGet, tlSet, cp), 5, 2),
-				new HelperMethod(dsetName, boolDescUtf, dsetCode(tlGet, objectArrayClass), 3, 2));
+		MethodRefEntry dget = cp.methodRef(thisClass, dgetName.entry(), refDescUtf.entry());
+		MethodRefEntry dbind = cp.methodRef(thisClass, dbindName.entry(), refDescUtf.entry());
+		MethodRefEntry dset = cp.methodRef(thisClass, dsetName.entry(), boolDescUtf.entry());
+		List<HelperMethod> methods = List.of(new HelperMethod(dgetName, refDescUtf, dgetCode(tlGet, objectArrayClass)),
+				new HelperMethod(dbindName, refDescUtf, dbindCode(tlGet, tlSet, cp)),
+				new HelperMethod(dsetName, boolDescUtf, dsetCode(tlGet, objectArrayClass)));
 		return new DynVarRuntime(fields, fieldNameUtfs, fieldDescUtf, tlSet, dget, dbind, dset, methods, clinitCode,
 				cp.addUtf8("<clinit>"), cp.addUtf8("()V"));
 	}
 
 	/** {@code _dget(tl, global)}: the thread's cell value when bound, else the global. */
-	private static List<Integer> dgetCode(MethodrefConstant tlGet, ClassConstant objectArrayClass) {
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.ALOAD); // 0
-		code.add(0);
-		code.add(Opcode.INVOKEVIRTUAL); // 2
-		JvmRuntimeBuilder.emitU2(code, tlGet.index());
-		code.add(Opcode.DUP); // 5
-		code.add(Opcode.IFNULL); // 6 -> 15
-		JvmRuntimeBuilder.emitU2(code, 15 - 6);
-		code.add(Opcode.CHECKCAST); // 9
-		JvmRuntimeBuilder.emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_0); // 12
-		code.add(Opcode.AALOAD); // 13
-		code.add(Opcode.ARETURN); // 14
-		code.add(Opcode.POP); // 15
-		code.add(Opcode.ALOAD); // 16
-		code.add(1);
-		code.add(Opcode.ARETURN); // 18
+	private static MethodCode dgetCode(MethodRefEntry tlGet, ClassEntry objectArrayClass) {
+		MethodCode code = new MethodCode();
+		code.aload(0);
+		code.invokevirtual(tlGet);
+		code.dup();
+		MethodCode.Label unbound = code.newLabel();
+		code.ifnull(unbound);
+		code.checkcast(objectArrayClass);
+		code.iconst_0();
+		code.aaload();
+		code.areturn();
+		code.labelBinding(unbound);
+		code.pop();
+		code.aload(1);
+		code.areturn();
 		return code;
 	}
 
 	/** {@code _dbind(tl, v)}: install a fresh cell, answer the previous one. */
-	private static List<Integer> dbindCode(MethodrefConstant tlGet, MethodrefConstant tlSet, ConstantPool cp) {
-		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.ALOAD); // 0
-		code.add(0);
-		code.add(Opcode.INVOKEVIRTUAL); // 2: old
-		JvmRuntimeBuilder.emitU2(code, tlGet.index());
-		code.add(Opcode.ICONST_1); // 5
-		code.add(Opcode.ANEWARRAY); // 6
-		JvmRuntimeBuilder.emitU2(code, objectClass.index());
-		code.add(Opcode.DUP); // 9
-		code.add(Opcode.ICONST_0); // 10
-		code.add(Opcode.ALOAD); // 11
-		code.add(1);
-		code.add(Opcode.AASTORE); // 13: old cell
-		code.add(Opcode.ALOAD); // 14
-		code.add(0);
-		code.add(Opcode.SWAP); // 16: old tl cell
-		code.add(Opcode.INVOKEVIRTUAL); // 17
-		JvmRuntimeBuilder.emitU2(code, tlSet.index());
-		code.add(Opcode.ARETURN); // 20
+	private static MethodCode dbindCode(MethodRefEntry tlGet, MethodRefEntry tlSet, ConstantPool cp) {
+		ClassEntry objectClass = cp.classEntry("java/lang/Object");
+		MethodCode code = new MethodCode();
+		code.aload(0);
+		code.invokevirtual(tlGet); // old
+		code.iconst_1();
+		code.anewarray(objectClass);
+		code.dup();
+		code.iconst_0();
+		code.aload(1);
+		code.aastore(); // old cell
+		code.aload(0);
+		code.swap(); // old tl cell
+		code.invokevirtual(tlSet);
+		code.areturn();
 		return code;
 	}
 
 	/** {@code _dset(tl, v)}: write the thread's cell when bound (1), else answer 0. */
-	private static List<Integer> dsetCode(MethodrefConstant tlGet, ClassConstant objectArrayClass) {
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.ALOAD); // 0
-		code.add(0);
-		code.add(Opcode.INVOKEVIRTUAL); // 2
-		JvmRuntimeBuilder.emitU2(code, tlGet.index());
-		code.add(Opcode.DUP); // 5
-		code.add(Opcode.IFNULL); // 6 -> 18
-		JvmRuntimeBuilder.emitU2(code, 18 - 6);
-		code.add(Opcode.CHECKCAST); // 9
-		JvmRuntimeBuilder.emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_0); // 12
-		code.add(Opcode.ALOAD); // 13
-		code.add(1);
-		code.add(Opcode.AASTORE); // 15
-		code.add(Opcode.ICONST_1); // 16
-		code.add(Opcode.IRETURN); // 17
-		code.add(Opcode.POP); // 18
-		code.add(Opcode.ICONST_0); // 19
-		code.add(Opcode.IRETURN); // 20
+	private static MethodCode dsetCode(MethodRefEntry tlGet, ClassEntry objectArrayClass) {
+		MethodCode code = new MethodCode();
+		code.aload(0);
+		code.invokevirtual(tlGet);
+		code.dup();
+		MethodCode.Label unbound = code.newLabel();
+		code.ifnull(unbound);
+		code.checkcast(objectArrayClass);
+		code.iconst_0();
+		code.aload(1);
+		code.aastore();
+		code.iconst_1();
+		code.ireturn();
+		code.labelBinding(unbound);
+		code.pop();
+		code.iconst_0();
+		code.ireturn();
 		return code;
 	}
 

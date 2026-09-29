@@ -67,7 +67,6 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
 import org.jspecify.annotations.Nullable;
 
@@ -1988,8 +1987,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
 		// more than one thread -- one register per thread (JvmMvChannel).
 		FieldrefConstant mvSpillField = globalFields.get(LispNames.MV_SPILL);
-		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : usesAsyncSpawn || usesThreads
-				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
+		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null
+				: usesAsyncSpawn || usesThreads ? JvmMvChannel.perThread(cp, thisClass.entry(), mvSpillField.entry())
+						: new JvmMvChannel(mvSpillField.entry(), null);
 		// A special that is DYNAMICALLY BOUND somewhere additionally gets a per-thread
 		// store (a _d$ ThreadLocal next to its _g$ global default), so concurrent
 		// http-handler requests binding the same special do not clobber each other --
@@ -2004,7 +2004,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			boundSpecialVars.addAll(specialVars);
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass.entry(), objectArrayClass.entry(), boundSpecialVars);
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -3124,7 +3124,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant rdStructsName = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
 		Utf8Constant rdStructsDesc = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
-		List<Integer> structTableClinit = List.of();
+		@Nullable MethodCode structTableClinit = null;
 		if (usesRead) {
 			// The reader reads #S(...) and #P"..." only when an instance can exist at
 			// all (the same gate the instance machinery uses); with it on, every struct
@@ -3151,7 +3151,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
-		final List<Integer> structTableClinitFinal = structTableClinit;
+		final @Nullable MethodCode structTableClinitFinal = structTableClinit;
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
@@ -3482,7 +3482,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// rontolisp:tls-connect built-in); built before the IO runtime so the stream
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
-				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
+				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass.entry(), longValueOf.methodRefEntry()) : null;
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
 				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
@@ -3798,14 +3798,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
 		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
 		// before the writeFields/writeMethods lambdas run.
-		final List<Integer> layoutClinitCode = new ArrayList<>();
+		final MethodCode layoutClinitCode = new MethodCode();
 		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
 		// The bignum-literal half of <clinit>, assembled HERE for the same reason: it
 		// mints the CONSTANT_String decimal forms, and the pool is complete because
 		// every body (defun, top-level chunk, lambda, outlined fused site) has been
 		// compiled by now. Empty for a program with no bignum literal, which is then
 		// emitted byte for byte as before.
-		final List<Integer> bigIntClinitCode = new ArrayList<>();
+		final MethodCode bigIntClinitCode = new MethodCode();
 		mainCtx.bigIntPool.emitClinitInit(bigIntClinitCode, cp);
 		// When the standard-stream handles are reserved, the stream table must EXIST
 		// from the start with those slots empty. _addStream reserves the COUNT, but it
@@ -4038,7 +4038,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readSrcName, readSrcDesc);
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readPosName, readPosDesc);
 		}
-		if (!structTableClinitFinal.isEmpty()) {
+		if (structTableClinitFinal != null) {
 			// The runtime struct-layout directory for #S(...) read at run time.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rdStructsName, rdStructsDesc);
 		}
@@ -4094,10 +4094,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mainCtx.quotePool.used()) {
 			JvmQuotePool.Members table = mainCtx.quotePool.members();
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.fieldName(), table.fieldDesc());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc(), 2, 1,
-					table.getCode(), List.of());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					table.setName(), table.setDesc(), 3, 2, table.setCode(), List.of());
+			table.getCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc());
+			table.setCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						table.setName(), table.setDesc());
 		}
 		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
 		// create it on first use, in a class with a callee that takes physical
@@ -4108,14 +4109,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mainCtx.unsupplied.used()) {
 			JvmUnsupplied.Members marker = mainCtx.unsupplied.members();
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.fieldName(), marker.fieldDesc());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
-					marker.methodDesc(), 2, 0, marker.accessorCode(), List.of());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					marker.initName(), marker.methodDesc(), 2, 0, marker.initCode(), List.of());
-			if (marker.optArgCode() != null) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()), 2, 1,
-						marker.optArgCode(), List.of());
+			marker.accessorCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
+						marker.methodDesc());
+			marker.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						marker.initName(), marker.methodDesc());
+			MethodCode optArgCode = marker.optArgCode();
+			if (optArgCode != null) {
+				optArgCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()));
 			}
 		}
 
@@ -4170,7 +4173,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					dm.maxLocals, dm.code, List.of());
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
-				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty()
+				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
 				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)
 				|| javaSignals != null) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
@@ -4205,59 +4208,43 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (mvChannel != null && mvChannel.perThread() != null) {
 				// The per-thread %mv-spill store joins the same initializer: every
 				// thread's register starts null, nil.
-				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal().entry());
+				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
 			}
 			if (javaSignals != null) {
 				// ... as does the record of what functions called back from Java raised.
 				tlFields.add(javaSignals.field());
 			}
-			List<Integer> clinitCode = new java.util.ArrayList<>();
+			MethodCode clinitCode = new MethodCode();
 			// The holder-presence probe's single initialization (.todo/757):
 			// _hasComplex is true when the travelling RontoComplex class
 			// loads, false when a lone class runs without it beside it (then
 			// every holder test takes its holder-less shape, which is exact
 			// because no holder can exist). First, so the top level a
-			// <clinit> may run already sees the settled value. Peaks at one
-			// stack slot, under every declared clinit maximum.
-			final List<ClassDefinition.Handler> clinitProbeTable;
+			// <clinit> may run already sees the settled value.
 			if (usesComplex) {
-				List<Integer> probe = new java.util.ArrayList<>();
-				int tryStart = probe.size();
-				probe.add(Opcode.LDC_W);
-				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexTarget).index());
-				probe.add(Opcode.INVOKESTATIC);
-				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexProbe).index());
-				probe.add(Opcode.POP);
-				probe.add(Opcode.ICONST_1);
-				probe.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
-				int toDone = probe.size();
-				probe.add(Opcode.GOTO);
-				JvmRuntimeBuilder.emitU2(probe, 0);
-				int handler = probe.size();
+				MethodCode.Label tryStart = clinitCode.newBoundLabel();
+				clinitCode.ldc(java.util.Objects.requireNonNull(hasComplexTarget).entry());
+				clinitCode.invokestatic(java.util.Objects.requireNonNull(hasComplexProbe).methodRefEntry());
+				clinitCode.pop();
+				clinitCode.iconst_1();
+				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField).entry());
+				MethodCode.Label tryEnd = clinitCode.newBoundLabel();
+				MethodCode.Label done = clinitCode.newLabel();
+				clinitCode.goto_(done);
+				MethodCode.Label handler = clinitCode.newBoundLabel();
 				// The caught exception is on the stack on handler entry.
-				probe.add(Opcode.POP);
-				probe.add(Opcode.ICONST_0);
-				probe.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
-				int done = probe.size();
-				JvmRuntimeBuilder.patchBranch(probe, toDone, done);
-				clinitCode.addAll(probe);
-				clinitProbeTable = List.of(new ClassDefinition.Handler(tryStart, toDone, handler,
-						java.util.Objects.requireNonNull(hasComplexAbsent).index()));
-			}
-			else {
-				clinitProbeTable = List.of();
+				clinitCode.pop();
+				clinitCode.iconst_0();
+				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField).entry());
+				clinitCode.labelBinding(done);
+				clinitCode.exceptionCatch(tryStart, tryEnd, handler,
+						java.util.Objects.requireNonNull(hasComplexAbsent).entry());
 			}
 			for (FieldRefEntry tlField : tlFields) {
-				clinitCode.add(Opcode.NEW);
-				JvmRuntimeBuilder.emitU2(clinitCode,
-						java.util.Objects.requireNonNull(channel.threadLocalClass).index());
-				clinitCode.add(Opcode.DUP);
-				clinitCode.add(Opcode.INVOKESPECIAL);
-				JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(channel.tlCtor).index());
-				clinitCode.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
+				clinitCode.new_(java.util.Objects.requireNonNull(channel.threadLocalClass).entry());
+				clinitCode.dup();
+				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor).methodRefEntry());
+				clinitCode.putstatic(tlField);
 			}
 			if (dynVarRuntime != null) {
 				// The dynamic-binding ThreadLocals (one per bound special) join
@@ -4265,26 +4252,22 @@ public final class JvmLispCompiler implements LispCompiler {
 				// same initializer -- never lazily: a racy first binding from two
 				// request threads would mint two ThreadLocals and lose one
 				// binding.
-				clinitCode.addAll(dynVarRuntime.clinitCode());
+				clinitCode.append(dynVarRuntime.clinitCode());
 			}
 			if (streamsFieldRef != null) {
 				// _streams = new Object[16]; _streamCount = 3 -- the reserved
 				// standard-stream handles as empty table slots (see above).
-				clinitCode.add(Opcode.BIPUSH);
-				clinitCode.add(16);
-				clinitCode.add(Opcode.ANEWARRAY);
-				JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-				clinitCode.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(clinitCode, streamsFieldRef.index());
-				clinitCode.add(Opcode.ICONST_3);
-				clinitCode.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(streamCountFieldRef).index());
+				clinitCode.loadConstant(16);
+				clinitCode.anewarray(objectClass.entry());
+				clinitCode.putstatic(streamsFieldRef.entry());
+				clinitCode.iconst_3();
+				clinitCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef).entry());
 			}
 			// The bignum literals go in before the layouts: they are plain
 			// values with no dependency of their own, and every later fragment
 			// (and the top-level runner, invoked last) may read them.
-			clinitCode.addAll(bigIntClinitCode);
-			clinitCode.addAll(layoutClinitCode);
+			clinitCode.append(bigIntClinitCode);
+			clinitCode.append(layoutClinitCode);
 			// The standard stream variables' defaults, one table
 			// (StreamDesignators) feeding BOTH homes: the per-name global field
 			// a direct read uses, and the eval runtime's _genv mirror that
@@ -4294,66 +4277,46 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (globalField != null) {
 					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
 							streamLayoutField, streamKindStandardStr);
-					clinitCode.add(Opcode.PUTSTATIC);
-					JvmRuntimeBuilder.emitU2(clinitCode, globalField.index());
+					clinitCode.putstatic(globalField.entry());
 				}
 				ConstantPool.StringConstant seedName = streamGenvSeeds.get(streamVar.getKey());
 				if (seedName != null) {
 					// _genv = {{name, default}, _genv} -- the binding shape
 					// _store prepends, so a later top-level assignment MUTATES
 					// this cell rather than shadowing it.
-					clinitCode.add(Opcode.ICONST_2);
-					clinitCode.add(Opcode.ANEWARRAY);
-					JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-					clinitCode.add(Opcode.DUP);
-					clinitCode.add(Opcode.ICONST_0);
-					clinitCode.add(Opcode.ICONST_2);
-					clinitCode.add(Opcode.ANEWARRAY);
-					JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-					clinitCode.add(Opcode.DUP);
-					clinitCode.add(Opcode.ICONST_0);
-					clinitCode.add(Opcode.LDC_W);
-					JvmRuntimeBuilder.emitU2(clinitCode, seedName.index());
-					clinitCode.add(Opcode.AASTORE);
-					clinitCode.add(Opcode.DUP);
-					clinitCode.add(Opcode.ICONST_1);
+					clinitCode.iconst_2();
+					clinitCode.anewarray(objectClass.entry());
+					clinitCode.dup();
+					clinitCode.iconst_0();
+					clinitCode.iconst_2();
+					clinitCode.anewarray(objectClass.entry());
+					clinitCode.dup();
+					clinitCode.iconst_0();
+					clinitCode.ldc(seedName.entry());
+					clinitCode.aastore();
+					clinitCode.dup();
+					clinitCode.iconst_1();
 					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
 							streamLayoutField, streamKindStandardStr);
-					clinitCode.add(Opcode.AASTORE);
-					clinitCode.add(Opcode.AASTORE);
-					clinitCode.add(Opcode.DUP);
-					clinitCode.add(Opcode.ICONST_1);
-					clinitCode.add(Opcode.GETSTATIC);
-					JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
-					clinitCode.add(Opcode.AASTORE);
-					clinitCode.add(Opcode.PUTSTATIC);
-					JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
+					clinitCode.aastore();
+					clinitCode.aastore();
+					clinitCode.dup();
+					clinitCode.iconst_1();
+					clinitCode.getstatic(genvField.entry());
+					clinitCode.aastore();
+					clinitCode.putstatic(genvField.entry());
 				}
 			}
-			clinitCode.addAll(structTableClinitFinal);
+			if (structTableClinitFinal != null) {
+				clinitCode.append(structTableClinitFinal);
+			}
 			if (topRunnerRef != null) {
 				// Run the top level last, after every piece of runtime infra
 				// above is seeded — this is the export-carrying class's
 				// "top level at instantiation" (see mainCtx above).
-				clinitCode.add(Opcode.INVOKESTATIC);
-				JvmRuntimeBuilder.emitU2(clinitCode, topRunnerRef.index());
+				clinitCode.invokestatic(topRunnerRef.methodRefEntry());
 			}
-			clinitCode.add(Opcode.RETURN);
-			// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
-			// group at 4 (array; DUP; index; LDC), the reader's struct directory
-			// at 10 (outer array, entry, initTexts nested builds each keep a DUP
-			// and an index live), a _genv seed at 8 (outer array plus index under
-			// the inner array build, whose boxed handle is briefly a long).
-			// A stream-VALUE seed adds its own Object[3] build (array, dup,
-			// index, then a briefly-two-slot long) on top of whichever nest it
-			// sits in, hence the +6. The writer recomputes the shipped max_stack from
-			// the code, so this value only documents the peak.
-			// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
-			// dup, the decimal string).
-			final int clinitMaxStack = Math.max(
-					Math.max(streamGenvSeeds.isEmpty() ? 0 : 8, mainCtx.bigIntPool.isEmpty() ? 0 : 3),
-					!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
-					+ (streamLayoutField != null ? 6 : 0);
+			clinitCode.return_();
 			// A layout-only program never runs ensureThreadLocalInfra, so the
 			// channel's <clinit> name constants are null there; a
 			// bound-special-only
@@ -4368,15 +4331,14 @@ public final class JvmLispCompiler implements LispCompiler {
 							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
 									: standardOutputClinitDesc != null ? standardOutputClinitDesc
 											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
-			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitMaxStack, 0, clinitCode,
-					clinitProbeTable);
+			clinitCode.addTo(definition, AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf);
 		}
 		if (dynVarRuntime != null) {
 			// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
 			// helpers.
 			for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
-						hm.maxStack(), hm.maxLocals(), hm.code(), List.of());
+				hm.code()
+					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8());
 			}
 		}
 		if (mainCtx.conditionChannel.used || teTlField != null) {
@@ -4435,9 +4397,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// steady state pays one uncontended class monitor per call, which every
 		// one of these paths (reflection, FFM, a kernel) dwarfs.
 		if (javaRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					javaRuntime.initName(), javaRuntime.initDesc(), javaRuntime.maxStack(), javaRuntime.maxLocals(),
-					javaRuntime.initCode(), List.of());
+			javaRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						javaRuntime.initName(), javaRuntime.initDesc());
 		}
 		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
 		// helpers they share, made while the bodies above were compiled; then the
@@ -4464,19 +4426,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.implementationCallbacks = Set.of();
 		}
 		if (objcRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					objcRuntime.initName(), objcRuntime.initDesc(), objcRuntime.maxStack(), objcRuntime.maxLocals(),
-					objcRuntime.initCode(), List.of());
+			objcRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						objcRuntime.initName(), objcRuntime.initDesc());
 		}
 		if (ffiRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					ffiRuntime.initName(), ffiRuntime.initDesc(), ffiRuntime.maxStack(), ffiRuntime.maxLocals(),
-					ffiRuntime.initCode(), List.of());
+			ffiRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						ffiRuntime.initName(), ffiRuntime.initDesc());
 		}
 		if (simdRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					simdRuntime.initName(), simdRuntime.initDesc(), simdRuntime.maxStack(), simdRuntime.maxLocals(),
-					simdRuntime.initCode(), simdRuntime.initExceptionTable());
+			simdRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						simdRuntime.initName(), simdRuntime.initDesc());
 			// _simdReady(): returns whether the bridge linked --
 			// _simdInit must have run first, same as every ops.get(member)
 			// call site. False on a runtime without jdk.incubator.vector, so
@@ -4484,38 +4446,43 @@ public final class JvmLispCompiler implements LispCompiler {
 			// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
 			// instead of resolving a method reference into a bridge class that
 			// cannot link.
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
-					simdRuntime.readyDesc(), 1, 0, simdRuntime.readyCode(), List.of());
+			simdRuntime.readyCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
+						simdRuntime.readyDesc());
 		}
 		if (gpuRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					gpuRuntime.initName(), gpuRuntime.initDesc(), gpuRuntime.maxStack(), gpuRuntime.maxLocals(),
-					gpuRuntime.initCode(), List.of());
+			gpuRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						gpuRuntime.initName(), gpuRuntime.initDesc());
 			// The residency invalidation guard, called from every in-place write
 			// to a packed float array, answering the array to write into
 			// (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
-					gpuRuntime.writtenDesc(), 1, 1, gpuRuntime.writtenCode(), List.of());
+			gpuRuntime.writtenCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
+						gpuRuntime.writtenDesc());
 			// Its read-side twin, called before every host read of one and
 			// answering the array to read
 			// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
-					gpuRuntime.materializeDesc(), 1, 1, gpuRuntime.materializeCode(), List.of());
+			gpuRuntime.materializeCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
+						gpuRuntime.materializeDesc());
 			// And the one a call site runs over a host rung's answer, per
 			// argument it handed over (JvmGpuRuntimeBuilder.UNSWAP_METHOD).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
-					gpuRuntime.unswapDesc(), 3, 3, gpuRuntime.unswapCode(), List.of());
+			gpuRuntime.unswapCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
+						gpuRuntime.unswapDesc());
 		}
 		if (geomRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					geomRuntime.initName(), geomRuntime.initDesc(), geomRuntime.maxStack(), geomRuntime.maxLocals(),
-					geomRuntime.initCode(), geomRuntime.initExceptionTable());
+			geomRuntime.initCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+						geomRuntime.initName(), geomRuntime.initDesc());
 			// _geomReady(): whether the bridge define succeeded. False on a JRE
 			// older than the template's class version, so every accelerated call
 			// site declines to the spliced geom.lisp defun instead of resolving a
 			// method reference into a class that was never defined.
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
-					geomRuntime.readyDesc(), 1, 0, geomRuntime.readyCode(), List.of());
+			geomRuntime.readyCode()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
+						geomRuntime.readyDesc());
 		}
 		if (fetchRuntimeBodies != null) {
 			JvmFetchRuntimeBuilder.FetchMethod fm = fetchRuntimeBodies.fetch();
@@ -4530,10 +4497,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mvChannel != null && mvChannel.perThread() != null) {
 			JvmMvChannel.PerThread mvPerThread = mvChannel.perThread();
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
-					mvPerThread.getDesc(), 2, 0, mvPerThread.getCode(mvChannel.field()), List.of());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
-					mvPerThread.setDesc(), 2, 1, mvPerThread.setCode(mvChannel.field()), List.of());
+			mvPerThread.getCode(mvChannel.field())
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
+						mvPerThread.getDesc());
+			mvPerThread.setCode(mvChannel.field())
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
+						mvPerThread.setDesc());
 		}
 		if (octetsPackedRuntime != null) {
 			octetsPackedRuntime.code()
@@ -4541,9 +4510,9 @@ public final class JvmLispCompiler implements LispCompiler {
 						octetsPackedRuntime.desc());
 		}
 		if (secureRandomRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
-					secureRandomRuntime.desc(), secureRandomRuntime.maxStack(), secureRandomRuntime.maxLocals(),
-					secureRandomRuntime.code(), List.of());
+			secureRandomRuntime.code()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
+						secureRandomRuntime.desc());
 		}
 		if (argvRuntime != null) {
 			argvRuntime.code()
@@ -4551,8 +4520,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						argvRuntime.desc());
 		}
 		for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(), mm.maxStack(),
-					mm.maxLocals(), mm.code(), List.of());
+			mm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc());
 		}
 		if (threadRuntimeBodies != null) {
 			for (JvmThreadRuntimeBuilder.ThreadMethod tm : threadRuntimeBodies.staticMethods()) {
@@ -4573,11 +4541,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The sized-stack launcher does it for its Runnable.
 			Utf8Constant initName = ctorName;
 			Utf8Constant initDesc = java.util.Objects.requireNonNull(ctorDesc);
-			int objectInitIdx = java.util.Objects.requireNonNull(ctorObjectInitRef).index();
-			List<Integer> instanceInitCode = new java.util.ArrayList<>(List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
-			JvmRuntimeBuilder.emitU2(instanceInitCode, objectInitIdx);
-			instanceInitCode.add(Opcode.RETURN);
-			definition.addMethod(AccessFlag.ACC_PUBLIC, initName, initDesc, 1, 1, instanceInitCode, List.of());
+			MethodCode instanceInitCode = new MethodCode();
+			instanceInitCode.aload(0);
+			instanceInitCode.invokespecial(java.util.Objects.requireNonNull(ctorObjectInitRef).methodRefEntry());
+			instanceInitCode.return_();
+			instanceInitCode.addTo(definition, AccessFlag.ACC_PUBLIC, initName, initDesc);
 		}
 		if (usesTlsConnect) {
 			Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
@@ -4585,17 +4553,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
 			Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
 			Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
-			int x509CertIdx = java.util.Objects.requireNonNull(x509CertificateClass).index();
 			// X509TrustManager: trust-all client/server checks (empty bodies) and
 			// an empty accepted-issuers array.
-			definition.addMethod(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, 0, 3, List.of(Opcode.RETURN),
-					List.of());
-			definition.addMethod(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, 0, 3, List.of(Opcode.RETURN),
-					List.of());
-			List<Integer> acceptedIssuersCode = new java.util.ArrayList<>(List.of(Opcode.ICONST_0, Opcode.ANEWARRAY));
-			JvmRuntimeBuilder.emitU2(acceptedIssuersCode, x509CertIdx);
-			acceptedIssuersCode.add(Opcode.ARETURN);
-			definition.addMethod(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc, 1, 1, acceptedIssuersCode, List.of());
+			new MethodCode().return_().addTo(definition, AccessFlag.ACC_PUBLIC, clientName, trustedDesc);
+			new MethodCode().return_().addTo(definition, AccessFlag.ACC_PUBLIC, serverName, trustedDesc);
+			MethodCode acceptedIssuersCode = new MethodCode();
+			acceptedIssuersCode.iconst_0();
+			acceptedIssuersCode.anewarray(java.util.Objects.requireNonNull(x509CertificateClass).entry());
+			acceptedIssuersCode.areturn();
+			acceptedIssuersCode.addTo(definition, AccessFlag.ACC_PUBLIC, issuersName, issuersDesc);
 		}
 		if (httpHandlerRuntime != null) {
 			// handle(Request): the RontoHttpServer.Handler implementation
@@ -5036,7 +5002,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * -- the variable's global field and the eval runtime's {@code _genv} mirror -- both
 	 * push it through here, so neither can drift from {@code StreamDesignators}' table.
 	 */
-	private static void emitStreamDefault(List<Integer> code, LispVal value,
+	private static void emitStreamDefault(MethodCode code, LispVal value,
 			ConstantPool.@Nullable StringConstant tDesignator, MethodrefConstant longValueOf,
 			ConstantPool.ClassConstant objectClass, @Nullable FieldrefConstant streamLayoutField,
 			ConstantPool.@Nullable StringConstant streamKindStr) {
@@ -5045,48 +5011,31 @@ public final class JvmLispCompiler implements LispCompiler {
 			// Object[]{layout, Long(2), ":STANDARD"} -- the same shape
 			// JvmObjCompiler.emitWrapStream builds at a producer, written out here
 			// because <clinit> has no expression compiler.
-			JvmRuntimeBuilder.emitIntConstStatic(code, 1 + am.ik.rontolisp.LispLayout.STREAM.capacity());
-			code.add(Opcode.ANEWARRAY);
-			JvmRuntimeBuilder.emitU2(code, objectClass.index());
-			code.add(Opcode.DUP);
-			code.add(Opcode.ICONST_0);
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(streamLayoutField).index());
-			code.add(Opcode.AASTORE);
-			code.add(Opcode.DUP);
-			code.add(Opcode.ICONST_1);
-			JvmRuntimeBuilder.emitIntConstStatic(code, (int) StreamDesignators.STANDARD_ERROR_HANDLE);
-			code.add(Opcode.I2L);
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
-			code.add(Opcode.AASTORE);
-			code.add(Opcode.DUP);
-			code.add(Opcode.ICONST_2);
-			code.add(Opcode.LDC_W);
-			JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(streamKindStr).index());
-			code.add(Opcode.AASTORE);
+			code.loadConstant(1 + am.ik.rontolisp.LispLayout.STREAM.capacity());
+			code.anewarray(objectClass.entry());
+			code.dup();
+			code.iconst_0();
+			code.getstatic(java.util.Objects.requireNonNull(streamLayoutField).entry());
+			code.aastore();
+			code.dup();
+			code.iconst_1();
+			code.loadConstant((int) StreamDesignators.STANDARD_ERROR_HANDLE);
+			code.i2l();
+			code.invokestatic(longValueOf.methodRefEntry());
+			code.aastore();
+			code.dup();
+			code.iconst_2();
+			code.ldc(java.util.Objects.requireNonNull(streamKindStr).entry());
+			code.aastore();
 			return;
 		}
 		if (value instanceof LispInteger handle) {
-			JvmRuntimeBuilder.emitIntConstStatic(code, (int) handle.value());
-			code.add(Opcode.I2L);
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
+			code.loadConstant((int) handle.value());
+			code.i2l();
+			code.invokestatic(longValueOf.methodRefEntry());
 			return;
 		}
-		if (value instanceof LispCons) {
-			// The instance gate is off (see seedsStreamValue): the raw reserved handle.
-			JvmRuntimeBuilder.emitIntConstStatic(code, (int) StreamDesignators.STANDARD_ERROR_HANDLE);
-			code.add(Opcode.I2L);
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
-			return;
-		}
-		// LDC_W, not the narrow LDC: this is the emission a redirecting program had
-		// before the two seed sites were merged, and its bytes are pinned by the
-		// byte-identity rule in .kb/standard-output-redirect.md.
-		code.add(Opcode.LDC_W);
-		JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(tDesignator).index());
+		code.ldc(java.util.Objects.requireNonNull(tDesignator).entry());
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
@@ -6082,12 +6031,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Appends the layout initializers to the shared {@code <clinit>} body. Peak
-		 * operand depth is 4 (array, dup, index, string).
+		 * Appends the layout initializers to the shared {@code <clinit>} body.
 		 * @param code the {@code <clinit>} body being assembled
 		 * @param cp the constant pool (mints the layout strings)
 		 */
-		void emitClinitInit(List<Integer> code, ConstantPool cp) {
+		void emitClinitInit(MethodCode code, ConstantPool cp) {
 			for (LayoutField lf : this.byTag.values()) {
 				List<String> parts = new ArrayList<>();
 				parts.add(lf.layout().tag());
@@ -6099,17 +6047,15 @@ public final class JvmLispCompiler implements LispCompiler {
 					case OPAQUE -> "O";
 				});
 				parts.addAll(lf.layout().slotNames());
-				JvmRuntimeBuilder.emitIntConstStatic(code, parts.size());
-				code.add(Opcode.ANEWARRAY);
-				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.stringCls).index());
+				code.loadConstant(parts.size());
+				code.anewarray(Objects.requireNonNull(this.stringCls).entry());
 				for (int i = 0; i < parts.size(); i++) {
-					code.add(Opcode.DUP);
-					JvmRuntimeBuilder.emitIntConstStatic(code, i);
-					JvmRuntimeBuilder.emitLdc(code, cp.addString(parts.get(i)).index());
-					code.add(Opcode.AASTORE);
+					code.dup();
+					code.loadConstant(i);
+					code.ldc(cp.addString(parts.get(i)).entry());
+					code.aastore();
 				}
-				code.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(code, lf.ref().index());
+				code.putstatic(lf.ref().entry());
 			}
 		}
 
@@ -6197,21 +6143,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Appends the bignum initializers to the shared {@code <clinit>} body. Peak
-		 * operand depth is 3 (the uninitialized instance, its dup, the string).
+		 * Appends the bignum initializers to the shared {@code <clinit>} body.
 		 * @param code the {@code <clinit>} body being assembled
 		 * @param cp the constant pool (mints the decimal strings)
 		 */
-		void emitClinitInit(List<Integer> code, ConstantPool cp) {
+		void emitClinitInit(MethodCode code, ConstantPool cp) {
 			for (BigIntField bf : this.byValue.values()) {
-				code.add(Opcode.NEW);
-				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.bigIntegerCls).index());
-				code.add(Opcode.DUP);
-				JvmRuntimeBuilder.emitLdc(code, cp.addString(bf.value().toString()).index());
-				code.add(Opcode.INVOKESPECIAL);
-				JvmRuntimeBuilder.emitU2(code, Objects.requireNonNull(this.ctor).index());
-				code.add(Opcode.PUTSTATIC);
-				JvmRuntimeBuilder.emitU2(code, bf.ref().index());
+				code.new_(Objects.requireNonNull(this.bigIntegerCls).entry());
+				code.dup();
+				code.ldc(cp.addString(bf.value().toString()).entry());
+				code.invokespecial(Objects.requireNonNull(this.ctor).methodRefEntry());
+				code.putstatic(bf.ref().entry());
 			}
 		}
 

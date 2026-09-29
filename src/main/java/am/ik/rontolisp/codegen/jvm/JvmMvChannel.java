@@ -1,15 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 
 import org.jspecify.annotations.Nullable;
 
@@ -34,7 +31,7 @@ import org.jspecify.annotations.Nullable;
  * @param field the {@code _g$} static field of the {@code %mv-spill} global
  * @param perThread the per-thread store, or null in a single-threaded program
  */
-record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread perThread) {
+record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThread) {
 
 	/**
 	 * The per-thread store's members.
@@ -55,54 +52,42 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 	 * @param tlGet {@code ThreadLocal.get()}
 	 * @param tlSet {@code ThreadLocal.set(Object)}
 	 */
-	record PerThread(Utf8Constant threadLocalName, Utf8Constant threadLocalDesc, FieldrefConstant threadLocal,
-			Utf8Constant ownerName, Utf8Constant ownerDesc, FieldrefConstant owner, Utf8Constant getName,
-			Utf8Constant getDesc, MethodrefConstant get, Utf8Constant setName, Utf8Constant setDesc,
-			MethodrefConstant set, MethodrefConstant currentThread, MethodrefConstant tlGet, MethodrefConstant tlSet) {
+	record PerThread(Utf8Constant threadLocalName, Utf8Constant threadLocalDesc, FieldRefEntry threadLocal,
+			Utf8Constant ownerName, Utf8Constant ownerDesc, FieldRefEntry owner, Utf8Constant getName,
+			Utf8Constant getDesc, MethodRefEntry get, Utf8Constant setName, Utf8Constant setDesc, MethodRefEntry set,
+			MethodRefEntry currentThread, MethodRefEntry tlGet, MethodRefEntry tlSet) {
 
 		/** {@code _mvGet}: the owner's static field, or this thread's ThreadLocal. */
-		List<Integer> getCode(FieldrefConstant field) {
-			List<Integer> code = new ArrayList<>();
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.currentThread.index());
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.owner.index());
-			int branch = code.size();
-			code.add(Opcode.IF_ACMPNE);
-			JvmRuntimeBuilder.emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, field.index());
-			code.add(Opcode.ARETURN);
-			JvmRuntimeBuilder.patchBranch(code, branch, code.size());
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.threadLocal.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, this.tlGet.index());
-			code.add(Opcode.ARETURN);
+		MethodCode getCode(FieldRefEntry field) {
+			MethodCode code = new MethodCode();
+			code.invokestatic(this.currentThread);
+			code.getstatic(this.owner);
+			MethodCode.Label branch = code.newLabel();
+			code.if_acmpne(branch);
+			code.getstatic(field);
+			code.areturn();
+			code.labelBinding(branch);
+			code.getstatic(this.threadLocal);
+			code.invokevirtual(this.tlGet);
+			code.areturn();
 			return code;
 		}
 
 		/** {@code _mvSet(v)}: the owner's static field, or this thread's ThreadLocal. */
-		List<Integer> setCode(FieldrefConstant field) {
-			List<Integer> code = new ArrayList<>();
-			code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.currentThread.index());
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.owner.index());
-			int branch = code.size();
-			code.add(Opcode.IF_ACMPNE);
-			JvmRuntimeBuilder.emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.PUTSTATIC);
-			JvmRuntimeBuilder.emitU2(code, field.index());
-			code.add(Opcode.RETURN);
-			JvmRuntimeBuilder.patchBranch(code, branch, code.size());
-			code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(code, this.threadLocal.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, this.tlSet.index());
-			code.add(Opcode.RETURN);
+		MethodCode setCode(FieldRefEntry field) {
+			MethodCode code = new MethodCode();
+			code.invokestatic(this.currentThread);
+			code.getstatic(this.owner);
+			MethodCode.Label branch = code.newLabel();
+			code.if_acmpne(branch);
+			code.aload(0);
+			code.putstatic(field);
+			code.return_();
+			code.labelBinding(branch);
+			code.getstatic(this.threadLocal);
+			code.aload(0);
+			code.invokevirtual(this.tlSet);
+			code.return_();
 			return code;
 		}
 
@@ -115,9 +100,9 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 	 * @param field the {@code _g$} static field of the {@code %mv-spill} global
 	 * @return the per-thread channel
 	 */
-	static JvmMvChannel perThread(ConstantPool cp, ClassConstant thisClass, FieldrefConstant field) {
-		ClassConstant threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
-		ClassConstant threadClass = cp.addClass(cp.addUtf8("java/lang/Thread"));
+	static JvmMvChannel perThread(ConstantPool cp, ClassEntry thisClass, FieldRefEntry field) {
+		ClassEntry threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
+		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
 		Utf8Constant tlName = cp.addUtf8("_mvTl");
 		Utf8Constant tlDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
 		Utf8Constant ownerName = cp.addUtf8("_mvOwner");
@@ -127,16 +112,13 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 		Utf8Constant setName = cp.addUtf8("_mvSet");
 		Utf8Constant setDesc = cp.addUtf8("(Ljava/lang/Object;)V");
 		return new JvmMvChannel(field,
-				new PerThread(tlName, tlDesc, cp.addFieldref(thisClass, cp.addNameAndType(tlName, tlDesc)), ownerName,
-						ownerDesc, cp.addFieldref(thisClass, cp.addNameAndType(ownerName, ownerDesc)), getName, getDesc,
-						cp.addMethodref(thisClass, cp.addNameAndType(getName, getDesc)), setName, setDesc,
-						cp.addMethodref(thisClass, cp.addNameAndType(setName, setDesc)),
-						cp.addMethodref(threadClass,
-								cp.addNameAndType(cp.addUtf8("currentThread"), cp.addUtf8("()Ljava/lang/Thread;"))),
-						cp.addMethodref(threadLocalClass,
-								cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;"))),
-						cp.addMethodref(threadLocalClass,
-								cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")))));
+				new PerThread(tlName, tlDesc, cp.fieldRef(thisClass, tlName.entry(), tlDesc.entry()), ownerName,
+						ownerDesc, cp.fieldRef(thisClass, ownerName.entry(), ownerDesc.entry()), getName, getDesc,
+						cp.methodRef(thisClass, getName.entry(), getDesc.entry()), setName, setDesc,
+						cp.methodRef(thisClass, setName.entry(), setDesc.entry()),
+						cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;"),
+						cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;"),
+						cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V")));
 	}
 
 	/**
@@ -145,10 +127,10 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 	 */
 	void emitLoad(MethodCode code) {
 		if (this.perThread == null) {
-			code.getstatic(this.field.entry());
+			code.getstatic(this.field);
 			return;
 		}
-		code.invokestatic(this.perThread.get().entry());
+		code.invokestatic(this.perThread.get());
 	}
 
 	/**
@@ -157,10 +139,10 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 	 */
 	void emitStore(MethodCode code) {
 		if (this.perThread == null) {
-			code.putstatic(this.field.entry());
+			code.putstatic(this.field);
 			return;
 		}
-		code.invokestatic(this.perThread.set().entry());
+		code.invokestatic(this.perThread.set());
 	}
 
 	/** {@link #emitLoad(MethodCode)} into a compile context's body. */
@@ -189,8 +171,8 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 		if (this.perThread == null) {
 			return;
 		}
-		ctx.body.invokestatic(this.perThread.currentThread().entry());
-		ctx.body.putstatic(this.perThread.owner().entry());
+		ctx.body.invokestatic(this.perThread.currentThread());
+		ctx.body.putstatic(this.perThread.owner());
 	}
 
 }

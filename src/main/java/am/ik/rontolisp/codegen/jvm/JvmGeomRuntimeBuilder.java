@@ -3,18 +3,15 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code geom} kernel bridge for the generated {@code .class}: the logic lives
@@ -79,10 +76,9 @@ final class JvmGeomRuntimeBuilder {
 	 * ({@code ops} keys: {@code init}, {@value #AVAILABLE}, and the qualified name of
 	 * each accelerated member).
 	 */
-	record GeomRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
-			int maxLocals, List<ClassDefinition.Handler> initExceptionTable, Utf8Constant initedFieldName,
+	record GeomRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
 			Utf8Constant initedFieldDesc, Utf8Constant availableFieldName, Utf8Constant availableFieldDesc,
-			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode, Map<String, MethodrefConstant> ops,
+			Utf8Constant readyName, Utf8Constant readyDesc, MethodCode readyCode, Map<String, MethodrefConstant> ops,
 			Map<String, byte[]> classFiles) {
 	}
 
@@ -134,46 +130,38 @@ final class JvmGeomRuntimeBuilder {
 		// defuns.
 		// }
 		// _geomInited = 1;
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		int guardPos = code.size();
-		code.add(Opcode.IFNE);
-		JvmRuntimeBuilder.emitU2(code, 0);
-		int tryStart = code.size();
-		JvmRuntimeBuilder.emitLdc(code, bridgeClass.index()); // [class]
-		code.add(Opcode.POP);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(code, availableField.index());
-		int skipHandlerPos = code.size();
-		code.add(Opcode.GOTO);
-		JvmRuntimeBuilder.emitU2(code, 0);
+		MethodCode code = new MethodCode();
+		code.getstatic(initedField.entry());
+		MethodCode.Label guard = code.newLabel();
+		code.ifne(guard);
+		MethodCode.Label tryStart = code.newBoundLabel();
+		code.ldc(bridgeClass.entry()); // [class]
+		code.pop();
+		code.iconst_1();
+		code.putstatic(availableField.entry());
+		MethodCode.Label skipHandler = code.newLabel();
+		code.goto_(skipHandler);
 		// catch (LinkageError e) -- the operand stack holds just the caught throwable;
 		// discard it and leave _geomAvailable false. Nothing is printed: this is not a
 		// flag the user asked for, so there is nothing for them to act on.
-		int handlerPc = code.size();
-		code.add(Opcode.POP);
-		JvmRuntimeBuilder.patchBranch(code, skipHandlerPos, code.size());
+		MethodCode.Label handler = code.newBoundLabel();
+		code.pop();
+		code.labelBinding(skipHandler);
 		// _geomInited = 1 (tried, either way -- never re-attempt)
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
-		code.add(Opcode.RETURN);
+		code.iconst_1();
+		code.putstatic(initedField.entry());
+		code.labelBinding(guard);
+		code.return_();
 
-		List<ClassDefinition.Handler> initExceptionTable = List
-			.of(new ClassDefinition.Handler(tryStart, handlerPc, handlerPc, linkageErrorClass.index()));
+		code.exceptionCatch(tryStart, handler, handler, linkageErrorClass.entry());
 
 		// --- _geomReady body: return _geomAvailable != 0; ---
-		List<Integer> readyCode = new ArrayList<>();
-		readyCode.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(readyCode, availableField.index());
-		readyCode.add(Opcode.IRETURN);
+		MethodCode readyCode = new MethodCode();
+		readyCode.getstatic(availableField.entry());
+		readyCode.ireturn();
 
-		return new GeomRuntime(initName, initDesc, code, 1, 0, initExceptionTable, initedFieldName, initedFieldDesc,
-				availableFieldName, availableFieldDesc, readyName, readyDesc, readyCode, ops,
-				Map.of(bridgeName + ".class", bridgeBytes));
+		return new GeomRuntime(initName, initDesc, code, initedFieldName, initedFieldDesc, availableFieldName,
+				availableFieldDesc, readyName, readyDesc, readyCode, ops, Map.of(bridgeName + ".class", bridgeBytes));
 	}
 
 	/** Reads the compiled {@link JvmGeomTemplate} bytecode from the classpath. */

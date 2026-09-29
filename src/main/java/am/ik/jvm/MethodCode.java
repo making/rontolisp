@@ -147,6 +147,31 @@ public final class MethodCode {
 		}
 	}
 
+	/**
+	 * Appends a fragment built on a body of its own -- one whose entries had to be minted
+	 * before the point this body reaches it, as {@code <clinit>}'s pieces are. Its
+	 * handlers and long branches move with it; a label bound in it keeps the fragment's
+	 * position and names nothing here.
+	 * @param fragment the complete fragment
+	 * @return this
+	 * @throws IllegalStateException when a branch in the fragment waits for a label
+	 */
+	public MethodCode append(MethodCode fragment) {
+		fragment.checkComplete();
+		int base = this.code.size();
+		for (int b : fragment.code) {
+			this.u1(b);
+		}
+		for (ClassDefinition.Handler h : fragment.handlers) {
+			this.handlers.add(new ClassDefinition.Handler(h.startPc() + base, h.endPc() + base, h.handlerPc() + base,
+					h.catchType()));
+		}
+		for (ClassDefinition.Branch b : fragment.longBranches) {
+			this.longBranches.add(new ClassDefinition.Branch(b.pc() + base, b.target() + base));
+		}
+		return this;
+	}
+
 	// --- labels, branches, handlers ---------------------------------------------------
 
 	/**

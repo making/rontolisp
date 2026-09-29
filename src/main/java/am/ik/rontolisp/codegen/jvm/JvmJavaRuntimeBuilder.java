@@ -5,9 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
@@ -15,7 +13,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code java:} interop runtime for the generated {@code .class}. Unlike the
@@ -63,9 +61,8 @@ final class JvmJavaRuntimeBuilder {
 	 * {@code proxy}, {@code reify}), and the bridge class file that travels beside the
 	 * program, keyed by its path within an output tree.
 	 */
-	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
-			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
-			Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
+	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
+			Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
 	}
 
 	/**
@@ -115,26 +112,22 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("reify", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaReify"), cp.addUtf8(newDesc))));
 
 		// --- _javaInit body ---
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (_javaInited != 0) return;
-		code.add(Opcode.GETSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		int guardPos = code.size();
-		code.add(Opcode.IFNE);
-		JvmRuntimeBuilder.emitU2(code, 0);
+		code.getstatic(initedField.entry());
+		MethodCode.Label guard = code.newLabel();
+		code.ifne(guard);
 		// <Program>$JavaBridge.bind(<Program>.class) -- the bridge loads from the
 		// program's own class loader like any other class beside it.
-		JvmRuntimeBuilder.emitLdc(code, thisClass.index());
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, bind.index());
+		code.ldc(thisClass.entry());
+		code.invokestatic(bind.entry());
 		// _javaInited = 1
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.PUTSTATIC);
-		JvmRuntimeBuilder.emitU2(code, initedField.index());
-		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
-		code.add(Opcode.RETURN);
+		code.iconst_1();
+		code.putstatic(initedField.entry());
+		code.labelBinding(guard);
+		code.return_();
 
-		return new JavaRuntime(initName, initDesc, code, 1, 0, initedFieldName, initedFieldDesc, ops,
+		return new JavaRuntime(initName, initDesc, code, initedFieldName, initedFieldDesc, ops,
 				Map.of(bridgeName + ".class", bridgeBytes));
 	}
 

@@ -1,13 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code _mutexNew} / {@code _mutexAcquire} / {@code _mutexRelease} runtime
@@ -42,29 +42,26 @@ final class JvmMutexRuntimeBuilder {
 
 	static final String UNARY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
-	/** One emitted helper: its name/descriptor plus the code and frame sizes. */
-	record MutexMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	/** One emitted helper: its name/descriptor plus the body. */
+	record MutexMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	private JvmMutexRuntimeBuilder() {
 	}
 
 	static List<MutexMethod> build(ConstantPool cp) {
-		ClassConstant lockClass = cp.addClass(cp.addUtf8("java/util/concurrent/locks/ReentrantLock"));
-		MethodrefConstant init = cp.addMethodref(lockClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant lock = cp.addMethodref(lockClass, cp.addNameAndType(cp.addUtf8("lock"), cp.addUtf8("()V")));
-		MethodrefConstant unlock = cp.addMethodref(lockClass,
-				cp.addNameAndType(cp.addUtf8("unlock"), cp.addUtf8("()V")));
+		ClassEntry lockClass = cp.classEntry("java/util/concurrent/locks/ReentrantLock");
+		MethodRefEntry init = cp.methodRef(lockClass, "<init>", "()V");
+		MethodRefEntry lock = cp.methodRef(lockClass, "lock", "()V");
+		MethodRefEntry unlock = cp.methodRef(lockClass, "unlock", "()V");
 		List<MutexMethod> methods = new ArrayList<>();
 		// return new ReentrantLock();
-		List<Integer> newCode = new ArrayList<>();
-		newCode.add(Opcode.NEW);
-		emitU2(newCode, lockClass.index());
-		newCode.add(Opcode.DUP);
-		newCode.add(Opcode.INVOKESPECIAL);
-		emitU2(newCode, init.index());
-		newCode.add(Opcode.ARETURN);
-		methods.add(new MutexMethod(cp.addUtf8(NEW_METHOD), cp.addUtf8(NEW_DESC), 2, 0, newCode));
+		MethodCode newCode = new MethodCode();
+		newCode.new_(lockClass);
+		newCode.dup();
+		newCode.invokespecial(init);
+		newCode.areturn();
+		methods.add(new MutexMethod(cp.addUtf8(NEW_METHOD), cp.addUtf8(NEW_DESC), newCode));
 		// ((ReentrantLock) m).lock(); return m; -- and the unlock twin. unlock() throws
 		// IllegalMonitorStateException when this thread does not hold the lock, which is
 		// the JVM-side spelling of the interpreter's "not held by this thread" error.
@@ -73,22 +70,14 @@ final class JvmMutexRuntimeBuilder {
 		return List.copyOf(methods);
 	}
 
-	private static MutexMethod unary(ConstantPool cp, String name, ClassConstant lockClass, MethodrefConstant call) {
-		List<Integer> code = new ArrayList<>();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, lockClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, call.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
-		return new MutexMethod(cp.addUtf8(name), cp.addUtf8(UNARY_DESC), 1, 1, code);
-	}
-
-	private static void emitU2(List<Integer> code, int value) {
-		// The shared writer keeps a pool index past 65535 whole
-		// (JvmRuntimeBuilder.emitU2).
-		JvmRuntimeBuilder.emitU2(code, value);
+	private static MutexMethod unary(ConstantPool cp, String name, ClassEntry lockClass, MethodRefEntry call) {
+		MethodCode code = new MethodCode();
+		code.aload(0);
+		code.checkcast(lockClass);
+		code.invokevirtual(call);
+		code.aload(0);
+		code.areturn();
+		return new MutexMethod(cp.addUtf8(name), cp.addUtf8(UNARY_DESC), code);
 	}
 
 }

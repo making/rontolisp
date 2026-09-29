@@ -26,7 +26,7 @@ final class JvmPhysicalArgs {
 	 * @param className the class being emitted
 	 */
 	static void emitUnsupplied(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.body.invokestatic(ctx.unsupplied.ref(ctx.cp, className).entry());
+		ctx.body.invokestatic(ctx.unsupplied.ref(ctx.cp, className));
 	}
 
 	/**
@@ -111,8 +111,7 @@ final class JvmPhysicalArgs {
 			}
 			else {
 				// cell == null ? UNSUPPLIED : car(cell)
-				ctx.body
-					.invokestatic(ctx.unsupplied.optArgRef(ctx.cp, ctx.cp.addClass(ctx.cp.addUtf8(className))).entry());
+				ctx.body.invokestatic(ctx.unsupplied.optArgRef(ctx.cp, ctx.cp.classEntry(className)));
 			}
 		}
 		if (fi.variadic()) {

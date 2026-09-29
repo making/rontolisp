@@ -81,8 +81,7 @@ import org.jspecify.annotations.Nullable;
  * already carry, because the JVM dispatches an exception table in order: an inner handler
  * must win. The region is the whole body, and the entry costs 8 bytes plus this handler's
  * ~30 -- main is a list of {@code invokestatic} chunk calls, so neither the 64 KB method
- * limit nor {@code maxStack} (floored at 64) is in reach. Offsets are written raw rather
- * than deferred because main never overflows a branch.
+ * limit nor {@code maxStack} (floored at 64) is in reach.
  */
 final class JvmUncaughtHandler {
 

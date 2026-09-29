@@ -19,7 +19,6 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code quote} special form.
@@ -68,13 +67,13 @@ final class JvmQuoteCompiler {
 		// <slot>; INVOKESTATIC _qd; DUP; IFNONNULL end; POP; <build>; <slot>;
 		// INVOKESTATIC _qdSet; end: -- one value on the stack on both paths.
 		JvmEmitHelper.emitIntConst(ctx, slot);
-		ctx.body.invokestatic(refs.get().entry()).dup();
+		ctx.body.invokestatic(refs.get()).dup();
 		MethodCode.Label branchPos = ctx.body.newLabel();
 		ctx.body.ifnonnull(branchPos);
 		ctx.body.pop();
 		build.run();
 		JvmEmitHelper.emitIntConst(ctx, slot);
-		ctx.body.invokestatic(refs.set().entry());
+		ctx.body.invokestatic(refs.set());
 		ctx.body.labelBinding(branchPos);
 	}
 

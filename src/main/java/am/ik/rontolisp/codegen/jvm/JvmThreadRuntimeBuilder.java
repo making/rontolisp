@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
@@ -373,13 +374,13 @@ final class JvmThreadRuntimeBuilder {
 		// --- _dtl(name): the special's _d$ ThreadLocal by runtime name, or a clear error
 		{
 			MethodCode a = new MethodCode();
-			for (Map.Entry<String, FieldrefConstant> entry : dynVarRuntime.fields().entrySet()) {
+			for (Map.Entry<String, FieldRefEntry> entry : dynVarRuntime.fields().entrySet()) {
 				MethodCode.Label next = a.newLabel();
 				a.ldc(cp.addString(entry.getKey()).entry());
 				a.aload(0);
 				a.invokevirtual(stringEquals.methodRefEntry());
 				a.ifeq(next);
-				a.getstatic(entry.getValue().entry());
+				a.getstatic(entry.getValue());
 				a.areturn();
 				a.labelBinding(next);
 			}
@@ -399,7 +400,7 @@ final class JvmThreadRuntimeBuilder {
 		// EMARKER error payload
 		ThreadMethod callMethod;
 		{
-			MethodrefConstant dbind = dynVarRuntime.dbind();
+			MethodRefEntry dbind = dynVarRuntime.dbind();
 			MethodCode a = new MethodCode();
 			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
@@ -426,7 +427,7 @@ final class JvmThreadRuntimeBuilder {
 			a.aload(3);
 			a.loadConstant(1);
 			a.aaload();
-			a.invokestatic(dbind.entry()); // [old cell]
+			a.invokestatic(dbind); // [old cell]
 			a.pop(); // no restore: the bindings die with the thread
 			a.aload(2);
 			a.loadConstant(1);

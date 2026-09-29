@@ -105,19 +105,21 @@ HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write
 `ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
 compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
 predicates sharing its exclusion helpers); the I/O and socket runtimes with `_flushStreams`,
-the first raw lists (a86); and every other expression compiler (a90), so `Ctx.emit`/`emitU2`,
-`Ctx.code` and `JvmEmitHelper.patchBranch` are gone. The rest (the runtime builders' raw
-`List<Integer>` lists) still write code bytes, which `CodeReplay` decodes. The remaining slices
-are `.todo/a87`, `a88`, `a91`: the core runtime builders, the small builders with
-`JvmLispCompiler`'s own code, then `MethodCode` storing instruction records so the code bytes,
-their decoders and `am.ik.jvm.Opcode` go.
+the first raw lists (a86); every other expression compiler (a90), so `Ctx.emit`/`emitU2`,
+`Ctx.code` and `JvmEmitHelper.patchBranch` are gone; and the small builders with
+`JvmLispCompiler`'s own code (a88). The rest (the core runtime builders' raw `List<Integer>`
+lists) still write code bytes, which `CodeReplay` decodes. The remaining slices are
+`.todo/a87` (the core runtime builders), then `a93` (the sized `ClassDefinition.Builder.addMethod`
+overload and the wrapper bridges a87 leaves), then `a91`: `MethodCode` storing instruction records so the
+code bytes, their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
 `stringEntry` for an emitter building from names), `size()`, labels (a branch to an unbound
 label waits for `labelBinding`; one past the 16-bit offset is recorded as a long branch;
 `checkComplete` refuses a branch left waiting -- its placeholder would jump to itself),
-`exceptionCatch` over bound labels, and `addTo(definition, ...)`. Until a91 it stores code
+`exceptionCatch` over bound labels, `append(fragment)` (a body built apart, its handlers and
+long branches rebased), and `addTo(definition, ...)`. Until a91 it stores code
 bytes; over a compile context it feeds `Ctx.stack` every byte and reconciles the model where a
 forward branch's label is bound. It encodes a local in the explicit-slot form the byte
 emitters used (`aload 1`, two bytes; `wide` past 255) and an int in the shortest, so a sequence
@@ -171,6 +173,22 @@ comparisons (the 4,857 programs, every CLI compile above). Emitted forms changed
 changing a class: `main`'s `aload_0` is `aload 0` and
 the `_cu1` selector's `bipush 0..5` is `iconst_<n>`.
 
+**The small builders and the compiler's own code** (a88, 2026-09-29): the dyn-var, quote-pool,
+UNSUPPLIED, `%mv-spill`, SecureRandom and mutex runtimes, the `java:`/`objc:`/`ffi:`/`--simd`/
+`--gpu`/`geom` bridges' init and guard bodies, and `JvmLispCompiler`'s `<clinit>`, instance
+`<init>` and TLS trust stubs -- byte-identical by the same comparisons (the 4,857 programs, every
+CLI compile above) plus programs reaching `%random-byte`, `tls-connect :insecure` and a
+`<clinit>` with every piece at once; this time not even a version string differed. `<clinit>`
+is one `MethodCode`; its pieces minted before the class assembly (the layout and bignum
+initializers, the reader's struct directory, the `_d$` ThreadLocals) are fragments built apart
+and `append`ed, because the MINT order decides every pool index and so the bytes. The `_hasComplex`
+probe's handler is labels. Left on pool wrappers: the bridge builders' `ops` maps (they join
+`Ctx` beside the BLAS, numeric and math maps) and the `ffi:` bridge's refs, which the printer's
+`JvmRuntimeBuilder.BridgePrint` still writes as code bytes; `JvmUnsupplied` keeps
+`ClassConstant` overloads of `ref`/`optArgRef` for the dispatchers `JvmRuntimeBuilder` writes as
+bytes. Those go after a87 (`.todo/a93`). `emitStreamDefault`'s "LDC_W, not the narrow LDC" pin is gone: the writer
+re-decides `ldc` by the index, so the form emitted never reached the class.
+
 **How a slice moves** (the recipe every slice used; tools in
 `.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, and for a raw list
 `.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/`, each with a
@@ -190,8 +208,9 @@ the `_cu1` selector's `bipush 0..5` is `iconst_<n>`.
   `exceptionCatch` once the handler's label is bound. A method record carries the body
   (`record XMethod(name, desc, MethodCode code)`) and `code.addTo(definition, access, name,
   desc)` adds it; the declared max_stack/max_locals go. A record still carrying bytes (the
-  numeric builder's, the reader's `<clinit>` chunk) takes `JvmRuntimeBuilder.codeBytes(body)`,
-  which refuses a long branch or a handler it could not carry.
+  numeric builder's) takes `JvmRuntimeBuilder.codeBytes(body)`, which refuses a long branch or
+  a handler it could not carry. A piece of another body (a `<clinit>` fragment) is a
+  `MethodCode` of its own, `append`ed where it goes.
 - A trap the pass does not see: an operand byte written with `op(n)` after an opcode
   (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
   `aconst_null` compiles and emits the wrong code. javac catches the opcode half
@@ -203,7 +222,11 @@ the `_cu1` selector's `bipush 0..5` is `iconst_<n>`.
   (`newBoundLabel()`, then `exceptionCatch`), a sentinel `int p = -1` (a `@Nullable` label),
   an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
   the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
-  code already on the layer called on a field that became an entry.
+  code already on the layer called on a field that became an entry. A file spelling the
+  helpers qualified (`JvmRuntimeBuilder.emitU2`) goes through a88's `prep.py` first
+  (`.todo/artefacts/a88-jvm-small-runtime-builders-and-the-compilers-own-code-move-onto-methodcode/`,
+  with its gate programs); a builder whose exported refs feed code still on the wrappers skips
+  `pool.py`.
 - An expression compiler (tools in `.todo/artefacts/a89-jvm-large-expression-compilers-move-onto-ctx-body/`):
   `ctxmig.py` maps `ctx.emit(Opcode.X)` + operands one to one (a `bipush`/`sipush` becomes
   `loadConstant` only where that is the same bytes) and turns a position into a label where it
