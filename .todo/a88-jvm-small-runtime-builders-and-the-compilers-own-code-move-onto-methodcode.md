@@ -17,5 +17,7 @@ definition its bodies as code lists plus declared max_stack/max_locals the write
 
 The same conversion (`.kb/jvm-method-size-limits.md`, "How a slice moves"), then the
 `ClassDefinition.Builder.addMethod` overload that takes a max_stack and a max_locals has no caller
-and goes. Byte-for-byte comparison before and after, over programs that reach each runtime
+and goes, and so do `JvmRuntimeBuilder`'s shared raw-list helpers (`emitU2`, `emitLdc`,
+`emitIntConstStatic`, `patchBranch`; a87 left them for these callers) and `codeBytes` (the
+reader's `<clinit>` chunk). Byte-for-byte comparison before and after, over programs that reach each runtime
 (`--simd`/`--blas`/`--gpu`, `java:`, `ffi:`, served handlers, `jvm-export`).

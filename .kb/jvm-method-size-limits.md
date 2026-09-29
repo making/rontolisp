@@ -104,19 +104,22 @@ assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thre
 HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
 `ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
 compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
-predicates sharing its exclusion helpers); and the I/O and socket runtimes with
-`_flushStreams`, the first raw lists (a86). The rest still write code bytes (`Ctx.emit`/
-`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining slices are
-`.todo/a87`, `a88`, `a90`, `a91`: the core runtime builders, the small builders with
-`JvmLispCompiler`'s own code, the rest of the expression compilers, then `MethodCode` storing
-instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
+predicates sharing its exclusion helpers); the I/O and socket runtimes with `_flushStreams`,
+the first raw lists (a86); and the core runtime builders -- `JvmRuntimeBuilder` (printers,
+dispatch tables, arity reporters) and the numeric, complex and operand-type runtimes (a87).
+The rest still write code bytes (`Ctx.emit`/`emitU2`, raw `List<Integer>` lists through
+`JvmRuntimeBuilder`'s shared `emitU2`/`emitLdc`/`emitIntConstStatic`/`patchBranch`), which
+`CodeReplay` decodes. The remaining slices are `.todo/a88`, `a90`, `a91`: the small builders
+with `JvmLispCompiler`'s own code, the rest of the expression compilers, then `MethodCode`
+storing instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
 `stringEntry` for an emitter building from names), `size()`, labels (a branch to an unbound
 label waits for `labelBinding`; one past the 16-bit offset is recorded as a long branch;
 `checkComplete` refuses a branch left waiting -- its placeholder would jump to itself),
-`exceptionCatch` over bound labels, and `addTo(definition, ...)`. Until a91 it stores code
+`exceptionCatch` over bound labels, `append` (a block built as a body of its own, every label
+bound and no handler: the dispatch tables' case bodies), and `addTo(definition, ...)`. Until a91 it stores code
 bytes, so one body mixes it with the byte emitters: over a compile context it writes into
 `Ctx.code` and feeds `Ctx.stack` every byte, reconciling the model at a label exactly as
 `JvmEmitHelper.patchBranch` does. It encodes a local in the explicit-slot form the byte
@@ -162,9 +165,30 @@ they did; no budget reads a runtime helper, and the written class is the same. T
 handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions held in an
 `int p = -1` sentinel and 7 lists of positions each patched by one loop.
 
+**The core runtime slice** (a87, 2026-09-29): `JvmRuntimeBuilder`, `JvmNumericRuntimeBuilder`,
+`JvmComplexRuntimeBuilder` and `JvmOperandTypeRuntime` (11,900 lines); `DispatchMethod`,
+`NumericMethod` and `ComplexMethod` carry the body, a numeric helper's try range is its own
+`exceptionCatch`. The builders keep the pool wrappers as parameters (`.entry()` at each typed
+call, as a85 left the rest of these files), so no entry is minted in another order.
+Byte-identical over the 4,857 programs and every CLI compile above plus a86's gate programs,
+with two deliberate differences held back by a temporary patch and then measured alone:
+
+- A dispatch case is a size a budget READS (`partitionCases` sums the case bodies against
+  `DISPATCH_SEGMENT_BUDGET`). A spread case's `aload 1` was the one-byte raw `aload_1` and is
+  two bytes on the layer, so a large program's `_invoke_v` is cut into a few more segments --
+  mito probe 72 -> 75, corpus 45 -> 47, jose 35 -> 37 (the mito class +293 B of 9,045,499) --
+  and no other method changes. a91's written-size `size()` puts the cut back.
+- `_cmul` carried a `goto` the raw list never patched (offset 0), dead after its exact arm's
+  `areturn` and written as `nop nop athrow`; `checkComplete` refused it, and it is gone.
+
+The jars compared were made in seconds, not by a package run: the packaged jar with the
+worktree's classes, compiled by plain javac, put over it -- both sides alike, so not even the
+version strings differ.
+
 **How a slice moves** (the recipe every slice used; tools in
-`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, and for a raw list
-`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/`, each with a
+`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, for a raw list
+`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/` and
+`.todo/artefacts/a87-jvm-core-runtime-code-lists-move-onto-methodcode/`, each with a
 `README.md`):
 
 - Calls map one to one: `label()`/`bind` -> `newLabel()`/`labelBinding`, `branch(Opcode.X, l)`
@@ -195,6 +219,18 @@ handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions hel
   an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
   the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
   code already on the layer called on a field that became an entry.
+- A raw list through helpers of its own (the numeric and complex runtimes): `rawx.py` rewrites
+  them into raw.py's idiom first (`int p = branch(c, op)`, `patch(c, p)`, `aload(c, s)`,
+  `invoke(c, op, ref)`, a join `int t = c.size()` and its patches) and runs it. An operation
+  the caller picks is a method reference (`Consumer<MethodCode>`: `MethodCode::dadd`; a branch,
+  `BiConsumer<MethodCode, Label>`: `MethodCode::ifle`), a load it picks the slot, and a helper
+  that answered positions (two guards' `int[]`, a list it filled) takes the label to jump to.
+  `labels.py` names the labels no `labelBinding` in their method binds (a returned or passed
+  one is fine). Check every `bipush` operand: raw.py turns `add(BIPUSH); add(x & 0xFF)` into
+  `loadConstant(x & 0xFF)`, a negative constant made positive.
+- A size a budget reads may change its measure on the layer (a one-byte raw `aload_1`): keep a
+  temporary patch that reproduces the old measure (a87's `phase1.py`) until the bytes compare,
+  then measure the change alone.
 - An expression compiler (tools in `.todo/artefacts/a89-jvm-large-expression-compilers-move-onto-ctx-body/`):
   `ctxmig.py` maps `ctx.emit(Opcode.X)` + operands one to one (a `bipush`/`sipush` becomes
   `loadConstant` only where that is the same bytes) and turns a position into a label where it
@@ -277,7 +313,10 @@ splitter's byte writer and the pool's own storage: main source 4,993 -> 4,280 li
   `chainedDispatchDefuns`, all four backends). Ambiguous literal `slot-value` outlines onto
   `%slot-value(-set)-runtime`.
 - `_invoke_<arity>` (66 KB at arity 9) and the spread `_invoke_v` are split by
-  `JvmRuntimeBuilder.buildDispatchMethods` into chained ~24 KB segments (`_invoke_9$1`, ...).
+  `JvmRuntimeBuilder.buildDispatchMethods` into chained segments (`_invoke_9$1`, ...) under
+  `DISPATCH_SEGMENT_BUDGET`, 6000 bytes for HotSpot's HugeMethodLimit
+  ([hot-path-method-size.md](hot-path-method-size.md)); the branch reach sets no bound there
+  (a far branch is written `goto_w`).
   The per-arity family stops at `MAX_CALLABLE_ARITY` (7); `_apply` used to fall off that ladder
   and silently answer nil for an 8+-argument `apply` through a COMPUTED designator.
 - `_lookup` (60 KB) is split by `JvmEvalRuntimeBuilder.buildLookupSegments` (`_lookup$1`, ...).
@@ -322,7 +361,7 @@ is never reused.
 - The layer: `am.ik.jvm.MethodCodeTest` (labels both ways, a long branch, `wide` locals and
   `iinc`, explicit emitted/shortest written forms, an unbound label refused, `invokeinterface`'s
   count, a handler, the operand-stack model kept in step, an array store and a return chosen
-  by kind)
+  by kind, a spliced block and what cannot be spliced)
 - The writer: `am.ik.jvm.CodeReplayTest` (a long branch over wide locals, only the branch that
   does not reach widened, a widening cascade, handlers, `ldc` widened and narrowed by the
   class's pool, wide `iinc`, a body past the limit), `LineNumberTableTest` (lines through the

@@ -1,8 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
-import java.lang.classfile.constantpool.MemberRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.MethodTypeDesc;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -14,7 +16,6 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
@@ -208,9 +209,8 @@ final class JvmOperandTypeRuntime {
 		 * @param slot the local holding the rejected operand
 		 * @param kind the kind constant
 		 */
-		void emitThrow(List<Integer> c, int slot, StringConstant kind) {
-			c.add(Opcode.ALOAD);
-			c.add(slot);
+		void emitThrow(MethodCode c, int slot, StringConstant kind) {
+			c.aload(slot);
 			emitThrowLoaded(c, kind);
 		}
 
@@ -219,11 +219,10 @@ final class JvmOperandTypeRuntime {
 		 * @param c the bytecode sink
 		 * @param kind the kind constant
 		 */
-		void emitThrowLoaded(List<Integer> c, StringConstant kind) {
-			JvmRuntimeBuilder.emitLdc(c, kind.index());
-			c.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(c, this.teRaw.index());
-			c.add(Opcode.ATHROW);
+		void emitThrowLoaded(MethodCode c, StringConstant kind) {
+			c.ldc(kind.entry());
+			c.invokestatic(this.teRaw.entry());
+			c.athrow();
 		}
 
 	}
@@ -300,52 +299,48 @@ final class JvmOperandTypeRuntime {
 
 		// _teRaw(Object x, String kind): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + kind), recorded under a pad.
-		List<Integer> c = new ArrayList<>();
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, rte.index());
-		c.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(c, valuePrefix.index());
-		c.add(Opcode.ALOAD_0);
-		invoke(c, Opcode.INVOKESTATIC, lispToString);
-		invoke(c, Opcode.INVOKEVIRTUAL, concat);
-		JvmRuntimeBuilder.emitLdc(c, typeInfix.index());
-		invoke(c, Opcode.INVOKEVIRTUAL, concat);
-		c.add(Opcode.ALOAD_1);
-		invoke(c, Opcode.INVOKEVIRTUAL, concat);
-		invoke(c, Opcode.INVOKESPECIAL, rteInit);
+		MethodCode c = new MethodCode();
+		c.new_(rte.entry());
+		c.dup();
+		c.ldc(valuePrefix.entry());
+		c.aload(0);
+		c.invokestatic(lispToString.entry());
+		c.invokevirtual(concat.methodRefEntry());
+		c.ldc(typeInfix.entry());
+		c.invokevirtual(concat.methodRefEntry());
+		c.aload(1);
+		c.invokevirtual(concat.methodRefEntry());
+		c.invokespecial(rteInit.entry());
 		if (records != null) {
-			c.add(Opcode.ASTORE_2);
-			records.emit(c, 2, () -> c.add(Opcode.ALOAD_0), () -> c.add(Opcode.ALOAD_1));
-			c.add(Opcode.ALOAD_2);
+			c.astore(2);
+			records.emit(c, 2, () -> c.aload(0), () -> c.aload(1));
+			c.aload(2);
 		}
-		c.add(Opcode.ARETURN);
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_RAW), cp.addUtf8(TE_RAW_DESC), c, 6, 3,
-				List.of()));
+		c.areturn();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_RAW), cp.addUtf8(TE_RAW_DESC), c));
 
 		// _teOf(Object x, Object type): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + prin1(type)), recorded under a pad with the type object.
-		List<Integer> t = new ArrayList<>();
-		t.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(t, rte.index());
-		t.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(t, valuePrefix.index());
-		t.add(Opcode.ALOAD_0);
-		invoke(t, Opcode.INVOKESTATIC, lispToString);
-		invoke(t, Opcode.INVOKEVIRTUAL, concat);
-		JvmRuntimeBuilder.emitLdc(t, typeInfix.index());
-		invoke(t, Opcode.INVOKEVIRTUAL, concat);
-		t.add(Opcode.ALOAD_1);
-		invoke(t, Opcode.INVOKESTATIC, lispToString);
-		invoke(t, Opcode.INVOKEVIRTUAL, concat);
-		invoke(t, Opcode.INVOKESPECIAL, rteInit);
+		MethodCode t = new MethodCode();
+		t.new_(rte.entry());
+		t.dup();
+		t.ldc(valuePrefix.entry());
+		t.aload(0);
+		t.invokestatic(lispToString.entry());
+		t.invokevirtual(concat.methodRefEntry());
+		t.ldc(typeInfix.entry());
+		t.invokevirtual(concat.methodRefEntry());
+		t.aload(1);
+		t.invokestatic(lispToString.entry());
+		t.invokevirtual(concat.methodRefEntry());
+		t.invokespecial(rteInit.entry());
 		if (records != null) {
-			t.add(Opcode.ASTORE_2);
-			records.emit(t, 2, () -> t.add(Opcode.ALOAD_0), () -> t.add(Opcode.ALOAD_1));
-			t.add(Opcode.ALOAD_2);
+			t.astore(2);
+			records.emit(t, 2, () -> t.aload(0), () -> t.aload(1));
+			t.aload(2);
 		}
-		t.add(Opcode.ARETURN);
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_OF), cp.addUtf8(TE_OF_DESC), t, 6, 3,
-				List.of()));
+		t.areturn();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_OF), cp.addUtf8(TE_OF_DESC), t));
 
 		// _oob(Object datum, int dim): new RuntimeException("The value " + prin1(datum)
 		// + " is not of type (INTEGER 0 (" + dim + "))"), recorded under a pad with the
@@ -354,88 +349,85 @@ final class JvmOperandTypeRuntime {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
 		MethodrefConstant longValueOf = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		List<Integer> b = new ArrayList<>();
-		b.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(b, rte.index());
-		b.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(b, valuePrefix.index());
-		b.add(Opcode.ALOAD_0);
-		invoke(b, Opcode.INVOKESTATIC, lispToString);
-		invoke(b, Opcode.INVOKEVIRTUAL, concat);
-		JvmRuntimeBuilder.emitLdc(b, cp.addString(OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX).index());
-		invoke(b, Opcode.INVOKEVIRTUAL, concat);
-		b.add(Opcode.ILOAD_1);
-		invoke(b, Opcode.INVOKESTATIC, intToString);
-		invoke(b, Opcode.INVOKEVIRTUAL, concat);
-		JvmRuntimeBuilder.emitLdc(b, cp.addString(OperandTypes.INDEX_TYPE_SUFFIX).index());
-		invoke(b, Opcode.INVOKEVIRTUAL, concat);
-		invoke(b, Opcode.INVOKESPECIAL, rteInit);
+		MethodCode b = new MethodCode();
+		b.new_(rte.entry());
+		b.dup();
+		b.ldc(valuePrefix.entry());
+		b.aload(0);
+		b.invokestatic(lispToString.entry());
+		b.invokevirtual(concat.methodRefEntry());
+		b.ldc(cp.addString(OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX).entry());
+		b.invokevirtual(concat.methodRefEntry());
+		b.iload(1);
+		b.invokestatic(intToString.entry());
+		b.invokevirtual(concat.methodRefEntry());
+		b.ldc(cp.addString(OperandTypes.INDEX_TYPE_SUFFIX).entry());
+		b.invokevirtual(concat.methodRefEntry());
+		b.invokespecial(rteInit.entry());
 		if (records != null) {
-			b.add(Opcode.ASTORE_2);
+			b.astore(2);
 			StringConstant integerKind = cp.addString(OperandTypes.Kind.INTEGER.name());
-			records.emit(b, 2, () -> b.add(Opcode.ALOAD_0), () -> {
+			records.emit(b, 2, () -> b.aload(0), () -> {
 				// (INTEGER 0 (dim)): {"INTEGER", {0L, {{dimL, nil}, nil}}}
-				emitConsHead(b, object, () -> JvmRuntimeBuilder.emitLdc(b, integerKind.index()));
+				emitConsHead(b, object, () -> b.ldc(integerKind.entry()));
 				emitConsHead(b, object, () -> {
-					b.add(Opcode.LCONST_0);
-					invoke(b, Opcode.INVOKESTATIC, longValueOf);
+					b.lconst_0();
+					b.invokestatic(longValueOf.entry());
 				});
 				emitConsHead(b, object, () -> {
 					emitConsHead(b, object, () -> {
-						b.add(Opcode.ILOAD_1);
-						b.add(Opcode.I2L);
-						invoke(b, Opcode.INVOKESTATIC, longValueOf);
+						b.iload(1);
+						b.i2l();
+						b.invokestatic(longValueOf.entry());
 					});
-					b.add(Opcode.ACONST_NULL);
+					b.aconst_null();
 					emitConsTail(b);
 				});
-				b.add(Opcode.ACONST_NULL);
+				b.aconst_null();
 				emitConsTail(b);
 				emitConsTail(b);
 				emitConsTail(b);
 			});
-			b.add(Opcode.ALOAD_2);
+			b.aload(2);
 		}
-		b.add(Opcode.ARETURN);
-		methods.add(
-				new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OOB), cp.addUtf8(OOB_DESC), b, 24, 3, List.of()));
+		b.areturn();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OOB), cp.addUtf8(OOB_DESC), b));
 
 		// _ckBound(Object i, int dim): (int) i for a Long in [0, dim), else
 		// throw _oob(i, dim) -- a BigInteger, which no bound reaches, included.
 		MethodrefConstant longLongValue = cp.addMethodref(longClass,
 				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-		List<Integer> k = new ArrayList<>();
-		k.add(Opcode.ALOAD_0);
-		k.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(k, longClass.index());
-		int ifNotLong = branch(k, Opcode.IFEQ);
-		k.add(Opcode.ALOAD_0);
-		k.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(k, longClass.index());
-		invoke(k, Opcode.INVOKEVIRTUAL, longLongValue);
-		k.add(Opcode.LSTORE_2);
-		k.add(Opcode.LLOAD_2);
-		k.add(Opcode.LCONST_0);
-		k.add(Opcode.LCMP);
-		int ifNegative = branch(k, Opcode.IFLT);
-		k.add(Opcode.LLOAD_2);
-		k.add(Opcode.ILOAD_1);
-		k.add(Opcode.I2L);
-		k.add(Opcode.LCMP);
-		int ifPast = branch(k, Opcode.IFGE);
-		k.add(Opcode.LLOAD_2);
-		k.add(Opcode.L2I);
-		k.add(Opcode.IRETURN);
-		int out = k.size();
-		JvmRuntimeBuilder.patchBranch(k, ifNotLong, out);
-		JvmRuntimeBuilder.patchBranch(k, ifNegative, out);
-		JvmRuntimeBuilder.patchBranch(k, ifPast, out);
-		k.add(Opcode.ALOAD_0);
-		k.add(Opcode.ILOAD_1);
-		invoke(k, Opcode.INVOKESTATIC, self(cp, thisClass, OOB, OOB_DESC));
-		k.add(Opcode.ATHROW);
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND), cp.addUtf8(CK_BOUND_DESC), k, 4, 4,
-				List.of()));
+		MethodCode k = new MethodCode();
+		k.aload(0);
+		k.instanceOf(longClass.entry());
+		MethodCode.Label ifNotLong = k.newLabel();
+		k.ifeq(ifNotLong);
+		k.aload(0);
+		k.checkcast(longClass.entry());
+		k.invokevirtual(longLongValue.methodRefEntry());
+		k.lstore(2);
+		k.lload(2);
+		k.lconst_0();
+		k.lcmp();
+		MethodCode.Label ifNegative = k.newLabel();
+		k.iflt(ifNegative);
+		k.lload(2);
+		k.iload(1);
+		k.i2l();
+		k.lcmp();
+		MethodCode.Label ifPast = k.newLabel();
+		k.ifge(ifPast);
+		k.lload(2);
+		k.l2i();
+		k.ireturn();
+		k.labelBinding(ifNotLong);
+		k.labelBinding(ifNegative);
+		k.labelBinding(ifPast);
+		k.aload(0);
+		k.iload(1);
+		k.invokestatic(self(cp, thisClass, OOB, OOB_DESC).entry());
+		k.athrow();
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND), cp.addUtf8(CK_BOUND_DESC), k));
 
 		// _ckBoundJ(long i, int dim): (int) i in [0, dim), else
 		// throw _oob(Long.valueOf(i), dim). The check is Objects.checkIndex, the JIT's
@@ -446,23 +438,24 @@ final class JvmOperandTypeRuntime {
 		MethodrefConstant checkIndex = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Objects")),
 				cp.addNameAndType(cp.addUtf8("checkIndex"), cp.addUtf8("(JJ)J")));
 		ClassConstant ioobe = cp.addClass(cp.addUtf8("java/lang/IndexOutOfBoundsException"));
-		List<Integer> j = new ArrayList<>();
-		j.add(Opcode.LLOAD_0);
-		j.add(Opcode.ILOAD_2);
-		j.add(Opcode.I2L);
-		invoke(j, Opcode.INVOKESTATIC, checkIndex);
-		j.add(Opcode.L2I);
-		int tryEnd = j.size();
-		j.add(Opcode.IRETURN);
-		int handler = j.size();
-		j.add(Opcode.POP);
-		j.add(Opcode.LLOAD_0);
-		invoke(j, Opcode.INVOKESTATIC, longValueOf);
-		j.add(Opcode.ILOAD_2);
-		invoke(j, Opcode.INVOKESTATIC, self(cp, thisClass, OOB, OOB_DESC));
-		j.add(Opcode.ATHROW);
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND_J), cp.addUtf8(CK_BOUND_J_DESC), j,
-				4, 3, List.<int[]>of(new int[] { 0, tryEnd, handler, ioobe.index() })));
+		MethodCode j = new MethodCode();
+		MethodCode.Label tryStart = j.newBoundLabel();
+		j.lload(0);
+		j.iload(2);
+		j.i2l();
+		j.invokestatic(checkIndex.entry());
+		j.l2i();
+		MethodCode.Label tryEnd = j.newBoundLabel();
+		j.ireturn();
+		MethodCode.Label handler = j.newBoundLabel();
+		j.pop();
+		j.lload(0);
+		j.invokestatic(longValueOf.entry());
+		j.iload(2);
+		j.invokestatic(self(cp, thisClass, OOB, OOB_DESC).entry());
+		j.athrow();
+		j.exceptionCatch(tryStart, tryEnd, handler, ioobe.entry());
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND_J), cp.addUtf8(CK_BOUND_J_DESC), j));
 
 		// _opTypeErr(Throwable e, String op, String opType): an unnamed report renamed
 		// "OP: The value X is not of type T" (T = opType, narrowed NUMBER -> REAL when
@@ -483,166 +476,155 @@ final class JvmOperandTypeRuntime {
 		// Locals: 0=e, 1=op, 2=opType, 3=msg, 4=the type's start, 5=type, 6=the renamed
 		// exception, 7=e's record, 8=1 when the type is the report's own compound one,
 		// 9=the thread's record map.
-		List<Integer> o = new ArrayList<>();
-		o.add(Opcode.ALOAD_0);
-		invoke(o, Opcode.INVOKEVIRTUAL, getMessage);
-		o.add(Opcode.ASTORE_3);
-		o.add(Opcode.ALOAD_3);
-		int ifNull = branch(o, Opcode.IFNULL);
-		o.add(Opcode.ALOAD_3);
-		JvmRuntimeBuilder.emitLdc(o, valuePrefix.index());
-		invoke(o, Opcode.INVOKEVIRTUAL, startsWith);
-		int ifNotRaw = branch(o, Opcode.IFEQ);
-		o.add(Opcode.ALOAD_3);
-		JvmRuntimeBuilder.emitLdc(o, typeInfix.index());
-		invoke(o, Opcode.INVOKEVIRTUAL, lastIndexOf);
-		o.add(Opcode.DUP);
-		o.add(Opcode.ISTORE);
-		o.add(4);
+		MethodCode o = new MethodCode();
+		o.aload(0);
+		o.invokevirtual(getMessage.methodRefEntry());
+		o.astore(3);
+		o.aload(3);
+		MethodCode.Label ifNull = o.newLabel();
+		o.ifnull(ifNull);
+		o.aload(3);
+		o.ldc(valuePrefix.entry());
+		o.invokevirtual(startsWith.methodRefEntry());
+		MethodCode.Label ifNotRaw = o.newLabel();
+		o.ifeq(ifNotRaw);
+		o.aload(3);
+		o.ldc(typeInfix.entry());
+		o.invokevirtual(lastIndexOf.methodRefEntry());
+		o.dup();
+		o.istore(4);
 		// A text that only opens like a report is some other error's.
-		int ifNoType = branch(o, Opcode.IFLT);
-		o.add(Opcode.IINC);
-		o.add(4);
-		o.add(OperandTypes.TYPE_INFIX.length());
-		o.add(Opcode.ALOAD_2);
-		o.add(Opcode.ASTORE);
-		o.add(5);
+		MethodCode.Label ifNoType = o.newLabel();
+		o.iflt(ifNoType);
+		o.iinc(4, OperandTypes.TYPE_INFIX.length());
+		o.aload(2);
+		o.astore(5);
 		// compound = msg.charAt(start) == '('
-		o.add(Opcode.ALOAD_3);
-		o.add(Opcode.ILOAD);
-		o.add(4);
-		invoke(o, Opcode.INVOKEVIRTUAL, charAt);
-		o.add(Opcode.BIPUSH);
-		o.add((int) '(');
-		int ifNotCompound = branch(o, Opcode.IF_ICMPNE);
-		o.add(Opcode.ICONST_1);
-		o.add(Opcode.ISTORE);
-		o.add(8);
-		int toReportsOwn = branch(o, Opcode.GOTO);
-		JvmRuntimeBuilder.patchBranch(o, ifNotCompound, o.size());
-		o.add(Opcode.ICONST_0);
-		o.add(Opcode.ISTORE);
-		o.add(8);
+		o.aload(3);
+		o.iload(4);
+		o.invokevirtual(charAt.methodRefEntry());
+		o.loadConstant('(');
+		MethodCode.Label ifNotCompound = o.newLabel();
+		o.if_icmpne(ifNotCompound);
+		o.iconst_1();
+		o.istore(8);
+		MethodCode.Label toReportsOwn = o.newLabel();
+		o.goto_(toReportsOwn);
+		o.labelBinding(ifNotCompound);
+		o.iconst_0();
+		o.istore(8);
 		// opType is always a wrapper's ldc constant, and string constants are interned,
 		// so identity decides it. A funnel-typed operator's is FUNNEL_TYPE: the type is
 		// the funnel's own kind, the report's last word, a to-double funnel's NUMBER
 		// read as REAL.
-		o.add(Opcode.ALOAD_2);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.FUNNEL_TYPE).index());
-		int ifNotFunnelTyped = branch(o, Opcode.IF_ACMPNE);
-		JvmRuntimeBuilder.patchBranch(o, toReportsOwn, o.size());
-		o.add(Opcode.ALOAD_3);
-		o.add(Opcode.ILOAD);
-		o.add(4);
-		invoke(o, Opcode.INVOKEVIRTUAL, cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;"))));
-		o.add(Opcode.ASTORE);
-		o.add(5);
-		o.add(Opcode.ALOAD_3);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(" " + OperandTypes.Kind.NUMBER.name()).index());
-		invoke(o, Opcode.INVOKEVIRTUAL, endsWith);
-		int ifKindNotNumber = branch(o, Opcode.IFEQ);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.Kind.REAL.name()).index());
-		o.add(Opcode.ASTORE);
-		o.add(5);
-		int toBuild = branch(o, Opcode.GOTO);
-		JvmRuntimeBuilder.patchBranch(o, ifNotFunnelTyped, o.size());
-		o.add(Opcode.ALOAD_2);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.Kind.NUMBER.name()).index());
-		int ifNotNumber = branch(o, Opcode.IF_ACMPNE);
-		o.add(Opcode.ALOAD_3);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(" " + OperandTypes.Kind.REAL.name()).index());
-		invoke(o, Opcode.INVOKEVIRTUAL, endsWith);
-		int ifNotReal = branch(o, Opcode.IFEQ);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.Kind.REAL.name()).index());
-		o.add(Opcode.ASTORE);
-		o.add(5);
-		int build = o.size();
-		JvmRuntimeBuilder.patchBranch(o, ifNotNumber, build);
-		JvmRuntimeBuilder.patchBranch(o, ifNotReal, build);
-		JvmRuntimeBuilder.patchBranch(o, ifKindNotNumber, build);
-		JvmRuntimeBuilder.patchBranch(o, toBuild, build);
-		o.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(o, rte.index());
-		o.add(Opcode.DUP);
-		o.add(Opcode.ALOAD_1);
-		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.OPERATOR_SEPARATOR).index());
-		invoke(o, Opcode.INVOKEVIRTUAL, concat);
-		o.add(Opcode.ALOAD_3);
-		o.add(Opcode.ICONST_0);
-		o.add(Opcode.ILOAD);
-		o.add(4);
-		invoke(o, Opcode.INVOKEVIRTUAL, substring);
-		invoke(o, Opcode.INVOKEVIRTUAL, concat);
-		o.add(Opcode.ALOAD);
-		o.add(5);
-		invoke(o, Opcode.INVOKEVIRTUAL, concat);
-		invoke(o, Opcode.INVOKESPECIAL, rteInit);
-		o.add(Opcode.ASTORE);
-		o.add(6);
+		o.aload(2);
+		o.ldc(cp.addString(OperandTypes.FUNNEL_TYPE).entry());
+		MethodCode.Label ifNotFunnelTyped = o.newLabel();
+		o.if_acmpne(ifNotFunnelTyped);
+		o.labelBinding(toReportsOwn);
+		o.aload(3);
+		o.iload(4);
+		o.invokevirtual(
+				cp.addMethodref(string, cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")))
+					.methodRefEntry());
+		o.astore(5);
+		o.aload(3);
+		o.ldc(cp.addString(" " + OperandTypes.Kind.NUMBER.name()).entry());
+		o.invokevirtual(endsWith.methodRefEntry());
+		MethodCode.Label ifKindNotNumber = o.newLabel();
+		o.ifeq(ifKindNotNumber);
+		o.ldc(cp.addString(OperandTypes.Kind.REAL.name()).entry());
+		o.astore(5);
+		MethodCode.Label toBuild = o.newLabel();
+		o.goto_(toBuild);
+		o.labelBinding(ifNotFunnelTyped);
+		o.aload(2);
+		o.ldc(cp.addString(OperandTypes.Kind.NUMBER.name()).entry());
+		MethodCode.Label ifNotNumber = o.newLabel();
+		o.if_acmpne(ifNotNumber);
+		o.aload(3);
+		o.ldc(cp.addString(" " + OperandTypes.Kind.REAL.name()).entry());
+		o.invokevirtual(endsWith.methodRefEntry());
+		MethodCode.Label ifNotReal = o.newLabel();
+		o.ifeq(ifNotReal);
+		o.ldc(cp.addString(OperandTypes.Kind.REAL.name()).entry());
+		o.astore(5);
+		o.labelBinding(ifNotNumber);
+		o.labelBinding(ifNotReal);
+		o.labelBinding(ifKindNotNumber);
+		o.labelBinding(toBuild);
+		o.new_(rte.entry());
+		o.dup();
+		o.aload(1);
+		o.ldc(cp.addString(OperandTypes.OPERATOR_SEPARATOR).entry());
+		o.invokevirtual(concat.methodRefEntry());
+		o.aload(3);
+		o.iconst_0();
+		o.iload(4);
+		o.invokevirtual(substring.methodRefEntry());
+		o.invokevirtual(concat.methodRefEntry());
+		o.aload(5);
+		o.invokevirtual(concat.methodRefEntry());
+		o.invokespecial(rteInit.entry());
+		o.astore(6);
 		if (records != null) {
 			// The datum travels from the funnel's record of e, and so does a compound
 			// type's object (a list the text only spells), into the renamed exception's.
 			records.emitRead(o, 0, 9, 7);
-			o.add(Opcode.ALOAD);
-			o.add(7);
-			int ifNoRecord = branch(o, Opcode.IFNULL);
-			o.add(Opcode.ILOAD);
-			o.add(8);
-			int ifSymbolType = branch(o, Opcode.IFEQ);
-			o.add(Opcode.ALOAD);
-			o.add(7);
-			o.add(Opcode.ICONST_1);
-			o.add(Opcode.AALOAD);
-			o.add(Opcode.ASTORE);
-			o.add(5);
-			JvmRuntimeBuilder.patchBranch(o, ifSymbolType, o.size());
+			o.aload(7);
+			MethodCode.Label ifNoRecord = o.newLabel();
+			o.ifnull(ifNoRecord);
+			o.iload(8);
+			MethodCode.Label ifSymbolType = o.newLabel();
+			o.ifeq(ifSymbolType);
+			o.aload(7);
+			o.iconst_1();
+			o.aaload();
+			o.astore(5);
+			o.labelBinding(ifSymbolType);
 			records.emit(o, 6, () -> {
-				o.add(Opcode.ALOAD);
-				o.add(7);
-				o.add(Opcode.ICONST_0);
-				o.add(Opcode.AALOAD);
+				o.aload(7);
+				o.iconst_0();
+				o.aaload();
 			}, () -> {
-				o.add(Opcode.ALOAD);
-				o.add(5);
+				o.aload(5);
 			});
-			JvmRuntimeBuilder.patchBranch(o, ifNoRecord, o.size());
+			o.labelBinding(ifNoRecord);
 		}
-		o.add(Opcode.ALOAD);
-		o.add(6);
-		o.add(Opcode.ARETURN);
-		int unchanged = o.size();
-		JvmRuntimeBuilder.patchBranch(o, ifNull, unchanged);
-		JvmRuntimeBuilder.patchBranch(o, ifNotRaw, unchanged);
-		JvmRuntimeBuilder.patchBranch(o, ifNoType, unchanged);
-		o.add(Opcode.ALOAD_0);
-		o.add(Opcode.ARETURN);
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OP_TYPE_ERR), cp.addUtf8(OP_TYPE_ERR_DESC), o,
-				8, records != null ? 10 : 9, List.of()));
+		o.aload(6);
+		o.areturn();
+		o.labelBinding(ifNull);
+		o.labelBinding(ifNotRaw);
+		o.labelBinding(ifNoType);
+		o.aload(0);
+		o.areturn();
+		methods
+			.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OP_TYPE_ERR), cp.addUtf8(OP_TYPE_ERR_DESC), o));
 
 		if (records != null) {
 			// _teSlot(Throwable e, int i): e's record for 0 (null when it has none), its
 			// datum for 1, its type for 2.
-			List<Integer> s = new ArrayList<>();
+			MethodCode s = new MethodCode();
 			records.emitRead(s, 0, 2, 3);
-			s.add(Opcode.ILOAD_1);
-			int ifElement = branch(s, Opcode.IFNE);
-			s.add(Opcode.ALOAD_3);
-			s.add(Opcode.ARETURN);
-			JvmRuntimeBuilder.patchBranch(s, ifElement, s.size());
-			s.add(Opcode.ALOAD_3);
-			int ifNoRecord = branch(s, Opcode.IFNULL);
-			s.add(Opcode.ALOAD_3);
-			s.add(Opcode.ILOAD_1);
-			s.add(Opcode.ICONST_M1);
-			s.add(Opcode.IADD);
-			s.add(Opcode.AALOAD);
-			s.add(Opcode.ARETURN);
-			JvmRuntimeBuilder.patchBranch(s, ifNoRecord, s.size());
-			s.add(Opcode.ACONST_NULL);
-			s.add(Opcode.ARETURN);
-			methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_SLOT), cp.addUtf8(TE_SLOT_DESC), s, 3,
-					4, List.of()));
+			s.iload(1);
+			MethodCode.Label ifElement = s.newLabel();
+			s.ifne(ifElement);
+			s.aload(3);
+			s.areturn();
+			s.labelBinding(ifElement);
+			s.aload(3);
+			MethodCode.Label ifNoRecord = s.newLabel();
+			s.ifnull(ifNoRecord);
+			s.aload(3);
+			s.iload(1);
+			s.iconst_m1();
+			s.iadd();
+			s.aaload();
+			s.areturn();
+			s.labelBinding(ifNoRecord);
+			s.aconst_null();
+			s.areturn();
+			methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_SLOT), cp.addUtf8(TE_SLOT_DESC), s));
 		}
 		return methods;
 	}
@@ -760,10 +742,9 @@ final class JvmOperandTypeRuntime {
 		}
 		a.areturn();
 		a.labelBinding(miss);
-		emitNamedListThrow(a.code(), cp, teRaw, opTypeErr, listKind, funnelType,
+		emitNamedListThrow(a, cp, teRaw, opTypeErr, listKind, funnelType,
 				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC),
-				JvmRuntimeBuilder.codeBytes(a), 3, 3, List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), a);
 	}
 
 	/**
@@ -782,9 +763,8 @@ final class JvmOperandTypeRuntime {
 		a.aload(0);
 		a.areturn();
 		a.labelBinding(miss);
-		emitNamedListThrow(a.code(), cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC),
-				JvmRuntimeBuilder.codeBytes(a), 3, 3, List.of());
+		emitNamedListThrow(a, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), a);
 	}
 
 	/**
@@ -801,8 +781,7 @@ final class JvmOperandTypeRuntime {
 		a.labelBinding(miss);
 		a.loadConstant(0);
 		a.ireturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC),
-				JvmRuntimeBuilder.codeBytes(a), 2, 3, List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC), a);
 	}
 
 	/**
@@ -831,8 +810,7 @@ final class JvmOperandTypeRuntime {
 		a.ldc(kind.entry());
 		a.invokestatic(teRaw.entry());
 		a.athrow();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc),
-				JvmRuntimeBuilder.codeBytes(a), 2, 3, List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), a);
 	}
 
 	/**
@@ -846,15 +824,15 @@ final class JvmOperandTypeRuntime {
 	 * @param funnelType the {@link OperandTypes#FUNNEL_TYPE} constant
 	 * @param operator the operator the report names
 	 */
-	static void emitNamedListThrow(List<Integer> c, ConstantPool cp, MethodrefConstant teRaw,
-			MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType, String operator) {
-		c.add(Opcode.ALOAD_0);
-		JvmRuntimeBuilder.emitLdc(c, listKind.index());
-		invoke(c, Opcode.INVOKESTATIC, teRaw);
-		JvmRuntimeBuilder.emitLdc(c, cp.addString(operator).index());
-		JvmRuntimeBuilder.emitLdc(c, funnelType.index());
-		invoke(c, Opcode.INVOKESTATIC, opTypeErr);
-		c.add(Opcode.ATHROW);
+	static void emitNamedListThrow(MethodCode c, ConstantPool cp, MethodrefConstant teRaw, MethodrefConstant opTypeErr,
+			StringConstant listKind, StringConstant funnelType, String operator) {
+		c.aload(0);
+		c.ldc(listKind.entry());
+		c.invokestatic(teRaw.entry());
+		c.ldc(cp.addString(operator).entry());
+		c.ldc(funnelType.entry());
+		c.invokestatic(opTypeErr.entry());
+		c.athrow();
 	}
 
 	/**
@@ -863,25 +841,21 @@ final class JvmOperandTypeRuntime {
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
 			List<ClassConstant> accepted, MethodrefConstant teRaw, StringConstant kind) {
-		List<Integer> c = new ArrayList<>();
-		List<Integer> hits = new ArrayList<>();
+		MethodCode c = new MethodCode();
+		MethodCode.Label ok = c.newLabel();
 		for (ClassConstant type : accepted) {
-			c.add(Opcode.ALOAD_0);
-			c.add(Opcode.INSTANCEOF);
-			JvmRuntimeBuilder.emitU2(c, type.index());
-			hits.add(branch(c, Opcode.IFNE));
+			c.aload(0);
+			c.instanceOf(type.entry());
+			c.ifne(ok);
 		}
-		c.add(Opcode.ALOAD_0);
-		JvmRuntimeBuilder.emitLdc(c, kind.index());
-		invoke(c, Opcode.INVOKESTATIC, teRaw);
-		c.add(Opcode.ATHROW);
-		int ok = c.size();
-		for (int hit : hits) {
-			JvmRuntimeBuilder.patchBranch(c, hit, ok);
-		}
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.ARETURN);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c, 2, 1, List.of());
+		c.aload(0);
+		c.ldc(kind.entry());
+		c.invokestatic(teRaw.entry());
+		c.athrow();
+		c.labelBinding(ok);
+		c.aload(0);
+		c.areturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c);
 	}
 
 	/**
@@ -889,23 +863,22 @@ final class JvmOperandTypeRuntime {
 	 * the stack for {@link #emitConsTail} to store the cdr pushed after it. Peak operand
 	 * stack: 3 plus the car's.
 	 */
-	private static void emitConsHead(List<Integer> c, ClassConstant object, Runnable car) {
-		c.add(Opcode.ICONST_2);
-		c.add(Opcode.ANEWARRAY);
-		JvmRuntimeBuilder.emitU2(c, object.index());
-		c.add(Opcode.DUP);
-		c.add(Opcode.ICONST_0);
+	private static void emitConsHead(MethodCode c, ClassConstant object, Runnable car) {
+		c.iconst_2();
+		c.anewarray(object.entry());
+		c.dup();
+		c.iconst_0();
 		car.run();
-		c.add(Opcode.AASTORE);
-		c.add(Opcode.DUP);
-		c.add(Opcode.ICONST_1);
+		c.aastore();
+		c.dup();
+		c.iconst_1();
 	}
 
 	/**
 	 * Closes the cons {@link #emitConsHead} opened, over the cdr on top of the stack.
 	 */
-	private static void emitConsTail(List<Integer> c) {
-		c.add(Opcode.AASTORE);
+	private static void emitConsTail(MethodCode c) {
+		c.aastore();
 	}
 
 	/**
@@ -938,25 +911,22 @@ final class JvmOperandTypeRuntime {
 		 * keeps the entry alive. Peak operand stack: 5 plus what {@code datum} and
 		 * {@code type} push.
 		 */
-		void emit(List<Integer> c, int excSlot, Runnable datum, Runnable type) {
-			c.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(c, this.teTl.index());
-			invoke(c, Opcode.INVOKESTATIC, this.tlMap);
-			c.add(Opcode.ALOAD);
-			c.add(excSlot);
-			c.add(Opcode.ICONST_2);
-			c.add(Opcode.ANEWARRAY);
-			JvmRuntimeBuilder.emitU2(c, this.object.index());
-			c.add(Opcode.DUP);
-			c.add(Opcode.ICONST_0);
+		void emit(MethodCode c, int excSlot, Runnable datum, Runnable type) {
+			c.getstatic(this.teTl.entry());
+			c.invokestatic(this.tlMap);
+			c.aload(excSlot);
+			c.iconst_2();
+			c.anewarray(this.object.entry());
+			c.dup();
+			c.iconst_0();
 			datum.run();
-			c.add(Opcode.AASTORE);
-			c.add(Opcode.DUP);
-			c.add(Opcode.ICONST_1);
+			c.aastore();
+			c.dup();
+			c.iconst_1();
 			type.run();
-			c.add(Opcode.AASTORE);
-			invoke(c, Opcode.INVOKEVIRTUAL, this.mapPut);
-			c.add(Opcode.POP);
+			c.aastore();
+			c.invokevirtual(this.mapPut);
+			c.pop();
 		}
 
 		/**
@@ -964,29 +934,24 @@ final class JvmOperandTypeRuntime {
 		 * local {@code recordSlot} (null when the thread has no map, or the map nothing
 		 * for it), the map passing through local {@code mapSlot}. Peak operand stack: 2.
 		 */
-		void emitRead(List<Integer> c, int excSlot, int mapSlot, int recordSlot) {
-			c.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(c, this.teTl.index());
-			invoke(c, Opcode.INVOKEVIRTUAL, this.tlGet);
-			c.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(c, this.weakMap.index());
-			c.add(Opcode.DUP);
-			c.add(Opcode.ASTORE);
-			c.add(mapSlot);
-			int ifNoMap = branch(c, Opcode.IFNULL);
-			c.add(Opcode.ALOAD);
-			c.add(mapSlot);
-			c.add(Opcode.ALOAD);
-			c.add(excSlot);
-			invoke(c, Opcode.INVOKEVIRTUAL, this.mapGet);
-			int toCast = branch(c, Opcode.GOTO);
-			JvmRuntimeBuilder.patchBranch(c, ifNoMap, c.size());
-			c.add(Opcode.ACONST_NULL);
-			JvmRuntimeBuilder.patchBranch(c, toCast, c.size());
-			c.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(c, this.objArr.index());
-			c.add(Opcode.ASTORE);
-			c.add(recordSlot);
+		void emitRead(MethodCode c, int excSlot, int mapSlot, int recordSlot) {
+			c.getstatic(this.teTl.entry());
+			c.invokevirtual(this.tlGet.methodRefEntry());
+			c.checkcast(this.weakMap.entry());
+			c.dup();
+			c.astore(mapSlot);
+			MethodCode.Label ifNoMap = c.newLabel();
+			c.ifnull(ifNoMap);
+			c.aload(mapSlot);
+			c.aload(excSlot);
+			c.invokevirtual(this.mapGet);
+			MethodCode.Label toCast = c.newLabel();
+			c.goto_(toCast);
+			c.labelBinding(ifNoMap);
+			c.aconst_null();
+			c.labelBinding(toCast);
+			c.checkcast(this.objArr.entry());
+			c.astore(recordSlot);
 		}
 
 	}
@@ -1033,66 +998,28 @@ final class JvmOperandTypeRuntime {
 			}
 			ref = self(this.cp, this.thisClass, name, desc);
 			this.made.put(name, ref);
-			List<Integer> c = new ArrayList<>();
+			MethodCode c = new MethodCode();
+			MethodTypeDesc type = MethodTypeDesc.ofDescriptor(desc);
+			MethodCode.Label start = c.newBoundLabel();
 			int slot = 0;
-			int i = 1;
-			while (desc.charAt(i) != ')') {
-				char t = desc.charAt(i);
-				int load = switch (t) {
-					case 'I', 'Z', 'B', 'C', 'S' -> Opcode.ILOAD;
-					case 'J' -> Opcode.LLOAD;
-					case 'F' -> Opcode.FLOAD;
-					case 'D' -> Opcode.DLOAD;
-					default -> Opcode.ALOAD;
-				};
-				c.add(load);
-				c.add(slot);
-				slot += (t == 'J' || t == 'D') ? 2 : 1;
-				if (t == '[') {
-					while (desc.charAt(i) == '[') {
-						i++;
-					}
-				}
-				i = desc.charAt(i) == 'L' ? desc.indexOf(';', i) + 1 : i + 1;
+			for (ClassDesc parameter : type.parameterList()) {
+				TypeKind kind = TypeKind.from(parameter);
+				c.loadLocal(kind, slot);
+				slot += kind.slotSize();
 			}
-			invoke(c, Opcode.INVOKESTATIC, target);
-			int end = c.size();
-			c.add(switch (desc.charAt(i + 1)) {
-				case 'V' -> Opcode.RETURN;
-				case 'I', 'Z', 'B', 'C', 'S' -> Opcode.IRETURN;
-				case 'J' -> Opcode.LRETURN;
-				case 'F' -> Opcode.FRETURN;
-				case 'D' -> Opcode.DRETURN;
-				default -> Opcode.ARETURN;
-			});
-			int handler = c.size();
-			JvmRuntimeBuilder.emitLdc(c, this.cp.addString(op).index());
-			JvmRuntimeBuilder.emitLdc(c,
-					this.cp.addString(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))).index());
-			invoke(c, Opcode.INVOKESTATIC, self(this.cp, this.thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC));
-			c.add(Opcode.ATHROW);
-			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.addUtf8(name), this.cp.addUtf8(desc), c,
-					Math.max(slot, 3), slot, List.<int[]>of(new int[] { 0, end, handler, 0 })));
+			c.invokestatic(target.entry());
+			MethodCode.Label end = c.newBoundLabel();
+			c.return_(TypeKind.from(type.returnType()));
+			MethodCode.Label handler = c.newBoundLabel();
+			c.ldc(this.cp.addString(op).entry());
+			c.ldc(this.cp.addString(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))).entry());
+			c.invokestatic(self(this.cp, this.thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC).entry());
+			c.athrow();
+			c.exceptionCatch(start, end, handler, null);
+			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.addUtf8(name), this.cp.addUtf8(desc), c));
 			return ref;
 		}
 
-	}
-
-	private static void invoke(List<Integer> c, int opcode, MethodrefConstant ref) {
-		c.add(opcode);
-		JvmRuntimeBuilder.emitU2(c, ref.index());
-	}
-
-	private static void invoke(List<Integer> c, int opcode, MemberRefEntry ref) {
-		c.add(opcode);
-		JvmRuntimeBuilder.emitU2(c, ref.index());
-	}
-
-	private static int branch(List<Integer> c, int opcode) {
-		int pos = c.size();
-		c.add(opcode);
-		JvmRuntimeBuilder.emitU2(c, 0);
-		return pos;
 	}
 
 }

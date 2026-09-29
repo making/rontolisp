@@ -147,6 +147,23 @@ public final class MethodCode {
 		}
 	}
 
+	/**
+	 * Splices a block assembled as a body of its own: its instructions, whose branches
+	 * all land inside it, so it can be appended at any position.
+	 * @param block the block, every label bound
+	 * @return this
+	 * @throws IllegalArgumentException when the block has a handler or a long branch, or
+	 * this body feeds an operand-stack model (the block's branches never reached it)
+	 */
+	public MethodCode append(MethodCode block) {
+		block.checkComplete();
+		if (!block.handlers.isEmpty() || !block.longBranches.isEmpty() || this.stack != null) {
+			throw new IllegalArgumentException("only a plain block is spliced into a plain body");
+		}
+		this.code.addAll(block.code);
+		return this;
+	}
+
 	// --- labels, branches, handlers ---------------------------------------------------
 
 	/**
@@ -694,6 +711,10 @@ public final class MethodCode {
 
 	public MethodCode ddiv() {
 		return this.op(Opcode.DDIV);
+	}
+
+	public MethodCode drem() {
+		return this.op(Opcode.DREM);
 	}
 
 	public MethodCode dneg() {
