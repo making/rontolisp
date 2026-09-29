@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.lang.classfile.constantpool.FieldRefEntry;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -19,7 +20,6 @@ import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LetBoundDesignators;
 import am.ik.rontolisp.compiler.ParallelLetStaging;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -141,35 +141,21 @@ final class JvmLetCompiler {
 										+ " (SpecialVarCollector.collectDynamicallyBound missed this binding form)");
 					}
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.GETSTATIC);
-					ctx.emitU2(tlField.index());
-					ctx.emit(Opcode.SWAP);
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(dyn.dbind().index());
+					ctx.body.dup().getstatic(tlField.entry()).swap();
+					ctx.body.invokestatic(dyn.dbind().entry());
 					int saveSlot = ctx.allocTemp();
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(saveSlot);
+					ctx.body.astore(saveSlot);
 					if (dynamicRestores == null) {
 						dynamicRestores = new ArrayList<>();
 					}
 					dynamicRestores.add(new int[] { tlField.index(), saveSlot });
 					if (capturedInLet.contains(name)) {
 						int tmpSlot = ctx.allocTemp();
-						ctx.emit(Opcode.ASTORE);
-						ctx.emit(tmpSlot);
-						ctx.emit(Opcode.ICONST_1);
-						ctx.emit(Opcode.ANEWARRAY);
-						ctx.emitU2(ctx.objectClass.index());
-						ctx.emit(Opcode.DUP);
-						ctx.emit(Opcode.ICONST_0);
-						ctx.emit(Opcode.ALOAD);
-						ctx.emit(tmpSlot);
-						ctx.emit(Opcode.AASTORE);
+						ctx.body.astore(tmpSlot).iconst_1().anewarray(ctx.objectClass.entry());
+						ctx.body.dup().iconst_0().aload(tmpSlot).aastore();
 					}
 					int lexSlot = ctx.allocLocal(name);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(lexSlot);
+					ctx.body.astore(lexSlot);
 					ctx.rawLocals.remove(name);
 					ctx.rawDoubleLocals.remove(name);
 					ctx.localIntLambdas.remove(name);
@@ -196,8 +182,7 @@ final class JvmLetCompiler {
 					JvmSetqCompiler.compileRawDoubleValue(pairList.get(1), ctx, className);
 					int doubleSlot = ctx.allocTemp();
 					ctx.allocTemp();
-					ctx.emit(Opcode.DSTORE);
-					ctx.emit(doubleSlot);
+					ctx.body.dstore(doubleSlot);
 					ctx.rawDoubleLocals.put(name, doubleSlot);
 					ctx.locals.remove(name);
 					ctx.rawLocals.remove(name);
@@ -222,12 +207,7 @@ final class JvmLetCompiler {
 					// Pre-initialize the raw and shadow slots: a store writes only its
 					// own pair, so every slot must be DEFINED on every path or a later
 					// read fails verification at a merge.
-					ctx.emit(Opcode.LCONST_0);
-					ctx.emit(Opcode.LSTORE);
-					ctx.emit(longSlot);
-					ctx.emit(Opcode.ACONST_NULL);
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(shadowSlot);
+					ctx.body.lconst_0().lstore(longSlot).aconst_null().astore(shadowSlot);
 					JvmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, className, rawLocal);
 					ctx.rawLocals.put(name, rawLocal);
 					ctx.locals.remove(name);
@@ -239,20 +219,15 @@ final class JvmLetCompiler {
 				}
 				boundInThisLet.add(name);
 				if (capturedInLet.contains(name)) {
-					ctx.emit(Opcode.ICONST_1);
-					ctx.emit(Opcode.ANEWARRAY);
-					ctx.emitU2(ctx.objectClass.index());
-					ctx.emit(Opcode.DUP);
-					ctx.emit(Opcode.ICONST_0);
+					ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
-					ctx.emit(Opcode.AASTORE);
+					ctx.body.aastore();
 				}
 				else {
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
 				}
 				int slot = ctx.allocLocal(name);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(slot);
+				ctx.body.astore(slot);
 				ctx.rawLocals.remove(name);
 				ctx.rawDoubleLocals.remove(name);
 				ctx.localIntLambdas.remove(name);
@@ -350,7 +325,7 @@ final class JvmLetCompiler {
 		}
 		if (!hasBody && !forEffect) {
 			// CLHS: a body-less let/let* returns nil (the loop above pushed nothing).
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		afterBody.run();
 	}
@@ -384,7 +359,7 @@ final class JvmLetCompiler {
 	 */
 	static void compileDynRestore(LispCons cons, JvmLispCompiler.Ctx ctx) {
 		emitRestoreForEffect(cons, ctx);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 	/** The {@code %dyn-restore} form compiled for effect: the restore, no value. */
@@ -401,12 +376,9 @@ final class JvmLetCompiler {
 	 * @param ctx the compilation context
 	 */
 	private static void emitRestore(int tlFieldIndex, int saveSlot, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(tlFieldIndex);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(saveSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(ctx.dynVars).tlSet().index());
+		ctx.body.getstatic((FieldRefEntry) ctx.cp.entryAt(tlFieldIndex))
+			.aload(saveSlot)
+			.invokevirtual(Objects.requireNonNull(ctx.dynVars).tlSet().methodRefEntry());
 	}
 
 	/**

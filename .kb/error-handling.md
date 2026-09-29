@@ -164,8 +164,8 @@ normal completion OUTSIDE the handler. `ignore-errors` = `expandIgnoreErrors` ov
   `Ctx.spillOperandStack()` saves live operands into fresh locals BEFORE the protected region and
   `Spill.restore` reloads them past the merge; a statement-position handler-case spills nothing and
   stays byte-identical. Liveness comes from `am.ik.jvm.OperandStack`, a typed model fed by
-  `Ctx.emit`/`emitU2` that also supplies a real `max_stack` and raises on a merge-point mismatch
-  rather than writing an unverifiable class. **An object under construction (`new`, pre-`<init>`)
+  every instruction `ctx.body` writes, that also supplies a real `max_stack` and raises on a
+  merge-point mismatch rather than writing an unverifiable class. **An object under construction (`new`, pre-`<init>`)
   can never be spilled** -- tagged `Slot.UNINIT` and rejected. A `return` escaping a spilled region
   reloads from the outermost escaped `SpillScope` (`JvmReturnCompiler.emitStackUnwind`).
 - `FreeVarAnalyzer` learned `handler-case` (clause var BOUND in the clause body), `ignore-errors`

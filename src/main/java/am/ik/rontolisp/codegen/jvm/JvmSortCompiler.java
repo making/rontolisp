@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code sort} built-in function when the program does not carry the shared
@@ -34,8 +34,7 @@ final class JvmSortCompiler {
 		// dispatcher.
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int listSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(listSlot);
+		ctx.body.astore(listSlot);
 
 		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(2), 2, ctx, className);
 
@@ -44,105 +43,68 @@ final class JvmSortCompiler {
 		int tmpSlot = ctx.allocTemp();
 
 		// i = list
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(iSlot);
+		ctx.body.aload(listSlot).astore(iSlot);
 
 		// outerLoop:
-		int outerPos = ctx.code.size();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(iSlot);
-		int outerEndBranch = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		MethodCode.Label outerPos = ctx.body.newBoundLabel();
+		ctx.body.aload(iSlot);
+		MethodCode.Label outerEndBranch = ctx.body.newLabel();
+		ctx.body.ifnull(outerEndBranch);
 
 		// j = cdr(i)
 		emitCdr(ctx, iSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(jSlot);
+		ctx.body.astore(jSlot);
 
 		// innerLoop:
-		int innerPos = ctx.code.size();
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(jSlot);
-		int innerEndBranch = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		MethodCode.Label innerPos = ctx.body.newBoundLabel();
+		ctx.body.aload(jSlot);
+		MethodCode.Label innerEndBranch = ctx.body.newLabel();
+		ctx.body.ifnull(innerEndBranch);
 
 		// if (pred(car(j), car(i)) != nil) swap car(i) and car(j)
 		call.emitCall(ctx, className, List.of(() -> emitCar(ctx, jSlot), () -> emitCar(ctx, iSlot)));
-		int noSwapBranch = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		MethodCode.Label noSwapBranch = ctx.body.newLabel();
+		ctx.body.ifnull(noSwapBranch);
 
 		// tmp = car(i)
 		emitCar(ctx, iSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(tmpSlot);
+		ctx.body.astore(tmpSlot);
 		// car(i) = car(j)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(iSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
+		ctx.body.aload(iSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0();
 		emitCar(ctx, jSlot);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aastore();
 		// car(j) = tmp
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(jSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tmpSlot);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aload(jSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aload(tmpSlot);
+		ctx.body.aastore();
 
 		// noSwap:
-		JvmEmitHelper.patchBranch(ctx, noSwapBranch, ctx.code.size());
+		ctx.body.labelBinding(noSwapBranch);
 		// j = cdr(j)
 		emitCdr(ctx, jSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(jSlot);
+		ctx.body.astore(jSlot);
 		// goto innerLoop
-		int innerGoto = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2((innerPos - innerGoto) & 0xFFFF);
+		ctx.body.goto_(innerPos);
 
 		// innerEnd:
-		JvmEmitHelper.patchBranch(ctx, innerEndBranch, ctx.code.size());
+		ctx.body.labelBinding(innerEndBranch);
 		// i = cdr(i)
 		emitCdr(ctx, iSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(iSlot);
+		ctx.body.astore(iSlot);
 		// goto outerLoop
-		int outerGoto = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2((outerPos - outerGoto) & 0xFFFF);
+		ctx.body.goto_(outerPos);
 
 		// outerEnd:
-		JvmEmitHelper.patchBranch(ctx, outerEndBranch, ctx.code.size());
+		ctx.body.labelBinding(outerEndBranch);
 		// result = list (original head, now sorted)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
+		ctx.body.aload(listSlot);
 	}
 
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 	}
 
 	private static void emitCdr(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
 	}
 
 }

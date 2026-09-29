@@ -5,10 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.LispCons;
@@ -96,7 +94,7 @@ final class JvmHandlerCaseCompiler {
 		JvmLispCompiler.UnwindScope scope = new JvmLispCompiler.UnwindScope(List.of(depthDecForm),
 				ctx.blockTargets.size());
 		ctx.unwindScopes.push(scope);
-		int start = ctx.body.size();
+		MethodCode.Label start = ctx.body.newBoundLabel();
 		// In restart mode -- and under the signal-point clause match -- the clause
 		// types also go on the DYNAMIC handler stack for the protected extent, so
 		// %run-handlers stops at this handler-case instead of running an enclosing
@@ -118,7 +116,7 @@ final class JvmHandlerCaseCompiler {
 			protectedForm = LispMacroExpander.settleMvTail(protectedForm);
 		}
 		JvmExprCompiler.compileExpr(protectedForm, ctx, className);
-		int end = ctx.body.size();
+		MethodCode.Label end = ctx.body.newBoundLabel();
 		ctx.unwindScopes.pop();
 		ctx.body.astore(resultSlot);
 		// Normal completion: depth--, then the :no-error clause (outside the protected
@@ -132,7 +130,7 @@ final class JvmHandlerCaseCompiler {
 		// Handler: depth--, take the condition the caught throwable carries, synthesize a
 		// simple-error from the message when it carries none, dispatch through the
 		// clauses.
-		int handler = ctx.body.size();
+		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
 		ctx.body.astore(excSlot);
 		emitDepthAdjust(ctx, className, false);
@@ -186,7 +184,7 @@ final class JvmHandlerCaseCompiler {
 			spill.restore(ctx);
 		}
 		ctx.body.aload(resultSlot);
-		addExceptionEntries(ctx, scope, start, end, handler);
+		scope.catchAny(ctx.body, start, end, handler);
 		ctx.nextLocal = savedNextLocal;
 	}
 
@@ -900,25 +898,6 @@ final class JvmHandlerCaseCompiler {
 	static void compileDepthDec(JvmLispCompiler.Ctx ctx, String className) {
 		emitDepthAdjust(ctx, className, false);
 		ctx.body.aconst_null();
-	}
-
-	/**
-	 * Appends the catch-any exception-table entries of the protected region, excluding
-	 * the recorded return-site cleanup holes (same sweep as
-	 * {@code JvmUnwindProtectCompiler}).
-	 */
-	private static void addExceptionEntries(JvmLispCompiler.Ctx ctx, JvmLispCompiler.UnwindScope scope, int start,
-			int end, int handler) {
-		int cur = start;
-		for (int[] hole : scope.holes) {
-			if (hole[0] > cur) {
-				ctx.exceptionTable.add(new ClassDefinition.Handler(cur, hole[0], handler, 0));
-			}
-			cur = Math.max(cur, hole[1]);
-		}
-		if (cur < end) {
-			ctx.exceptionTable.add(new ClassDefinition.Handler(cur, end, handler, 0));
-		}
 	}
 
 }

@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code append} built-in function.
@@ -18,7 +17,7 @@ final class JvmAppendCompiler {
 		List<LispVal> args = cons.toList();
 		int argCount = args.size() - 1; // exclude 'append' itself
 		if (argCount == 0) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		if (argCount == 1) {
@@ -31,8 +30,7 @@ final class JvmAppendCompiler {
 		}
 		// Right-fold: call _append N-1 times from right to left
 		for (int i = 0; i < argCount - 1; i++) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.appendMethod.index());
+			ctx.body.invokestatic(ctx.appendMethod.entry());
 		}
 	}
 

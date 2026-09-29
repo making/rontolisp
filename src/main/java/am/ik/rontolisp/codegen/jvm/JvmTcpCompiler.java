@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -55,7 +54,7 @@ final class JvmTcpCompiler {
 					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
 				}
 				else {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				invoke(ctx, ctx.tlsConnectHelper, member);
 				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
@@ -78,7 +77,7 @@ final class JvmTcpCompiler {
 					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
 				}
 				else {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				invoke(ctx, ctx.tlsUpgradeHelper, member);
 				wrapStream(ctx, className, LispLayout.Kinds.SOCKET);
@@ -92,7 +91,7 @@ final class JvmTcpCompiler {
 					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
 				}
 				else {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				invoke(ctx, ctx.tlsListenHelper, member);
 				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
@@ -106,7 +105,7 @@ final class JvmTcpCompiler {
 					JvmExprCompiler.compileExpr(args.get(4), ctx, className);
 				}
 				else {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				invoke(ctx, ctx.tlsListenP12Helper, member);
 				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
@@ -118,7 +117,7 @@ final class JvmTcpCompiler {
 					JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				}
 				else {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				invoke(ctx, ctx.tcpListenHelper, member);
 				wrapStream(ctx, className, LispLayout.Kinds.SOCKET_SERVER);
@@ -187,8 +186,7 @@ final class JvmTcpCompiler {
 		if (helper == null) {
 			throw new IllegalStateException(member + " helper method was not emitted");
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(helper.index());
+		ctx.body.invokestatic(helper.entry());
 	}
 
 }

@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -38,12 +37,10 @@ final class JvmReadFromStringCompiler {
 	 */
 	static void compileEnd(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		emitRead(cons, ctx, className, LispNames.READ_FROM_STRING_END);
-		ctx.emit(Opcode.POP);
+		ctx.body.pop();
 		FieldrefConstant pos = ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("_readPos"), ctx.cp.addUtf8("I")));
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(pos.index());
-		ctx.emit(Opcode.I2L);
+		ctx.body.getstatic(pos.entry()).i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
@@ -58,8 +55,7 @@ final class JvmReadFromStringCompiler {
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
 				ctx.cp.addUtf8("_readFromString"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

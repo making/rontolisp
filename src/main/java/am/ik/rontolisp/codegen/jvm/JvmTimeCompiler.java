@@ -6,7 +6,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the time built-in functions for the JVM, each taking no arguments and
@@ -30,34 +29,29 @@ final class JvmTimeCompiler {
 		}
 		switch (name) {
 			case LispNames.GET_UNIVERSAL_TIME -> {
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.systemOp("currentTimeMillis").index());
+				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis").entry());
 				pushRawLong(1000L, ctx);
-				ctx.emit(Opcode.LDIV);
+				ctx.body.ldiv();
 				pushRawLong(UNIVERSAL_TIME_OFFSET, ctx);
-				ctx.emit(Opcode.LADD);
+				ctx.body.ladd();
 			}
 			case LispNames.GET_INTERNAL_REAL_TIME -> {
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.systemOp("currentTimeMillis").index());
+				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis").entry());
 			}
 			case LispNames.GET_INTERNAL_RUN_TIME -> {
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.systemOp("nanoTime").index());
+				ctx.body.invokestatic(ctx.systemOp("nanoTime").entry());
 				pushRawLong(1000000L, ctx);
-				ctx.emit(Opcode.LDIV);
+				ctx.body.ldiv();
 			}
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Box the long result.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.longValueOf.index());
+		ctx.body.invokestatic(ctx.longValueOf.entry());
 	}
 
 	private static void pushRawLong(long value, JvmLispCompiler.Ctx ctx) {
 		final ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-		ctx.emit(Opcode.LDC2_W);
-		ctx.emitU2(lc.index());
+		ctx.body.ldc(lc.entry());
 	}
 
 }

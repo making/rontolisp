@@ -11,7 +11,6 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.jvm.ConstantPool.StringConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
@@ -86,38 +85,31 @@ final class JvmSubseqCompiler {
 		// directly in _subseqCv (rendering it here would both cost O(source) per slice
 		// and launder the mutable representation away, .todo/559).
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(seqSlot);
+		ctx.body.astore(seqSlot);
 		// start = (int) arg
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
-		ctx.emit(Opcode.L2I);
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(startSlot);
+		ctx.body.l2i().istore(startSlot);
 		// end = (int) arg, or -1 (sentinel for "to the end") when omitted; a runtime
 		// nil value (e.g. an end parameter defaulting to nil) also maps to the
 		// sentinel, matching the interpreter's (subseq seq start nil).
 		if (args.size() >= 4 && !(args.get(3) instanceof LispNil)) {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-			ctx.emit(Opcode.DUP);
-			int ifNullPos = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
+			ctx.body.dup();
+			MethodCode.Label ifNullPos = ctx.body.newLabel();
+			ctx.body.ifnull(ifNullPos);
 			JvmEmitHelper.unboxLong(ctx);
-			ctx.emit(Opcode.L2I);
-			int gotoEndPos = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-			ctx.emit(Opcode.POP);
-			ctx.emit(Opcode.ICONST_M1);
-			JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+			ctx.body.l2i();
+			MethodCode.Label gotoEndPos = ctx.body.newLabel();
+			ctx.body.goto_(gotoEndPos);
+			ctx.body.labelBinding(ifNullPos);
+			ctx.body.pop().iconst_m1();
+			ctx.body.labelBinding(gotoEndPos);
 		}
 		else {
-			ctx.emit(Opcode.ICONST_M1);
+			ctx.body.iconst_m1();
 		}
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(endSlot);
+		ctx.body.istore(endSlot);
 
 		MethodCode asm = ctx.body;
 		MethodCode.Label listLabel = asm.newLabel();

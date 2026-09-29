@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -44,24 +43,19 @@ final class JvmExitCompiler {
 		// wants out of an exit status.
 		MethodrefConstant intValue = ctx.cp.addMethodref(ctx.numberClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("intValue"), ctx.cp.addUtf8("()I")));
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.numberClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(intValue.index());
+		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(intValue.methodRefEntry());
 		// System.exit runs no finally and main's return is never reached, so the output
 		// files the program never closed are flushed here (a program that opens none has
 		// no _flushStreams and keeps its bytes).
 		if (ctx.flushStreams != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.flushStreams.index());
+			ctx.body.invokestatic(ctx.flushStreams.entry());
 		}
 		MethodrefConstant exit = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System")),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("exit"), ctx.cp.addUtf8("(I)V")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(exit.index());
+		ctx.body.invokestatic(exit.entry());
 		// Never reached, but the verifier types this expression like any other: it leaves
 		// one value behind.
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 }

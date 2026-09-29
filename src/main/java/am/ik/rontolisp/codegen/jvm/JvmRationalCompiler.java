@@ -20,8 +20,7 @@ final class JvmRationalCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// _rational handles Long, BigInteger, Double and ratios (BigInteger[]).
-		ctx.emit(am.ik.jvm.Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RATIONAL).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RATIONAL).entry());
 	}
 
 }

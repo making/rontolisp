@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code numerator} and {@code denominator} accessors. For a ratio
@@ -32,37 +32,25 @@ final class JvmRatioAccessorCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// _ckRat answers a rational and throws the operator's type-error for anything
 		// else -- a float, a complex, a non-number.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_RAT).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_RAT).entry());
 		int temp = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
-		int ifNotRatioPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
-		ctx.emit(index == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.astore(temp).aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		MethodCode.Label ifNotRatioPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotRatioPos);
+		ctx.body.aload(temp).checkcast(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		ctx.body.loadConstant(index);
+		ctx.body.aaload();
 		JvmEmitHelper.normalizeBigInteger(ctx);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotRatioPos, ctx.code.size());
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(ifNotRatioPos);
 		if (index == 0) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
+			ctx.body.aload(temp);
 		}
 		else {
 			JvmEmitHelper.compileLong(1, ctx);
 		}
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

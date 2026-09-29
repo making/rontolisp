@@ -10,7 +10,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the unary floating-point math built-ins ({@code sqrt}, {@code exp},
@@ -118,16 +117,13 @@ final class JvmMathFnCompiler {
 			// carries the escape and java.lang.Math would answer NaN. Anything else
 			// keeps the inline Math call below.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.emit(Opcode.BIPUSH);
-			ctx.emit(u1Op(name));
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).index());
+			ctx.body.loadConstant(u1Op(name));
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
 			return;
 		}
 		// Number.doubleValue() coerces both Long and Double arguments to double.
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.mathOp(name).index());
+		ctx.body.invokestatic(ctx.mathOp(name).entry());
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
@@ -147,8 +143,7 @@ final class JvmMathFnCompiler {
 			// interpreter's REAL operand-type report there.
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(ATAN2).index());
+			ctx.body.invokestatic(ctx.mathOp(ATAN2).entry());
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
@@ -159,27 +154,21 @@ final class JvmMathFnCompiler {
 			// of helpers (/ (log n) (log base)) would reach with a complex operand.
 			compileLogThroughU1(args.get(1), ctx, className);
 			compileLogThroughU1(args.get(2), ctx, className);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.DIV).index());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.DIV).entry());
 			return;
 		}
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.mathOp(LispNames.LOG).index());
+		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG).entry());
 		JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.mathOp(LispNames.LOG).index());
-		ctx.emit(Opcode.DDIV);
+		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG).entry()).ddiv();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
 	/** One {@code log} of the argument through the gated {@code _cu1} helper. */
 	private static void compileLogThroughU1(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(arg, ctx, className);
-		ctx.emit(Opcode.BIPUSH);
-		ctx.emit(JvmComplexRuntimeBuilder.U1_LOG);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).index());
+		ctx.body.loadConstant(JvmComplexRuntimeBuilder.U1_LOG);
+		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
 	}
 
 	/**
@@ -199,16 +188,14 @@ final class JvmMathFnCompiler {
 			throw new UnsupportedOperationException(name + " expects 1 argument(s), got " + got);
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.BIPUSH);
-		ctx.emit(switch (name) {
+		ctx.body.loadConstant(switch (name) {
 			case LispNames.ASINH -> JvmComplexRuntimeBuilder.U1_ASINH;
 			case LispNames.ACOSH -> JvmComplexRuntimeBuilder.U1_ACOSH;
 			case LispNames.ATANH -> JvmComplexRuntimeBuilder.U1_ATANH;
 			case LispNames.CIS -> JvmComplexRuntimeBuilder.U1_CIS;
 			default -> throw new IllegalArgumentException("not an always-complex-capable unary: " + name);
 		});
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).index());
+		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
 	}
 
 	/** The {@code _cu1} opcode selecting the formula for a Lisp name. */

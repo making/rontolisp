@@ -17,8 +17,8 @@ import am.ik.rontolisp.LispVal;
  * current function: the compile-path deviation that keeps a {@code return-from} inside a
  * lambda a lambda-local exit (a goto cannot cross into a separately compiled method).
  * {@code (return-from nil ...)} is plain {@code return}. The emit sequence (value store,
- * escaped unwind-protect cleanups with hole recording, operand-stack unwind, patched
- * goto) is {@link JvmReturnCompiler#emitExit}.
+ * escaped unwind-protect cleanups with hole recording, operand-stack unwind, the goto to
+ * the exit label) is {@link JvmReturnCompiler#emitExit}.
  */
 final class JvmReturnFromCompiler {
 

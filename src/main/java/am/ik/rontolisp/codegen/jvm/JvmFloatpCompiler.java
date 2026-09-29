@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code floatp} predicate.
@@ -17,8 +16,7 @@ final class JvmFloatpCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.doubleClass.index());
+		ctx.body.instanceOf(ctx.doubleClass.entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

@@ -5,7 +5,6 @@ import java.util.List;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -30,16 +29,14 @@ final class JvmFloat16Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
-		ctx.emit(Opcode.D2F);
+		ctx.body.d2f();
 		invokeStatic(ctx, "java/lang/Float", "floatToFloat16", "(F)S");
 		// The (S)-typed result is an int on the stack, sign-extended -- mask to the
 		// unsigned 16-bit pattern. iconst cannot push 0xFFFF directly (SIPUSH is a
 		// signed 16-bit immediate); -1 >>> 16 is exactly 0x0000FFFF.
 		JvmEmitHelper.emitIntConst(ctx, -1);
 		JvmEmitHelper.emitIntConst(ctx, 16);
-		ctx.emit(Opcode.IUSHR);
-		ctx.emit(Opcode.IAND);
-		ctx.emit(Opcode.I2L);
+		ctx.body.iushr().iand().i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
@@ -48,11 +45,10 @@ final class JvmFloat16Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").index());
-		ctx.emit(Opcode.L2I);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+		ctx.body.l2i();
 		invokeStatic(ctx, "java/lang/Float", "float16ToFloat", "(S)F");
-		ctx.emit(Opcode.F2D);
+		ctx.body.f2d();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
@@ -77,9 +73,8 @@ final class JvmFloat16Compiler {
 		if (startExpr != null) {
 			JvmExprCompiler.compileExpr(startExpr, ctx, className);
 			JvmEmitHelper.toBigInteger(ctx);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").index());
-			ctx.emit(Opcode.L2I);
+			ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+			ctx.body.l2i();
 		}
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 0);
@@ -87,8 +82,7 @@ final class JvmFloat16Compiler {
 		ClassConstant selfClass = ctx.cp.addClass(ctx.cp.addUtf8(className));
 		MethodrefConstant helper = ctx.cp.addMethodref(selfClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(helper.index());
+		ctx.body.invokestatic(helper.entry());
 	}
 
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword, int from) {
@@ -104,8 +98,7 @@ final class JvmFloat16Compiler {
 		ConstantPool.ClassConstant cls = ctx.cp.addClass(ctx.cp.addUtf8(owner));
 		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(cls,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

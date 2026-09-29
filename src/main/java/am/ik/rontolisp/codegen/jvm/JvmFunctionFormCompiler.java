@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -9,7 +10,6 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code (function name)} special form ({@code #'name} reader syntax) and
@@ -73,61 +73,37 @@ final class JvmFunctionFormCompiler {
 		// binding (the interpreter and SBCL signal for it).
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		int symSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(symSlot);
-		int done;
+		ctx.body.astore(symSlot);
+		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.evalStoreRef != null) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(symSlot);
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(fenvField(ctx, className).index());
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(envLookupRef(ctx, className).index());
-			ctx.emit(Opcode.DUP);
-			int fenvMiss = branch(ctx, Opcode.IFNULL);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.DUP);
-			int tombstone = branch(ctx, Opcode.IFNULL);
-			done = branch(ctx, Opcode.GOTO);
-			JvmEmitHelper.patchBranch(ctx, tombstone, ctx.code.size());
-			ctx.emit(Opcode.POP);
+			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className).entry());
+			ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+			MethodCode.Label fenvMiss = ctx.body.newLabel();
+			ctx.body.ifnull(fenvMiss);
+			ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload().dup();
+			MethodCode.Label tombstone = ctx.body.newLabel();
+			ctx.body.ifnull(tombstone);
+			ctx.body.goto_(done);
+			ctx.body.labelBinding(tombstone);
+			ctx.body.pop();
 			emitUndefinedFunctionThrow(symSlot, ctx);
-			JvmEmitHelper.patchBranch(ctx, fenvMiss, ctx.code.size());
-			ctx.emit(Opcode.POP);
+			ctx.body.labelBinding(fenvMiss);
+			ctx.body.pop();
 		}
-		else {
-			done = -1;
-		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(symSlot);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(lookupRef(ctx, className).index());
-		ctx.emit(Opcode.DUP);
-		int registryMiss = branch(ctx, Opcode.IFNULL);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(symSlot).invokestatic(lookupRef(ctx, className).entry()).dup();
+		MethodCode.Label registryMiss = ctx.body.newLabel();
+		ctx.body.ifnull(registryMiss);
+		ctx.body.iconst_0().aaload();
 		int idSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(idSlot);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(idSlot);
-		ctx.emit(Opcode.AASTORE);
-		int boxed = branch(ctx, Opcode.GOTO);
-		JvmEmitHelper.patchBranch(ctx, registryMiss, ctx.code.size());
-		ctx.emit(Opcode.POP);
+		ctx.body.astore(idSlot).iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.aload(idSlot).aastore();
+		MethodCode.Label boxed = ctx.body.newLabel();
+		ctx.body.goto_(boxed);
+		ctx.body.labelBinding(registryMiss);
+		ctx.body.pop();
 		emitUndefinedFunctionThrow(symSlot, ctx);
-		if (done >= 0) {
-			JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
-		}
-		JvmEmitHelper.patchBranch(ctx, boxed, ctx.code.size());
+		ctx.body.labelBinding(done);
+		ctx.body.labelBinding(boxed);
 	}
 
 	static void compileNamed(String name, JvmLispCompiler.Ctx ctx, String className) {
@@ -141,15 +117,9 @@ final class JvmFunctionFormCompiler {
 			// One of the two places a funcId becomes a callable VALUE, so it is where
 			// the _invoke_N dispatchers learn they must carry a case for it.
 			ctx.valueFuncIds.add(fi.funcId());
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
+			ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.integerValueOf.index());
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.invokestatic(ctx.integerValueOf.entry()).aastore();
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -178,14 +148,6 @@ final class JvmFunctionFormCompiler {
 				new LispCons(params, new LispCons(call, LispNil.INSTANCE)));
 	}
 
-	/** Emits a branch with a placeholder offset; returns the position for patchBranch. */
-	private static int branch(JvmLispCompiler.Ctx ctx, int opcode) {
-		int pos = ctx.code.size();
-		ctx.emit(opcode);
-		ctx.emitU2(0);
-		return pos;
-	}
-
 	private static am.ik.jvm.ConstantPool.FieldrefConstant fenvField(JvmLispCompiler.Ctx ctx, String className) {
 		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("_fenv"), ctx.cp.addUtf8("Ljava/lang/Object;")));
@@ -211,22 +173,11 @@ final class JvmFunctionFormCompiler {
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
 		am.ik.jvm.ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		JvmEmitHelper.compileStringLiteral("The function ", ctx);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nameSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
 		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat.index());
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(exCtor.index());
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(exCtor.entry()).athrow();
 	}
 
 }

@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -67,8 +66,7 @@ final class JvmAsyncOpsCompiler {
 		for (int i = 1; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(helper.index());
+		ctx.body.invokestatic(helper.entry());
 	}
 
 }

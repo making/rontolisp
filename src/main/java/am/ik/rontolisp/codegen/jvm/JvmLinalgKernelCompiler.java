@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -13,7 +14,6 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.LinalgKernelCallLayout;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the accelerated {@code linalg:} kernels to calls into the shipped bridges, the
@@ -309,8 +309,7 @@ final class JvmLinalgKernelCompiler {
 		for (int i = 0; i < supplied; i++) {
 			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
 			slots[i] = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slots[i]);
+			ctx.body.astore(slots[i]);
 		}
 		// The attempts, outermost first: the device when --gpu emitted its bridge, then
 		// the library product when --blas emitted its own, then the lane kernel when
@@ -319,9 +318,9 @@ final class JvmLinalgKernelCompiler {
 		// each attempt returns null for an input it declines, and control falls into the
 		// next one over the SAME temps -- so a declined product always lands on the best
 		// CPU path this invocation enabled, never back on the defun.
-		List<Integer> takenBranches = new ArrayList<>();
+		MethodCode.Label taken = ctx.body.newLabel();
 		if (gpuKey != null && gpu != null) {
-			emitAttempt(ctx, gpu, gpuKey, extendedCall ? layout : null, slots, arity, takenBranches);
+			emitAttempt(ctx, gpu, gpuKey, extendedCall ? layout : null, slots, arity, taken);
 		}
 		// The host rungs below read the arguments on the host, and the in-place members
 		// among them write some: under --gpu an argument a host KERNEL will read is
@@ -356,29 +355,23 @@ final class JvmLinalgKernelCompiler {
 				int index = i;
 				boolean writes = Arrays.stream(written).anyMatch(w -> w == index);
 				originals[i] = ctx.allocTemp();
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
+				ctx.body.aload(slots[i]);
 				if (!writes && !hostKernelRung) {
 					// No guard: the temp and the original are the one value, so the
 					// unswap below is the identity on it.
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(originals[i]);
+					ctx.body.astore(originals[i]);
 					continue;
 				}
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(originals[i]);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(writes ? report.index() : materialize.index());
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(slots[i]);
+				ctx.body.dup().astore(originals[i]);
+				ctx.body.invokestatic((writes ? report : materialize).entry());
+				ctx.body.astore(slots[i]);
 			}
 		}
 		// The host rungs' own answers all pass through the unswap below; only the device
 		// rung's skips it.
-		List<Integer> hostBranches = new ArrayList<>();
+		MethodCode.Label hostTaken = ctx.body.newLabel();
 		if (blas != null && !extendedCall) {
-			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, hostBranches);
+			emitAttempt(ctx, blas, JvmBlasRuntimeBuilder.DOT, null, slots, arity, hostTaken);
 		}
 		if (simd != null) {
 			// A runtime without jdk.incubator.vector cannot link the bridge
@@ -386,13 +379,11 @@ final class JvmLinalgKernelCompiler {
 			// _simdReady() false): skip this rung entirely rather than resolve a
 			// method reference into it, landing exactly where a declined kernel would
 			// -- the next rung, or the scalar defun.
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).index());
-			int skipPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostBranches);
-			JvmEmitHelper.patchBranch(ctx, skipPos, ctx.code.size());
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+			MethodCode.Label skipPos = ctx.body.newLabel();
+			ctx.body.ifeq(skipPos);
+			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostTaken);
+			ctx.body.labelBinding(skipPos);
 		}
 		// The scalar defun over the same temps, in its physical shape: an optional the
 		// call does not pass is the UNSUPPLIED marker and only what is past the physical
@@ -400,32 +391,21 @@ final class JvmLinalgKernelCompiler {
 		List<Runnable> temps = new ArrayList<>();
 		for (int slot : slots) {
 			temps.add(() -> {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
+				ctx.body.aload(slot);
 			});
 		}
 		JvmPhysicalArgs.emit(ctx, className, defun, temps);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(defun.methodref().index());
-		for (int branchPos : hostBranches) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
+		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.labelBinding(hostTaken);
 		if (gpuOps != null) {
 			// A host rung that answered one of its arguments answered the backing it was
 			// handed: answer the caller's object instead, once per argument.
 			MethodrefConstant unswap = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP));
 			for (int i = 0; i < supplied; i++) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(originals[i]);
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slots[i]);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(unswap.index());
+				ctx.body.aload(originals[i]).aload(slots[i]).invokestatic(unswap.entry());
 			}
 		}
-		for (int branchPos : takenBranches) {
-			JvmEmitHelper.patchBranch(ctx, branchPos, ctx.code.size());
-		}
+		ctx.body.labelBinding(taken);
 	}
 
 	/**
@@ -434,42 +414,36 @@ final class JvmLinalgKernelCompiler {
 	 * attempt (or the scalar defun) starts from the same shape.
 	 */
 	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 	}
 
 	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
-			int @org.jspecify.annotations.Nullable [] layout, int[] slots, int arity, List<Integer> takenBranches) {
+			int @org.jspecify.annotations.Nullable [] layout, int[] slots, int arity, MethodCode.Label taken) {
 		if (layout != null) {
 			// The kernel's parameters in its own order: the temp of the form supplying
 			// each one, or null = nil for an option the call leaves out.
 			for (int i : layout) {
 				if (i < 0) {
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 				}
 				else {
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(slots[i]);
+					ctx.body.aload(slots[i]);
 				}
 			}
 		}
 		else {
 			loadAll(ctx, java.util.Arrays.copyOf(slots, arity));
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(kernelKey)).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry());
 		// if (result != null) goto end; else fall through to the next attempt.
-		ctx.emit(Opcode.DUP);
-		takenBranches.add(ctx.code.size());
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
+		ctx.body.dup();
+		ctx.body.ifnonnull(taken);
+		ctx.body.pop();
 	}
 
 	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots) {
 		for (int slot : slots) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(slot);
+			ctx.body.aload(slot);
 		}
 	}
 

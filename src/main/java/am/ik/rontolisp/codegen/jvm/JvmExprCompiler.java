@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispComplex;
@@ -70,7 +71,7 @@ final class JvmExprCompiler {
 		String operator = BuiltinFunctionWrappers
 			.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons));
 		if (operator == null) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		else {
 			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
@@ -81,8 +82,7 @@ final class JvmExprCompiler {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.METHOD),
 						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.DESC)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 	/**
@@ -92,14 +92,14 @@ final class JvmExprCompiler {
 	 * directly ({@link #compileSuppliedPTest}).
 	 */
 	private static void compileSuppliedP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		int suppliedPos = compileSuppliedPTest(cons, ctx, className);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, suppliedPos, ctx.code.size());
+		MethodCode.Label supplied = ctx.body.newLabel();
+		compileSuppliedPTest(cons, ctx, className, supplied);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(supplied);
 		JvmEmitHelper.compileTrue(ctx);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 	/**
@@ -108,15 +108,13 @@ final class JvmExprCompiler {
 	 * @param cons the {@code %supplied-p} form
 	 * @param ctx the compilation context
 	 * @param className the class being emitted
-	 * @return the position of the branch to patch
+	 * @param supplied where the branch jumps when the parameter holds an argument
 	 */
-	static int compileSuppliedPTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+	static void compileSuppliedPTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			MethodCode.Label supplied) {
 		compileExpr(cons.toList().get(1), ctx, className);
 		JvmPhysicalArgs.emitUnsupplied(ctx, className);
-		int branchPos = ctx.code.size();
-		ctx.emit(Opcode.IF_ACMPNE);
-		ctx.emitU2(0);
-		return branchPos;
+		ctx.body.if_acmpne(supplied);
 	}
 
 	/**
@@ -147,8 +145,7 @@ final class JvmExprCompiler {
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_METHOD),
 						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_DESC)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 	/**
@@ -188,7 +185,7 @@ final class JvmExprCompiler {
 			return;
 		}
 		compileExpr(expr, ctx, className);
-		ctx.emit(Opcode.POP);
+		ctx.body.pop();
 	}
 
 	/**
@@ -241,7 +238,7 @@ final class JvmExprCompiler {
 			case LispRatio r -> JvmEmitHelper.compileRatio(r, ctx);
 			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
 			case LispComplex c -> JvmComplexCompiler.compileLiteral(c, ctx, className);
-			case LispNil ignored -> ctx.emit(Opcode.ACONST_NULL);
+			case LispNil ignored -> ctx.body.aconst_null();
 			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
 			case LispString s -> JvmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
@@ -286,7 +283,7 @@ final class JvmExprCompiler {
 		if (ctx.mvChannel == null && LispNames.MV_SPILL.equals(name)) {
 			// A program without the spill global publishes nothing, so an expansion's
 			// read of the channel answers nil (.kb/multiple-values.md).
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
@@ -303,8 +300,7 @@ final class JvmExprCompiler {
 		// fresh -- the slot is always authoritative.
 		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
 		if (rawDoubleSlot != null) {
-			ctx.emit(Opcode.DLOAD);
-			ctx.emit(rawDoubleSlot);
+			ctx.body.dload(rawDoubleSlot);
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
@@ -322,28 +318,17 @@ final class JvmExprCompiler {
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			if (ctx.boxedVars.contains(name)) {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
-				ctx.emit(Opcode.CHECKCAST);
-				ctx.emitU2(ctx.objectArrayClass.index());
-				ctx.emit(Opcode.ICONST_0);
-				ctx.emit(Opcode.AALOAD);
+				ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 			}
 			else {
-				ctx.emit(Opcode.ALOAD);
-				ctx.emit(slot);
+				ctx.body.aload(slot);
 			}
 		}
 		else if (ctx.captures.containsKey(name)) {
 			int captureIdx = ctx.captures.get(name);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(ctx.closureEnvSlot);
+			ctx.body.aload(ctx.closureEnvSlot);
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
-			ctx.emit(Opcode.AALOAD);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aaload().checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 		}
 		else if (ctx.globals.contains(name)) {
 			// A top-level global variable: read from its dedicated static field. Works
@@ -400,17 +385,13 @@ final class JvmExprCompiler {
 		if (dyn != null) {
 			am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn.fields().get(name);
 			if (tlField != null) {
-				ctx.emit(Opcode.GETSTATIC);
-				ctx.emitU2(tlField.index());
-				ctx.emit(Opcode.GETSTATIC);
-				ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(dyn.dget().index());
+				ctx.body.getstatic(tlField.entry());
+				ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).entry());
+				ctx.body.invokestatic(dyn.dget().entry());
 				return;
 			}
 		}
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index());
+		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).entry());
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -556,11 +537,10 @@ final class JvmExprCompiler {
 								"%octets-to-string-packed expects 1 argument, got " + (cons.toList().size() - 1));
 					}
 					compileExpr(cons.toList().get(1), ctx, className);
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.body.invokestatic(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD),
 									ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
-						.index());
+						.entry());
 					return;
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
@@ -570,18 +550,17 @@ final class JvmExprCompiler {
 						throw new UnsupportedOperationException(
 								"%random-byte expects 0 arguments, got " + (cons.toList().size() - 1));
 					}
-					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.body.invokestatic(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.METHOD),
 									ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.DESC)))
-						.index());
+						.entry());
 					return;
 				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
 					// rontolisp:wasm-export marks a function for direct WASM export; the
 					// JVM
 					// backend has no notion of it, so it is a no-op that yields nil.
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 					return;
 				}
 				if (LispNames.JVM_EXPORT.equals(qn.member())) {
@@ -595,7 +574,7 @@ final class JvmExprCompiler {
 					// rontolisp:wasm-import declares a host function imported into WASM
 					// output; on the JVM the error-signalling stub defun was registered
 					// in pass 1, so the directive itself is a no-op that yields nil.
-					ctx.emit(Opcode.ACONST_NULL);
+					ctx.body.aconst_null();
 					return;
 				}
 				if (LispNames.WITH_ARENA.equals(qn.member())) {
@@ -1730,7 +1709,7 @@ final class JvmExprCompiler {
 			// nil and the caller's element loop runs. The arguments are the helper
 			// body's own bindings (pure reads), so skipping their evaluation is
 			// unobservable.
-			case LispNames.REPLACE_BULK -> ctx.emit(Opcode.ACONST_NULL);
+			case LispNames.REPLACE_BULK -> ctx.body.aconst_null();
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
 			case LispNames.VECTOR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
@@ -2382,11 +2361,11 @@ final class JvmExprCompiler {
 		if (arity == 1) {
 			compileExpr(args.get(1), ctx, className);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.cp
-			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
-			.index());
+		ctx.body.invokestatic(
+				ctx.cp
+					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
+					.entry());
 	}
 
 	/**
@@ -2417,7 +2396,7 @@ final class JvmExprCompiler {
 				compileExpr(args.get(2), ctx, className);
 			}
 			else {
-				ctx.emit(Opcode.ACONST_NULL);
+				ctx.body.aconst_null();
 			}
 			method = JvmThreadRuntimeBuilder.SPAWN_METHOD;
 			desc = JvmThreadRuntimeBuilder.SPAWN_DESC;
@@ -2436,11 +2415,11 @@ final class JvmExprCompiler {
 			};
 			desc = JvmThreadRuntimeBuilder.UNARY_DESC;
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.cp
-			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
-			.index());
+		ctx.body.invokestatic(
+				ctx.cp
+					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
+					.entry());
 	}
 
 	/**

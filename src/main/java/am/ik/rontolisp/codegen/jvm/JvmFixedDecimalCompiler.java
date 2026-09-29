@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the internal {@code %fixed-decimal} built-in function -- what {@code format}'s
@@ -25,8 +24,7 @@ final class JvmFixedDecimalCompiler {
 		for (int i = 1; i <= 4; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FIXED_DEC).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FIXED_DEC).entry());
 	}
 
 }

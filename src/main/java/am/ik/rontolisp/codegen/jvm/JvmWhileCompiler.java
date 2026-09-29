@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 
 /**
@@ -28,7 +29,7 @@ final class JvmWhileCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		JvmLispCompiler.Ctx.Spill spill = JvmEmitHelper.enterLoopScope(ctx);
-		int loopStart = ctx.code.size();
+		MethodCode.Label loopStart = ctx.body.newBoundLabel();
 		// Evaluate the test; if false, branch out of the loop. A fusable binary
 		// comparison leaves a RAW int truth value (no boxed t/nil per iteration,
 		// .kb/jvm-int-fusion.md); any other test compiles boxed as before.
@@ -40,22 +41,18 @@ final class JvmWhileCompiler {
 			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 			exitBranchOpcode = Opcode.IFNULL;
 		}
-		int ifNullPos = ctx.code.size();
-		ctx.emit(exitBranchOpcode);
-		ctx.emitU2(0);
+		MethodCode.Label exit = ctx.body.newLabel();
+		JvmEmitHelper.branch(ctx, exitBranchOpcode, exit);
 		// Body: every expression leaves a (boxed) reference, which is discarded.
 		for (int i = 2; i < parts.size(); i++) {
 			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);
 		}
 		// Jump back to re-evaluate the test.
-		int gotoPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, gotoPos, loopStart);
-		// Loop exit: patch the IFNULL here and push nil as the result.
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		ctx.body.goto_(loopStart);
+		// Loop exit: bind the exit branch here and push nil as the result.
+		ctx.body.labelBinding(exit);
 		JvmEmitHelper.leaveLoopScope(ctx, spill);
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 	}
 
 }

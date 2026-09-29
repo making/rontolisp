@@ -2,11 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the internal {@code %string-dimension} accessor: the array DIMENSION of a
@@ -49,54 +49,32 @@ final class JvmStringDimensionCompiler {
 	private static void emitBody(JvmLispCompiler.Ctx ctx, String className) {
 		MethodrefConstant charCount = JvmEmitHelper.selfMethod(ctx, className,
 				JvmStringIndexRuntimeBuilder.COUNT_METHOD, JvmStringIndexRuntimeBuilder.COUNT_DESC);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int ifNotString = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(charCount.index());
-		ctx.emit(Opcode.I2L);
+		ctx.body.aload(0).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label ifNotString = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotString);
+		ctx.body.aload(0).checkcast(ctx.stringClass.entry()).invokestatic(charCount.entry()).i2l();
 		JvmEmitHelper.boxLong(ctx);
-		int gotoEnd = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotString, ctx.code.size());
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(ifNotString);
 		if (ctx.usesArrays) {
 			// The mutable character vector / string view: dims[0] of the slot-0 header,
 			// already a boxed Long.
 			ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
 			MethodrefConstant alGet = ctx.cp.addMethodref(arrayListClass,
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(0);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alGet.index());
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.aload(0).checkcast(arrayListClass.entry()).iconst_0();
+			ctx.body.invokevirtual(alGet.methodRefEntry()).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.iconst_0().aaload();
 			// header[0] is the dims Object[]; its slot 0 is the boxed Long dimension.
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
 		}
 		else {
 			// No array runtime, so no character vector can exist: the only string shape
 			// is the immutable one handled above.
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
-		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+		ctx.body.labelBinding(gotoEnd);
 	}
 
 }

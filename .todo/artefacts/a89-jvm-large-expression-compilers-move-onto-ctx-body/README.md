@@ -8,6 +8,9 @@ the files; the verifying tools are a85's (`../a85-jvm-runtime-builders-on-jvmasm
   shape it does not know). Safe to run again on a file.
 - `listlabel.py FILE NAME...` -- named `List<Integer>` position lists (and parameters) into
   labels.
+- `intidx.py FILE TYPE NAME...` -- a pool operand held as `int NAME = x.index()` into
+  `TYPE NAME = x`, its `emitU2(NAME)` uses into the shape `ctxmig.py` maps; run `ctxmig.py`
+  after it.
 
 Then `jc.sh` + `fix.py` (a85's), `unused_imports.py --fix`, a jar, and `runchunks.sh` /
 `cmpcli.sh` against the jar before.

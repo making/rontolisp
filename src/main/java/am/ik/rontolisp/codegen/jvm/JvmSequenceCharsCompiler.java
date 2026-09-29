@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -27,7 +26,7 @@ final class JvmSequenceCharsCompiler {
 					parts.get(0).print() + " expects (seq stream start end), got " + (parts.size() - 1) + " arguments");
 		}
 		if (!ctx.usesCharSequenceIo) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		// The stream designator, like read-char: an explicit nil means the current
@@ -41,8 +40,7 @@ final class JvmSequenceCharsCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_SEQ_CHARS_DESC);
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

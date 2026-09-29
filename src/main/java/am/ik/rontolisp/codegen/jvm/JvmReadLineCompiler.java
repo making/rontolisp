@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
@@ -39,8 +38,7 @@ final class JvmReadLineCompiler {
 		// the hard-coded standard input.
 		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
 		if (stream == null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.readLineHelper.index());
+			ctx.body.invokestatic(ctx.readLineHelper.entry());
 			return;
 		}
 		JvmExprCompiler.compileExpr(stream, ctx, className);
@@ -48,8 +46,7 @@ final class JvmReadLineCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_LINE_STREAM_DESC);
 		MethodrefConstant readLineStreamRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(readLineStreamRef.index());
+		ctx.body.invokestatic(readLineStreamRef.entry());
 	}
 
 }

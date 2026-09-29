@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code cdr} built-in function.
@@ -19,8 +18,7 @@ final class JvmCdrCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// nil answers nil, a cons its field, a non-list is CDR's type-error
 		// (JvmOperandTypeRuntime).
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CDR).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CDR).entry());
 	}
 
 }

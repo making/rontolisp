@@ -1,13 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -74,32 +72,27 @@ final class JvmBlockCompiler {
 			@Nullable String name, boolean catchesPlain, boolean functionBoundary) {
 		int savedNextLocal = ctx.nextLocal;
 		int rvSlot = ctx.allocTemp();
-		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, new ArrayList<>(), ctx.stack.snapshot(), name,
+		ctx.blockTargets.push(new JvmLispCompiler.BlockTarget(rvSlot, ctx.body.newLabel(), ctx.stack.snapshot(), name,
 				catchesPlain, functionBoundary));
 		// Body forms run as a progn, leaving the last value on the stack.
 		if (parts.size() <= bodyStart) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		else {
 			for (int i = bodyStart; i < parts.size(); i++) {
 				if (i > bodyStart) {
-					ctx.emit(Opcode.POP);
+					ctx.body.pop();
 				}
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
 		}
 		// Normal completion: store the body value into the block's slot.
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(rvSlot);
+		ctx.body.astore(rvSlot);
 		JvmLispCompiler.BlockTarget target = ctx.blockTargets.pop();
-		int exit = ctx.code.size();
-		for (int patchPos : target.exitPatches()) {
-			JvmEmitHelper.patchBranch(ctx, patchPos, exit);
-		}
+		ctx.body.labelBinding(target.exit());
 		// The block's value is the slot, populated by either normal completion or an
 		// exit jump.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(rvSlot);
+		ctx.body.aload(rvSlot);
 		ctx.nextLocal = savedNextLocal;
 	}
 

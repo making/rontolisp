@@ -1,16 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
 import org.jspecify.annotations.Nullable;
@@ -173,47 +170,26 @@ final class JvmUncaughtHandler {
 	 */
 	static Prepared prepare(JvmLispCompiler.Ctx mainCtx) {
 		ConstantPool cp = mainCtx.cp;
-		// Slot 1 in practice: main's body is a list of invokestatic chunk calls and
-		// allocates no local of its own. The raw appends below bypass Ctx.emit, which is
-		// where a past-255 index would be rewritten into its `wide` form, so say so
-		// rather than write an index that wraps onto another slot.
 		int exSlot = mainCtx.allocTemp();
-		if (exSlot > 255) {
-			throw new IllegalStateException("the uncaught-condition handler needs a local slot, and main is at "
-					+ exSlot + " -- past the one-byte load/store operand these raw appends carry");
-		}
 		ConstantPool.ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
 		ConstantPool.ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
 		ConstantPool.FieldrefConstant systemErr = cp.addFieldref(systemClass,
 				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;")));
-		int getMessage = cp
-			.addMethodref(throwableClass,
-					cp.addNameAndType(cp.addUtf8("getMessage"), cp.addUtf8("()Ljava/lang/String;")))
-			.index();
+		MethodrefConstant getMessage = method(cp, throwableClass, "getMessage", "()Ljava/lang/String;");
 		// String.valueOf(Object), not concat's argument directly: a RuntimeException
 		// raised by something other than %error may carry a null message, and
 		// "...".concat(null) would replace the report with a NullPointerException.
-		int valueOf = cp
-			.addMethodref(mainCtx.stringClass,
-					cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")))
-			.index();
-		int concat = cp
-			.addMethodref(mainCtx.stringClass,
-					cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")))
-			.index();
-		int getenv = cp
-			.addMethodref(systemClass,
-					cp.addNameAndType(cp.addUtf8("getenv"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")))
-			.index();
-		int setStackTrace = cp
-			.addMethodref(throwableClass,
-					cp.addNameAndType(cp.addUtf8("setStackTrace"), cp.addUtf8("([Ljava/lang/StackTraceElement;)V")))
-			.index();
-		int stackTraceElement = cp.addClass(cp.addUtf8("java/lang/StackTraceElement")).index();
-		int prefix = cp.addString(UncaughtReport.PREFIX).index();
-		int debugEnv = cp.addString(UncaughtReport.DEBUG_ENV).index();
-		int runtimeException = cp.addClass(cp.addUtf8("java/lang/RuntimeException")).index();
-		return new Prepared(mainCtx, exSlot, systemErr.index(), getMessage, valueOf, concat, getenv, setStackTrace,
+		MethodrefConstant valueOf = method(cp, mainCtx.stringClass, "valueOf",
+				"(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodrefConstant concat = method(cp, mainCtx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodrefConstant getenv = method(cp, systemClass, "getenv", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodrefConstant setStackTrace = method(cp, throwableClass, "setStackTrace",
+				"([Ljava/lang/StackTraceElement;)V");
+		ClassConstant stackTraceElement = cp.addClass(cp.addUtf8("java/lang/StackTraceElement"));
+		StringConstant prefix = cp.addString(UncaughtReport.PREFIX);
+		StringConstant debugEnv = cp.addString(UncaughtReport.DEBUG_ENV);
+		ClassConstant runtimeException = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		return new Prepared(mainCtx, exSlot, systemErr, getMessage, valueOf, concat, getenv, setStackTrace,
 				stackTraceElement, prefix, debugEnv, runtimeException);
 	}
 
@@ -233,8 +209,10 @@ final class JvmUncaughtHandler {
 	 * @param debugEnv {@link UncaughtReport#DEBUG_ENV}
 	 * @param runtimeException the {@code RuntimeException} class, the entry's catch type
 	 */
-	record Prepared(JvmLispCompiler.Ctx mainCtx, int exSlot, int systemErr, int getMessage, int valueOf, int concat,
-			int getenv, int setStackTrace, int stackTraceElement, int prefix, int debugEnv, int runtimeException) {
+	record Prepared(JvmLispCompiler.Ctx mainCtx, int exSlot, ConstantPool.FieldrefConstant systemErr,
+			MethodrefConstant getMessage, MethodrefConstant valueOf, MethodrefConstant concat, MethodrefConstant getenv,
+			MethodrefConstant setStackTrace, ClassConstant stackTraceElement, StringConstant prefix,
+			StringConstant debugEnv, ClassConstant runtimeException) {
 
 		/**
 		 * Appends the handler to main's code and the entry covering the body to its
@@ -251,68 +229,41 @@ final class JvmUncaughtHandler {
 
 	private static void appendHandler(Prepared p, @Nullable MethodrefConstant where) {
 		JvmLispCompiler.Ctx mainCtx = p.mainCtx();
-		int bodyEnd = mainCtx.code.size();
+		MethodCode code = mainCtx.body;
+		MethodCode.Label bodyEnd = code.newBoundLabel();
 		int exSlot = p.exSlot();
-		int getMessage = p.getMessage();
-		int valueOf = p.valueOf();
-		int concat = p.concat();
-		int getenv = p.getenv();
-		int setStackTrace = p.setStackTrace();
-		int stackTraceElement = p.stackTraceElement();
-
-		List<Integer> code = new ArrayList<>();
 		// The handler is entered with the exception as the sole operand.
-		code.add(Opcode.ASTORE);
-		code.add(exSlot);
+		mainCtx.stack.enterHandler();
+		code.astore(exSlot);
 		// System.err.println(PREFIX.concat(String.valueOf(ex.getMessage())))
-		code.add(Opcode.GETSTATIC);
-		addU2(code, p.systemErr());
-		addLdc(code, p.prefix());
-		code.add(Opcode.ALOAD);
-		code.add(exSlot);
-		code.add(Opcode.INVOKEVIRTUAL);
-		addU2(code, getMessage);
-		code.add(Opcode.INVOKESTATIC);
-		addU2(code, valueOf);
-		code.add(Opcode.INVOKEVIRTUAL);
-		addU2(code, concat);
-		code.add(Opcode.INVOKEVIRTUAL);
-		addU2(code, mainCtx.printlnStr.index());
+		code.getstatic(p.systemErr().entry())
+			.ldc(p.prefix().entry())
+			.aload(exSlot)
+			.invokevirtual(p.getMessage().methodRefEntry())
+			.invokestatic(p.valueOf().entry())
+			.invokevirtual(p.concat().methodRefEntry())
+			.invokevirtual(mainCtx.printlnStr.methodRefEntry());
 		// _where(ex): the location lines, read off the trace before it is emptied.
 		if (where != null) {
-			code.add(Opcode.ALOAD);
-			code.add(exSlot);
-			code.add(Opcode.INVOKESTATIC);
-			addU2(code, where.index());
+			code.aload(exSlot).invokestatic(where.entry());
 		}
 		// if (System.getenv("RONTOLISP_DEBUG") == null) ex.setStackTrace(new
 		// StackTraceElement[0]);
-		addLdc(code, p.debugEnv());
-		code.add(Opcode.INVOKESTATIC);
-		addU2(code, getenv);
-		code.add(Opcode.IFNONNULL);
-		// past this 3-byte branch, the 9 bytes of the clearing it guards
-		addU2(code, 3 + 9);
-		code.add(Opcode.ALOAD);
-		code.add(exSlot);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ANEWARRAY);
-		addU2(code, stackTraceElement);
-		code.add(Opcode.INVOKEVIRTUAL);
-		addU2(code, setStackTrace);
+		MethodCode.Label debugging = code.newLabel();
+		code.ldc(p.debugEnv().entry()).invokestatic(p.getenv().entry()).ifnonnull(debugging);
+		code.aload(exSlot)
+			.iconst_0()
+			.anewarray(p.stackTraceElement().entry())
+			.invokevirtual(p.setStackTrace().methodRefEntry());
+		code.labelBinding(debugging);
 		// The program ends here, so the output files it never closed get what they
 		// still buffer -- the same flush main's return and %host-exit do.
 		if (mainCtx.flushStreams != null) {
-			code.add(Opcode.INVOKESTATIC);
-			addU2(code, mainCtx.flushStreams.index());
+			code.invokestatic(mainCtx.flushStreams.entry());
 		}
 		// Rethrow: the launcher's exit code is 1 and its echo is now one line.
-		code.add(Opcode.ALOAD);
-		code.add(exSlot);
-		code.add(Opcode.ATHROW);
-
-		mainCtx.code.addAll(code);
-		mainCtx.exceptionTable.add(new ClassDefinition.Handler(0, bodyEnd, bodyEnd, p.runtimeException()));
+		code.aload(exSlot).athrow();
+		code.exceptionCatch(mainCtx.bodyStart, bodyEnd, bodyEnd, p.runtimeException().entry());
 	}
 
 	/**
@@ -328,22 +279,15 @@ final class JvmUncaughtHandler {
 	 */
 	static void appendAsyncCrossing(JvmLispCompiler.Ctx ctx, String head, MethodrefConstant cross) {
 		ConstantPool cp = ctx.cp;
-		int bodyEnd = ctx.code.size();
+		MethodCode.Label bodyEnd = ctx.body.newBoundLabel();
 		int exSlot = ctx.allocTemp();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(exSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(exSlot);
+		ctx.body.astore(exSlot).aload(exSlot);
 		// A Java string for the trace, never a value the program can hold.
 		JvmEmitHelper.compileUnspelledLiteral(head, ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(cross.index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(exSlot);
-		ctx.emit(Opcode.ATHROW);
-		ctx.exceptionTable.add(new ClassDefinition.Handler(0, bodyEnd, bodyEnd,
-				cp.addClass(cp.addUtf8("java/lang/RuntimeException")).index()));
+		ctx.body.invokestatic(cross.entry()).aload(exSlot).athrow();
+		ctx.body.exceptionCatch(ctx.bodyStart, bodyEnd, bodyEnd,
+				cp.addClass(cp.addUtf8("java/lang/RuntimeException")).entry());
 	}
 
 	/**
@@ -800,23 +744,6 @@ final class JvmUncaughtHandler {
 
 	private static MethodrefConstant method(ConstantPool cp, ClassConstant owner, String name, String desc) {
 		return cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
-	}
-
-	private static void addU2(List<Integer> code, int value) {
-		// The shared writer keeps a pool index past 65535 whole
-		// (JvmRuntimeBuilder.emitU2).
-		JvmRuntimeBuilder.emitU2(code, value);
-	}
-
-	private static void addLdc(List<Integer> code, int index) {
-		if (index <= 255) {
-			code.add(Opcode.LDC);
-			code.add(index);
-		}
-		else {
-			code.add(Opcode.LDC_W);
-			addU2(code, index);
-		}
 	}
 
 }

@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles function calls and variable references that cannot be resolved statically,
@@ -68,7 +67,7 @@ final class JvmDynamicCallCompiler {
 	private static void compileEvalForm(LispVal quotedForm, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(quotedForm, ctx, className);
 		// env = null (empty/global lexical environment)
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.aconst_null();
 		emitInvoke("_eval", ctx, className);
 	}
 
@@ -77,8 +76,7 @@ final class JvmDynamicCallCompiler {
 		Utf8Constant descUtf8 = ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

@@ -6,7 +6,6 @@ import java.util.Objects;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -33,7 +32,7 @@ final class JvmSequencePackedCompiler {
 					parts.get(0).print() + " expects (seq stream start end), got " + (parts.size() - 1) + " arguments");
 		}
 		if (!ctx.usesPackedSequenceIo) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		// The stream designator, like read-byte: an explicit nil means the current
@@ -50,10 +49,9 @@ final class JvmSequencePackedCompiler {
 		// stub's backing (.kb/gpu.md, "Device residency"). The helper answers a position.
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects
+			ctx.body.invokestatic(Objects
 				.requireNonNull(gpuOps.get(read ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
-				.index());
+				.entry());
 		}
 		JvmExprCompiler.compileExpr(stream != null ? stream : parts.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
@@ -64,8 +62,7 @@ final class JvmSequencePackedCompiler {
 			.addUtf8(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_DESC : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_DESC);
 		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

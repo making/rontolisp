@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the string equality predicates {@code string=} (case-sensitive) and
@@ -21,28 +21,23 @@ final class JvmStringEqCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		ctx.body.checkcast(ctx.stringClass.entry());
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
+		ctx.body.invokevirtual(ctx.objectEquals.methodRefEntry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
 	static void compileEqual(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		int equalsIgnoreCase = JvmEmitHelper.stringMethod(ctx, "equalsIgnoreCase", "(Ljava/lang/String;)Z").index();
+		MethodrefConstant equalsIgnoreCase = JvmEmitHelper.stringMethod(ctx, "equalsIgnoreCase",
+				"(Ljava/lang/String;)Z");
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		ctx.body.checkcast(ctx.stringClass.entry());
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(equalsIgnoreCase);
+		ctx.body.checkcast(ctx.stringClass.entry()).invokevirtual(equalsIgnoreCase.methodRefEntry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

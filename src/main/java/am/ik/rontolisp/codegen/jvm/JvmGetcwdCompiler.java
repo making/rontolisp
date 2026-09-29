@@ -4,7 +4,7 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -35,29 +35,23 @@ final class JvmGetcwdCompiler {
 		ClassConstant systemClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System"));
 		MethodrefConstant getProperty = ctx.cp.addMethodref(systemClass, ctx.cp
 			.addNameAndType(ctx.cp.addUtf8("getProperty"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		final int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		final MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat",
+				"(Ljava/lang/String;)Ljava/lang/String;");
 		// System.getProperty("user.dir") -- the raw host string, no Lisp quotes.
 		JvmEmitHelper.compileUnspelledLiteral("user.dir", ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(getProperty.index()); // [value|null]
-		ctx.emit(Opcode.DUP); // [value, value]
-		final int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0); // [value]
+		ctx.body.invokestatic(getProperty.entry()); // [value|null]
+		ctx.body.dup(); // [value, value]
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.ifnull(end);
 		// non-null: wrap as "\"" + value + "\"", the runtime string representation.
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [value, q]
-		ctx.emit(Opcode.SWAP); // [q, value]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat); // [q+value]
+		ctx.body.swap(); // [q, value]
+		ctx.body.invokevirtual(concat.methodRefEntry()); // [q+value]
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [.., q]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat); // [quoted]
-		final int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.invokevirtual(concat.methodRefEntry()); // [quoted]
+		ctx.body.goto_(end);
 		// null path: leave the null (nil) on the stack.
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(end);
 	}
 
 }

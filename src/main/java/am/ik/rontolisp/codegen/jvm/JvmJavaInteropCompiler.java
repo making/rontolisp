@@ -14,7 +14,6 @@ import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaSite;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the six {@code java:} interop functions ({@code java:new}, {@code java:call},
@@ -72,7 +71,7 @@ final class JvmJavaInteropCompiler {
 			// Refused: the attempt fails once every site has been seen; the value only
 			// keeps the method being compiled well-formed until then.
 			sites.refuse(cons, bridgeReason);
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 			return;
 		}
 		if (implementsInterface) {
@@ -100,17 +99,15 @@ final class JvmJavaInteropCompiler {
 			// This attempt carries no bridge (every site it predicted was direct): a call
 			// to
 			// the absent _javaInit makes the helper-gate check retry with the bridge.
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.cp
+			ctx.body.invokestatic(ctx.cp
 				.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 						ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD), ctx.cp.addUtf8("()V")))
-				.index());
-			ctx.emit(Opcode.ACONST_NULL);
+				.entry());
+			ctx.body.aconst_null();
 			return;
 		}
 		// Make sure the bridge class is defined before its method reference resolves.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
 		switch (member) {
 			case LispNames.JAVA_NEW -> {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -170,16 +167,14 @@ final class JvmJavaInteropCompiler {
 		}
 		MethodRefEntry factory = sites.implementations().factory(implementation);
 		JvmEmitHelper.emitIntConst(ctx, functions.size());
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
+		ctx.body.anewarray(ctx.objectClass.entry());
 		for (int i = 0; i < functions.size(); i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i);
 			JvmExprCompiler.compileExpr(functions.get(i), ctx, className);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(factory.index());
+		ctx.body.invokestatic(factory);
 	}
 
 	/**
@@ -219,12 +214,11 @@ final class JvmJavaInteropCompiler {
 		boolean packed = values.size() > JvmJavaDirectSites.MAX_SPREAD;
 		if (packed) {
 			JvmEmitHelper.emitIntConst(ctx, values.size());
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
+			ctx.body.anewarray(ctx.objectClass.entry());
 		}
 		for (int i = 0; i < values.size(); i++) {
 			if (packed) {
-				ctx.emit(Opcode.DUP);
+				ctx.body.dup();
 				JvmEmitHelper.emitIntConst(ctx, i);
 			}
 			JvmExprCompiler.compileExpr(values.get(i), ctx, className);
@@ -233,11 +227,10 @@ final class JvmJavaInteropCompiler {
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
 			if (packed) {
-				ctx.emit(Opcode.AASTORE);
+				ctx.body.aastore();
 			}
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(method.index());
+		ctx.body.invokestatic(method);
 	}
 
 	private static void requireArity(boolean ok, String message) {
@@ -260,28 +253,25 @@ final class JvmJavaInteropCompiler {
 	private static void emitMaterialize(JvmLispCompiler.Ctx ctx) {
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).entry());
 		}
 	}
 
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
+		ctx.body.anewarray(ctx.objectClass.entry());
 		for (int i = from; i < args.size(); i++) {
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - from);
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			emitMaterialize(ctx);
-			ctx.emit(Opcode.AASTORE);
+			ctx.body.aastore();
 		}
 	}
 
 	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String key) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(Objects.requireNonNull(ops.get(key)).index());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)).entry());
 	}
 
 }

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayDeque;
@@ -2594,7 +2595,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				JvmBodyOutliner.compileFunctionBody(defun.bodyExprs, funcCtx, this.className);
 				// Inside the try so an underflow here (a valueless body) still reports
 				// WHICH defun it was.
-				funcCtx.emit(Opcode.ARETURN);
+				funcCtx.body.areturn();
 			}
 			catch (UnsupportedOperationException ex) {
 				// Keep the type: callers (and tests) distinguish an unsupported form
@@ -2648,9 +2649,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
-			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {
+			if (chunkCtx == null || chunkCtx.body.size() >= chunkCodeBudget) {
 				if (chunkCtx != null) {
-					chunkCtx.emit(Opcode.RETURN);
+					chunkCtx.body.return_();
 				}
 				chunkCtx = ctxBuilder.build();
 				chunkCtx.topLevel = true;
@@ -2687,11 +2688,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			boolean taken = offered && chunkCtx.definerNameDropped == null;
 			chunkCtx.definerNameDropped = null;
 			if (!taken) {
-				chunkCtx.emit(Opcode.POP);
+				chunkCtx.body.pop();
 			}
 		}
 		if (chunkCtx != null) {
-			chunkCtx.emit(Opcode.RETURN);
+			chunkCtx.body.return_();
 		}
 
 		// main() simply calls each top-level chunk in order, then returns. With any
@@ -2723,9 +2724,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// _argv = args. In main and only in main -- with a jvm-export the top level
 			// has already run in <clinit>, before any main could store one, which is the
 			// null the helper answers nil for.
-			mainCtx.emit(Opcode.ALOAD_0);
-			mainCtx.emit(Opcode.PUTSTATIC);
-			mainCtx.emitU2(argvRuntime.field().index());
+			mainCtx.body.aload(0);
+			mainCtx.body.putstatic(argvRuntime.field());
 		}
 		Ctx topRunnerCtx = null;
 		Ctx entryCtx = mainCtx;
@@ -2735,8 +2735,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			entryCtx = topRunnerCtx;
 		}
 		for (MethodrefConstant ref : topChunkRefs) {
-			entryCtx.emit(Opcode.INVOKESTATIC);
-			entryCtx.emitU2(ref.index());
+			entryCtx.body.invokestatic(ref.entry());
 		}
 		// A program that writes RAW OCTETS to standard output has to drain the
 		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
@@ -2749,18 +2748,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// operators that reach the helper, so every other artifact keeps its exact bytes:
 		// ANY new path to _writeByte's standard-output branch must join this gate.
 		if (programUsesSymbol(program, LispNames.WRITE_BYTE) || programUsesSymbol(program, LispNames.WRITE_SEQUENCE)) {
-			entryCtx.emit(Opcode.GETSTATIC);
-			entryCtx.emitU2(systemOut.index());
-			entryCtx.emit(Opcode.INVOKEVIRTUAL);
-			entryCtx.emitU2(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
+			entryCtx.body.getstatic(systemOut.entry());
+			entryCtx.body.invokevirtual(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
 					cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")))
-				.index());
+				.methodRefEntry());
 		}
 		if (flushStreamsMethod != null) {
-			entryCtx.emit(Opcode.INVOKESTATIC);
-			entryCtx.emitU2(flushStreamsMethod.index());
+			entryCtx.body.invokestatic(flushStreamsMethod.entry());
 		}
-		entryCtx.emit(Opcode.RETURN);
+		entryCtx.body.return_();
 		// A condition nobody caught reports itself on standard error instead of
 		// unwinding out of main as a stack trace through mangled Lisp names. Last, so
 		// every handler main already carries dispatches first. In _top$run the same
@@ -2772,7 +2768,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (topLevelInClinit) {
 			// main (when kept) has nothing left to do: invoking it already triggered
 			// <clinit>, which ran the top level.
-			mainCtx.emit(Opcode.RETURN);
+			mainCtx.body.return_();
 		}
 
 		// Pass 2c: Compile lambda bodies (iteratively, new lambdas may be discovered
@@ -2843,9 +2839,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			if (lambda.bodyExprs.isEmpty()) {
 				// An empty-body (lambda ()) returns nil.
-				lambdaCtx.emit(Opcode.ACONST_NULL);
+				lambdaCtx.body.aconst_null();
 			}
-			lambdaCtx.emit(Opcode.ARETURN);
+			lambdaCtx.body.areturn();
 			lambdaCtxs.add(lambdaCtx);
 			lambdaIdx++;
 		}
@@ -2895,7 +2891,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// next attempt to cut.
 		Map<String, AstOutliner.Budget> tooLarge = new LinkedHashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
-			int size = funcCtxs.get(i).code.size();
+			int size = funcCtxs.get(i).body.size();
 			if (size <= HUGE_METHOD_LIMIT) {
 				continue;
 			}
@@ -2922,19 +2918,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			List<Sized> sized = new ArrayList<>();
 			for (int i = 0; i < defuns.size(); i++) {
-				sized.add(new Sized(defuns.get(i).name, funcCtxs.get(i).code.size()));
+				sized.add(new Sized(defuns.get(i).name, funcCtxs.get(i).body.size()));
 			}
 			for (int i = 0; i < lambdaCtxs.size(); i++) {
-				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).code.size()));
+				sized.add(new Sized(lambdaDecls.get(i).methodName, lambdaCtxs.get(i).body.size()));
 			}
 			// The top-level chunks are subject to the same 64 KB cap, and unlike a defun
 			// they cannot be split by the author -- chunking happens BETWEEN top-level
 			// forms, so one oversized form has no split point (see chunkCodeBudget).
 			for (int i = 0; i < topChunks.size(); i++) {
-				sized.add(new Sized("_top$" + i, topChunks.get(i).code.size()));
+				sized.add(new Sized("_top$" + i, topChunks.get(i).body.size()));
 			}
 			for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
-				sized.add(new Sized(outlined.name(), outlined.ctx().code.size()));
+				sized.add(new Sized(outlined.name(), outlined.ctx().body.size()));
 			}
 			sized.stream()
 				.sorted(java.util.Comparator.comparingInt(Sized::size).reversed())
@@ -5752,36 +5748,36 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * An active block return boundary during compilation ({@code %block}, a named
 	 * {@code block} or the {@code %fn-block} function boundary). {@code rvSlot} is the
-	 * local that holds the block's value; {@code exitPatches} collects the positions of
-	 * the {@code goto} instructions emitted by {@code return}/{@code return-from} forms,
-	 * all back-patched to the block's exit once its body has been compiled;
-	 * {@code entryStack} is the operand stack the block was entered with, which is the
-	 * shape its exit is reached with on every path -- an exit discards whatever the body
-	 * had pushed on top of it (see {@link JvmReturnCompiler}). {@code name} is the block
-	 * name a {@code return-from} matches against ({@code null} for {@code %block} and the
-	 * {@code nil} block); {@code catchesPlain} marks the targets a plain {@code return}
-	 * exits ({@code %block} and {@code (block nil ...)}); {@code functionBoundary} marks
-	 * the {@code %fn-block} wrap -- the fallback target for a {@code return-from} whose
-	 * name matches no enclosing block.
+	 * local that holds the block's value; {@code exit} is the label the {@code goto}
+	 * instructions emitted by {@code return}/{@code return-from} forms jump to, bound at
+	 * the block's exit once its body has been compiled; {@code entryStack} is the operand
+	 * stack the block was entered with, which is the shape its exit is reached with on
+	 * every path -- an exit discards whatever the body had pushed on top of it (see
+	 * {@link JvmReturnCompiler}). {@code name} is the block name a {@code return-from}
+	 * matches against ({@code null} for {@code %block} and the {@code nil} block);
+	 * {@code catchesPlain} marks the targets a plain {@code return} exits ({@code %block}
+	 * and {@code (block nil ...)}); {@code functionBoundary} marks the {@code %fn-block}
+	 * wrap -- the fallback target for a {@code return-from} whose name matches no
+	 * enclosing block.
 	 */
-	record BlockTarget(int rvSlot, List<Integer> exitPatches, List<OperandStack.Slot> entryStack, @Nullable String name,
+	record BlockTarget(int rvSlot, MethodCode.Label exit, List<OperandStack.Slot> entryStack, @Nullable String name,
 			boolean catchesPlain, boolean functionBoundary) {
 	}
 
 	/**
-	 * An active {@code tagbody} during compilation. {@code labelPositions} maps each
-	 * label already emitted to its code position (a {@code go} to it is a backward jump
-	 * patched immediately); {@code pendingGos} holds, per label, the {@code goto}
-	 * positions of forward {@code go}s awaiting the label (its key set is the tagbody's
-	 * full label set, registered up front so {@code JvmGoCompiler} can resolve the
-	 * innermost tagbody declaring a tag). {@code entryStack} is the operand stack at
-	 * tagbody entry -- every label is reached with exactly that shape ({@code go}
-	 * discards anything above it); {@code unwindDepth}/{@code spillDepth} are the
-	 * scope-stack sizes at entry, so a {@code go} can tell which
-	 * {@code unwind-protect}/{@code handler-case} scopes it escapes.
+	 * An active {@code tagbody} during compilation. {@code labels} maps each of the
+	 * tagbody's tags to the label a {@code go} to it jumps to -- bound where the tag
+	 * stands, so a {@code go} past it jumps backward and one before it waits for the
+	 * binding (its key set is the tagbody's full tag set, registered up front so
+	 * {@code JvmGoCompiler} can resolve the innermost tagbody declaring a tag).
+	 * {@code entryStack} is the operand stack at tagbody entry -- every label is reached
+	 * with exactly that shape ({@code go} discards anything above it);
+	 * {@code unwindDepth}/{@code spillDepth} are the scope-stack sizes at entry, so a
+	 * {@code go} can tell which {@code unwind-protect}/{@code handler-case} scopes it
+	 * escapes.
 	 */
 	record TagbodyScope(List<OperandStack.Slot> entryStack, int unwindDepth, int spillDepth,
-			java.util.Map<String, Integer> labelPositions, java.util.Map<String, List<Integer>> pendingGos) {
+			java.util.Map<String, MethodCode.Label> labels) {
 	}
 
 	/**
@@ -6222,13 +6218,47 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final int blockDepth;
 
-		final List<int[]> holes = new ArrayList<>();
+		final List<Hole> holes = new ArrayList<>();
 
 		UnwindScope(List<LispVal> cleanupForms, int blockDepth) {
 			this.cleanupForms = cleanupForms;
 			this.blockDepth = blockDepth;
 		}
 
+		/**
+		 * Adds the scope's catch-any exception-table entries: {@code [start, end)} minus
+		 * the recorded holes, which lie inside the protected region but must not be
+		 * covered by this scope's own handler. The holes are recorded in code order, so
+		 * one left-to-right sweep suffices.
+		 * @param body the method body
+		 * @param start the first instruction of the protected region
+		 * @param end the first instruction past it
+		 * @param handler the handler's entry
+		 */
+		void catchAny(MethodCode body, MethodCode.Label start, MethodCode.Label end, MethodCode.Label handler) {
+			MethodCode.Label cur = start;
+			for (Hole hole : this.holes) {
+				if (hole.start().position() > cur.position()) {
+					body.exceptionCatch(cur, hole.start(), handler, null);
+				}
+				if (hole.end().position() > cur.position()) {
+					cur = hole.end();
+				}
+			}
+			if (cur.position() < end.position()) {
+				body.exceptionCatch(cur, end, handler, null);
+			}
+		}
+
+	}
+
+	/**
+	 * A cleanup sequence inlined inside a protected region ({@link UnwindScope#holes}).
+	 *
+	 * @param start its first instruction
+	 * @param end the first instruction past it
+	 */
+	record Hole(MethodCode.Label start, MethodCode.Label end) {
 	}
 
 	/**
@@ -6244,13 +6274,6 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	static final class Ctx {
-
-		/**
-		 * The highest local slot a one-byte load/store operand can name. Past it
-		 * {@link #emit(int)} rewrites the instruction into its {@code wide} form, whose
-		 * two-byte index reaches {@link #MAX_LOCAL_SLOT}.
-		 */
-		private static final int MAX_ONE_BYTE_LOCAL_SLOT = 255;
 
 		/**
 		 * The highest local slot a method can have at all: {@code max_locals} is a u2, so
@@ -6447,8 +6470,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		/** The compilation's operator wrappers, or null outside a full compilation. */
 		JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
-		final List<Integer> code = new ArrayList<>();
-
 		/**
 		 * This method body's operand stack, tracked as it is emitted: it says what is
 		 * live on the stack right now (which {@code handler-case} must spill, and
@@ -6458,13 +6479,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		final OperandStack stack;
 
 		/**
-		 * The typed layer over this body ({@link am.ik.jvm.MethodCode}, the words of
-		 * {@code java.lang.classfile}'s {@code CodeBuilder}): it writes into
-		 * {@link #code} and feeds {@link #stack} exactly as {@link #emit} does, so one
-		 * body mixes the two freely while the emitters move onto it
+		 * This method's body ({@link am.ik.jvm.MethodCode}, the words of
+		 * {@code java.lang.classfile}'s {@code CodeBuilder}): its code, exception table
+		 * and long branches; every instruction feeds {@link #stack}
 		 * (.kb/jvm-method-size-limits.md, "Emission on java.lang.classfile").
 		 */
 		final am.ik.jvm.MethodCode body;
+
+		/**
+		 * The label bound at the body's first instruction: where a handler covering the
+		 * whole body starts ({@link JvmUncaughtHandler}).
+		 */
+		final MethodCode.Label bodyStart;
 
 		Map<String, Integer> locals = new HashMap<>();
 
@@ -7100,22 +7126,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		final Deque<SpillScope> spillScopes = new ArrayDeque<>();
 
 		/**
-		 * This method's {@code Code} attribute exception table, in dispatch order.
-		 * {@code unwind-protect} appends catch-any entries covering its protected region
-		 * (class version 50 verifies handlers without a StackMapTable).
-		 */
-		final List<ClassDefinition.Handler> exceptionTable = new ArrayList<>();
-
-		/**
-		 * Branches whose patch overflowed the signed 16-bit encoding:
-		 * {@code JvmEmitHelper.patchBranch} records them here instead of throwing, their
-		 * offset bytes left as placeholders, and the class writer places each in its
-		 * {@code goto_w} form ({@link am.ik.jvm.JvmClassSplitter}). Empty for every
-		 * method whose branches fit.
-		 */
-		final List<ClassDefinition.Branch> deferredBranches = new ArrayList<>();
-
-		/**
 		 * The compilation's source-site table, shared by every context like
 		 * {@link #lambdaDecls}; {@code null} when the compile records no source positions
 		 * (an embedder calling {@link JvmLispCompiler#compile} on forms it built), which
@@ -7261,7 +7271,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
 			this.stack = new OperandStack(this.cp);
-			this.body = new am.ik.jvm.MethodCode(this.code, this.stack, this.deferredBranches, this.exceptionTable);
+			this.body = new am.ik.jvm.MethodCode(new ArrayList<>(), this.stack, new ArrayList<>(), new ArrayList<>());
+			this.bodyStart = this.body.newBoundLabel();
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
 			this.lispToString = Objects.requireNonNull(builder.lispToString);
@@ -7377,7 +7388,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.siteOwner = from.siteOwner;
 			this.siteCurrent = from.siteCurrent;
 			if (this.siteCurrent != 0) {
-				this.siteMarks.add(new int[] { this.code.size(), this.siteCurrent });
+				this.siteMarks.add(new int[] { this.body.size(), this.siteCurrent });
 			}
 		}
 
@@ -7399,7 +7410,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			int saved = this.siteCurrent;
 			this.siteCurrent = site;
-			this.siteMarks.add(new int[] { this.code.size(), site });
+			this.siteMarks.add(new int[] { this.body.size(), site });
 			return saved;
 		}
 
@@ -7413,7 +7424,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return;
 			}
 			this.siteCurrent = saved;
-			this.siteMarks.add(new int[] { this.code.size(), saved });
+			this.siteMarks.add(new int[] { this.body.size(), saved });
 		}
 
 		/**
@@ -7425,7 +7436,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		void restoreSite(int site) {
 			if (site != this.siteCurrent) {
 				this.siteCurrent = site;
-				this.siteMarks.add(new int[] { this.code.size(), site });
+				this.siteMarks.add(new int[] { this.body.size(), site });
 			}
 		}
 
@@ -7438,8 +7449,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		void addTo(ClassDefinition.Builder definition, int access, Utf8Constant name, Utf8Constant descriptor) {
 			this.body.checkComplete();
-			definition.addMethod(access, name, descriptor, this.code, this.exceptionTable, this.lines(),
-					this.deferredBranches);
+			definition.addMethod(access, name, descriptor, this.body.code(), this.body.handlers(), this.lines(),
+					this.body.longBranches());
 		}
 
 		/**
@@ -7453,7 +7464,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		List<ClassDefinition.Line> lines() {
 			List<ClassDefinition.Line> entries = new ArrayList<>();
-			int end = this.code.size();
+			int end = this.body.size();
 			for (int[] mark : this.siteMarks) {
 				int pc = mark[0];
 				if (pc >= end) {
@@ -8446,39 +8457,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.definedGlobals = shared;
 		}
 
-		void emit(int opcode) {
-			if (opcode > MAX_ONE_BYTE_LOCAL_SLOT && this.stack.awaitingLocalIndex()) {
-				// A local index past 255 does not fit the one-byte operand of the plain
-				// load/store opcodes; rewrite the instruction just emitted into its
-				// `wide` form rather than writing a truncated index that names a
-				// DIFFERENT slot (which the frame walk only sometimes notices -- a
-				// wrapped index landing on a same-typed slot is a silent wrong answer).
-				int op = this.code.removeLast();
-				this.code.add(Opcode.WIDE);
-				this.code.add(op);
-				this.code.add((opcode >> 8) & 0xFF);
-				this.code.add(opcode & 0xFF);
-				this.stack.widenPendingLocalIndex();
-				return;
-			}
-			this.code.add(opcode);
-			this.stack.feed(opcode);
-		}
-
-		/**
-		 * Appends a two-byte operand, the high part kept whole for the reason
-		 * {@link JvmRuntimeBuilder#emitU2} gives: a pool index past 65535 must reach the
-		 * splitter, and the operand-stack model, uncut.
-		 */
-		void emitU2(int value) {
-			int high = value >> 8;
-			int low = value & 0xFF;
-			this.code.add(high);
-			this.stack.feed(high);
-			this.code.add(low);
-			this.stack.feed(low);
-		}
-
 		/**
 		 * The deepest this method body's operand stack ever gets. The floor keeps the
 		 * emitted {@code Code} attribute byte-identical to the fixed value this used to
@@ -8548,8 +8526,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					throw new UnsupportedOperationException(
 							"Cannot compile " + what + " here: the function is out of local variable slots");
 				}
-				this.emit(storeOpcode(slot));
-				this.emit(slots[i]);
+				this.body.storeLocal(kind(slot), slots[i]);
 			}
 			return new Spill(live, slots);
 		}
@@ -8562,7 +8539,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		void discardOperandsDownTo(int keep) {
 			for (int i = this.stack.snapshot().size(); i > keep; i--) {
-				this.emit(this.stack.snapshot().getLast().wide() ? Opcode.POP2 : Opcode.POP);
+				if (this.stack.snapshot().getLast().wide()) {
+					this.body.pop2();
+				}
+				else {
+					this.body.pop();
+				}
 			}
 		}
 
@@ -8592,31 +8574,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			/** Reloads the bottom {@code count} of the spilled values. */
 			void restore(Ctx ctx, int count) {
 				for (int i = 0; i < count; i++) {
-					ctx.emit(loadOpcode(this.live.get(i)));
-					ctx.emit(this.slots[i]);
+					ctx.body.loadLocal(kind(this.live.get(i)), this.slots[i]);
 				}
 			}
 
 		}
 
-		private static int storeOpcode(OperandStack.Slot slot) {
+		private static TypeKind kind(OperandStack.Slot slot) {
 			return switch (slot) {
-				case REF -> Opcode.ASTORE;
-				case INT -> Opcode.ISTORE;
-				case FLOAT -> Opcode.FSTORE;
-				case LONG -> Opcode.LSTORE;
-				case DOUBLE -> Opcode.DSTORE;
-				case UNINIT -> throw new IllegalStateException("an object under construction cannot be spilled");
-			};
-		}
-
-		private static int loadOpcode(OperandStack.Slot slot) {
-			return switch (slot) {
-				case REF -> Opcode.ALOAD;
-				case INT -> Opcode.ILOAD;
-				case FLOAT -> Opcode.FLOAD;
-				case LONG -> Opcode.LLOAD;
-				case DOUBLE -> Opcode.DLOAD;
+				case REF -> TypeKind.REFERENCE;
+				case INT -> TypeKind.INT;
+				case FLOAT -> TypeKind.FLOAT;
+				case LONG -> TypeKind.LONG;
+				case DOUBLE -> TypeKind.DOUBLE;
 				case UNINIT -> throw new IllegalStateException("an object under construction cannot be spilled");
 			};
 		}

@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
@@ -33,42 +34,38 @@ final class JvmIfCompiler {
 			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 			falseBranchOpcode = Opcode.IFNULL;
 		}
-		int ifNullPos = ctx.code.size();
-		ctx.emit(falseBranchOpcode);
-		ctx.emitU2(0);
+		MethodCode.Label elseStart = ctx.body.newLabel();
+		MethodCode.Label end = ctx.body.newLabel();
+		JvmEmitHelper.branch(ctx, falseBranchOpcode, elseStart);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		int elseStart = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, elseStart);
+		ctx.body.goto_(end);
+		ctx.body.labelBinding(elseStart);
 		if (parts.size() > 3) {
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
-		int endPos = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, endPos);
+		ctx.body.labelBinding(end);
 	}
 
 	// (if (%supplied-p p) then else): the comparison branches to THEN when the parameter
 	// holds an argument and falls through to ELSE on the marker.
 	private static void compileSuppliedPTest(LispCons test, List<LispVal> parts, JvmLispCompiler.Ctx ctx,
 			String className) {
-		int suppliedPos = JvmExprCompiler.compileSuppliedPTest(test, ctx, className);
+		MethodCode.Label supplied = ctx.body.newLabel();
+		JvmExprCompiler.compileSuppliedPTest(test, ctx, className, supplied);
 		if (parts.size() > 3) {
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, suppliedPos, ctx.code.size());
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(supplied);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

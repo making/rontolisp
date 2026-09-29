@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -53,22 +52,18 @@ final class JvmApplyCompiler {
 					// list: _arityChk with the shape (0, variadic) walks it for that
 					// alone.
 					int tailSlot = ctx.allocTemp();
-					ctx.emit(Opcode.ASTORE);
-					ctx.emit(tailSlot);
+					ctx.body.astore(tailSlot);
 					emitArityGuard(ctx, className, tailSlot, 0, true, null);
-					ctx.emit(Opcode.ALOAD);
-					ctx.emit(tailSlot);
+					ctx.body.aload(tailSlot);
 				}
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(fi.methodref().index());
+				ctx.body.invokestatic(fi.methodref().entry());
 				return;
 			}
 			if (fi != null) {
 				JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx,
 						className);
 				int argsSlot = ctx.allocTemp();
-				ctx.emit(Opcode.ASTORE);
-				ctx.emit(argsSlot);
+				ctx.body.astore(argsSlot);
 				// The count guard. This call reaches no dispatcher, so no no-match arm
 				// can report a wrong count for it, and the walk below is car/cdr -- a
 				// short list would BIND nil for the parameters it does not reach and a
@@ -79,8 +74,7 @@ final class JvmApplyCompiler {
 				// The parameters out of the list: an optional past its end is the
 				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
 				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(fi.methodref().index());
+				ctx.body.invokestatic(fi.methodref().entry());
 				return;
 			}
 		}
@@ -88,54 +82,35 @@ final class JvmApplyCompiler {
 		// Compile the function designator.
 		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
 		int funcSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(funcSlot);
+		ctx.body.astore(funcSlot);
 
 		// Compile the leading literal arguments (indices 2 .. n-2), left to right.
 		List<Integer> argSlots = new ArrayList<>();
 		for (int i = 2; i < n - 1; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			int s = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(s);
+			ctx.body.astore(s);
 			argSlots.add(s);
 		}
 
 		// Compile the final list argument; it becomes the tail of the argument list.
 		JvmExprCompiler.compileExpr(args.get(n - 1), ctx, className);
 		int curSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(curSlot);
+		ctx.body.astore(curSlot);
 
 		// Prepend each leading argument: cur = new Object[]{arg, cur}.
 		for (int k = argSlots.size() - 1; k >= 0; k--) {
-			ctx.emit(Opcode.ICONST_2);
-			ctx.emit(Opcode.ANEWARRAY);
-			ctx.emitU2(ctx.objectClass.index());
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(argSlots.get(k));
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.ICONST_1);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(curSlot);
-			ctx.emit(Opcode.AASTORE);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(curSlot);
+			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+			ctx.body.aload(argSlots.get(k)).aastore().dup().iconst_1().aload(curSlot).aastore();
+			ctx.body.astore(curSlot);
 		}
 
 		// _apply(func, argList)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(funcSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(curSlot);
+		ctx.body.aload(funcSlot).aload(curSlot);
 		MethodrefConstant applyRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("_apply"),
 						ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(applyRef.index());
+		ctx.body.invokestatic(applyRef.entry());
 	}
 
 	/**
@@ -151,11 +126,9 @@ final class JvmApplyCompiler {
 		MethodrefConstant chkRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
 						ctx.cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)));
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(argsSlot);
+		ctx.body.aload(argsSlot);
 		JvmEmitHelper.emitIntConst(ctx, shape);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(chkRef.index());
+		ctx.body.invokestatic(chkRef.entry());
 	}
 
 }

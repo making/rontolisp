@@ -6,7 +6,6 @@ import java.util.Objects;
 
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -94,15 +93,13 @@ final class JvmQuantizedMatrixCompiler {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 			Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 			if (i == 1 && materializeFirst && gpuOps != null) {
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+				ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).entry());
 			}
 		}
 		ClassConstant selfClass = ctx.cp.addClass(ctx.cp.addUtf8(className));
 		MethodrefConstant ref = ctx.cp.addMethodref(selfClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(helper), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 	private static void requireArity(List<LispVal> args, int arity, String member) {

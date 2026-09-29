@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -27,12 +26,11 @@ final class JvmIeee754Compiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
 		invokeStatic(ctx, "java/lang/Double", "doubleToRawLongBits", "(D)J");
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(bigIntegerValueOf(ctx).index());
+		ctx.body.invokestatic(bigIntegerValueOf(ctx).entry());
 		JvmEmitHelper.compileBigInteger(MASK64, ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(
-				JvmEmitHelper.bigIntegerMethod(ctx, "and", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;").index());
+		ctx.body
+			.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "and", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;")
+				.methodRefEntry());
 		JvmEmitHelper.normalizeBigInteger(ctx);
 	}
 
@@ -41,8 +39,7 @@ final class JvmIeee754Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").index());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
 		invokeStatic(ctx, "java/lang/Double", "longBitsToDouble", "(J)D");
 		JvmEmitHelper.boxDouble(ctx);
 	}
@@ -52,7 +49,7 @@ final class JvmIeee754Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
-		ctx.emit(Opcode.D2F);
+		ctx.body.d2f();
 		invokeStatic(ctx, "java/lang/Float", "floatToRawIntBits", "(F)I");
 		invokeStatic(ctx, "java/lang/Integer", "toUnsignedLong", "(I)J");
 		JvmEmitHelper.boxLong(ctx);
@@ -63,11 +60,10 @@ final class JvmIeee754Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").index());
-		ctx.emit(Opcode.L2I);
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+		ctx.body.l2i();
 		invokeStatic(ctx, "java/lang/Float", "intBitsToFloat", "(I)F");
-		ctx.emit(Opcode.F2D);
+		ctx.body.f2d();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
@@ -79,8 +75,7 @@ final class JvmIeee754Compiler {
 		ConstantPool.ClassConstant cls = ctx.cp.addClass(ctx.cp.addUtf8(owner));
 		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(cls,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 }

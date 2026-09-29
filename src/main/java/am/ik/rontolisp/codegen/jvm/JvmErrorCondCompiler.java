@@ -2,7 +2,6 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -38,8 +37,7 @@ final class JvmErrorCondCompiler {
 		int savedNextLocal = ctx.nextLocal;
 		int condSlot = ctx.allocTemp();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(condSlot);
+		ctx.body.astore(condSlot);
 		// throw _condPut(new RuntimeException(strip(message)), condition) -- _condRan
 		// for the signal hook's terminal
 		JvmErrorCompiler.compileThrowRuntimeException(args.get(2), ctx, className, condSlot, handlersRan);

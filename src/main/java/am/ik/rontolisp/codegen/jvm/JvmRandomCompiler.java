@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code random} built-in function. Returns a non-negative random number
@@ -36,34 +36,26 @@ final class JvmRandomCompiler {
 			// costs
 			// nothing observable; the non-positive path bails to the wrapped _random call
 			// instead of drawing, which throws before any draw happens either.
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.unboxDouble(ctx);
-			ctx.emit(Opcode.DCONST_0);
-			ctx.emit(Opcode.DCMPL);
-			int ifPositive = ctx.code.size();
-			ctx.emit(Opcode.IFGT);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).index());
-			int done = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifPositive, ctx.code.size());
+			ctx.body.dconst_0().dcmpl();
+			MethodCode.Label ifPositive = ctx.body.newLabel();
+			ctx.body.ifgt(ifPositive);
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).entry());
+			MethodCode.Label done = ctx.body.newLabel();
+			ctx.body.goto_(done);
+			ctx.body.labelBinding(ifPositive);
 			JvmEmitHelper.unboxDouble(ctx);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).index());
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).index());
-			ctx.emit(Opcode.DMUL);
+			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).entry());
+			ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).methodRefEntry()).dmul();
 			JvmEmitHelper.boxDouble(ctx);
-			JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+			ctx.body.labelBinding(done);
 		}
 		else {
 			// Non-literal limit: _random dispatches on the runtime type (a Double limit
 			// returns a Double, otherwise the truncated Long), so a float limit through a
 			// variable works, and rejects a non-positive or ratio limit (.todo/981).
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).index());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).entry());
 		}
 	}
 

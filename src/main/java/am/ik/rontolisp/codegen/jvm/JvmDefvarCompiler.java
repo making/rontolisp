@@ -7,7 +7,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code defvar} special form. A top-level variable is stored in a main()
@@ -56,15 +55,14 @@ final class JvmDefvarCompiler {
 					return;
 				}
 				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
-				ctx.emit(Opcode.DUP);
-				ctx.emit(Opcode.PUTSTATIC);
-				ctx.emitU2(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())).index());
+				ctx.body.dup();
+				ctx.body.putstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())).entry());
 				// Mirror into the eval runtime's global env (no-op unless eval is used at
 				// top level); leaves the stack as it was (the DUP'd copy is consumed by
 				// the
 				// mirror's _store, which returns it, then we pop it).
 				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
-				ctx.emit(Opcode.POP);
+				ctx.body.pop();
 				ctx.definedGlobals.add(name.name());
 			}
 		}
@@ -77,13 +75,12 @@ final class JvmDefvarCompiler {
 			// (JvmSetqCompiler.mirrorsTopLevelGlobal), so the DUP/POP is emitted only
 			// when the mirror is.
 			if (JvmSetqCompiler.mirrorsTopLevelGlobal(name.name(), ctx)) {
-				ctx.emit(Opcode.DUP);
+				ctx.body.dup();
 				JvmSetqCompiler.mirrorTopLevelGlobal(name.name(), ctx);
-				ctx.emit(Opcode.POP);
+				ctx.body.pop();
 			}
 			int slot = ctx.allocLocal(name.name());
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(slot);
+			ctx.body.astore(slot);
 		}
 		// defvar returns the variable name symbol -- unless the caller is dropping it.
 		if (emitName) {

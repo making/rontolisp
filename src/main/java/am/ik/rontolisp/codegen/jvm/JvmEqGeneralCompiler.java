@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code eq} and {@code eql} built-in functions, which are one predicate
@@ -39,41 +39,31 @@ final class JvmEqGeneralCompiler {
 		int aSlot = 0;
 		int bSlot = 1;
 		// If a is null: return (b == null) ? t : nil
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(aSlot);
-		int ifNonNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
+		ctx.body.aload(aSlot);
+		MethodCode.Label ifNonNullPos = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifNonNullPos);
 		// a is null
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(bSlot);
-		int ifNonNull2Pos = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
-		ctx.emitU2(0);
+		ctx.body.aload(bSlot);
+		MethodCode.Label ifNonNull2Pos = ctx.body.newLabel();
+		ctx.body.ifnonnull(ifNonNull2Pos);
 		// both null -> t
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoBothNullPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label gotoBothNullPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoBothNullPos);
 		// a null, b not null -> nil
-		JvmEmitHelper.patchBranch(ctx, ifNonNull2Pos, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoANullPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.labelBinding(ifNonNull2Pos);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoANullPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoANullPos);
 		// a is not null: a.equals(b) -> bool
-		JvmEmitHelper.patchBranch(ctx, ifNonNullPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(aSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(bSlot);
+		ctx.body.labelBinding(ifNonNullPos);
+		ctx.body.aload(aSlot).aload(bSlot);
 		// _eqv is a.equals(b) plus element-wise comparison for ratios.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.EQV).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQV).entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		// end
-		JvmEmitHelper.patchBranch(ctx, gotoBothNullPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, gotoANullPos, ctx.code.size());
+		ctx.body.labelBinding(gotoBothNullPos);
+		ctx.body.labelBinding(gotoANullPos);
 	}
 
 }

@@ -5,7 +5,8 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.MethodCode;
 
 /**
  * Compiles the {@code %host-getenv} internal primitive: the HOST's value for an
@@ -27,50 +28,39 @@ final class JvmGetenvCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.HOST_GETENV + " expects 1 argument, got " + (args.size() - 1));
 		}
-		final int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
-		final int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
-		final int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		final MethodrefConstant length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		final MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		final MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat",
+				"(Ljava/lang/String;)Ljava/lang/String;");
 
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className); // [s]
 		// A variable name built by a string producer (concatenate, format nil) is a
 		// mutable character vector: render it before the (String) cast (a no-op
 		// without the array runtime).
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
+		ctx.body.checkcast(ctx.stringClass.entry());
 		// name = s.substring(1, s.length() - 1)
-		ctx.emit(Opcode.DUP); // [s, s]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(length); // [s, len]
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ISUB); // [s, len-1]
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.SWAP); // [s, 1, len-1]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(substring); // [name]
+		ctx.body.dup(); // [s, s]
+		ctx.body.invokevirtual(length.methodRefEntry()); // [s, len]
+		ctx.body.iconst_1();
+		ctx.body.isub(); // [s, len-1]
+		ctx.body.iconst_1();
+		ctx.body.swap(); // [s, 1, len-1]
+		ctx.body.invokevirtual(substring.methodRefEntry()); // [name]
 		// System.getenv(name)
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.systemOp("getenv").index()); // [value|null]
-		ctx.emit(Opcode.DUP); // [value, value]
-		final int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0); // [value]
+		ctx.body.invokestatic(ctx.systemOp("getenv").entry()); // [value|null]
+		ctx.body.dup(); // [value, value]
+		MethodCode.Label end = ctx.body.newLabel();
+		ctx.body.ifnull(end);
 		// non-null: wrap as "\"" + value + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [value, q]
-		ctx.emit(Opcode.SWAP); // [q, value]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat); // [q+value]
+		ctx.body.swap(); // [q, value]
+		ctx.body.invokevirtual(concat.methodRefEntry()); // [q+value]
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [.., q]
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(concat); // [quoted]
-		final int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.invokevirtual(concat.methodRefEntry()); // [quoted]
+		ctx.body.goto_(end);
 		// null path: leave the null (nil) on the stack
-		final int nullStart = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, nullStart);
-		final int endPos = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, endPos);
+		ctx.body.labelBinding(end);
 	}
 
 }
