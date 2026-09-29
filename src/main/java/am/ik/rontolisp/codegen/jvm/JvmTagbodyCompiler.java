@@ -4,6 +4,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import am.ik.jvm.MethodCode;
@@ -73,11 +74,13 @@ final class JvmTagbodyCompiler {
 			String label = labelName(part);
 			if (label != null) {
 				ctx.stack.joinShape(entryStack);
+				MethodCode.Label target = Objects.requireNonNull(labels.get(label));
 				if (!bound.add(label)) {
 					// A tag standing twice: a go past its second place jumps there.
-					labels.put(label, ctx.body.newLabel());
+					target = ctx.body.newLabel();
+					labels.put(label, target);
 				}
-				ctx.body.labelBinding(labels.get(label));
+				ctx.body.labelBinding(target);
 			}
 			else {
 				JvmExprCompiler.compileForEffect(part, ctx, className);

@@ -10,7 +10,7 @@ the write phase's time and every written class's size and pool count.
 - **Branch offset, signed 16 bits** — a branch that does not reach is written in its long form
   (`goto_w`, or an inverted short branch over one) by `am.ik.jvm.CodeReplay.Layout`, a fixpoint
   over the method (widening one branch moves every later instruction). The emitters feed it
-  through `JvmEmitHelper.patchBranch` -> `Ctx.deferredBranches` (placeholder offset bytes, true
+  through `MethodCode`'s labels -> `MethodCode.longBranches` (placeholder offset bytes, true
   target recorded); the raw-list `JvmRuntimeBuilder.patchBranch` still throws. NOT the writer's
   own relaxation: see "Emission on java.lang.classfile" below.
 - **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `JvmClassSplitter` rejects the emitted body
@@ -33,7 +33,7 @@ bodies are the emitters' code lists with their handler, line and long-branch tab
 
 - **One master pool.** `ConstantPool` wraps one `java.lang.classfile` `ConstantPoolBuilder`
   for the whole program; the emitters' u2 operands are its indexes, kept whole past 65535 (every
-  u2 writer keeps the high part: `JvmRuntimeBuilder.emitU2`, `Ctx.emitU2`, the private copies
+  u2 writer keeps the high part: `JvmRuntimeBuilder.emitU2`, `MethodCode`, the private copies
   delegate; `OperandStack` reads a pool operand uncut). The builder refuses nothing as entries
   are added -- only a pool being WRITTEN is held to 65535 (`Constant pool is too large`).
 - **The scan** (`JvmClassSplitter.Scan`) reads every body's pool operands once: the own-call
@@ -104,12 +104,13 @@ assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thre
 HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
 `ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
 compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
-predicates sharing its exclusion helpers); and the I/O and socket runtimes with
-`_flushStreams`, the first raw lists (a86). The rest still write code bytes (`Ctx.emit`/
-`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining slices are
-`.todo/a87`, `a88`, `a90`, `a91`: the core runtime builders, the small builders with
-`JvmLispCompiler`'s own code, the rest of the expression compilers, then `MethodCode` storing
-instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
+predicates sharing its exclusion helpers); the I/O and socket runtimes with `_flushStreams`,
+the first raw lists (a86); and every other expression compiler (a90), so `Ctx.emit`/`emitU2`,
+`Ctx.code` and `JvmEmitHelper.patchBranch` are gone. The rest (the runtime builders' raw
+`List<Integer>` lists) still write code bytes, which `CodeReplay` decodes. The remaining slices
+are `.todo/a87`, `a88`, `a91`: the core runtime builders, the small builders with
+`JvmLispCompiler`'s own code, then `MethodCode` storing instruction records so the code bytes,
+their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
@@ -117,10 +118,9 @@ instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
 label waits for `labelBinding`; one past the 16-bit offset is recorded as a long branch;
 `checkComplete` refuses a branch left waiting -- its placeholder would jump to itself),
 `exceptionCatch` over bound labels, and `addTo(definition, ...)`. Until a91 it stores code
-bytes, so one body mixes it with the byte emitters: over a compile context it writes into
-`Ctx.code` and feeds `Ctx.stack` every byte, reconciling the model at a label exactly as
-`JvmEmitHelper.patchBranch` does. It encodes a local in the explicit-slot form the byte
-emitters use (`aload 1`, two bytes; `wide` past 255) and an int in the shortest, so a sequence
+bytes; over a compile context it feeds `Ctx.stack` every byte and reconciles the model where a
+forward branch's label is bound. It encodes a local in the explicit-slot form the byte
+emitters used (`aload 1`, two bytes; `wide` past 255) and an int in the shortest, so a sequence
 moved onto it MEASURES what it measured and no budget decides differently; the writer's
 shortest forms make the class the same either way.
 
@@ -161,6 +161,15 @@ they did; no budget reads a runtime helper, and the written class is the same. T
 203 reads, 192 branch sources patched to the current position, 4 backward-branch targets, 6
 handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions held in an
 `int p = -1` sentinel and 7 lists of positions each patched by one loop.
+
+**The rest of the expression compilers** (a90, 2026-09-29): ~1,600 sites in 121 files, plus the
+position designs they shared -- a block's exit (`BlockTarget.exit`), a tagbody's tags
+(`TagbodyScope.labels`), the unwind holes (`UnwindScope.holes`, label pairs, one sweep in
+`UnwindScope.catchAny` for `unwind-protect` and `handler-case`), the uncaught handler's and
+the async crossing's whole-body entries (`Ctx.bodyStart`). Byte-identical by the same
+comparisons (the 4,857 programs, every CLI compile above). Emitted forms changed without
+changing a class: `main`'s `aload_0` is `aload 0` and
+the `_cu1` selector's `bipush 0..5` is `iconst_<n>`.
 
 **How a slice moves** (the recipe every slice used; tools in
 `.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, and for a raw list
@@ -205,13 +214,14 @@ handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions hel
   helper answering positions takes the label to jump to instead (`emitNoHolderJump`,
   `emitOctetTestOnStack`, `emitInstanceExclusion`), several branches patched at one place
   share one label, an opcode chosen at run time goes through `JvmEmitHelper.branch(ctx, int,
-  label)` or an `if` over the typed calls. Handler ranges are labels, except where a range
-  is cut by `UnwindScope.holes` (still positions, recorded by the return/go compilers):
-  `handler-case`'s entries are still added from positions (`ctx.body.size()`).
+  label)` or an `if` over the typed calls. Handler ranges are labels. `intidx.py` turns a pool
+  operand held as an `int` index into its constant so `ctxmig.py` maps its uses.
 - Verify by bytes, not only by tests: `Cmp.java` compiles a directory of programs with both
   jars in process (`extract.py` pulls them out of the tests, `runchunks.sh` runs chunks in
   parallel, ~4 min for the 4,857), `cmpcli.sh` the CLI programs; `MethodDiff.java` names what
-  differs.
+  differs. Both jars from ONE compiler: classes `jc.sh` compiled put over a maven-built jar
+  differ from maven's in every travelling runtime and template class a program copies, so put
+  the baseline's own `jc.sh` classes (sources from `git archive`) over the same jar.
 
 **The shortest forms, measured 2026-09-29** (the writer's canonical loads, stores and ints,
 against the forms emitted): ci-spec corpus class 7,687,513 -> 7,498,301 B (code 4,545,371 ->
@@ -308,7 +318,7 @@ not only under eval. WASM mirrors it.
 a crash, and `AstOutliner`'s 8000-byte `HugeMethodLimit` never fired because `ctx.nextLocal`
 only grows. Past 255 a load/store takes the `wide` prefix
 ([stack-map-frames.md](stack-map-frames.md)); the hard limit is the u2 `max_locals`, which
-`Ctx.allocTemp` refuses to cross. `iinc` was the one-byte slot `Ctx.emit`'s rewrite missed
+`Ctx.allocTemp` refuses to cross. `iinc` was the one-byte slot the byte emitter's rewrite missed
 (`maphash`, `%obj-slots`; fixed 2026-09-29 by `MethodCode.iinc`). Still open: a temporary's slot
 is never reused.
 
