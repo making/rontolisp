@@ -35,7 +35,11 @@ the shipped class, so an under-declared one is no longer a `VerifyError`.
 - NOT loud any more: `aaload` on a non-array (an over-lossy merge) makes the generator push
   TOP instead of throwing, which surfaces as a `VerifyError` at class load. The old
   `StackMapAugmenter` threw at compile time; the tests load every class they compile, so
-  the regression net is the same.
+  the regression net is the same. `ClassFile.verify` at compile time would restore it and
+  is NOT adopted (measured 2026-09-29 on the default-level ci-spec class): 711-755 ms
+  against 441-494 ms for the frames themselves, and over the class-loader-free resolver
+  above it reports 1,678 false errors (`RuntimeException` not assignable to `Throwable`:
+  its assignability needs the real hierarchy), 0 over the class-loading default.
 - javac-compiled embedded template classes ([template-class-embedding.md](template-class-embedding.md))
   carry their own frames and are never touched.
 - `osrHostileBackedges` reads the generated `StackMapTable` back: a branch or switch whose
