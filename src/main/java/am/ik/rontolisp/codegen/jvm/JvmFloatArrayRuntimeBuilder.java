@@ -1,14 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 
 import static am.ik.rontolisp.codegen.jvm.JvmPackedFloatWidth.BFLOAT16;
@@ -137,18 +138,16 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * delegates to a {@code _qm*} helper ({@link JvmQuantizedMatrixRuntimeBuilder}),
 	 * which exists exactly when this record is non-null.
 	 */
-	private record Quantized(ClassConstant byteArrayClass, MethodrefConstant aref1, MethodrefConstant aref2,
-			MethodrefConstant arefN, MethodrefConstant dims, MethodrefConstant length, MethodrefConstant qmInt,
-			boolean octets) {
+	private record Quantized(ClassEntry byteArrayClass, MethodRefEntry aref1, MethodRefEntry aref2,
+			MethodRefEntry arefN, MethodRefEntry dims, MethodRefEntry length, MethodRefEntry qmInt, boolean octets) {
 
 	}
 
 	/** The constant-pool references one emitted body needs, per width. */
-	private record Refs(ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
-			MethodrefConstant bf16Value, MethodrefConstant bf16Bits, MethodrefConstant ckBound,
-			@Nullable Quantized quantized) {
+	private record Refs(ClassEntry doubleArrayClass, ClassEntry floatArrayClass, ClassEntry shortArrayClass,
+			MethodRefEntry bf16Value, MethodRefEntry bf16Bits, MethodRefEntry ckBound, @Nullable Quantized quantized) {
 
-		ClassConstant arrayClass(JvmPackedFloatWidth w) {
+		ClassEntry arrayClass(JvmPackedFloatWidth w) {
 			return switch (w) {
 				case DOUBLE -> this.doubleArrayClass;
 				case SINGLE -> this.floatArrayClass;
@@ -170,55 +169,45 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * -- can exist, so those arms test the tag that tells the two apart
 	 * @return the helper methods
 	 */
-	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass, @Nullable MethodrefConstant written, @Nullable MethodrefConstant materialize,
+	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
+			ClassEntry selfClass, @Nullable MethodRefEntry written, @Nullable MethodRefEntry materialize,
 			boolean quantized, boolean octets) {
-		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
-		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
-		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		ClassConstant floatClass = cp.addClass(cp.addUtf8("java/lang/Float"));
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant alAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant longIntValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
-		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-		MethodrefConstant floatValueOf = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(F)Ljava/lang/Float;")));
+		ClassEntry doubleArrayClass = cp.classEntry("[D");
+		ClassEntry floatArrayClass = cp.classEntry("[F");
+		ClassEntry shortArrayClass = cp.classEntry("[S");
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		ClassEntry floatClass = cp.classEntry("java/lang/Float");
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
+		MethodRefEntry alAdd = cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry longIntValue = cp.methodRef(longClass, "intValue", "()I");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry doubleValueOf = cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+		MethodRefEntry numberDoubleValue = cp.methodRef(numberClass, "doubleValue", "()D");
+		MethodRefEntry floatValueOf = cp.methodRef(floatClass, "valueOf", "(F)Ljava/lang/Float;");
 		// Self-referencing static helpers to delegate to / reuse.
-		MethodrefConstant dbl = self(cp, selfClass, JvmNumericRuntimeBuilder.DBL, "(" + OBJ + ")" + OBJ);
-		MethodrefConstant lengthHelper = self(cp, selfClass, JvmLengthRuntimeBuilder.METHOD,
-				JvmLengthRuntimeBuilder.DESC);
-		MethodrefConstant toGeneral = self(cp, selfClass, TO_GENERAL, TO_GENERAL_DESC);
-		MethodrefConstant aref1 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1_DESC);
-		MethodrefConstant aref2 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2_DESC);
-		MethodrefConstant arefN = self(cp, selfClass, JvmArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN_DESC);
-		MethodrefConstant aset1 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1_DESC);
-		MethodrefConstant aset2 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2_DESC);
-		MethodrefConstant asetN = self(cp, selfClass, JvmArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN_DESC);
-		MethodrefConstant arrayDims = self(cp, selfClass, JvmArrayRuntimeBuilder.DIMS,
-				JvmArrayRuntimeBuilder.DIMS_DESC);
-		MethodrefConstant arrayCheckRank = self(cp, selfClass, JvmArrayRuntimeBuilder.CHECK_RANK,
+		MethodRefEntry dbl = self(cp, selfClass, JvmNumericRuntimeBuilder.DBL, "(" + OBJ + ")" + OBJ);
+		MethodRefEntry lengthHelper = self(cp, selfClass, JvmLengthRuntimeBuilder.METHOD, JvmLengthRuntimeBuilder.DESC);
+		MethodRefEntry toGeneral = self(cp, selfClass, TO_GENERAL, TO_GENERAL_DESC);
+		MethodRefEntry aref1 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1_DESC);
+		MethodRefEntry aref2 = self(cp, selfClass, JvmArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2_DESC);
+		MethodRefEntry arefN = self(cp, selfClass, JvmArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN_DESC);
+		MethodRefEntry aset1 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1_DESC);
+		MethodRefEntry aset2 = self(cp, selfClass, JvmArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2_DESC);
+		MethodRefEntry asetN = self(cp, selfClass, JvmArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN_DESC);
+		MethodRefEntry arrayDims = self(cp, selfClass, JvmArrayRuntimeBuilder.DIMS, JvmArrayRuntimeBuilder.DIMS_DESC);
+		MethodRefEntry arrayCheckRank = self(cp, selfClass, JvmArrayRuntimeBuilder.CHECK_RANK,
 				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
-		MethodrefConstant ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
+		MethodRefEntry ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
 				JvmOperandTypeRuntime.CK_BOUND_DESC);
-		MethodrefConstant bf16Value = self(cp, selfClass, BF16_VALUE, BF16_VALUE_DESC);
-		MethodrefConstant bf16Bits = self(cp, selfClass, BF16_BITS, BF16_BITS_DESC);
-		MethodrefConstant bf16Print = self(cp, selfClass, BF16_PRINT, BF16_PRINT_DESC);
-		Quantized qm = quantized ? new Quantized(cp.addClass(cp.addUtf8("[B")),
+		MethodRefEntry bf16Value = self(cp, selfClass, BF16_VALUE, BF16_VALUE_DESC);
+		MethodRefEntry bf16Bits = self(cp, selfClass, BF16_BITS, BF16_BITS_DESC);
+		MethodRefEntry bf16Print = self(cp, selfClass, BF16_PRINT, BF16_PRINT_DESC);
+		Quantized qm = quantized ? new Quantized(cp.classEntry("[B"),
 				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.AREF1,
 						JvmQuantizedMatrixRuntimeBuilder.BINARY_DESC),
 				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.AREF2,
@@ -268,8 +257,8 @@ final class JvmFloatArrayRuntimeBuilder {
 		return methods;
 	}
 
-	private static MethodrefConstant self(ConstantPool cp, ClassConstant selfClass, String name, String desc) {
-		return cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	private static MethodRefEntry self(ConstantPool cp, ClassEntry selfClass, String name, String desc) {
+		return cp.methodRef(selfClass, name, desc);
 	}
 
 	// _fvToGeneral(o): convert a packed array into an equivalent general array (an
@@ -279,27 +268,27 @@ final class JvmFloatArrayRuntimeBuilder {
 	// array (the print/length dispatch tests instanceof first), so it dispatches the
 	// three widths with no general fallback. Locals: 0=o, 1=d (array), 2=rank, 3=off,
 	// 4=total, 5=dimsArr, 6=list, 7=k, 8=f.
-	private static ArrayMethod buildToGeneral(ConstantPool cp, String name, Refs refs, ClassConstant arrayListClass,
-			ClassConstant objectClass, MethodrefConstant alInit, MethodrefConstant alAdd, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf, @Nullable MethodrefConstant floatValueOf,
-			@Nullable MethodrefConstant bf16Print, @Nullable MethodrefConstant materialize) {
-		JvmAsm a = new JvmAsm();
+	private static ArrayMethod buildToGeneral(ConstantPool cp, String name, Refs refs, ClassEntry arrayListClass,
+			ClassEntry objectClass, MethodRefEntry alInit, MethodRefEntry alAdd, MethodRefEntry longValueOf,
+			MethodRefEntry doubleValueOf, @Nullable MethodRefEntry floatValueOf, @Nullable MethodRefEntry bf16Print,
+			@Nullable MethodRefEntry materialize) {
+		MethodCode a = new MethodCode();
 		// --gpu: every element is about to be read; a result the device still holds comes
 		// home first. Once, for the whole array, ahead of the loop.
 		emitMaterialize(a, 0, materialize);
 		for (int i = 0; i < WIDTHS.length; i++) {
 			JvmPackedFloatWidth w = WIDTHS[i];
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			if (i < WIDTHS.length - 1) {
 				a.aload(0);
 				a.instanceOf(refs.arrayClass(w));
-				a.branch(Opcode.IFEQ, next);
+				a.ifeq(next);
 			}
 			emitToGeneralBody(a, w, refs, arrayListClass, objectClass, alInit, alAdd, longValueOf, doubleValueOf,
 					floatValueOf, bf16Print);
-			a.bind(next);
+			a.labelBinding(next);
 		}
-		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(TO_GENERAL_DESC), 8, 9, a.finish());
+		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(TO_GENERAL_DESC), a);
 	}
 
 	/**
@@ -308,7 +297,7 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * stub's backing -- so the local is rebound to it and every read below sees the
 	 * bytes.
 	 */
-	private static void emitMaterialize(JvmAsm a, int local, @Nullable MethodrefConstant materialize) {
+	private static void emitMaterialize(MethodCode a, int local, @Nullable MethodRefEntry materialize) {
 		if (materialize != null) {
 			a.aload(local);
 			a.invokestatic(materialize);
@@ -319,10 +308,9 @@ final class JvmFloatArrayRuntimeBuilder {
 	// floatValueOf/bf16Print non-null select the print-only boxing: a single-float
 	// element is boxed as a Float (no widening) and a bfloat16 element as its shortest
 	// round-tripping Float, so the renderer can spell each at its own width.
-	private static void emitToGeneralBody(JvmAsm a, JvmPackedFloatWidth w, Refs refs, ClassConstant arrayListClass,
-			ClassConstant objectClass, MethodrefConstant alInit, MethodrefConstant alAdd, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf, @Nullable MethodrefConstant floatValueOf,
-			@Nullable MethodrefConstant bf16Print) {
+	private static void emitToGeneralBody(MethodCode a, JvmPackedFloatWidth w, Refs refs, ClassEntry arrayListClass,
+			ClassEntry objectClass, MethodRefEntry alInit, MethodRefEntry alAdd, MethodRefEntry longValueOf,
+			MethodRefEntry doubleValueOf, @Nullable MethodRefEntry floatValueOf, @Nullable MethodRefEntry bf16Print) {
 		int o = 0, d = 1, rank = 2, off = 3, total = 4, dimsArr = 5, list = 6, k = 7, f = 8;
 		a.aload(o);
 		a.checkcast(refs.arrayClass(w));
@@ -336,56 +324,56 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(d);
 		a.arraylength();
 		a.iload(off);
-		a.op(Opcode.ISUB);
+		a.isub();
 		a.istore(total);
 		a.iload(rank);
 		a.anewarray(objectClass);
 		a.astore(dimsArr);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int kLoop = a.label();
-		int kDone = a.label();
-		a.bind(kLoop);
+		MethodCode.Label kLoop = a.newLabel();
+		MethodCode.Label kDone = a.newLabel();
+		a.labelBinding(kLoop);
 		a.iload(k);
 		a.iload(rank);
-		a.branch(Opcode.IF_ICMPGE, kDone);
+		a.if_icmpge(kDone);
 		a.aload(dimsArr);
 		a.iload(k);
 		a.aload(d);
 		a.iload(k);
 		w.loadDim(a);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(longValueOf);
 		a.aastore();
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, kLoop);
-		a.bind(kDone);
-		a.anew(arrayListClass);
+		a.goto_(kLoop);
+		a.labelBinding(kDone);
+		a.new_(arrayListClass);
 		a.dup();
 		a.invokespecial(alInit);
 		a.astore(list);
 		a.aload(list);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(dimsArr);
 		a.aastore();
 		a.invokevirtual(alAdd);
 		a.pop();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(f);
-		int fLoop = a.label();
-		int fDone = a.label();
-		a.bind(fLoop);
+		MethodCode.Label fLoop = a.newLabel();
+		MethodCode.Label fDone = a.newLabel();
+		a.labelBinding(fLoop);
 		a.iload(f);
 		a.iload(total);
-		a.branch(Opcode.IF_ICMPGE, fDone);
+		a.if_icmpge(fDone);
 		a.aload(list);
 		a.aload(d);
 		a.iload(off);
 		a.iload(f);
-		a.op(Opcode.IADD);
+		a.iadd();
 		if (w == SINGLE && floatValueOf != null) {
 			a.faload();
 			a.invokestatic(floatValueOf);
@@ -401,8 +389,8 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.invokevirtual(alAdd);
 		a.pop();
 		a.iinc(f, 1);
-		a.branch(Opcode.GOTO, fLoop);
-		a.bind(fDone);
+		a.goto_(fLoop);
+		a.labelBinding(fDone);
 		a.aload(list);
 		a.areturn();
 	}
@@ -413,18 +401,18 @@ final class JvmFloatArrayRuntimeBuilder {
 	// (areturn) on every path.
 	private interface Body {
 
-		void emit(JvmAsm a, JvmPackedFloatWidth w);
+		void emit(MethodCode a, JvmPackedFloatWidth w);
 
 	}
 
-	private static void emitWidthDispatch(JvmAsm a, Refs refs, int arr, Body body) {
+	private static void emitWidthDispatch(MethodCode a, Refs refs, int arr, Body body) {
 		for (JvmPackedFloatWidth w : WIDTHS) {
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.aload(arr);
 			a.instanceOf(refs.arrayClass(w));
-			a.branch(Opcode.IFEQ, next);
+			a.ifeq(next);
 			body.emit(a, w);
-			a.bind(next);
+			a.labelBinding(next);
 		}
 	}
 
@@ -435,35 +423,35 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * slot 0 is not that vector's tag. Nothing when no quantized matrix can exist in the
 	 * program, so such a program's helpers keep their bytes.
 	 */
-	private static void emitQuantizedArm(JvmAsm a, Refs refs, int arr, java.util.function.Consumer<Quantized> body) {
+	private static void emitQuantizedArm(MethodCode a, Refs refs, int arr,
+			java.util.function.Consumer<Quantized> body) {
 		Quantized qm = refs.quantized();
 		if (qm == null) {
 			return;
 		}
-		int next = a.label();
+		MethodCode.Label next = a.newLabel();
 		a.aload(arr);
 		a.instanceOf(qm.byteArrayClass());
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		if (qm.octets()) {
 			a.aload(arr);
 			a.checkcast(qm.byteArrayClass());
-			a.iconst(0);
+			a.loadConstant(0);
 			a.baload();
-			a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.branch(Opcode.IF_ICMPEQ, next);
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.if_icmpeq(next);
 		}
 		body.accept(qm);
-		a.bind(next);
+		a.labelBinding(next);
 	}
 
 	// _fvAref1(arr, i): packed -> Double.valueOf(d[off + i]), i checked against the
 	// total size (d.length - off); else _aref1. Serves rank-1 aref and row-major-aref
 	// (rank read from the header). Locals: 0=arr, 1=i, 2=d, 3=rank, 4=off.
-	private static ArrayMethod buildAref1(ConstantPool cp, Refs refs, ClassConstant longClass,
-			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant aref1,
-			@Nullable MethodrefConstant materialize) {
+	private static ArrayMethod buildAref1(ConstantPool cp, Refs refs, ClassEntry longClass, MethodRefEntry longIntValue,
+			MethodRefEntry doubleValueOf, MethodRefEntry aref1, @Nullable MethodRefEntry materialize) {
 		int arr = 0, i = 1, d = 2, rank = 3, off = 4;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// --gpu: the element read below must see the device's bytes if it holds them.
 		emitMaterialize(a, arr, materialize);
 		emitQuantizedArm(a, refs, arr, qm -> {
@@ -485,7 +473,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(d);
 			asm.iload(off);
 			emitFlatBounded(asm, refs, i, d, off);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			w.loadElem(asm, refs.bf16Value());
 			asm.invokestatic(doubleValueOf);
 			asm.areturn();
@@ -494,17 +482,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(i);
 		a.invokestatic(aref1);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 5, 5, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), a);
 	}
 
 	// _fvAref2(arr, i, j): packed -> Double.valueOf(d[off + i * cols + j]) with
 	// cols = dim 1, i and j each checked against its own dimension; else _aref2.
 	// Locals: 0=arr, 1=i, 2=j, 3=d, 4=rank, 5=cols.
-	private static ArrayMethod buildAref2(ConstantPool cp, Refs refs, ClassConstant longClass,
-			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant aref2,
-			@Nullable MethodrefConstant materialize) {
+	private static ArrayMethod buildAref2(ConstantPool cp, Refs refs, ClassEntry longClass, MethodRefEntry longIntValue,
+			MethodRefEntry doubleValueOf, MethodRefEntry aref2, @Nullable MethodRefEntry materialize) {
 		int arr = 0, i = 1, j = 2, d = 3, rank = 4, cols = 5;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitMaterialize(a, arr, materialize);
 		emitQuantizedArm(a, refs, arr, qm -> {
 			a.aload(arr);
@@ -521,14 +508,14 @@ final class JvmFloatArrayRuntimeBuilder {
 			w.loadRank(asm);
 			asm.istore(rank);
 			asm.aload(d);
-			asm.iconst(1);
+			asm.loadConstant(1);
 			w.loadDim(asm);
 			asm.istore(cols);
 			asm.aload(d);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
 			emitFlat2Bounded(asm, w, refs, i, j, d, cols);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			w.loadElem(asm, refs.bf16Value());
 			asm.invokestatic(doubleValueOf);
 			asm.areturn();
@@ -538,16 +525,16 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(j);
 		a.invokestatic(aref2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), 10, 6, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), a);
 	}
 
 	// _fvArefN(arr, subs): packed -> Horner flat index over the header dims; else _arefN.
 	// Locals: 0=arr, 1=subs, 2=d, 3=subsArr, 4=rank, 5=flat, 6=k.
-	private static ArrayMethod buildArefN(ConstantPool cp, Refs refs, ClassConstant objectArrayClass,
-			ClassConstant longClass, MethodrefConstant longIntValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant arefN, @Nullable MethodrefConstant materialize) {
+	private static ArrayMethod buildArefN(ConstantPool cp, Refs refs, ClassEntry objectArrayClass, ClassEntry longClass,
+			MethodRefEntry longIntValue, MethodRefEntry doubleValueOf, MethodRefEntry arefN,
+			@Nullable MethodRefEntry materialize) {
 		int arr = 0, subs = 1, d = 2, subsArr = 3, rank = 4, flat = 5, k = 6;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitMaterialize(a, arr, materialize);
 		emitQuantizedArm(a, refs, arr, qm -> {
 			a.aload(arr);
@@ -570,7 +557,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.iload(rank);
 			w.emitDataOffset(asm);
 			asm.iload(flat);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			w.loadElem(asm, refs.bf16Value());
 			asm.invokestatic(doubleValueOf);
 			asm.areturn();
@@ -579,58 +566,59 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(subs);
 		a.invokestatic(arefN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), 10, 7, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), a);
 	}
 
 	// Pushes the subscript in local i checked against the flat bound d.length - off,
 	// the total size: the index as an int (_ckBound, JvmOperandTypeRuntime).
-	private static void emitFlatBounded(JvmAsm a, Refs refs, int i, int d, int off) {
+	private static void emitFlatBounded(MethodCode a, Refs refs, int i, int d, int off) {
 		a.aload(i);
 		a.aload(d);
 		a.arraylength();
 		a.iload(off);
-		a.op(Opcode.ISUB);
+		a.isub();
 		a.invokestatic(refs.ckBound());
 	}
 
 	// Pushes i * cols + j, each subscript checked against its own dimension (dim 0 read
 	// from the header, cols in its local) so a column past its dimension is out of
 	// range rather than folding into the next row.
-	private static void emitFlat2Bounded(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int i, int j, int d, int cols) {
+	private static void emitFlat2Bounded(MethodCode a, JvmPackedFloatWidth w, Refs refs, int i, int j, int d,
+			int cols) {
 		a.aload(i);
 		a.aload(d);
-		a.iconst(0);
+		a.loadConstant(0);
 		w.loadDim(a);
 		a.invokestatic(refs.ckBound());
 		a.iload(cols);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.aload(j);
 		a.iload(cols);
 		a.invokestatic(refs.ckBound());
-		a.op(Opcode.IADD);
+		a.iadd();
 	}
 
 	// flat = 0; for k in 0..rank-1: flat = flat * dims[k] + subs[k], each subscript
 	// checked against its own dimension. Starting the fold at 0 rather than at subs[0]
 	// is what makes a RANK-0 packed array (no subscripts) answer the flat index 0 of its
 	// single element.
-	private static void emitHornerFlatIndex(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int d, int subsArr, int rank,
-			int flat, int k) {
-		a.iconst(0);
+	private static void emitHornerFlatIndex(MethodCode a, JvmPackedFloatWidth w, Refs refs, int d, int subsArr,
+			int rank, int flat, int k) {
+		a.loadConstant(0);
 		a.istore(flat);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int loop = a.label();
-		int done = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(k);
 		a.iload(rank);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.iload(flat);
 		a.aload(d);
 		a.iload(k);
 		w.loadDim(a);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.aload(subsArr);
 		a.iload(k);
 		a.aaload();
@@ -638,17 +626,17 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iload(k);
 		w.loadDim(a);
 		a.invokestatic(refs.ckBound());
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(flat);
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 	}
 
 	// The first half of the aset bodies: coerce val to a double in dval -- a non-real
 	// is the store's type-error, reported before an out-of-range subscript is.
-	private static void emitCoerce(JvmAsm a, int val, int dval, ClassConstant numberClass,
-			MethodrefConstant numberDoubleValue, MethodrefConstant dbl) {
+	private static void emitCoerce(MethodCode a, int val, int dval, ClassEntry numberClass,
+			MethodRefEntry numberDoubleValue, MethodRefEntry dbl) {
 		a.aload(val);
 		a.invokestatic(dbl);
 		a.checkcast(numberClass);
@@ -658,8 +646,8 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	// The tail of the aset bodies: report the write to the device runtime (--gpu), store
 	// dval at idx, and return the value AS STORED.
-	private static void emitStoreReturn(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int d, int idx, int dval,
-			MethodrefConstant doubleValueOf, @Nullable MethodrefConstant written) {
+	private static void emitStoreReturn(MethodCode a, JvmPackedFloatWidth w, Refs refs, int d, int idx, int dval,
+			MethodRefEntry doubleValueOf, @Nullable MethodRefEntry written) {
 		if (written != null) {
 			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
 			// home first and is dropped, so the store lands on the array's real bytes --
@@ -686,19 +674,17 @@ final class JvmFloatArrayRuntimeBuilder {
 	// _fvAset1(arr, i, val): packed -> d[off + (int) i] = coerce(val), return the stored
 	// value (matching the interpreter, which returns the coerced -- and narrowed --
 	// value); else _aset1. Locals: 0=arr, 1=i, 2=val, 3=d, 4=rank, 5=idx, 6..7=dval.
-	private static ArrayMethod buildAset1(ConstantPool cp, Refs refs, ClassConstant longClass,
-			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant aset1,
-			@Nullable MethodrefConstant written) {
+	private static ArrayMethod buildAset1(ConstantPool cp, Refs refs, ClassEntry longClass, ClassEntry numberClass,
+			MethodRefEntry longIntValue, MethodRefEntry numberDoubleValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry dbl, MethodRefEntry aset1, @Nullable MethodRefEntry written) {
 		int arr = 0, i = 1, val = 2, d = 3, rank = 4, idx = 5, dval = 6;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
 		// interpreter's sentence, word for word.
-		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+		StringEntry immutable = cp.stringEntry(am.ik.rontolisp.LispNames.ASET
 				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
-		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry rtExForQuantized = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInitForQuantized = cp.methodRef(rtExForQuantized, "<init>", "(Ljava/lang/String;)V");
 		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
@@ -713,7 +699,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.istore(idx);
 			asm.iload(idx);
 			emitFlatBounded(asm, refs, i, d, idx);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			asm.istore(idx);
 			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
@@ -722,24 +708,22 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset1);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), 5, 8, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), a);
 	}
 
 	// _fvAset2(arr, i, j, val): packed store at i*cols+j; else _aset2.
 	// Locals: 0=arr, 1=i, 2=j, 3=val, 4=d, 5=rank, 6=cols, 7=idx, 8..9=dval.
-	private static ArrayMethod buildAset2(ConstantPool cp, Refs refs, ClassConstant longClass,
-			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant dbl, MethodrefConstant aset2,
-			@Nullable MethodrefConstant written) {
+	private static ArrayMethod buildAset2(ConstantPool cp, Refs refs, ClassEntry longClass, ClassEntry numberClass,
+			MethodRefEntry longIntValue, MethodRefEntry numberDoubleValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry dbl, MethodRefEntry aset2, @Nullable MethodRefEntry written) {
 		int arr = 0, i = 1, j = 2, val = 3, d = 4, rank = 5, cols = 6, idx = 7, dval = 8;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
 		// interpreter's sentence, word for word.
-		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+		StringEntry immutable = cp.stringEntry(am.ik.rontolisp.LispNames.ASET
 				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
-		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry rtExForQuantized = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInitForQuantized = cp.methodRef(rtExForQuantized, "<init>", "(Ljava/lang/String;)V");
 		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
@@ -750,13 +734,13 @@ final class JvmFloatArrayRuntimeBuilder {
 			w.loadRank(asm);
 			asm.istore(rank);
 			asm.aload(d);
-			asm.iconst(1);
+			asm.loadConstant(1);
 			w.loadDim(asm);
 			asm.istore(cols);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
 			emitFlat2Bounded(asm, w, refs, i, j, d, cols);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			asm.istore(idx);
 			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
@@ -766,25 +750,23 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), 10, 10, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), a);
 	}
 
 	// _fvAsetN(arr, subs, val): packed Horner store; else _asetN.
 	// Locals: 0=arr, 1=subs, 2=val, 3=d, 4=subsArr, 5=rank, 6=flat, 7=k, 8=idx,
 	// 9..10=dval.
-	private static ArrayMethod buildAsetN(ConstantPool cp, Refs refs, ClassConstant objectArrayClass,
-			ClassConstant longClass, ClassConstant numberClass, MethodrefConstant longIntValue,
-			MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant dbl,
-			MethodrefConstant asetN, @Nullable MethodrefConstant written) {
+	private static ArrayMethod buildAsetN(ConstantPool cp, Refs refs, ClassEntry objectArrayClass, ClassEntry longClass,
+			ClassEntry numberClass, MethodRefEntry longIntValue, MethodRefEntry numberDoubleValue,
+			MethodRefEntry doubleValueOf, MethodRefEntry dbl, MethodRefEntry asetN, @Nullable MethodRefEntry written) {
 		int arr = 0, subs = 1, val = 2, d = 3, subsArr = 4, rank = 5, flat = 6, k = 7, idx = 8, dval = 9;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// A quantized matrix has no slot to store into (.kb/quantized-matrix.md): the
 		// interpreter's sentence, word for word.
-		ConstantPool.StringConstant immutable = cp.addString(am.ik.rontolisp.LispNames.ASET
+		StringEntry immutable = cp.stringEntry(am.ik.rontolisp.LispNames.ASET
 				+ ": a quantized matrix is immutable (dequantize it into a packed float array to change it)");
-		ClassConstant rtExForQuantized = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInitForQuantized = cp.addMethodref(rtExForQuantized,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry rtExForQuantized = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInitForQuantized = cp.methodRef(rtExForQuantized, "<init>", "(Ljava/lang/String;)V");
 		emitQuantizedArm(a, refs, arr, qm -> emitThrow(a, rtExForQuantized, rtExInitForQuantized, immutable));
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
 			asm.aload(arr);
@@ -801,7 +783,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.iload(rank);
 			w.emitDataOffset(asm);
 			asm.iload(flat);
-			asm.op(Opcode.IADD);
+			asm.iadd();
 			asm.istore(idx);
 			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
@@ -810,15 +792,15 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(asetN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), 10, 11, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), a);
 	}
 
 	// _fvDims(arr): packed -> a fresh cons list of the header dims as Longs; else
 	// _arrayDims. Locals: 0=arr, 1=d, 2=rank, 3=result, 4=j.
-	private static ArrayMethod buildDims(ConstantPool cp, Refs refs, ClassConstant objectClass,
-			MethodrefConstant longValueOf, MethodrefConstant arrayDims) {
+	private static ArrayMethod buildDims(ConstantPool cp, Refs refs, ClassEntry objectClass, MethodRefEntry longValueOf,
+			MethodRefEntry arrayDims) {
 		int arr = 0, d = 1, rank = 2, result = 3, j = 4;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitQuantizedArm(a, refs, arr, qm -> {
 			a.aload(arr);
 			a.invokestatic(qm.dims());
@@ -831,64 +813,61 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
-			asm.aconstNull();
+			asm.aconst_null();
 			asm.astore(result);
 			asm.iload(rank);
-			asm.iconst(1);
-			asm.op(Opcode.ISUB);
+			asm.loadConstant(1);
+			asm.isub();
 			asm.istore(j);
-			int loop = asm.label();
-			int done = asm.label();
-			asm.bind(loop);
+			MethodCode.Label loop = asm.newLabel();
+			MethodCode.Label done = asm.newLabel();
+			asm.labelBinding(loop);
 			asm.iload(j);
-			asm.branch(Opcode.IFLT, done);
-			asm.iconst(2);
+			asm.iflt(done);
+			asm.loadConstant(2);
 			asm.anewarray(objectClass);
 			asm.dup();
-			asm.iconst(0);
+			asm.loadConstant(0);
 			asm.aload(d);
 			asm.iload(j);
 			w.loadDim(asm);
-			asm.op(Opcode.I2L);
+			asm.i2l();
 			asm.invokestatic(longValueOf);
 			asm.aastore();
 			asm.dup();
-			asm.iconst(1);
+			asm.loadConstant(1);
 			asm.aload(result);
 			asm.aastore();
 			asm.astore(result);
 			asm.iinc(j, -1);
-			asm.branch(Opcode.GOTO, loop);
-			asm.bind(done);
+			asm.goto_(loop);
+			asm.labelBinding(done);
 			asm.aload(result);
 			asm.areturn();
 		});
 		a.aload(arr);
 		a.invokestatic(arrayDims);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), 9, 5, a.finish());
+		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), a);
 	}
 
 	// _fvCheckRank(arr, given): packed -> the header rank (loaded the same way DIMS
 	// reads it) compared against `given`; else delegate to _arrayCheckRank. Locals:
 	// 0=arr, 1=given, 2=rank, 3=giv.
-	private static ArrayMethod buildCheckRank(ConstantPool cp, Refs refs, ClassConstant longClass,
-			MethodrefConstant longIntValue, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			MethodrefConstant checkRankDelegate) {
-		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant sbInit = cp.addMethodref(sbClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbAppendInt = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+	private static ArrayMethod buildCheckRank(ConstantPool cp, Refs refs, ClassEntry longClass,
+			MethodRefEntry longIntValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry checkRankDelegate) {
+		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "()V");
+		MethodRefEntry sbAppendStr = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbAppendInt = cp.methodRef(sbClass, "append", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
 		int arr = 0, given = 1, rank = 2, giv = 3;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitQuantizedArm(a, refs, arr, qm -> {
 			a.aload(arr);
 			a.checkcast(qm.byteArrayClass());
-			a.iconst(4);
+			a.loadConstant(4);
 			a.invokestatic(qm.qmInt());
 			a.istore(rank);
 			emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt,
@@ -906,43 +885,42 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), 6, 4, a.finish());
+		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), a);
 	}
 
 	// Shared tail of _fvCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
 	// against the already-computed actual rank (rankSlot); a match returns arr (arrSlot)
 	// unchanged, a mismatch throws the "aref: expected N subscripts, got M" text
 	// LispFloatArray#flatIndex uses in the interpreter.
-	private static void emitRankCheckAndReturn(ConstantPool cp, JvmAsm a, ClassConstant longClass,
-			MethodrefConstant longIntValue, ClassConstant sbClass, MethodrefConstant sbInit,
-			MethodrefConstant sbAppendStr, MethodrefConstant sbAppendInt, MethodrefConstant sbToString,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, int arrSlot, int givenSlot, int rankSlot,
-			int givSlot) {
+	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
+			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
+			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
 		a.aload(givenSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(givSlot);
-		int ok = a.label();
+		MethodCode.Label ok = a.newLabel();
 		a.iload(rankSlot);
 		a.iload(givSlot);
-		a.branch(Opcode.IF_ICMPEQ, ok);
-		a.anew(rtExClass);
+		a.if_icmpeq(ok);
+		a.new_(rtExClass);
 		a.dup();
-		a.anew(sbClass);
+		a.new_(sbClass);
 		a.dup();
 		a.invokespecial(sbInit);
-		a.ldcString(cp.addString("aref: expected "));
+		a.ldc(cp.stringEntry("aref: expected "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldcString(cp.addString(" subscripts, got "));
+		a.ldc(cp.addString(" subscripts, got ").entry());
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
 		a.invokevirtual(sbToString);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
-		a.bind(ok);
+		a.athrow();
+		a.labelBinding(ok);
 		a.aload(arrSlot);
 		a.areturn();
 	}
@@ -950,17 +928,17 @@ final class JvmFloatArrayRuntimeBuilder {
 	// _fvLength(arr): packed rank-1 -> Long.valueOf(count); packed rank-n -> delegate via
 	// _length(_fvToGeneral(arr)) for exact parity with the general array; else _length.
 	// Locals: 0=arr, 1=d, 2=rank.
-	private static ArrayMethod buildLength(ConstantPool cp, Refs refs, MethodrefConstant longValueOf,
-			MethodrefConstant toGeneral, MethodrefConstant lengthHelper) {
+	private static ArrayMethod buildLength(ConstantPool cp, Refs refs, MethodRefEntry longValueOf,
+			MethodRefEntry toGeneral, MethodRefEntry lengthHelper) {
 		int arr = 0, d = 1, rank = 2;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitQuantizedArm(a, refs, arr, qm -> {
 			a.aload(arr);
 			a.invokestatic(qm.length());
 			a.areturn();
 		});
 		emitWidthDispatch(a, refs, arr, (asm, w) -> {
-			int rankN = asm.label();
+			MethodCode.Label rankN = asm.newLabel();
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
 			asm.astore(d);
@@ -968,19 +946,19 @@ final class JvmFloatArrayRuntimeBuilder {
 			w.loadRank(asm);
 			asm.istore(rank);
 			asm.iload(rank);
-			asm.iconst(1);
-			asm.branch(Opcode.IF_ICMPNE, rankN);
+			asm.loadConstant(1);
+			asm.if_icmpne(rankN);
 			// rank 1: count = dim 0, the header's one dimension -- read from the header
 			// and not from the Java length, because under --gpu a result stub is the
 			// header alone (.kb/gpu.md, "Lazy results, and the result that has no host
 			// array").
 			asm.aload(d);
-			asm.iconst(0);
+			asm.loadConstant(0);
 			w.loadDim(asm);
-			asm.op(Opcode.I2L);
+			asm.i2l();
 			asm.invokestatic(longValueOf);
 			asm.areturn();
-			asm.bind(rankN);
+			asm.labelBinding(rankN);
 			asm.aload(arr);
 			asm.invokestatic(toGeneral);
 			asm.invokestatic(lengthHelper);
@@ -989,7 +967,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(arr);
 		a.invokestatic(lengthHelper);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(LENGTH_DESC), 6, 3, a.finish());
+		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(LENGTH_DESC), a);
 	}
 
 	// _fvMake / _sfvMake / _bfvMake(dims, init): build a packed array of the width with a
@@ -1000,100 +978,99 @@ final class JvmFloatArrayRuntimeBuilder {
 	// 1=init, 2..3=initVal, 4=rank, 5=total, 6=arr, 7=cur, 8=k, 9=off, 10=i, 11=dim,
 	// 12=initBits (bfloat16: the pattern, narrowed once rather than per element).
 	private static ArrayMethod buildMake(ConstantPool cp, JvmPackedFloatWidth w, String name, Refs refs,
-			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant numberClass,
-			MethodrefConstant longIntValue, MethodrefConstant numberDoubleValue, MethodrefConstant dbl) {
+			ClassEntry objectArrayClass, ClassEntry longClass, ClassEntry numberClass, MethodRefEntry longIntValue,
+			MethodRefEntry numberDoubleValue, MethodRefEntry dbl) {
 		int dims = 0, init = 1, initVal = 2, rank = 4, total = 5, arr = 6, cur = 7, k = 8, off = 9, i = 10, dim = 11,
 				initBits = 12;
-		MethodrefConstant arraysFillShort = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
-				cp.addNameAndType(cp.addUtf8("fill"), cp.addUtf8("([SIIS)V")));
-		JvmAsm a = new JvmAsm();
+		MethodRefEntry arraysFillShort = cp.methodRef(cp.classEntry("java/util/Arrays"), "fill", "([SIIS)V");
+		MethodCode a = new MethodCode();
 		// initVal = init == null ? 0.0 : ((Number) _dbl(init)).doubleValue()
-		int haveInit = a.label();
-		int initDone = a.label();
+		MethodCode.Label haveInit = a.newLabel();
+		MethodCode.Label initDone = a.newLabel();
 		a.aload(init);
-		a.branch(Opcode.IFNONNULL, haveInit);
-		a.op(Opcode.DCONST_0);
+		a.ifnonnull(haveInit);
+		a.dconst_0();
 		a.dstore(initVal);
-		a.branch(Opcode.GOTO, initDone);
-		a.bind(haveInit);
+		a.goto_(initDone);
+		a.labelBinding(haveInit);
 		a.aload(init);
 		a.invokestatic(dbl);
 		a.checkcast(numberClass);
 		a.invokevirtual(numberDoubleValue);
 		a.dstore(initVal);
-		a.bind(initDone);
+		a.labelBinding(initDone);
 		if (w == BFLOAT16) {
 			a.dload(initVal);
 			a.invokestatic(refs.bf16Bits());
 			a.istore(initBits);
 		}
 		// parse dims
-		int listCase = a.label();
-		int fill = a.label();
+		MethodCode.Label listCase = a.newLabel();
+		MethodCode.Label fill = a.newLabel();
 		a.aload(dims);
 		a.instanceOf(longClass);
-		a.branch(Opcode.IFEQ, listCase);
+		a.ifeq(listCase);
 		// rank-1 shorthand: total = (int) dims; arr = new [width][off + total];
 		// arr[0]=1; dim 0 = total; off = dataOffset(1)
 		a.aload(dims);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(total);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(rank);
-		a.iconst(w.dataOffset(1));
+		a.loadConstant(w.dataOffset(1));
 		a.istore(off);
 		a.iload(off);
 		a.iload(total);
-		a.op(Opcode.IADD);
+		a.iadd();
 		w.newBacking(a);
 		a.astore(arr);
 		a.aload(arr);
-		a.iconst(1);
+		a.loadConstant(1);
 		w.storeRank(a);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
 		a.iload(total);
 		a.istore(dim);
 		w.storeDim(a, arr, k, dim);
-		a.branch(Opcode.GOTO, fill);
+		a.goto_(fill);
 		// cons list of dims: count rank + product, then allocate and write header
-		a.bind(listCase);
-		a.iconst(0);
+		a.labelBinding(listCase);
+		a.loadConstant(0);
 		a.istore(rank);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(total);
 		a.aload(dims);
 		a.astore(cur);
-		int countLoop = a.label();
-		int countDone = a.label();
-		a.bind(countLoop);
+		MethodCode.Label countLoop = a.newLabel();
+		MethodCode.Label countDone = a.newLabel();
+		a.labelBinding(countLoop);
 		a.aload(cur);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, countDone);
+		a.ifeq(countDone);
 		a.iinc(rank, 1);
 		a.iload(total);
 		a.aload(cur);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.istore(total);
 		a.aload(cur);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(cur);
-		a.branch(Opcode.GOTO, countLoop);
-		a.bind(countDone);
+		a.goto_(countLoop);
+		a.labelBinding(countDone);
 		a.iload(rank);
 		w.emitDataOffset(a);
 		a.istore(off);
 		a.iload(off);
 		a.iload(total);
-		a.op(Opcode.IADD);
+		a.iadd();
 		w.newBacking(a);
 		a.astore(arr);
 		a.aload(arr);
@@ -1102,17 +1079,17 @@ final class JvmFloatArrayRuntimeBuilder {
 		// write the dims into the header
 		a.aload(dims);
 		a.astore(cur);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int dimLoop = a.label();
-		int dimDone = a.label();
-		a.bind(dimLoop);
+		MethodCode.Label dimLoop = a.newLabel();
+		MethodCode.Label dimDone = a.newLabel();
+		a.labelBinding(dimLoop);
 		a.aload(cur);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, dimDone);
+		a.ifeq(dimDone);
 		a.aload(cur);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
@@ -1120,14 +1097,14 @@ final class JvmFloatArrayRuntimeBuilder {
 		w.storeDim(a, arr, k, dim);
 		a.aload(cur);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(cur);
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, dimLoop);
-		a.bind(dimDone);
+		a.goto_(dimLoop);
+		a.labelBinding(dimDone);
 		// fill data slots with initVal
-		a.bind(fill);
+		a.labelBinding(fill);
 		if (w == BFLOAT16) {
 			// Arrays.fill(arr, off, off + total, (short) initBits): the pattern was
 			// narrowed once above, so a checkpoint-sized allocation does not pay for
@@ -1136,33 +1113,33 @@ final class JvmFloatArrayRuntimeBuilder {
 			a.iload(off);
 			a.iload(off);
 			a.iload(total);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.iload(initBits);
-			a.op(Opcode.I2S);
+			a.i2s();
 			a.invokestatic(arraysFillShort);
 		}
 		else {
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(i);
-			int fillLoop = a.label();
-			int fillDone = a.label();
-			a.bind(fillLoop);
+			MethodCode.Label fillLoop = a.newLabel();
+			MethodCode.Label fillDone = a.newLabel();
+			a.labelBinding(fillLoop);
 			a.iload(i);
 			a.iload(total);
-			a.branch(Opcode.IF_ICMPGE, fillDone);
+			a.if_icmpge(fillDone);
 			a.aload(arr);
 			a.iload(off);
 			a.iload(i);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.dload(initVal);
 			w.storeElem(a, refs.bf16Bits());
 			a.iinc(i, 1);
-			a.branch(Opcode.GOTO, fillLoop);
-			a.bind(fillDone);
+			a.goto_(fillLoop);
+			a.labelBinding(fillDone);
 		}
 		a.aload(arr);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(MAKE_DESC), 6, 13, a.finish());
+		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(MAKE_DESC), a);
 	}
 
 	// _fvElementType(arr): packed double[] -> the symbol double-float; packed float[] ->
@@ -1170,24 +1147,24 @@ final class JvmFloatArrayRuntimeBuilder {
 	// (general arrays are element-type t, matching the lite expandArrayElementType).
 	// Locals: 0=arr.
 	private static ArrayMethod buildElementType(ConstantPool cp, Refs refs) {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitQuantizedArm(a, refs, 0, qm -> {
-			a.ldcString(cp.addString(am.ik.rontolisp.LispNames.Q8_0));
+			a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.Q8_0));
 			a.areturn();
 		});
 		emitWidthDispatch(a, refs, 0, (asm, w) -> {
-			asm.ldcString(cp.addString(switch (w) {
+			asm.ldc(cp.stringEntry(switch (w) {
 				case DOUBLE -> am.ik.rontolisp.LispNames.DOUBLE_FLOAT;
 				case SINGLE -> am.ik.rontolisp.LispNames.SINGLE_FLOAT;
 				case BFLOAT16 -> am.ik.rontolisp.LispNames.BFLOAT16;
 			}));
 			asm.areturn();
 		});
-		a.ldcString(cp.addString("T"));
+		a.ldc(cp.stringEntry("T"));
 		a.areturn();
 		// 2: the quantized arm's tag test (a byte[] slot and the tag) where an octet
 		// vector can exist.
-		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 2, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), a);
 	}
 
 	// _fvRequireGeneral(o): the fill-pointer-surface guard for a packed float array -- a
@@ -1195,16 +1172,16 @@ final class JvmFloatArrayRuntimeBuilder {
 	// operations reject it with a clear error (mirroring the interpreter's
 	// requireGeneralArray and _ivRequireGeneral's packed-integer-vector twin); any other
 	// value passes through unchanged. Locals: 0=o.
-	private static ArrayMethod buildRequireGeneral(ConstantPool cp, Refs refs, ClassConstant rtExClass,
-			MethodrefConstant rtExInit) {
-		JvmAsm a = new JvmAsm();
-		ConstantPool.StringConstant message = cp.addString("not applicable to a packed float array");
-		ConstantPool.StringConstant quantizedMessage = cp.addString("not applicable to a quantized matrix");
+	private static ArrayMethod buildRequireGeneral(ConstantPool cp, Refs refs, ClassEntry rtExClass,
+			MethodRefEntry rtExInit) {
+		MethodCode a = new MethodCode();
+		StringEntry message = cp.stringEntry("not applicable to a packed float array");
+		StringEntry quantizedMessage = cp.stringEntry("not applicable to a quantized matrix");
 		emitQuantizedArm(a, refs, 0, qm -> emitThrow(a, rtExClass, rtExInit, quantizedMessage));
 		emitWidthDispatch(a, refs, 0, (asm, w) -> emitThrow(asm, rtExClass, rtExInit, message));
 		a.aload(0);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), 3, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), a);
 	}
 
 	// _bf16Value(bits): BFloat16.value(int), instruction for instruction. Locals:
@@ -1215,54 +1192,52 @@ final class JvmFloatArrayRuntimeBuilder {
 	// return Double.longBitsToDouble(((long) (b & 0x8000) << 48) | EXPONENT_MASK |
 	// ((long) (b & 0x7f) << 45));
 	// return Float.intBitsToFloat(b << 16); -- f2d is exact here: not a NaN.
-	private static ArrayMethod buildBf16Value(ConstantPool cp, ClassConstant doubleClass, ClassConstant floatClass) {
-		MethodrefConstant longBitsToDouble = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("longBitsToDouble"), cp.addUtf8("(J)D")));
-		MethodrefConstant intBitsToFloat = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("intBitsToFloat"), cp.addUtf8("(I)F")));
+	private static ArrayMethod buildBf16Value(ConstantPool cp, ClassEntry doubleClass, ClassEntry floatClass) {
+		MethodRefEntry longBitsToDouble = cp.methodRef(doubleClass, "longBitsToDouble", "(J)D");
+		MethodRefEntry intBitsToFloat = cp.methodRef(floatClass, "intBitsToFloat", "(I)F");
 		int bits = 0, b = 1;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		a.iload(bits);
 		JvmPackedFloatWidth.emitMaskU16(a);
 		a.istore(b);
-		int ordinary = a.label();
+		MethodCode.Label ordinary = a.newLabel();
 		a.iload(b);
-		a.iconst(0x7f80);
-		a.op(Opcode.IAND);
-		a.iconst(0x7f80);
-		a.branch(Opcode.IF_ICMPNE, ordinary);
+		a.loadConstant(0x7f80);
+		a.iand();
+		a.loadConstant(0x7f80);
+		a.if_icmpne(ordinary);
 		a.iload(b);
-		a.iconst(0x7f);
-		a.op(Opcode.IAND);
-		a.branch(Opcode.IFEQ, ordinary);
+		a.loadConstant(0x7f);
+		a.iand();
+		a.ifeq(ordinary);
 		// NaN: the sign and the payload's top seven bits carried across by hand
 		a.iload(b);
-		a.iconst(0x7fff);
-		a.iconst(1);
-		a.op(Opcode.IADD); // 0x8000, which iconst cannot encode as a positive sipush
-		a.op(Opcode.IAND);
+		a.loadConstant(0x7fff);
+		a.loadConstant(1);
+		a.iadd(); // 0x8000, which iconst cannot encode as a positive sipush
+		a.iand();
 		a.i2l();
-		a.iconst(48);
-		a.op(Opcode.LSHL);
-		a.ldc2Long(cp.addLong(EXPONENT_MASK));
-		a.op(Opcode.LOR);
+		a.loadConstant(48);
+		a.lshl();
+		a.ldc(cp.entries().longEntry(EXPONENT_MASK));
+		a.lor();
 		a.iload(b);
-		a.iconst(0x7f);
-		a.op(Opcode.IAND);
+		a.loadConstant(0x7f);
+		a.iand();
 		a.i2l();
-		a.iconst(45);
-		a.op(Opcode.LSHL);
-		a.op(Opcode.LOR);
+		a.loadConstant(45);
+		a.lshl();
+		a.lor();
 		a.invokestatic(longBitsToDouble);
-		a.op(Opcode.DRETURN);
-		a.bind(ordinary);
+		a.dreturn();
+		a.labelBinding(ordinary);
 		a.iload(b);
-		a.iconst(16);
-		a.op(Opcode.ISHL);
+		a.loadConstant(16);
+		a.ishl();
 		a.invokestatic(intBitsToFloat);
 		a.f2d();
-		a.op(Opcode.DRETURN);
-		return new ArrayMethod(cp.addUtf8(BF16_VALUE), cp.addUtf8(BF16_VALUE_DESC), 6, 2, a.finish());
+		a.dreturn();
+		return new ArrayMethod(cp.addUtf8(BF16_VALUE), cp.addUtf8(BF16_VALUE_DESC), a);
 	}
 
 	// _bf16Bits(value): BFloat16.bits(double) then bits(float), instruction for
@@ -1278,110 +1253,108 @@ final class JvmFloatArrayRuntimeBuilder {
 	// payload = (f >>> 16) & 0x7f;
 	// return (f >>> 16) & 0x8000 | 0x7f80 | (payload | ((payload - 1) >>> 31)); }
 	// return ((f + 0x7fff + ((f >>> 16) & 1)) >>> 16) & 0xffff;
-	private static ArrayMethod buildBf16Bits(ConstantPool cp, ClassConstant doubleClass, ClassConstant floatClass) {
-		MethodrefConstant doubleToRawLongBits = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("doubleToRawLongBits"), cp.addUtf8("(D)J")));
-		MethodrefConstant floatToRawIntBits = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("floatToRawIntBits"), cp.addUtf8("(F)I")));
+	private static ArrayMethod buildBf16Bits(ConstantPool cp, ClassEntry doubleClass, ClassEntry floatClass) {
+		MethodRefEntry doubleToRawLongBits = cp.methodRef(doubleClass, "doubleToRawLongBits", "(D)J");
+		MethodRefEntry floatToRawIntBits = cp.methodRef(floatClass, "floatToRawIntBits", "(F)I");
 		int value = 0, l = 2, f = 4, payload = 5;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		a.dload(value);
 		a.invokestatic(doubleToRawLongBits);
 		a.lstore(l);
-		int viaFloat = a.label();
+		MethodCode.Label viaFloat = a.newLabel();
 		a.lload(l);
-		a.ldc2Long(cp.addLong(EXPONENT_MASK));
-		a.op(Opcode.LAND);
-		a.ldc2Long(cp.addLong(EXPONENT_MASK));
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFNE, viaFloat);
+		a.ldc(cp.entries().longEntry(EXPONENT_MASK));
+		a.land();
+		a.ldc(cp.entries().longEntry(EXPONENT_MASK));
+		a.lcmp();
+		a.ifne(viaFloat);
 		a.lload(l);
-		a.ldc2Long(cp.addLong(MANTISSA_MASK));
-		a.op(Opcode.LAND);
-		a.op(Opcode.LCONST_0);
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFEQ, viaFloat);
+		a.ldc(cp.entries().longEntry(MANTISSA_MASK));
+		a.land();
+		a.lconst_0();
+		a.lcmp();
+		a.ifeq(viaFloat);
 		// a double NaN
 		a.lload(l);
-		a.iconst(45);
-		a.op(Opcode.LUSHR);
+		a.loadConstant(45);
+		a.lushr();
 		a.l2i();
-		a.iconst(0x7f);
-		a.op(Opcode.IAND);
+		a.loadConstant(0x7f);
+		a.iand();
 		a.istore(payload);
 		a.lload(l);
-		a.iconst(63);
-		a.op(Opcode.LUSHR);
+		a.loadConstant(63);
+		a.lushr();
 		a.l2i();
-		a.iconst(15);
-		a.op(Opcode.ISHL);
-		a.iconst(0x7f80);
-		a.op(Opcode.IOR);
+		a.loadConstant(15);
+		a.ishl();
+		a.loadConstant(0x7f80);
+		a.ior();
 		emitPayloadOrOne(a, payload);
-		a.op(Opcode.IOR);
-		a.op(Opcode.IRETURN);
-		a.bind(viaFloat);
+		a.ior();
+		a.ireturn();
+		a.labelBinding(viaFloat);
 		a.dload(value);
 		a.d2f();
 		a.invokestatic(floatToRawIntBits);
 		a.istore(f);
-		int roundToNearestEven = a.label();
+		MethodCode.Label roundToNearestEven = a.newLabel();
 		a.iload(f);
-		a.ldcInt(cp.addInteger(0x7f800000));
-		a.op(Opcode.IAND);
-		a.ldcInt(cp.addInteger(0x7f800000));
-		a.branch(Opcode.IF_ICMPNE, roundToNearestEven);
+		a.ldc(cp.entries().intEntry(0x7f800000));
+		a.iand();
+		a.ldc(cp.entries().intEntry(0x7f800000));
+		a.if_icmpne(roundToNearestEven);
 		a.iload(f);
-		a.ldcInt(cp.addInteger(0x007fffff));
-		a.op(Opcode.IAND);
-		a.branch(Opcode.IFEQ, roundToNearestEven);
+		a.ldc(cp.entries().intEntry(0x007fffff));
+		a.iand();
+		a.ifeq(roundToNearestEven);
 		// an f32 NaN (unreachable from a double that was not one, kept for the mirror)
 		a.iload(f);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.iconst(0x7f);
-		a.op(Opcode.IAND);
+		a.loadConstant(16);
+		a.iushr();
+		a.loadConstant(0x7f);
+		a.iand();
 		a.istore(payload);
 		a.iload(f);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.iconst(0x7fff);
-		a.iconst(1);
-		a.op(Opcode.IADD); // 0x8000
-		a.op(Opcode.IAND);
-		a.iconst(0x7f80);
-		a.op(Opcode.IOR);
+		a.loadConstant(16);
+		a.iushr();
+		a.loadConstant(0x7fff);
+		a.loadConstant(1);
+		a.iadd(); // 0x8000
+		a.iand();
+		a.loadConstant(0x7f80);
+		a.ior();
 		emitPayloadOrOne(a, payload);
-		a.op(Opcode.IOR);
-		a.op(Opcode.IRETURN);
-		a.bind(roundToNearestEven);
+		a.ior();
+		a.ireturn();
+		a.labelBinding(roundToNearestEven);
 		a.iload(f);
-		a.iconst(0x7fff);
-		a.op(Opcode.IADD);
+		a.loadConstant(0x7fff);
+		a.iadd();
 		a.iload(f);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.iconst(1);
-		a.op(Opcode.IAND);
-		a.op(Opcode.IADD);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
+		a.loadConstant(16);
+		a.iushr();
+		a.loadConstant(1);
+		a.iand();
+		a.iadd();
+		a.loadConstant(16);
+		a.iushr();
 		JvmPackedFloatWidth.emitMaskU16(a);
-		a.op(Opcode.IRETURN);
-		return new ArrayMethod(cp.addUtf8(BF16_BITS), cp.addUtf8(BF16_BITS_DESC), 6, 6, a.finish());
+		a.ireturn();
+		return new ArrayMethod(cp.addUtf8(BF16_BITS), cp.addUtf8(BF16_BITS_DESC), a);
 	}
 
 	// stack: (...) -> (..., int): payload | ((payload - 1) >>> 31) -- a zero payload
 	// becomes one, so a NaN never comes back as an infinity. Branch-free, as the
 	// authority spells it.
-	private static void emitPayloadOrOne(JvmAsm a, int payload) {
+	private static void emitPayloadOrOne(MethodCode a, int payload) {
 		a.iload(payload);
 		a.iload(payload);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.iconst(31);
-		a.op(Opcode.IUSHR);
-		a.op(Opcode.IOR);
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(31);
+		a.iushr();
+		a.ior();
 	}
 
 	// _bf16Print(bits): the Float whose Float.toString (with the FloatText E -> e
@@ -1389,61 +1362,55 @@ final class JvmFloatArrayRuntimeBuilder {
 	// the widened value for NaN, an infinity and a zero, else the first of the
 	// 1..9-significant-digit roundings of the value that narrows back to the same
 	// pattern. Locals: 0=bits, 1=f, 2=digits, 3=candidate.
-	private static ArrayMethod buildBf16Print(ConstantPool cp, ClassConstant floatClass, MethodrefConstant floatValueOf,
-			MethodrefConstant bf16Bits) {
-		ClassConstant bigDecimalClass = cp.addClass(cp.addUtf8("java/math/BigDecimal"));
-		ClassConstant mathContextClass = cp.addClass(cp.addUtf8("java/math/MathContext"));
-		MethodrefConstant intBitsToFloat = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("intBitsToFloat"), cp.addUtf8("(I)F")));
-		MethodrefConstant floatIsNaN = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("isNaN"), cp.addUtf8("(F)Z")));
-		MethodrefConstant floatIsInfinite = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("isInfinite"), cp.addUtf8("(F)Z")));
-		MethodrefConstant bigDecimalInit = cp.addMethodref(bigDecimalClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(D)V")));
-		MethodrefConstant mathContextInit = cp.addMethodref(mathContextClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
-		MethodrefConstant bigDecimalRound = cp.addMethodref(bigDecimalClass,
-				cp.addNameAndType(cp.addUtf8("round"), cp.addUtf8("(Ljava/math/MathContext;)Ljava/math/BigDecimal;")));
-		MethodrefConstant bigDecimalFloatValue = cp.addMethodref(bigDecimalClass,
-				cp.addNameAndType(cp.addUtf8("floatValue"), cp.addUtf8("()F")));
+	private static ArrayMethod buildBf16Print(ConstantPool cp, ClassEntry floatClass, MethodRefEntry floatValueOf,
+			MethodRefEntry bf16Bits) {
+		ClassEntry bigDecimalClass = cp.classEntry("java/math/BigDecimal");
+		ClassEntry mathContextClass = cp.classEntry("java/math/MathContext");
+		MethodRefEntry intBitsToFloat = cp.methodRef(floatClass, "intBitsToFloat", "(I)F");
+		MethodRefEntry floatIsNaN = cp.methodRef(floatClass, "isNaN", "(F)Z");
+		MethodRefEntry floatIsInfinite = cp.methodRef(floatClass, "isInfinite", "(F)Z");
+		MethodRefEntry bigDecimalInit = cp.methodRef(bigDecimalClass, "<init>", "(D)V");
+		MethodRefEntry mathContextInit = cp.methodRef(mathContextClass, "<init>", "(I)V");
+		MethodRefEntry bigDecimalRound = cp.methodRef(bigDecimalClass, "round",
+				"(Ljava/math/MathContext;)Ljava/math/BigDecimal;");
+		MethodRefEntry bigDecimalFloatValue = cp.methodRef(bigDecimalClass, "floatValue", "()F");
 		int bits = 0, f = 1, digits = 2, candidate = 3;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		a.iload(bits);
 		JvmPackedFloatWidth.emitMaskU16(a);
 		a.istore(bits);
 		a.iload(bits);
-		a.iconst(16);
-		a.op(Opcode.ISHL);
+		a.loadConstant(16);
+		a.ishl();
 		a.invokestatic(intBitsToFloat);
 		a.fstore(f);
-		int asIs = a.label();
+		MethodCode.Label asIs = a.newLabel();
 		a.fload(f);
 		a.invokestatic(floatIsNaN);
-		a.branch(Opcode.IFNE, asIs);
+		a.ifne(asIs);
 		a.fload(f);
 		a.invokestatic(floatIsInfinite);
-		a.branch(Opcode.IFNE, asIs);
+		a.ifne(asIs);
 		a.fload(f);
-		a.op(Opcode.FCONST_0);
-		a.op(Opcode.FCMPL);
-		a.branch(Opcode.IFEQ, asIs);
-		a.iconst(1);
+		a.fconst_0();
+		a.fcmpl();
+		a.ifeq(asIs);
+		a.loadConstant(1);
 		a.istore(digits);
-		int loop = a.label();
-		int next = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label next = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(digits);
-		a.iconst(9);
-		a.branch(Opcode.IF_ICMPGT, asIs);
+		a.loadConstant(9);
+		a.if_icmpgt(asIs);
 		// candidate = new BigDecimal((double) f).round(new
 		// MathContext(digits)).floatValue()
-		a.anew(bigDecimalClass);
+		a.new_(bigDecimalClass);
 		a.dup();
 		a.fload(f);
 		a.f2d();
 		a.invokespecial(bigDecimalInit);
-		a.anew(mathContextClass);
+		a.new_(mathContextClass);
 		a.dup();
 		a.iload(digits);
 		a.invokespecial(mathContextInit);
@@ -1455,28 +1422,27 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.f2d();
 		a.invokestatic(bf16Bits);
 		a.iload(bits);
-		a.branch(Opcode.IF_ICMPNE, next);
+		a.if_icmpne(next);
 		a.fload(candidate);
 		a.invokestatic(floatValueOf);
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 		a.iinc(digits, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(asIs);
+		a.goto_(loop);
+		a.labelBinding(asIs);
 		a.fload(f);
 		a.invokestatic(floatValueOf);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(BF16_PRINT), cp.addUtf8(BF16_PRINT_DESC), 6, 4, a.finish());
+		return new ArrayMethod(cp.addUtf8(BF16_PRINT), cp.addUtf8(BF16_PRINT_DESC), a);
 	}
 
 	// new RuntimeException(message); athrow.
-	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			ConstantPool.StringConstant message) {
-		a.anew(rtExClass);
+	private static void emitThrow(MethodCode a, ClassEntry rtExClass, MethodRefEntry rtExInit, StringEntry message) {
+		a.new_(rtExClass);
 		a.dup();
-		a.ldcString(message);
+		a.ldc(message);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
+		a.athrow();
 	}
 
 }

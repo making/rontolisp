@@ -1,11 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 
@@ -109,52 +112,46 @@ final class JvmIntArrayRuntimeBuilder {
 	 * exist, so the octet vector's test reads the tag
 	 * @return the helper methods
 	 */
-	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass, boolean usesFloatArray, boolean usesQuantized) {
-		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
-		Octets octets = new Octets(cp.addClass(cp.addUtf8("[B")), usesQuantized);
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant bigIntegerClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant alAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant longIntValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant numberLongValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
+			ClassEntry selfClass, boolean usesFloatArray, boolean usesQuantized) {
+		ClassEntry longArrayClass = cp.classEntry("[J");
+		Octets octets = new Octets(cp.classEntry("[B"), usesQuantized);
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry bigIntegerClass = cp.classEntry("java/math/BigInteger");
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
+		MethodRefEntry alAdd = cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry longIntValue = cp.methodRef(longClass, "intValue", "()I");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry numberLongValue = cp.methodRef(numberClass, "longValue", "()J");
 		// The next tier of the dispatch chain: the _fv* float helpers when they are
 		// emitted, else the general _array*/_length helpers directly.
-		MethodrefConstant aref1Delegate = self(cp, selfClass,
+		MethodRefEntry aref1Delegate = self(cp, selfClass,
 				usesFloatArray ? JvmFloatArrayRuntimeBuilder.AREF1 : JvmArrayRuntimeBuilder.AREF1,
 				JvmArrayRuntimeBuilder.AREF1_DESC);
-		MethodrefConstant aset1Delegate = self(cp, selfClass,
+		MethodRefEntry aset1Delegate = self(cp, selfClass,
 				usesFloatArray ? JvmFloatArrayRuntimeBuilder.ASET1 : JvmArrayRuntimeBuilder.ASET1,
 				JvmArrayRuntimeBuilder.ASET1_DESC);
-		MethodrefConstant dimsDelegate = self(cp, selfClass,
+		MethodRefEntry dimsDelegate = self(cp, selfClass,
 				usesFloatArray ? JvmFloatArrayRuntimeBuilder.DIMS : JvmArrayRuntimeBuilder.DIMS,
 				JvmArrayRuntimeBuilder.DIMS_DESC);
-		MethodrefConstant checkRankDelegate = self(cp, selfClass,
+		MethodRefEntry checkRankDelegate = self(cp, selfClass,
 				usesFloatArray ? JvmFloatArrayRuntimeBuilder.CHECK_RANK : JvmArrayRuntimeBuilder.CHECK_RANK,
 				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
-		MethodrefConstant lengthDelegate = self(cp, selfClass,
+		MethodRefEntry lengthDelegate = self(cp, selfClass,
 				usesFloatArray ? JvmFloatArrayRuntimeBuilder.LENGTH : JvmLengthRuntimeBuilder.METHOD,
 				JvmLengthRuntimeBuilder.DESC);
-		MethodrefConstant elementTypeDelegate = usesFloatArray ? self(cp, selfClass,
+		MethodRefEntry elementTypeDelegate = usesFloatArray ? self(cp, selfClass,
 				JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC) : null;
-		MethodrefConstant arrayMakeTyped = self(cp, selfClass, JvmArrayRuntimeBuilder.MAKE_TYPED,
+		MethodRefEntry arrayMakeTyped = self(cp, selfClass, JvmArrayRuntimeBuilder.MAKE_TYPED,
 				JvmArrayRuntimeBuilder.MAKE_TYPED_DESC);
 
 		// An out-of-range subscript is the access's type-error (JvmOperandTypeRuntime),
 		// named by its operator's wrapper.
-		MethodrefConstant ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
+		MethodRefEntry ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
 				JvmOperandTypeRuntime.CK_BOUND_DESC);
 
 		List<ArrayMethod> methods = new ArrayList<>();
@@ -184,7 +181,7 @@ final class JvmIntArrayRuntimeBuilder {
 	 * @return the positions of the branches taken for any other value
 	 */
 	static List<Integer> emitOctetTestOnStack(JvmLispCompiler.Ctx ctx) {
-		ClassConstant byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B"));
+		ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
 		List<Integer> notOctets = new ArrayList<>();
 		ctx.emit(Opcode.DUP);
 		ctx.emit(Opcode.INSTANCEOF);
@@ -215,7 +212,7 @@ final class JvmIntArrayRuntimeBuilder {
 	 * @param byteArrayClass the {@code [B} class constant
 	 * @param quantized whether a quantized matrix can exist in the program
 	 */
-	record Octets(ClassConstant byteArrayClass, boolean quantized) {
+	record Octets(ClassEntry byteArrayClass, boolean quantized) {
 
 		/**
 		 * Branches to {@code notOctets} unless local {@code slot} holds an octet vector.
@@ -224,53 +221,52 @@ final class JvmIntArrayRuntimeBuilder {
 		 * @param slot the local holding the value
 		 * @param notOctets the label taken for any other value
 		 */
-		void emitTest(JvmAsm a, int slot, int notOctets) {
+		void emitTest(MethodCode a, int slot, MethodCode.Label notOctets) {
 			a.aload(slot);
 			a.instanceOf(this.byteArrayClass);
-			a.branch(Opcode.IFEQ, notOctets);
+			a.ifeq(notOctets);
 			if (this.quantized) {
 				a.aload(slot);
 				a.checkcast(this.byteArrayClass);
-				a.iconst(0);
+				a.loadConstant(0);
 				a.baload();
-				a.iconst(OCTET_TAG);
-				a.branch(Opcode.IF_ICMPNE, notOctets);
+				a.loadConstant(OCTET_TAG);
+				a.if_icmpne(notOctets);
 			}
 		}
 
 	}
 
-	private static MethodrefConstant self(ConstantPool cp, ClassConstant selfClass, String name, String desc) {
-		return cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	private static MethodRefEntry self(ConstantPool cp, ClassEntry selfClass, String name, String desc) {
+		return cp.methodRef(selfClass, name, desc);
 	}
 
 	// new RuntimeException(message); athrow.
-	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			ConstantPool.StringConstant message) {
-		a.anew(rtExClass);
+	private static void emitThrow(MethodCode a, ClassEntry rtExClass, MethodRefEntry rtExInit, StringEntry message) {
+		a.new_(rtExClass);
 		a.dup();
-		a.ldcString(message);
+		a.ldc(message);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
+		a.athrow();
 	}
 
 	// Coerces the integer value in objSlot to a raw long in vSlot (Long or BigInteger:
 	// Number.longValue() keeps the low 64 bits; the caller's width mask keeps fewer);
 	// anything else throws the "stores integers" type error.
-	private static void emitCoerceInt(JvmAsm a, int objSlot, int vSlot, ClassConstant longClass,
-			ClassConstant bigIntegerClass, ClassConstant numberClass, MethodrefConstant numberLongValue,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, ConstantPool.StringConstant message) {
-		int coerceOk = a.label();
-		int bad = a.label();
+	private static void emitCoerceInt(MethodCode a, int objSlot, int vSlot, ClassEntry longClass,
+			ClassEntry bigIntegerClass, ClassEntry numberClass, MethodRefEntry numberLongValue, ClassEntry rtExClass,
+			MethodRefEntry rtExInit, StringEntry message) {
+		MethodCode.Label coerceOk = a.newLabel();
+		MethodCode.Label bad = a.newLabel();
 		a.aload(objSlot);
 		a.instanceOf(longClass);
-		a.branch(Opcode.IFNE, coerceOk);
+		a.ifne(coerceOk);
 		a.aload(objSlot);
 		a.instanceOf(bigIntegerClass);
-		a.branch(Opcode.IFNE, coerceOk);
-		a.bind(bad);
+		a.ifne(coerceOk);
+		a.labelBinding(bad);
 		emitThrow(a, rtExClass, rtExInit, message);
-		a.bind(coerceOk);
+		a.labelBinding(coerceOk);
 		a.aload(objSlot);
 		a.checkcast(numberClass);
 		a.invokevirtual(numberLongValue);
@@ -279,14 +275,14 @@ final class JvmIntArrayRuntimeBuilder {
 
 	// Masks the raw long in vSlot to the width (in bits) in widthSlot:
 	// v &= (1L << width) - 1.
-	private static void emitMask(JvmAsm a, int vSlot, int widthSlot) {
+	private static void emitMask(MethodCode a, int vSlot, int widthSlot) {
 		a.lload(vSlot);
-		a.op(Opcode.LCONST_1);
+		a.lconst_1();
 		a.iload(widthSlot);
-		a.op(Opcode.LSHL);
-		a.op(Opcode.LCONST_1);
-		a.op(Opcode.LSUB);
-		a.op(Opcode.LAND);
+		a.lshl();
+		a.lconst_1();
+		a.lsub();
+		a.land();
 		a.lstore(vSlot);
 	}
 
@@ -294,79 +290,79 @@ final class JvmIntArrayRuntimeBuilder {
 	// boxed Long is the widened unsigned read), i checked against the length
 	// (_ckBound); else delegate. Serves rank-1 aref and row-major-aref. Locals: 0=arr,
 	// 1=i, 2=l.
-	private static ArrayMethod buildAref1(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			MethodrefConstant longValueOf, MethodrefConstant ckBound, MethodrefConstant aref1Delegate) {
+	private static ArrayMethod buildAref1(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			MethodRefEntry longValueOf, MethodRefEntry ckBound, MethodRefEntry aref1Delegate) {
 		int arr = 0, i = 1, l = 2;
-		JvmAsm a = new JvmAsm();
-		int notOctets = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, arr, notOctets);
 		// Long.valueOf(b[1 + i] & 0xFF)
 		a.aload(arr);
 		a.checkcast(octets.byteArrayClass());
 		a.astore(l);
 		a.aload(l);
-		a.iconst(1);
+		a.loadConstant(1);
 		emitBoundedIndex(a, l, i, ckBound);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.baload();
-		a.iconst(0xFF);
-		a.op(Opcode.IAND);
+		a.loadConstant(0xFF);
+		a.iand();
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notOctets);
-		int notPacked = a.label();
+		a.labelBinding(notOctets);
+		MethodCode.Label notPacked = a.newLabel();
 		a.aload(arr);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		a.aload(arr);
 		a.checkcast(longArrayClass);
 		a.astore(l);
 		a.aload(l);
-		a.iconst(1);
+		a.loadConstant(1);
 		emitBoundedIndex(a, l, i, ckBound);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.laload();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		a.aload(arr);
 		a.aload(i);
 		a.invokestatic(aref1Delegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 6, 3, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), a);
 	}
 
 	// Pushes the subscript in local i checked against the vector's length
 	// (l.length - 1, past the width header): the index as an int.
-	private static void emitBoundedIndex(JvmAsm a, int l, int i, MethodrefConstant ckBound) {
+	private static void emitBoundedIndex(MethodCode a, int l, int i, MethodRefEntry ckBound) {
 		a.aload(i);
 		a.aload(l);
 		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokestatic(ckBound);
 	}
 
 	// Pushes the length of the packed vector in local slot, known to be one of the two
 	// representations: its array's length past the width header.
-	private static void emitPackedLength(JvmAsm a, int slot, Octets octets, ClassConstant longArrayClass) {
-		int wide = a.label();
-		int done = a.label();
+	private static void emitPackedLength(MethodCode a, int slot, Octets octets, ClassEntry longArrayClass) {
+		MethodCode.Label wide = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(slot);
 		a.instanceOf(octets.byteArrayClass());
-		a.branch(Opcode.IFEQ, wide);
+		a.ifeq(wide);
 		a.aload(slot);
 		a.checkcast(octets.byteArrayClass());
 		a.arraylength();
-		a.branch(Opcode.GOTO, done);
-		a.bind(wide);
+		a.goto_(done);
+		a.labelBinding(wide);
 		a.aload(slot);
 		a.checkcast(longArrayClass);
 		a.arraylength();
-		a.bind(done);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.labelBinding(done);
+		a.loadConstant(1);
+		a.isub();
 	}
 
 	// _ivAset1(arr, i, val): packed -> l[1 + i] = coerce(val) & widthMask, return the
@@ -374,14 +370,14 @@ final class JvmIntArrayRuntimeBuilder {
 	// delegate. The value is checked before the bound, as every store checks them.
 	// Serves rank-1 %aset and %row-major-aset. Locals: 0=arr, 1=i, 2=val, 3=l, 4=idx,
 	// 5=width, 6..7=v.
-	private static ArrayMethod buildAset1(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			MethodrefConstant ckBound, ClassConstant longClass, ClassConstant bigIntegerClass,
-			ClassConstant numberClass, MethodrefConstant longValueOf, MethodrefConstant numberLongValue,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant aset1Delegate) {
+	private static ArrayMethod buildAset1(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			MethodRefEntry ckBound, ClassEntry longClass, ClassEntry bigIntegerClass, ClassEntry numberClass,
+			MethodRefEntry longValueOf, MethodRefEntry numberLongValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry aset1Delegate) {
 		int arr = 0, i = 1, val = 2, l = 3, idx = 4, width = 5, v = 6;
-		JvmAsm a = new JvmAsm();
-		ConstantPool.StringConstant storesIntegers = cp.addString("%aset: a packed integer vector stores integers");
-		int notOctets = a.label();
+		MethodCode a = new MethodCode();
+		StringEntry storesIntegers = cp.stringEntry("%aset: a packed integer vector stores integers");
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, arr, notOctets);
 		// b[1 + i] = (byte) v; answer v & 0xFF, the value as stored. The narrowing store
 		// is the mask.
@@ -394,24 +390,24 @@ final class JvmIntArrayRuntimeBuilder {
 		a.istore(idx);
 		a.lload(v);
 		a.l2i();
-		a.iconst(0xFF);
-		a.op(Opcode.IAND);
+		a.loadConstant(0xFF);
+		a.iand();
 		a.istore(width);
 		a.aload(l);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(idx);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.iload(width);
 		a.bastore();
 		a.iload(width);
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notOctets);
-		int notPacked = a.label();
+		a.labelBinding(notOctets);
+		MethodCode.Label notPacked = a.newLabel();
 		a.aload(arr);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		a.aload(arr);
 		a.checkcast(longArrayClass);
 		a.astore(l);
@@ -421,161 +417,157 @@ final class JvmIntArrayRuntimeBuilder {
 		a.istore(idx);
 		// width = (int) l[0]; v &= (1L << width) - 1
 		a.aload(l);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.laload();
 		a.l2i();
 		a.istore(width);
 		emitMask(a, v, width);
 		a.aload(l);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(idx);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.lload(v);
 		a.lastore();
 		a.lload(v);
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		a.aload(arr);
 		a.aload(i);
 		a.aload(val);
 		a.invokestatic(aset1Delegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), 7, 8, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), a);
 	}
 
 	// _ivDims(arr): packed -> the fresh cons list (n); else delegate. A cons is an
 	// Object[]{car, cdr}, nil is null. Locals: 0=arr.
-	private static ArrayMethod buildDims(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant objectClass, MethodrefConstant longValueOf, MethodrefConstant dimsDelegate) {
-		JvmAsm a = new JvmAsm();
-		int notPacked = a.label();
-		int packed = a.label();
-		int notOctets = a.label();
+	private static ArrayMethod buildDims(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry objectClass, MethodRefEntry longValueOf, MethodRefEntry dimsDelegate) {
+		MethodCode a = new MethodCode();
+		MethodCode.Label notPacked = a.newLabel();
+		MethodCode.Label packed = a.newLabel();
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, 0, notOctets);
-		a.branch(Opcode.GOTO, packed);
-		a.bind(notOctets);
+		a.goto_(packed);
+		a.labelBinding(notOctets);
 		a.aload(0);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		// Either representation: the length is the array's past the width header.
-		a.bind(packed);
-		a.iconst(2);
+		a.labelBinding(packed);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		emitPackedLength(a, 0, octets, longArrayClass);
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.aastore();
 		a.areturn();
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		a.aload(0);
 		a.invokestatic(dimsDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), 7, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), a);
 	}
 
 	// _ivCheckRank(arr, given): packed -> rank is always 1 (a packed integer vector is
 	// always rank 1, no header field to read); else delegate down the chain. Locals:
 	// 0=arr, 1=given, 2=rank, 3=giv.
-	private static ArrayMethod buildCheckRank(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant longClass, MethodrefConstant longIntValue, ClassConstant rtExClass,
-			MethodrefConstant rtExInit, MethodrefConstant checkRankDelegate) {
-		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant sbInit = cp.addMethodref(sbClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbAppendInt = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+	private static ArrayMethod buildCheckRank(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry longClass, MethodRefEntry longIntValue, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry checkRankDelegate) {
+		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "()V");
+		MethodRefEntry sbAppendStr = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbAppendInt = cp.methodRef(sbClass, "append", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
 		int arr = 0, given = 1, rank = 2, giv = 3;
-		JvmAsm a = new JvmAsm();
-		int notPacked = a.label();
-		int packed = a.label();
-		int notOctets = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notPacked = a.newLabel();
+		MethodCode.Label packed = a.newLabel();
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, arr, notOctets);
-		a.branch(Opcode.GOTO, packed);
-		a.bind(notOctets);
+		a.goto_(packed);
+		a.labelBinding(notOctets);
 		a.aload(arr);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
-		a.bind(packed);
-		a.iconst(1);
+		a.ifeq(notPacked);
+		a.labelBinding(packed);
+		a.loadConstant(1);
 		a.istore(rank);
 		emitRankCheckAndReturn(cp, a, longClass, longIntValue, sbClass, sbInit, sbAppendStr, sbAppendInt, sbToString,
 				rtExClass, rtExInit, arr, given, rank, giv);
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		a.aload(arr);
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), 6, 4, a.finish());
+		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), a);
 	}
 
 	// Shared tail of _ivCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
 	// against the already-computed actual rank (rankSlot); a match returns arr (arrSlot)
 	// unchanged, a mismatch throws the "aref: expected N subscripts, got M" text the
 	// interpreter uses.
-	private static void emitRankCheckAndReturn(ConstantPool cp, JvmAsm a, ClassConstant longClass,
-			MethodrefConstant longIntValue, ClassConstant sbClass, MethodrefConstant sbInit,
-			MethodrefConstant sbAppendStr, MethodrefConstant sbAppendInt, MethodrefConstant sbToString,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, int arrSlot, int givenSlot, int rankSlot,
-			int givSlot) {
+	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
+			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
+			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
 		a.aload(givenSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(givSlot);
-		int ok = a.label();
+		MethodCode.Label ok = a.newLabel();
 		a.iload(rankSlot);
 		a.iload(givSlot);
-		a.branch(Opcode.IF_ICMPEQ, ok);
-		a.anew(rtExClass);
+		a.if_icmpeq(ok);
+		a.new_(rtExClass);
 		a.dup();
-		a.anew(sbClass);
+		a.new_(sbClass);
 		a.dup();
 		a.invokespecial(sbInit);
-		a.ldcString(cp.addString("aref: expected "));
+		a.ldc(cp.stringEntry("aref: expected "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldcString(cp.addString(" subscripts, got "));
+		a.ldc(cp.addString(" subscripts, got ").entry());
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
 		a.invokevirtual(sbToString);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
-		a.bind(ok);
+		a.athrow();
+		a.labelBinding(ok);
 		a.aload(arrSlot);
 		a.areturn();
 	}
 
 	// _ivLength(arr): packed -> Long.valueOf(arr.length - 1); else delegate. Locals:
 	// 0=arr.
-	private static ArrayMethod buildLength(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			MethodrefConstant longValueOf, MethodrefConstant lengthDelegate) {
-		JvmAsm a = new JvmAsm();
-		int notPacked = a.label();
-		int packed = a.label();
-		int notOctets = a.label();
+	private static ArrayMethod buildLength(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			MethodRefEntry longValueOf, MethodRefEntry lengthDelegate) {
+		MethodCode a = new MethodCode();
+		MethodCode.Label notPacked = a.newLabel();
+		MethodCode.Label packed = a.newLabel();
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, 0, notOctets);
-		a.branch(Opcode.GOTO, packed);
-		a.bind(notOctets);
+		a.goto_(packed);
+		a.labelBinding(notOctets);
 		a.aload(0);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
-		a.bind(packed);
+		a.ifeq(notPacked);
+		a.labelBinding(packed);
 		emitPackedLength(a, 0, octets, longArrayClass);
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		a.aload(0);
 		a.invokestatic(lengthDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(JvmLengthRuntimeBuilder.DESC), 3, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(JvmLengthRuntimeBuilder.DESC), a);
 	}
 
 	// _ivToGeneral(o): converts a packed vector into the equivalent general array (an
@@ -584,27 +576,27 @@ final class JvmIntArrayRuntimeBuilder {
 	// (CL prints specialized vectors that way). Only ever called with a packed vector
 	// (the print dispatch tests the representation first). Locals: 0=o, 1=unused, 2=n,
 	// 3=list, 4=f.
-	private static ArrayMethod buildToGeneral(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant arrayListClass, ClassConstant objectClass, MethodrefConstant alInit, MethodrefConstant alAdd,
-			MethodrefConstant longValueOf) {
+	private static ArrayMethod buildToGeneral(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry arrayListClass, ClassEntry objectClass, MethodRefEntry alInit, MethodRefEntry alAdd,
+			MethodRefEntry longValueOf) {
 		int o = 0, n = 2, list = 3, f = 4;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitPackedLength(a, o, octets, longArrayClass);
 		a.istore(n);
-		a.anew(arrayListClass);
+		a.new_(arrayListClass);
 		a.dup();
 		a.invokespecial(alInit);
 		a.astore(list);
 		// list.add(new Object[]{new Object[]{Long.valueOf(n)}, null, null})
 		a.aload(list);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.iconst(1);
+		a.loadConstant(0);
+		a.loadConstant(1);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(n);
 		a.i2l();
 		a.invokestatic(longValueOf);
@@ -612,46 +604,46 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aastore();
 		a.invokevirtual(alAdd);
 		a.pop();
-		int wide = a.label();
-		int done = a.label();
+		MethodCode.Label wide = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(o);
 		a.instanceOf(octets.byteArrayClass());
-		a.branch(Opcode.IFEQ, wide);
+		a.ifeq(wide);
 		emitBoxEach(a, o, n, list, f, alAdd, longValueOf, done, () -> {
 			a.checkcast(octets.byteArrayClass());
-			a.iconst(1);
+			a.loadConstant(1);
 			a.iload(f);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.baload();
-			a.iconst(0xFF);
-			a.op(Opcode.IAND);
+			a.loadConstant(0xFF);
+			a.iand();
 			a.i2l();
 		});
-		a.bind(wide);
+		a.labelBinding(wide);
 		emitBoxEach(a, o, n, list, f, alAdd, longValueOf, done, () -> {
 			a.checkcast(longArrayClass);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.iload(f);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.laload();
 		});
-		a.bind(done);
+		a.labelBinding(done);
 		a.aload(list);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(TO_GENERAL), cp.addUtf8(TO_GENERAL_DESC), 10, 5, a.finish());
+		return new ArrayMethod(cp.addUtf8(TO_GENERAL), cp.addUtf8(TO_GENERAL_DESC), a);
 	}
 
 	// for (f = 0; f < n; f++) list.add(Long.valueOf(<element f>)); goto done -- the
 	// element pushed as a long by readElement, which finds the vector on the stack.
-	private static void emitBoxEach(JvmAsm a, int o, int n, int list, int f, MethodrefConstant alAdd,
-			MethodrefConstant longValueOf, int done, Runnable readElement) {
-		a.iconst(0);
+	private static void emitBoxEach(MethodCode a, int o, int n, int list, int f, MethodRefEntry alAdd,
+			MethodRefEntry longValueOf, MethodCode.Label done, Runnable readElement) {
+		a.loadConstant(0);
 		a.istore(f);
-		int loop = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(f);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(list);
 		a.aload(o);
 		readElement.run();
@@ -659,65 +651,65 @@ final class JvmIntArrayRuntimeBuilder {
 		a.invokevirtual(alAdd);
 		a.pop();
 		a.iinc(f, 1);
-		a.branch(Opcode.GOTO, loop);
+		a.goto_(loop);
 	}
 
 	// _ivElementType(arr): packed -> the fresh cons list (UNSIGNED-BYTE width) (the REAL
 	// specifier, matching the interpreter); else delegate to _fvElementType (when the
 	// float helpers are emitted) or answer the symbol t directly (general arrays are
 	// element-type t). Locals: 0=arr.
-	private static ArrayMethod buildElementType(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant objectClass, MethodrefConstant longValueOf,
-			@org.jspecify.annotations.Nullable MethodrefConstant elementTypeDelegate) {
-		JvmAsm a = new JvmAsm();
-		int notPacked = a.label();
-		int notOctets = a.label();
+	private static ArrayMethod buildElementType(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry objectClass, MethodRefEntry longValueOf,
+			@org.jspecify.annotations.Nullable MethodRefEntry elementTypeDelegate) {
+		MethodCode a = new MethodCode();
+		MethodCode.Label notPacked = a.newLabel();
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, 0, notOctets);
 		emitUnsignedByteSpec(cp, a, objectClass, longValueOf, () -> {
-			a.iconst(OCTET_TAG);
+			a.loadConstant(OCTET_TAG);
 			a.i2l();
 		});
 		a.areturn();
-		a.bind(notOctets);
+		a.labelBinding(notOctets);
 		a.aload(0);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		emitUnsignedByteSpec(cp, a, objectClass, longValueOf, () -> {
 			a.aload(0);
 			a.checkcast(longArrayClass);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.laload();
 		});
 		a.areturn();
-		a.bind(notPacked);
+		a.labelBinding(notPacked);
 		if (elementTypeDelegate != null) {
 			a.aload(0);
 			a.invokestatic(elementTypeDelegate);
 			a.areturn();
 		}
 		else {
-			a.ldcString(cp.addString("T"));
+			a.ldc(cp.stringEntry("T"));
 			a.areturn();
 		}
-		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 10, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), a);
 	}
 
 	// Pushes new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(width), null}}, the
 	// width pushed as a long by pushWidth.
-	private static void emitUnsignedByteSpec(ConstantPool cp, JvmAsm a, ClassConstant objectClass,
-			MethodrefConstant longValueOf, Runnable pushWidth) {
-		a.iconst(2);
+	private static void emitUnsignedByteSpec(ConstantPool cp, MethodCode a, ClassEntry objectClass,
+			MethodRefEntry longValueOf, Runnable pushWidth) {
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
+		a.loadConstant(0);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.iconst(2);
+		a.loadConstant(1);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		pushWidth.run();
 		a.invokestatic(longValueOf);
 		a.aastore();
@@ -731,188 +723,186 @@ final class JvmIntArrayRuntimeBuilder {
 	// keeps the general boxed representation via _arrayMake, mirroring the
 	// interpreter's runtime rank check. Locals: 0=dims, 1=init, 2=width, 3=n, 4=arr,
 	// 5=i, 6..7=fill.
-	private static ArrayMethod buildMake(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant objectArrayClass, ClassConstant longClass, ClassConstant bigIntegerClass,
-			ClassConstant numberClass, MethodrefConstant longIntValue, MethodrefConstant longValueOf,
-			MethodrefConstant numberLongValue, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			MethodrefConstant arrayMakeTyped) {
+	private static ArrayMethod buildMake(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry objectArrayClass, ClassEntry longClass, ClassEntry bigIntegerClass, ClassEntry numberClass,
+			MethodRefEntry longIntValue, MethodRefEntry longValueOf, MethodRefEntry numberLongValue,
+			ClassEntry rtExClass, MethodRefEntry rtExInit, MethodRefEntry arrayMakeTyped) {
 		int dims = 0, init = 1, width = 2, n = 3, arr = 4, i = 5, fill = 6;
-		JvmAsm a = new JvmAsm();
-		int tryList = a.label();
-		int general = a.label();
-		int haveN = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label tryList = a.newLabel();
+		MethodCode.Label general = a.newLabel();
+		MethodCode.Label haveN = a.newLabel();
 		a.aload(dims);
 		a.instanceOf(longClass);
-		a.branch(Opcode.IFEQ, tryList);
+		a.ifeq(tryList);
 		// rank-1 shorthand: n = (int) dims
 		a.aload(dims);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(n);
-		a.branch(Opcode.GOTO, haveN);
+		a.goto_(haveN);
 		// a one-element cons list of dims is rank 1 too: (n) with cdr nil
-		a.bind(tryList);
+		a.labelBinding(tryList);
 		a.aload(dims);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, general);
+		a.ifeq(general);
 		a.aload(dims);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.branch(Opcode.IFNONNULL, general);
+		a.ifnonnull(general);
 		a.aload(dims);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(n);
-		a.branch(Opcode.GOTO, haveN);
+		a.goto_(haveN);
 		// rank n: the general representation (no fill pointer / adjustability at this
 		// call site by construction), REMEMBERING the (unsigned-byte width) it was asked
 		// for and defaulting an unsupplied element to 0 rather than nil. The 0 also
 		// keeps the allocation on _arrayMake's packed long[] path, so the type is
 		// remembered without giving up the packing.
-		a.bind(general);
-		int initGiven = a.label();
-		int initDone = a.label();
+		a.labelBinding(general);
+		MethodCode.Label initGiven = a.newLabel();
+		MethodCode.Label initDone = a.newLabel();
 		a.aload(dims);
 		a.aload(init);
-		a.branch(Opcode.IFNONNULL, initGiven);
-		a.op(Opcode.LCONST_0);
+		a.ifnonnull(initGiven);
+		a.lconst_0();
 		a.invokestatic(longValueOf);
-		a.branch(Opcode.GOTO, initDone);
-		a.bind(initGiven);
+		a.goto_(initDone);
+		a.labelBinding(initGiven);
 		a.aload(init);
-		a.bind(initDone);
-		a.aconstNull();
-		a.aconstNull();
+		a.labelBinding(initDone);
+		a.aconst_null();
+		a.aconst_null();
 		emitWidthToElementTypeCode(a, width);
 		a.invokestatic(arrayMakeTyped);
 		a.areturn();
-		a.bind(haveN);
-		ConstantPool.StringConstant storesIntegers = cp
-			.addString("make-array: a packed integer vector stores integers");
-		int wide = a.label();
+		a.labelBinding(haveN);
+		StringEntry storesIntegers = cp.addString("make-array: a packed integer vector stores integers").entry();
+		MethodCode.Label wide = a.newLabel();
 		a.iload(width);
-		a.iconst(OCTET_TAG);
-		a.branch(Opcode.IF_ICMPNE, wide);
+		a.loadConstant(OCTET_TAG);
+		a.if_icmpne(wide);
 		// width 8: b = new byte[n + 1]; b[0] = 8; the init narrowed into every element
 		// (a zero init is the array's own zero fill)
 		a.iload(n);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.newarrayByte();
+		a.loadConstant(1);
+		a.iadd();
+		a.newarray(TypeKind.BYTE);
 		a.astore(arr);
 		a.aload(arr);
-		a.iconst(0);
-		a.iconst(OCTET_TAG);
+		a.loadConstant(0);
+		a.loadConstant(OCTET_TAG);
 		a.bastore();
-		int octetsDone = a.label();
+		MethodCode.Label octetsDone = a.newLabel();
 		a.aload(init);
-		a.branch(Opcode.IFNULL, octetsDone);
+		a.ifnull(octetsDone);
 		emitCoerceInt(a, init, fill, longClass, bigIntegerClass, numberClass, numberLongValue, rtExClass, rtExInit,
 				storesIntegers);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(i);
-		int octetsLoop = a.label();
-		a.bind(octetsLoop);
+		MethodCode.Label octetsLoop = a.newLabel();
+		a.labelBinding(octetsLoop);
 		a.iload(i);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, octetsDone);
+		a.if_icmpge(octetsDone);
 		a.aload(arr);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(i);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.lload(fill);
 		a.l2i();
 		a.bastore();
 		a.iinc(i, 1);
-		a.branch(Opcode.GOTO, octetsLoop);
-		a.bind(octetsDone);
+		a.goto_(octetsLoop);
+		a.labelBinding(octetsDone);
 		a.aload(arr);
 		a.areturn();
-		a.bind(wide);
+		a.labelBinding(wide);
 		a.iload(n);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.newarrayLong();
+		a.loadConstant(1);
+		a.iadd();
+		a.newarray(TypeKind.LONG);
 		a.astore(arr);
 		a.aload(arr);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(width);
 		a.i2l();
 		a.lastore();
-		int done = a.label();
+		MethodCode.Label done = a.newLabel();
 		a.aload(init);
-		a.branch(Opcode.IFNULL, done);
+		a.ifnull(done);
 		emitCoerceInt(a, init, fill, longClass, bigIntegerClass, numberClass, numberLongValue, rtExClass, rtExInit,
 				storesIntegers);
 		emitMask(a, fill, width);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(i);
-		int loop = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(i);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(arr);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(i);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.lload(fill);
 		a.lastore();
 		a.iinc(i, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(arr);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 7, 8, a.finish());
+		return new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), a);
 	}
 
 	// _ivRequireGeneral(o): the fill-pointer-surface guard -- a packed integer vector
 	// has no fill pointer, adjustability or displacement, so those operations reject it
 	// with a clear error (mirroring the interpreter's requireGeneralArray); any other
 	// value passes through unchanged. Locals: 0=o.
-	private static ArrayMethod buildRequireGeneral(ConstantPool cp, Octets octets, ClassConstant longArrayClass,
-			ClassConstant rtExClass, MethodrefConstant rtExInit) {
-		JvmAsm a = new JvmAsm();
-		ConstantPool.StringConstant notApplicable = cp.addString("not applicable to a packed integer vector");
-		int notOctets = a.label();
+	private static ArrayMethod buildRequireGeneral(ConstantPool cp, Octets octets, ClassEntry longArrayClass,
+			ClassEntry rtExClass, MethodRefEntry rtExInit) {
+		MethodCode a = new MethodCode();
+		StringEntry notApplicable = cp.stringEntry("not applicable to a packed integer vector");
+		MethodCode.Label notOctets = a.newLabel();
 		octets.emitTest(a, 0, notOctets);
 		emitThrow(a, rtExClass, rtExInit, notApplicable);
-		a.bind(notOctets);
-		int ok = a.label();
+		a.labelBinding(notOctets);
+		MethodCode.Label ok = a.newLabel();
 		a.aload(0);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, ok);
+		a.ifeq(ok);
 		emitThrow(a, rtExClass, rtExInit, notApplicable);
-		a.bind(ok);
+		a.labelBinding(ok);
 		a.aload(0);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), 3, 1, a.finish());
+		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), a);
 	}
 
 	// The ArrayElementTypes code for the packed width held in widthSlot: the widths are
 	// 8/16/32 by construction, so two compares decide it.
-	private static void emitWidthToElementTypeCode(JvmAsm a, int widthSlot) {
-		int is8 = a.label();
-		int is16 = a.label();
-		int done = a.label();
+	private static void emitWidthToElementTypeCode(MethodCode a, int widthSlot) {
+		MethodCode.Label is8 = a.newLabel();
+		MethodCode.Label is16 = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.iload(widthSlot);
-		a.iconst(8);
-		a.branch(Opcode.IF_ICMPEQ, is8);
+		a.loadConstant(8);
+		a.if_icmpeq(is8);
 		a.iload(widthSlot);
-		a.iconst(16);
-		a.branch(Opcode.IF_ICMPEQ, is16);
-		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_32);
-		a.branch(Opcode.GOTO, done);
-		a.bind(is8);
-		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_8);
-		a.branch(Opcode.GOTO, done);
-		a.bind(is16);
-		a.iconst(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_16);
-		a.bind(done);
+		a.loadConstant(16);
+		a.if_icmpeq(is16);
+		a.loadConstant(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_32);
+		a.goto_(done);
+		a.labelBinding(is8);
+		a.loadConstant(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_8);
+		a.goto_(done);
+		a.labelBinding(is16);
+		a.loadConstant(am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_16);
+		a.labelBinding(done);
 	}
 
 }

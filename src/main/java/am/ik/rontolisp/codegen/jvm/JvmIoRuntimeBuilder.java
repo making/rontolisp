@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -12,6 +13,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -701,7 +703,7 @@ final class JvmIoRuntimeBuilder {
 		this.stringBufferSetLength = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StringBuffer")),
 				cp.addNameAndType(cp.addUtf8("setLength"), cp.addUtf8("(I)V")));
 		this.stringPositions = fileMeta.position() ? JvmStringStreamPositions.mint(cp, fileMeta.stringInputPositions(),
-				this.stringWriterClass, this.stringWriterGetBuffer) : null;
+				this.stringWriterClass.entry(), this.stringWriterGetBuffer.methodRefEntry()) : null;
 		this.stringInputStreamClass = fileMeta.stringInputs()
 				? cp.addClass(cp.addUtf8(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS)) : null;
 		this.stringInputStreamInit = this.stringInputStreamClass != null ? cp.addMethodref(this.stringInputStreamClass,
@@ -2241,45 +2243,45 @@ final class JvmIoRuntimeBuilder {
 	 * {@code _bumpStreamPosition} (after it reads the current one).
 	 */
 	private List<Integer> buildStoreStreamPosition() {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=pos, 2=arr, 3=idx (int)
 		a.aload(0);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(3);
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
 		a.astore(2);
 		a.aload(2);
-		int have = a.label();
-		a.branch(Opcode.IFNONNULL, have);
-		a.iconst(16);
-		a.anewarray(this.objectClass);
+		MethodCode.Label have = a.newLabel();
+		a.ifnonnull(have);
+		a.loadConstant(16);
+		a.anewarray(this.objectClass.entry());
 		a.astore(2);
-		a.bind(have);
+		a.labelBinding(have);
 		a.iload(3);
 		a.aload(2);
 		a.arraylength();
-		int fits = a.label();
-		a.branch(Opcode.IF_ICMPLT, fits);
+		MethodCode.Label fits = a.newLabel();
+		a.if_icmplt(fits);
 		a.aload(2);
 		a.iload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iadd();
-		a.iconst(2);
+		a.loadConstant(2);
 		a.imul();
-		a.invokestatic(this.arraysCopyOf);
+		a.invokestatic(this.arraysCopyOf.entry());
 		a.astore(2);
-		a.bind(fits);
+		a.labelBinding(fits);
 		a.aload(2);
 		a.iload(3);
 		a.aload(1);
 		a.aastore();
 		a.aload(2);
-		a.putstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.putstatic(Objects.requireNonNull(this.streamPositionsField).entry());
 		a.aload(0);
 		a.areturn();
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
 	/**
@@ -2289,86 +2291,86 @@ final class JvmIoRuntimeBuilder {
 	 * (a socket, a character file stream, a standard stream, a closed slot) is a no-op.
 	 */
 	private List<Integer> buildBumpStreamPosition() {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=delta (int), 2=idx (int), 3=arr, 4=paths, 5=val, 6=cur
 		// (long)
 		a.aload(0);
-		a.instanceOf(this.longClass);
-		int notHandle = a.label();
-		a.branch(Opcode.IFEQ, notHandle);
+		a.instanceOf(this.longClass.entry());
+		MethodCode.Label notHandle = a.newLabel();
+		a.ifeq(notHandle);
 		a.aload(0);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(2);
-		a.getstatic(Objects.requireNonNull(this.streamPathsField));
+		a.getstatic(Objects.requireNonNull(this.streamPathsField).entry());
 		a.astore(4);
 		a.aload(4);
-		int noPaths = a.label();
-		a.branch(Opcode.IFNULL, noPaths);
+		MethodCode.Label noPaths = a.newLabel();
+		a.ifnull(noPaths);
 		a.iload(2);
-		int idxNeg = a.label();
-		a.branch(Opcode.IFLT, idxNeg);
+		MethodCode.Label idxNeg = a.newLabel();
+		a.iflt(idxNeg);
 		a.iload(2);
 		a.aload(4);
 		a.arraylength();
-		int idxOob = a.label();
-		a.branch(Opcode.IF_ICMPGE, idxOob);
+		MethodCode.Label idxOob = a.newLabel();
+		a.if_icmpge(idxOob);
 		a.aload(4);
 		a.iload(2);
 		a.aaload();
-		int notFile = a.label();
-		a.branch(Opcode.IFNULL, notFile);
+		MethodCode.Label notFile = a.newLabel();
+		a.ifnull(notFile);
 		// cur = (arr = _streamPositions) != null && idx < arr.length
 		// && (val = arr[idx]) != null ? ((Long) val).longValue() : 0L
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
 		a.astore(3);
-		a.lconst0();
+		a.lconst_0();
 		a.lstore(6);
 		a.aload(3);
-		int noArr = a.label();
-		a.branch(Opcode.IFNULL, noArr);
+		MethodCode.Label noArr = a.newLabel();
+		a.ifnull(noArr);
 		a.iload(2);
 		a.aload(3);
 		a.arraylength();
-		int idxOob2 = a.label();
-		a.branch(Opcode.IF_ICMPGE, idxOob2);
+		MethodCode.Label idxOob2 = a.newLabel();
+		a.if_icmpge(idxOob2);
 		a.aload(3);
 		a.iload(2);
 		a.aaload();
 		a.astore(5);
 		a.aload(5);
-		int curNull2 = a.label();
-		a.branch(Opcode.IFNULL, curNull2);
+		MethodCode.Label curNull2 = a.newLabel();
+		a.ifnull(curNull2);
 		a.aload(5);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.lstore(6);
-		a.bind(noArr);
-		a.bind(idxOob2);
-		a.bind(curNull2);
+		a.labelBinding(noArr);
+		a.labelBinding(idxOob2);
+		a.labelBinding(curNull2);
 		// cur += delta
 		a.lload(6);
 		a.iload(1);
 		a.i2l();
 		a.ladd();
-		a.invokestatic(this.longValueOf);
+		a.invokestatic(this.longValueOf.entry());
 		// _storeStreamPosition(handle, Long.valueOf(cur)); return null;
 		a.aload(0);
 		a.swap();
-		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef).entry());
 		a.pop();
-		int done = a.label();
-		a.branch(Opcode.GOTO, done);
-		a.bind(notHandle);
-		a.bind(noPaths);
-		a.bind(idxNeg);
-		a.bind(idxOob);
-		a.bind(notFile);
-		a.bind(done);
-		a.aconstNull();
+		MethodCode.Label done = a.newLabel();
+		a.goto_(done);
+		a.labelBinding(notHandle);
+		a.labelBinding(noPaths);
+		a.labelBinding(idxNeg);
+		a.labelBinding(idxOob);
+		a.labelBinding(notFile);
+		a.labelBinding(done);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
 	/**
@@ -2381,96 +2383,97 @@ final class JvmIoRuntimeBuilder {
 	 * offset). Either answers "T" on success, null where it cannot.
 	 */
 	private List<Integer> buildFilePosition() {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=pos, 2=idx (int), 3=paths, 4=p, 5=entry, 6=arr, 7=n (long,
 		// slots 7-8), 9=stream/val
 		a.aload(0);
-		a.instanceOf(this.longClass);
-		int notHandle = a.label();
-		a.branch(Opcode.IFEQ, notHandle);
+		a.instanceOf(this.longClass.entry());
+		MethodCode.Label notHandle = a.newLabel();
+		a.ifeq(notHandle);
 		a.aload(0);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(2);
 		if (this.stringPositions != null) {
 			// A STRING stream answers first (JvmStringStreamPositions); it has no path.
 			a.iload(2);
-			int notInTable = a.label();
-			a.branch(Opcode.IFLT, notInTable);
+			MethodCode.Label notInTable = a.newLabel();
+			a.iflt(notInTable);
 			a.iload(2);
-			a.getstatic(Objects.requireNonNull(this.streamsField));
+			a.getstatic(Objects.requireNonNull(this.streamsField).entry());
 			a.arraylength();
-			a.branch(Opcode.IF_ICMPGE, notInTable);
-			a.getstatic(Objects.requireNonNull(this.streamsField));
+			a.if_icmpge(notInTable);
+			a.getstatic(Objects.requireNonNull(this.streamsField).entry());
 			a.iload(2);
 			a.aaload();
 			a.astore(5);
-			this.stringPositions.emit(a, 5, 1, 7, this.longClass, this.longValue, this.longValueOf, this.tStr);
-			a.bind(notInTable);
+			this.stringPositions.emit(a, 5, 1, 7, this.longClass.entry(), this.longValue.methodRefEntry(),
+					this.longValueOf.methodRefEntry(), this.tStr.entry());
+			a.labelBinding(notInTable);
 		}
-		a.getstatic(Objects.requireNonNull(this.streamPathsField));
+		a.getstatic(Objects.requireNonNull(this.streamPathsField).entry());
 		a.astore(3);
 		a.aload(3);
-		int noPaths = a.label();
-		a.branch(Opcode.IFNULL, noPaths);
+		MethodCode.Label noPaths = a.newLabel();
+		a.ifnull(noPaths);
 		a.iload(2);
-		int idxNeg = a.label();
-		a.branch(Opcode.IFLT, idxNeg);
+		MethodCode.Label idxNeg = a.newLabel();
+		a.iflt(idxNeg);
 		a.iload(2);
 		a.aload(3);
 		a.arraylength();
-		int idxOob = a.label();
-		a.branch(Opcode.IF_ICMPGE, idxOob);
+		MethodCode.Label idxOob = a.newLabel();
+		a.if_icmpge(idxOob);
 		a.aload(3);
 		a.iload(2);
 		a.aaload();
 		a.astore(4);
 		a.aload(4);
-		int noPathVal = a.label();
-		a.branch(Opcode.IFNULL, noPathVal);
+		MethodCode.Label noPathVal = a.newLabel();
+		a.ifnull(noPathVal);
 		// entry = _streams[idx]
-		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
 		a.iload(2);
 		a.aaload();
 		a.astore(5);
-		int ioNeg = -1;
+		MethodCode.@Nullable Label ioNeg = null;
 		if (this.ioStreams != null) {
 			// A BIDIRECTIONAL entry owns its cursor: both halves are the
 			// RandomAccessFile's own, with no side table and no re-open. This is what
 			// makes file-position real for a CHARACTER :io stream, which the
 			// Reader/Writer arms below cannot answer for.
 			a.aload(5);
-			a.instanceOf(this.ioStreams.type());
-			int notIoPos = a.label();
-			a.branch(Opcode.IFEQ, notIoPos);
+			a.instanceOf(this.ioStreams.type().entry());
+			MethodCode.Label notIoPos = a.newLabel();
+			a.ifeq(notIoPos);
 			a.aload(1);
-			int ioSet = a.label();
-			a.branch(Opcode.IFNONNULL, ioSet);
+			MethodCode.Label ioSet = a.newLabel();
+			a.ifnonnull(ioSet);
 			a.aload(5);
-			a.checkcast(this.ioStreams.type());
-			a.invokevirtual(this.ioStreams.position());
-			a.invokestatic(this.longValueOf);
+			a.checkcast(this.ioStreams.type().entry());
+			a.invokevirtual(this.ioStreams.position().methodRefEntry());
+			a.invokestatic(this.longValueOf.entry());
 			a.areturn();
-			a.bind(ioSet);
+			a.labelBinding(ioSet);
 			a.aload(1);
-			a.checkcast(this.longClass);
-			a.invokevirtual(this.longValue);
+			a.checkcast(this.longClass.entry());
+			a.invokevirtual(this.longValue.methodRefEntry());
 			a.lstore(7);
 			a.lload(7);
-			a.lconst0();
+			a.lconst_0();
 			a.lcmp();
-			ioNeg = a.label();
-			a.branch(Opcode.IFLT, ioNeg);
+			ioNeg = a.newLabel();
+			a.iflt(ioNeg);
 			a.aload(5);
-			a.checkcast(this.ioStreams.type());
+			a.checkcast(this.ioStreams.type().entry());
 			a.lload(7);
-			a.invokevirtual(this.ioStreams.seek());
-			emitLdc(a.code, this.tStr.index());
+			a.invokevirtual(this.ioStreams.seek().methodRefEntry());
+			a.ldc(this.tStr.entry());
 			a.areturn();
-			a.bind(notIoPos);
+			a.labelBinding(notIoPos);
 		}
-		List<Integer> charNegs = new ArrayList<>();
+		List<MethodCode.Label> charNegs = new ArrayList<>();
 		if (this.charFileStreams != null) {
 			// A positioned CHARACTER entry answers its own byte offset, and a set moves
 			// it (dropping what it had buffered): no side table, no re-open.
@@ -2481,154 +2484,154 @@ final class JvmIoRuntimeBuilder {
 		}
 		// Only a BINARY entry (an InputStream/OutputStream) has a byte position.
 		a.aload(5);
-		a.instanceOf(this.inputStreamClass);
-		int notBinaryIn = a.label();
-		a.branch(Opcode.IFEQ, notBinaryIn);
-		int isBinary = a.label();
-		a.branch(Opcode.GOTO, isBinary);
-		a.bind(notBinaryIn);
+		a.instanceOf(this.inputStreamClass.entry());
+		MethodCode.Label notBinaryIn = a.newLabel();
+		a.ifeq(notBinaryIn);
+		MethodCode.Label isBinary = a.newLabel();
+		a.goto_(isBinary);
+		a.labelBinding(notBinaryIn);
 		a.aload(5);
-		a.instanceOf(this.outputStreamClass);
-		int notBinaryOut = a.label();
-		a.branch(Opcode.IFEQ, notBinaryOut);
-		a.bind(isBinary);
+		a.instanceOf(this.outputStreamClass.entry());
+		MethodCode.Label notBinaryOut = a.newLabel();
+		a.ifeq(notBinaryOut);
+		a.labelBinding(isBinary);
 		// pos == null -> query
 		a.aload(1);
-		int setPos = a.label();
-		a.branch(Opcode.IFNONNULL, setPos);
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		MethodCode.Label setPos = a.newLabel();
+		a.ifnonnull(setPos);
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
 		a.astore(6);
 		// return arr != null && idx < arr.length && arr[idx] != null ? arr[idx]
 		// : Long.valueOf(0L)
 		a.aload(6);
-		int noPosArr = a.label();
-		a.branch(Opcode.IFNULL, noPosArr);
+		MethodCode.Label noPosArr = a.newLabel();
+		a.ifnull(noPosArr);
 		a.iload(2);
 		a.aload(6);
 		a.arraylength();
-		int posIdxOob = a.label();
-		a.branch(Opcode.IF_ICMPGE, posIdxOob);
+		MethodCode.Label posIdxOob = a.newLabel();
+		a.if_icmpge(posIdxOob);
 		a.aload(6);
 		a.iload(2);
 		a.aaload();
 		a.astore(9);
 		a.aload(9);
-		int posNull = a.label();
-		a.branch(Opcode.IFNULL, posNull);
+		MethodCode.Label posNull = a.newLabel();
+		a.ifnull(posNull);
 		a.aload(9);
 		a.areturn();
-		a.bind(noPosArr);
-		a.bind(posIdxOob);
-		a.bind(posNull);
-		a.lconst0();
-		a.invokestatic(this.longValueOf);
+		a.labelBinding(noPosArr);
+		a.labelBinding(posIdxOob);
+		a.labelBinding(posNull);
+		a.lconst_0();
+		a.invokestatic(this.longValueOf.entry());
 		a.areturn();
 		// --- the set half -----------------------------------------------------
-		a.bind(setPos);
+		a.labelBinding(setPos);
 		a.aload(1);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.lstore(7);
 		a.lload(7);
-		a.lconst0();
+		a.lconst_0();
 		a.lcmp();
-		int posNeg = a.label();
-		a.branch(Opcode.IFLT, posNeg);
+		MethodCode.Label posNeg = a.newLabel();
+		a.iflt(posNeg);
 		a.aload(0);
-		a.invokestatic(Objects.requireNonNull(this.forceOutputRef));
+		a.invokestatic(Objects.requireNonNull(this.forceOutputRef).entry());
 		a.pop();
 		// input arm
 		a.aload(5);
-		a.instanceOf(this.inputStreamClass);
-		int notInput = a.label();
-		a.branch(Opcode.IFEQ, notInput);
+		a.instanceOf(this.inputStreamClass.entry());
+		MethodCode.Label notInput = a.newLabel();
+		a.ifeq(notInput);
 		// fis = new FileInputStream(p); fis.getChannel().position(n)
-		a.anew(this.fileInputStreamClass);
+		a.new_(this.fileInputStreamClass.entry());
 		a.dup();
 		a.aload(4);
-		a.checkcast(this.stringClass);
-		a.invokespecial(this.fileInputStreamInit);
+		a.checkcast(this.stringClass.entry());
+		a.invokespecial(this.fileInputStreamInit.entry());
 		a.astore(9);
 		a.aload(9);
-		a.invokevirtual(Objects.requireNonNull(this.fileInputStreamGetChannel));
+		a.invokevirtual(Objects.requireNonNull(this.fileInputStreamGetChannel).methodRefEntry());
 		a.lload(7);
-		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition).methodRefEntry());
 		a.pop();
 		// _streams[idx] = new BufferedInputStream(fis); close the old entry
-		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
 		a.iload(2);
-		a.anew(this.bufferedInputStreamClass);
+		a.new_(this.bufferedInputStreamClass.entry());
 		a.dup();
 		a.aload(9);
-		a.invokespecial(this.bufferedInputStreamInit);
+		a.invokespecial(this.bufferedInputStreamInit.entry());
 		a.aastore();
 		a.aload(5);
-		a.checkcast(this.inputStreamClass);
-		a.invokevirtual(this.inputStreamClose);
-		int setDone = a.label();
-		a.branch(Opcode.GOTO, setDone);
-		a.bind(notInput);
+		a.checkcast(this.inputStreamClass.entry());
+		a.invokevirtual(this.inputStreamClose.methodRefEntry());
+		MethodCode.Label setDone = a.newLabel();
+		a.goto_(setDone);
+		a.labelBinding(notInput);
 		// output arm: FileChannel.open(Path.of(p), WRITE).position(n)
 		a.aload(4);
-		a.checkcast(this.stringClass);
-		a.invokestatic(Objects.requireNonNull(this.pathOf));
-		a.iconst(1);
-		a.anewarray(Objects.requireNonNull(this.openOptionClass));
+		a.checkcast(this.stringClass.entry());
+		a.invokestatic(Objects.requireNonNull(this.pathOf).entry());
+		a.loadConstant(1);
+		a.anewarray(Objects.requireNonNull(this.openOptionClass).entry());
 		a.dup();
-		a.iconst(0);
-		a.getstatic(Objects.requireNonNull(this.standardOpenOptionWrite));
+		a.loadConstant(0);
+		a.getstatic(Objects.requireNonNull(this.standardOpenOptionWrite).entry());
 		a.aastore();
-		a.invokestatic(Objects.requireNonNull(this.fileChannelOpen));
+		a.invokestatic(Objects.requireNonNull(this.fileChannelOpen).entry());
 		a.astore(9);
 		a.aload(9);
 		a.lload(7);
-		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition).methodRefEntry());
 		a.pop();
 		// _streams[idx] = new BufferedOutputStream(Channels.newOutputStream(ch))
-		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
 		a.iload(2);
-		a.anew(this.bufferedOutputStreamClass);
+		a.new_(this.bufferedOutputStreamClass.entry());
 		a.dup();
 		a.aload(9);
-		a.invokestatic(Objects.requireNonNull(this.channelsNewOutputStream));
-		a.invokespecial(this.bufferedOutputStreamInit);
+		a.invokestatic(Objects.requireNonNull(this.channelsNewOutputStream).entry());
+		a.invokespecial(this.bufferedOutputStreamInit.entry());
 		a.aastore();
 		a.aload(5);
-		a.checkcast(this.outputStreamClass);
-		a.invokevirtual(this.outputStreamClose);
-		a.bind(setDone);
+		a.checkcast(this.outputStreamClass.entry());
+		a.invokevirtual(this.outputStreamClose.methodRefEntry());
+		a.labelBinding(setDone);
 		// _storeStreamPosition(handle, Long.valueOf(n)); return "T";
 		a.lload(7);
-		a.invokestatic(this.longValueOf);
+		a.invokestatic(this.longValueOf.entry());
 		a.aload(0);
 		a.swap();
-		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef).entry());
 		a.pop();
-		emitLdc(a.code, this.tStr.index());
+		a.ldc(this.tStr.entry());
 		a.areturn();
 		// --- the nil exits ----------------------------------------------------
-		a.bind(notHandle);
-		a.bind(noPaths);
-		a.bind(idxNeg);
-		a.bind(idxOob);
-		a.bind(noPathVal);
-		a.bind(notBinaryOut);
-		a.aconstNull();
+		a.labelBinding(notHandle);
+		a.labelBinding(noPaths);
+		a.labelBinding(idxNeg);
+		a.labelBinding(idxOob);
+		a.labelBinding(noPathVal);
+		a.labelBinding(notBinaryOut);
+		a.aconst_null();
 		a.areturn();
 		// the negative-position error
-		a.bind(posNeg);
-		if (ioNeg >= 0) {
-			a.bind(ioNeg);
+		a.labelBinding(posNeg);
+		if (ioNeg != null) {
+			a.labelBinding(ioNeg);
 		}
-		for (int charNeg : charNegs) {
-			a.bind(charNeg);
+		for (MethodCode.Label charNeg : charNegs) {
+			a.labelBinding(charNeg);
 		}
-		a.anew(this.runtimeExceptionClass);
+		a.new_(this.runtimeExceptionClass.entry());
 		a.dup();
-		a.ldcString(java.util.Objects.requireNonNull(this.negPositionMsg));
-		a.invokespecial(this.runtimeExceptionInit);
+		a.ldc(java.util.Objects.requireNonNull(this.negPositionMsg).entry());
+		a.invokespecial(this.runtimeExceptionInit.entry());
 		a.athrow();
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
 	/**
@@ -2637,38 +2640,38 @@ final class JvmIoRuntimeBuilder {
 	 * slot 1, null) and {@code position(n)} then "T" for the set. A negative position
 	 * branches to the label added to {@code negs}, bound by the caller at its error.
 	 */
-	private void emitOwnCursorArm(JvmAsm a, ClassConstant type, MethodrefConstant position, MethodrefConstant seek,
-			List<Integer> negs) {
+	private void emitOwnCursorArm(MethodCode a, ClassConstant type, MethodrefConstant position, MethodrefConstant seek,
+			List<MethodCode.Label> negs) {
 		a.aload(5);
-		a.instanceOf(type);
-		int notThis = a.label();
-		a.branch(Opcode.IFEQ, notThis);
+		a.instanceOf(type.entry());
+		MethodCode.Label notThis = a.newLabel();
+		a.ifeq(notThis);
 		a.aload(1);
-		int set = a.label();
-		a.branch(Opcode.IFNONNULL, set);
+		MethodCode.Label set = a.newLabel();
+		a.ifnonnull(set);
 		a.aload(5);
-		a.checkcast(type);
-		a.invokevirtual(position);
-		a.invokestatic(this.longValueOf);
+		a.checkcast(type.entry());
+		a.invokevirtual(position.methodRefEntry());
+		a.invokestatic(this.longValueOf.entry());
 		a.areturn();
-		a.bind(set);
+		a.labelBinding(set);
 		a.aload(1);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.lstore(7);
 		a.lload(7);
-		a.lconst0();
+		a.lconst_0();
 		a.lcmp();
-		int neg = a.label();
-		a.branch(Opcode.IFLT, neg);
+		MethodCode.Label neg = a.newLabel();
+		a.iflt(neg);
 		negs.add(neg);
 		a.aload(5);
-		a.checkcast(type);
+		a.checkcast(type.entry());
 		a.lload(7);
-		a.invokevirtual(seek);
-		emitLdc(a.code, this.tStr.index());
+		a.invokevirtual(seek.methodRefEntry());
+		a.ldc(this.tStr.entry());
 		a.areturn();
-		a.bind(notThis);
+		a.labelBinding(notThis);
 	}
 
 	/**
@@ -2725,107 +2728,107 @@ final class JvmIoRuntimeBuilder {
 	private List<Integer> buildListDirectory() {
 		// Slots: 0=path, 1=p (String), 2=dir (File), 3=names (String[]), 4=i (int),
 		// 5=acc (Object), 6=entry (String)
-		JvmAsm a = new JvmAsm();
-		int notADirectory = a.label();
-		int loop = a.label();
-		int done = a.label();
-		int notSubdir = a.label();
-		int joined = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notADirectory = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label notSubdir = a.newLabel();
+		MethodCode.Label joined = a.newLabel();
 		// p = ((String) path).substring(1, length - 1);
 		a.aload(0);
 		if (this.strvRef != null) {
-			a.invokestatic(this.strvRef);
+			a.invokestatic(this.strvRef.entry());
 		}
-		a.checkcast(this.stringClass);
+		a.checkcast(this.stringClass.entry());
 		a.astore(1);
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(1);
-		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.invokevirtual(this.stringSubstring);
+		a.invokevirtual(this.stringLength.methodRefEntry());
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(this.stringSubstring.methodRefEntry());
 		a.astore(1);
 		// dir = new File(p); names = dir.list(); if (names == null) return null;
-		a.anew(this.fileClass);
+		a.new_(this.fileClass.entry());
 		a.dup();
 		a.aload(1);
-		a.invokespecial(this.fileInit);
+		a.invokespecial(this.fileInit.entry());
 		a.astore(2);
 		a.aload(2);
-		a.invokevirtual(java.util.Objects.requireNonNull(this.fileList));
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileList).methodRefEntry());
 		a.astore(3);
 		a.aload(3);
-		a.branch(Opcode.IFNULL, notADirectory);
+		a.ifnull(notADirectory);
 		// acc = null; for (i = names.length - 1; i >= 0; i--)
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(5);
 		a.aload(3);
 		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(4);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(4);
-		a.branch(Opcode.IFLT, done);
+		a.iflt(done);
 		// entry = "\"" + names[i]; then + "/\"" for a subdirectory, + "\"" otherwise
-		a.ldcString(this.quoteStr);
+		a.ldc(this.quoteStr.entry());
 		a.aload(3);
 		a.iload(4);
 		a.aaload();
-		a.invokevirtual(this.stringConcat);
+		a.invokevirtual(this.stringConcat.methodRefEntry());
 		a.astore(6);
-		a.anew(this.fileClass);
+		a.new_(this.fileClass.entry());
 		a.dup();
 		a.aload(2);
 		a.aload(3);
 		a.iload(4);
 		a.aaload();
-		a.invokespecial(java.util.Objects.requireNonNull(this.fileInitChild));
-		a.invokevirtual(java.util.Objects.requireNonNull(this.fileIsDirectory));
-		a.branch(Opcode.IFEQ, notSubdir);
+		a.invokespecial(java.util.Objects.requireNonNull(this.fileInitChild).entry());
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileIsDirectory).methodRefEntry());
+		a.ifeq(notSubdir);
 		a.aload(6);
-		a.ldcString(java.util.Objects.requireNonNull(this.slashQuoteStr));
-		a.invokevirtual(this.stringConcat);
+		a.ldc(java.util.Objects.requireNonNull(this.slashQuoteStr).entry());
+		a.invokevirtual(this.stringConcat.methodRefEntry());
 		a.astore(6);
-		a.branch(Opcode.GOTO, joined);
-		a.bind(notSubdir);
+		a.goto_(joined);
+		a.labelBinding(notSubdir);
 		a.aload(6);
-		a.ldcString(this.quoteStr);
-		a.invokevirtual(this.stringConcat);
+		a.ldc(this.quoteStr.entry());
+		a.invokevirtual(this.stringConcat.methodRefEntry());
 		a.astore(6);
-		a.bind(joined);
+		a.labelBinding(joined);
 		// acc = new Object[] { entry, acc };
-		a.iconst(2);
-		a.anewarray(this.objectClass);
+		a.loadConstant(2);
+		a.anewarray(this.objectClass.entry());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(6);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(5);
 		a.aastore();
 		a.astore(5);
 		a.iinc(4, -1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		// return new Object[] { "T", acc };
-		a.iconst(2);
-		a.anewarray(this.objectClass);
+		a.loadConstant(2);
+		a.anewarray(this.objectClass.entry());
 		a.dup();
-		a.iconst(0);
-		a.ldcString(this.tStr);
+		a.loadConstant(0);
+		a.ldc(this.tStr.entry());
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(5);
 		a.aastore();
 		a.areturn();
-		a.bind(notADirectory);
-		a.aconstNull();
+		a.labelBinding(notADirectory);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
 	/**
@@ -3972,265 +3975,265 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private List<Integer> buildReadSeqChars() {
 		CharSequenceIo io = java.util.Objects.requireNonNull(this.charSequenceIo);
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// Slots: 0=seq, 1=handle, 2=start, 3=end, 4=list, 5=header, 6=len, 7=s, 8=e,
 		// 9=r (BufferedReader), 10=block (char[]), 11=at, 12=n, 13=k, 14=c, 15=low,
 		// 16=entry
 		final int SEQ = 0, HANDLE = 1, START = 2, END = 3, LIST = 4, HEADER = 5, LEN = 6, S = 7, E = 8, R = 9,
 				BLOCK = 10, AT = 11, N = 12, K = 13, C = 14, LOW = 15, ENTRY = 16;
 		final int BLOCK_UNITS = 8192;
-		int declined = a.label();
+		MethodCode.Label declined = a.newLabel();
 		// --- the buffer: the length-4 header is the character-vector marker ----------
 		a.aload(SEQ);
-		a.instanceOf(io.arrayListClass());
-		a.branch(Opcode.IFEQ, declined);
+		a.instanceOf(io.arrayListClass().entry());
+		a.ifeq(declined);
 		a.aload(SEQ);
-		a.checkcast(io.arrayListClass());
+		a.checkcast(io.arrayListClass().entry());
 		a.astore(LIST);
 		a.aload(LIST);
-		a.iconst(0);
-		a.invokevirtual(io.listGet());
-		a.instanceOf(io.objectArrayClass());
-		a.branch(Opcode.IFEQ, declined);
+		a.loadConstant(0);
+		a.invokevirtual(io.listGet().methodRefEntry());
+		a.instanceOf(io.objectArrayClass().entry());
+		a.ifeq(declined);
 		a.aload(LIST);
-		a.iconst(0);
-		a.invokevirtual(io.listGet());
-		a.checkcast(io.objectArrayClass());
+		a.loadConstant(0);
+		a.invokevirtual(io.listGet().methodRefEntry());
+		a.checkcast(io.objectArrayClass().entry());
 		a.astore(HEADER);
 		a.aload(HEADER);
 		a.arraylength();
-		a.iconst(4);
-		a.branch(Opcode.IF_ICMPNE, declined);
+		a.loadConstant(4);
+		a.if_icmpne(declined);
 		// len = the fill pointer when there is one, else dimension 0 -- what (length seq)
 		// answers, which is the bound the loop this replaces reads.
-		int useDim = a.label();
-		int haveLen = a.label();
+		MethodCode.Label useDim = a.newLabel();
+		MethodCode.Label haveLen = a.newLabel();
 		a.aload(HEADER);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.branch(Opcode.IFNULL, useDim);
+		a.ifnull(useDim);
 		a.aload(HEADER);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(LEN);
-		a.branch(Opcode.GOTO, haveLen);
-		a.bind(useDim);
+		a.goto_(haveLen);
+		a.labelBinding(useDim);
 		a.aload(HEADER);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(io.objectArrayClass());
-		a.iconst(0);
+		a.checkcast(io.objectArrayClass().entry());
+		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(LEN);
-		a.bind(haveLen);
+		a.labelBinding(haveLen);
 		// --- the bounds -------------------------------------------------------------
-		emitBoundArg(a, START, S, () -> a.iconst(0));
+		emitBoundArg(a, START, S, () -> a.loadConstant(0));
 		emitBoundArg(a, END, E, () -> a.iload(LEN));
 		a.iload(S);
-		a.branch(Opcode.IFLT, declined);
+		a.iflt(declined);
 		a.iload(E);
 		a.iload(LEN);
-		a.branch(Opcode.IF_ICMPGT, declined);
+		a.if_icmpgt(declined);
 		a.iload(S);
 		a.iload(E);
-		a.branch(Opcode.IF_ICMPGT, declined);
+		a.if_icmpgt(declined);
 		// --- the stream: a text table entry, or standard input ----------------------
-		int stdin = a.label();
-		int haveReader = a.label();
+		MethodCode.Label stdin = a.newLabel();
+		MethodCode.Label haveReader = a.newLabel();
 		a.aload(HANDLE);
-		a.instanceOf(this.longClass);
-		a.branch(Opcode.IFEQ, stdin);
-		a.getstatic(this.streamsField);
+		a.instanceOf(this.longClass.entry());
+		a.ifeq(stdin);
+		a.getstatic(this.streamsField.entry());
 		a.aload(HANDLE);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.aaload();
 		a.astore(ENTRY);
 		a.aload(ENTRY);
-		a.instanceOf(this.bufferedReaderClass);
-		a.branch(Opcode.IFEQ, declined);
+		a.instanceOf(this.bufferedReaderClass.entry());
+		a.ifeq(declined);
 		a.aload(ENTRY);
-		a.checkcast(this.bufferedReaderClass);
+		a.checkcast(this.bufferedReaderClass.entry());
 		a.astore(R);
-		a.branch(Opcode.GOTO, haveReader);
-		a.bind(stdin);
-		int haveStdin = a.label();
-		a.getstatic(this.stdinReaderField);
-		a.branch(Opcode.IFNONNULL, haveStdin);
-		a.anew(this.bufferedReaderClass);
+		a.goto_(haveReader);
+		a.labelBinding(stdin);
+		MethodCode.Label haveStdin = a.newLabel();
+		a.getstatic(this.stdinReaderField.entry());
+		a.ifnonnull(haveStdin);
+		a.new_(this.bufferedReaderClass.entry());
 		a.dup();
-		a.anew(this.inputStreamReaderClass);
+		a.new_(this.inputStreamReaderClass.entry());
 		a.dup();
-		a.getstatic(this.systemIn);
-		a.invokespecial(this.inputStreamReaderInit);
-		a.invokespecial(this.bufferedReaderInit);
-		a.putstatic(this.stdinReaderField);
-		a.bind(haveStdin);
-		a.getstatic(this.stdinReaderField);
+		a.getstatic(this.systemIn.entry());
+		a.invokespecial(this.inputStreamReaderInit.entry());
+		a.invokespecial(this.bufferedReaderInit.entry());
+		a.putstatic(this.stdinReaderField.entry());
+		a.labelBinding(haveStdin);
+		a.getstatic(this.stdinReaderField.entry());
 		a.astore(R);
-		a.bind(haveReader);
+		a.labelBinding(haveReader);
 		// --- the transfer: block by block, at walks the code points from s to e ------
 		a.iload(E);
 		a.iload(S);
-		a.op(Opcode.ISUB);
+		a.isub();
 		a.istore(N);
-		int blockSized = a.label();
+		MethodCode.Label blockSized = a.newLabel();
 		a.iload(N);
-		a.iconst(BLOCK_UNITS);
-		a.branch(Opcode.IF_ICMPLE, blockSized);
-		a.iconst(BLOCK_UNITS);
+		a.loadConstant(BLOCK_UNITS);
+		a.if_icmple(blockSized);
+		a.loadConstant(BLOCK_UNITS);
 		a.istore(N);
-		a.bind(blockSized);
+		a.labelBinding(blockSized);
 		a.iload(N);
-		a.newarrayChar();
+		a.newarray(TypeKind.CHAR);
 		a.astore(BLOCK);
 		a.iload(S);
 		a.istore(AT);
-		int round = a.label();
-		int done = a.label();
-		int unit = a.label();
-		a.bind(round);
+		MethodCode.Label round = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label unit = a.newLabel();
+		a.labelBinding(round);
 		a.iload(AT);
 		a.iload(E);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		// n = r.read(block, 0, min(block.length, e - at))
 		a.aload(BLOCK);
 		a.arraylength();
 		a.istore(N);
-		int wantSized = a.label();
+		MethodCode.Label wantSized = a.newLabel();
 		a.iload(N);
 		a.iload(E);
 		a.iload(AT);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPLE, wantSized);
+		a.isub();
+		a.if_icmple(wantSized);
 		a.iload(E);
 		a.iload(AT);
-		a.op(Opcode.ISUB);
+		a.isub();
 		a.istore(N);
-		a.bind(wantSized);
+		a.labelBinding(wantSized);
 		a.aload(R);
 		a.aload(BLOCK);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(N);
-		a.invokevirtual(io.readBlock());
+		a.invokevirtual(io.readBlock().methodRefEntry());
 		a.istore(N);
 		a.iload(N);
-		a.branch(Opcode.IFLT, done);
-		a.iconst(0);
+		a.iflt(done);
+		a.loadConstant(0);
 		a.istore(K);
-		a.bind(unit);
+		a.labelBinding(unit);
 		a.iload(K);
 		a.iload(N);
-		a.branch(Opcode.IF_ICMPGE, round);
+		a.if_icmpge(round);
 		a.iload(AT);
 		a.iload(E);
-		a.branch(Opcode.IF_ICMPGE, round);
+		a.if_icmpge(round);
 		a.aload(BLOCK);
 		a.iload(K);
 		a.caload();
 		a.istore(C);
 		a.iinc(K, 1);
-		int store = a.label();
+		MethodCode.Label store = a.newLabel();
 		a.iload(C);
-		a.op(Opcode.I2C);
-		a.invokestatic(this.characterIsHighSurrogate);
-		a.branch(Opcode.IFEQ, store);
-		int fromBlock = a.label();
+		a.i2c();
+		a.invokestatic(this.characterIsHighSurrogate.entry());
+		a.ifeq(store);
+		MethodCode.Label fromBlock = a.newLabel();
 		a.iload(K);
 		a.iload(N);
-		a.branch(Opcode.IF_ICMPLT, fromBlock);
+		a.if_icmplt(fromBlock);
 		// the block ended on the high half: read one more behind a mark
 		a.aload(R);
-		a.iconst(1);
-		a.invokevirtual(this.bufferedReaderMark);
+		a.loadConstant(1);
+		a.invokevirtual(this.bufferedReaderMark.methodRefEntry());
 		a.aload(R);
-		a.invokevirtual(this.bufferedReaderRead);
+		a.invokevirtual(this.bufferedReaderRead.methodRefEntry());
 		a.istore(LOW);
 		a.iload(LOW);
-		a.branch(Opcode.IFLT, store);
+		a.iflt(store);
 		a.iload(LOW);
-		a.op(Opcode.I2C);
-		a.invokestatic(this.characterIsLowSurrogate);
-		int putBack = a.label();
-		a.branch(Opcode.IFEQ, putBack);
+		a.i2c();
+		a.invokestatic(this.characterIsLowSurrogate.entry());
+		MethodCode.Label putBack = a.newLabel();
+		a.ifeq(putBack);
 		emitCombinePair(a, C, LOW);
-		a.branch(Opcode.GOTO, store);
-		a.bind(putBack);
+		a.goto_(store);
+		a.labelBinding(putBack);
 		a.aload(R);
-		a.invokevirtual(this.bufferedReaderReset);
-		a.branch(Opcode.GOTO, store);
+		a.invokevirtual(this.bufferedReaderReset.methodRefEntry());
+		a.goto_(store);
 		// the low half is the next unit of the block, when it is one
-		a.bind(fromBlock);
+		a.labelBinding(fromBlock);
 		a.aload(BLOCK);
 		a.iload(K);
 		a.caload();
 		a.istore(LOW);
 		a.iload(LOW);
-		a.op(Opcode.I2C);
-		a.invokestatic(this.characterIsLowSurrogate);
-		a.branch(Opcode.IFEQ, store);
+		a.i2c();
+		a.invokestatic(this.characterIsLowSurrogate.entry());
+		a.ifeq(store);
 		a.iinc(K, 1);
 		emitCombinePair(a, C, LOW);
 		// list.set(1 + at, new int[]{c}) -- the runtime CHARACTER representation
-		a.bind(store);
+		a.labelBinding(store);
 		a.aload(LIST);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(AT);
-		a.op(Opcode.IADD);
-		a.iconst(1);
-		a.newarrayInt();
+		a.iadd();
+		a.loadConstant(1);
+		a.newarray(TypeKind.INT);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(C);
 		a.iastore();
-		a.invokevirtual(io.listSet());
+		a.invokevirtual(io.listSet().methodRefEntry());
 		a.pop();
 		a.iinc(AT, 1);
-		a.branch(Opcode.GOTO, unit);
-		a.bind(done);
+		a.goto_(unit);
+		a.labelBinding(done);
 		a.iload(AT);
 		a.i2l();
-		a.invokestatic(this.longValueOf);
+		a.invokestatic(this.longValueOf.entry());
 		a.areturn();
-		a.bind(declined);
-		a.aconstNull();
+		a.labelBinding(declined);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
 	// c = Character.toCodePoint((char) c, (char) low)
-	private void emitCombinePair(JvmAsm a, int cSlot, int lowSlot) {
+	private void emitCombinePair(MethodCode a, int cSlot, int lowSlot) {
 		a.iload(cSlot);
-		a.op(Opcode.I2C);
+		a.i2c();
 		a.iload(lowSlot);
-		a.op(Opcode.I2C);
-		a.invokestatic(this.characterToCodePoint);
+		a.i2c();
+		a.invokestatic(this.characterToCodePoint.entry());
 		a.istore(cSlot);
 	}
 
 	// target = arg is nil ? dflt : (int) ((Long) arg).longValue()
-	private void emitBoundArg(JvmAsm a, int argSlot, int targetSlot, Runnable dflt) {
-		int fromArg = a.label();
-		int have = a.label();
+	private void emitBoundArg(MethodCode a, int argSlot, int targetSlot, Runnable dflt) {
+		MethodCode.Label fromArg = a.newLabel();
+		MethodCode.Label have = a.newLabel();
 		a.aload(argSlot);
-		a.branch(Opcode.IFNONNULL, fromArg);
+		a.ifnonnull(fromArg);
 		dflt.run();
 		a.istore(targetSlot);
-		a.branch(Opcode.GOTO, have);
-		a.bind(fromArg);
+		a.goto_(have);
+		a.labelBinding(fromArg);
 		a.aload(argSlot);
-		a.checkcast(this.longClass);
-		a.invokevirtual(this.longValue);
+		a.checkcast(this.longClass.entry());
+		a.invokevirtual(this.longValue.methodRefEntry());
 		a.l2i();
 		a.istore(targetSlot);
-		a.bind(have);
+		a.labelBinding(have);
 	}
 
 	/**

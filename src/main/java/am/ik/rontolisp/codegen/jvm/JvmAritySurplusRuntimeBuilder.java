@@ -1,12 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
 
 /**
@@ -45,7 +44,7 @@ final class JvmAritySurplusRuntimeBuilder {
 	/**
 	 * An arity-surplus runtime method body ready to be emitted into the generated class.
 	 */
-	record AritySurplusMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record AritySurplusMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_aritySurplus";
@@ -55,7 +54,7 @@ final class JvmAritySurplusRuntimeBuilder {
 	/**
 	 * An arity-missing runtime method body ready to be emitted into the generated class.
 	 */
-	record ArityMissingMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record ArityMissingMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	static final String MISSING_METHOD = "_arityMissing";
@@ -65,72 +64,68 @@ final class JvmAritySurplusRuntimeBuilder {
 	private JvmAritySurplusRuntimeBuilder() {
 	}
 
-	static AritySurplusMethod build(ConstantPool cp, ClassConstant objectArrayClass) {
-		ClassConstant sb = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant sbInit = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant appendStr = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant appendInt = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant toString = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+	static AritySurplusMethod build(ConstantPool cp, ClassEntry objectArrayClass) {
+		ClassEntry sb = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry sbInit = cp.methodRef(sb, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry appendStr = cp.methodRef(sb, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry appendInt = cp.methodRef(sb, "append", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry toString = cp.methodRef(sb, "toString", "()Ljava/lang/String;");
 		// Slots: 0 = the operator (null: Function), 1 = max, 2 = the running count
 		// (starts at required), 3 = the rest cursor, 4 = the builder.
-		JvmAsm a = new JvmAsm();
-		int named = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label named = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, named);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_ANONYMOUS_OPERATOR));
+		a.ifnonnull(named);
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_ANONYMOUS_OPERATOR));
 		a.astore(0);
-		a.bind(named);
-		a.anew(sb);
+		a.labelBinding(named);
+		a.new_(sb);
 		a.dup();
-		a.ldcString(cp.addString("\""));
+		a.ldc(cp.stringEntry("\""));
 		a.invokespecial(sbInit);
 		a.astore(4);
 		a.aload(4);
 		a.aload(0);
 		a.invokevirtual(appendStr);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_VERB + ClosRegistry.ARITY_AT_MOST));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_VERB + ClosRegistry.ARITY_AT_MOST));
 		a.invokevirtual(appendStr);
 		a.iload(1);
 		a.invokevirtual(appendInt);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_ARGUMENT));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_ARGUMENT));
 		a.invokevirtual(appendStr);
 		a.pop();
-		int singular = a.label();
+		MethodCode.Label singular = a.newLabel();
 		a.iload(1);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPEQ, singular);
+		a.loadConstant(1);
+		a.if_icmpeq(singular);
 		a.aload(4);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_PLURAL));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_PLURAL));
 		a.invokevirtual(appendStr);
 		a.pop();
-		a.bind(singular);
-		int loop = a.label();
-		int done = a.label();
-		a.bind(loop);
+		a.labelBinding(singular);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(loop);
 		a.aload(3);
-		a.branch(Opcode.IFNULL, done);
+		a.ifnull(done);
 		a.iinc(2, 1);
 		a.aload(3);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(3);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(4);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_MESSAGE_INFIX));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_MESSAGE_INFIX));
 		a.invokevirtual(appendStr);
 		a.iload(2);
 		a.invokevirtual(appendInt);
-		a.ldcString(cp.addString("\""));
+		a.ldc(cp.stringEntry("\""));
 		a.invokevirtual(appendStr);
 		a.invokevirtual(toString);
 		a.areturn();
-		return new AritySurplusMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 5, a.finish());
+		return new AritySurplusMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
 	}
 
 	/**
@@ -143,47 +138,43 @@ final class JvmAritySurplusRuntimeBuilder {
 	 * @return the method body
 	 */
 	static ArityMissingMethod buildMissing(ConstantPool cp) {
-		ClassConstant sb = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant sbInit = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant appendStr = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant appendInt = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant toString = cp.addMethodref(sb,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassEntry sb = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry sbInit = cp.methodRef(sb, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry appendStr = cp.methodRef(sb, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry appendInt = cp.methodRef(sb, "append", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry toString = cp.methodRef(sb, "toString", "()Ljava/lang/String;");
 		// Slots: 0 = required, 1 = got, 2 = the builder.
-		JvmAsm a = new JvmAsm();
-		a.anew(sb);
+		MethodCode a = new MethodCode();
+		a.new_(sb);
 		a.dup();
-		a.ldcString(cp.addString("\"" + ClosRegistry.ARITY_MESSAGE_PREFIX + ClosRegistry.ARITY_AT_LEAST));
+		a.ldc(cp.stringEntry("\"" + ClosRegistry.ARITY_MESSAGE_PREFIX + ClosRegistry.ARITY_AT_LEAST));
 		a.invokespecial(sbInit);
 		a.astore(2);
 		a.aload(2);
 		a.iload(0);
 		a.invokevirtual(appendInt);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_ARGUMENT));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_ARGUMENT));
 		a.invokevirtual(appendStr);
 		a.pop();
-		int singular = a.label();
+		MethodCode.Label singular = a.newLabel();
 		a.iload(0);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPEQ, singular);
+		a.loadConstant(1);
+		a.if_icmpeq(singular);
 		a.aload(2);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_PLURAL));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_PLURAL));
 		a.invokevirtual(appendStr);
 		a.pop();
-		a.bind(singular);
+		a.labelBinding(singular);
 		a.aload(2);
-		a.ldcString(cp.addString(ClosRegistry.ARITY_MESSAGE_INFIX));
+		a.ldc(cp.stringEntry(ClosRegistry.ARITY_MESSAGE_INFIX));
 		a.invokevirtual(appendStr);
 		a.iload(1);
 		a.invokevirtual(appendInt);
-		a.ldcString(cp.addString("\""));
+		a.ldc(cp.stringEntry("\""));
 		a.invokevirtual(appendStr);
 		a.invokevirtual(toString);
 		a.areturn();
-		return new ArityMissingMethod(cp.addUtf8(MISSING_METHOD), cp.addUtf8(MISSING_DESC), 3, 3, a.finish());
+		return new ArityMissingMethod(cp.addUtf8(MISSING_METHOD), cp.addUtf8(MISSING_DESC), a);
 	}
 
 }

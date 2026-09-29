@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -95,44 +96,43 @@ final class JvmStringTrimCompiler {
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(endSlot);
 
-		JvmAsm asm = new JvmAsm();
+		MethodCode asm = ctx.body;
 		if (left) {
-			int loop = asm.label();
-			int done = asm.label();
-			asm.bind(loop);
+			MethodCode.Label loop = asm.newLabel();
+			MethodCode.Label done = asm.newLabel();
+			asm.labelBinding(loop);
 			asm.iload(startSlot);
 			asm.iload(endSlot);
-			asm.branch(Opcode.IF_ICMPGE, done);
+			asm.if_icmpge(done);
 			asm.aload(bagSlot);
 			asm.aload(sSlot);
 			asm.iload(startSlot);
-			asm.invokevirtual(ctx.stringCharAt);
-			asm.invokevirtual(indexOf);
-			asm.branch(Opcode.IFLT, done);
+			asm.invokevirtual(ctx.stringCharAt.methodRefEntry());
+			asm.invokevirtual(indexOf.methodRefEntry());
+			asm.iflt(done);
 			asm.iinc(startSlot, 1);
-			asm.branch(Opcode.GOTO, loop);
-			asm.bind(done);
+			asm.goto_(loop);
+			asm.labelBinding(done);
 		}
 		if (right) {
-			int loop = asm.label();
-			int done = asm.label();
-			asm.bind(loop);
+			MethodCode.Label loop = asm.newLabel();
+			MethodCode.Label done = asm.newLabel();
+			asm.labelBinding(loop);
 			asm.iload(endSlot);
 			asm.iload(startSlot);
-			asm.branch(Opcode.IF_ICMPLE, done);
+			asm.if_icmple(done);
 			asm.aload(bagSlot);
 			asm.aload(sSlot);
 			asm.iload(endSlot);
-			asm.iconst(1);
-			asm.op(Opcode.ISUB);
-			asm.invokevirtual(ctx.stringCharAt);
-			asm.invokevirtual(indexOf);
-			asm.branch(Opcode.IFLT, done);
+			asm.loadConstant(1);
+			asm.isub();
+			asm.invokevirtual(ctx.stringCharAt.methodRefEntry());
+			asm.invokevirtual(indexOf.methodRefEntry());
+			asm.iflt(done);
 			asm.iinc(endSlot, -1);
-			asm.branch(Opcode.GOTO, loop);
-			asm.bind(done);
+			asm.goto_(loop);
+			asm.labelBinding(done);
 		}
-		ctx.emitBlock(asm.finish());
 
 		// "\"" + s.substring(start, end) + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx);

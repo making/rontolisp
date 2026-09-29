@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -9,8 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
-import am.ik.rontolisp.codegen.jvm.JvmAsyncRuntimeBuilder.Asm;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the JVM bytecode of the thread primitives behind {@code rontolisp:make-thread},
@@ -90,9 +90,8 @@ final class JvmThreadRuntimeBuilder {
 	private JvmThreadRuntimeBuilder() {
 	}
 
-	/** A ready-to-emit method body (optionally with an exception table). */
-	record ThreadMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<int[]> exceptionTable) {
+	/** A ready-to-emit method body, its handlers included. */
+	record ThreadMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/** The emitted bodies: the static helpers plus the public instance {@code call()}. */
@@ -151,8 +150,8 @@ final class JvmThreadRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("_invoke_0"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant dtl = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(DTL_METHOD), cp.addUtf8(DTL_DESC)));
-		MethodrefConstant condTake = java.util.Objects.requireNonNull(channel.condTake);
-		MethodrefConstant condPut = java.util.Objects.requireNonNull(channel.condPut);
+		java.lang.classfile.constantpool.MethodRefEntry condTake = java.util.Objects.requireNonNull(channel.condTake);
+		java.lang.classfile.constantpool.MethodRefEntry condPut = java.util.Objects.requireNonNull(channel.condPut);
 		ConstantPool.StringConstant tMarker = cp.addString(TMARKER);
 		ConstantPool.StringConstant eMarker = cp.addString(JvmAsyncRuntimeBuilder.EMARKER);
 		ConstantPool.StringConstant tStr = cp.addString("T");
@@ -162,171 +161,150 @@ final class JvmThreadRuntimeBuilder {
 		// --- _thread_spawn(fn, bindings): FutureTask over a fresh runner instance on a
 		// virtual thread; the handle packs the thread (alive/destroy) and the task (join)
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			// runner (slot 2) = new Prog() with the two fields set
-			a.op(Opcode.NEW);
-			a.u2(thisClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(instanceInitRef.index());
+			a.new_(thisClass.entry());
+			a.dup();
+			a.invokespecial(instanceInitRef.entry());
 			a.astore(2);
 			a.aload(2);
 			a.aload(0);
-			a.op(Opcode.PUTFIELD);
-			a.u2(fnField.index());
+			a.putfield(fnField.entry());
 			a.aload(2);
 			a.aload(1);
-			a.op(Opcode.PUTFIELD);
-			a.u2(bindingsField.index());
+			a.putfield(bindingsField.entry());
 			// task (slot 3) = new FutureTask(runner)
-			a.op(Opcode.NEW);
-			a.u2(futureTaskClass.index());
-			a.op(Opcode.DUP);
+			a.new_(futureTaskClass.entry());
+			a.dup();
 			a.aload(2);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(futureTaskCtor.index());
+			a.invokespecial(futureTaskCtor.entry());
 			a.astore(3);
 			// thread (slot 4) = Thread.ofVirtual().start(task)
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(threadOfVirtual.index()); // [builder]
+			a.invokestatic(threadOfVirtual.entry()); // [builder]
 			a.aload(3);
-			a.op(Opcode.INVOKEINTERFACE);
-			a.u2(builderStart.index());
-			a.op(2); // this + 1 arg
-			a.op(0); // [thread]
+			a.invokeinterface(builderStart.interfaceMethodRefEntry());
 			a.astore(4);
 			// {TMARKER, thread, task}
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(tMarker.index());
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(tMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
+			a.dup();
+			a.loadConstant(1);
 			a.aload(4);
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
+			a.dup();
+			a.loadConstant(2);
 			a.aload(3);
 			a.aastore();
 			a.areturn();
-			methods
-				.add(new ThreadMethod(cp.addUtf8(SPAWN_METHOD), cp.addUtf8(SPAWN_DESC), 4, 5, a.finish(), List.of()));
+			methods.add(new ThreadMethod(cp.addUtf8(SPAWN_METHOD), cp.addUtf8(SPAWN_DESC), a));
 		}
 
 		// --- _thread_join(h): the task's value, rethrowing an EMARKER error payload with
 		// its condition re-set on the joining thread (the _await precedent)
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(futureTaskClass);
+			a.checkcast(futureTaskClass.entry());
 			// the try region covers ONLY get(): a bad handle's ClassCastException above
 			// must surface as itself, not as "interrupted"
-			int tryStart = a.pos();
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureTaskGet.index()); // [v]
+			MethodCode.Label tryStart = a.newBoundLabel();
+			a.invokevirtual(futureTaskGet.methodRefEntry()); // [v]
 			a.astore(1);
 			// also wait for the thread itself to die, so thread-alive-p answers nil
 			// deterministically after a join (the task settles inside the body, a beat
 			// before the thread's teardown). The handle casts cannot throw here: the
 			// same values already passed the casts above.
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(threadClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(threadJoin.index());
-			int tryEnd = a.pos();
-			int check = a.label();
-			a.branch(Opcode.GOTO, check);
+			a.checkcast(threadClass.entry());
+			a.invokevirtual(threadJoin.methodRefEntry());
+			MethodCode.Label tryEnd = a.newBoundLabel();
+			MethodCode.Label check = a.newLabel();
+			a.goto_(check);
 			// catch (Exception e): interrupted while joining (call() itself never throws)
-			int handler = a.pos();
+			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(2);
-			a.op(Opcode.NEW);
-			a.u2(iseClass.index());
-			a.op(Opcode.DUP);
-			a.ldc(cp.addString("JOIN-THREAD: interrupted while joining the thread").index());
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(iseCtor.index());
-			a.op(Opcode.ATHROW);
-			a.bind(check);
-			int ret = a.label();
+			a.new_(iseClass.entry());
+			a.dup();
+			a.ldc(cp.addString("JOIN-THREAD: interrupted while joining the thread").entry());
+			a.invokespecial(iseCtor.entry());
+			a.athrow();
+			a.labelBinding(check);
+			MethodCode.Label ret = a.newLabel();
 			a.aload(1);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(objectArrayClass.index());
-			a.branch(Opcode.IFEQ, ret);
+			a.instanceOf(objectArrayClass.entry());
+			a.ifeq(ret);
 			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(3);
-			a.branch(Opcode.IF_ICMPNE, ret);
+			a.checkcast(objectArrayClass.entry());
+			a.arraylength();
+			a.loadConstant(3);
+			a.if_icmpne(ret);
 			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.iconst(0);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(0);
 			a.aaload();
-			a.ldc(eMarker.index());
-			a.branch(Opcode.IF_ACMPNE, ret);
+			a.ldc(eMarker.entry());
+			a.if_acmpne(ret);
 			// error payload: record the condition under the throwable on this thread,
 			// rethrow the throwable
 			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(throwableClass);
+			a.checkcast(throwableClass.entry());
 			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(condPut.index());
-			a.op(Opcode.ATHROW);
-			a.bind(ret);
+			a.invokestatic(condPut);
+			a.athrow();
+			a.labelBinding(ret);
 			a.aload(1);
 			a.areturn();
-			methods.add(new ThreadMethod(cp.addUtf8(JOIN_METHOD), cp.addUtf8(UNARY_DESC), 3, 3, a.finish(),
-					List.of(new int[] { tryStart, tryEnd, handler, exceptionClass.index() })));
+			a.exceptionCatch(tryStart, tryEnd, handler, exceptionClass.entry());
+			methods.add(new ThreadMethod(cp.addUtf8(JOIN_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _thread_alive(h): Thread.isAlive as T/nil
 		{
-			Asm a = new Asm();
-			int no = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label no = a.newLabel();
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(threadClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(threadIsAlive.index());
-			a.branch(Opcode.IFEQ, no);
-			a.ldc(tStr.index());
+			a.checkcast(threadClass.entry());
+			a.invokevirtual(threadIsAlive.methodRefEntry());
+			a.ifeq(no);
+			a.ldc(tStr.entry());
 			a.areturn();
-			a.bind(no);
-			a.aconstNull();
+			a.labelBinding(no);
+			a.aconst_null();
 			a.areturn();
-			methods
-				.add(new ThreadMethod(cp.addUtf8(ALIVE_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+			methods.add(new ThreadMethod(cp.addUtf8(ALIVE_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _thread_destroy(h): interrupt the thread, answer the handle
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(threadClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(threadInterrupt.index());
+			a.checkcast(threadClass.entry());
+			a.invokevirtual(threadInterrupt.methodRefEntry());
 			a.aload(0);
 			a.areturn();
-			methods
-				.add(new ThreadMethod(cp.addUtf8(DESTROY_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+			methods.add(new ThreadMethod(cp.addUtf8(DESTROY_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _thread_current(): the calling thread's own handle, cached in the
@@ -339,96 +317,82 @@ final class JvmThreadRuntimeBuilder {
 					cp.addNameAndType(cp.addUtf8("currentThread"), cp.addUtf8("()Ljava/lang/Thread;")));
 			MethodrefConstant tlGetRef = java.util.Objects.requireNonNull(channel.tlGet);
 			MethodrefConstant tlSetRef = java.util.Objects.requireNonNull(channel.tlSet);
-			Asm a = new Asm();
-			a.op(Opcode.GETSTATIC);
-			a.u2(curThreadTlField.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlGetRef.index());
+			MethodCode a = new MethodCode();
+			a.getstatic(curThreadTlField.entry());
+			a.invokevirtual(tlGetRef.methodRefEntry());
 			a.astore(0);
-			int ret = a.label();
+			MethodCode.Label ret = a.newLabel();
 			a.aload(0);
-			a.branch(Opcode.IFNONNULL, ret);
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(tMarker.index());
+			a.ifnonnull(ret);
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(tMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(threadCurrent.index());
+			a.dup();
+			a.loadConstant(1);
+			a.invokestatic(threadCurrent.entry());
 			a.aastore();
 			a.astore(0);
-			a.op(Opcode.GETSTATIC);
-			a.u2(curThreadTlField.index());
+			a.getstatic(curThreadTlField.entry());
 			a.aload(0);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlSetRef.index());
-			a.bind(ret);
+			a.invokevirtual(tlSetRef.methodRefEntry());
+			a.labelBinding(ret);
 			a.aload(0);
 			a.areturn();
-			methods.add(new ThreadMethod(cp.addUtf8(CURRENT_METHOD), cp.addUtf8(CURRENT_DESC), 4, 1, a.finish(),
-					List.of()));
+			methods.add(new ThreadMethod(cp.addUtf8(CURRENT_METHOD), cp.addUtf8(CURRENT_DESC), a));
 		}
 
 		// --- _threadp(x): the marker identity test
 		{
-			Asm a = new Asm();
-			int no = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label no = a.newLabel();
 			a.aload(0);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(objectArrayClass.index());
-			a.branch(Opcode.IFEQ, no);
+			a.instanceOf(objectArrayClass.entry());
+			a.ifeq(no);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(3);
-			a.branch(Opcode.IF_ICMPNE, no);
+			a.checkcast(objectArrayClass.entry());
+			a.arraylength();
+			a.loadConstant(3);
+			a.if_icmpne(no);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(0);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(0);
 			a.aaload();
-			a.ldc(tMarker.index());
-			a.branch(Opcode.IF_ACMPNE, no);
-			a.ldc(tStr.index());
+			a.ldc(tMarker.entry());
+			a.if_acmpne(no);
+			a.ldc(tStr.entry());
 			a.areturn();
-			a.bind(no);
-			a.aconstNull();
+			a.labelBinding(no);
+			a.aconst_null();
 			a.areturn();
-			methods
-				.add(new ThreadMethod(cp.addUtf8(THREADP_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+			methods.add(new ThreadMethod(cp.addUtf8(THREADP_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _dtl(name): the special's _d$ ThreadLocal by runtime name, or a clear error
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			for (Map.Entry<String, FieldrefConstant> entry : dynVarRuntime.fields().entrySet()) {
-				int next = a.label();
-				a.ldc(cp.addString(entry.getKey()).index());
+				MethodCode.Label next = a.newLabel();
+				a.ldc(cp.addString(entry.getKey()).entry());
 				a.aload(0);
-				a.op(Opcode.INVOKEVIRTUAL);
-				a.u2(stringEquals.index());
-				a.branch(Opcode.IFEQ, next);
-				a.op(Opcode.GETSTATIC);
-				a.u2(entry.getValue().index());
+				a.invokevirtual(stringEquals.methodRefEntry());
+				a.ifeq(next);
+				a.getstatic(entry.getValue().entry());
 				a.areturn();
-				a.bind(next);
+				a.labelBinding(next);
 			}
-			a.op(Opcode.NEW);
-			a.u2(iseClass.index());
-			a.op(Opcode.DUP);
-			a.ldc(cp.addString("MAKE-THREAD: cannot dynamically bind ").index());
+			a.new_(iseClass.entry());
+			a.dup();
+			a.ldc(cp.addString("MAKE-THREAD: cannot dynamically bind ").entry());
 			a.aload(0);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringConcat.index());
-			a.ldc(cp.addString(" (not a special variable of this program)").index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringConcat.index());
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(iseCtor.index());
-			a.op(Opcode.ATHROW);
-			methods.add(new ThreadMethod(cp.addUtf8(DTL_METHOD), cp.addUtf8(DTL_DESC), 4, 1, a.finish(), List.of()));
+			a.invokevirtual(stringConcat.methodRefEntry());
+			a.ldc(cp.addString(" (not a special variable of this program)").entry());
+			a.invokevirtual(stringConcat.methodRefEntry());
+			a.invokespecial(iseCtor.entry());
+			a.athrow();
+			methods.add(new ThreadMethod(cp.addUtf8(DTL_METHOD), cp.addUtf8(DTL_DESC), a));
 		}
 
 		// --- call(): the spawned body (Callable protocol) -- bind, run, or answer the
@@ -436,73 +400,67 @@ final class JvmThreadRuntimeBuilder {
 		ThreadMethod callMethod;
 		{
 			MethodrefConstant dbind = dynVarRuntime.dbind();
-			Asm a = new Asm();
-			int tryStart = a.pos();
+			MethodCode a = new MethodCode();
+			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(bindingsField.index());
+			a.getfield(bindingsField.entry());
 			a.astore(1);
-			int loop = a.label();
-			int loopEnd = a.label();
-			a.bind(loop);
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label loopEnd = a.newLabel();
+			a.labelBinding(loop);
 			a.aload(1);
-			a.branch(Opcode.IFNULL, loopEnd);
+			a.ifnull(loopEnd);
 			a.aload(1);
-			a.checkcast(objectArrayClass);
+			a.checkcast(objectArrayClass.entry());
 			a.astore(2); // cons
 			a.aload(2);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
-			a.checkcast(objectArrayClass);
+			a.checkcast(objectArrayClass.entry());
 			a.astore(3); // pair (name . value)
 			a.aload(3);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
-			a.checkcast(stringClass);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(dtl.index()); // [tl]
+			a.checkcast(stringClass.entry());
+			a.invokestatic(dtl.entry()); // [tl]
 			a.aload(3);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(dbind.index()); // [old cell]
-			a.op(Opcode.POP); // no restore: the bindings die with the thread
+			a.invokestatic(dbind.entry()); // [old cell]
+			a.pop(); // no restore: the bindings die with the thread
 			a.aload(2);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aaload();
 			a.astore(1);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(loopEnd);
+			a.goto_(loop);
+			a.labelBinding(loopEnd);
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(fnField.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke0.index());
+			a.getfield(fnField.entry());
+			a.invokestatic(invoke0.entry());
 			a.areturn();
-			int tryEnd = a.pos();
+			MethodCode.Label tryEnd = a.newBoundLabel();
 			// catch (Throwable t): answer {EMARKER, t, _condTake(t)} normally -- the
 			// condition channel is a ThreadLocal, so the payload carries it to the joiner
-			int handler = a.pos();
+			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(1);
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(eMarker.index());
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(eMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
+			a.dup();
+			a.loadConstant(1);
 			a.aload(1);
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
+			a.dup();
+			a.loadConstant(2);
 			a.aload(1);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(condTake.index());
+			a.invokestatic(condTake);
 			a.aastore();
 			a.areturn();
-			callMethod = new ThreadMethod(cp.addUtf8("call"), cp.addUtf8("()Ljava/lang/Object;"), 4, 4, a.finish(),
-					List.of(new int[] { tryStart, tryEnd, handler, throwableClass.index() }));
+			a.exceptionCatch(tryStart, tryEnd, handler, throwableClass.entry());
+			callMethod = new ThreadMethod(cp.addUtf8("call"), cp.addUtf8("()Ljava/lang/Object;"), a);
 		}
 
 		return new ThreadRuntime(List.copyOf(methods), callMethod);

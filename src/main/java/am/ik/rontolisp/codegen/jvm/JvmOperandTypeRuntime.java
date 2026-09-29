@@ -1,5 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MemberRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -10,6 +13,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoHashTable;
@@ -226,6 +230,10 @@ final class JvmOperandTypeRuntime {
 
 	static MethodrefConstant self(ConstantPool cp, ClassConstant thisClass, String name, String desc) {
 		return cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	}
+
+	static MethodRefEntry self(ConstantPool cp, ClassEntry thisClass, String name, String desc) {
+		return cp.methodRef(thisClass, name, desc);
 	}
 
 	/**
@@ -685,42 +693,42 @@ final class JvmOperandTypeRuntime {
 		 * @param head the local to receive its slot 0
 		 * @param miss the not-a-cons label
 		 */
-		void emitTest(JvmAsm a, int value, int arr, int head, int miss) {
+		void emitTest(MethodCode a, int value, int arr, int head, MethodCode.Label miss) {
 			a.aload(value);
-			a.instanceOf(this.objArr);
-			a.branch(Opcode.IFEQ, miss);
+			a.instanceOf(this.objArr.entry());
+			a.ifeq(miss);
 			a.aload(value);
-			a.instanceOf(this.ratio);
-			a.branch(Opcode.IFNE, miss);
+			a.instanceOf(this.ratio.entry());
+			a.ifne(miss);
 			a.aload(value);
-			a.checkcast(this.objArr);
+			a.checkcast(this.objArr.entry());
 			a.astore(arr);
 			a.aload(arr);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.astore(head);
 			a.aload(head);
-			a.instanceOf(this.funcRefHead);
-			a.branch(Opcode.IFNE, miss);
+			a.instanceOf(this.funcRefHead.entry());
+			a.ifne(miss);
 			if (this.instanceLayout != null) {
 				a.aload(head);
-				a.instanceOf(this.instanceLayout);
-				a.branch(Opcode.IFNE, miss);
+				a.instanceOf(this.instanceLayout.entry());
+				a.ifne(miss);
 			}
 			if (!this.asyncMarkers.isEmpty()) {
 				// Length first, like the runtime's own marker test: a cons is an
 				// Object[2], so no marker comparison is reached on the cons path.
-				int notTriple = a.label();
+				MethodCode.Label notTriple = a.newLabel();
 				a.aload(arr);
 				a.arraylength();
-				a.iconst(3);
-				a.branch(Opcode.IF_ICMPNE, notTriple);
+				a.loadConstant(3);
+				a.if_icmpne(notTriple);
 				for (StringConstant marker : this.asyncMarkers) {
 					a.aload(head);
-					a.ldcString(marker);
-					a.branch(Opcode.IF_ACMPEQ, miss);
+					a.ldc(marker.entry());
+					a.if_acmpeq(miss);
 				}
-				a.bind(notTriple);
+				a.labelBinding(notTriple);
 			}
 		}
 
@@ -733,29 +741,29 @@ final class JvmOperandTypeRuntime {
 	private static JvmNumericRuntimeBuilder.NumericMethod field(ConstantPool cp, String name, int index,
 			ConsShape shape, MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind,
 			StringConstant funnelType) {
-		JvmAsm a = new JvmAsm();
-		int notNull = a.label();
-		int miss = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notNull = a.newLabel();
+		MethodCode.Label miss = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, notNull);
-		a.aconstNull();
+		a.ifnonnull(notNull);
+		a.aconst_null();
 		a.areturn();
-		a.bind(notNull);
+		a.labelBinding(notNull);
 		shape.emitTest(a, 0, 1, 2, miss);
 		if (index == 0) {
 			a.aload(2);
 		}
 		else {
 			a.aload(1);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aaload();
 		}
 		a.areturn();
-		a.bind(miss);
-		emitNamedListThrow(a.code, cp, teRaw, opTypeErr, listKind, funnelType,
+		a.labelBinding(miss);
+		emitNamedListThrow(a.code(), cp, teRaw, opTypeErr, listKind, funnelType,
 				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), a.finish(), 3, 3,
-				List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC),
+				JvmRuntimeBuilder.codeBytes(a), 3, 3, List.of());
 	}
 
 	/**
@@ -764,37 +772,37 @@ final class JvmOperandTypeRuntime {
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod listCheck(ConstantPool cp, ConsShape shape,
 			MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType) {
-		JvmAsm a = new JvmAsm();
-		int answer = a.label();
-		int miss = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label answer = a.newLabel();
+		MethodCode.Label miss = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNULL, answer);
+		a.ifnull(answer);
 		shape.emitTest(a, 0, 1, 2, miss);
-		a.bind(answer);
+		a.labelBinding(answer);
 		a.aload(0);
 		a.areturn();
-		a.bind(miss);
-		emitNamedListThrow(a.code, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), a.finish(), 3, 3,
-				List.of());
+		a.labelBinding(miss);
+		emitNamedListThrow(a.code(), cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC),
+				JvmRuntimeBuilder.codeBytes(a), 3, 3, List.of());
 	}
 
 	/**
 	 * Builds {@code _isCons}: true for a cons, false for anything else.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod consTest(ConstantPool cp, ConsShape shape) {
-		JvmAsm a = new JvmAsm();
-		int miss = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label miss = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNULL, miss);
+		a.ifnull(miss);
 		shape.emitTest(a, 0, 1, 2, miss);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.ireturn();
-		a.bind(miss);
-		a.iconst(0);
+		a.labelBinding(miss);
+		a.loadConstant(0);
 		a.ireturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC), a.finish(), 2,
-				3, List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC),
+				JvmRuntimeBuilder.codeBytes(a), 2, 3, List.of());
 	}
 
 	/**
@@ -804,27 +812,27 @@ final class JvmOperandTypeRuntime {
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod consCheck(ConstantPool cp, String name, String desc,
 			boolean nilOk, ConsShape shape, MethodrefConstant teRaw, StringConstant kind) {
-		JvmAsm a = new JvmAsm();
-		int ifNull = a.label();
-		int miss = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label ifNull = a.newLabel();
+		MethodCode.Label miss = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNULL, nilOk ? ifNull : miss);
+		a.ifnull(nilOk ? ifNull : miss);
 		shape.emitTest(a, 0, 1, 2, miss);
 		if (nilOk) {
-			a.bind(ifNull);
+			a.labelBinding(ifNull);
 			a.aload(0);
 		}
 		else {
 			a.aload(1);
 		}
 		a.areturn();
-		a.bind(miss);
+		a.labelBinding(miss);
 		a.aload(0);
-		a.ldcString(kind);
-		a.invokestatic(teRaw);
+		a.ldc(kind.entry());
+		a.invokestatic(teRaw.entry());
 		a.athrow();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), a.finish(), 2, 3,
-				List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc),
+				JvmRuntimeBuilder.codeBytes(a), 2, 3, List.of());
 	}
 
 	/**
@@ -914,13 +922,12 @@ final class JvmOperandTypeRuntime {
 	 * @param object the {@code java/lang/Object} class
 	 * @param objArr the {@code Object[]} class
 	 */
-	private record Records(FieldrefConstant teTl, MethodrefConstant tlGet, MethodrefConstant tlMap,
-			ClassConstant weakMap, MethodrefConstant mapPut, MethodrefConstant mapGet, ClassConstant object,
-			ClassConstant objArr) {
+	private record Records(FieldrefConstant teTl, MethodrefConstant tlGet, MethodRefEntry tlMap, ClassConstant weakMap,
+			MethodRefEntry mapPut, MethodRefEntry mapGet, ClassConstant object, ClassConstant objArr) {
 
 		static Records of(ConstantPool cp, ClassConstant thisClass, FieldrefConstant teTl, MethodrefConstant tlGet,
 				ClassConstant object, ClassConstant objArr) {
-			return new Records(teTl, tlGet, JvmThrowableRecords.tlMap(cp, thisClass),
+			return new Records(teTl, tlGet, JvmThrowableRecords.tlMap(cp, thisClass.entry()),
 					cp.addClass(cp.addUtf8(JvmThrowableRecords.WEAK_MAP)), JvmThrowableRecords.mapPut(cp),
 					JvmThrowableRecords.mapGet(cp), object, objArr);
 		}
@@ -1072,6 +1079,11 @@ final class JvmOperandTypeRuntime {
 	}
 
 	private static void invoke(List<Integer> c, int opcode, MethodrefConstant ref) {
+		c.add(opcode);
+		JvmRuntimeBuilder.emitU2(c, ref.index());
+	}
+
+	private static void invoke(List<Integer> c, int opcode, MemberRefEntry ref) {
 		c.add(opcode);
 		JvmRuntimeBuilder.emitU2(c, ref.index());
 	}

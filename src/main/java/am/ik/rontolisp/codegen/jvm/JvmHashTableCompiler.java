@@ -48,7 +48,7 @@ final class JvmHashTableCompiler {
 		else {
 			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 		}
-		ctx.body.invokestatic(javaSites.direct().tableGuard().entry());
+		ctx.body.invokestatic(javaSites.direct().tableGuard());
 	}
 
 	/**

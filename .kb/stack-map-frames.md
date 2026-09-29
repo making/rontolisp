@@ -111,11 +111,11 @@ The writer keeps the form: a replayed `wide aload` is written `aload_w` (`Opcode
 EMISSION is one chokepoint per code list: `JvmLispCompiler.Ctx.emit` sees `emit(opcode)` then
 `emit(slot)` as two calls, asks `OperandStack.awaitingLocalIndex()`, and for a slot past 255
 retroactively rewrites the appended opcode byte into `wide opcode u2` (`widenPendingLocalIndex`) --
-the rewrite only extends the TAIL, so earlier labels stay valid. `JvmAsm.localOp` does the same for
-blocks spliced whole by `Ctx.emitBlock` (`JvmStringCaseFold`, `JvmSubseqCompiler`,
-`JvmStringTrimCompiler`, `JvmIntFusionCompiler` -- they look hand-assembled but their slots come from
-`Ctx.allocTemp`). Everything else is a `Jvm*RuntimeBuilder` with literal slots, plus
-`JvmUncaughtHandler` (slot 1; now a loud check). The rewrite sees loads and stores only: an `iinc`
+the rewrite only extends the TAIL, so earlier labels stay valid. The blocks that look
+hand-assembled but take their slots from `Ctx.allocTemp` (`JvmStringCaseFold`,
+`JvmSubseqCompiler`, `JvmStringTrimCompiler`) write on `ctx.body` (`am.ik.jvm.MethodCode`, below).
+Everything else is a `Jvm*RuntimeBuilder` with literal slots, plus `JvmUncaughtHandler` (slot 1;
+now a loud check). The rewrite sees loads and stores only: an `iinc`
 emitted as bytes kept a one-byte slot (the `maphash` and `%obj-slots` cursors until 2026-09-29).
 `am.ik.jvm.MethodCode` encodes every local instruction's `wide` form itself, `iinc` included,
 feeding the model the four- or six-byte instruction whole.

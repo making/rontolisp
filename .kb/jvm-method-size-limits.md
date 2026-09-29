@@ -99,12 +99,15 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
 ## Emission on `java.lang.classfile`
 **Where it stands (2026-09-29):** every class is WRITTEN by the API (above). Every method body
 has a typed, `CodeBuilder`-shaped layer, `am.ik.jvm.MethodCode` (`Ctx.body` for a compile
-context; a builder makes its own), and the hash-table slice emits through it; the rest still
-write code bytes (`Ctx.emit`/`emitU2`, `JvmAsm`, raw `List<Integer>` lists), which
-`CodeReplay` decodes. The remaining slices are `.todo/a85`-`a91`: the `JvmAsm` builders, the
-I/O and socket builders, the core runtime builders, the small builders with
-`JvmLispCompiler`'s own code, the expression compilers in two halves, then `MethodCode`
-storing instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
+context; a builder makes its own). On it: the hash-table slice, and every builder that had an
+assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thread, fetch,
+HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
+`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone). The rest still write code
+bytes (`Ctx.emit`/`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The
+remaining slices are `.todo/a86`-`a91`: the I/O and socket builders, the core runtime
+builders, the small builders with `JvmLispCompiler`'s own code, the expression compilers in
+two halves, then `MethodCode` storing instruction records so the code bytes, their decoders
+and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
@@ -130,6 +133,44 @@ class: the byte emitters wrote `iinc` with a one-byte slot (`Ctx.emit`'s `wide` 
 loads and stores only), so past slot 255 `maphash`'s counter and `%obj-slots`'s cursor named
 another local -- a `VerifyError` when that slot held a reference, an endless loop when it held
 an int. `MethodCode.iinc` widens; both sites moved onto it.
+
+**The assembler slice** (2026-09-29): every builder on `JvmAsm` or a private `Asm`, and the
+three spliced blocks, came out byte-identical too -- 4,857 programs extracted from the JVM-side
+tests (text blocks and one-line sources) compiled in process with both jars, plus the CLI
+compiles of the corpus (`default`, `off`, `--dynamic`), the mito probe with its `$Part1`, the
+jose suite and 28 example compiles (`java:` interop, jvm-export with and without `--simd`,
+`--gpu`, served, clack/ningle, asdf systems); every difference is the build's
+commit id in a version string (`lisp-implementation-version`, `uiop/os:lisp-version-string`,
+the `rontolisp:fetch` user agent).
+
+**How a slice moves** (the recipe both slices used; tools in
+`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, `README.md`
+there):
+
+- Calls map one to one: `label()`/`bind` -> `newLabel()`/`labelBinding`, `branch(Opcode.X, l)`
+  -> `x(l)`, `op(Opcode.X)` -> `x()`, `op(X); u2(e.index())` -> the typed call on `e`, `iconst`
+  -> `loadConstant`, every `ldc` flavour -> `ldc(entry)`, `newarray(atype)` ->
+  `newarray(TypeKind)`, an opcode chosen at run time -> `arrayStore(TypeKind)`/
+  `return_(TypeKind)`. `mig.py` does ~95% of a file; `fix.py` reads javac's errors and adds
+  `.entry()` (`.methodRefEntry()`/`.interfaceMethodRefEntry()` where a `MethodrefConstant`
+  must be a `Methodref`/`InterfaceMethodref`) at the boundary to code still on the wrappers.
+- Pool wrappers become `java.lang.classfile` entries (`ConstantPool.classEntry`/`methodRef`/
+  `interfaceMethodRef`/`fieldRef`/`stringEntry`, each over names or `Utf8Entry`s), minted in
+  the same order, so every `ldc` index -- and so every measured size -- is what it was.
+- A handler range is labels: `newBoundLabel()` where a position was read, then
+  `exceptionCatch` once the handler's label is bound. A method record carries the body
+  (`record XMethod(name, desc, MethodCode code)`) and `code.addTo(definition, access, name,
+  desc)` adds it; the declared max_stack/max_locals go. A record still carrying bytes (the
+  numeric builder's, the reader's `<clinit>` chunk) takes `JvmRuntimeBuilder.codeBytes(body)`,
+  which refuses a long branch or a handler it could not carry.
+- A trap the pass does not see: an operand byte written with `op(n)` after an opcode
+  (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
+  `aconst_null` compiles and emits the wrong code. javac catches the opcode half
+  (`lstore()` has no zero-argument form) -- fix the pair by hand.
+- Verify by bytes, not only by tests: `Cmp.java` compiles a directory of programs with both
+  jars in process (`extract.py` pulls them out of the tests, `runchunks.sh` runs chunks in
+  parallel, ~4 min for the 4,857), `cmpcli.sh` the CLI programs; `MethodDiff.java` names what
+  differs.
 
 **The shortest forms, measured 2026-09-29** (the writer's canonical loads, stores and ints,
 against the forms emitted): ci-spec corpus class 7,687,513 -> 7,498,301 B (code 4,545,371 ->
@@ -239,7 +280,8 @@ is never reused.
   `.compileCharBeyondBmpCodePoint`
 - The layer: `am.ik.jvm.MethodCodeTest` (labels both ways, a long branch, `wide` locals and
   `iinc`, explicit emitted/shortest written forms, an unbound label refused, `invokeinterface`'s
-  count, a handler, the operand-stack model kept in step)
+  count, a handler, the operand-stack model kept in step, an array store and a return chosen
+  by kind)
 - The writer: `am.ik.jvm.CodeReplayTest` (a long branch over wide locals, only the branch that
   does not reach widened, a widening cascade, handlers, `ldc` widened and narrowed by the
   class's pool, wide `iinc`, a body past the limit), `LineNumberTableTest` (lines through the

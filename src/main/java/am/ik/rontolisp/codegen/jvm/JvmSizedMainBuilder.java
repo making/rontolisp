@@ -1,13 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.List;
-
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 import org.jspecify.annotations.Nullable;
 
@@ -90,8 +88,7 @@ final class JvmSizedMainBuilder {
 	static final int DEFAULT_STACK_MIB = 16;
 
 	/** A method body ready to emit. */
-	record Method(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<int[]> exceptionTable) {
+	record Method(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -121,12 +118,11 @@ final class JvmSizedMainBuilder {
 		 * @return the method
 		 */
 		Method instanceRun(ConstantPool cp) {
-			JvmAsyncRuntimeBuilder.Asm a = new JvmAsyncRuntimeBuilder.Asm();
+			MethodCode a = new MethodCode();
 			a.aload(0);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(this.runRef.index());
-			a.op(Opcode.RETURN);
-			return new Method(cp.addUtf8("run"), cp.addUtf8("()V"), 1, 1, a.finish(), List.of());
+			a.invokestatic(this.runRef.entry());
+			a.return_();
+			return new Method(cp.addUtf8("run"), cp.addUtf8("()V"), a);
 		}
 
 	}
@@ -186,133 +182,113 @@ final class JvmSizedMainBuilder {
 		@Nullable HandOver handOver = mainThreadClass != null ? HandOver.mint(cp, thisClass, mainThreadClass) : null;
 
 		// --- main(String[] args): locals 0 args, 1 runner, 2 thread, 3 interrupted
-		JvmAsyncRuntimeBuilder.Asm m = new JvmAsyncRuntimeBuilder.Asm();
-		m.op(Opcode.NEW);
-		m.u2(thisClass.index());
-		m.op(Opcode.DUP);
-		m.op(Opcode.INVOKESPECIAL);
-		m.u2(instanceInitRef.index());
+		MethodCode m = new MethodCode();
+		m.new_(thisClass.entry());
+		m.dup();
+		m.invokespecial(instanceInitRef.entry());
 		m.astore(1);
 		m.aload(1);
 		m.aload(0);
-		m.op(Opcode.PUTFIELD);
-		m.u2(argsField.index());
-		m.op(Opcode.NEW);
-		m.u2(threadClass.index());
-		m.op(Opcode.DUP);
-		m.aconstNull();
+		m.putfield(argsField.entry());
+		m.new_(threadClass.entry());
+		m.dup();
+		m.aconst_null();
 		m.aload(1);
-		m.ldc(threadName.index());
-		m.ldc(property.index());
-		m.iconst(DEFAULT_STACK_MIB);
-		m.op(Opcode.INVOKESTATIC);
-		m.u2(getInteger.index());
-		m.op(Opcode.INVOKEVIRTUAL);
-		m.u2(intValue.index());
-		m.op(Opcode.I2L);
-		m.iconst(20);
-		m.op(Opcode.LSHL);
-		m.op(Opcode.INVOKESPECIAL);
-		m.u2(threadInit.index());
+		m.ldc(threadName.entry());
+		m.ldc(property.entry());
+		m.loadConstant(DEFAULT_STACK_MIB);
+		m.invokestatic(getInteger.entry());
+		m.invokevirtual(intValue.methodRefEntry());
+		m.i2l();
+		m.loadConstant(20);
+		m.lshl();
+		m.invokespecial(threadInit.entry());
 		m.astore(2);
 		if (handOver != null) {
 			// Thread 0 is the one AppKit needs: the worker takes the program and
 			// thread 0 parks in the run loop for good.
-			int keep = m.label();
-			m.op(Opcode.INVOKESTATIC);
-			m.u2(handOver.required().index());
-			m.branch(Opcode.IFEQ, keep);
+			MethodCode.Label keep = m.newLabel();
+			m.invokestatic(handOver.required().entry());
+			m.ifeq(keep);
 			m.aload(1);
-			m.iconst(1);
-			m.op(Opcode.PUTFIELD);
-			m.u2(handOver.exitField().index());
+			m.loadConstant(1);
+			m.putfield(handOver.exitField().entry());
 			m.aload(2);
-			m.op(Opcode.INVOKEVIRTUAL);
-			m.u2(threadStart.index());
-			m.op(Opcode.INVOKESTATIC);
-			m.u2(handOver.get().index());
-			m.op(Opcode.INVOKEVIRTUAL);
-			m.u2(handOver.runLoop().index());
-			m.op(Opcode.RETURN);
-			m.bind(keep);
+			m.invokevirtual(threadStart.methodRefEntry());
+			m.invokestatic(handOver.get().entry());
+			m.invokevirtual(handOver.runLoop().methodRefEntry());
+			m.return_();
+			m.labelBinding(keep);
 		}
 		m.aload(2);
-		m.op(Opcode.INVOKEVIRTUAL);
-		m.u2(threadStart.index());
-		m.iconst(0);
+		m.invokevirtual(threadStart.methodRefEntry());
+		m.loadConstant(0);
 		m.istore(3);
-		int join = m.label();
-		int joined = m.label();
-		m.bind(join);
-		int tryStart = m.pos();
+		MethodCode.Label join = m.newLabel();
+		MethodCode.Label joined = m.newLabel();
+		m.labelBinding(join);
+		MethodCode.Label tryStart = m.newBoundLabel();
 		m.aload(2);
-		m.op(Opcode.INVOKEVIRTUAL);
-		m.u2(threadJoin.index());
-		int tryEnd = m.pos();
-		m.branch(Opcode.GOTO, joined);
+		m.invokevirtual(threadJoin.methodRefEntry());
+		MethodCode.Label tryEnd = m.newBoundLabel();
+		m.goto_(joined);
 		// An interrupt aimed at thread 0 is remembered, never a reason to stop waiting:
 		// returning early would end main while the program still runs.
-		int handler = m.pos();
-		m.op(Opcode.POP);
-		m.iconst(1);
+		MethodCode.Label handler = m.newBoundLabel();
+		m.pop();
+		m.loadConstant(1);
 		m.istore(3);
-		m.branch(Opcode.GOTO, join);
-		m.bind(joined);
-		int notInterrupted = m.label();
+		m.goto_(join);
+		m.labelBinding(joined);
+		MethodCode.Label notInterrupted = m.newLabel();
 		m.iload(3);
-		m.branch(Opcode.IFEQ, notInterrupted);
-		m.op(Opcode.INVOKESTATIC);
-		m.u2(currentThread.index());
-		m.op(Opcode.INVOKEVIRTUAL);
-		m.u2(threadInterrupt.index());
-		m.bind(notInterrupted);
-		int clean = m.label();
+		m.ifeq(notInterrupted);
+		m.invokestatic(currentThread.entry());
+		m.invokevirtual(threadInterrupt.methodRefEntry());
+		m.labelBinding(notInterrupted);
+		MethodCode.Label clean = m.newLabel();
 		m.aload(1);
-		m.op(Opcode.GETFIELD);
-		m.u2(thrownField.index());
-		m.op(Opcode.DUP);
-		m.branch(Opcode.IFNULL, clean);
-		m.op(Opcode.ATHROW);
-		m.bind(clean);
-		m.op(Opcode.POP);
-		m.op(Opcode.RETURN);
-		Method main = new Method(cp.addUtf8("main"), mainDesc, 9, 4, m.finish(),
-				List.of(new int[] { tryStart, tryEnd, handler, interruptedClass.index() }));
+		m.getfield(thrownField.entry());
+		m.dup();
+		m.ifnull(clean);
+		m.athrow();
+		m.labelBinding(clean);
+		m.pop();
+		m.return_();
+		m.exceptionCatch(tryStart, tryEnd, handler, interruptedClass.entry());
+		Method main = new Method(cp.addUtf8("main"), mainDesc, m);
 
 		// --- _main$run(Prog r): try { _main$body(r._main$args) } catch (Throwable t) {
 		// r._main$thrown = t }
-		JvmAsyncRuntimeBuilder.Asm r = new JvmAsyncRuntimeBuilder.Asm();
-		int bodyStart = r.pos();
+		MethodCode r = new MethodCode();
+		MethodCode.Label bodyStart = r.newBoundLabel();
 		r.aload(0);
-		r.op(Opcode.GETFIELD);
-		r.u2(argsField.index());
-		r.op(Opcode.INVOKESTATIC);
-		r.u2(bodyRef.index());
-		int bodyEnd = r.pos();
-		int after = r.label();
+		r.getfield(argsField.entry());
+		r.invokestatic(bodyRef.entry());
+		MethodCode.Label bodyEnd = r.newBoundLabel();
+		MethodCode.Label after = r.newLabel();
 		if (handOver != null) {
-			r.branch(Opcode.GOTO, after);
+			r.goto_(after);
 		}
 		else {
-			r.op(Opcode.RETURN);
+			r.return_();
 		}
-		int caught = r.pos();
+		MethodCode.Label caught = r.newBoundLabel();
 		r.astore(1);
 		r.aload(0);
 		r.aload(1);
-		r.op(Opcode.PUTFIELD);
-		r.u2(thrownField.index());
+		r.putfield(thrownField.entry());
 		if (handOver == null) {
-			r.op(Opcode.RETURN);
+			r.return_();
 		}
 		else {
 			// The worker of a hand-over ends the process: nothing waits for it, and
 			// thread 0 never leaves the run loop.
-			r.bind(after);
+			r.labelBinding(after);
 			handOver.emitExit(r, thrownField);
 		}
-		Method run = new Method(runName, runDesc, handOver != null ? 3 : 2, handOver != null ? 3 : 2, r.finish(),
-				List.of(new int[] { bodyStart, bodyEnd, caught, throwableClass.index() }));
+		r.exceptionCatch(bodyStart, bodyEnd, caught, throwableClass.entry());
+		Method run = new Method(runName, runDesc, r);
 
 		return new SizedMain(bodyName, main, run, runRef, argsName, argsDesc, thrownName, thrownDesc, runnableClass,
 				handOver != null ? handOver.exitName() : null, handOver != null ? handOver.exitDesc() : null);
@@ -376,41 +352,32 @@ final class JvmSizedMainBuilder {
 		 * }
 		 * </pre>
 		 */
-		void emitExit(JvmAsyncRuntimeBuilder.Asm r, FieldrefConstant thrownField) {
-			int done = r.label();
-			int clean = r.label();
+		void emitExit(MethodCode r, FieldrefConstant thrownField) {
+			MethodCode.Label done = r.newLabel();
+			MethodCode.Label clean = r.newLabel();
 			r.aload(0);
-			r.op(Opcode.GETFIELD);
-			r.u2(this.exitField.index());
-			r.branch(Opcode.IFEQ, done);
+			r.getfield(this.exitField.entry());
+			r.ifeq(done);
 			r.aload(0);
-			r.op(Opcode.GETFIELD);
-			r.u2(thrownField.index());
+			r.getfield(thrownField.entry());
 			r.astore(1);
 			r.aload(1);
-			r.branch(Opcode.IFNULL, clean);
-			r.op(Opcode.INVOKESTATIC);
-			r.u2(this.currentThread.index());
+			r.ifnull(clean);
+			r.invokestatic(this.currentThread.entry());
 			r.astore(2);
 			r.aload(2);
-			r.op(Opcode.INVOKEVIRTUAL);
-			r.u2(this.handlerOf.index());
+			r.invokevirtual(this.handlerOf.methodRefEntry());
 			r.aload(2);
 			r.aload(1);
-			r.op(Opcode.INVOKEINTERFACE);
-			r.u2(this.uncaught.index());
-			r.op(3);
-			r.op(0);
-			r.iconst(1);
-			r.op(Opcode.INVOKESTATIC);
-			r.u2(this.exit.index());
-			r.op(Opcode.RETURN);
-			r.bind(clean);
-			r.iconst(0);
-			r.op(Opcode.INVOKESTATIC);
-			r.u2(this.exit.index());
-			r.bind(done);
-			r.op(Opcode.RETURN);
+			r.invokeinterface(this.uncaught.interfaceMethodRefEntry());
+			r.loadConstant(1);
+			r.invokestatic(this.exit.entry());
+			r.return_();
+			r.labelBinding(clean);
+			r.loadConstant(0);
+			r.invokestatic(this.exit.entry());
+			r.labelBinding(done);
+			r.return_();
 		}
 
 	}

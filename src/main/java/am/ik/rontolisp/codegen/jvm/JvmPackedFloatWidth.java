@@ -1,11 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * The three widths of a packed float array on the JVM backend, and the ONE place that
@@ -115,17 +116,17 @@ enum JvmPackedFloatWidth {
 	}
 
 	/** Stack: {@code (..., int length) -> (..., arrayref)}: a fresh backing array. */
-	void newBacking(JvmAsm a) {
+	void newBacking(MethodCode a) {
 		switch (this) {
-			case DOUBLE -> a.newarrayDouble();
-			case SINGLE -> a.newarrayFloat();
-			case BFLOAT16 -> a.newarrayShort();
+			case DOUBLE -> a.newarray(TypeKind.DOUBLE);
+			case SINGLE -> a.newarray(TypeKind.FLOAT);
+			case BFLOAT16 -> a.newarray(TypeKind.SHORT);
 		}
 	}
 
 	/** Stack: {@code (..., arrayref) -> (..., int)}: the rank from header slot 0. */
-	void loadRank(JvmAsm a) {
-		a.iconst(0);
+	void loadRank(MethodCode a) {
+		a.loadConstant(0);
 		switch (this) {
 			case DOUBLE -> {
 				a.daload();
@@ -144,17 +145,17 @@ enum JvmPackedFloatWidth {
 	 * header. At the bfloat16 width the two slots are reassembled, {@code (hi << 16) |
 	 * (lo & 0xffff)}.
 	 */
-	void loadDim(JvmAsm a) {
+	void loadDim(MethodCode a) {
 		switch (this) {
 			case DOUBLE -> {
-				a.iconst(1);
-				a.op(Opcode.IADD);
+				a.loadConstant(1);
+				a.iadd();
 				a.daload();
 				a.d2i();
 			}
 			case SINGLE -> {
-				a.iconst(1);
-				a.op(Opcode.IADD);
+				a.loadConstant(1);
+				a.iadd();
 				a.faload();
 				a.f2i();
 			}
@@ -162,39 +163,39 @@ enum JvmPackedFloatWidth {
 				// (arr, k) -> (arr, k, arr, k) -> (arr, k, lo) -> (lo, arr, k, lo) ->
 				// (lo, arr, k) -> (lo, hi << 16) -> (dim)
 				a.dup2();
-				a.iconst(2);
-				a.op(Opcode.IMUL);
-				a.iconst(2);
-				a.op(Opcode.IADD);
+				a.loadConstant(2);
+				a.imul();
+				a.loadConstant(2);
+				a.iadd();
 				a.saload();
 				emitMaskU16(a);
-				a.op(Opcode.DUP_X2);
+				a.dup_x2();
 				a.pop();
-				a.iconst(2);
-				a.op(Opcode.IMUL);
-				a.iconst(1);
-				a.op(Opcode.IADD);
+				a.loadConstant(2);
+				a.imul();
+				a.loadConstant(1);
+				a.iadd();
 				a.saload();
-				a.iconst(16);
-				a.op(Opcode.ISHL);
-				a.op(Opcode.IOR);
+				a.loadConstant(16);
+				a.ishl();
+				a.ior();
 			}
 		}
 	}
 
 	/** Stack: {@code (..., int rank) -> (..., int)}: the data offset for that rank. */
-	void emitDataOffset(JvmAsm a) {
+	void emitDataOffset(MethodCode a) {
 		if (this == BFLOAT16) {
-			a.iconst(2);
-			a.op(Opcode.IMUL);
+			a.loadConstant(2);
+			a.imul();
 		}
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 	}
 
 	/** Stack: {@code (..., arrayref, int rank) -> (...)}: writes header slot 0. */
-	void storeRank(JvmAsm a) {
-		a.iconst(0);
+	void storeRank(MethodCode a) {
+		a.loadConstant(0);
 		a.swap();
 		switch (this) {
 			case DOUBLE -> {
@@ -214,13 +215,13 @@ enum JvmPackedFloatWidth {
 	 * {@code arrSlot}, the dimension index in {@code kSlot}, the size in {@code dimSlot}.
 	 * Stack-neutral.
 	 */
-	void storeDim(JvmAsm a, int arrSlot, int kSlot, int dimSlot) {
+	void storeDim(MethodCode a, int arrSlot, int kSlot, int dimSlot) {
 		switch (this) {
 			case DOUBLE, SINGLE -> {
 				a.aload(arrSlot);
-				a.iconst(1);
+				a.loadConstant(1);
 				a.iload(kSlot);
-				a.op(Opcode.IADD);
+				a.iadd();
 				a.iload(dimSlot);
 				if (this == DOUBLE) {
 					a.i2d();
@@ -235,20 +236,20 @@ enum JvmPackedFloatWidth {
 				// hi at 1 + 2k, lo at 2 + 2k; sastore keeps the low sixteen bits.
 				a.aload(arrSlot);
 				a.iload(kSlot);
-				a.iconst(2);
-				a.op(Opcode.IMUL);
-				a.iconst(1);
-				a.op(Opcode.IADD);
+				a.loadConstant(2);
+				a.imul();
+				a.loadConstant(1);
+				a.iadd();
 				a.iload(dimSlot);
-				a.iconst(16);
-				a.op(Opcode.IUSHR);
+				a.loadConstant(16);
+				a.iushr();
 				a.sastore();
 				a.aload(arrSlot);
 				a.iload(kSlot);
-				a.iconst(2);
-				a.op(Opcode.IMUL);
-				a.iconst(2);
-				a.op(Opcode.IADD);
+				a.loadConstant(2);
+				a.imul();
+				a.loadConstant(2);
+				a.iadd();
 				a.iload(dimSlot);
 				a.sastore();
 			}
@@ -263,7 +264,7 @@ enum JvmPackedFloatWidth {
 	 * @param bf16Value the program's {@code _bf16Value(I)D}; required at
 	 * {@link #BFLOAT16}, ignored otherwise
 	 */
-	void loadElem(JvmAsm a, @Nullable MethodrefConstant bf16Value) {
+	void loadElem(MethodCode a, @Nullable MethodRefEntry bf16Value) {
 		switch (this) {
 			case DOUBLE -> a.daload();
 			case SINGLE -> {
@@ -284,7 +285,7 @@ enum JvmPackedFloatWidth {
 	 * @param bf16Bits the program's {@code _bf16Bits(D)I}; required at {@link #BFLOAT16},
 	 * ignored otherwise
 	 */
-	void storeElem(JvmAsm a, @Nullable MethodrefConstant bf16Bits) {
+	void storeElem(MethodCode a, @Nullable MethodRefEntry bf16Bits) {
 		switch (this) {
 			case DOUBLE -> a.dastore();
 			case SINGLE -> {
@@ -302,7 +303,7 @@ enum JvmPackedFloatWidth {
 	 * Stack: {@code (..., double) -> (..., double)}: the value AS STORED -- what a read
 	 * of the slot just written answers, so a store's result reflects the narrowing.
 	 */
-	void emitStoredValue(JvmAsm a, @Nullable MethodrefConstant bf16Value, @Nullable MethodrefConstant bf16Bits) {
+	void emitStoredValue(MethodCode a, @Nullable MethodRefEntry bf16Value, @Nullable MethodRefEntry bf16Bits) {
 		switch (this) {
 			case DOUBLE -> {
 			}
@@ -319,11 +320,11 @@ enum JvmPackedFloatWidth {
 
 	// AND with 0xFFFF: -1 shifted right unsigned by 16 -- iconst() cannot encode 0xFFFF
 	// (its SIPUSH fallback is a SIGNED 16-bit immediate, so 65535 would become -1).
-	static void emitMaskU16(JvmAsm a) {
-		a.iconst(-1);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.op(Opcode.IAND);
+	static void emitMaskU16(MethodCode a) {
+		a.loadConstant(-1);
+		a.loadConstant(16);
+		a.iushr();
+		a.iand();
 	}
 
 }

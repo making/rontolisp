@@ -1,7 +1,5 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -10,7 +8,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ClackEnv;
@@ -115,7 +113,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 	}
 
 	/** The ready-to-emit {@code handle(Request)} method body. */
-	record HandleMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record HandleMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -197,7 +195,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 
 		// handle(Request): slots 0 this, 1 request, 2 rawBody, 3 body text scratch /
 		// env, 4 result / triple, 5 drained body.
-		Asm a = new Asm();
+		MethodCode a = new MethodCode();
 		if (bufferBody) {
 			// rawBody = %http-body-stream(bodyOctets(request)) -- the compiled Gray
 			// instance over the octets as they came; the defun itself answers nil for
@@ -208,190 +206,69 @@ final class JvmHttpHandlerRuntimeBuilder {
 									PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
 							unaryDesc));
 			a.aload(1);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(bodyOctets.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(bodyStream.index());
+			a.invokestatic(bodyOctets.entry());
+			a.invokestatic(bodyStream.entry());
 			a.astore(2);
 		}
 		else {
 			// rawBody = the asynchronous stream: one settled octet chunk when the
 			// request carries a body, an already-closed empty stream otherwise (its
 			// first read observes end of stream) -- interpreter parity.
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(makeStream.index());
+			a.invokestatic(makeStream.entry());
 			a.astore(2);
 			a.aload(1);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(bodyOctets.index());
+			a.invokestatic(bodyOctets.entry());
 			a.astore(3);
-			int bodyEmpty = a.label();
+			MethodCode.Label bodyEmpty = a.newLabel();
 			a.aload(3);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(1);
-			a.branch(Opcode.IF_ICMPLE, bodyEmpty); // byte[]{8} alone: no body
+			a.arraylength();
+			a.loadConstant(1);
+			a.if_icmple(bodyEmpty); // byte[]{8} alone: no body
 			a.aload(2);
 			a.aload(3);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(streamWrite.index());
-			a.op(Opcode.POP);
-			a.bind(bodyEmpty);
+			a.invokestatic(streamWrite.entry());
+			a.pop();
+			a.labelBinding(bodyEmpty);
 			a.aload(2);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(streamClose.index());
-			a.op(Opcode.POP);
+			a.invokestatic(streamClose.entry());
+			a.pop();
 		}
 		// env = RontoHttpClack.buildEnv(request, rawBody)
 		a.aload(1);
 		a.aload(2);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(buildEnv.index());
+		a.invokestatic(buildEnv.entry());
 		a.astore(3);
 		// result = _await(_invoke_1(_httpHandlerFn, env))
-		a.op(Opcode.GETSTATIC);
-		a.u2(handlerField.index());
+		a.getstatic(handlerField.entry());
 		a.aload(3);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(invoke1.index());
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(awaitHelper.index());
+		a.invokestatic(invoke1.entry());
+		a.invokestatic(awaitHelper.entry());
 		// triple = %http-normalize-response(result)
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(normalizeResponse.index());
+		a.invokestatic(normalizeResponse.entry());
 		a.astore(4);
 		// drained = _drain_body(third(triple))
 		a.aload(4);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(0);
 		a.aaload();
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(drainBody.index());
+		a.invokestatic(drainBody.entry());
 		a.astore(5);
 		// return RontoHttpClack.toResponse(triple, drained)
 		a.aload(4);
 		a.aload(5);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(toResponse.index());
+		a.invokestatic(toResponse.entry());
 		a.areturn();
 
 		HandleMethod handle = new HandleMethod(cp.addUtf8("handle"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 6, 6, a.finish());
+				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), a);
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
-	}
-
-	/** Minimal label-based assembler, mirroring the one in JvmFetchRuntimeBuilder. */
-	private static final class Asm {
-
-		private final List<Integer> code = new ArrayList<>();
-
-		private final Map<Integer, Integer> labelPos = new HashMap<>();
-
-		private final Map<Integer, List<Integer>> pending = new HashMap<>();
-
-		private int nextLabel = 0;
-
-		int label() {
-			return this.nextLabel++;
-		}
-
-		void bind(int label) {
-			int pos = this.code.size();
-			this.labelPos.put(label, pos);
-			List<Integer> ps = this.pending.remove(label);
-			if (ps != null) {
-				for (int bp : ps) {
-					JvmRuntimeBuilder.patchBranch(this.code, bp, pos);
-				}
-			}
-		}
-
-		void branch(int opcode, int label) {
-			int bp = this.code.size();
-			this.code.add(opcode);
-			JvmRuntimeBuilder.emitU2(this.code, 0);
-			Integer tgt = this.labelPos.get(label);
-			if (tgt != null) {
-				JvmRuntimeBuilder.patchBranch(this.code, bp, tgt);
-			}
-			else {
-				this.pending.computeIfAbsent(label, k -> new ArrayList<>()).add(bp);
-			}
-		}
-
-		void op(int opcode) {
-			this.code.add(opcode);
-		}
-
-		void u2(int value) {
-			JvmRuntimeBuilder.emitU2(this.code, value);
-		}
-
-		void aload(int slot) {
-			this.code.add(Opcode.ALOAD);
-			this.code.add(slot);
-		}
-
-		void astore(int slot) {
-			this.code.add(Opcode.ASTORE);
-			this.code.add(slot);
-		}
-
-		void aaload() {
-			this.code.add(Opcode.AALOAD);
-		}
-
-		void iconst(int n) {
-			if (n == -1) {
-				this.code.add(Opcode.ICONST_M1);
-			}
-			else if (n >= 0 && n <= 5) {
-				this.code.add(Opcode.ICONST_0 + n);
-			}
-			else if (n >= -128 && n <= 127) {
-				this.code.add(Opcode.BIPUSH);
-				this.code.add(n & 0xFF);
-			}
-			else {
-				this.code.add(Opcode.SIPUSH);
-				JvmRuntimeBuilder.emitU2(this.code, n);
-			}
-		}
-
-		void ldc(int index) {
-			if (index <= 255) {
-				this.code.add(Opcode.LDC);
-				this.code.add(index);
-			}
-			else {
-				this.code.add(Opcode.LDC_W);
-				JvmRuntimeBuilder.emitU2(this.code, index);
-			}
-		}
-
-		void checkcast(ClassConstant c) {
-			this.code.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void areturn() {
-			this.code.add(Opcode.ARETURN);
-		}
-
-		List<Integer> finish() {
-			if (!this.pending.isEmpty()) {
-				throw new IllegalStateException(
-						"Unbound labels in http-handler runtime assembly: " + this.pending.keySet());
-			}
-			return this.code;
-		}
-
 	}
 
 }

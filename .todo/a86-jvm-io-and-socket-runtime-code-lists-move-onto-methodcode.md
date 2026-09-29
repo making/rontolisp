@@ -12,12 +12,11 @@ still throws. Counts 2026-09-29.
 
 ## What is needed
 
-Each helper becomes a `MethodCode`; each position/patch pair a label. Unlike the `JvmAsm`
-builders (a85) this is not a rename: a position read by `code.size()` can be a branch source,
+Each helper becomes a `MethodCode`; each position/patch pair a label. Unlike the builders that
+had an assembler (moved 2026-09-29) this is not a rename: a position read by `code.size()` can be a branch source,
 a target or an exception-table bound, and the handlers (`ClassDefinition.Handler`) take bound
-labels (`MethodCode.exceptionCatch`). Recipe and byte-for-byte verification:
-`.todo/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode.md` and
-`.kb/jvm-method-size-limits.md`, "Emission on java.lang.classfile". The I/O helpers are reached by
+labels (`MethodCode.exceptionCatch`). Recipe, tools and byte-for-byte verification:
+`.kb/jvm-method-size-limits.md`, "How a slice moves". The I/O helpers are reached by
 the ci-spec corpus's stream, file and socket cases and by the lack/clack E2Es; compare the corpus
 class and a served example's class before and after. Split by builder if one session is not
 enough.

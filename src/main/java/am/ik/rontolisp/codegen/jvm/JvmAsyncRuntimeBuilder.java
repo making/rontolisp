@@ -1,15 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.runtime.RontoFetch;
 
 import org.jspecify.annotations.Nullable;
@@ -157,9 +157,8 @@ final class JvmAsyncRuntimeBuilder {
 	private JvmAsyncRuntimeBuilder() {
 	}
 
-	/** A ready-to-emit method body (optionally with an exception table). */
-	record AsyncMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<int[]> exceptionTable) {
+	/** A ready-to-emit method body, its handlers included. */
+	record AsyncMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -269,8 +268,8 @@ final class JvmAsyncRuntimeBuilder {
 
 		ConstantPool.FieldrefConstant handoffField = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(HANDOFF_FIELD), cp.addUtf8("Ljava/lang/ThreadLocal;")));
-		MethodrefConstant condTake = java.util.Objects.requireNonNull(channel.condTake);
-		MethodrefConstant condPut = java.util.Objects.requireNonNull(channel.condPut);
+		java.lang.classfile.constantpool.MethodRefEntry condTake = java.util.Objects.requireNonNull(channel.condTake);
+		java.lang.classfile.constantpool.MethodRefEntry condPut = java.util.Objects.requireNonNull(channel.condPut);
 
 		ConstantPool.FieldrefConstant fnField = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(FN_FIELD), cp.addUtf8("Ljava/lang/Object;")));
@@ -306,422 +305,368 @@ final class JvmAsyncRuntimeBuilder {
 
 		// --- _release_handoff(): countDown the current thread's handoff latch, if any
 		{
-			Asm a = new Asm();
-			int done = a.label();
-			a.op(Opcode.GETSTATIC);
-			a.u2(handoffField.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlGet.index()); // [latch-or-null]
-			a.op(Opcode.DUP);
-			int nonNull = a.label();
-			a.branch(Opcode.IFNONNULL, nonNull);
-			a.op(Opcode.POP);
-			a.branch(Opcode.GOTO, done);
-			a.bind(nonNull);
-			a.checkcast(latchClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(latchCountDown.index());
-			a.bind(done);
-			a.op(Opcode.RETURN);
-			methods.add(new AsyncMethod(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC), 2, 1,
-					a.finish(), List.of()));
+			MethodCode a = new MethodCode();
+			MethodCode.Label done = a.newLabel();
+			a.getstatic(handoffField.entry());
+			a.invokevirtual(tlGet.methodRefEntry()); // [latch-or-null]
+			a.dup();
+			MethodCode.Label nonNull = a.newLabel();
+			a.ifnonnull(nonNull);
+			a.pop();
+			a.goto_(done);
+			a.labelBinding(nonNull);
+			a.checkcast(latchClass.entry());
+			a.invokevirtual(latchCountDown.methodRefEntry());
+			a.labelBinding(done);
+			a.return_();
+			methods.add(new AsyncMethod(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC), a));
 		}
 
 		// --- _async_run(fn): spawn the body on a virtual thread, eager-start handoff
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			// future (slot 1)
-			a.op(Opcode.NEW);
-			a.u2(futureClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(futureCtor.index());
+			a.new_(futureClass.entry());
+			a.dup();
+			a.invokespecial(futureCtor.entry());
 			a.astore(1);
 			// latch (slot 2)
-			a.op(Opcode.NEW);
-			a.u2(latchClass.index());
-			a.op(Opcode.DUP);
-			a.iconst(1);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(latchCtor.index());
+			a.new_(latchClass.entry());
+			a.dup();
+			a.loadConstant(1);
+			a.invokespecial(latchCtor.entry());
 			a.astore(2);
 			// runner (slot 3) = new Prog() with the three fields set
-			a.op(Opcode.NEW);
-			a.u2(thisClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(instanceInitRef.index());
+			a.new_(thisClass.entry());
+			a.dup();
+			a.invokespecial(instanceInitRef.entry());
 			a.astore(3);
 			a.aload(3);
 			a.aload(0);
-			a.op(Opcode.PUTFIELD);
-			a.u2(fnField.index());
+			a.putfield(fnField.entry());
 			a.aload(3);
 			a.aload(1);
-			a.op(Opcode.PUTFIELD);
-			a.u2(futureField.index());
+			a.putfield(futureField.entry());
 			a.aload(3);
 			a.aload(2);
-			a.op(Opcode.PUTFIELD);
-			a.u2(latchField.index());
+			a.putfield(latchField.entry());
 			// Thread.ofVirtual().start(runner)
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(threadOfVirtual.index()); // [builder]
+			a.invokestatic(threadOfVirtual.entry()); // [builder]
 			a.aload(3);
-			a.op(Opcode.INVOKEINTERFACE);
-			a.u2(builderStart.index());
-			a.op(2); // this + 1 arg
-			a.op(0); // [thread]
-			a.op(Opcode.POP);
+			a.invokeinterface(builderStart.interfaceMethodRefEntry());
+			a.pop();
 			// latch.await() -- resumes at the body's first suspension or completion
 			a.aload(2);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(latchAwait.index());
+			a.invokevirtual(latchAwait.methodRefEntry());
 			a.aload(1);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(ASYNC_RUN_METHOD), cp.addUtf8(ASYNC_RUN_DESC), 3, 4, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(ASYNC_RUN_METHOD), cp.addUtf8(ASYNC_RUN_DESC), a));
 		}
 
 		// --- run(): the async body on its virtual thread (Runnable protocol)
 		AsyncMethod runMethod;
 		{
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			if (launcherRun != null) {
 				// if (this._asyncLatch == null) { _main$run(this); return; }
-				int asyncBody = a.label();
+				MethodCode.Label asyncBody = a.newLabel();
 				a.aload(0);
-				a.op(Opcode.GETFIELD);
-				a.u2(latchField.index());
-				a.branch(Opcode.IFNONNULL, asyncBody);
+				a.getfield(latchField.entry());
+				a.ifnonnull(asyncBody);
 				a.aload(0);
-				a.op(Opcode.INVOKESTATIC);
-				a.u2(launcherRun.index());
-				a.op(Opcode.RETURN);
-				a.bind(asyncBody);
+				a.invokestatic(launcherRun.entry());
+				a.return_();
+				a.labelBinding(asyncBody);
 			}
 			// _handoffTl.set(this._asyncLatch)
-			a.op(Opcode.GETSTATIC);
-			a.u2(handoffField.index());
+			a.getstatic(handoffField.entry());
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(latchField.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(tlSet.index());
+			a.getfield(latchField.entry());
+			a.invokevirtual(tlSet.methodRefEntry());
 			// try { future.complete(_invoke_0(fn)) }
-			int tryStart = a.pos();
+			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(futureField.index());
-			a.checkcast(futureClass);
+			a.getfield(futureField.entry());
+			a.checkcast(futureClass.entry());
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(fnField.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke0.index()); // [future, v]
+			a.getfield(fnField.entry());
+			a.invokestatic(invoke0.entry()); // [future, v]
 			if (mvChannel != null && vMarker != null) {
 				// The channel holds the body's extra values the moment its thunk
 				// returns (its tail settled them), on THIS thread: a body that answered
 				// other than one value completes with {VMARKER, v, extras}.
-				int single = a.label();
+				MethodCode.Label single = a.newLabel();
 				a.astore(1);
-				mvChannel.emitLoad(a::op, a::u2);
-				a.branch(Opcode.IFNULL, single);
-				a.iconst(3);
-				a.anewarray(objectClass);
-				a.op(Opcode.DUP);
-				a.iconst(0);
-				a.ldc(vMarker.index());
+				mvChannel.emitLoad(a);
+				a.ifnull(single);
+				a.loadConstant(3);
+				a.anewarray(objectClass.entry());
+				a.dup();
+				a.loadConstant(0);
+				a.ldc(vMarker.entry());
 				a.aastore();
-				a.op(Opcode.DUP);
-				a.iconst(1);
+				a.dup();
+				a.loadConstant(1);
 				a.aload(1);
 				a.aastore();
-				a.op(Opcode.DUP);
-				a.iconst(2);
-				mvChannel.emitLoad(a::op, a::u2);
+				a.dup();
+				a.loadConstant(2);
+				mvChannel.emitLoad(a);
 				a.aastore();
 				a.astore(1);
-				a.bind(single);
+				a.labelBinding(single);
 				a.aload(1); // [future, v-or-payload]
 			}
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureComplete.index());
-			a.op(Opcode.POP);
-			int tryEnd = a.pos();
-			int done = a.label();
-			a.branch(Opcode.GOTO, done);
+			a.invokevirtual(futureComplete.methodRefEntry());
+			a.pop();
+			MethodCode.Label tryEnd = a.newBoundLabel();
+			MethodCode.Label done = a.newLabel();
+			a.goto_(done);
 			// catch (Throwable t): future.complete({EMARKER, t, _condTake(t)}), and
 			// t.getStackTrace() after them when the body recorded its boundary there
-			int handler = a.pos();
+			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(1);
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(futureField.index());
-			a.checkcast(futureClass);
-			a.iconst(errorPayloadLength);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(eMarker.index());
+			a.getfield(futureField.entry());
+			a.checkcast(futureClass.entry());
+			a.loadConstant(errorPayloadLength);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(eMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
+			a.dup();
+			a.loadConstant(1);
 			a.aload(1);
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
+			a.dup();
+			a.loadConstant(2);
 			a.aload(1);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(condTake.index());
+			a.invokestatic(condTake);
 			a.aastore();
 			if (throwableGetStackTrace != null) {
 				// The trace as the boundary left it, which every await puts back
 				// (JvmUncaughtHandler): the condition is one object all of them rethrow.
-				a.op(Opcode.DUP);
-				a.iconst(3);
+				a.dup();
+				a.loadConstant(3);
 				a.aload(1);
-				a.op(Opcode.INVOKEVIRTUAL);
-				a.u2(throwableGetStackTrace.index());
+				a.invokevirtual(throwableGetStackTrace.methodRefEntry());
 				a.aastore();
 			}
 			// [future, payload]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureComplete.index());
-			a.op(Opcode.POP);
-			a.bind(done);
+			a.invokevirtual(futureComplete.methodRefEntry());
+			a.pop();
+			a.labelBinding(done);
 			// latch.countDown() on both paths
 			a.aload(0);
-			a.op(Opcode.GETFIELD);
-			a.u2(latchField.index());
-			a.checkcast(latchClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(latchCountDown.index());
-			a.op(Opcode.RETURN);
-			runMethod = new AsyncMethod(cp.addUtf8("run"), cp.addUtf8("()V"), 6, 2, a.finish(),
-					List.of(new int[] { tryStart, tryEnd, handler, throwableClass.index() }));
+			a.getfield(latchField.entry());
+			a.checkcast(latchClass.entry());
+			a.invokevirtual(latchCountDown.methodRefEntry());
+			a.return_();
+			a.exceptionCatch(tryStart, tryEnd, handler, throwableClass.entry());
+			runMethod = new AsyncMethod(cp.addUtf8("run"), cp.addUtf8("()V"), a);
 		}
 
 		// --- _await(v): the generic resolver (flattening loop)
 		{
-			Asm a = new Asm();
-			int loop = a.label();
-			int notToken = a.label();
-			int notFuture = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label notToken = a.newLabel();
+			MethodCode.Label notFuture = a.newLabel();
 			if (mvChannel != null) {
 				// await is a multiple-value producer: one value unless the last
 				// future of the chain settled with a {VMARKER, ...} payload.
-				a.aconstNull();
-				mvChannel.emitStore(a::op, a::u2);
+				a.aconst_null();
+				mvChannel.emitStore(a);
 			}
-			a.bind(loop);
+			a.labelBinding(loop);
 			// stream-read token {RMARKER, queue, state}?
 			a.aload(0);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(objectArrayClass.index());
-			a.branch(Opcode.IFEQ, notToken);
+			a.instanceOf(objectArrayClass.entry());
+			a.ifeq(notToken);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(3);
-			a.branch(Opcode.IF_ICMPNE, notToken);
+			a.checkcast(objectArrayClass.entry());
+			a.arraylength();
+			a.loadConstant(3);
+			a.if_icmpne(notToken);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(0);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(0);
 			a.aaload();
-			a.ldc(rMarker.index());
-			a.branch(Opcode.IF_ACMPNE, notToken);
+			a.ldc(rMarker.entry());
+			a.if_acmpne(notToken);
 			// blocking take (the suspension point): release the handoff first
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(releaseHandoff.index());
+			a.invokestatic(releaseHandoff.entry());
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(queueClass);
+			a.checkcast(queueClass.entry());
 			a.astore(1); // q
 			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueTake.index());
+			a.invokevirtual(queueTake.methodRefEntry());
 			a.astore(2); // chunk
-			int notPill = a.label();
+			MethodCode.Label notPill = a.newLabel();
 			a.aload(2);
-			a.ldc(sMarker.index());
-			a.branch(Opcode.IF_ACMPNE, notPill);
+			a.ldc(sMarker.entry());
+			a.if_acmpne(notPill);
 			// end of stream: re-enqueue the pill for other readers, yield nil
 			a.aload(1);
-			a.ldc(sMarker.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueOffer.index());
-			a.op(Opcode.POP);
-			a.aconstNull();
+			a.ldc(sMarker.entry());
+			a.invokevirtual(queueOffer.methodRefEntry());
+			a.pop();
+			a.aconst_null();
 			a.areturn();
-			a.bind(notPill);
+			a.labelBinding(notPill);
 			if (mvChannel != null) {
-				a.aconstNull();
-				mvChannel.emitStore(a::op, a::u2);
+				a.aconst_null();
+				mvChannel.emitStore(a);
 			}
 			a.aload(2);
 			a.astore(0);
-			a.branch(Opcode.GOTO, loop); // flatten the chunk
-			a.bind(notToken);
+			a.goto_(loop); // flatten the chunk
+			a.labelBinding(notToken);
 			// CompletableFuture?
 			a.aload(0);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(futureClass.index());
-			a.branch(Opcode.IFEQ, notFuture);
+			a.instanceOf(futureClass.entry());
+			a.ifeq(notFuture);
 			a.aload(0);
-			a.checkcast(futureClass);
+			a.checkcast(futureClass.entry());
 			a.astore(3); // f
 			a.aload(3);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureIsDone.index());
-			int joinIt = a.label();
-			a.branch(Opcode.IFNE, joinIt);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(releaseHandoff.index());
-			a.bind(joinIt);
+			a.invokevirtual(futureIsDone.methodRefEntry());
+			MethodCode.Label joinIt = a.newLabel();
+			a.ifne(joinIt);
+			a.invokestatic(releaseHandoff.entry());
+			a.labelBinding(joinIt);
 			a.aload(3);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(futureJoin.index());
+			a.invokevirtual(futureJoin.methodRefEntry());
 			a.astore(4); // r
 			// the {EMARKER, t, cond[, trace]} error envelope
-			int plain = a.label();
+			MethodCode.Label plain = a.newLabel();
 			a.aload(4);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(objectArrayClass.index());
-			a.branch(Opcode.IFEQ, plain);
+			a.instanceOf(objectArrayClass.entry());
+			a.ifeq(plain);
 			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(errorPayloadLength);
-			a.branch(Opcode.IF_ICMPNE, plain);
+			a.checkcast(objectArrayClass.entry());
+			a.arraylength();
+			a.loadConstant(errorPayloadLength);
+			a.if_icmpne(plain);
 			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(0);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(0);
 			a.aaload();
-			a.ldc(eMarker.index());
-			a.branch(Opcode.IF_ACMPNE, plain);
+			a.ldc(eMarker.entry());
+			a.if_acmpne(plain);
 			// {EMARKER, t, cond}: record the condition under t HERE (the awaiting
 			// thread) and rethrow, so handler-case dispatches by type
 			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(throwableClass);
+			a.checkcast(throwableClass.entry());
 			a.aload(4);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(condPut.index());
+			a.invokestatic(condPut);
 			if (asyncAwaited != null) {
 				// The uncaught report's hop: this await completes the boundary the body's
 				// thunk recorded in the trace, put back as stored (JvmUncaughtHandler).
-				a.op(Opcode.DUP);
+				a.dup();
 				a.aload(4);
-				a.checkcast(objectArrayClass);
-				a.iconst(3);
+				a.checkcast(objectArrayClass.entry());
+				a.loadConstant(3);
 				a.aaload();
-				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass));
-				a.op(Opcode.INVOKESTATIC);
-				a.u2(asyncAwaited.index());
+				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass).entry());
+				a.invokestatic(asyncAwaited.entry());
 			}
-			a.op(Opcode.ATHROW);
-			a.bind(plain);
+			a.athrow();
+			a.labelBinding(plain);
 			if (mvChannel != null && vMarker != null) {
 				// {VMARKER, primary, extras}: publish the extras, flatten the primary
-				int oneValue = a.label();
+				MethodCode.Label oneValue = a.newLabel();
 				emitMarkerTest(a, objectArrayClass, vMarker, 4, oneValue);
 				a.aload(4);
-				a.checkcast(objectArrayClass);
-				a.iconst(2);
+				a.checkcast(objectArrayClass.entry());
+				a.loadConstant(2);
 				a.aaload();
-				mvChannel.emitStore(a::op, a::u2);
+				mvChannel.emitStore(a);
 				a.aload(4);
-				a.checkcast(objectArrayClass);
-				a.iconst(1);
+				a.checkcast(objectArrayClass.entry());
+				a.loadConstant(1);
 				a.aaload();
 				a.astore(0);
-				a.branch(Opcode.GOTO, loop);
-				a.bind(oneValue);
-				a.aconstNull();
-				mvChannel.emitStore(a::op, a::u2);
+				a.goto_(loop);
+				a.labelBinding(oneValue);
+				a.aconst_null();
+				mvChannel.emitStore(a);
 			}
 			// flatten: v = r; loop (a plain value exits at the type checks above)
 			a.aload(4);
 			a.astore(0);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(notFuture);
+			a.goto_(loop);
+			a.labelBinding(notFuture);
 			a.aload(0);
 			a.areturn();
-			methods
-				.add(new AsyncMethod(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC), 12, 20, a.finish(), List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC), a));
 		}
 
 		// --- _futurep(v): CompletableFuture or a stream-read token
 		{
-			Asm a = new Asm();
-			int yes = a.label();
-			int no = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label yes = a.newLabel();
+			MethodCode.Label no = a.newLabel();
 			a.aload(0);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(futureClass.index());
-			a.branch(Opcode.IFNE, yes);
+			a.instanceOf(futureClass.entry());
+			a.ifne(yes);
 			emitMarkerTest(a, objectArrayClass, rMarker, 0, no);
-			a.bind(yes);
-			a.ldc(tStr.index());
+			a.labelBinding(yes);
+			a.ldc(tStr.entry());
 			a.areturn();
-			a.bind(no);
-			a.aconstNull();
+			a.labelBinding(no);
+			a.aconst_null();
 			a.areturn();
-			methods
-				.add(new AsyncMethod(cp.addUtf8(FUTUREP_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(FUTUREP_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _streamp(v)
 		{
-			Asm a = new Asm();
-			int no = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label no = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, no);
-			a.ldc(tStr.index());
+			a.ldc(tStr.entry());
 			a.areturn();
-			a.bind(no);
-			a.aconstNull();
+			a.labelBinding(no);
+			a.aconst_null();
 			a.areturn();
-			methods
-				.add(new AsyncMethod(cp.addUtf8(STREAMP_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(STREAMP_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _make_stream(): {SMARKER, new LinkedBlockingQueue, new AtomicInteger(0)}
 		{
-			Asm a = new Asm();
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(sMarker.index());
+			MethodCode a = new MethodCode();
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(sMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
-			a.op(Opcode.NEW);
-			a.u2(queueClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(queueCtor.index());
+			a.dup();
+			a.loadConstant(1);
+			a.new_(queueClass.entry());
+			a.dup();
+			a.invokespecial(queueCtor.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
-			a.op(Opcode.NEW);
-			a.u2(atomicIntClass.index());
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(atomicIntCtor.index());
+			a.dup();
+			a.loadConstant(2);
+			a.new_(atomicIntClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.invokespecial(atomicIntCtor.entry());
 			a.aastore();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(MAKE_STREAM_METHOD), cp.addUtf8(MAKE_STREAM_DESC), 6, 1, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(MAKE_STREAM_METHOD), cp.addUtf8(MAKE_STREAM_DESC), a));
 		}
 
 		// --- _stream_new(readFn, closeFn): the PULL stream rontolisp::%stream-new
@@ -730,38 +675,35 @@ final class JvmAsyncRuntimeBuilder {
 		// consumer that only asks "is this a stream" (_streamp, the printer) is
 		// untouched.
 		{
-			Asm a = new Asm();
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(sMarker.index());
+			MethodCode a = new MethodCode();
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(sMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
-			a.iconst(2);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
+			a.dup();
+			a.loadConstant(1);
+			a.loadConstant(2);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
 			a.aload(0);
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
+			a.dup();
+			a.loadConstant(1);
 			a.aload(1);
 			a.aastore();
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
-			a.op(Opcode.NEW);
-			a.u2(atomicIntClass.index());
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(atomicIntCtor.index());
+			a.dup();
+			a.loadConstant(2);
+			a.new_(atomicIntClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.invokespecial(atomicIntCtor.entry());
 			a.aastore();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_NEW_METHOD), cp.addUtf8(STREAM_NEW_DESC), 8, 2, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_NEW_METHOD), cp.addUtf8(STREAM_NEW_DESC), a));
 		}
 
 		// --- _stream_read(s): a buffered stream answers the {RMARKER, q, state} token
@@ -771,198 +713,179 @@ final class JvmAsyncRuntimeBuilder {
 		// future and a future wrapping nil is not nil. The first nil chunk runs the close
 		// thunk once (the drain closes exactly once; a read past the end is nil).
 		{
-			Asm a = new Asm();
-			int bad = a.label();
-			int pull = a.label();
-			int drained = a.label();
-			int settle = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label bad = a.newLabel();
+			MethodCode.Label pull = a.newLabel();
+			MethodCode.Label drained = a.newLabel();
+			MethodCode.Label settle = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.op(Opcode.INSTANCEOF);
-			a.u2(queueClass.index());
-			a.branch(Opcode.IFEQ, pull);
-			a.iconst(3);
-			a.anewarray(objectClass);
-			a.op(Opcode.DUP);
-			a.iconst(0);
-			a.ldc(rMarker.index());
+			a.instanceOf(queueClass.entry());
+			a.ifeq(pull);
+			a.loadConstant(3);
+			a.anewarray(objectClass.entry());
+			a.dup();
+			a.loadConstant(0);
+			a.ldc(rMarker.entry());
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(1);
+			a.dup();
+			a.loadConstant(1);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
 			a.aastore();
-			a.op(Opcode.DUP);
-			a.iconst(2);
+			a.dup();
+			a.loadConstant(2);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
 			a.aastore();
 			a.areturn();
-			a.bind(pull);
+			a.labelBinding(pull);
 			// fns (slot 1), state (slot 2)
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(objectArrayClass);
+			a.checkcast(objectArrayClass.entry());
 			a.astore(1);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass);
+			a.checkcast(atomicIntClass.entry());
 			a.astore(2);
 			a.aload(2);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(atomicIntGet.index());
-			a.branch(Opcode.IFNE, drained);
+			a.invokevirtual(atomicIntGet.methodRefEntry());
+			a.ifne(drained);
 			// chunk (slot 3) = _await(_invoke_0(readFn))
 			a.aload(1);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke0.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(awaitSelf.index());
+			a.invokestatic(invoke0.entry());
+			a.invokestatic(awaitSelf.entry());
 			a.astore(3);
 			a.aload(3);
-			a.branch(Opcode.IFNONNULL, settle);
+			a.ifnonnull(settle);
 			a.aload(2);
-			a.iconst(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(atomicIntGetAndSet.index());
-			a.branch(Opcode.IFNE, settle);
+			a.loadConstant(1);
+			a.invokevirtual(atomicIntGetAndSet.methodRefEntry());
+			a.ifne(settle);
 			a.aload(1);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke0.index());
-			a.op(Opcode.POP);
-			a.bind(settle);
+			a.invokestatic(invoke0.entry());
+			a.pop();
+			a.labelBinding(settle);
 			a.aload(3);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(futureCompleted.index());
+			a.invokestatic(futureCompleted.entry());
 			a.areturn();
-			a.bind(drained);
-			a.aconstNull();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(futureCompleted.index());
+			a.labelBinding(drained);
+			a.aconst_null();
+			a.invokestatic(futureCompleted.entry());
 			a.areturn();
-			a.bind(bad);
+			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-read expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC), 5, 4, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _stream_write(s, chunk)
 		{
-			Asm a = new Asm();
-			int bad = a.label();
-			int nilChunk = a.label();
-			int closed = a.label();
-			int noWriteEnd = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label bad = a.newLabel();
+			MethodCode.Label nilChunk = a.newLabel();
+			MethodCode.Label closed = a.newLabel();
+			MethodCode.Label noWriteEnd = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			// A pull stream has no buffer to append to -- its chunks come from its read
 			// thunk -- so the refusal is its own, not "the stream is closed".
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.op(Opcode.INSTANCEOF);
-			a.u2(queueClass.index());
-			a.branch(Opcode.IFEQ, noWriteEnd);
+			a.instanceOf(queueClass.entry());
+			a.ifeq(noWriteEnd);
 			a.aload(1);
-			a.branch(Opcode.IFNULL, nilChunk);
+			a.ifnull(nilChunk);
 			// closed?
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(atomicIntGet.index());
-			a.branch(Opcode.IFNE, closed);
+			a.checkcast(atomicIntClass.entry());
+			a.invokevirtual(atomicIntGet.methodRefEntry());
+			a.ifne(closed);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(queueClass);
+			a.checkcast(queueClass.entry());
 			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueOffer.index());
-			a.op(Opcode.POP);
+			a.invokevirtual(queueOffer.methodRefEntry());
+			a.pop();
 			// accepted immediately: a settled future of nil
-			a.aconstNull();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(futureCompleted.index());
+			a.aconst_null();
+			a.invokestatic(futureCompleted.entry());
 			a.areturn();
-			a.bind(bad);
+			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write expects a stream");
-			a.bind(nilChunk);
+			a.labelBinding(nilChunk);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: a chunk must not be nil");
-			a.bind(closed);
+			a.labelBinding(closed);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream is closed");
-			a.bind(noWriteEnd);
+			a.labelBinding(noWriteEnd);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream has no write end");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_WRITE_METHOD), cp.addUtf8(STREAM_WRITE_DESC), 3, 2,
-					a.finish(), List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_WRITE_METHOD), cp.addUtf8(STREAM_WRITE_DESC), a));
 		}
 
 		// --- _stream_close(s): end the stream once -- the poison pill for a buffered
 		// stream, the close thunk for a pull one
 		{
-			Asm a = new Asm();
-			int bad = a.label();
-			int already = a.label();
-			int pull = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label bad = a.newLabel();
+			MethodCode.Label already = a.newLabel();
+			MethodCode.Label pull = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(2);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass);
-			a.iconst(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(atomicIntGetAndSet.index());
-			a.branch(Opcode.IFNE, already);
+			a.checkcast(atomicIntClass.entry());
+			a.loadConstant(1);
+			a.invokevirtual(atomicIntGetAndSet.methodRefEntry());
+			a.ifne(already);
 			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
 			a.astore(1);
 			a.aload(1);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(queueClass.index());
-			a.branch(Opcode.IFEQ, pull);
+			a.instanceOf(queueClass.entry());
+			a.ifeq(pull);
 			a.aload(1);
-			a.checkcast(queueClass);
-			a.ldc(sMarker.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueOffer.index());
-			a.op(Opcode.POP);
-			a.branch(Opcode.GOTO, already);
-			a.bind(pull);
+			a.checkcast(queueClass.entry());
+			a.ldc(sMarker.entry());
+			a.invokevirtual(queueOffer.methodRefEntry());
+			a.pop();
+			a.goto_(already);
+			a.labelBinding(pull);
 			a.aload(1);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
+			a.checkcast(objectArrayClass.entry());
+			a.loadConstant(1);
 			a.aaload();
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(invoke0.index());
-			a.op(Opcode.POP);
-			a.bind(already);
-			a.aconstNull();
+			a.invokestatic(invoke0.entry());
+			a.pop();
+			a.labelBinding(already);
+			a.aconst_null();
 			a.areturn();
-			a.bind(bad);
+			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-close expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_CLOSE_METHOD), cp.addUtf8(UNARY_DESC), 3, 2, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_CLOSE_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _iv_of_bytes(byte[]): raw bytes -> byte[]{8, e0, ...}, the packed
@@ -972,32 +895,29 @@ final class JvmAsyncRuntimeBuilder {
 		{
 			MethodrefConstant arraycopy = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")), cp
 				.addNameAndType(cp.addUtf8("arraycopy"), cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V")));
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			// slots: 0 bytes, 1 out
 			a.aload(0);
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(1);
-			a.op(Opcode.IADD);
-			a.op(Opcode.NEWARRAY);
-			a.op(8); // T_BYTE
+			a.arraylength();
+			a.loadConstant(1);
+			a.iadd();
+			a.newarray(TypeKind.BYTE);
 			a.astore(1);
 			a.aload(1);
-			a.iconst(0);
-			a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			a.op(Opcode.BASTORE); // out[0] = 8 (the width header)
+			a.loadConstant(0);
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.bastore(); // out[0] = 8 (the width header)
 			// System.arraycopy(bytes, 0, out, 1, bytes.length)
 			a.aload(0);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aload(1);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aload(0);
-			a.op(Opcode.ARRAYLENGTH);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(arraycopy.index());
+			a.arraylength();
+			a.invokestatic(arraycopy.entry());
 			a.aload(1);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC), 5, 2, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC), a));
 		}
 
 		// --- _drain_body(v): for http-handler response marshaling -- a stream drains to
@@ -1028,145 +948,125 @@ final class JvmAsyncRuntimeBuilder {
 					cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
 			MethodrefConstant stringGetBytes = cp.addMethodref(stringClass,
 					cp.addNameAndType(cp.addUtf8("getBytes"), cp.addUtf8("(Ljava/nio/charset/Charset;)[B")));
-			Asm a = new Asm();
+			MethodCode a = new MethodCode();
 			// slots: 0 v, 1 sink, 2 chunk, 3 octetsSeen, 4 textSeen, 5 i, 6 iv
-			int passThrough = a.label();
+			MethodCode.Label passThrough = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, passThrough);
-			a.op(Opcode.NEW);
-			a.u2(baosClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(baosInit.index());
+			a.new_(baosClass.entry());
+			a.dup();
+			a.invokespecial(baosInit.entry());
 			a.astore(1);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(3);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(4);
-			int loop = a.label();
-			int done = a.label();
-			int notIv = a.label();
-			int mixed = a.label();
-			a.bind(loop);
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			MethodCode.Label notIv = a.newLabel();
+			MethodCode.Label mixed = a.newLabel();
+			a.labelBinding(loop);
 			a.aload(0);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(streamReadSelf.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(awaitSelf.index());
+			a.invokestatic(streamReadSelf.entry());
+			a.invokestatic(awaitSelf.entry());
 			a.astore(2); // chunk
 			a.aload(2);
-			a.branch(Opcode.IFNULL, done);
+			a.ifnull(done);
 			// an octet chunk, byte[]{8, e0, ...}: the elements after the width header, in
 			// one write
-			int notOctets = a.label();
+			MethodCode.Label notOctets = a.newLabel();
 			a.aload(2);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(byteArrayClass.index());
-			a.branch(Opcode.IFEQ, notOctets);
-			a.iconst(1);
+			a.instanceOf(byteArrayClass.entry());
+			a.ifeq(notOctets);
+			a.loadConstant(1);
 			a.istore(3);
 			a.aload(1);
 			a.aload(2);
-			a.checkcast(byteArrayClass);
-			a.op(Opcode.DUP); // [sink, chunk, chunk]
-			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(1);
-			a.op(Opcode.ISUB);
-			a.iconst(1);
-			a.op(Opcode.SWAP); // [sink, chunk, 1, len-1]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(baosWriteRange.index());
-			a.branch(Opcode.GOTO, loop);
-			a.bind(notOctets);
+			a.checkcast(byteArrayClass.entry());
+			a.dup(); // [sink, chunk, chunk]
+			a.arraylength();
+			a.loadConstant(1);
+			a.isub();
+			a.loadConstant(1);
+			a.swap(); // [sink, chunk, 1, len-1]
+			a.invokevirtual(baosWriteRange.methodRefEntry());
+			a.goto_(loop);
+			a.labelBinding(notOctets);
 			a.aload(2);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(longArrayClass.index());
-			a.branch(Opcode.IFEQ, notIv);
+			a.instanceOf(longArrayClass.entry());
+			a.ifeq(notIv);
 			// a wider packed chunk: every element after the width header, one write each
-			a.iconst(1);
+			a.loadConstant(1);
 			a.istore(3);
 			a.aload(2);
-			a.checkcast(longArrayClass);
+			a.checkcast(longArrayClass.entry());
 			a.astore(6);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.istore(5);
-			int ivLoop = a.label();
-			int ivDone = a.label();
-			a.bind(ivLoop);
+			MethodCode.Label ivLoop = a.newLabel();
+			MethodCode.Label ivDone = a.newLabel();
+			a.labelBinding(ivLoop);
 			a.iload(5);
 			a.aload(6);
-			a.op(Opcode.ARRAYLENGTH);
-			a.branch(Opcode.IF_ICMPGE, ivDone);
+			a.arraylength();
+			a.if_icmpge(ivDone);
 			a.aload(1);
 			a.aload(6);
 			a.iload(5);
-			a.op(Opcode.LALOAD);
-			a.op(Opcode.L2I);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(baosWrite.index());
+			a.laload();
+			a.l2i();
+			a.invokevirtual(baosWrite.methodRefEntry());
 			a.iinc(5, 1);
-			a.branch(Opcode.GOTO, ivLoop);
-			a.bind(ivDone);
-			a.branch(Opcode.GOTO, loop);
+			a.goto_(ivLoop);
+			a.labelBinding(ivDone);
+			a.goto_(loop);
 			// a string chunk: its raw text, UTF-8 encoded
-			a.bind(notIv);
-			a.iconst(1);
+			a.labelBinding(notIv);
+			a.loadConstant(1);
 			a.istore(4);
 			a.aload(1);
 			a.aload(2);
-			a.checkcast(stringClass);
-			a.op(Opcode.DUP); // [sink, chunk, chunk]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringLength.index()); // [sink, chunk, len]
-			a.iconst(1);
-			a.op(Opcode.ISUB);
-			a.iconst(1);
-			a.op(Opcode.SWAP); // [sink, chunk, 1, len-1]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringSubstring.index()); // [sink, raw]
-			a.op(Opcode.GETSTATIC);
-			a.u2(utf8Field.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringGetBytes.index()); // [sink, bytes]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(baosWriteBytes.index());
-			a.branch(Opcode.GOTO, loop);
-			a.bind(done);
+			a.checkcast(stringClass.entry());
+			a.dup(); // [sink, chunk, chunk]
+			a.invokevirtual(stringLength.methodRefEntry()); // [sink, chunk, len]
+			a.loadConstant(1);
+			a.isub();
+			a.loadConstant(1);
+			a.swap(); // [sink, chunk, 1, len-1]
+			a.invokevirtual(stringSubstring.methodRefEntry()); // [sink, raw]
+			a.getstatic(utf8Field.entry());
+			a.invokevirtual(stringGetBytes.methodRefEntry()); // [sink, bytes]
+			a.invokevirtual(baosWriteBytes.methodRefEntry());
+			a.goto_(loop);
+			a.labelBinding(done);
 			a.iload(3);
 			a.iload(4);
-			a.op(Opcode.IAND);
-			a.branch(Opcode.IFNE, mixed);
-			int textResult = a.label();
+			a.iand();
+			a.ifne(mixed);
+			MethodCode.Label textResult = a.newLabel();
 			a.iload(3);
-			a.branch(Opcode.IFEQ, textResult);
+			a.ifeq(textResult);
 			// octets: one byte[] vector, written by the transport as it is
 			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(baosToByteArray.index());
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(ivOfBytesSelf.index());
+			a.invokevirtual(baosToByteArray.methodRefEntry());
+			a.invokestatic(ivOfBytesSelf.entry());
 			a.areturn();
 			// text (or an empty stream): the quoted concatenation
-			a.bind(textResult);
-			a.ldc(quote.index());
+			a.labelBinding(textResult);
+			a.ldc(quote.entry());
 			a.aload(1);
-			a.op(Opcode.GETSTATIC);
-			a.u2(utf8Field.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(baosToString.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringConcat.index());
-			a.ldc(quote.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringConcat.index());
+			a.getstatic(utf8Field.entry());
+			a.invokevirtual(baosToString.methodRefEntry());
+			a.invokevirtual(stringConcat.methodRefEntry());
+			a.ldc(quote.entry());
+			a.invokevirtual(stringConcat.methodRefEntry());
 			a.areturn();
-			a.bind(mixed);
+			a.labelBinding(mixed);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
 					"http-handler: a stream response body mixes string and octet chunks");
-			a.bind(passThrough);
+			a.labelBinding(passThrough);
 			a.aload(0);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(DRAIN_BODY_METHOD), cp.addUtf8(UNARY_DESC), 5, 7, a.finish(),
-					List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(DRAIN_BODY_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		// --- _wait_for(ms): a future settling to nil after ms milliseconds, via
@@ -1181,38 +1081,31 @@ final class JvmAsyncRuntimeBuilder {
 			MethodrefConstant completeOnTimeout = cp
 				.addMethodref(futureClass, cp.addNameAndType(cp.addUtf8("completeOnTimeout"), cp.addUtf8(
 						"(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/CompletableFuture;")));
-			Asm a = new Asm();
-			int bad = a.label();
+			MethodCode a = new MethodCode();
+			MethodCode.Label bad = a.newLabel();
 			a.aload(0);
-			a.op(Opcode.INSTANCEOF);
-			a.u2(longBoxClass.index());
-			a.branch(Opcode.IFEQ, bad);
+			a.instanceOf(longBoxClass.entry());
+			a.ifeq(bad);
 			a.aload(0);
-			a.checkcast(longBoxClass);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(longValue.index()); // [J]
-			a.op(Opcode.LSTORE_1); // ms in slots 1-2; the bad path is reached stack-empty
-			a.op(Opcode.LLOAD_1);
-			a.op(Opcode.LCONST_0);
-			a.op(Opcode.LCMP);
-			a.branch(Opcode.IFLT, bad); // []
-			a.op(Opcode.NEW);
-			a.u2(futureClass.index());
-			a.op(Opcode.DUP);
-			a.op(Opcode.INVOKESPECIAL);
-			a.u2(futureCtor.index()); // [cf]
-			a.aconstNull(); // [cf, nil]
-			a.op(Opcode.LLOAD_1); // [cf, nil, J]
-			a.op(Opcode.GETSTATIC);
-			a.u2(millisUnit.index()); // [cf, nil, J, unit]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(completeOnTimeout.index()); // [cf]
+			a.checkcast(longBoxClass.entry());
+			a.invokevirtual(longValue.methodRefEntry()); // [J]
+			a.lstore(1); // ms in slots 1-2; the bad path is reached stack-empty
+			a.lload(1);
+			a.lconst_0();
+			a.lcmp();
+			a.iflt(bad); // []
+			a.new_(futureClass.entry());
+			a.dup();
+			a.invokespecial(futureCtor.entry()); // [cf]
+			a.aconst_null(); // [cf, nil]
+			a.lload(1); // [cf, nil, J]
+			a.getstatic(millisUnit.entry()); // [cf, nil, J, unit]
+			a.invokevirtual(completeOnTimeout.methodRefEntry()); // [cf]
 			a.areturn();
-			a.bind(bad);
+			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
 					"wait-for expects a non-negative integer of milliseconds");
-			methods
-				.add(new AsyncMethod(cp.addUtf8(WAIT_FOR_METHOD), cp.addUtf8(UNARY_DESC), 6, 3, a.finish(), List.of()));
+			methods.add(new AsyncMethod(cp.addUtf8(WAIT_FOR_METHOD), cp.addUtf8(UNARY_DESC), a));
 		}
 
 		return new AsyncRuntime(methods, runMethod, true);
@@ -1260,194 +1153,182 @@ final class JvmAsyncRuntimeBuilder {
 		MethodrefConstant lowSurrogate = cp.addMethodref(characterClass,
 				cp.addNameAndType(cp.addUtf8("lowSurrogate"), cp.addUtf8("(I)C")));
 
-		Asm a = new Asm();
+		MethodCode a = new MethodCode();
 		// slots: 0 v, 1 bytes (the vector: tag, then the octets), 2 n (its length), 3 i,
 		// 4 units, 5 every code point OR'd, 6 b, 7 cp, 8 adv, 9 four-byte code point,
 		// 10 k, 11 out
 		int bytesSlot = 1, nSlot = 2, iSlot = 3, unitsSlot = 4, orSlot = 5, bSlot = 6, cpSlot = 7, advSlot = 8,
 				cp4Slot = 9, kSlot = 10, outSlot = 11;
 		Unit unit = new Unit(bytesSlot, iSlot, nSlot, bSlot, cpSlot, advSlot, cp4Slot);
-		int none = a.label();
+		MethodCode.Label none = a.newLabel();
 		a.aload(0);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(byteArrayClass.index());
-		a.branch(Opcode.IFEQ, none);
+		a.instanceOf(byteArrayClass.entry());
+		a.ifeq(none);
 		a.aload(0);
-		a.checkcast(byteArrayClass);
+		a.checkcast(byteArrayClass.entry());
 		a.astore(bytesSlot);
 		a.aload(bytesSlot);
-		a.op(Opcode.ARRAYLENGTH);
+		a.arraylength();
 		a.istore(nSlot);
 		// Refuse an empty array and a quantized matrix (another byte[], whose slot 0 is
 		// its format code) rather than reading a header that is not the tag.
 		a.iload(nSlot);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPLT, none);
+		a.loadConstant(1);
+		a.if_icmplt(none);
 		a.aload(bytesSlot);
-		a.iconst(0);
-		a.op(Opcode.BALOAD);
-		a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		a.branch(Opcode.IF_ICMPNE, none);
+		a.loadConstant(0);
+		a.baload();
+		a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		a.if_icmpne(none);
 		// Count: units (UTF-16 code units, a supplementary character two) and the OR of
 		// every code point.
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(unitsSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(orSlot);
-		int counted = a.label();
+		MethodCode.Label counted = a.newLabel();
 		unit.emitLoop(a, counted, () -> {
 			a.iload(orSlot);
 			a.iload(cpSlot);
-			a.op(Opcode.IOR);
+			a.ior();
 			a.istore(orSlot);
 			a.iinc(unitsSlot, 1);
-			int bmp = a.label();
+			MethodCode.Label bmp = a.newLabel();
 			a.iload(cpSlot);
-			a.iconst(16);
-			a.op(Opcode.ISHR);
-			a.branch(Opcode.IFEQ, bmp);
+			a.loadConstant(16);
+			a.ishr();
+			a.ifeq(bmp);
 			a.iinc(unitsSlot, 1);
-			a.bind(bmp);
+			a.labelBinding(bmp);
 		});
-		a.bind(counted);
+		a.labelBinding(counted);
 		// Every unit one octet: the octets ARE the Latin-1 content -- one copy between
 		// the frame quotes.
-		int notVerbatim = a.label();
+		MethodCode.Label notVerbatim = a.newLabel();
 		a.iload(unitsSlot);
 		a.iload(nSlot);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPNE, notVerbatim);
+		a.loadConstant(1);
+		a.isub();
+		a.if_icmpne(notVerbatim);
 		a.iload(nSlot);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.op(Opcode.NEWARRAY);
-		a.op(8); // T_BYTE
+		a.loadConstant(1);
+		a.iadd();
+		a.newarray(TypeKind.BYTE);
 		a.astore(outSlot);
 		a.aload(bytesSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(outSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(unitsSlot);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(arraycopy.index());
-		int latin1Framed = a.label();
-		a.branch(Opcode.GOTO, latin1Framed);
-		a.bind(notVerbatim);
-		int wide = a.label();
+		a.invokestatic(arraycopy.entry());
+		MethodCode.Label latin1Framed = a.newLabel();
+		a.goto_(latin1Framed);
+		a.labelBinding(notVerbatim);
+		MethodCode.Label wide = a.newLabel();
 		a.iload(orSlot);
-		a.iconst(0xFF);
-		a.branch(Opcode.IF_ICMPGT, wide);
+		a.loadConstant(0xFF);
+		a.if_icmpgt(wide);
 		// Every character Latin-1: narrowed into a byte[].
 		a.iload(unitsSlot);
-		a.iconst(2);
-		a.op(Opcode.IADD);
-		a.op(Opcode.NEWARRAY);
-		a.op(8); // T_BYTE
+		a.loadConstant(2);
+		a.iadd();
+		a.newarray(TypeKind.BYTE);
 		a.astore(outSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(kSlot);
 		unit.emitLoop(a, latin1Framed, () -> {
 			a.aload(outSlot);
-			a.checkcast(byteArrayClass);
+			a.checkcast(byteArrayClass.entry());
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.op(Opcode.BASTORE);
+			a.bastore();
 			a.iinc(kSlot, 1);
 		});
 		// out[0] = out[last] = '"'; return new String(out, ISO_8859_1)
-		a.bind(latin1Framed);
+		a.labelBinding(latin1Framed);
 		a.aload(outSlot);
-		a.checkcast(byteArrayClass);
-		a.iconst(0);
-		a.iconst('"');
-		a.op(Opcode.BASTORE);
+		a.checkcast(byteArrayClass.entry());
+		a.loadConstant(0);
+		a.loadConstant('"');
+		a.bastore();
 		a.aload(outSlot);
-		a.checkcast(byteArrayClass);
-		a.op(Opcode.DUP);
-		a.op(Opcode.ARRAYLENGTH);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.iconst('"');
-		a.op(Opcode.BASTORE);
-		a.op(Opcode.NEW);
-		a.u2(stringClass.index());
-		a.op(Opcode.DUP);
+		a.checkcast(byteArrayClass.entry());
+		a.dup();
+		a.arraylength();
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant('"');
+		a.bastore();
+		a.new_(stringClass.entry());
+		a.dup();
 		a.aload(outSlot);
-		a.op(Opcode.GETSTATIC);
-		a.u2(latin1.index());
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(stringFromBytes.index());
+		a.getstatic(latin1.entry());
+		a.invokespecial(stringFromBytes.entry());
 		a.areturn();
 		// Otherwise a char[], a supplementary character as its surrogate pair.
-		a.bind(wide);
+		a.labelBinding(wide);
 		a.iload(unitsSlot);
-		a.iconst(2);
-		a.op(Opcode.IADD);
-		a.op(Opcode.NEWARRAY);
-		a.op(5); // T_CHAR
+		a.loadConstant(2);
+		a.iadd();
+		a.newarray(TypeKind.CHAR);
 		a.astore(outSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(kSlot);
-		int wideDone = a.label();
+		MethodCode.Label wideDone = a.newLabel();
 		unit.emitLoop(a, wideDone, () -> {
-			int bmp = a.label();
-			int stored = a.label();
+			MethodCode.Label bmp = a.newLabel();
+			MethodCode.Label stored = a.newLabel();
 			a.iload(cpSlot);
-			a.iconst(16);
-			a.op(Opcode.ISHR);
-			a.branch(Opcode.IFEQ, bmp);
+			a.loadConstant(16);
+			a.ishr();
+			a.ifeq(bmp);
 			a.aload(outSlot);
-			a.checkcast(cp.addClass(cp.addUtf8("[C")));
+			a.checkcast(cp.classEntry("[C"));
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(highSurrogate.index());
-			a.op(Opcode.CASTORE);
+			a.invokestatic(highSurrogate.entry());
+			a.castore();
 			a.iinc(kSlot, 1);
 			a.aload(outSlot);
-			a.checkcast(cp.addClass(cp.addUtf8("[C")));
+			a.checkcast(cp.classEntry("[C"));
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(lowSurrogate.index());
-			a.op(Opcode.CASTORE);
-			a.branch(Opcode.GOTO, stored);
-			a.bind(bmp);
+			a.invokestatic(lowSurrogate.entry());
+			a.castore();
+			a.goto_(stored);
+			a.labelBinding(bmp);
 			a.aload(outSlot);
-			a.checkcast(cp.addClass(cp.addUtf8("[C")));
+			a.checkcast(cp.classEntry("[C"));
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.op(Opcode.CASTORE);
-			a.bind(stored);
+			a.castore();
+			a.labelBinding(stored);
 			a.iinc(kSlot, 1);
 		});
-		a.bind(wideDone);
+		a.labelBinding(wideDone);
 		a.aload(outSlot);
-		a.checkcast(cp.addClass(cp.addUtf8("[C")));
-		a.iconst(0);
-		a.iconst('"');
-		a.op(Opcode.CASTORE);
+		a.checkcast(cp.classEntry("[C"));
+		a.loadConstant(0);
+		a.loadConstant('"');
+		a.castore();
 		a.aload(outSlot);
-		a.checkcast(cp.addClass(cp.addUtf8("[C")));
-		a.op(Opcode.DUP);
-		a.op(Opcode.ARRAYLENGTH);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.iconst('"');
-		a.op(Opcode.CASTORE);
-		a.op(Opcode.NEW);
-		a.u2(stringClass.index());
-		a.op(Opcode.DUP);
+		a.checkcast(cp.classEntry("[C"));
+		a.dup();
+		a.arraylength();
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant('"');
+		a.castore();
+		a.new_(stringClass.entry());
+		a.dup();
 		a.aload(outSlot);
-		a.checkcast(cp.addClass(cp.addUtf8("[C")));
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(stringFromChars.index());
+		a.checkcast(cp.classEntry("[C"));
+		a.invokespecial(stringFromChars.entry());
 		a.areturn();
-		a.bind(none);
-		a.aconstNull();
+		a.labelBinding(none);
+		a.aconst_null();
 		a.areturn();
-		return new AsyncMethod(cp.addUtf8(OCTETS_PACKED_METHOD), cp.addUtf8(UNARY_DESC), 6, 12, a.finish(), List.of());
+		return new AsyncMethod(cp.addUtf8(OCTETS_PACKED_METHOD), cp.addUtf8(UNARY_DESC), a);
 	}
 
 	/**
@@ -1465,76 +1346,76 @@ final class JvmAsyncRuntimeBuilder {
 		 * @param done the label past the loop
 		 * @param body what each unit does, with its code point in {@code cpSlot}
 		 */
-		void emitLoop(Asm a, int done, Runnable body) {
-			a.iconst(1);
+		void emitLoop(MethodCode a, MethodCode.Label done, Runnable body) {
+			a.loadConstant(1);
 			a.istore(this.iSlot);
-			int loop = a.label();
-			a.bind(loop);
+			MethodCode.Label loop = a.newLabel();
+			a.labelBinding(loop);
 			a.iload(this.iSlot);
 			a.iload(this.nSlot);
-			a.branch(Opcode.IF_ICMPGE, done);
+			a.if_icmpge(done);
 			emitStep(a);
 			body.run();
 			a.iload(this.iSlot);
 			a.iload(this.advSlot);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.istore(this.iSlot);
-			a.branch(Opcode.GOTO, loop);
+			a.goto_(loop);
 		}
 
-		private void emitStep(Asm a) {
-			int emit = a.label();
+		private void emitStep(MethodCode a) {
+			MethodCode.Label emit = a.newLabel();
 			// b = bytes[i] & 0xFF; by default it is its own character, one octet long.
 			a.aload(this.bytesSlot);
 			a.iload(this.iSlot);
-			a.op(Opcode.BALOAD);
-			a.iconst(0xFF);
-			a.op(Opcode.IAND);
-			a.op(Opcode.DUP);
+			a.baload();
+			a.loadConstant(0xFF);
+			a.iand();
+			a.dup();
 			a.istore(this.bSlot);
 			a.istore(this.cpSlot);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.istore(this.advSlot);
 			// b < 0xC0: ASCII, or a continuation byte that leads nothing.
 			a.iload(this.bSlot);
-			a.iconst(0xC0);
-			a.branch(Opcode.IF_ICMPLT, emit);
-			int notTwo = a.label();
+			a.loadConstant(0xC0);
+			a.if_icmplt(emit);
+			MethodCode.Label notTwo = a.newLabel();
 			a.iload(this.bSlot);
-			a.iconst(0xE0);
-			a.branch(Opcode.IF_ICMPGE, notTwo);
+			a.loadConstant(0xE0);
+			a.if_icmpge(notTwo);
 			emitLeadTakes(a, 2, 0x1F, this.bytesSlot, this.iSlot, this.nSlot, this.bSlot, emit);
 			a.istore(this.cpSlot);
-			a.iconst(2);
+			a.loadConstant(2);
 			a.istore(this.advSlot);
-			a.branch(Opcode.GOTO, emit);
-			a.bind(notTwo);
-			int notThree = a.label();
+			a.goto_(emit);
+			a.labelBinding(notTwo);
+			MethodCode.Label notThree = a.newLabel();
 			a.iload(this.bSlot);
-			a.iconst(0xF0);
-			a.branch(Opcode.IF_ICMPGE, notThree);
+			a.loadConstant(0xF0);
+			a.if_icmpge(notThree);
 			emitLeadTakes(a, 3, 0x0F, this.bytesSlot, this.iSlot, this.nSlot, this.bSlot, emit);
 			a.istore(this.cpSlot);
-			a.iconst(3);
+			a.loadConstant(3);
 			a.istore(this.advSlot);
-			a.branch(Opcode.GOTO, emit);
-			a.bind(notThree);
+			a.goto_(emit);
+			a.labelBinding(notThree);
 			a.iload(this.bSlot);
-			a.iconst(0xF8);
-			a.branch(Opcode.IF_ICMPGE, emit);
+			a.loadConstant(0xF8);
+			a.if_icmpge(emit);
 			emitLeadTakes(a, 4, 0x07, this.bytesSlot, this.iSlot, this.nSlot, this.bSlot, emit);
 			a.istore(this.cp4Slot);
 			// Past U+10FFFF (cp >> 16 > 0x10) the lead byte stays its own character.
 			a.iload(this.cp4Slot);
-			a.iconst(16);
-			a.op(Opcode.ISHR);
-			a.iconst(0x10);
-			a.branch(Opcode.IF_ICMPGT, emit);
+			a.loadConstant(16);
+			a.ishr();
+			a.loadConstant(0x10);
+			a.if_icmpgt(emit);
 			a.iload(this.cp4Slot);
 			a.istore(this.cpSlot);
-			a.iconst(4);
+			a.loadConstant(4);
 			a.istore(this.advSlot);
-			a.bind(emit);
+			a.labelBinding(emit);
 		}
 
 	}
@@ -1545,27 +1426,27 @@ final class JvmAsyncRuntimeBuilder {
 	 * after it -- leaving it on the stack, or branches to {@code short} (with nothing on
 	 * the stack) when the vector ends before the sequence does.
 	 */
-	private static void emitLeadTakes(Asm a, int length, int leadMask, int bytesSlot, int iSlot, int nSlot, int bSlot,
-			int shortLabel) {
+	private static void emitLeadTakes(MethodCode a, int length, int leadMask, int bytesSlot, int iSlot, int nSlot,
+			int bSlot, MethodCode.Label shortLabel) {
 		a.iload(iSlot);
-		a.iconst(length - 1);
-		a.op(Opcode.IADD);
+		a.loadConstant(length - 1);
+		a.iadd();
 		a.iload(nSlot);
-		a.branch(Opcode.IF_ICMPGE, shortLabel);
+		a.if_icmpge(shortLabel);
 		a.iload(bSlot);
-		a.iconst(leadMask);
-		a.op(Opcode.IAND);
+		a.loadConstant(leadMask);
+		a.iand();
 		for (int k = 1; k < length; k++) {
-			a.iconst(6);
-			a.op(Opcode.ISHL);
+			a.loadConstant(6);
+			a.ishl();
 			a.aload(bytesSlot);
 			a.iload(iSlot);
-			a.iconst(k);
-			a.op(Opcode.IADD);
-			a.op(Opcode.BALOAD);
-			a.iconst(0x3F);
-			a.op(Opcode.IAND);
-			a.op(Opcode.IOR);
+			a.loadConstant(k);
+			a.iadd();
+			a.baload();
+			a.loadConstant(0x3F);
+			a.iand();
+			a.ior();
 		}
 	}
 
@@ -1573,176 +1454,33 @@ final class JvmAsyncRuntimeBuilder {
 	 * Emits "is local {@code slot} an {@code Object[3]} whose head is {@code marker}",
 	 * branching to {@code noLabel} when it is not (falls through when it is).
 	 */
-	private static void emitMarkerTest(Asm a, ClassConstant objectArrayClass, ConstantPool.StringConstant marker,
-			int slot, int noLabel) {
+	private static void emitMarkerTest(MethodCode a, ClassConstant objectArrayClass, ConstantPool.StringConstant marker,
+			int slot, MethodCode.Label noLabel) {
 		a.aload(slot);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(objectArrayClass.index());
-		a.branch(Opcode.IFEQ, noLabel);
+		a.instanceOf(objectArrayClass.entry());
+		a.ifeq(noLabel);
 		a.aload(slot);
-		a.checkcast(objectArrayClass);
-		a.op(Opcode.ARRAYLENGTH);
-		a.iconst(3);
-		a.branch(Opcode.IF_ICMPNE, noLabel);
+		a.checkcast(objectArrayClass.entry());
+		a.arraylength();
+		a.loadConstant(3);
+		a.if_icmpne(noLabel);
 		a.aload(slot);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(0);
 		a.aaload();
-		a.ldc(marker.index());
-		a.branch(Opcode.IF_ACMPNE, noLabel);
+		a.ldc(marker.entry());
+		a.if_acmpne(noLabel);
 	}
 
 	/** Emits {@code throw new RuntimeException(message)}. */
-	private static void emitThrow(Asm a, ConstantPool cp, ClassConstant runtimeExceptionClass,
+	private static void emitThrow(MethodCode a, ConstantPool cp, ClassConstant runtimeExceptionClass,
 			MethodrefConstant runtimeExceptionInit, String message) {
 		ConstantPool.StringConstant msg = cp.addString(message);
-		a.op(Opcode.NEW);
-		a.u2(runtimeExceptionClass.index());
-		a.op(Opcode.DUP);
-		a.ldc(msg.index());
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(runtimeExceptionInit.index());
-		a.op(Opcode.ATHROW);
-	}
-
-	/** Minimal label-based assembler, mirroring the one in JvmFetchRuntimeBuilder. */
-	static final class Asm {
-
-		private final List<Integer> code = new ArrayList<>();
-
-		private final Map<Integer, Integer> labelPos = new HashMap<>();
-
-		private final Map<Integer, List<Integer>> pending = new HashMap<>();
-
-		private int nextLabel = 0;
-
-		int pos() {
-			return this.code.size();
-		}
-
-		int label() {
-			return this.nextLabel++;
-		}
-
-		void bind(int label) {
-			int pos = this.code.size();
-			this.labelPos.put(label, pos);
-			List<Integer> ps = this.pending.remove(label);
-			if (ps != null) {
-				for (int bp : ps) {
-					JvmRuntimeBuilder.patchBranch(this.code, bp, pos);
-				}
-			}
-		}
-
-		void branch(int opcode, int label) {
-			int bp = this.code.size();
-			this.code.add(opcode);
-			JvmRuntimeBuilder.emitU2(this.code, 0);
-			Integer tgt = this.labelPos.get(label);
-			if (tgt != null) {
-				JvmRuntimeBuilder.patchBranch(this.code, bp, tgt);
-			}
-			else {
-				this.pending.computeIfAbsent(label, k -> new ArrayList<>()).add(bp);
-			}
-		}
-
-		void op(int opcode) {
-			this.code.add(opcode);
-		}
-
-		void u2(int value) {
-			JvmRuntimeBuilder.emitU2(this.code, value);
-		}
-
-		void aload(int slot) {
-			this.code.add(Opcode.ALOAD);
-			this.code.add(slot);
-		}
-
-		void astore(int slot) {
-			this.code.add(Opcode.ASTORE);
-			this.code.add(slot);
-		}
-
-		void aaload() {
-			this.code.add(Opcode.AALOAD);
-		}
-
-		void iload(int slot) {
-			this.code.add(Opcode.ILOAD);
-			this.code.add(slot);
-		}
-
-		void istore(int slot) {
-			this.code.add(Opcode.ISTORE);
-			this.code.add(slot);
-		}
-
-		void iinc(int slot, int delta) {
-			this.code.add(Opcode.IINC);
-			this.code.add(slot);
-			this.code.add(delta & 0xFF);
-		}
-
-		void aastore() {
-			this.code.add(Opcode.AASTORE);
-		}
-
-		void aconstNull() {
-			this.code.add(Opcode.ACONST_NULL);
-		}
-
-		void iconst(int n) {
-			if (n == -1) {
-				this.code.add(Opcode.ICONST_M1);
-			}
-			else if (n >= 0 && n <= 5) {
-				this.code.add(Opcode.ICONST_0 + n);
-			}
-			else if (n >= -128 && n <= 127) {
-				this.code.add(Opcode.BIPUSH);
-				this.code.add(n & 0xFF);
-			}
-			else {
-				this.code.add(Opcode.SIPUSH);
-				JvmRuntimeBuilder.emitU2(this.code, n);
-			}
-		}
-
-		void ldc(int index) {
-			if (index <= 255) {
-				this.code.add(Opcode.LDC);
-				this.code.add(index);
-			}
-			else {
-				this.code.add(Opcode.LDC_W);
-				JvmRuntimeBuilder.emitU2(this.code, index);
-			}
-		}
-
-		void checkcast(ClassConstant c) {
-			this.code.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void anewarray(ClassConstant c) {
-			this.code.add(Opcode.ANEWARRAY);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void areturn() {
-			this.code.add(Opcode.ARETURN);
-		}
-
-		List<Integer> finish() {
-			if (!this.pending.isEmpty()) {
-				throw new IllegalStateException("Unbound labels in async runtime assembly: " + this.pending.keySet());
-			}
-			return this.code;
-		}
-
+		a.new_(runtimeExceptionClass.entry());
+		a.dup();
+		a.ldc(msg.entry());
+		a.invokespecial(runtimeExceptionInit.entry());
+		a.athrow();
 	}
 
 }

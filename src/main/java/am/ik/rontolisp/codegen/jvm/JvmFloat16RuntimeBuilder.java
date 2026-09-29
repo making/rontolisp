@@ -1,12 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.ArrayMethod;
 
 /**
@@ -65,27 +65,21 @@ final class JvmFloat16RuntimeBuilder {
 	 * @return the two helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp) {
-		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
-		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
-		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
-		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
-		ClassConstant floatClass = cp.addClass(cp.addUtf8("java/lang/Float"));
-		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		ClassEntry doubleArrayClass = cp.classEntry("[D");
+		ClassEntry floatArrayClass = cp.classEntry("[F");
+		ClassEntry shortArrayClass = cp.classEntry("[S");
+		ClassEntry longArrayClass = cp.classEntry("[J");
+		ClassEntry floatClass = cp.classEntry("java/lang/Float");
+		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
 
-		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant stringEqualsObj = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/String")),
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant float16ToFloat = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("float16ToFloat"), cp.addUtf8("(S)F")));
-		MethodrefConstant floatToFloat16 = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("floatToFloat16"), cp.addUtf8("(F)S")));
-		MethodrefConstant intBitsToFloat = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("intBitsToFloat"), cp.addUtf8("(I)F")));
-		MethodrefConstant floatToRawIntBits = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("floatToRawIntBits"), cp.addUtf8("(F)I")));
-		MethodrefConstant floatIsNaN = cp.addMethodref(floatClass,
-				cp.addNameAndType(cp.addUtf8("isNaN"), cp.addUtf8("(F)Z")));
+		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry stringEqualsObj = cp.methodRef(cp.classEntry("java/lang/String"), "equals",
+				"(Ljava/lang/Object;)Z");
+		MethodRefEntry float16ToFloat = cp.methodRef(floatClass, "float16ToFloat", "(S)F");
+		MethodRefEntry floatToFloat16 = cp.methodRef(floatClass, "floatToFloat16", "(F)S");
+		MethodRefEntry intBitsToFloat = cp.methodRef(floatClass, "intBitsToFloat", "(I)F");
+		MethodRefEntry floatToRawIntBits = cp.methodRef(floatClass, "floatToRawIntBits", "(F)I");
+		MethodRefEntry floatIsNaN = cp.methodRef(floatClass, "isNaN", "(F)Z");
 
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildWiden(cp, doubleArrayClass, floatArrayClass, shortArrayClass, longArrayClass, rtExClass,
@@ -105,54 +99,53 @@ final class JvmFloat16RuntimeBuilder {
 	// 1=format, 2=dst, 3=start, 4=bitsArr, 5=n, 6=float16, 7=dArr, 8=rank, 9=off, 10=i,
 	// 11=bTmp, 12=vf (the decoded float -- NEVER widened to double: see emitWidenArm),
 	// 13=bitsInt, 14=resultInt (the bfloat16 destination's narrow only).
-	private static ArrayMethod buildWiden(ConstantPool cp, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant shortArrayClass, ClassConstant longArrayClass,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj,
-			MethodrefConstant float16ToFloat, MethodrefConstant intBitsToFloat, MethodrefConstant floatToRawIntBits,
-			MethodrefConstant floatIsNaN) {
+	private static ArrayMethod buildWiden(ConstantPool cp, ClassEntry doubleArrayClass, ClassEntry floatArrayClass,
+			ClassEntry shortArrayClass, ClassEntry longArrayClass, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry stringEqualsObj, MethodRefEntry float16ToFloat, MethodRefEntry intBitsToFloat,
+			MethodRefEntry floatToRawIntBits, MethodRefEntry floatIsNaN) {
 		int bitsP = 0, formatP = 1, dstP = 2, startP = 3, bitsArr = 4, n = 5, float16 = 6, dArr = 7, rank = 8, off = 9,
 				i = 10, bTmp = 11, vf = 12, bitsInt = 13, resultInt = 14;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		a.aload(bitsP);
 		a.checkcast(longArrayClass);
 		a.astore(bitsArr);
 		a.aload(bitsArr);
 		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(n);
 		emitFormatFlag(a, cp, formatP, float16, stringEqualsObj);
 		emitFormatCheck(a, cp, float16, rtExClass, rtExInit, stringEqualsObj, formatP, "WIDEN-FLOAT-BITS");
 
-		int tryFloat = a.label();
-		int tryShort = a.label();
-		int notArray = a.label();
+		MethodCode.Label tryFloat = a.newLabel();
+		MethodCode.Label tryShort = a.newLabel();
+		MethodCode.Label notArray = a.newLabel();
 		a.aload(dstP);
 		a.instanceOf(doubleArrayClass);
-		a.branch(Opcode.IFEQ, tryFloat);
+		a.ifeq(tryFloat);
 		emitWidenArm(a, JvmPackedFloatWidth.DOUBLE, doubleArrayClass, float16ToFloat, intBitsToFloat, floatToRawIntBits,
 				floatIsNaN, dstP, bitsArr, n, float16, startP, dArr, rank, off, i, bTmp, vf, bitsInt, resultInt);
-		a.bind(tryFloat);
+		a.labelBinding(tryFloat);
 		a.aload(dstP);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, tryShort);
+		a.ifeq(tryShort);
 		emitWidenArm(a, JvmPackedFloatWidth.SINGLE, floatArrayClass, float16ToFloat, intBitsToFloat, floatToRawIntBits,
 				floatIsNaN, dstP, bitsArr, n, float16, startP, dArr, rank, off, i, bTmp, vf, bitsInt, resultInt);
-		a.bind(tryShort);
+		a.labelBinding(tryShort);
 		a.aload(dstP);
 		a.instanceOf(shortArrayClass);
-		a.branch(Opcode.IFEQ, notArray);
+		a.ifeq(notArray);
 		emitWidenArm(a, JvmPackedFloatWidth.BFLOAT16, shortArrayClass, float16ToFloat, intBitsToFloat,
 				floatToRawIntBits, floatIsNaN, dstP, bitsArr, n, float16, startP, dArr, rank, off, i, bTmp, vf, bitsInt,
 				resultInt);
-		a.bind(notArray);
+		a.labelBinding(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "WIDEN-FLOAT-BITS: dst must be a packed float array");
-		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 8, 15, a.finish());
+		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), a);
 	}
 
-	private static void emitWidenArm(JvmAsm a, JvmPackedFloatWidth w, ClassConstant arrayClass,
-			MethodrefConstant float16ToFloat, MethodrefConstant intBitsToFloat, MethodrefConstant floatToRawIntBits,
-			MethodrefConstant floatIsNaN, int dstP, int bitsArr, int n, int float16, int startP, int dArr, int rank,
+	private static void emitWidenArm(MethodCode a, JvmPackedFloatWidth w, ClassEntry arrayClass,
+			MethodRefEntry float16ToFloat, MethodRefEntry intBitsToFloat, MethodRefEntry floatToRawIntBits,
+			MethodRefEntry floatIsNaN, int dstP, int bitsArr, int n, int float16, int startP, int dArr, int rank,
 			int off, int i, int bTmp, int vf, int bitsInt, int resultInt) {
 		a.aload(dstP);
 		a.checkcast(arrayClass);
@@ -163,21 +156,21 @@ final class JvmFloat16RuntimeBuilder {
 		a.iload(rank);
 		w.emitDataOffset(a);
 		a.iload(startP);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(off);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(i);
-		int loopTop = a.label();
-		int loopEnd = a.label();
-		a.bind(loopTop);
+		MethodCode.Label loopTop = a.newLabel();
+		MethodCode.Label loopEnd = a.newLabel();
+		a.labelBinding(loopTop);
 		a.iload(i);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, loopEnd);
+		a.if_icmpge(loopEnd);
 		// bTmp = (int) bitsArr[1 + i]
 		a.aload(bitsArr);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(i);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.laload();
 		a.l2i();
 		a.istore(bTmp);
@@ -188,8 +181,8 @@ final class JvmFloat16RuntimeBuilder {
 		// signalling NaN 126/65536 times (measured against java.lang.Float.floatToFloat16
 		// / bit-shift oracles, both directions), so the roundtrip silently drops every
 		// NaN the source encoded as signalling into the corresponding quiet one.
-		int isBf16 = a.label();
-		int decodeDone = a.label();
+		MethodCode.Label isBf16 = a.newLabel();
+		MethodCode.Label decodeDone = a.newLabel();
 		if (w == JvmPackedFloatWidth.BFLOAT16) {
 			// The bfloat16 destination stores PATTERNS, not values, so this arm ends in
 			// an int and never touches the two above's f32 store.
@@ -201,42 +194,42 @@ final class JvmFloat16RuntimeBuilder {
 			// file's narrow arm emits and the interpreter reaches through
 			// am.ik.rontolisp.BFloat16#bits(float). Not a fourth copy of it.
 			a.iload(float16);
-			a.branch(Opcode.IFEQ, isBf16);
+			a.ifeq(isBf16);
 			a.iload(bTmp);
 			a.invokestatic(float16ToFloat);
 			a.fstore(vf);
 			emitBf16Narrow(a, floatToRawIntBits, floatIsNaN, vf, bitsInt, resultInt);
-			a.branch(Opcode.GOTO, decodeDone);
-			a.bind(isBf16);
+			a.goto_(decodeDone);
+			a.labelBinding(isBf16);
 			a.iload(bTmp);
 			emitMaskU16(a);
 			a.istore(resultInt);
-			a.bind(decodeDone);
+			a.labelBinding(decodeDone);
 			a.aload(dArr);
 			a.iload(off);
 			a.iload(i);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.iload(resultInt);
 			a.sastore();
 		}
 		else {
 			a.iload(float16);
-			a.branch(Opcode.IFEQ, isBf16);
+			a.ifeq(isBf16);
 			a.iload(bTmp);
 			a.invokestatic(float16ToFloat);
 			a.fstore(vf);
-			a.branch(Opcode.GOTO, decodeDone);
-			a.bind(isBf16);
+			a.goto_(decodeDone);
+			a.labelBinding(isBf16);
 			a.iload(bTmp);
-			a.iconst(16);
-			a.op(Opcode.ISHL);
+			a.loadConstant(16);
+			a.ishl();
 			a.invokestatic(intBitsToFloat);
 			a.fstore(vf);
-			a.bind(decodeDone);
+			a.labelBinding(decodeDone);
 			a.aload(dArr);
 			a.iload(off);
 			a.iload(i);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.fload(vf);
 			if (w == JvmPackedFloatWidth.SINGLE) {
 				a.fastore();
@@ -249,8 +242,8 @@ final class JvmFloat16RuntimeBuilder {
 			}
 		}
 		a.iinc(i, 1);
-		a.branch(Opcode.GOTO, loopTop);
-		a.bind(loopEnd);
+		a.goto_(loopTop);
+		a.labelBinding(loopEnd);
 		a.aload(dstP);
 		a.areturn();
 	}
@@ -265,51 +258,50 @@ final class JvmFloat16RuntimeBuilder {
 	// it, at EVERY width. dst is a long[] bits vector written from 1 + start.
 	// Locals: 0=src, 1=format, 2=dst, 3=start, 4=n, 5=float16, 6=sArr, 7=bitsArr, 8=i,
 	// 9=fTmp, 10=bitsInt, 11=resultInt, 12=rank, 13=off, 14=k (the dimension product).
-	private static ArrayMethod buildNarrow(ConstantPool cp, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant shortArrayClass, ClassConstant longArrayClass,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj,
-			MethodrefConstant floatToFloat16, MethodrefConstant intBitsToFloat, MethodrefConstant floatToRawIntBits,
-			MethodrefConstant floatIsNaN) {
+	private static ArrayMethod buildNarrow(ConstantPool cp, ClassEntry doubleArrayClass, ClassEntry floatArrayClass,
+			ClassEntry shortArrayClass, ClassEntry longArrayClass, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			MethodRefEntry stringEqualsObj, MethodRefEntry floatToFloat16, MethodRefEntry intBitsToFloat,
+			MethodRefEntry floatToRawIntBits, MethodRefEntry floatIsNaN) {
 		int srcP = 0, formatP = 1, dstP = 2, startP = 3, n = 4, float16 = 5, sArr = 6, bitsArr = 7, i = 8, fTmp = 9,
 				bitsInt = 10, resultInt = 11, rank = 12, off = 13, k = 14;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitFormatFlag(a, cp, formatP, float16, stringEqualsObj);
 		emitFormatCheck(a, cp, float16, rtExClass, rtExInit, stringEqualsObj, formatP, "NARROW-FLOAT-BITS");
 		a.aload(dstP);
 		a.checkcast(longArrayClass);
 		a.astore(bitsArr);
 
-		int tryFloat = a.label();
-		int tryShort = a.label();
-		int notArray = a.label();
+		MethodCode.Label tryFloat = a.newLabel();
+		MethodCode.Label tryShort = a.newLabel();
+		MethodCode.Label notArray = a.newLabel();
 		a.aload(srcP);
 		a.instanceOf(doubleArrayClass);
-		a.branch(Opcode.IFEQ, tryFloat);
+		a.ifeq(tryFloat);
 		emitNarrowArm(a, JvmPackedFloatWidth.DOUBLE, doubleArrayClass, floatToFloat16, intBitsToFloat,
 				floatToRawIntBits, floatIsNaN, srcP, bitsArr, n, float16, startP, sArr, i, fTmp, bitsInt, resultInt,
 				rank, off, k);
-		a.bind(tryFloat);
+		a.labelBinding(tryFloat);
 		a.aload(srcP);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, tryShort);
+		a.ifeq(tryShort);
 		emitNarrowArm(a, JvmPackedFloatWidth.SINGLE, floatArrayClass, floatToFloat16, intBitsToFloat, floatToRawIntBits,
 				floatIsNaN, srcP, bitsArr, n, float16, startP, sArr, i, fTmp, bitsInt, resultInt, rank, off, k);
-		a.bind(tryShort);
+		a.labelBinding(tryShort);
 		a.aload(srcP);
 		a.instanceOf(shortArrayClass);
-		a.branch(Opcode.IFEQ, notArray);
+		a.ifeq(notArray);
 		emitNarrowArm(a, JvmPackedFloatWidth.BFLOAT16, shortArrayClass, floatToFloat16, intBitsToFloat,
 				floatToRawIntBits, floatIsNaN, srcP, bitsArr, n, float16, startP, sArr, i, fTmp, bitsInt, resultInt,
 				rank, off, k);
-		a.bind(notArray);
+		a.labelBinding(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "NARROW-FLOAT-BITS: src must be a packed float array");
-		return new ArrayMethod(cp.addUtf8(NARROW), cp.addUtf8(NARROW_DESC), 8, 15, a.finish());
+		return new ArrayMethod(cp.addUtf8(NARROW), cp.addUtf8(NARROW_DESC), a);
 	}
 
-	private static void emitNarrowArm(JvmAsm a, JvmPackedFloatWidth w, ClassConstant arrayClass,
-			MethodrefConstant floatToFloat16, MethodrefConstant intBitsToFloat, MethodrefConstant floatToRawIntBits,
-			MethodrefConstant floatIsNaN, int srcP, int bitsArr, int n, int float16, int startP, int sArr, int i,
-			int fTmp, int bitsInt, int resultInt, int rank, int off, int k) {
+	private static void emitNarrowArm(MethodCode a, JvmPackedFloatWidth w, ClassEntry arrayClass,
+			MethodRefEntry floatToFloat16, MethodRefEntry intBitsToFloat, MethodRefEntry floatToRawIntBits,
+			MethodRefEntry floatIsNaN, int srcP, int bitsArr, int n, int float16, int startP, int sArr, int i, int fTmp,
+			int bitsInt, int resultInt, int rank, int off, int k) {
 		a.aload(srcP);
 		a.checkcast(arrayClass);
 		a.astore(sArr);
@@ -325,41 +317,41 @@ final class JvmFloat16RuntimeBuilder {
 		// LispFloatArray.totalSize answers at every rank. Read from the HEADER and not
 		// from the Java length, for the same reason _fvLength's rank-1 arm does: under
 		// --gpu a result stub is the header alone (.kb/gpu.md).
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(n);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int dimTop = a.label();
-		int dimEnd = a.label();
-		a.bind(dimTop);
+		MethodCode.Label dimTop = a.newLabel();
+		MethodCode.Label dimEnd = a.newLabel();
+		a.labelBinding(dimTop);
 		a.iload(k);
 		a.iload(rank);
-		a.branch(Opcode.IF_ICMPGE, dimEnd);
+		a.if_icmpge(dimEnd);
 		a.iload(n);
 		a.aload(sArr);
 		a.iload(k);
 		w.loadDim(a);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.istore(n);
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, dimTop);
-		a.bind(dimEnd);
-		a.iconst(0);
+		a.goto_(dimTop);
+		a.labelBinding(dimEnd);
+		a.loadConstant(0);
 		a.istore(i);
-		int loopTop = a.label();
-		int loopEnd = a.label();
-		a.bind(loopTop);
+		MethodCode.Label loopTop = a.newLabel();
+		MethodCode.Label loopEnd = a.newLabel();
+		a.labelBinding(loopTop);
 		a.iload(i);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, loopEnd);
+		a.if_icmpge(loopEnd);
 		// fTmp = sArr[off + i], as a float. NEVER via loadElemShared's widen-to-double
 		// (that helper exists for callers that want a double either way): a float
 		// source read faload straight into fTmp with no conversion at all, a double
 		// source narrows ONCE with d2f -- either is safe, but a widen-then-narrow
 		// roundtrip (f2d then d2f, what loadElemShared followed by a bare d2f would be
 		// for the single-float arm) quiets a signalling NaN 126/65536 times (measured).
-		int isBf16 = a.label();
-		int narrowDone = a.label();
+		MethodCode.Label isBf16 = a.newLabel();
+		MethodCode.Label narrowDone = a.newLabel();
 		if (w == JvmPackedFloatWidth.BFLOAT16) {
 			// A bfloat16 SOURCE hands out patterns, not values: to :bfloat16 it is a
 			// straight copy of the stored pattern (no conversion, so no NaN can be lost),
@@ -369,30 +361,30 @@ final class JvmFloat16RuntimeBuilder {
 			a.aload(sArr);
 			a.iload(off);
 			a.iload(i);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.saload();
 			emitMaskU16(a);
 			a.istore(bitsInt);
 			a.iload(float16);
-			a.branch(Opcode.IFEQ, isBf16);
+			a.ifeq(isBf16);
 			a.iload(bitsInt);
-			a.iconst(16);
-			a.op(Opcode.ISHL);
+			a.loadConstant(16);
+			a.ishl();
 			a.invokestatic(intBitsToFloat);
 			a.invokestatic(floatToFloat16);
 			emitMaskU16(a);
 			a.istore(resultInt);
-			a.branch(Opcode.GOTO, narrowDone);
-			a.bind(isBf16);
+			a.goto_(narrowDone);
+			a.labelBinding(isBf16);
 			a.iload(bitsInt);
 			a.istore(resultInt);
-			a.bind(narrowDone);
+			a.labelBinding(narrowDone);
 		}
 		else {
 			a.aload(sArr);
 			a.iload(off);
 			a.iload(i);
-			a.op(Opcode.IADD);
+			a.iadd();
 			if (w == JvmPackedFloatWidth.SINGLE) {
 				a.faload();
 			}
@@ -402,30 +394,30 @@ final class JvmFloat16RuntimeBuilder {
 			}
 			a.fstore(fTmp);
 			a.iload(float16);
-			a.branch(Opcode.IFEQ, isBf16);
+			a.ifeq(isBf16);
 			// f16: Float.floatToFloat16(fTmp) & 0xFFFF
 			a.fload(fTmp);
 			a.invokestatic(floatToFloat16);
 			emitMaskU16(a);
 			a.istore(resultInt);
-			a.branch(Opcode.GOTO, narrowDone);
-			a.bind(isBf16);
+			a.goto_(narrowDone);
+			a.labelBinding(isBf16);
 			emitBf16Narrow(a, floatToRawIntBits, floatIsNaN, fTmp, bitsInt, resultInt);
-			a.bind(narrowDone);
+			a.labelBinding(narrowDone);
 		}
 		// bitsArr[1 + start + i] = (long) resultInt
 		a.aload(bitsArr);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(startP);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.iload(i);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.iload(resultInt);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.lastore();
 		a.iinc(i, 1);
-		a.branch(Opcode.GOTO, loopTop);
-		a.bind(loopEnd);
+		a.goto_(loopTop);
+		a.labelBinding(loopEnd);
 		a.aload(bitsArr);
 		a.areturn();
 	}
@@ -436,33 +428,33 @@ final class JvmFloat16RuntimeBuilder {
 	// rather than relying on the payload surviving the add. Emitted instruction for
 	// instruction from am.ik.rontolisp.BFloat16#bits(float), which eval.FloatBitsWidening
 	// calls -- the interpreter and this backend answer one rounding (.kb/bfloat16.md).
-	private static void emitBf16Narrow(JvmAsm a, MethodrefConstant floatToRawIntBits, MethodrefConstant floatIsNaN,
+	private static void emitBf16Narrow(MethodCode a, MethodRefEntry floatToRawIntBits, MethodRefEntry floatIsNaN,
 			int fTmp, int bitsInt, int resultInt) {
 		a.fload(fTmp);
 		a.invokestatic(floatToRawIntBits);
 		a.istore(bitsInt);
-		int nanCase = a.label();
-		int done = a.label();
+		MethodCode.Label nanCase = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.fload(fTmp);
 		a.invokestatic(floatIsNaN);
-		a.branch(Opcode.IFNE, nanCase);
+		a.ifne(nanCase);
 		// rounded = bitsInt + 0x7fff + ((bitsInt >>> 16) & 1); result = (rounded >>> 16)
 		// & 0xFFFF
 		a.iload(bitsInt);
-		a.iconst(0x7fff);
-		a.op(Opcode.IADD);
+		a.loadConstant(0x7fff);
+		a.iadd();
 		a.iload(bitsInt);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.iconst(1);
-		a.op(Opcode.IAND);
-		a.op(Opcode.IADD);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
+		a.loadConstant(16);
+		a.iushr();
+		a.loadConstant(1);
+		a.iand();
+		a.iadd();
+		a.loadConstant(16);
+		a.iushr();
 		emitMaskU16(a);
 		a.istore(resultInt);
-		a.branch(Opcode.GOTO, done);
-		a.bind(nanCase);
+		a.goto_(done);
+		a.labelBinding(nanCase);
 		// result = u | (((u & 0x7f) - 1) >>> 31), where u = (bitsInt >>> 16) & 0xFFFF.
 		// The top sixteen bits of an f32 NaN ALREADY are the sign, an all-ones exponent
 		// and the payload's top seven bits, so the pattern is u unchanged -- carried
@@ -470,61 +462,61 @@ final class JvmFloat16RuntimeBuilder {
 		// here exactly as it does on the interpreter. The one correction is a payload
 		// whose top seven bits are all zero, which u alone would spell as an infinity.
 		a.iload(bitsInt);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
+		a.loadConstant(16);
+		a.iushr();
 		emitMaskU16(a);
 		a.dup();
-		a.iconst(0x7f);
-		a.op(Opcode.IAND);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.iconst(31);
-		a.op(Opcode.IUSHR);
-		a.op(Opcode.IOR);
+		a.loadConstant(0x7f);
+		a.iand();
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(31);
+		a.iushr();
+		a.ior();
 		a.istore(resultInt);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	// AND with 0xFFFF: -1 (all bits set) shifted right unsigned by 16 is exactly
 	// 0x0000FFFF -- iconst() cannot encode 0xFFFF directly (its SIPUSH fallback is a
 	// SIGNED 16-bit immediate, so 65535 would silently become -1).
-	private static void emitMaskU16(JvmAsm a) {
-		a.iconst(-1);
-		a.iconst(16);
-		a.op(Opcode.IUSHR);
-		a.op(Opcode.IAND);
+	private static void emitMaskU16(MethodCode a) {
+		a.loadConstant(-1);
+		a.loadConstant(16);
+		a.iushr();
+		a.iand();
 	}
 
 	// float16 = ":FLOAT16".equals(format)
-	private static void emitFormatFlag(JvmAsm a, ConstantPool cp, int formatP, int float16Slot,
-			MethodrefConstant stringEqualsObj) {
-		a.ldcString(cp.addString(":FLOAT16"));
+	private static void emitFormatFlag(MethodCode a, ConstantPool cp, int formatP, int float16Slot,
+			MethodRefEntry stringEqualsObj) {
+		a.ldc(cp.stringEntry(":FLOAT16"));
 		a.aload(formatP);
 		a.invokevirtual(stringEqualsObj);
 		a.istore(float16Slot);
 	}
 
 	// if !float16 && !":BFLOAT16".equals(format): throw
-	private static void emitFormatCheck(JvmAsm a, ConstantPool cp, int float16Slot, ClassConstant rtExClass,
-			MethodrefConstant rtExInit, MethodrefConstant stringEqualsObj, int formatP, String opName) {
-		int ok = a.label();
+	private static void emitFormatCheck(MethodCode a, ConstantPool cp, int float16Slot, ClassEntry rtExClass,
+			MethodRefEntry rtExInit, MethodRefEntry stringEqualsObj, int formatP, String opName) {
+		MethodCode.Label ok = a.newLabel();
 		a.iload(float16Slot);
-		a.branch(Opcode.IFNE, ok);
-		a.ldcString(cp.addString(":BFLOAT16"));
+		a.ifne(ok);
+		a.ldc(cp.stringEntry(":BFLOAT16"));
 		a.aload(formatP);
 		a.invokevirtual(stringEqualsObj);
-		a.branch(Opcode.IFNE, ok);
+		a.ifne(ok);
 		emitThrow(a, cp, rtExClass, rtExInit, opName + ": format must be :float16 or :bfloat16");
-		a.bind(ok);
+		a.labelBinding(ok);
 	}
 
-	private static void emitThrow(JvmAsm a, ConstantPool cp, ClassConstant rtExClass, MethodrefConstant rtExInit,
+	private static void emitThrow(MethodCode a, ConstantPool cp, ClassEntry rtExClass, MethodRefEntry rtExInit,
 			String message) {
-		a.anew(rtExClass);
+		a.new_(rtExClass);
 		a.dup();
-		a.ldcString(cp.addString(message));
+		a.ldc(cp.stringEntry(message));
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
+		a.athrow();
 	}
 
 }

@@ -1,10 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.StringConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -26,29 +28,28 @@ final class JvmStringStreamPositions {
 	/** The class a string input stream is built as when its position can be asked. */
 	static final String STRING_INPUT_STREAM_CLASS = "am/ik/rontolisp/runtime/RontoStringInputStream";
 
-	private final @Nullable ClassConstant inputType;
+	private final @Nullable ClassEntry inputType;
 
-	private final @Nullable MethodrefConstant inputPosition;
+	private final @Nullable MethodRefEntry inputPosition;
 
-	private final @Nullable MethodrefConstant inputSeek;
+	private final @Nullable MethodRefEntry inputSeek;
 
-	private final ClassConstant writerType;
+	private final ClassEntry writerType;
 
-	private final MethodrefConstant writerGetBuffer;
+	private final MethodRefEntry writerGetBuffer;
 
-	private final MethodrefConstant bufferLength;
+	private final MethodRefEntry bufferLength;
 
-	private final MethodrefConstant bufferCodePointCount;
+	private final MethodRefEntry bufferCodePointCount;
 
-	private final ConstantPool.LongConstant minusOne;
+	private final LongEntry minusOne;
 
-	private JvmStringStreamPositions(ConstantPool cp, boolean inputs, ClassConstant writerType,
-			MethodrefConstant writerGetBuffer) {
+	private JvmStringStreamPositions(ConstantPool cp, boolean inputs, ClassEntry writerType,
+			MethodRefEntry writerGetBuffer) {
 		if (inputs) {
-			this.inputType = cp.addClass(cp.addUtf8(STRING_INPUT_STREAM_CLASS));
-			this.inputPosition = cp.addMethodref(this.inputType,
-					cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J")));
-			this.inputSeek = cp.addMethodref(this.inputType, cp.addNameAndType(cp.addUtf8("seek"), cp.addUtf8("(J)Z")));
+			this.inputType = cp.classEntry(STRING_INPUT_STREAM_CLASS);
+			this.inputPosition = cp.methodRef(this.inputType, "position", "()J");
+			this.inputSeek = cp.methodRef(this.inputType, "seek", "(J)Z");
 		}
 		else {
 			this.inputType = null;
@@ -57,11 +58,10 @@ final class JvmStringStreamPositions {
 		}
 		this.writerType = writerType;
 		this.writerGetBuffer = writerGetBuffer;
-		ClassConstant buffer = cp.addClass(cp.addUtf8("java/lang/StringBuffer"));
-		this.bufferLength = cp.addMethodref(buffer, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		this.bufferCodePointCount = cp.addMethodref(buffer,
-				cp.addNameAndType(cp.addUtf8("codePointCount"), cp.addUtf8("(II)I")));
-		this.minusOne = cp.addLong(-1L);
+		ClassEntry buffer = cp.classEntry("java/lang/StringBuffer");
+		this.bufferLength = cp.methodRef(buffer, "length", "()I");
+		this.bufferCodePointCount = cp.methodRef(buffer, "codePointCount", "(II)I");
+		this.minusOne = cp.entries().longEntry(-1L);
 	}
 
 	/**
@@ -72,8 +72,8 @@ final class JvmStringStreamPositions {
 	 * @param writerGetBuffer {@code StringWriter.getBuffer()}
 	 * @return the arms
 	 */
-	static JvmStringStreamPositions mint(ConstantPool cp, boolean inputs, ClassConstant writerType,
-			MethodrefConstant writerGetBuffer) {
+	static JvmStringStreamPositions mint(ConstantPool cp, boolean inputs, ClassEntry writerType,
+			MethodRefEntry writerGetBuffer) {
 		return new JvmStringStreamPositions(cp, inputs, writerType, writerGetBuffer);
 	}
 
@@ -89,77 +89,77 @@ final class JvmStringStreamPositions {
 	 * @param longValueOf {@code Long.valueOf(long)}
 	 * @param tStr the {@code "T"} constant
 	 */
-	void emit(JvmAsm a, int entrySlot, int posSlot, int longSlot, ClassConstant longClass, MethodrefConstant longValue,
-			MethodrefConstant longValueOf, StringConstant tStr) {
-		int fail = a.label();
+	void emit(MethodCode a, int entrySlot, int posSlot, int longSlot, ClassEntry longClass, MethodRefEntry longValue,
+			MethodRefEntry longValueOf, StringEntry tStr) {
+		MethodCode.Label fail = a.newLabel();
 		if (this.inputType != null) {
 			a.aload(entrySlot);
 			a.instanceOf(this.inputType);
-			int notInput = a.label();
-			a.branch(Opcode.IFEQ, notInput);
+			MethodCode.Label notInput = a.newLabel();
+			a.ifeq(notInput);
 			a.aload(posSlot);
-			int inputSet = a.label();
-			a.branch(Opcode.IFNONNULL, inputSet);
+			MethodCode.Label inputSet = a.newLabel();
+			a.ifnonnull(inputSet);
 			a.aload(entrySlot);
 			a.checkcast(this.inputType);
 			a.invokevirtual(java.util.Objects.requireNonNull(this.inputPosition));
 			a.invokestatic(longValueOf);
 			a.areturn();
-			a.bind(inputSet);
+			a.labelBinding(inputSet);
 			a.aload(entrySlot);
 			a.checkcast(this.inputType);
 			a.aload(posSlot);
 			a.checkcast(longClass);
 			a.invokevirtual(longValue);
 			a.invokevirtual(java.util.Objects.requireNonNull(this.inputSeek));
-			a.branch(Opcode.IFEQ, fail);
-			a.ldcString(tStr);
+			a.ifeq(fail);
+			a.ldc(tStr);
 			a.areturn();
-			a.bind(notInput);
+			a.labelBinding(notInput);
 		}
 		a.aload(entrySlot);
 		a.instanceOf(this.writerType);
-		int notOutput = a.label();
-		a.branch(Opcode.IFEQ, notOutput);
+		MethodCode.Label notOutput = a.newLabel();
+		a.ifeq(notOutput);
 		// n = buffer.codePointCount(0, buffer.length())
 		a.aload(entrySlot);
 		a.checkcast(this.writerType);
 		a.invokevirtual(this.writerGetBuffer);
 		a.dup();
 		a.invokevirtual(this.bufferLength);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.swap();
 		a.invokevirtual(this.bufferCodePointCount);
 		a.i2l();
 		a.lstore(longSlot);
 		a.aload(posSlot);
-		int outputSet = a.label();
-		a.branch(Opcode.IFNONNULL, outputSet);
+		MethodCode.Label outputSet = a.newLabel();
+		a.ifnonnull(outputSet);
 		a.lload(longSlot);
 		a.invokestatic(longValueOf);
 		a.areturn();
 		// The set succeeds only where the stream already is: at n, or at -1 (:end).
-		a.bind(outputSet);
+		a.labelBinding(outputSet);
 		a.aload(posSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longValue);
 		a.lload(longSlot);
 		a.lcmp();
-		int atEnd = a.label();
-		a.branch(Opcode.IFEQ, atEnd);
+		MethodCode.Label atEnd = a.newLabel();
+		a.ifeq(atEnd);
 		a.aload(posSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longValue);
-		a.ldc2Long(this.minusOne);
+		a.ldc(this.minusOne);
 		a.lcmp();
-		a.branch(Opcode.IFNE, fail);
-		a.bind(atEnd);
-		a.ldcString(tStr);
+		a.ifne(fail);
+		a.labelBinding(atEnd);
+		a.ldc(tStr);
 		a.areturn();
-		a.bind(fail);
-		a.aconstNull();
+		a.labelBinding(fail);
+		a.aconst_null();
 		a.areturn();
-		a.bind(notOutput);
+		a.labelBinding(notOutput);
 	}
 
 }

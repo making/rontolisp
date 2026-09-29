@@ -1,11 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.OperandTypes;
 
@@ -35,7 +34,7 @@ import am.ik.rontolisp.compiler.OperandTypes;
 final class JvmNthcdrRuntimeBuilder {
 
 	/** An nthcdr runtime method body ready to be emitted into the generated class. */
-	record NthcdrMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record NthcdrMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_nthcdr";
@@ -45,41 +44,41 @@ final class JvmNthcdrRuntimeBuilder {
 	private JvmNthcdrRuntimeBuilder() {
 	}
 
-	static NthcdrMethod build(ConstantPool cp, JvmOperandTypeRuntime.ConsShape consShape, ClassConstant thisClass) {
+	static NthcdrMethod build(ConstantPool cp, JvmOperandTypeRuntime.ConsShape consShape, ClassEntry thisClass) {
 		// Slots: 0 = n (int), 1 = the list cursor, 2 = it as a cons, 3 = its car.
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int done = a.label();
-		int notList = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label notList = a.newLabel();
 
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(0);
-		a.branch(Opcode.IFLE, done);
+		a.ifle(done);
 		a.aload(1);
-		a.branch(Opcode.IFNULL, done);
+		a.ifnull(done);
 		consShape.emitTest(a, 1, 2, 3, notList);
 		a.aload(2);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(1);
 		a.iinc(0, -1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(1);
 		a.areturn();
 		// throw _opTypeErr(_teRaw(list, "LIST"), "NTHCDR", FUNNEL_TYPE)
-		a.bind(notList);
+		a.labelBinding(notList);
 		a.aload(1);
-		a.ldcString(cp.addString(OperandTypes.Kind.LIST.name()));
+		a.ldc(cp.stringEntry(OperandTypes.Kind.LIST.name()));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
-		a.ldcString(cp.addString(LispNames.NTHCDR));
-		a.ldcString(cp.addString(OperandTypes.FUNNEL_TYPE));
+		a.ldc(cp.stringEntry(LispNames.NTHCDR));
+		a.ldc(cp.stringEntry(OperandTypes.FUNNEL_TYPE));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		a.athrow();
 
-		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 4, a.finish());
+		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
 	}
 
 }

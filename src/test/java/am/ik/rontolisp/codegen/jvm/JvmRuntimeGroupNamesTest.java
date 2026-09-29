@@ -35,10 +35,11 @@ class JvmRuntimeGroupNamesTest {
 		MethodrefConstant lispToString = selfMethod(cp, selfClass, "_lispToString", TO_STRING_DESC);
 		MethodrefConstant lispToDisplayString = selfMethod(cp, selfClass, "_lispToDisplayString", TO_STRING_DESC);
 
-		List<JvmArrayRuntimeBuilder.ArrayMethod> emitted = new ArrayList<>(
-				JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, selfClass, false));
+		List<JvmArrayRuntimeBuilder.ArrayMethod> emitted = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
+				objectClass.entry(), objectArrayClass.entry(), selfClass.entry(), false));
 		emitted.addAll(
-				JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToString, lispToDisplayString, selfClass,
+				JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToString.methodRefEntry(),
+						lispToDisplayString.methodRefEntry(), selfClass.entry(),
 						new JvmRuntimeBuilder.RenderGuardRefs(
 								cp.addFieldref(selfClass,
 										cp.addNameAndType(cp.addUtf8("_renderPath"),

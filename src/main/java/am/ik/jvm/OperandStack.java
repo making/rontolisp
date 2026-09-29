@@ -77,13 +77,6 @@ public final class OperandStack {
 
 	}
 
-	/**
-	 * How much operand stack an appended opaque block is assumed to use internally. The
-	 * blocks are small straight-line sequences over locals; this only feeds
-	 * {@code max_stack}, which has a floor well above it anyway.
-	 */
-	private static final int OPAQUE_BLOCK_HEADROOM = 8;
-
 	private final ConstantPool cp;
 
 	private final List<Slot> stack = new ArrayList<>();
@@ -235,25 +228,6 @@ public final class OperandStack {
 		this.stack.add(Slot.REF);
 		this.reachable = true;
 		this.record();
-	}
-
-	/**
-	 * Accounts for a self-contained block of code appended to the method whole, rather
-	 * than emitted through {@link #feed(int)} -- an assembled sequence with its own
-	 * internal labels, computing over locals only. Such a block neither reads nor rejoins
-	 * the operand stack it is spliced into: it leaves exactly {@code produced} behind.
-	 * @param byteCount the block's length, which the model's positions must skip over
-	 * @param produced what the block leaves on the operand stack
-	 */
-	public void appendOpaque(int byteCount, Slot... produced) {
-		this.pc += byteCount;
-		int headroom = this.depth() + OPAQUE_BLOCK_HEADROOM;
-		if (headroom > this.maxDepth) {
-			this.maxDepth = headroom;
-		}
-		for (Slot slot : produced) {
-			this.push(slot);
-		}
 	}
 
 	/**

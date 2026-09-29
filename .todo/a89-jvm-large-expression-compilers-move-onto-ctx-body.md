@@ -20,7 +20,7 @@ target)`). The largest (2026-09-29 `ctx.emit`/`emitU2` sites): `JvmIntFusionComp
 feeds the same operand-stack model, so a file moves on its own and a body mixes the two. A
 label replaces each position/patch pair; `exceptionCatch` takes bound labels; `enterHandler`,
 `joinShape` and the spills stay calls on `ctx.stack` until a91. Verify byte for byte (corpus,
-mito, jose; recipe in `.todo/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode.md`): the
+mito, jose; recipe in `.kb/jvm-method-size-limits.md`, "How a slice moves"): the
 layer encodes a local exactly as `ctx.emit` does, so every budget measures what it measured.
 Watch for the bug class the first slice found twice: a raw `iinc` (and anything else
 `Ctx.emit`'s `wide` rewrite does not see) wrote its slot in one byte, which past 255 names

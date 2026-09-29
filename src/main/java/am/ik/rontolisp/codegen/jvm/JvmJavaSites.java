@@ -69,9 +69,9 @@ final class JvmJavaSites {
 			MethodrefConstant lispToString, boolean javaStatic) {
 		this.resolver = new JavaSiteResolver(lookup);
 		this.lookup = lookup;
-		this.direct = new JvmJavaDirectSites(cp, thisClass, lookup, lispToString);
-		this.implementations = new JvmJavaImplementations(cp, thisClass, programInternalName, lookup, this.direct,
-				lispToString);
+		this.direct = new JvmJavaDirectSites(cp, thisClass.entry(), lookup, lispToString.methodRefEntry());
+		this.implementations = new JvmJavaImplementations(cp, thisClass.entry(), programInternalName, lookup,
+				this.direct, lispToString.methodRefEntry());
 		this.direct.implementations(this.implementations);
 		this.javaStatic = javaStatic;
 	}

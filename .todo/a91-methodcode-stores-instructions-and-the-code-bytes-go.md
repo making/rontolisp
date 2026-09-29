@@ -4,7 +4,7 @@ Difficulty: High
 
 ## The problem
 
-Once a85-a90 have moved every emitter onto `am.ik.jvm.MethodCode`, the code bytes survive only
+Once a86-a90 have moved every emitter onto `am.ik.jvm.MethodCode`, the code bytes survive only
 inside the layer: `MethodCode` still encodes each instruction into a `List<Integer>`, the
 operand-stack model (`OperandStack.feed`) and the class writer (`CodeReplay`) decode them again,
 `ClassDefinition.Method` carries the list, the long branches ride as placeholder offsets, and
@@ -22,7 +22,7 @@ the pool operands are master-pool indexes kept whole in a u2's high part
 - The operand-stack model is fed typed instructions (`OperandStack`'s byte state machine and its
   `wide` handling go); `Ctx.stack`'s users keep their queries.
 - `ClassDefinition.Method` holds the body; `JvmClassSplitter.Scan` reads operands as entries.
-- Deleted: `am.ik.jvm.Opcode`, `JvmAsm` (if a85 left it), the `ConstantPool` wrapper types and
+- Deleted: `am.ik.jvm.Opcode`, `JvmRuntimeBuilder.codeBytes`, the `ConstantPool` wrapper types and
   facade methods the emitters no longer call, the pool-index-origin instrument (no index sink
   is left to cut), and the byte fixtures in `src/test/java/am/ik/jvm` (`CodeReplayTest`,
   `LineNumberTableTest`, `JvmClassSplitterTest` build bodies from bytes) -- rewritten on

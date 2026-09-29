@@ -1,0 +1,5 @@
+(asdf:load-system :rove)
+(setf rove:*enable-colors* nil)
+(setf *print-pretty* nil)
+(asdf:load-system :jose/tests/jwt)
+(format t "~&jwt passed: ~A~%" (if (rove:run :jose/tests/jwt) "yes" "no"))

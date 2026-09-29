@@ -234,6 +234,16 @@ public final class ConstantPool {
 	}
 
 	/**
+	 * @param owner the declaring class
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return the Methodref
+	 */
+	public MethodRefEntry methodRef(ClassEntry owner, Utf8Entry name, Utf8Entry descriptor) {
+		return this.entries.methodRefEntry(owner, this.entries.nameAndTypeEntry(name, descriptor));
+	}
+
+	/**
 	 * @param owner the declaring class's internal name
 	 * @param name the method's name
 	 * @param descriptor its descriptor
@@ -250,7 +260,17 @@ public final class ConstantPool {
 	 * @return the InterfaceMethodref
 	 */
 	public InterfaceMethodRefEntry interfaceMethodRef(String owner, String name, String descriptor) {
-		return this.entries.interfaceMethodRefEntry(this.classEntry(owner), this.nameAndType(name, descriptor));
+		return this.interfaceMethodRef(this.classEntry(owner), name, descriptor);
+	}
+
+	/**
+	 * @param owner the declaring interface
+	 * @param name the method's name
+	 * @param descriptor its descriptor
+	 * @return the InterfaceMethodref
+	 */
+	public InterfaceMethodRefEntry interfaceMethodRef(ClassEntry owner, String name, String descriptor) {
+		return this.entries.interfaceMethodRefEntry(owner, this.nameAndType(name, descriptor));
 	}
 
 	/**
@@ -261,6 +281,26 @@ public final class ConstantPool {
 	 */
 	public FieldRefEntry fieldRef(ClassEntry owner, String name, String descriptor) {
 		return this.entries.fieldRefEntry(owner, this.nameAndType(name, descriptor));
+	}
+
+	/**
+	 * @param owner the declaring class
+	 * @param name the field's name
+	 * @param descriptor its descriptor
+	 * @return the Fieldref
+	 */
+	public FieldRefEntry fieldRef(ClassEntry owner, Utf8Entry name, Utf8Entry descriptor) {
+		return this.entries.fieldRefEntry(owner, this.entries.nameAndTypeEntry(name, descriptor));
+	}
+
+	/**
+	 * @param owner the declaring class's internal name
+	 * @param name the field's name
+	 * @param descriptor its descriptor
+	 * @return the Fieldref
+	 */
+	public FieldRefEntry fieldRef(String owner, String name, String descriptor) {
+		return this.fieldRef(this.classEntry(owner), name, descriptor);
 	}
 
 	/**
@@ -506,6 +546,23 @@ public final class ConstantPool {
 		@Override
 		public MemberRefEntry entry() {
 			return (MemberRefEntry) super.entry();
+		}
+
+		/**
+		 * @return the entry as a {@code Methodref}, what {@code invokevirtual} names
+		 * @throws ClassCastException when it is an {@code InterfaceMethodref}
+		 */
+		public MethodRefEntry methodRefEntry() {
+			return (MethodRefEntry) super.entry();
+		}
+
+		/**
+		 * @return the entry as an {@code InterfaceMethodref}, what
+		 * {@code invokeinterface} names
+		 * @throws ClassCastException when it is a {@code Methodref}
+		 */
+		public InterfaceMethodRefEntry interfaceMethodRefEntry() {
+			return (InterfaceMethodRefEntry) super.entry();
 		}
 
 	}

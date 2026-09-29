@@ -1,5 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -7,12 +11,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -51,59 +52,59 @@ final class JvmEvalRuntimeBuilder {
 
 		private final ConstantPool cp;
 
-		private final ClassConstant objectClass;
+		private final ClassEntry objectClass;
 
-		private final ClassConstant objectArrayClass;
+		private final ClassEntry objectArrayClass;
 
-		private final ClassConstant integerClass;
+		private final ClassEntry integerClass;
 
-		private final ClassConstant longClass;
+		private final ClassEntry longClass;
 
-		private final ClassConstant doubleClass;
+		private final ClassEntry doubleClass;
 
-		private final ClassConstant stringClass;
+		private final ClassEntry stringClass;
 
-		private final MethodrefConstant integerValueOf;
+		private final MethodRefEntry integerValueOf;
 
-		private final MethodrefConstant integerValue;
+		private final MethodRefEntry integerValue;
 
-		private final MethodrefConstant longValueOf;
+		private final MethodRefEntry longValueOf;
 
-		private final MethodrefConstant longValue;
+		private final MethodRefEntry longValue;
 
-		private final MethodrefConstant stringCharAt;
+		private final MethodRefEntry stringCharAt;
 
-		private final MethodrefConstant stringLength;
+		private final MethodRefEntry stringLength;
 
-		private final MethodrefConstant objectEquals;
+		private final MethodRefEntry objectEquals;
 
-		private final MethodrefConstant evalRef;
+		private final MethodRefEntry evalRef;
 
-		private final MethodrefConstant applyRef;
+		private final MethodRefEntry applyRef;
 
-		private final MethodrefConstant storeRef;
+		private final MethodRefEntry storeRef;
 
-		private final MethodrefConstant envLookupRef;
+		private final MethodRefEntry envLookupRef;
 
-		private final MethodrefConstant lookupRef;
+		private final MethodRefEntry lookupRef;
 
-		private final MethodrefConstant notFnRef;
+		private final MethodRefEntry notFnRef;
 
-		private final FieldrefConstant genvField;
+		private final FieldRefEntry genvField;
 
-		private final FieldrefConstant fenvField;
+		private final FieldRefEntry fenvField;
 
-		private final MethodrefConstant[] invoke;
+		private final MethodRefEntry[] invoke;
 
-		private final MethodrefConstant invokeSpread;
+		private final MethodRefEntry invokeSpread;
 
 		private final Map<String, JvmLispCompiler.FunctionInfo> functions;
 
 		private final boolean complexValues;
 
-		private final @Nullable FieldrefConstant hasComplexField;
+		private final @Nullable FieldRefEntry hasComplexField;
 
-		private final @Nullable MethodrefConstant arityChkRef;
+		private final @Nullable MethodRefEntry arityChkRef;
 
 		private final JvmArityOperators arityOperators;
 
@@ -143,96 +144,96 @@ final class JvmEvalRuntimeBuilder {
 			return this.cp;
 		}
 
-		ClassConstant objectClass() {
+		ClassEntry objectClass() {
 			return this.objectClass;
 		}
 
-		ClassConstant objectArrayClass() {
+		ClassEntry objectArrayClass() {
 			return this.objectArrayClass;
 		}
 
-		ClassConstant integerClass() {
+		ClassEntry integerClass() {
 			return this.integerClass;
 		}
 
-		ClassConstant longClass() {
+		ClassEntry longClass() {
 			return this.longClass;
 		}
 
-		ClassConstant doubleClass() {
+		ClassEntry doubleClass() {
 			return this.doubleClass;
 		}
 
-		ClassConstant stringClass() {
+		ClassEntry stringClass() {
 			return this.stringClass;
 		}
 
-		MethodrefConstant integerValueOf() {
+		MethodRefEntry integerValueOf() {
 			return this.integerValueOf;
 		}
 
-		MethodrefConstant integerValue() {
+		MethodRefEntry integerValue() {
 			return this.integerValue;
 		}
 
-		MethodrefConstant longValueOf() {
+		MethodRefEntry longValueOf() {
 			return this.longValueOf;
 		}
 
-		MethodrefConstant longValue() {
+		MethodRefEntry longValue() {
 			return this.longValue;
 		}
 
-		MethodrefConstant stringCharAt() {
+		MethodRefEntry stringCharAt() {
 			return this.stringCharAt;
 		}
 
-		MethodrefConstant stringLength() {
+		MethodRefEntry stringLength() {
 			return this.stringLength;
 		}
 
-		MethodrefConstant objectEquals() {
+		MethodRefEntry objectEquals() {
 			return this.objectEquals;
 		}
 
-		MethodrefConstant evalRef() {
+		MethodRefEntry evalRef() {
 			return this.evalRef;
 		}
 
-		MethodrefConstant applyRef() {
+		MethodRefEntry applyRef() {
 			return this.applyRef;
 		}
 
-		MethodrefConstant storeRef() {
+		MethodRefEntry storeRef() {
 			return this.storeRef;
 		}
 
-		MethodrefConstant envLookupRef() {
+		MethodRefEntry envLookupRef() {
 			return this.envLookupRef;
 		}
 
-		MethodrefConstant lookupRef() {
+		MethodRefEntry lookupRef() {
 			return this.lookupRef;
 		}
 
 		/** {@code _notFn(Object)}: the exception applying a non-function raises. */
-		MethodrefConstant notFnRef() {
+		MethodRefEntry notFnRef() {
 			return this.notFnRef;
 		}
 
-		FieldrefConstant genvField() {
+		FieldRefEntry genvField() {
 			return this.genvField;
 		}
 
-		FieldrefConstant fenvField() {
+		FieldRefEntry fenvField() {
 			return this.fenvField;
 		}
 
-		MethodrefConstant[] invoke() {
+		MethodRefEntry[] invoke() {
 			return this.invoke;
 		}
 
-		MethodrefConstant invokeSpread() {
+		MethodRefEntry invokeSpread() {
 			return this.invokeSpread;
 		}
 
@@ -244,7 +245,7 @@ final class JvmEvalRuntimeBuilder {
 			return this.complexValues;
 		}
 
-		@Nullable FieldrefConstant hasComplexField() {
+		@Nullable FieldRefEntry hasComplexField() {
 			return this.hasComplexField;
 		}
 
@@ -253,7 +254,7 @@ final class JvmEvalRuntimeBuilder {
 		 * which the runtime's own count checks throw through too. Present wherever
 		 * {@code _apply} is built.
 		 */
-		MethodrefConstant arityChkRef() {
+		MethodRefEntry arityChkRef() {
 			return Objects.requireNonNull(this.arityChkRef, "_arityChk is built only with _apply");
 		}
 
@@ -272,59 +273,59 @@ final class JvmEvalRuntimeBuilder {
 
 			private @Nullable ConstantPool cp;
 
-			private @Nullable ClassConstant objectClass;
+			private @Nullable ClassEntry objectClass;
 
-			private @Nullable ClassConstant objectArrayClass;
+			private @Nullable ClassEntry objectArrayClass;
 
-			private @Nullable ClassConstant integerClass;
+			private @Nullable ClassEntry integerClass;
 
-			private @Nullable ClassConstant longClass;
+			private @Nullable ClassEntry longClass;
 
-			private @Nullable ClassConstant doubleClass;
+			private @Nullable ClassEntry doubleClass;
 
-			private @Nullable ClassConstant stringClass;
+			private @Nullable ClassEntry stringClass;
 
-			private @Nullable MethodrefConstant integerValueOf;
+			private @Nullable MethodRefEntry integerValueOf;
 
-			private @Nullable MethodrefConstant integerValue;
+			private @Nullable MethodRefEntry integerValue;
 
-			private @Nullable MethodrefConstant longValueOf;
+			private @Nullable MethodRefEntry longValueOf;
 
-			private @Nullable MethodrefConstant longValue;
+			private @Nullable MethodRefEntry longValue;
 
-			private @Nullable MethodrefConstant stringCharAt;
+			private @Nullable MethodRefEntry stringCharAt;
 
-			private @Nullable MethodrefConstant stringLength;
+			private @Nullable MethodRefEntry stringLength;
 
-			private @Nullable MethodrefConstant objectEquals;
+			private @Nullable MethodRefEntry objectEquals;
 
-			private @Nullable MethodrefConstant evalRef;
+			private @Nullable MethodRefEntry evalRef;
 
-			private @Nullable MethodrefConstant applyRef;
+			private @Nullable MethodRefEntry applyRef;
 
-			private @Nullable MethodrefConstant storeRef;
+			private @Nullable MethodRefEntry storeRef;
 
-			private @Nullable MethodrefConstant envLookupRef;
+			private @Nullable MethodRefEntry envLookupRef;
 
-			private @Nullable MethodrefConstant lookupRef;
+			private @Nullable MethodRefEntry lookupRef;
 
-			private @Nullable MethodrefConstant notFnRef;
+			private @Nullable MethodRefEntry notFnRef;
 
-			private @Nullable FieldrefConstant genvField;
+			private @Nullable FieldRefEntry genvField;
 
-			private @Nullable FieldrefConstant fenvField;
+			private @Nullable FieldRefEntry fenvField;
 
-			private MethodrefConstant @Nullable [] invoke;
+			private MethodRefEntry @Nullable [] invoke;
 
-			private @Nullable MethodrefConstant invokeSpread;
+			private @Nullable MethodRefEntry invokeSpread;
 
 			private @Nullable Map<String, JvmLispCompiler.FunctionInfo> functions;
 
 			private boolean complexValues;
 
-			private @Nullable FieldrefConstant hasComplexField;
+			private @Nullable FieldRefEntry hasComplexField;
 
-			private @Nullable MethodrefConstant arityChkRef;
+			private @Nullable MethodRefEntry arityChkRef;
 
 			private @Nullable JvmArityOperators arityOperators;
 
@@ -333,117 +334,117 @@ final class JvmEvalRuntimeBuilder {
 				return this;
 			}
 
-			Builder objectClass(ClassConstant c) {
+			Builder objectClass(ClassEntry c) {
 				this.objectClass = c;
 				return this;
 			}
 
-			Builder objectArrayClass(ClassConstant c) {
+			Builder objectArrayClass(ClassEntry c) {
 				this.objectArrayClass = c;
 				return this;
 			}
 
-			Builder integerClass(ClassConstant c) {
+			Builder integerClass(ClassEntry c) {
 				this.integerClass = c;
 				return this;
 			}
 
-			Builder longClass(ClassConstant c) {
+			Builder longClass(ClassEntry c) {
 				this.longClass = c;
 				return this;
 			}
 
-			Builder doubleClass(ClassConstant c) {
+			Builder doubleClass(ClassEntry c) {
 				this.doubleClass = c;
 				return this;
 			}
 
-			Builder stringClass(ClassConstant c) {
+			Builder stringClass(ClassEntry c) {
 				this.stringClass = c;
 				return this;
 			}
 
-			Builder integerValueOf(MethodrefConstant m) {
+			Builder integerValueOf(MethodRefEntry m) {
 				this.integerValueOf = m;
 				return this;
 			}
 
-			Builder integerValue(MethodrefConstant m) {
+			Builder integerValue(MethodRefEntry m) {
 				this.integerValue = m;
 				return this;
 			}
 
-			Builder longValueOf(MethodrefConstant m) {
+			Builder longValueOf(MethodRefEntry m) {
 				this.longValueOf = m;
 				return this;
 			}
 
-			Builder longValue(MethodrefConstant m) {
+			Builder longValue(MethodRefEntry m) {
 				this.longValue = m;
 				return this;
 			}
 
-			Builder stringCharAt(MethodrefConstant m) {
+			Builder stringCharAt(MethodRefEntry m) {
 				this.stringCharAt = m;
 				return this;
 			}
 
-			Builder stringLength(MethodrefConstant m) {
+			Builder stringLength(MethodRefEntry m) {
 				this.stringLength = m;
 				return this;
 			}
 
-			Builder objectEquals(MethodrefConstant m) {
+			Builder objectEquals(MethodRefEntry m) {
 				this.objectEquals = m;
 				return this;
 			}
 
-			Builder evalRef(MethodrefConstant m) {
+			Builder evalRef(MethodRefEntry m) {
 				this.evalRef = m;
 				return this;
 			}
 
-			Builder applyRef(MethodrefConstant m) {
+			Builder applyRef(MethodRefEntry m) {
 				this.applyRef = m;
 				return this;
 			}
 
-			Builder storeRef(MethodrefConstant m) {
+			Builder storeRef(MethodRefEntry m) {
 				this.storeRef = m;
 				return this;
 			}
 
-			Builder envLookupRef(MethodrefConstant m) {
+			Builder envLookupRef(MethodRefEntry m) {
 				this.envLookupRef = m;
 				return this;
 			}
 
-			Builder lookupRef(MethodrefConstant m) {
+			Builder lookupRef(MethodRefEntry m) {
 				this.lookupRef = m;
 				return this;
 			}
 
-			Builder notFnRef(MethodrefConstant m) {
+			Builder notFnRef(MethodRefEntry m) {
 				this.notFnRef = m;
 				return this;
 			}
 
-			Builder genvField(FieldrefConstant f) {
+			Builder genvField(FieldRefEntry f) {
 				this.genvField = f;
 				return this;
 			}
 
-			Builder fenvField(FieldrefConstant f) {
+			Builder fenvField(FieldRefEntry f) {
 				this.fenvField = f;
 				return this;
 			}
 
-			Builder invoke(MethodrefConstant[] invoke) {
+			Builder invoke(MethodRefEntry[] invoke) {
 				this.invoke = invoke;
 				return this;
 			}
 
-			Builder invokeSpread(MethodrefConstant invokeSpread) {
+			Builder invokeSpread(MethodRefEntry invokeSpread) {
 				this.invokeSpread = invokeSpread;
 				return this;
 			}
@@ -458,12 +459,12 @@ final class JvmEvalRuntimeBuilder {
 				return this;
 			}
 
-			Builder hasComplexField(@Nullable FieldrefConstant hasComplexField) {
+			Builder hasComplexField(@Nullable FieldRefEntry hasComplexField) {
 				this.hasComplexField = hasComplexField;
 				return this;
 			}
 
-			Builder arityChkRef(@Nullable MethodrefConstant arityChkRef) {
+			Builder arityChkRef(@Nullable MethodRefEntry arityChkRef) {
 				this.arityChkRef = arityChkRef;
 				return this;
 			}
@@ -484,180 +485,7 @@ final class JvmEvalRuntimeBuilder {
 	/** Maximum callable arity, matching the WASM backend. */
 	static final int MAX_CALLABLE_ARITY = 7;
 
-	// === label-based assembler ===
-
-	/**
-	 * A minimal one-pass assembler with symbolic labels. Branch instructions reference
-	 * labels; forward references are back-patched when the label is bound. All branch
-	 * offsets are 16-bit signed, which is sufficient because each generated method body
-	 * is far smaller than 32 KB.
-	 */
-	private static final class Asm {
-
-		final List<Integer> code = new ArrayList<>();
-
-		private final Map<Integer, Integer> labelPos = new HashMap<>();
-
-		private final Map<Integer, List<Integer>> pending = new HashMap<>();
-
-		private int nextLabel = 0;
-
-		int label() {
-			return this.nextLabel++;
-		}
-
-		void bind(int label) {
-			int pos = this.code.size();
-			this.labelPos.put(label, pos);
-			List<Integer> ps = this.pending.remove(label);
-			if (ps != null) {
-				for (int bp : ps) {
-					JvmRuntimeBuilder.patchBranch(this.code, bp, pos);
-				}
-			}
-		}
-
-		void branch(int opcode, int label) {
-			int bp = this.code.size();
-			this.code.add(opcode);
-			JvmRuntimeBuilder.emitU2(this.code, 0);
-			Integer tgt = this.labelPos.get(label);
-			if (tgt != null) {
-				JvmRuntimeBuilder.patchBranch(this.code, bp, tgt);
-			}
-			else {
-				this.pending.computeIfAbsent(label, k -> new ArrayList<>()).add(bp);
-			}
-		}
-
-		void op(int opcode) {
-			this.code.add(opcode);
-		}
-
-		void u2(int value) {
-			JvmRuntimeBuilder.emitU2(this.code, value);
-		}
-
-		void aload(int slot) {
-			this.code.add(Opcode.ALOAD);
-			this.code.add(slot);
-		}
-
-		void astore(int slot) {
-			this.code.add(Opcode.ASTORE);
-			this.code.add(slot);
-		}
-
-		void iload(int slot) {
-			this.code.add(Opcode.ILOAD);
-			this.code.add(slot);
-		}
-
-		void istore(int slot) {
-			this.code.add(Opcode.ISTORE);
-			this.code.add(slot);
-		}
-
-		void iinc(int slot, int delta) {
-			this.code.add(Opcode.IINC);
-			this.code.add(slot);
-			this.code.add(delta & 0xFF);
-		}
-
-		void aconstNull() {
-			this.code.add(Opcode.ACONST_NULL);
-		}
-
-		void iconst(int n) {
-			if (n == -1) {
-				this.code.add(Opcode.ICONST_M1);
-			}
-			else if (n >= 0 && n <= 5) {
-				this.code.add(Opcode.ICONST_0 + n);
-			}
-			else if (n >= -128 && n <= 127) {
-				this.code.add(Opcode.BIPUSH);
-				this.code.add(n & 0xFF);
-			}
-			else {
-				this.code.add(Opcode.SIPUSH);
-				JvmRuntimeBuilder.emitU2(this.code, n);
-			}
-		}
-
-		void dup() {
-			this.code.add(Opcode.DUP);
-		}
-
-		void pop() {
-			this.code.add(Opcode.POP);
-		}
-
-		void areturn() {
-			this.code.add(Opcode.ARETURN);
-		}
-
-		void ireturn() {
-			this.code.add(Opcode.IRETURN);
-		}
-
-		void aaload() {
-			this.code.add(Opcode.AALOAD);
-		}
-
-		void aastore() {
-			this.code.add(Opcode.AASTORE);
-		}
-
-		void arraylength() {
-			this.code.add(Opcode.ARRAYLENGTH);
-		}
-
-		void checkcast(ClassConstant c) {
-			this.code.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void instanceOf(ClassConstant c) {
-			this.code.add(Opcode.INSTANCEOF);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void anewarray(ClassConstant c) {
-			this.code.add(Opcode.ANEWARRAY);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void invokestatic(MethodrefConstant m) {
-			this.code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(this.code, m.index());
-		}
-
-		void invokevirtual(MethodrefConstant m) {
-			this.code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(this.code, m.index());
-		}
-
-		void getstatic(FieldrefConstant f) {
-			this.code.add(Opcode.GETSTATIC);
-			JvmRuntimeBuilder.emitU2(this.code, f.index());
-		}
-
-		void putstatic(FieldrefConstant f) {
-			this.code.add(Opcode.PUTSTATIC);
-			JvmRuntimeBuilder.emitU2(this.code, f.index());
-		}
-
-		List<Integer> finish() {
-			if (!this.pending.isEmpty()) {
-				throw new IllegalStateException("Unbound labels in eval runtime assembly: " + this.pending.keySet());
-			}
-			return this.code;
-		}
-
-	}
-
-	private final Map<String, ConstantPool.StringConstant> stringCache = new HashMap<>();
+	private final Map<String, StringEntry> stringCache = new HashMap<>();
 
 	private final EvalConstants k;
 
@@ -665,33 +493,17 @@ final class JvmEvalRuntimeBuilder {
 		this.k = constants;
 	}
 
-	private void ldcStr(Asm a, String value) {
-		ConstantPool.StringConstant sc = this.stringCache.computeIfAbsent(value, this.k.cp()::addString);
-		if (sc.index() <= 255) {
-			a.op(Opcode.LDC);
-			a.code.add(sc.index());
-		}
-		else {
-			a.op(Opcode.LDC_W);
-			a.u2(sc.index());
-		}
+	private void ldcStr(MethodCode a, String value) {
+		a.ldc(this.stringCache.computeIfAbsent(value, this.k.cp()::stringEntry));
 	}
 
 	/** Pushes an int constant, pooled when it is past {@code sipush} range. */
-	private void ldcInt(Asm a, int value) {
+	private void ldcInt(MethodCode a, int value) {
 		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			a.iconst(value);
+			a.loadConstant(value);
 			return;
 		}
-		int index = this.k.cp().addInteger(value).index();
-		if (index <= 255) {
-			a.op(Opcode.LDC);
-			a.code.add(index);
-		}
-		else {
-			a.op(Opcode.LDC_W);
-			a.u2(index);
-		}
+		a.ldc(this.k.cp().entries().intEntry(value));
 	}
 
 	// === shared high-level emit helpers ===
@@ -702,59 +514,59 @@ final class JvmEvalRuntimeBuilder {
 	 * required before invoking {@code String} methods on a value held in an
 	 * {@code Object} slot.
 	 */
-	private void aloadStr(Asm a, int slot) {
+	private void aloadStr(MethodCode a, int slot) {
 		a.aload(slot);
 		a.checkcast(this.k.stringClass());
 	}
 
 	/** Pushes {@code ((Object[]) slot)[index]}. */
-	private void idx(Asm a, int slot, int index) {
+	private void idx(MethodCode a, int slot, int index) {
 		a.aload(slot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(index);
+		a.loadConstant(index);
 		a.aaload();
 	}
 
 	/** Pushes {@code ((Object[]) slot).length}. */
-	private void arrLen(Asm a, int slot) {
+	private void arrLen(MethodCode a, int slot) {
 		a.aload(slot);
 		a.checkcast(this.k.objectArrayClass());
 		a.arraylength();
 	}
 
 	/** Pushes {@code car} of the cons in {@code slot}. */
-	private void car(Asm a, int slot) {
+	private void car(MethodCode a, int slot) {
 		a.aload(slot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 	}
 
 	/** Pushes {@code cdr} of the cons in {@code slot}. */
-	private void cdr(Asm a, int slot) {
+	private void cdr(MethodCode a, int slot) {
 		a.aload(slot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 	}
 
 	/** Pushes {@code _eval(car(slot), env)}. */
-	private void evalCar(Asm a, int slot, int envSlot) {
+	private void evalCar(MethodCode a, int slot, int envSlot) {
 		car(a, slot);
 		a.aload(envSlot);
 		a.invokestatic(this.k.evalRef());
 	}
 
 	/** Pushes a fresh {@code Object[2]{ aload(carSlot), aload(cdrSlot) }}. */
-	private void consFromSlots(Asm a, int carSlot, int cdrSlot) {
-		a.iconst(2);
+	private void consFromSlots(MethodCode a, int carSlot, int cdrSlot) {
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(carSlot);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(cdrSlot);
 		a.aastore();
 	}
@@ -765,39 +577,39 @@ final class JvmEvalRuntimeBuilder {
 	 * prepended. Reads the name from {@code nameSlot} and the value from
 	 * {@code valueSlot}; clobbers {@code tmpSlot}. Leaves nothing on the stack.
 	 */
-	private void storeFunctionBinding(Asm a, int nameSlot, int valueSlot, int tmpSlot) {
-		int create = a.label();
-		int done = a.label();
+	private void storeFunctionBinding(MethodCode a, int nameSlot, int valueSlot, int tmpSlot) {
+		MethodCode.Label create = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(nameSlot);
 		a.getstatic(this.k.fenvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(tmpSlot);
 		a.aload(tmpSlot);
-		a.branch(Opcode.IFNULL, create);
+		a.ifnull(create);
 		// existing binding: binding[1] = value
 		a.aload(tmpSlot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(valueSlot);
 		a.aastore();
-		a.branch(Opcode.GOTO, done);
-		a.bind(create);
+		a.goto_(done);
+		a.labelBinding(create);
 		// binding = new Object[]{name, value}
 		consFromSlots(a, nameSlot, valueSlot);
 		a.astore(tmpSlot);
 		// _fenv = new Object[]{binding, _fenv}
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(tmpSlot);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.getstatic(this.k.fenvField());
 		a.aastore();
 		a.putstatic(this.k.fenvField());
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	/**
@@ -807,17 +619,17 @@ final class JvmEvalRuntimeBuilder {
 	 * {@code Object[]{Integer funcId}}), and nil when undefined. Every path ends in
 	 * {@code areturn}; clobbers {@code tmpSlot}.
 	 */
-	private void emitFunctionLookupReturn(Asm a, int nameSlot, int tmpSlot) {
-		ConstantPool.MethodrefConstant toLowerCase = stringCaseRef("toLowerCase");
-		ConstantPool.MethodrefConstant toUpperCase = stringCaseRef("toUpperCase");
+	private void emitFunctionLookupReturn(MethodCode a, int nameSlot, int tmpSlot) {
+		MethodRefEntry toLowerCase = stringCaseRef("toLowerCase");
+		MethodRefEntry toUpperCase = stringCaseRef("toUpperCase");
 		// Probe the exact spelling first.
 		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
 		// One case-flip retry: compiled references read upcased (the reader premise)
 		// while runtime-read definitions are case-preserved -- and vice versa for a
 		// runtime-read reference to a compiled definition. Flip to the lowercase
 		// spelling (or, when already lowercase, the uppercase one) and probe again.
-		int realMiss = a.label();
-		int flipped = a.label();
+		MethodCode.Label realMiss = a.newLabel();
+		MethodCode.Label flipped = a.newLabel();
 		a.aload(nameSlot);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(toLowerCase);
@@ -825,7 +637,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(tmpSlot);
 		a.aload(nameSlot);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, flipped);
+		a.ifeq(flipped);
 		a.aload(nameSlot);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(toUpperCase);
@@ -833,56 +645,54 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(tmpSlot);
 		a.aload(nameSlot);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFNE, realMiss);
-		a.bind(flipped);
+		a.ifne(realMiss);
+		a.labelBinding(flipped);
 		a.aload(tmpSlot);
 		a.astore(nameSlot);
 		emitFunctionProbeReturn(a, nameSlot, tmpSlot);
-		a.bind(realMiss);
-		a.aconstNull();
+		a.labelBinding(realMiss);
+		a.aconst_null();
 		a.areturn();
 	}
 
 	// One probe pass of the function namespace: a runtime defun binding in _fenv, then
 	// the compiled function registry; every hit returns, a miss falls through.
-	private void emitFunctionProbeReturn(Asm a, int nameSlot, int tmpSlot) {
-		int reg = a.label();
+	private void emitFunctionProbeReturn(MethodCode a, int nameSlot, int tmpSlot) {
+		MethodCode.Label reg = a.newLabel();
 		a.aload(nameSlot);
 		a.getstatic(this.k.fenvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(tmpSlot);
 		a.aload(tmpSlot);
-		a.branch(Opcode.IFNULL, reg);
+		a.ifnull(reg);
 		a.aload(tmpSlot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(reg);
-		int miss = a.label();
+		a.labelBinding(reg);
+		MethodCode.Label miss = a.newLabel();
 		a.aload(nameSlot);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(tmpSlot);
 		a.aload(tmpSlot);
-		a.branch(Opcode.IFNULL, miss);
-		a.iconst(1);
+		a.ifnull(miss);
+		a.loadConstant(1);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(tmpSlot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aastore();
 		a.areturn();
-		a.bind(miss);
+		a.labelBinding(miss);
 	}
 
 	// A java/lang/String zero-argument case-conversion methodref.
-	private ConstantPool.MethodrefConstant stringCaseRef(String method) {
-		return this.k.cp()
-			.addMethodref(this.k.stringClass(), this.k.cp()
-				.addNameAndType(this.k.cp().addUtf8(method), this.k.cp().addUtf8("()Ljava/lang/String;")));
+	private MethodRefEntry stringCaseRef(String method) {
+		return this.k.cp().methodRef(this.k.stringClass(), method, "()Ljava/lang/String;");
 	}
 
 	/**
@@ -890,12 +700,12 @@ final class JvmEvalRuntimeBuilder {
 	 * {@code next} label. The caller emits the special-form body (which must end in a
 	 * return) and then binds {@code next}.
 	 */
-	private int special(Asm a, int opSlot, String name) {
-		int next = a.label();
+	private MethodCode.Label special(MethodCode a, int opSlot, String name) {
+		MethodCode.Label next = a.newLabel();
 		aloadStr(a, opSlot);
 		ldcStr(a, name);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		return next;
 	}
 
@@ -903,20 +713,20 @@ final class JvmEvalRuntimeBuilder {
 	 * Emits a {@code progn} loop over the list at {@code restSlot}, leaving the last
 	 * value (nil for an empty list) in {@code accSlot}. Consumes {@code restSlot}.
 	 */
-	private void prognInto(Asm a, int restSlot, int envSlot, int accSlot) {
-		a.aconstNull();
+	private void prognInto(MethodCode a, int restSlot, int envSlot, int accSlot) {
+		a.aconst_null();
 		a.astore(accSlot);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		a.aload(restSlot);
-		a.branch(Opcode.IFNULL, end);
+		a.ifnull(end);
 		evalCar(a, restSlot, envSlot);
 		a.astore(accSlot);
 		cdr(a, restSlot);
 		a.astore(restSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
+		a.goto_(loop);
+		a.labelBinding(end);
 	}
 
 	/**
@@ -924,60 +734,61 @@ final class JvmEvalRuntimeBuilder {
 	 * results into a fresh proper list whose head is left in {@code headSlot}. Consumes
 	 * {@code restSlot} and clobbers {@code tailSlot}, {@code cellSlot}, {@code tmpSlot}.
 	 */
-	private void buildArgList(Asm a, int restSlot, int envSlot, int headSlot, int tailSlot, int cellSlot, int tmpSlot) {
-		a.aconstNull();
+	private void buildArgList(MethodCode a, int restSlot, int envSlot, int headSlot, int tailSlot, int cellSlot,
+			int tmpSlot) {
+		a.aconst_null();
 		a.astore(headSlot);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(tailSlot);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		a.aload(restSlot);
-		a.branch(Opcode.IFNULL, end);
+		a.ifnull(end);
 		evalCar(a, restSlot, envSlot);
 		a.astore(tmpSlot);
 		// cell = cons(tmp, null)
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(tmpSlot);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.aconstNull();
+		a.loadConstant(1);
+		a.aconst_null();
 		a.aastore();
 		a.astore(cellSlot);
 		appendCell(a, cellSlot, headSlot, tailSlot);
 		cdr(a, restSlot);
 		a.astore(restSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
+		a.goto_(loop);
+		a.labelBinding(end);
 	}
 
 	/**
 	 * Appends the cons in {@code cellSlot} to the list tracked by {@code headSlot}/
 	 * {@code tailSlot}.
 	 */
-	private void appendCell(Asm a, int cellSlot, int headSlot, int tailSlot) {
-		int app = a.label();
-		int after = a.label();
+	private void appendCell(MethodCode a, int cellSlot, int headSlot, int tailSlot) {
+		MethodCode.Label app = a.newLabel();
+		MethodCode.Label after = a.newLabel();
 		a.aload(headSlot);
-		a.branch(Opcode.IFNONNULL, app);
+		a.ifnonnull(app);
 		a.aload(cellSlot);
 		a.astore(headSlot);
 		a.aload(cellSlot);
 		a.astore(tailSlot);
-		a.branch(Opcode.GOTO, after);
-		a.bind(app);
+		a.goto_(after);
+		a.labelBinding(app);
 		a.aload(tailSlot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(cellSlot);
 		a.aastore();
 		a.aload(cellSlot);
 		a.astore(tailSlot);
-		a.bind(after);
+		a.labelBinding(after);
 	}
 
 	// === entry points ===
@@ -997,14 +808,14 @@ final class JvmEvalRuntimeBuilder {
 	 * (JvmLispCompiler.Ctx.spelledLiterals) -- the alias probe reads it
 	 * @return the segment bodies
 	 */
-	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass,
+	static List<MethodCode> buildLookupSegments(EvalConstants k, ClassEntry thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
 			Set<String> spelledLiterals) {
 		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable, spelledLiterals);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
-	static List<Integer> buildEnvLookup(EvalConstants k) {
+	static MethodCode buildEnvLookup(EvalConstants k) {
 		return new JvmEvalRuntimeBuilder(k).envLookupBody();
 	}
 
@@ -1017,17 +828,17 @@ final class JvmEvalRuntimeBuilder {
 	 * references neither {@code _eval} nor {@code _envLookup}.
 	 * @return the body
 	 */
-	static List<Integer> buildApply(EvalConstants k, boolean withEval) {
+	static MethodCode buildApply(EvalConstants k, boolean withEval) {
 		return new JvmEvalRuntimeBuilder(k).applyBody(withEval);
 	}
 
 	/** Builds the {@code _store} method body. */
-	static List<Integer> buildStore(EvalConstants k) {
+	static MethodCode buildStore(EvalConstants k) {
 		return new JvmEvalRuntimeBuilder(k).storeBody();
 	}
 
 	/** Builds the {@code _eval} method body. */
-	static List<Integer> buildEval(EvalConstants k) {
+	static MethodCode buildEval(EvalConstants k) {
 		return new JvmEvalRuntimeBuilder(k).evalBody();
 	}
 
@@ -1044,7 +855,7 @@ final class JvmEvalRuntimeBuilder {
 	 */
 	private static final int LOOKUP_SEGMENT_BUDGET = 6_000;
 
-	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass,
+	private List<MethodCode> lookupSegments(ClassEntry thisClass,
 			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
 			Set<String> spelledLiterals) {
 		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
@@ -1079,186 +890,185 @@ final class JvmEvalRuntimeBuilder {
 				}
 			}
 		}
-		List<List<Integer>> segments = new ArrayList<>();
+		List<MethodCode> segments = new ArrayList<>();
 		int index = 0;
 		while (true) {
-			Asm a = new Asm();
-			while (index < entries.size() && a.code.size() < LOOKUP_SEGMENT_BUDGET) {
+			MethodCode a = new MethodCode();
+			while (index < entries.size() && a.size() < LOOKUP_SEGMENT_BUDGET) {
 				Map.Entry<String, JvmLispCompiler.FunctionInfo> e = entries.get(index++);
 				JvmLispCompiler.FunctionInfo fi = e.getValue();
-				int next = a.label();
+				MethodCode.Label next = a.newLabel();
 				a.aload(0);
 				ldcStr(a, e.getKey());
 				a.invokevirtual(this.k.objectEquals());
-				a.branch(Opcode.IFEQ, next);
+				a.ifeq(next);
 				// return new Object[]{ Integer.valueOf(funcId), Integer.valueOf(arity)
 				// }; a variadic function is encoded as a negative arity
 				// (-physicalParamCount) so the eval call path evaluates every argument
 				// instead of exactly arity
-				a.iconst(2);
+				a.loadConstant(2);
 				a.anewarray(this.k.objectClass());
 				a.dup();
-				a.iconst(0);
-				a.iconst(fi.funcId());
+				a.loadConstant(0);
+				a.loadConstant(fi.funcId());
 				a.invokestatic(this.k.integerValueOf());
 				a.aastore();
 				a.dup();
-				a.iconst(1);
-				a.iconst(fi.variadic() ? -fi.paramCount() : fi.paramCount());
+				a.loadConstant(1);
+				a.loadConstant(fi.variadic() ? -fi.paramCount() : fi.paramCount());
 				a.invokestatic(this.k.integerValueOf());
 				a.aastore();
 				a.areturn();
-				a.bind(next);
+				a.labelBinding(next);
 			}
 			if (index < entries.size()) {
 				// Continue the chain in the next segment.
 				ConstantPool cp = this.k.cp();
-				ConstantPool.MethodrefConstant nextRef = cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_lookup$" + (segments.size() + 1)),
-								cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;")));
+				MethodRefEntry nextRef = cp.methodRef(thisClass, "_lookup$" + (segments.size() + 1),
+						"(Ljava/lang/Object;)[Ljava/lang/Object;");
 				a.aload(0);
 				a.invokestatic(nextRef);
 				a.areturn();
-				segments.add(a.finish());
+				segments.add(a);
 				continue;
 			}
-			a.aconstNull();
+			a.aconst_null();
 			a.areturn();
-			segments.add(a.finish());
+			segments.add(a);
 			return segments;
 		}
 	}
 
 	// === _envLookup(String name, Object env) -> binding cons or null ===
 
-	private List<Integer> envLookupBody() {
-		Asm a = new Asm();
+	private MethodCode envLookupBody() {
+		MethodCode a = new MethodCode();
 		final int NAME = 0, ENV = 1, PAIR = 2, NAMEFIELD = 3;
-		int loop = a.label();
-		int retNull = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label retNull = a.newLabel();
+		a.labelBinding(loop);
 		a.aload(ENV);
-		a.branch(Opcode.IFNULL, retNull);
+		a.ifnull(retNull);
 		car(a, ENV);
 		a.astore(PAIR);
 		car(a, PAIR);
 		a.astore(NAMEFIELD);
-		int skip = a.label();
+		MethodCode.Label skip = a.newLabel();
 		a.aload(NAMEFIELD);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFEQ, skip);
+		a.ifeq(skip);
 		a.aload(NAMEFIELD);
 		a.aload(NAME);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, skip);
+		a.ifeq(skip);
 		a.aload(PAIR);
 		a.areturn();
-		a.bind(skip);
+		a.labelBinding(skip);
 		cdr(a, ENV);
 		a.astore(ENV);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(retNull);
-		a.aconstNull();
+		a.goto_(loop);
+		a.labelBinding(retNull);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// === _apply(Object fn, Object argList) -> value ===
 
-	private List<Integer> applyBody(boolean withEval) {
-		Asm a = new Asm();
+	private MethodCode applyBody(boolean withEval) {
+		MethodCode a = new MethodCode();
 		final int FN = 0, ARGLIST = 1, ARR = 2, PARAMS = 3, NEWENV = 4, BODY = 5, PAIR = 6, TMP = 7, ARGCUR = 8,
 				ARG0 = 9;
 		final int FUNCID = 17, LEN = 18;
 
 		// fn == null: NIL names no function -- an undefined-function, never a silent nil
-		int notNull = a.label();
+		MethodCode.Label notNull = a.newLabel();
 		a.aload(FN);
-		a.branch(Opcode.IFNONNULL, notNull);
+		a.ifnonnull(notNull);
 		emitNotFunctionThrow(a, FN);
-		a.bind(notNull);
+		a.labelBinding(notNull);
 
 		// symbol designator (CL-style): a String resolves in the function namespace
 		// (_fenv then the compiled registry) and the result replaces fn
-		int notSym = a.label();
-		int resolved = a.label();
+		MethodCode.Label notSym = a.newLabel();
+		MethodCode.Label resolved = a.newLabel();
 		a.aload(FN);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFEQ, notSym);
-		int desReg = a.label();
+		a.ifeq(notSym);
+		MethodCode.Label desReg = a.newLabel();
 		if (withEval) {
 			a.aload(FN);
 			a.getstatic(this.k.fenvField());
 			a.invokestatic(this.k.envLookupRef());
 			a.astore(TMP);
 			a.aload(TMP);
-			a.branch(Opcode.IFNULL, desReg);
+			a.ifnull(desReg);
 			a.aload(TMP);
 			a.checkcast(this.k.objectArrayClass());
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aaload();
 			a.astore(FN);
-			a.branch(Opcode.GOTO, resolved);
+			a.goto_(resolved);
 		}
-		a.bind(desReg);
-		int desMiss = a.label();
+		a.labelBinding(desReg);
+		MethodCode.Label desMiss = a.newLabel();
 		a.aload(FN);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, desMiss);
-		a.iconst(1);
+		a.ifnull(desMiss);
+		a.loadConstant(1);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aastore();
 		a.astore(FN);
-		a.branch(Opcode.GOTO, resolved);
-		a.bind(desMiss);
+		a.goto_(resolved);
+		a.labelBinding(desMiss);
 		// A symbol that resolves in neither _fenv nor the registry is an undefined
 		// function: fail LOUDLY like the funcall dispatcher (returning nil here
 		// silently swallowed (apply (intern "NOSUCH") ...)). A quote-framed STRING
 		// lands here too, and _notFn reports it as the non-function it is.
 		emitNotFunctionThrow(a, FN);
-		a.bind(resolved);
-		a.bind(notSym);
+		a.labelBinding(resolved);
+		a.labelBinding(notSym);
 
 		// fn instanceof Object[] ?
-		int notArr = a.label();
+		MethodCode.Label notArr = a.newLabel();
 		a.aload(FN);
 		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, notArr);
+		a.ifeq(notArr);
 		a.aload(FN);
 		a.checkcast(this.k.objectArrayClass());
 		a.astore(ARR);
 		// A cons, an instance, an empty vector: an Object[] whose slot 0 is no funcId
-		int isFunction = a.label();
-		int notFunction = a.label();
+		MethodCode.Label isFunction = a.newLabel();
+		MethodCode.Label notFunction = a.newLabel();
 		a.aload(ARR);
 		a.arraylength();
-		a.branch(Opcode.IFEQ, notFunction);
+		a.ifeq(notFunction);
 		idx(a, ARR, 0);
 		a.instanceOf(this.k.integerClass());
-		a.branch(Opcode.IFNE, isFunction);
-		a.bind(notFunction);
+		a.ifne(isFunction);
+		a.labelBinding(notFunction);
 		emitNotFunctionThrow(a, FN);
-		a.bind(isFunction);
+		a.labelBinding(isFunction);
 		idx(a, ARR, 0);
 		a.checkcast(this.k.integerClass());
 		a.invokevirtual(this.k.integerValue());
 		a.istore(FUNCID);
 
 		// interpreted closure? funcId == -1
-		int compiled = a.label();
+		MethodCode.Label compiled = a.newLabel();
 		// Only the eval runtime builds one.
 		if (withEval) {
 			a.iload(FUNCID);
-			a.iconst(-1);
-			a.branch(Opcode.IF_ICMPNE, compiled);
+			a.loadConstant(-1);
+			a.if_icmpne(compiled);
 			// arr = {Integer(-1), lambdaTail, capturedEnv}
 			idx(a, ARR, 1);
 			a.astore(PAIR); // lambdaTail = ((params) body...)
@@ -1272,31 +1082,31 @@ final class JvmEvalRuntimeBuilder {
 			// bind params to args
 			a.aload(ARGLIST);
 			a.astore(ARGCUR);
-			int bloop = a.label();
-			int bend = a.label();
-			a.bind(bloop);
+			MethodCode.Label bloop = a.newLabel();
+			MethodCode.Label bend = a.newLabel();
+			a.labelBinding(bloop);
 			a.aload(PARAMS);
-			a.branch(Opcode.IFNULL, bend);
+			a.ifnull(bend);
 			// pval = argcur == null ? null : car(argcur)
-			int pnull = a.label();
-			int pset = a.label();
+			MethodCode.Label pnull = a.newLabel();
+			MethodCode.Label pset = a.newLabel();
 			a.aload(ARGCUR);
-			a.branch(Opcode.IFNULL, pnull);
+			a.ifnull(pnull);
 			car(a, ARGCUR);
-			a.branch(Opcode.GOTO, pset);
-			a.bind(pnull);
-			a.aconstNull();
-			a.bind(pset);
+			a.goto_(pset);
+			a.labelBinding(pnull);
+			a.aconst_null();
+			a.labelBinding(pset);
 			a.astore(TMP);
 			// binding = cons(car(params), pval)
-			a.iconst(2);
+			a.loadConstant(2);
 			a.anewarray(this.k.objectClass());
 			a.dup();
-			a.iconst(0);
+			a.loadConstant(0);
 			car(a, PARAMS);
 			a.aastore();
 			a.dup();
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aload(TMP);
 			a.aastore();
 			a.astore(PAIR);
@@ -1306,18 +1116,18 @@ final class JvmEvalRuntimeBuilder {
 			cdr(a, PARAMS);
 			a.astore(PARAMS);
 			// argcur = argcur == null ? null : cdr(argcur)
-			int anull = a.label();
-			int aset = a.label();
+			MethodCode.Label anull = a.newLabel();
+			MethodCode.Label aset = a.newLabel();
 			a.aload(ARGCUR);
-			a.branch(Opcode.IFNULL, anull);
+			a.ifnull(anull);
 			cdr(a, ARGCUR);
-			a.branch(Opcode.GOTO, aset);
-			a.bind(anull);
-			a.aconstNull();
-			a.bind(aset);
+			a.goto_(aset);
+			a.labelBinding(anull);
+			a.aconst_null();
+			a.labelBinding(aset);
 			a.astore(ARGCUR);
-			a.branch(Opcode.GOTO, bloop);
-			a.bind(bend);
+			a.goto_(bloop);
+			a.labelBinding(bend);
 			prognInto(a, BODY, NEWENV, TMP);
 			a.aload(TMP);
 			a.areturn();
@@ -1331,15 +1141,15 @@ final class JvmEvalRuntimeBuilder {
 		// and an apply past it used to fall off the ladder and answer nil. (A length walk
 		// here, left over from that ladder, cast every cell and raised a type-error on
 		// an improper list before the dispatcher could report it.)
-		a.bind(compiled);
+		a.labelBinding(compiled);
 		a.aload(FN);
 		a.aload(ARGLIST);
 		a.invokestatic(this.k.invokeSpread());
 		a.areturn();
 
-		a.bind(notArr);
+		a.labelBinding(notArr);
 		emitNotFunctionThrow(a, FN);
-		return a.finish();
+		return a;
 	}
 
 	/**
@@ -1351,47 +1161,47 @@ final class JvmEvalRuntimeBuilder {
 	 * with the shape {@code (0, variadic)}, which only an {@code apply}'s improper last
 	 * argument can fail.
 	 */
-	private void emitClosureArityCheck(Asm a, int paramsSlot, int argListSlot, int cursorSlot, int countSlot) {
-		int loop = a.label();
-		int counted = a.label();
-		int nextParam = a.label();
-		int unchecked = a.label();
-		a.iconst(0);
+	private void emitClosureArityCheck(MethodCode a, int paramsSlot, int argListSlot, int cursorSlot, int countSlot) {
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label counted = a.newLabel();
+		MethodCode.Label nextParam = a.newLabel();
+		MethodCode.Label unchecked = a.newLabel();
+		a.loadConstant(0);
 		a.istore(countSlot);
 		a.aload(paramsSlot);
 		a.astore(cursorSlot);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.aload(cursorSlot);
-		a.branch(Opcode.IFNULL, counted);
+		a.ifnull(counted);
 		car(a, cursorSlot);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFEQ, nextParam);
+		a.ifeq(nextParam);
 		car(a, cursorSlot);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(this.k.stringLength());
-		a.branch(Opcode.IFEQ, nextParam);
+		a.ifeq(nextParam);
 		car(a, cursorSlot);
 		a.checkcast(this.k.stringClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('&');
-		a.branch(Opcode.IF_ICMPEQ, unchecked);
-		a.bind(nextParam);
+		a.loadConstant('&');
+		a.if_icmpeq(unchecked);
+		a.labelBinding(nextParam);
 		a.iinc(countSlot, 1);
 		cdr(a, cursorSlot);
 		a.astore(cursorSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(counted);
-		int check = a.label();
+		a.goto_(loop);
+		a.labelBinding(counted);
+		MethodCode.Label check = a.newLabel();
 		a.iload(countSlot);
-		a.iconst(1);
-		a.op(Opcode.ISHL);
+		a.loadConstant(1);
+		a.ishl();
 		a.istore(countSlot);
-		a.branch(Opcode.GOTO, check);
-		a.bind(unchecked);
-		a.iconst(1);
+		a.goto_(check);
+		a.labelBinding(unchecked);
+		a.loadConstant(1);
 		a.istore(countSlot);
-		a.bind(check);
+		a.labelBinding(check);
 		a.aload(argListSlot);
 		a.iload(countSlot);
 		a.invokestatic(this.k.arityChkRef());
@@ -1402,87 +1212,87 @@ final class JvmEvalRuntimeBuilder {
 	 * catchability) as the funcall dispatchers' non-function arm
 	 * ({@link JvmRuntimeBuilder#buildNotFnBody}).
 	 */
-	private void emitNotFunctionThrow(Asm a, int slot) {
+	private void emitNotFunctionThrow(MethodCode a, int slot) {
 		a.aload(slot);
 		a.invokestatic(this.k.notFnRef());
-		a.op(Opcode.ATHROW);
+		a.athrow();
 	}
 
 	// === _store(place, value, env) -> value ===
 
-	private List<Integer> storeBody() {
-		Asm a = new Asm();
+	private MethodCode storeBody() {
+		MethodCode a = new MethodCode();
 		final int PLACE = 0, VALUE = 1, ENV = 2, OP = 3, TMP = 4, TARGET = 5, ARGS = 6;
 		final int IDX = 8, FIELD = 9, CH = 10, LEN = 11, VALID = 12;
 
 		// Initialize TARGET so the slot has a reference type on every path (the inference
 		// verifier is flow-insensitive about the FIELD guard before the store).
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(TARGET);
 
 		// --- symbol place: variable assignment ---
-		int notSym = a.label();
+		MethodCode.Label notSym = a.newLabel();
 		a.aload(PLACE);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFEQ, notSym);
+		a.ifeq(notSym);
 		storeSymbolBinding(a, PLACE, ENV, VALUE, TMP, false);
 		storeSymbolBinding(a, PLACE, ENV, VALUE, TMP, true);
 		// not bound anywhere: prepend a new binding to the global environment
 		consFromSlots(a, PLACE, VALUE);
 		a.astore(TMP);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(TMP);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.getstatic(this.k.genvField());
 		a.aastore();
 		a.putstatic(this.k.genvField());
 		a.aload(VALUE);
 		a.areturn();
-		a.bind(notSym);
+		a.labelBinding(notSym);
 
 		// --- accessor place: (op arg...) ---
-		int isArr = a.label();
+		MethodCode.Label isArr = a.newLabel();
 		a.aload(PLACE);
 		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFNE, isArr);
+		a.ifne(isArr);
 		a.aload(VALUE);
 		a.areturn();
-		a.bind(isArr);
+		a.labelBinding(isArr);
 		car(a, PLACE);
 		a.astore(OP);
-		int opStr = a.label();
+		MethodCode.Label opStr = a.newLabel();
 		a.aload(OP);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFNE, opStr);
+		a.ifne(opStr);
 		a.aload(VALUE);
 		a.areturn();
-		a.bind(opStr);
+		a.labelBinding(opStr);
 		cdr(a, PLACE);
 		a.astore(ARGS);
 		// FIELD = -1 (no target resolved)
-		a.iconst(-1);
+		a.loadConstant(-1);
 		a.istore(FIELD);
 
 		// nth: walk n cdrs, set car
-		int afterNth = special(a, OP, LispNames.NTH);
+		MethodCode.Label afterNth = special(a, OP, LispNames.NTH);
 		evalCar(a, ARGS, ENV);
 		a.checkcast(this.k.longClass());
 		a.invokevirtual(this.k.longValue());
-		a.op(Opcode.L2I);
+		a.l2i();
 		a.istore(IDX);
 		cdr(a, ARGS);
 		a.astore(ARGS);
 		evalCar(a, ARGS, ENV);
 		a.astore(TARGET);
 		walkCdrs(a, TARGET, IDX);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(FIELD);
-		a.bind(afterNth);
+		a.labelBinding(afterNth);
 
 		// first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth: k cdrs, set
 		// car
@@ -1498,43 +1308,43 @@ final class JvmEvalRuntimeBuilder {
 		fixedAccessorTarget(a, OP, LispNames.TENTH, ARGS, ENV, TARGET, FIELD, 9);
 
 		// car/cdr and c[ad]+r compositions (only if no named accessor matched)
-		int skipCarCdr = a.label();
+		MethodCode.Label skipCarCdr = a.newLabel();
 		a.iload(FIELD);
-		a.iconst(-1);
-		a.branch(Opcode.IF_ICMPNE, skipCarCdr);
+		a.loadConstant(-1);
+		a.if_icmpne(skipCarCdr);
 		carCdrStoreTarget(a, OP, ARGS, ENV, TARGET, FIELD, IDX, CH, LEN, VALID);
-		a.bind(skipCarCdr);
+		a.labelBinding(skipCarCdr);
 
 		// store: if a target was resolved and is a cons, set car (FIELD 0) or cdr (FIELD
 		// 1)
-		int doneStore = a.label();
+		MethodCode.Label doneStore = a.newLabel();
 		a.iload(FIELD);
-		a.iconst(-1);
-		a.branch(Opcode.IF_ICMPEQ, doneStore);
+		a.loadConstant(-1);
+		a.if_icmpeq(doneStore);
 		a.aload(TARGET);
 		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, doneStore);
-		int setCdr = a.label();
-		int afterSet = a.label();
+		a.ifeq(doneStore);
+		MethodCode.Label setCdr = a.newLabel();
+		MethodCode.Label afterSet = a.newLabel();
 		a.iload(FIELD);
-		a.branch(Opcode.IFNE, setCdr);
+		a.ifne(setCdr);
 		a.aload(TARGET);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(VALUE);
 		a.aastore();
-		a.branch(Opcode.GOTO, afterSet);
-		a.bind(setCdr);
+		a.goto_(afterSet);
+		a.labelBinding(setCdr);
 		a.aload(TARGET);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(VALUE);
 		a.aastore();
-		a.bind(afterSet);
-		a.bind(doneStore);
+		a.labelBinding(afterSet);
+		a.labelBinding(doneStore);
 		a.aload(VALUE);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	/**
@@ -1542,7 +1352,8 @@ final class JvmEvalRuntimeBuilder {
 	 * binding.cdr = value; return value; }}, for the lexical ({@code global == false}) or
 	 * global ({@code global == true}) environment.
 	 */
-	private void storeSymbolBinding(Asm a, int nameSlot, int envSlot, int valueSlot, int tmpSlot, boolean global) {
+	private void storeSymbolBinding(MethodCode a, int nameSlot, int envSlot, int valueSlot, int tmpSlot,
+			boolean global) {
 		a.aload(nameSlot);
 		if (global) {
 			a.getstatic(this.k.genvField());
@@ -1552,17 +1363,17 @@ final class JvmEvalRuntimeBuilder {
 		}
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(tmpSlot);
-		int skip = a.label();
+		MethodCode.Label skip = a.newLabel();
 		a.aload(tmpSlot);
-		a.branch(Opcode.IFNULL, skip);
+		a.ifnull(skip);
 		a.aload(tmpSlot);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(valueSlot);
 		a.aastore();
 		a.aload(valueSlot);
 		a.areturn();
-		a.bind(skip);
+		a.labelBinding(skip);
 	}
 
 	/**
@@ -1571,34 +1382,34 @@ final class JvmEvalRuntimeBuilder {
 	 * {@code cdrCount} cdrs into {@code targetSlot} and sets {@code fieldSlot} to 0
 	 * (car).
 	 */
-	private void fixedAccessorTarget(Asm a, int opSlot, String name, int argsSlot, int envSlot, int targetSlot,
+	private void fixedAccessorTarget(MethodCode a, int opSlot, String name, int argsSlot, int envSlot, int targetSlot,
 			int fieldSlot, int cdrCount) {
-		int next = special(a, opSlot, name);
+		MethodCode.Label next = special(a, opSlot, name);
 		evalCar(a, argsSlot, envSlot);
 		a.astore(targetSlot);
 		for (int i = 0; i < cdrCount; i++) {
 			cdr(a, targetSlot);
 			a.astore(targetSlot);
 		}
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(fieldSlot);
-		a.bind(next);
+		a.labelBinding(next);
 	}
 
 	/** Emits a loop replacing {@code targetSlot} with its cdr {@code idxSlot} times. */
-	private void walkCdrs(Asm a, int targetSlot, int idxSlot) {
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
+	private void walkCdrs(MethodCode a, int targetSlot, int idxSlot) {
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(idxSlot);
-		a.branch(Opcode.IFLE, end);
+		a.ifle(end);
 		a.aload(targetSlot);
-		a.branch(Opcode.IFNULL, end);
+		a.ifnull(end);
 		cdr(a, targetSlot);
 		a.astore(targetSlot);
 		a.iinc(idxSlot, -1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
+		a.goto_(loop);
+		a.labelBinding(end);
 	}
 
 	/**
@@ -1608,156 +1419,156 @@ final class JvmEvalRuntimeBuilder {
 	 * 0 (outer op {@code a}) or 1 (outer op {@code d}); otherwise leaves
 	 * {@code fieldSlot} unchanged.
 	 */
-	private void carCdrStoreTarget(Asm a, int opSlot, int argsSlot, int envSlot, int targetSlot, int fieldSlot,
+	private void carCdrStoreTarget(MethodCode a, int opSlot, int argsSlot, int envSlot, int targetSlot, int fieldSlot,
 			int idxSlot, int chSlot, int lenSlot, int validSlot) {
 		aloadStr(a, opSlot);
 		a.invokevirtual(this.k.stringLength());
 		a.istore(lenSlot);
-		int noMatch = a.label();
+		MethodCode.Label noMatch = a.newLabel();
 		a.iload(lenSlot);
-		a.iconst(3);
-		a.branch(Opcode.IF_ICMPLT, noMatch);
+		a.loadConstant(3);
+		a.if_icmplt(noMatch);
 		aloadStr(a, opSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('C');
-		a.branch(Opcode.IF_ICMPNE, noMatch);
+		a.loadConstant('C');
+		a.if_icmpne(noMatch);
 		aloadStr(a, opSlot);
 		a.iload(lenSlot);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('R');
-		a.branch(Opcode.IF_ICMPNE, noMatch);
+		a.loadConstant('R');
+		a.if_icmpne(noMatch);
 		// scan middle bytes: valid = all in {'a','d'}
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(validSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(idxSlot);
-		int sloop = a.label();
-		int send = a.label();
-		a.bind(sloop);
+		MethodCode.Label sloop = a.newLabel();
+		MethodCode.Label send = a.newLabel();
+		a.labelBinding(sloop);
 		a.iload(idxSlot);
 		a.iload(lenSlot);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPGE, send);
+		a.loadConstant(1);
+		a.isub();
+		a.if_icmpge(send);
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
 		a.istore(chSlot);
-		int okch = a.label();
+		MethodCode.Label okch = a.newLabel();
 		a.iload(chSlot);
-		a.iconst('A');
-		a.branch(Opcode.IF_ICMPEQ, okch);
+		a.loadConstant('A');
+		a.if_icmpeq(okch);
 		a.iload(chSlot);
-		a.iconst('D');
-		a.branch(Opcode.IF_ICMPEQ, okch);
-		a.iconst(0);
+		a.loadConstant('D');
+		a.if_icmpeq(okch);
+		a.loadConstant(0);
 		a.istore(validSlot);
-		a.branch(Opcode.GOTO, send);
-		a.bind(okch);
+		a.goto_(send);
+		a.labelBinding(okch);
 		a.iinc(idxSlot, 1);
-		a.branch(Opcode.GOTO, sloop);
-		a.bind(send);
-		int notValid = a.label();
+		a.goto_(sloop);
+		a.labelBinding(send);
+		MethodCode.Label notValid = a.newLabel();
 		a.iload(validSlot);
-		a.branch(Opcode.IFEQ, notValid);
+		a.ifeq(notValid);
 		evalCar(a, argsSlot, envSlot);
 		a.astore(targetSlot);
 		// apply inner ops (indices len-2 down to 2)
 		a.iload(lenSlot);
-		a.iconst(2);
-		a.op(Opcode.ISUB);
+		a.loadConstant(2);
+		a.isub();
 		a.istore(idxSlot);
-		int iloop = a.label();
-		int iend = a.label();
-		a.bind(iloop);
+		MethodCode.Label iloop = a.newLabel();
+		MethodCode.Label iend = a.newLabel();
+		a.labelBinding(iloop);
 		a.iload(idxSlot);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPLT, iend);
-		int isCdr = a.label();
-		int afterc = a.label();
+		a.loadConstant(2);
+		a.if_icmplt(iend);
+		MethodCode.Label isCdr = a.newLabel();
+		MethodCode.Label afterc = a.newLabel();
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('A');
-		a.branch(Opcode.IF_ICMPNE, isCdr);
+		a.loadConstant('A');
+		a.if_icmpne(isCdr);
 		car(a, targetSlot);
 		a.astore(targetSlot);
-		a.branch(Opcode.GOTO, afterc);
-		a.bind(isCdr);
+		a.goto_(afterc);
+		a.labelBinding(isCdr);
 		cdr(a, targetSlot);
 		a.astore(targetSlot);
-		a.bind(afterc);
+		a.labelBinding(afterc);
 		a.iinc(idxSlot, -1);
-		a.branch(Opcode.GOTO, iloop);
-		a.bind(iend);
+		a.goto_(iloop);
+		a.labelBinding(iend);
 		// field = (op.charAt(1) == 'd') ? 1 : 0
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(fieldSlot);
-		int notD = a.label();
+		MethodCode.Label notD = a.newLabel();
 		aloadStr(a, opSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('D');
-		a.branch(Opcode.IF_ICMPNE, notD);
-		a.iconst(1);
+		a.loadConstant('D');
+		a.if_icmpne(notD);
+		a.loadConstant(1);
 		a.istore(fieldSlot);
-		a.bind(notD);
-		a.bind(notValid);
-		a.bind(noMatch);
+		a.labelBinding(notD);
+		a.labelBinding(notValid);
+		a.labelBinding(noMatch);
 	}
 
 	// === _eval(form, env) -> value ===
 
-	private List<Integer> evalBody() {
-		Asm a = new Asm();
+	private MethodCode evalBody() {
+		MethodCode a = new MethodCode();
 		final int VAL = 0, ENV = 1, REST = 2, TMP = 3, OP = 4, ARGHEAD = 5, ARGTAIL = 6, NEWCELL = 7, ACC = 8, FN = 9,
 				BODY = 10, BINDCUR = 11, ELEM = 12;
 		final int IDX = 15, LEN = 16, CH = 17, ARITY = 18, VALID = 19;
 
 		// --- self-evaluating: nil, Long, Double ---
-		int notNil = a.label();
+		MethodCode.Label notNil = a.newLabel();
 		a.aload(VAL);
-		a.branch(Opcode.IFNONNULL, notNil);
+		a.ifnonnull(notNil);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notNil);
-		int notLong = a.label();
+		a.labelBinding(notNil);
+		MethodCode.Label notLong = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(this.k.longClass());
-		a.branch(Opcode.IFEQ, notLong);
+		a.ifeq(notLong);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notLong);
-		int notDouble = a.label();
+		a.labelBinding(notLong);
+		MethodCode.Label notDouble = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(this.k.doubleClass());
-		a.branch(Opcode.IFEQ, notDouble);
+		a.ifeq(notDouble);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notDouble);
+		a.labelBinding(notDouble);
 		// a BigInteger (an exact integer past the long range) is self-evaluating too
-		ClassConstant bigIntegerClass = this.k.cp().addClass(this.k.cp().addUtf8("java/math/BigInteger"));
-		int notBigInteger = a.label();
+		ClassEntry bigIntegerClass = this.k.cp().classEntry("java/math/BigInteger");
+		MethodCode.Label notBigInteger = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(bigIntegerClass);
-		a.branch(Opcode.IFEQ, notBigInteger);
+		a.ifeq(notBigInteger);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notBigInteger);
+		a.labelBinding(notBigInteger);
 
 		// --- ratios (BigInteger[]) are self-evaluating; checked before the generic
 		// Object[] form handling because a ratio is also an Object[] ---
-		ClassConstant ratioArrayClass = this.k.cp().addClass(this.k.cp().addUtf8("[Ljava/math/BigInteger;"));
-		int notRatio = a.label();
+		ClassEntry ratioArrayClass = this.k.cp().classEntry("[Ljava/math/BigInteger;");
+		MethodCode.Label notRatio = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(ratioArrayClass);
-		a.branch(Opcode.IFEQ, notRatio);
+		a.ifeq(notRatio);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notRatio);
+		a.labelBinding(notRatio);
 
 		// --- complex values (RontoComplex) are self-evaluating, like ratios --
 		// emitted only for a complex-capable program, so the travelling class
@@ -1766,71 +1577,70 @@ final class JvmEvalRuntimeBuilder {
 		// resolving the holder class (.todo/757) -- exact, since no holder can
 		// exist then.
 		if (this.k.complexValues()) {
-			ClassConstant complexClass = this.k.cp()
-				.addClass(this.k.cp().addUtf8("am/ik/rontolisp/runtime/RontoComplex"));
-			int noHolder = a.label();
+			ClassEntry complexClass = this.k.cp().classEntry("am/ik/rontolisp/runtime/RontoComplex");
+			MethodCode.Label noHolder = a.newLabel();
 			a.getstatic(Objects.requireNonNull(this.k.hasComplexField()));
-			a.branch(Opcode.IFEQ, noHolder);
-			int notComplex = a.label();
+			a.ifeq(noHolder);
+			MethodCode.Label notComplex = a.newLabel();
 			a.aload(VAL);
 			a.instanceOf(complexClass);
-			a.branch(Opcode.IFEQ, notComplex);
+			a.ifeq(notComplex);
 			a.aload(VAL);
 			a.areturn();
-			a.bind(notComplex);
-			a.bind(noHolder);
+			a.labelBinding(notComplex);
+			a.labelBinding(noHolder);
 		}
 
 		// --- strings: string literal (self-eval) or symbol (variable reference) ---
-		int notStr = a.label();
+		MethodCode.Label notStr = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFEQ, notStr);
-		int sym = a.label();
+		a.ifeq(notStr);
+		MethodCode.Label sym = a.newLabel();
 		aloadStr(a, VAL);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst(QUOTE_CHAR);
-		a.branch(Opcode.IF_ICMPNE, sym);
+		a.loadConstant(QUOTE_CHAR);
+		a.if_icmpne(sym);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(sym);
+		a.labelBinding(sym);
 		// lexical lookup
-		int global = a.label();
+		MethodCode.Label global = a.newLabel();
 		a.aload(VAL);
 		a.aload(ENV);
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, global);
+		a.ifnull(global);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(global);
+		a.labelBinding(global);
 		// global lookup; Lisp-2: a bare symbol resolves the variable namespace only,
 		// never the function registry. An unbound symbol retries the case-flipped
 		// spelling once (compiled references read upcased while runtime-read
 		// definitions are case-preserved, and vice versa), then evaluates to ITSELF
 		// under its original spelling.
-		ConstantPool.MethodrefConstant varToLowerCase = stringCaseRef("toLowerCase");
-		ConstantPool.MethodrefConstant varToUpperCase = stringCaseRef("toUpperCase");
-		int self = a.label();
-		int varFlipped = a.label();
-		int retry = a.label();
+		MethodRefEntry varToLowerCase = stringCaseRef("toLowerCase");
+		MethodRefEntry varToUpperCase = stringCaseRef("toUpperCase");
+		MethodCode.Label self = a.newLabel();
+		MethodCode.Label varFlipped = a.newLabel();
+		MethodCode.Label retry = a.newLabel();
 		a.aload(VAL);
 		a.getstatic(this.k.genvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, retry);
+		a.ifnull(retry);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(retry);
+		a.labelBinding(retry);
 		a.aload(VAL);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(varToLowerCase);
@@ -1838,7 +1648,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(TMP);
 		a.aload(VAL);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, varFlipped);
+		a.ifeq(varFlipped);
 		a.aload(VAL);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(varToUpperCase);
@@ -1846,52 +1656,52 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(TMP);
 		a.aload(VAL);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFNE, self);
-		a.bind(varFlipped);
+		a.ifne(self);
+		a.labelBinding(varFlipped);
 		a.aload(TMP);
 		a.getstatic(this.k.genvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, self);
+		a.ifnull(self);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(self);
+		a.labelBinding(self);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(notStr);
+		a.labelBinding(notStr);
 
 		// --- Object[]: function value (self-eval) or cons (special form / application)
 		// ---
-		int isArr = a.label();
+		MethodCode.Label isArr = a.newLabel();
 		a.aload(VAL);
 		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFNE, isArr);
-		a.aconstNull();
+		a.ifne(isArr);
+		a.aconst_null();
 		a.areturn();
-		a.bind(isArr);
-		int cons = a.label();
+		a.labelBinding(isArr);
+		MethodCode.Label cons = a.newLabel();
 		arrLen(a, VAL);
-		a.branch(Opcode.IFEQ, cons);
+		a.ifeq(cons);
 		car(a, VAL);
 		a.instanceOf(this.k.integerClass());
-		a.branch(Opcode.IFEQ, cons);
+		a.ifeq(cons);
 		a.aload(VAL);
 		a.areturn();
-		a.bind(cons);
+		a.labelBinding(cons);
 		car(a, VAL);
 		a.astore(OP);
 		cdr(a, VAL);
 		a.astore(REST);
 
 		// non-symbol operator (inline lambda): evaluate it, then apply
-		int symOp = a.label();
+		MethodCode.Label symOp = a.newLabel();
 		a.aload(OP);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFNE, symOp);
+		a.ifne(symOp);
 		a.aload(OP);
 		a.aload(ENV);
 		a.invokestatic(this.k.evalRef());
@@ -1901,51 +1711,51 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
-		a.bind(symOp);
+		a.labelBinding(symOp);
 
 		// The inline arms below take only the call shape they are written for; any other
 		// argument count branches here, to the generic application, whose registered
 		// wrapper judges the count and names the operator (FUNCALL expects at least 1
 		// argument, got 0) or serves the shape the arm does not ((+) is 0).
-		int registryApply = a.label();
+		MethodCode.Label registryApply = a.newLabel();
 
 		// ---- quote ----
-		int n = special(a, OP, LispNames.QUOTE);
+		MethodCode.Label n = special(a, OP, LispNames.QUOTE);
 		car(a, REST);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- if ----
 		n = special(a, OP, LispNames.IF);
 		evalCar(a, REST, ENV);
-		int testTrue = a.label();
-		a.branch(Opcode.IFNONNULL, testTrue);
+		MethodCode.Label testTrue = a.newLabel();
+		a.ifnonnull(testTrue);
 		// false branch: rest = cddr; if null nil else eval(car)
 		cdr(a, REST);
 		a.astore(REST);
 		cdr(a, REST);
 		a.astore(REST);
-		int hasElse = a.label();
+		MethodCode.Label hasElse = a.newLabel();
 		a.aload(REST);
-		a.branch(Opcode.IFNONNULL, hasElse);
-		a.aconstNull();
+		a.ifnonnull(hasElse);
+		a.aconst_null();
 		a.areturn();
-		a.bind(hasElse);
+		a.labelBinding(hasElse);
 		evalCar(a, REST, ENV);
 		a.areturn();
-		a.bind(testTrue);
+		a.labelBinding(testTrue);
 		cdr(a, REST);
 		a.astore(REST);
 		evalCar(a, REST, ENV);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- progn ----
 		n = special(a, OP, LispNames.PROGN);
 		prognInto(a, REST, ENV, TMP);
 		a.aload(TMP);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- let ----
 		n = special(a, OP, LispNames.LET);
@@ -1955,11 +1765,11 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(BINDCUR);
 		a.aload(ENV);
 		a.astore(ELEM); // newEnv accumulator
-		int letLoop = a.label();
-		int letEnd = a.label();
-		a.bind(letLoop);
+		MethodCode.Label letLoop = a.newLabel();
+		MethodCode.Label letEnd = a.newLabel();
+		a.labelBinding(letLoop);
 		a.aload(BINDCUR);
-		a.branch(Opcode.IFNULL, letEnd);
+		a.ifnull(letEnd);
 		car(a, BINDCUR);
 		a.astore(TMP); // (name value)
 		cdr(a, TMP);
@@ -1967,14 +1777,14 @@ final class JvmEvalRuntimeBuilder {
 		evalCar(a, NEWCELL, ENV);
 		a.astore(NEWCELL); // value evaluated in the outer env
 		// binding = cons(car(TMP), value)
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		car(a, TMP);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(NEWCELL);
 		a.aastore();
 		a.astore(TMP);
@@ -1982,34 +1792,34 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(ELEM);
 		cdr(a, BINDCUR);
 		a.astore(BINDCUR);
-		a.branch(Opcode.GOTO, letLoop);
-		a.bind(letEnd);
+		a.goto_(letLoop);
+		a.labelBinding(letEnd);
 		a.aload(BODY);
 		a.astore(REST);
 		prognInto(a, REST, ELEM, TMP);
 		a.aload(TMP);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- lambda ----
 		n = special(a, OP, LispNames.LAMBDA);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
-		a.iconst(-1);
+		a.loadConstant(0);
+		a.loadConstant(-1);
 		a.invokestatic(this.k.integerValueOf());
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(REST);
 		a.aastore();
 		a.dup();
-		a.iconst(2);
+		a.loadConstant(2);
 		a.aload(ENV);
 		a.aastore();
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- defun: (defun name (params) body...) builds a closure and installs it
 		// into the _fenv function namespace so loaded files can define functions ----
@@ -2017,14 +1827,14 @@ final class JvmEvalRuntimeBuilder {
 		car(a, REST);
 		a.astore(ACC); // name symbol
 		// lambdaForm = cons("lambda", cdr(REST))
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		ldcStr(a, LispNames.LAMBDA);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		cdr(a, REST);
 		a.aastore();
 		a.astore(TMP); // lambdaForm
@@ -2037,165 +1847,165 @@ final class JvmEvalRuntimeBuilder {
 		storeFunctionBinding(a, ACC, NEWCELL, TMP);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- function: (function name) / #'name resolves the function namespace;
 		// (function (lambda ...)) evaluates to a closure ----
 		n = special(a, OP, LispNames.FUNCTION);
 		car(a, REST);
 		a.astore(ACC); // designator (unevaluated)
-		int fnSym = a.label();
+		MethodCode.Label fnSym = a.newLabel();
 		a.aload(ACC);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFNE, fnSym);
+		a.ifne(fnSym);
 		// non-symbol designator (a lambda form): evaluate it
 		a.aload(ACC);
 		a.aload(ENV);
 		a.invokestatic(this.k.evalRef());
 		a.areturn();
-		a.bind(fnSym);
+		a.labelBinding(fnSym);
 		emitFunctionLookupReturn(a, ACC, TMP);
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- symbol-function: like function but the argument is evaluated ----
 		n = special(a, OP, LispNames.SYMBOL_FUNCTION);
 		evalCar(a, REST, ENV);
 		a.astore(ACC);
-		int sfSym = a.label();
+		MethodCode.Label sfSym = a.newLabel();
 		a.aload(ACC);
 		a.instanceOf(this.k.stringClass());
-		a.branch(Opcode.IFNE, sfSym);
-		a.aconstNull();
+		a.ifne(sfSym);
+		a.aconst_null();
 		a.areturn();
-		a.bind(sfSym);
+		a.labelBinding(sfSym);
 		emitFunctionLookupReturn(a, ACC, TMP);
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- cond ----
 		n = special(a, OP, LispNames.COND);
 		a.aload(REST);
 		a.astore(BINDCUR);
-		int condLoop = a.label();
-		int condEnd = a.label();
-		a.bind(condLoop);
+		MethodCode.Label condLoop = a.newLabel();
+		MethodCode.Label condEnd = a.newLabel();
+		a.labelBinding(condLoop);
 		a.aload(BINDCUR);
-		a.branch(Opcode.IFNULL, condEnd);
+		a.ifnull(condEnd);
 		car(a, BINDCUR);
 		a.astore(TMP); // clause
 		evalCar(a, TMP, ENV);
 		a.astore(ACC); // test value
-		int nextClause = a.label();
+		MethodCode.Label nextClause = a.newLabel();
 		a.aload(ACC);
-		a.branch(Opcode.IFNULL, nextClause);
+		a.ifnull(nextClause);
 		cdr(a, TMP);
 		a.astore(BODY);
-		int hasBody = a.label();
+		MethodCode.Label hasBody = a.newLabel();
 		a.aload(BODY);
-		a.branch(Opcode.IFNONNULL, hasBody);
+		a.ifnonnull(hasBody);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(hasBody);
+		a.labelBinding(hasBody);
 		a.aload(BODY);
 		a.astore(REST);
 		prognInto(a, REST, ENV, TMP);
 		a.aload(TMP);
 		a.areturn();
-		a.bind(nextClause);
+		a.labelBinding(nextClause);
 		cdr(a, BINDCUR);
 		a.astore(BINDCUR);
-		a.branch(Opcode.GOTO, condLoop);
-		a.bind(condEnd);
-		a.aconstNull();
+		a.goto_(condLoop);
+		a.labelBinding(condEnd);
+		a.aconst_null();
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- and ----
 		n = special(a, OP, LispNames.AND);
-		int andNotEmpty = a.label();
+		MethodCode.Label andNotEmpty = a.newLabel();
 		a.aload(REST);
-		a.branch(Opcode.IFNONNULL, andNotEmpty);
+		a.ifnonnull(andNotEmpty);
 		ldcStr(a, "T");
 		a.areturn();
-		a.bind(andNotEmpty);
+		a.labelBinding(andNotEmpty);
 		a.aload(REST);
 		a.astore(BINDCUR);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(ACC);
-		int andLoop = a.label();
-		int andEnd = a.label();
-		a.bind(andLoop);
+		MethodCode.Label andLoop = a.newLabel();
+		MethodCode.Label andEnd = a.newLabel();
+		a.labelBinding(andLoop);
 		a.aload(BINDCUR);
-		a.branch(Opcode.IFNULL, andEnd);
+		a.ifnull(andEnd);
 		evalCar(a, BINDCUR, ENV);
 		a.astore(ACC);
-		int andOk = a.label();
+		MethodCode.Label andOk = a.newLabel();
 		a.aload(ACC);
-		a.branch(Opcode.IFNONNULL, andOk);
-		a.aconstNull();
+		a.ifnonnull(andOk);
+		a.aconst_null();
 		a.areturn();
-		a.bind(andOk);
+		a.labelBinding(andOk);
 		cdr(a, BINDCUR);
 		a.astore(BINDCUR);
-		a.branch(Opcode.GOTO, andLoop);
-		a.bind(andEnd);
+		a.goto_(andLoop);
+		a.labelBinding(andEnd);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- or ----
 		n = special(a, OP, LispNames.OR);
 		a.aload(REST);
 		a.astore(BINDCUR);
-		int orLoop = a.label();
-		int orEnd = a.label();
-		a.bind(orLoop);
+		MethodCode.Label orLoop = a.newLabel();
+		MethodCode.Label orEnd = a.newLabel();
+		a.labelBinding(orLoop);
 		a.aload(BINDCUR);
-		a.branch(Opcode.IFNULL, orEnd);
+		a.ifnull(orEnd);
 		evalCar(a, BINDCUR, ENV);
 		a.astore(ACC);
-		int orNot = a.label();
+		MethodCode.Label orNot = a.newLabel();
 		a.aload(ACC);
-		a.branch(Opcode.IFNULL, orNot);
+		a.ifnull(orNot);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(orNot);
+		a.labelBinding(orNot);
 		cdr(a, BINDCUR);
 		a.astore(BINDCUR);
-		a.branch(Opcode.GOTO, orLoop);
-		a.bind(orEnd);
-		a.aconstNull();
+		a.goto_(orLoop);
+		a.labelBinding(orEnd);
+		a.aconst_null();
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- when ----
 		n = special(a, OP, LispNames.WHEN);
 		evalCar(a, REST, ENV);
-		int whenProceed = a.label();
-		a.branch(Opcode.IFNONNULL, whenProceed);
-		a.aconstNull();
+		MethodCode.Label whenProceed = a.newLabel();
+		a.ifnonnull(whenProceed);
+		a.aconst_null();
 		a.areturn();
-		a.bind(whenProceed);
+		a.labelBinding(whenProceed);
 		cdr(a, REST);
 		a.astore(REST);
 		prognInto(a, REST, ENV, TMP);
 		a.aload(TMP);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- unless ----
 		n = special(a, OP, LispNames.UNLESS);
 		evalCar(a, REST, ENV);
-		int unlessProceed = a.label();
-		a.branch(Opcode.IFNULL, unlessProceed);
-		a.aconstNull();
+		MethodCode.Label unlessProceed = a.newLabel();
+		a.ifnull(unlessProceed);
+		a.aconst_null();
 		a.areturn();
-		a.bind(unlessProceed);
+		a.labelBinding(unlessProceed);
 		cdr(a, REST);
 		a.astore(REST);
 		prognInto(a, REST, ENV, TMP);
 		a.aload(TMP);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- while: (while test body...) -> evaluate body while test is non-nil ----
 		n = special(a, OP, LispNames.WHILE);
@@ -2203,21 +2013,21 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(FN); // test form
 		cdr(a, REST);
 		a.astore(BODY); // body list
-		int whileLoop = a.label();
-		int whileEnd = a.label();
-		a.bind(whileLoop);
+		MethodCode.Label whileLoop = a.newLabel();
+		MethodCode.Label whileEnd = a.newLabel();
+		a.labelBinding(whileLoop);
 		a.aload(FN);
 		a.aload(ENV);
 		a.invokestatic(this.k.evalRef());
-		a.branch(Opcode.IFNULL, whileEnd);
+		a.ifnull(whileEnd);
 		a.aload(BODY);
 		a.astore(REST);
 		prognInto(a, REST, ENV, TMP);
-		a.branch(Opcode.GOTO, whileLoop);
-		a.bind(whileEnd);
-		a.aconstNull();
+		a.goto_(whileLoop);
+		a.labelBinding(whileEnd);
+		a.aconst_null();
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- dotimes: (dotimes (var count result?) body...) ----
 		n = special(a, OP, LispNames.DOTIMES);
@@ -2230,92 +2040,92 @@ final class JvmEvalRuntimeBuilder {
 		evalCar(a, ACC, ENV); // evaluate the count form once
 		a.checkcast(this.k.longClass());
 		a.invokevirtual(this.k.longValue());
-		a.op(Opcode.L2I);
+		a.l2i();
 		a.istore(ARITY); // count limit
 		cdr(a, ACC);
 		a.astore(ACC); // (result?) or nil
-		int dtHasResult = a.label();
-		int dtResultDone = a.label();
+		MethodCode.Label dtHasResult = a.newLabel();
+		MethodCode.Label dtResultDone = a.newLabel();
 		a.aload(ACC);
-		a.branch(Opcode.IFNONNULL, dtHasResult);
-		a.aconstNull();
+		a.ifnonnull(dtHasResult);
+		a.aconst_null();
 		a.astore(FN);
-		a.branch(Opcode.GOTO, dtResultDone);
-		a.bind(dtHasResult);
+		a.goto_(dtResultDone);
+		a.labelBinding(dtHasResult);
 		car(a, ACC);
 		a.astore(FN); // result form
-		a.bind(dtResultDone);
+		a.labelBinding(dtResultDone);
 		cdr(a, REST);
 		a.astore(BODY); // body list
 		// bindCell = cons(var, Long(0)); newEnv = cons(bindCell, env)
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(BINDCUR);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.iconst(0);
-		a.op(Opcode.I2L);
+		a.loadConstant(1);
+		a.loadConstant(0);
+		a.i2l();
 		a.invokestatic(this.k.longValueOf());
 		a.aastore();
 		a.astore(NEWCELL); // mutable binding cell
 		consFromSlots(a, NEWCELL, ENV);
 		a.astore(ELEM); // extended environment
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(IDX); // loop counter
-		int dtLoop = a.label();
-		int dtEnd = a.label();
-		a.bind(dtLoop);
+		MethodCode.Label dtLoop = a.newLabel();
+		MethodCode.Label dtEnd = a.newLabel();
+		a.labelBinding(dtLoop);
 		a.iload(IDX);
 		a.iload(ARITY);
-		a.branch(Opcode.IF_ICMPGE, dtEnd);
+		a.if_icmpge(dtEnd);
 		// bindCell[1] = Long(i)
 		a.aload(NEWCELL);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(IDX);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(this.k.longValueOf());
 		a.aastore();
 		a.aload(BODY);
 		a.astore(REST);
 		prognInto(a, REST, ELEM, TMP);
 		a.iinc(IDX, 1);
-		a.branch(Opcode.GOTO, dtLoop);
-		a.bind(dtEnd);
+		a.goto_(dtLoop);
+		a.labelBinding(dtEnd);
 		// var = count for the result form
 		a.aload(NEWCELL);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(ARITY);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(this.k.longValueOf());
 		a.aastore();
-		int dtResult = a.label();
+		MethodCode.Label dtResult = a.newLabel();
 		a.aload(FN);
-		a.branch(Opcode.IFNONNULL, dtResult);
-		a.aconstNull();
+		a.ifnonnull(dtResult);
+		a.aconst_null();
 		a.areturn();
-		a.bind(dtResult);
+		a.labelBinding(dtResult);
 		a.aload(FN);
 		a.aload(ELEM);
 		a.invokestatic(this.k.evalRef());
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- setq ----
 		n = special(a, OP, LispNames.SETQ);
 		a.aload(REST);
 		a.astore(BINDCUR);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(ACC);
-		int setqLoop = a.label();
-		int setqEnd = a.label();
-		a.bind(setqLoop);
+		MethodCode.Label setqLoop = a.newLabel();
+		MethodCode.Label setqEnd = a.newLabel();
+		a.labelBinding(setqLoop);
 		a.aload(BINDCUR);
-		a.branch(Opcode.IFNULL, setqEnd);
+		a.ifnull(setqEnd);
 		car(a, BINDCUR); // place
 		cdr(a, BINDCUR);
 		a.astore(NEWCELL); // (value ...)
@@ -2327,11 +2137,11 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(BINDCUR);
 		cdr(a, BINDCUR);
 		a.astore(BINDCUR);
-		a.branch(Opcode.GOTO, setqLoop);
-		a.bind(setqEnd);
+		a.goto_(setqLoop);
+		a.labelBinding(setqEnd);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- setf ----
 		n = special(a, OP, LispNames.SETF);
@@ -2342,7 +2152,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- push: (push item place) ----
 		n = special(a, OP, LispNames.PUSH);
@@ -2353,14 +2163,14 @@ final class JvmEvalRuntimeBuilder {
 		car(a, REST);
 		a.astore(BODY); // place form
 		// newval = cons(item, eval(place))
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(ACC);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		evalCar(a, REST, ENV);
 		a.aastore();
 		a.astore(ACC);
@@ -2369,7 +2179,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ENV);
 		a.invokestatic(this.k.storeRef());
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- pop: (pop place) ----
 		n = special(a, OP, LispNames.POP);
@@ -2377,22 +2187,22 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(BODY); // place form
 		evalCar(a, REST, ENV);
 		a.astore(ELEM); // current list value
-		int popNotCons = a.label();
-		int popAfter = a.label();
+		MethodCode.Label popNotCons = a.newLabel();
+		MethodCode.Label popAfter = a.newLabel();
 		a.aload(ELEM);
 		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, popNotCons);
+		a.ifeq(popNotCons);
 		car(a, ELEM);
 		a.astore(ACC);
 		cdr(a, ELEM);
 		a.astore(TMP);
-		a.branch(Opcode.GOTO, popAfter);
-		a.bind(popNotCons);
-		a.aconstNull();
+		a.goto_(popAfter);
+		a.labelBinding(popNotCons);
+		a.aconst_null();
 		a.astore(ACC);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(TMP);
-		a.bind(popAfter);
+		a.labelBinding(popAfter);
 		a.aload(BODY);
 		a.aload(TMP);
 		a.aload(ENV);
@@ -2400,7 +2210,7 @@ final class JvmEvalRuntimeBuilder {
 		a.pop();
 		a.aload(ACC);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- eval (nested) ----
 		// No wrapper backs eval, so the arm reports a wrong count itself.
@@ -2409,15 +2219,15 @@ final class JvmEvalRuntimeBuilder {
 		ldcInt(a, this.k.arityOperators().namedShape(1, false, LispNames.EVAL));
 		a.invokestatic(this.k.arityChkRef());
 		evalCar(a, REST, ENV);
-		a.aconstNull();
+		a.aconst_null();
 		a.invokestatic(this.k.evalRef());
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- funcall ----
 		n = special(a, OP, LispNames.FUNCALL);
 		a.aload(REST);
-		a.branch(Opcode.IFNULL, registryApply);
+		a.ifnull(registryApply);
 		evalCar(a, REST, ENV);
 		a.astore(FN);
 		cdr(a, REST);
@@ -2427,7 +2237,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// mapcar, mapc, reduce, first ... tenth, rest and nth have no arm: their
 		// registered wrappers take every shape (mapcar over several lists, reduce with
@@ -2441,33 +2251,33 @@ final class JvmEvalRuntimeBuilder {
 		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
 		a.aload(ARGHEAD);
 		a.areturn();
-		a.bind(n);
+		a.labelBinding(n);
 
 		// ---- variadic + - * / : left-fold through the wrapper's two-argument call ----
-		int arith = a.label();
-		int notArith = a.label();
+		MethodCode.Label arith = a.newLabel();
+		MethodCode.Label notArith = a.newLabel();
 		for (String opName : new String[] { LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV }) {
 			a.aload(OP);
 			ldcStr(a, opName);
 			a.invokevirtual(this.k.objectEquals());
-			a.branch(Opcode.IFNE, arith);
+			a.ifne(arith);
 		}
-		a.branch(Opcode.GOTO, notArith);
-		a.bind(arith);
+		a.goto_(notArith);
+		a.labelBinding(arith);
 		// no argument: the wrapper answers the identity ((+) is 0) or reports the count
 		// ((-) expects at least 1 argument)
 		a.aload(REST);
-		a.branch(Opcode.IFNULL, registryApply);
+		a.ifnull(registryApply);
 		a.aload(OP);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(TMP);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aastore();
 		a.astore(FN);
@@ -2477,38 +2287,38 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(REST);
 		// single argument: (- x) negates and (/ x) takes the reciprocal, by seeding
 		// the fold with the identity element (0 - x, 1 / x)
-		int notUnary = a.label();
-		int unaryDiv = a.label();
+		MethodCode.Label notUnary = a.newLabel();
+		MethodCode.Label unaryDiv = a.newLabel();
 		a.aload(REST);
-		a.branch(Opcode.IFNONNULL, notUnary);
+		a.ifnonnull(notUnary);
 		a.aload(OP);
 		ldcStr(a, LispNames.SUB);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, unaryDiv);
+		a.ifeq(unaryDiv);
 		a.aload(FN);
-		a.op(Opcode.LCONST_0);
+		a.lconst_0();
 		a.invokestatic(this.k.longValueOf());
 		a.aload(ACC);
 		a.invokestatic(this.k.invoke()[2]);
 		a.astore(ACC);
-		a.branch(Opcode.GOTO, notUnary);
-		a.bind(unaryDiv);
+		a.goto_(notUnary);
+		a.labelBinding(unaryDiv);
 		a.aload(OP);
 		ldcStr(a, LispNames.DIV);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, notUnary);
+		a.ifeq(notUnary);
 		a.aload(FN);
-		a.op(Opcode.LCONST_1);
+		a.lconst_1();
 		a.invokestatic(this.k.longValueOf());
 		a.aload(ACC);
 		a.invokestatic(this.k.invoke()[2]);
 		a.astore(ACC);
-		a.bind(notUnary);
-		int foldLoop = a.label();
-		int foldEnd = a.label();
-		a.bind(foldLoop);
+		a.labelBinding(notUnary);
+		MethodCode.Label foldLoop = a.newLabel();
+		MethodCode.Label foldEnd = a.newLabel();
+		a.labelBinding(foldLoop);
 		a.aload(REST);
-		a.branch(Opcode.IFNULL, foldEnd);
+		a.ifnull(foldEnd);
 		a.aload(FN);
 		a.aload(ACC);
 		evalCar(a, REST, ENV);
@@ -2516,11 +2326,11 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(ACC);
 		cdr(a, REST);
 		a.astore(REST);
-		a.branch(Opcode.GOTO, foldLoop);
-		a.bind(foldEnd);
+		a.goto_(foldLoop);
+		a.labelBinding(foldEnd);
 		a.aload(ACC);
 		a.areturn();
-		a.bind(notArith);
+		a.labelBinding(notArith);
 
 		// `= < > <= >= /=` have no arm of their own: the wrappers take any count
 		// ((a &optional b &rest r)), so the registry path below reports their count
@@ -2533,24 +2343,24 @@ final class JvmEvalRuntimeBuilder {
 		// case-flipped spelling (compiled
 		// definitions are upcased, runtime-read references case-preserved, and vice
 		// versa) after the carcdr check falls through.
-		ConstantPool.MethodrefConstant applyToLowerCase = stringCaseRef("toLowerCase");
-		ConstantPool.MethodrefConstant applyToUpperCase = stringCaseRef("toUpperCase");
-		a.bind(registryApply);
-		a.iconst(0);
+		MethodRefEntry applyToLowerCase = stringCaseRef("toLowerCase");
+		MethodRefEntry applyToUpperCase = stringCaseRef("toUpperCase");
+		a.labelBinding(registryApply);
+		a.loadConstant(0);
 		a.istore(ARITY);
-		int genericApply = a.label();
-		a.bind(genericApply);
+		MethodCode.Label genericApply = a.newLabel();
+		a.labelBinding(genericApply);
 		// (a) operator defined at runtime via defun (the _fenv function namespace)
 		a.aload(OP);
 		a.getstatic(this.k.fenvField());
 		a.invokestatic(this.k.envLookupRef());
 		a.astore(TMP);
-		int notFenv = a.label();
+		MethodCode.Label notFenv = a.newLabel();
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, notFenv);
+		a.ifnull(notFenv);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(FN);
 		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
@@ -2558,8 +2368,8 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
-		a.bind(notFenv);
-		int notReg = a.label();
+		a.labelBinding(notFenv);
+		MethodCode.Label notReg = a.newLabel();
 		// (b) registered function: evaluate every argument form, then apply. The count is
 		// the spread dispatcher's to judge -- its case measures the list against the
 		// callee's lambda list and reports a wrong count naming the operator -- so no
@@ -2569,14 +2379,14 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.lookupRef());
 		a.astore(TMP);
 		a.aload(TMP);
-		a.branch(Opcode.IFNULL, notReg);
-		a.iconst(1);
+		a.ifnull(notReg);
+		a.loadConstant(1);
 		a.anewarray(this.k.objectClass());
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(TMP);
 		a.checkcast(this.k.objectArrayClass());
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aastore();
 		a.astore(FN);
@@ -2585,18 +2395,18 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
-		a.bind(notReg);
+		a.labelBinding(notReg);
 		// (c) car/cdr composition such as cadr -- BEFORE the case-flip retry, so the
 		// composition sees the original spelling (a returning match ends the eval).
 		carCdrComposition(a, OP, REST, ENV, ACC, IDX, CH, LEN, VALID);
 		// One case-flip retry of (a)+(b), guarded by ARITY's sign (a hit in either
 		// returns; a second pass runs the composition again with the flipped spelling,
 		// harmlessly).
-		int noRetry = a.label();
-		int applyFlipped = a.label();
+		MethodCode.Label noRetry = a.newLabel();
+		MethodCode.Label applyFlipped = a.newLabel();
 		a.iload(ARITY);
-		a.branch(Opcode.IFLT, noRetry);
-		a.iconst(-1);
+		a.iflt(noRetry);
+		a.loadConstant(-1);
 		a.istore(ARITY);
 		a.aload(OP);
 		a.checkcast(this.k.stringClass());
@@ -2605,7 +2415,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(TMP);
 		a.aload(OP);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFEQ, applyFlipped);
+		a.ifeq(applyFlipped);
 		a.aload(OP);
 		a.checkcast(this.k.stringClass());
 		a.invokevirtual(applyToUpperCase);
@@ -2613,16 +2423,16 @@ final class JvmEvalRuntimeBuilder {
 		a.aload(TMP);
 		a.aload(OP);
 		a.invokevirtual(this.k.objectEquals());
-		a.branch(Opcode.IFNE, noRetry);
-		a.bind(applyFlipped);
+		a.ifne(noRetry);
+		a.labelBinding(applyFlipped);
 		a.aload(TMP);
 		a.astore(OP);
-		a.branch(Opcode.GOTO, genericApply);
-		a.bind(noRetry);
+		a.goto_(genericApply);
+		a.labelBinding(noRetry);
 		// (d) unknown operator
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	/**
@@ -2631,94 +2441,94 @@ final class JvmEvalRuntimeBuilder {
 	 * single argument and applies the car/cdr operations from right to left, then
 	 * returns; otherwise falls through.
 	 */
-	private void carCdrComposition(Asm a, int opSlot, int restSlot, int envSlot, int accSlot, int idxSlot, int chSlot,
-			int lenSlot, int validSlot) {
+	private void carCdrComposition(MethodCode a, int opSlot, int restSlot, int envSlot, int accSlot, int idxSlot,
+			int chSlot, int lenSlot, int validSlot) {
 		aloadStr(a, opSlot);
 		a.invokevirtual(this.k.stringLength());
 		a.istore(lenSlot);
-		int noMatch = a.label();
+		MethodCode.Label noMatch = a.newLabel();
 		a.iload(lenSlot);
-		a.iconst(3);
-		a.branch(Opcode.IF_ICMPLT, noMatch);
+		a.loadConstant(3);
+		a.if_icmplt(noMatch);
 		aloadStr(a, opSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('C');
-		a.branch(Opcode.IF_ICMPNE, noMatch);
+		a.loadConstant('C');
+		a.if_icmpne(noMatch);
 		aloadStr(a, opSlot);
 		a.iload(lenSlot);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('R');
-		a.branch(Opcode.IF_ICMPNE, noMatch);
+		a.loadConstant('R');
+		a.if_icmpne(noMatch);
 		// scan middle bytes: valid = all in {'a','d'}
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(validSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(idxSlot);
-		int sloop = a.label();
-		int send = a.label();
-		a.bind(sloop);
+		MethodCode.Label sloop = a.newLabel();
+		MethodCode.Label send = a.newLabel();
+		a.labelBinding(sloop);
 		a.iload(idxSlot);
 		a.iload(lenSlot);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPGE, send);
+		a.loadConstant(1);
+		a.isub();
+		a.if_icmpge(send);
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
 		a.istore(chSlot);
-		int okch = a.label();
+		MethodCode.Label okch = a.newLabel();
 		a.iload(chSlot);
-		a.iconst('A');
-		a.branch(Opcode.IF_ICMPEQ, okch);
+		a.loadConstant('A');
+		a.if_icmpeq(okch);
 		a.iload(chSlot);
-		a.iconst('D');
-		a.branch(Opcode.IF_ICMPEQ, okch);
-		a.iconst(0);
+		a.loadConstant('D');
+		a.if_icmpeq(okch);
+		a.loadConstant(0);
 		a.istore(validSlot);
-		a.branch(Opcode.GOTO, send);
-		a.bind(okch);
+		a.goto_(send);
+		a.labelBinding(okch);
 		a.iinc(idxSlot, 1);
-		a.branch(Opcode.GOTO, sloop);
-		a.bind(send);
-		int notValid = a.label();
+		a.goto_(sloop);
+		a.labelBinding(send);
+		MethodCode.Label notValid = a.newLabel();
 		a.iload(validSlot);
-		a.branch(Opcode.IFEQ, notValid);
+		a.ifeq(notValid);
 		evalCar(a, restSlot, envSlot);
 		a.astore(accSlot);
 		a.iload(lenSlot);
-		a.iconst(2);
-		a.op(Opcode.ISUB);
+		a.loadConstant(2);
+		a.isub();
 		a.istore(idxSlot);
-		int iloop = a.label();
-		int iend = a.label();
-		a.bind(iloop);
+		MethodCode.Label iloop = a.newLabel();
+		MethodCode.Label iend = a.newLabel();
+		a.labelBinding(iloop);
 		a.iload(idxSlot);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPLT, iend);
-		int isCdr = a.label();
-		int afterc = a.label();
+		a.loadConstant(1);
+		a.if_icmplt(iend);
+		MethodCode.Label isCdr = a.newLabel();
+		MethodCode.Label afterc = a.newLabel();
 		aloadStr(a, opSlot);
 		a.iload(idxSlot);
 		a.invokevirtual(this.k.stringCharAt());
-		a.iconst('A');
-		a.branch(Opcode.IF_ICMPNE, isCdr);
+		a.loadConstant('A');
+		a.if_icmpne(isCdr);
 		car(a, accSlot);
 		a.astore(accSlot);
-		a.branch(Opcode.GOTO, afterc);
-		a.bind(isCdr);
+		a.goto_(afterc);
+		a.labelBinding(isCdr);
 		cdr(a, accSlot);
 		a.astore(accSlot);
-		a.bind(afterc);
+		a.labelBinding(afterc);
 		a.iinc(idxSlot, -1);
-		a.branch(Opcode.GOTO, iloop);
-		a.bind(iend);
+		a.goto_(iloop);
+		a.labelBinding(iend);
 		a.aload(accSlot);
 		a.areturn();
-		a.bind(notValid);
-		a.bind(noMatch);
+		a.labelBinding(notValid);
+		a.labelBinding(noMatch);
 	}
 
 }

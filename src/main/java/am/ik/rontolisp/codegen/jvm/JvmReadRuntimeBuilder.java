@@ -1,14 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.EmittedReaderInitforms;
 import am.ik.rontolisp.LispLayout;
@@ -35,7 +36,7 @@ import org.jspecify.annotations.Nullable;
 final class JvmReadRuntimeBuilder {
 
 	/** A reader method body ready to be emitted into the generated class. */
-	record ReadMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record ReadMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -51,199 +52,199 @@ final class JvmReadRuntimeBuilder {
 
 	private final ConstantPool cp;
 
-	private final ClassConstant thisClass;
+	private final ClassEntry thisClass;
 
-	private final ClassConstant objectClass;
+	private final ClassEntry objectClass;
 
-	private final ClassConstant objectArrayClass;
+	private final ClassEntry objectArrayClass;
 
-	private final ClassConstant stringClass;
+	private final ClassEntry stringClass;
 
-	private final MethodrefConstant longValueOf;
+	private final MethodRefEntry longValueOf;
 
-	private final MethodrefConstant doubleValueOf;
+	private final MethodRefEntry doubleValueOf;
 
-	private final MethodrefConstant stringCharAt;
+	private final MethodRefEntry stringCharAt;
 
-	private final MethodrefConstant stringLength;
+	private final MethodRefEntry stringLength;
 
-	private final MethodrefConstant stringSubstring;
+	private final MethodRefEntry stringSubstring;
 
-	private final MethodrefConstant objectEquals;
+	private final MethodRefEntry objectEquals;
 
 	private final boolean emitLoad;
 
 	// CP entries created internally
-	private final FieldrefConstant readSrc;
+	private final FieldRefEntry readSrc;
 
-	private final FieldrefConstant readPos;
+	private final FieldRefEntry readPos;
 
-	private final MethodrefConstant isWhitespace;
+	private final MethodRefEntry isWhitespace;
 
-	private final MethodrefConstant doubleParse;
+	private final MethodRefEntry doubleParse;
 
-	private final MethodrefConstant stringReplace;
+	private final MethodRefEntry stringReplace;
 
-	private final ClassConstant bigIntegerClass;
+	private final ClassEntry bigIntegerClass;
 
-	private final MethodrefConstant bigIntegerInit;
+	private final MethodRefEntry bigIntegerInit;
 
-	private final MethodrefConstant bigIntegerBitLength;
+	private final MethodRefEntry bigIntegerBitLength;
 
-	private final MethodrefConstant bigIntegerLongValue;
+	private final MethodRefEntry bigIntegerLongValue;
 
-	private final ClassConstant stringBuilderClass;
+	private final ClassEntry stringBuilderClass;
 
-	private final MethodrefConstant sbInitStr;
+	private final MethodRefEntry sbInitStr;
 
-	private final MethodrefConstant sbAppendChar;
+	private final MethodRefEntry sbAppendChar;
 
-	private final MethodrefConstant sbToString;
+	private final MethodRefEntry sbToString;
 
-	private final MethodrefConstant readSkipWs;
+	private final MethodRefEntry readSkipWs;
 
-	private final MethodrefConstant readExpr;
+	private final MethodRefEntry readExpr;
 
-	private final MethodrefConstant readList;
+	private final MethodRefEntry readList;
 
-	private final MethodrefConstant readAtom;
+	private final MethodRefEntry readAtom;
 
-	private final MethodrefConstant readStr;
+	private final MethodRefEntry readStr;
 
-	private final MethodrefConstant classify;
+	private final MethodRefEntry classify;
 
 	// === # dispatch (the frontend lexer's dispatch set, mirrored) ===
 
-	private final MethodrefConstant readHash;
+	private final MethodRefEntry readHash;
 
-	private final MethodrefConstant readCharLit;
+	private final MethodRefEntry readCharLit;
 
-	private final MethodrefConstant readRadix;
+	private final MethodRefEntry readRadix;
 
-	private final MethodrefConstant readBits;
+	private final MethodRefEntry readBits;
 
-	private final MethodrefConstant readArrayN;
+	private final MethodRefEntry readArrayN;
 
-	private final MethodrefConstant readPacked;
+	private final MethodRefEntry readPacked;
 
 	// The _fv* tier's bfloat16 narrowing (JvmFloatArrayRuntimeBuilder); the reader
 	// forces that tier on (usesRead -> usesFloatArray), so it is always emitted here.
-	private final MethodrefConstant bf16Bits;
+	private final MethodRefEntry bf16Bits;
 
-	private final MethodrefConstant readStruct;
+	private final MethodRefEntry readStruct;
 
-	private final MethodrefConstant rdLen;
+	private final MethodRefEntry rdLen;
 
-	private final MethodrefConstant rdConsp;
+	private final MethodRefEntry rdConsp;
 
-	private final MethodrefConstant rdLevel;
+	private final MethodRefEntry rdLevel;
 
-	private final MethodrefConstant rdDims;
+	private final MethodRefEntry rdDims;
 
-	private final MethodrefConstant rdFlat;
+	private final MethodRefEntry rdFlat;
 
-	private final MethodrefConstant rdErr;
+	private final MethodRefEntry rdErr;
 
-	private final MethodrefConstant rdName;
+	private final MethodRefEntry rdName;
 
-	private final MethodrefConstant rdF;
+	private final MethodRefEntry rdF;
 
-	private final MethodrefConstant rdInferRank;
+	private final MethodRefEntry rdInferRank;
 
-	private final MethodrefConstant lispToString;
+	private final MethodRefEntry lispToString;
 
-	private final MethodrefConstant ratMethod;
+	private final MethodRefEntry ratMethod;
 
-	private final ClassConstant intArrayClass;
+	private final ClassEntry intArrayClass;
 
-	private final ClassConstant bigIntegerArrayClass;
+	private final ClassEntry bigIntegerArrayClass;
 
-	private final ClassConstant stringArrayClass;
+	private final ClassEntry stringArrayClass;
 
-	private final ClassConstant integerClass;
+	private final ClassEntry integerClass;
 
-	private final ClassConstant longClass;
+	private final ClassEntry longClass;
 
-	private final ClassConstant doubleClass;
+	private final ClassEntry doubleClass;
 
-	private final ClassConstant arrayListClass;
+	private final ClassEntry arrayListClass;
 
-	private final ClassConstant rtExClass;
+	private final ClassEntry rtExClass;
 
-	private final MethodrefConstant rtExInit;
+	private final MethodRefEntry rtExInit;
 
-	private final MethodrefConstant alInit;
+	private final MethodRefEntry alInit;
 
-	private final MethodrefConstant alAdd;
+	private final MethodRefEntry alAdd;
 
-	private final MethodrefConstant alSet;
+	private final MethodRefEntry alSet;
 
-	private final MethodrefConstant alSize;
+	private final MethodRefEntry alSize;
 
-	private final MethodrefConstant alGet;
+	private final MethodRefEntry alGet;
 
-	private final MethodrefConstant charIsLetter;
+	private final MethodRefEntry charIsLetter;
 
-	private final MethodrefConstant charDigit;
+	private final MethodRefEntry charDigit;
 
-	private final MethodrefConstant charToString;
+	private final MethodRefEntry charToString;
 
-	private final MethodrefConstant bigIntegerInitRadix;
+	private final MethodRefEntry bigIntegerInitRadix;
 
-	private final MethodrefConstant bigIntegerSignum;
+	private final MethodRefEntry bigIntegerSignum;
 
-	private final MethodrefConstant bigIntegerToString;
+	private final MethodRefEntry bigIntegerToString;
 
-	private final MethodrefConstant bigIntegerDoubleValue;
+	private final MethodRefEntry bigIntegerDoubleValue;
 
-	private final MethodrefConstant longLongValue;
+	private final MethodRefEntry longLongValue;
 
-	private final MethodrefConstant doubleDoubleValue;
+	private final MethodRefEntry doubleDoubleValue;
 
-	private final MethodrefConstant sbInitEmpty;
+	private final MethodRefEntry sbInitEmpty;
 
-	private final MethodrefConstant sbAppendStr;
+	private final MethodRefEntry sbAppendStr;
 
-	private final MethodrefConstant sbAppendInt;
+	private final MethodRefEntry sbAppendInt;
 
-	private final MethodrefConstant sbAppendLong;
+	private final MethodRefEntry sbAppendLong;
 
-	private final MethodrefConstant stringEqualsIgnoreCase;
+	private final MethodRefEntry stringEqualsIgnoreCase;
 
-	private final MethodrefConstant stringIndexOf;
+	private final MethodRefEntry stringIndexOf;
 
-	private final MethodrefConstant stringLastIndexOf;
+	private final MethodRefEntry stringLastIndexOf;
 
-	private final MethodrefConstant stringSubstringFrom;
+	private final MethodRefEntry stringSubstringFrom;
 
-	private final MethodrefConstant stringStartsWith;
+	private final MethodRefEntry stringStartsWith;
 
-	private final @Nullable FieldrefConstant rdStructs;
+	private final @Nullable FieldRefEntry rdStructs;
 
 	// _classify upcases an atom token like CL's :upcase readtable case (the uppercase
 	// name is canonical -- there is no fold). See .kb/reader-case-upcase.md.
-	private final MethodrefConstant stringToUpperCase;
+	private final MethodRefEntry stringToUpperCase;
 
-	private final FieldrefConstant localeRoot;
+	private final FieldRefEntry localeRoot;
 
-	private final @Nullable MethodrefConstant evalRef;
+	private final @Nullable MethodRefEntry evalRef;
 
-	private final @Nullable MethodrefConstant pathsGet;
+	private final @Nullable MethodRefEntry pathsGet;
 
-	private final @Nullable MethodrefConstant filesReadString;
+	private final @Nullable MethodRefEntry filesReadString;
 
 	/**
 	 * The interned {@code LispLayout.PATHNAME} layout field, present exactly when the
 	 * instance machinery is (the {@code #P} arm builds {@code Object[]{layout, ns}} from
 	 * it); null with the gate off, where the arm signals instead.
 	 */
-	private final @Nullable FieldrefConstant pathnameLayout;
+	private final @Nullable FieldRefEntry pathnameLayout;
 
-	private JvmReadRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldrefConstant pathnameLayout) {
+	private JvmReadRuntimeBuilder(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
+			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
+			@Nullable FieldRefEntry pathnameLayout) {
 		this.pathnameLayout = pathnameLayout;
 		this.cp = cp;
 		this.thisClass = thisClass;
@@ -258,32 +259,23 @@ final class JvmReadRuntimeBuilder {
 		this.objectEquals = objectEquals;
 		this.emitLoad = emitLoad;
 
-		this.readSrc = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8("_readSrc"), cp.addUtf8("Ljava/lang/String;")));
-		this.readPos = cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8("_readPos"), cp.addUtf8("I")));
+		this.readSrc = cp.fieldRef(thisClass, "_readSrc", "Ljava/lang/String;");
+		this.readPos = cp.fieldRef(thisClass, "_readPos", "I");
 
-		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		this.isWhitespace = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("isWhitespace"), cp.addUtf8("(C)Z")));
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		this.doubleParse = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("parseDouble"), cp.addUtf8("(Ljava/lang/String;)D")));
-		this.stringReplace = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("replace"),
-				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")));
-		this.bigIntegerClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-		this.bigIntegerInit = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.bigIntegerBitLength = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("bitLength"), cp.addUtf8("()I")));
-		this.bigIntegerLongValue = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-		this.stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		this.sbInitStr = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.sbAppendChar = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(C)Ljava/lang/StringBuilder;")));
-		this.sbToString = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassEntry characterClass = cp.classEntry("java/lang/Character");
+		this.isWhitespace = cp.methodRef(characterClass, "isWhitespace", "(C)Z");
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		this.doubleParse = cp.methodRef(doubleClass, "parseDouble", "(Ljava/lang/String;)D");
+		this.stringReplace = cp.methodRef(stringClass, "replace",
+				"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;");
+		this.bigIntegerClass = cp.classEntry("java/math/BigInteger");
+		this.bigIntegerInit = cp.methodRef(this.bigIntegerClass, "<init>", "(Ljava/lang/String;)V");
+		this.bigIntegerBitLength = cp.methodRef(this.bigIntegerClass, "bitLength", "()I");
+		this.bigIntegerLongValue = cp.methodRef(this.bigIntegerClass, "longValue", "()J");
+		this.stringBuilderClass = cp.classEntry("java/lang/StringBuilder");
+		this.sbInitStr = cp.methodRef(this.stringBuilderClass, "<init>", "(Ljava/lang/String;)V");
+		this.sbAppendChar = cp.methodRef(this.stringBuilderClass, "append", "(C)Ljava/lang/StringBuilder;");
+		this.sbToString = cp.methodRef(this.stringBuilderClass, "toString", "()Ljava/lang/String;");
 
 		this.readSkipWs = methodref("_readSkipWs", "()V");
 		this.readExpr = methodref("_readExpr", "()Ljava/lang/Object;");
@@ -291,11 +283,9 @@ final class JvmReadRuntimeBuilder {
 		this.readAtom = methodref("_readAtom", "()Ljava/lang/Object;");
 		this.readStr = methodref("_readStr", "()Ljava/lang/Object;");
 		this.classify = methodref("_classify", "(Ljava/lang/String;)Ljava/lang/Object;");
-		ClassConstant localeClass = cp.addClass(cp.addUtf8("java/util/Locale"));
-		this.localeRoot = cp.addFieldref(localeClass,
-				cp.addNameAndType(cp.addUtf8("ROOT"), cp.addUtf8("Ljava/util/Locale;")));
-		this.stringToUpperCase = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("toUpperCase"), cp.addUtf8("(Ljava/util/Locale;)Ljava/lang/String;")));
+		ClassEntry localeClass = cp.classEntry("java/util/Locale");
+		this.localeRoot = cp.fieldRef(localeClass, "ROOT", "Ljava/util/Locale;");
+		this.stringToUpperCase = cp.methodRef(stringClass, "toUpperCase", "(Ljava/util/Locale;)Ljava/lang/String;");
 
 		this.readHash = methodref("_readHash", "()Ljava/lang/Object;");
 		this.readCharLit = methodref("_readCharLit", "()Ljava/lang/Object;");
@@ -317,70 +307,49 @@ final class JvmReadRuntimeBuilder {
 		this.rdInferRank = methodref("_rdInferRank", "(Ljava/lang/Object;)I");
 		this.lispToString = methodref("_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;");
 		this.ratMethod = methodref("_rat", "(Ljava/math/BigInteger;Ljava/math/BigInteger;)Ljava/lang/Object;");
-		this.intArrayClass = cp.addClass(cp.addUtf8("[I"));
-		this.bigIntegerArrayClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		this.stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
-		this.integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
-		this.longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		this.doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		this.arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		this.rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		this.rtExInit = cp.addMethodref(this.rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.alInit = cp.addMethodref(this.arrayListClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		this.alAdd = cp.addMethodref(this.arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		this.alSet = cp.addMethodref(this.arrayListClass,
-				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(ILjava/lang/Object;)Ljava/lang/Object;")));
-		this.alSize = cp.addMethodref(this.arrayListClass, cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		this.alGet = cp.addMethodref(this.arrayListClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		ClassConstant characterCls = cp.addClass(cp.addUtf8("java/lang/Character"));
-		this.charIsLetter = cp.addMethodref(characterCls,
-				cp.addNameAndType(cp.addUtf8("isLetter"), cp.addUtf8("(C)Z")));
-		this.charDigit = cp.addMethodref(characterCls, cp.addNameAndType(cp.addUtf8("digit"), cp.addUtf8("(II)I")));
-		this.charToString = cp.addMethodref(characterCls,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
-		this.bigIntegerInitRadix = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V")));
-		this.bigIntegerSignum = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("()I")));
-		this.bigIntegerToString = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		this.bigIntegerDoubleValue = cp.addMethodref(this.bigIntegerClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-		this.longLongValue = cp.addMethodref(this.longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-		this.doubleDoubleValue = cp.addMethodref(this.doubleClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-		this.sbInitEmpty = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		this.sbAppendStr = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		this.sbAppendInt = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		this.sbAppendLong = cp.addMethodref(this.stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(J)Ljava/lang/StringBuilder;")));
-		this.stringEqualsIgnoreCase = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("equalsIgnoreCase"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		this.stringIndexOf = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(I)I")));
-		this.stringLastIndexOf = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(I)I")));
-		this.stringSubstringFrom = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")));
-		this.stringStartsWith = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		this.rdStructs = instances ? cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STRUCT_TABLE_FIELD), cp.addUtf8(STRUCT_TABLE_DESC))) : null;
+		this.intArrayClass = cp.classEntry("[I");
+		this.bigIntegerArrayClass = cp.classEntry("[Ljava/math/BigInteger;");
+		this.stringArrayClass = cp.classEntry("[Ljava/lang/String;");
+		this.integerClass = cp.classEntry("java/lang/Integer");
+		this.longClass = cp.classEntry("java/lang/Long");
+		this.doubleClass = cp.classEntry("java/lang/Double");
+		this.arrayListClass = cp.classEntry("java/util/ArrayList");
+		this.rtExClass = cp.classEntry("java/lang/RuntimeException");
+		this.rtExInit = cp.methodRef(this.rtExClass, "<init>", "(Ljava/lang/String;)V");
+		this.alInit = cp.methodRef(this.arrayListClass, "<init>", "()V");
+		this.alAdd = cp.methodRef(this.arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		this.alSet = cp.methodRef(this.arrayListClass, "set", "(ILjava/lang/Object;)Ljava/lang/Object;");
+		this.alSize = cp.methodRef(this.arrayListClass, "size", "()I");
+		this.alGet = cp.methodRef(this.arrayListClass, "get", "(I)Ljava/lang/Object;");
+		ClassEntry characterCls = cp.classEntry("java/lang/Character");
+		this.charIsLetter = cp.methodRef(characterCls, "isLetter", "(C)Z");
+		this.charDigit = cp.methodRef(characterCls, "digit", "(II)I");
+		this.charToString = cp.methodRef(characterCls, "toString", "(I)Ljava/lang/String;");
+		this.bigIntegerInitRadix = cp.methodRef(this.bigIntegerClass, "<init>", "(Ljava/lang/String;I)V");
+		this.bigIntegerSignum = cp.methodRef(this.bigIntegerClass, "signum", "()I");
+		this.bigIntegerToString = cp.methodRef(this.bigIntegerClass, "toString", "()Ljava/lang/String;");
+		this.bigIntegerDoubleValue = cp.methodRef(this.bigIntegerClass, "doubleValue", "()D");
+		this.longLongValue = cp.methodRef(this.longClass, "longValue", "()J");
+		this.doubleDoubleValue = cp.methodRef(this.doubleClass, "doubleValue", "()D");
+		this.sbInitEmpty = cp.methodRef(this.stringBuilderClass, "<init>", "()V");
+		this.sbAppendStr = cp.methodRef(this.stringBuilderClass, "append",
+				"(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		this.sbAppendInt = cp.methodRef(this.stringBuilderClass, "append", "(I)Ljava/lang/StringBuilder;");
+		this.sbAppendLong = cp.methodRef(this.stringBuilderClass, "append", "(J)Ljava/lang/StringBuilder;");
+		this.stringEqualsIgnoreCase = cp.methodRef(stringClass, "equalsIgnoreCase", "(Ljava/lang/String;)Z");
+		this.stringIndexOf = cp.methodRef(stringClass, "indexOf", "(I)I");
+		this.stringLastIndexOf = cp.methodRef(stringClass, "lastIndexOf", "(I)I");
+		this.stringSubstringFrom = cp.methodRef(stringClass, "substring", "(I)Ljava/lang/String;");
+		this.stringStartsWith = cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z");
+		this.rdStructs = instances ? cp.fieldRef(thisClass, STRUCT_TABLE_FIELD, STRUCT_TABLE_DESC) : null;
 
 		if (emitLoad) {
 			this.evalRef = methodref("_eval", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-			ClassConstant pathsClass = cp.addClass(cp.addUtf8("java/nio/file/Paths"));
-			this.pathsGet = cp.addMethodref(pathsClass, cp.addNameAndType(cp.addUtf8("get"),
-					cp.addUtf8("(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;")));
-			ClassConstant filesClass = cp.addClass(cp.addUtf8("java/nio/file/Files"));
-			this.filesReadString = cp.addMethodref(filesClass, cp.addNameAndType(cp.addUtf8("readString"),
-					cp.addUtf8("(Ljava/nio/file/Path;)Ljava/lang/String;")));
+			ClassEntry pathsClass = cp.classEntry("java/nio/file/Paths");
+			this.pathsGet = cp.methodRef(pathsClass, "get",
+					"(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;");
+			ClassEntry filesClass = cp.classEntry("java/nio/file/Files");
+			this.filesReadString = cp.methodRef(filesClass, "readString", "(Ljava/nio/file/Path;)Ljava/lang/String;");
 		}
 		else {
 			this.evalRef = null;
@@ -389,19 +358,18 @@ final class JvmReadRuntimeBuilder {
 		}
 	}
 
-	static JvmReadRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
-			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, boolean emitLoad, boolean instances,
-			@Nullable FieldrefConstant pathnameLayout) {
+	static JvmReadRuntimeBuilder create(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry longValueOf,
+			MethodRefEntry doubleValueOf, MethodRefEntry stringCharAt, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry objectEquals, boolean emitLoad, boolean instances,
+			@Nullable FieldRefEntry pathnameLayout) {
 		return new JvmReadRuntimeBuilder(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, emitLoad, instances,
 				pathnameLayout);
 	}
 
-	private MethodrefConstant methodref(String name, String desc) {
-		return this.cp.addMethodref(this.thisClass,
-				this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	private MethodRefEntry methodref(String name, String desc) {
+		return this.cp.methodRef(this.thisClass, name, desc);
 	}
 
 	/**
@@ -420,11 +388,9 @@ final class JvmReadRuntimeBuilder {
 	 * @param stringClass {@code java/lang/String}
 	 * @return the code chunk (no trailing RETURN)
 	 */
-	static List<Integer> structTableClinit(ConstantPool cp, ClassConstant thisClass, JvmLispCompiler.LayoutPool pool,
-			ClosRegistry registry, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant stringClass) {
-		FieldrefConstant field = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STRUCT_TABLE_FIELD), cp.addUtf8(STRUCT_TABLE_DESC)));
+	static List<Integer> structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
+			ClosRegistry registry, ClassEntry objectClass, ClassEntry objectArrayClass, ClassEntry stringClass) {
+		FieldRefEntry field = cp.fieldRef(thisClass, STRUCT_TABLE_FIELD, STRUCT_TABLE_DESC);
 		// The PATHNAME layout is not a #S-readable type (its literal syntax is #P,
 		// which resolves through the fixed layout, never through this directory) --
 		// and its %PATHNAME tag carries neither name prefix, so it must not be
@@ -435,8 +401,8 @@ final class JvmReadRuntimeBuilder {
 				layouts.add(layout);
 			}
 		}
-		JvmAsm a = new JvmAsm();
-		a.iconst(layouts.size());
+		MethodCode a = new MethodCode();
+		a.loadConstant(layouts.size());
 		a.anewarray(objectArrayClass);
 		for (int i = 0; i < layouts.size(); i++) {
 			LispLayout layout = layouts.get(i);
@@ -447,33 +413,33 @@ final class JvmReadRuntimeBuilder {
 			String pkg = qn == null ? "" : qn.pkg();
 			String member = qn == null ? registered : qn.member();
 			a.dup();
-			a.iconst(i);
-			a.iconst(4);
+			a.loadConstant(i);
+			a.loadConstant(4);
 			a.anewarray(objectClass);
 			a.dup();
-			a.iconst(0);
-			a.ldcString(cp.addString(pkg));
+			a.loadConstant(0);
+			a.ldc(cp.stringEntry(pkg));
 			a.aastore();
 			a.dup();
-			a.iconst(1);
-			a.ldcString(cp.addString(member));
+			a.loadConstant(1);
+			a.ldc(cp.stringEntry(member));
 			a.aastore();
 			if (isStruct) {
-				FieldrefConstant layoutField = layoutFieldFor(pool, layout.tag());
+				FieldRefEntry layoutField = layoutFieldFor(pool, layout.tag());
 				a.dup();
-				a.iconst(2);
+				a.loadConstant(2);
 				a.getstatic(layoutField);
 				a.aastore();
 				@Nullable String[] inits = EmittedReaderInitforms.initTexts(layout, false);
 				a.dup();
-				a.iconst(3);
-				a.iconst(inits.length);
+				a.loadConstant(3);
+				a.loadConstant(inits.length);
 				a.anewarray(stringClass);
 				for (int k = 0; k < inits.length; k++) {
 					if (inits[k] != null) {
 						a.dup();
-						a.iconst(k);
-						a.ldcString(cp.addString(inits[k]));
+						a.loadConstant(k);
+						a.ldc(cp.stringEntry(inits[k]));
 						a.aastore();
 					}
 				}
@@ -482,13 +448,13 @@ final class JvmReadRuntimeBuilder {
 			a.aastore();
 		}
 		a.putstatic(field);
-		return a.finish();
+		return JvmRuntimeBuilder.codeBytes(a);
 	}
 
-	private static FieldrefConstant layoutFieldFor(JvmLispCompiler.LayoutPool pool, String tag) {
+	private static FieldRefEntry layoutFieldFor(JvmLispCompiler.LayoutPool pool, String tag) {
 		for (JvmLispCompiler.LayoutPool.LayoutField lf : pool.fields()) {
 			if (lf.layout().tag().equals(tag)) {
-				return lf.ref();
+				return lf.ref().entry();
 			}
 		}
 		throw new IllegalStateException("Struct layout not interned for the reader directory: " + tag);
@@ -497,280 +463,265 @@ final class JvmReadRuntimeBuilder {
 	/** Returns all reader method bodies to emit. */
 	List<ReadMethod> methods() {
 		List<ReadMethod> ms = new ArrayList<>();
-		ms.add(new ReadMethod(this.cp.addUtf8("_readSkipWs"), this.cp.addUtf8("()V"), 4, 2, buildSkipWs()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readExpr"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 2,
-				buildReadExpr()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readList"), this.cp.addUtf8("()Ljava/lang/Object;"), 6, 2,
-				buildReadList()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readAtom"), this.cp.addUtf8("()Ljava/lang/Object;"), 4, 2,
-				buildReadAtom()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStr"), this.cp.addUtf8("()Ljava/lang/Object;"), 4, 3,
-				buildReadStr()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readSkipWs"), this.cp.addUtf8("()V"), buildSkipWs()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readExpr"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadExpr()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readList"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadList()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readAtom"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadAtom()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readStr"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadStr()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
-				6, 10, buildClassify()));
+				buildClassify()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readFromString"),
-				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), 4, 3, buildReadFromString()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readHash"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 4,
-				buildReadHash()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readCharLit"), this.cp.addUtf8("()Ljava/lang/Object;"), 6, 4,
+				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), buildReadFromString()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readHash"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadHash()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readCharLit"), this.cp.addUtf8("()Ljava/lang/Object;"),
 				buildReadCharLit()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readRadix"), this.cp.addUtf8("(II)Ljava/lang/Object;"), 6, 7,
+		ms.add(new ReadMethod(this.cp.addUtf8("_readRadix"), this.cp.addUtf8("(II)Ljava/lang/Object;"),
 				buildReadRadix()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readBits"), this.cp.addUtf8("()Ljava/lang/Object;"), 10, 3,
-				buildReadBits()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readArrayN"), this.cp.addUtf8("(I)Ljava/lang/Object;"), 8, 5,
+		ms.add(new ReadMethod(this.cp.addUtf8("_readBits"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadBits()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_readArrayN"), this.cp.addUtf8("(I)Ljava/lang/Object;"),
 				buildReadArrayN()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readPacked"), this.cp.addUtf8("(I)Ljava/lang/Object;"), 8, 12,
+		ms.add(new ReadMethod(this.cp.addUtf8("_readPacked"), this.cp.addUtf8("(I)Ljava/lang/Object;"),
 				buildReadPacked()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStruct"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 21,
+		ms.add(new ReadMethod(this.cp.addUtf8("_readStruct"), this.cp.addUtf8("()Ljava/lang/Object;"),
 				buildReadStruct()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdLen"), this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)I"), 4,
-				4, buildRdLen()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdConsp"), this.cp.addUtf8("(Ljava/lang/Object;)Z"), 3, 2,
-				buildRdConsp()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdLen"), this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)I"),
+				buildRdLen()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdConsp"), this.cp.addUtf8("(Ljava/lang/Object;)Z"), buildRdConsp()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_rdLevel"),
-				this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"), 5, 2, buildRdLevel()));
+				this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"), buildRdLevel()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_rdDims"),
-				this.cp.addUtf8("(Ljava/lang/Object;ILjava/lang/String;)[Ljava/lang/Object;"), 6, 6, buildRdDims()));
+				this.cp.addUtf8("(Ljava/lang/Object;ILjava/lang/String;)[Ljava/lang/Object;"), buildRdDims()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_rdFlat"),
-				this.cp.addUtf8("(Ljava/lang/Object;I[Ljava/lang/Object;Ljava/util/ArrayList;Ljava/lang/String;)V"), 7,
-				8, buildRdFlat()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdErr"), this.cp.addUtf8("(Ljava/lang/String;)V"), 3, 1, buildRdErr()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdName"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"), 3,
-				2, buildRdName()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdF"), this.cp.addUtf8("(Ljava/lang/Object;)D"), 6, 2, buildRdF()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdInferRank"), this.cp.addUtf8("(Ljava/lang/Object;)I"), 3, 3,
+				this.cp.addUtf8("(Ljava/lang/Object;I[Ljava/lang/Object;Ljava/util/ArrayList;Ljava/lang/String;)V"),
+				buildRdFlat()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdErr"), this.cp.addUtf8("(Ljava/lang/String;)V"), buildRdErr()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdName"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"),
+				buildRdName()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdF"), this.cp.addUtf8("(Ljava/lang/Object;)D"), buildRdF()));
+		ms.add(new ReadMethod(this.cp.addUtf8("_rdInferRank"), this.cp.addUtf8("(Ljava/lang/Object;)I"),
 				buildRdInferRank()));
 		if (this.emitLoad) {
 			ms.add(new ReadMethod(this.cp.addUtf8("_load"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
-					4, 3, buildLoad()));
+					buildLoad()));
 		}
 		return ms;
 	}
 
 	// === per-method bodies ===
 
-	private void ldc(JvmAsm a, String value) {
-		ConstantPool.StringConstant sc = this.cp.addString(value);
-		if (sc.index() <= 255) {
-			a.op(Opcode.LDC);
-			a.code.add(sc.index());
-		}
-		else {
-			a.op(Opcode.LDC_W);
-			a.u2(sc.index());
-		}
+	private void ldc(MethodCode a, String value) {
+		a.ldc(this.cp.stringEntry(value));
 	}
 
 	/** Pushes {@code _readPos}. */
-	private void pos(JvmAsm a) {
+	private void pos(MethodCode a) {
 		a.getstatic(this.readPos);
 	}
 
 	/** Pushes {@code _readSrc.length()}. */
-	private void srcLen(JvmAsm a) {
+	private void srcLen(MethodCode a) {
 		a.getstatic(this.readSrc);
 		a.invokevirtual(this.stringLength);
 	}
 
 	/** Pushes {@code _readSrc.charAt(_readPos)}. */
-	private void charAtPos(JvmAsm a) {
+	private void charAtPos(MethodCode a) {
 		a.getstatic(this.readSrc);
 		a.getstatic(this.readPos);
 		a.invokevirtual(this.stringCharAt);
 	}
 
 	/** Emits {@code _readPos += 1}. */
-	private void advance(JvmAsm a) {
+	private void advance(MethodCode a) {
 		a.getstatic(this.readPos);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.putstatic(this.readPos);
 	}
 
-	private List<Integer> buildSkipWs() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int notWs = a.label();
-		int cloop = a.label();
-		int notSemi = a.label();
-		int bloop = a.label();
-		int bNotClose = a.label();
-		int bNotOpen = a.label();
-		int bPlain = a.label();
-		int end = a.label();
-		a.bind(loop);
+	private MethodCode buildSkipWs() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label notWs = a.newLabel();
+		MethodCode.Label cloop = a.newLabel();
+		MethodCode.Label notSemi = a.newLabel();
+		MethodCode.Label bloop = a.newLabel();
+		MethodCode.Label bNotClose = a.newLabel();
+		MethodCode.Label bNotOpen = a.newLabel();
+		MethodCode.Label bPlain = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		// if pos >= len return
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, end);
+		a.if_icmpge(end);
 		// c = charAt(pos)
 		charAtPos(a);
 		a.istore(0);
 		a.iload(0);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFEQ, notWs);
+		a.ifeq(notWs);
 		// whitespace: pos++
 		advance(a);
-		a.branch(Opcode.GOTO, loop);
+		a.goto_(loop);
 		// not whitespace: comment?
-		a.bind(notWs);
+		a.labelBinding(notWs);
 		a.iload(0);
-		a.iconst(';');
-		a.branch(Opcode.IF_ICMPNE, notSemi);
+		a.loadConstant(';');
+		a.if_icmpne(notSemi);
 		// comment: skip to end of line
-		a.bind(cloop);
+		a.labelBinding(cloop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, end);
+		a.if_icmpge(end);
 		charAtPos(a);
-		a.iconst('\n');
-		a.branch(Opcode.IF_ICMPEQ, loop); // newline consumed as whitespace next iteration
+		a.loadConstant('\n');
+		a.if_icmpeq(loop); // newline consumed as whitespace next iteration
 		advance(a);
-		a.branch(Opcode.GOTO, cloop);
-		a.bind(notSemi);
+		a.goto_(cloop);
+		a.labelBinding(notSemi);
 		// "#|" block comment, honoring nesting like the frontend lexer
 		a.iload(0);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, end);
+		a.loadConstant('#');
+		a.if_icmpne(end);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, end);
+		a.if_icmpge(end);
 		a.getstatic(this.readSrc);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('|');
-		a.branch(Opcode.IF_ICMPNE, end);
+		a.loadConstant('|');
+		a.if_icmpne(end);
 		advance(a); // consume '#'
 		advance(a); // consume '|'
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(1); // depth
-		a.bind(bloop);
+		a.labelBinding(bloop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, bNotClose);
+		a.if_icmplt(bNotClose);
 		// input exhausted inside the comment: unterminated
 		ldc(a, "Unterminated block comment");
 		a.invokestatic(this.rdErr);
-		a.op(Opcode.RETURN);
-		a.bind(bNotClose);
+		a.return_();
+		a.labelBinding(bNotClose);
 		// "|#" -> depth--, back to whitespace skipping at 0
 		charAtPos(a);
-		a.iconst('|');
-		a.branch(Opcode.IF_ICMPNE, bNotOpen);
+		a.loadConstant('|');
+		a.if_icmpne(bNotOpen);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, bNotOpen);
+		a.if_icmpge(bNotOpen);
 		a.getstatic(this.readSrc);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, bNotOpen);
+		a.loadConstant('#');
+		a.if_icmpne(bNotOpen);
 		advance(a); // consume '|'
 		advance(a); // consume '#'
 		a.iinc(1, -1);
 		a.iload(1);
-		a.branch(Opcode.IFEQ, loop); // depth 0: back to whitespace skipping
-		a.branch(Opcode.GOTO, bloop);
-		a.bind(bNotOpen);
+		a.ifeq(loop); // depth 0: back to whitespace skipping
+		a.goto_(bloop);
+		a.labelBinding(bNotOpen);
 		// "#|" -> depth++
 		charAtPos(a);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, bPlain);
+		a.loadConstant('#');
+		a.if_icmpne(bPlain);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, bPlain);
+		a.if_icmpge(bPlain);
 		a.getstatic(this.readSrc);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('|');
-		a.branch(Opcode.IF_ICMPNE, bPlain);
+		a.loadConstant('|');
+		a.if_icmpne(bPlain);
 		advance(a); // consume '#'
 		advance(a); // consume '|'
 		a.iinc(1, 1);
-		a.branch(Opcode.GOTO, bloop);
-		a.bind(bPlain);
+		a.goto_(bloop);
+		a.labelBinding(bPlain);
 		advance(a);
-		a.branch(Opcode.GOTO, bloop);
-		a.bind(end);
-		a.op(Opcode.RETURN);
-		return a.finish();
+		a.goto_(bloop);
+		a.labelBinding(end);
+		a.return_();
+		return a;
 	}
 
-	private List<Integer> buildReadExpr() {
-		JvmAsm a = new JvmAsm();
-		int retNull = a.label();
-		int notLp = a.label();
-		int notQuote = a.label();
-		int notSharp = a.label();
-		int notStr = a.label();
-		int atom = a.label();
+	private MethodCode buildReadExpr() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label retNull = a.newLabel();
+		MethodCode.Label notLp = a.newLabel();
+		MethodCode.Label notQuote = a.newLabel();
+		MethodCode.Label notSharp = a.newLabel();
+		MethodCode.Label notStr = a.newLabel();
+		MethodCode.Label atom = a.newLabel();
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, retNull);
+		a.if_icmpge(retNull);
 		charAtPos(a);
 		a.istore(0); // c
 		// '('
 		a.iload(0);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, notLp);
+		a.loadConstant('(');
+		a.if_icmpne(notLp);
 		advance(a);
 		a.invokestatic(this.readList);
 		a.areturn();
-		a.bind(notLp);
+		a.labelBinding(notLp);
 		// '\''
 		a.iload(0);
-		a.iconst('\'');
-		a.branch(Opcode.IF_ICMPNE, notQuote);
+		a.loadConstant('\'');
+		a.if_icmpne(notQuote);
 		advance(a);
 		a.invokestatic(this.readExpr);
 		a.astore(1); // inner
 		wrapWithSymbol(a, LispNames.QUOTE, 1);
 		a.areturn();
-		a.bind(notQuote);
+		a.labelBinding(notQuote);
 		// '#' -> the dispatch mirror of the frontend lexer (chars, vectors, arrays,
 		// structs, radix ints, packed floats, bit vectors); a token no dispatch claims
 		// falls back to the atom path inside _readHash, like the frontend's readSymbol.
 		a.iload(0);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, notSharp);
+		a.loadConstant('#');
+		a.if_icmpne(notSharp);
 		a.invokestatic(this.readHash);
 		a.areturn();
-		a.bind(notSharp);
+		a.labelBinding(notSharp);
 		// '"'
 		a.iload(0);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, notStr);
+		a.loadConstant('"');
+		a.if_icmpne(notStr);
 		a.invokestatic(this.readStr);
 		a.areturn();
-		a.bind(notStr);
+		a.labelBinding(notStr);
 		// ')'
 		a.iload(0);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant(')');
+		a.if_icmpne(atom);
 		advance(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(atom);
+		a.labelBinding(atom);
 		a.invokestatic(this.readAtom);
 		a.areturn();
-		a.bind(retNull);
-		a.aconstNull();
+		a.labelBinding(retNull);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	/**
@@ -778,46 +729,46 @@ final class JvmReadRuntimeBuilder {
 	 * where {@code inner} is in local slot {@code innerSlot}. Leaves the result on the
 	 * stack.
 	 */
-	private void wrapWithSymbol(JvmAsm a, String sym, int innerSlot) {
-		a.iconst(2);
+	private void wrapWithSymbol(MethodCode a, String sym, int innerSlot) {
+		a.loadConstant(2);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		ldc(a, sym);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.iconst(2);
+		a.loadConstant(1);
+		a.loadConstant(2);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(innerSlot);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.aconstNull();
+		a.loadConstant(1);
+		a.aconst_null();
 		a.aastore();
 		a.aastore();
 	}
 
-	private List<Integer> buildReadList() {
-		JvmAsm a = new JvmAsm();
-		int retNull = a.label();
-		int cont = a.label();
-		int notDot = a.label();
-		int isDot = a.label();
-		int build = a.label();
+	private MethodCode buildReadList() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label retNull = a.newLabel();
+		MethodCode.Label cont = a.newLabel();
+		MethodCode.Label notDot = a.newLabel();
+		MethodCode.Label isDot = a.newLabel();
+		MethodCode.Label build = a.newLabel();
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, retNull);
+		a.if_icmpge(retNull);
 		charAtPos(a);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, cont);
+		a.loadConstant(')');
+		a.if_icmpne(cont);
 		advance(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(cont);
+		a.labelBinding(cont);
 		a.invokestatic(this.readExpr);
 		a.astore(0); // car
 		// Dotted pair: a standalone '.' token puts the next datum directly in the
@@ -827,97 +778,97 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, notDot);
+		a.if_icmpge(notDot);
 		charAtPos(a);
-		a.iconst('.');
-		a.branch(Opcode.IF_ICMPNE, notDot);
+		a.loadConstant('.');
+		a.if_icmpne(notDot);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, isDot);
+		a.if_icmpge(isDot);
 		a.getstatic(this.readSrc);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
 		a.istore(1); // ch2 (slot reused; overwritten by the cdr below)
 		a.iload(1);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFNE, isDot);
+		a.ifne(isDot);
 		a.iload(1);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.loadConstant(')');
+		a.if_icmpeq(isDot);
 		a.iload(1);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.loadConstant('(');
+		a.if_icmpeq(isDot);
 		a.iload(1);
-		a.iconst('\'');
-		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.loadConstant('\'');
+		a.if_icmpeq(isDot);
 		a.iload(1);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPEQ, isDot);
+		a.loadConstant('"');
+		a.if_icmpeq(isDot);
 		a.iload(1);
-		a.iconst(';');
-		a.branch(Opcode.IF_ICMPEQ, isDot);
-		a.branch(Opcode.GOTO, notDot);
-		a.bind(isDot);
+		a.loadConstant(';');
+		a.if_icmpeq(isDot);
+		a.goto_(notDot);
+		a.labelBinding(isDot);
 		advance(a); // consume '.'
 		a.invokestatic(this.readExpr);
 		a.astore(1); // cdr = the dotted tail
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, build);
+		a.if_icmpge(build);
 		charAtPos(a);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, build);
+		a.loadConstant(')');
+		a.if_icmpne(build);
 		advance(a); // consume ')'
-		a.branch(Opcode.GOTO, build);
-		a.bind(notDot);
+		a.goto_(build);
+		a.labelBinding(notDot);
 		a.invokestatic(this.readList);
 		a.astore(1); // cdr
-		a.bind(build);
-		a.iconst(2);
+		a.labelBinding(build);
+		a.loadConstant(2);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(1);
 		a.aastore();
 		a.areturn();
-		a.bind(retNull);
-		a.aconstNull();
+		a.labelBinding(retNull);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
-	private List<Integer> buildReadAtom() {
-		JvmAsm a = new JvmAsm();
-		int aloop = a.label();
-		int aend = a.label();
+	private MethodCode buildReadAtom() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label aloop = a.newLabel();
+		MethodCode.Label aend = a.newLabel();
 		pos(a);
 		a.istore(0); // start
-		a.bind(aloop);
+		a.labelBinding(aloop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, aend);
+		a.if_icmpge(aend);
 		charAtPos(a);
 		a.istore(1); // ch
 		a.iload(1);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFNE, aend);
+		a.ifne(aend);
 		stopIf(a, '(', aend);
 		stopIf(a, ')', aend);
 		stopIf(a, '\'', aend);
 		stopIf(a, '"', aend);
 		stopIf(a, ';', aend);
 		advance(a);
-		a.branch(Opcode.GOTO, aloop);
-		a.bind(aend);
+		a.goto_(aloop);
+		a.labelBinding(aend);
 		// token = src.substring(start, pos)
 		a.getstatic(this.readSrc);
 		a.iload(0);
@@ -925,152 +876,152 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.stringSubstring);
 		a.invokestatic(this.classify);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
-	private void stopIf(JvmAsm a, char ch, int target) {
+	private void stopIf(MethodCode a, char ch, MethodCode.Label target) {
 		a.iload(1);
-		a.iconst(ch);
-		a.branch(Opcode.IF_ICMPEQ, target);
+		a.loadConstant(ch);
+		a.if_icmpeq(target);
 	}
 
-	private List<Integer> buildReadStr() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int close = a.label();
-		int done = a.label();
-		int plain = a.label();
-		int plainBs = a.label();
-		int adv = a.label();
-		int e1 = a.label();
-		int e2 = a.label();
-		int e3 = a.label();
-		int e4 = a.label();
+	private MethodCode buildReadStr() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label close = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label plain = a.newLabel();
+		MethodCode.Label plainBs = a.newLabel();
+		MethodCode.Label adv = a.newLabel();
+		MethodCode.Label e1 = a.newLabel();
+		MethodCode.Label e2 = a.newLabel();
+		MethodCode.Label e3 = a.newLabel();
+		MethodCode.Label e4 = a.newLabel();
 		// consume opening quote
 		advance(a);
 		// sb = new StringBuilder("\"")
-		a.anew(this.stringBuilderClass);
+		a.new_(this.stringBuilderClass);
 		a.dup();
 		ldc(a, "\"");
 		a.invokespecial(this.sbInitStr);
 		a.astore(0);
-		a.bind(loop);
+		a.labelBinding(loop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		charAtPos(a);
 		a.istore(1); // ch
 		a.iload(1);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPEQ, close);
+		a.loadConstant('"');
+		a.if_icmpeq(close);
 		a.iload(1);
-		a.iconst('\\');
-		a.branch(Opcode.IF_ICMPNE, plain);
+		a.loadConstant('\\');
+		a.if_icmpne(plain);
 		// backslash: check pos+1 < len
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, plainBs);
+		a.if_icmpge(plainBs);
 		// esc = charAt(pos+1)
 		a.getstatic(this.readSrc);
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
 		a.istore(2); // esc
 		// consume the backslash (esc char consumed by ADV)
 		advance(a);
 		// switch esc
 		a.iload(2);
-		a.iconst('n');
-		a.branch(Opcode.IF_ICMPNE, e1);
+		a.loadConstant('n');
+		a.if_icmpne(e1);
 		appendChar(a, '\n');
-		a.branch(Opcode.GOTO, adv);
-		a.bind(e1);
+		a.goto_(adv);
+		a.labelBinding(e1);
 		a.iload(2);
-		a.iconst('t');
-		a.branch(Opcode.IF_ICMPNE, e2);
+		a.loadConstant('t');
+		a.if_icmpne(e2);
 		appendChar(a, '\t');
-		a.branch(Opcode.GOTO, adv);
-		a.bind(e2);
+		a.goto_(adv);
+		a.labelBinding(e2);
 		a.iload(2);
-		a.iconst('\\');
-		a.branch(Opcode.IF_ICMPNE, e3);
+		a.loadConstant('\\');
+		a.if_icmpne(e3);
 		appendChar(a, '\\');
-		a.branch(Opcode.GOTO, adv);
-		a.bind(e3);
+		a.goto_(adv);
+		a.labelBinding(e3);
 		a.iload(2);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, e4);
+		a.loadConstant('"');
+		a.if_icmpne(e4);
 		appendChar(a, '"');
-		a.branch(Opcode.GOTO, adv);
-		a.bind(e4);
+		a.goto_(adv);
+		a.labelBinding(e4);
 		// default: append '\\' then esc
 		a.aload(0);
-		a.iconst('\\');
+		a.loadConstant('\\');
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
 		a.aload(0);
 		a.iload(2);
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
-		a.branch(Opcode.GOTO, adv);
-		a.bind(plainBs);
+		a.goto_(adv);
+		a.labelBinding(plainBs);
 		a.aload(0);
 		a.iload(1);
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
-		a.branch(Opcode.GOTO, adv);
-		a.bind(plain);
+		a.goto_(adv);
+		a.labelBinding(plain);
 		a.aload(0);
 		a.iload(1);
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
-		a.branch(Opcode.GOTO, adv);
-		a.bind(adv);
+		a.goto_(adv);
+		a.labelBinding(adv);
 		advance(a);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(close);
+		a.goto_(loop);
+		a.labelBinding(close);
 		advance(a); // consume closing quote
-		a.bind(done);
+		a.labelBinding(done);
 		a.aload(0);
-		a.iconst('"');
+		a.loadConstant('"');
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
 		a.aload(0);
 		a.invokevirtual(this.sbToString);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
-	private void appendChar(JvmAsm a, char ch) {
+	private void appendChar(MethodCode a, char ch) {
 		a.aload(0);
-		a.iconst(ch);
+		a.loadConstant(ch);
 		a.invokevirtual(this.sbAppendChar);
 		a.pop();
 	}
 
-	private List<Integer> buildClassify() {
-		JvmAsm a = new JvmAsm();
-		int notNil = a.label();
-		int notT = a.label();
-		int vloop = a.label();
-		int notDigit = a.label();
-		int notComma = a.label();
-		int expState = a.label();
-		int expBad = a.label();
-		int expSignOk = a.label();
-		int expPlus = a.label();
-		int notMarker = a.label();
-		int expMark = a.label();
-		int expOk = a.label();
-		int markersDone = a.label();
-		int vnext = a.label();
-		int vend = a.label();
-		int sym = a.label();
-		int intPath = a.label();
-		int big = a.label();
+	private MethodCode buildClassify() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label notNil = a.newLabel();
+		MethodCode.Label notT = a.newLabel();
+		MethodCode.Label vloop = a.newLabel();
+		MethodCode.Label notDigit = a.newLabel();
+		MethodCode.Label notComma = a.newLabel();
+		MethodCode.Label expState = a.newLabel();
+		MethodCode.Label expBad = a.newLabel();
+		MethodCode.Label expSignOk = a.newLabel();
+		MethodCode.Label expPlus = a.newLabel();
+		MethodCode.Label notMarker = a.newLabel();
+		MethodCode.Label expMark = a.newLabel();
+		MethodCode.Label expOk = a.newLabel();
+		MethodCode.Label markersDone = a.newLabel();
+		MethodCode.Label vnext = a.newLabel();
+		MethodCode.Label vend = a.newLabel();
+		MethodCode.Label sym = a.newLabel();
+		MethodCode.Label intPath = a.newLabel();
+		MethodCode.Label big = a.newLabel();
 		// Upcase the token to its canonical spelling first (uppercase-canonical: the
 		// reader upcases every unescaped symbol character like CL's :upcase readtable
 		// case, with no fold back to a lowercase form). So (read "foo") is FOO, (read
@@ -1085,150 +1036,150 @@ final class JvmReadRuntimeBuilder {
 		a.aload(0);
 		ldc(a, "NIL");
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, notNil);
-		a.aconstNull();
+		a.ifeq(notNil);
+		a.aconst_null();
 		a.areturn();
-		a.bind(notNil);
+		a.labelBinding(notNil);
 		// t? -> the symbol t (the bare String "t", like the interpreter's reader), so it
 		// prints as t and is eq to a quoted 't.
 		a.aload(0);
 		ldc(a, "T");
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, notT);
+		a.ifeq(notT);
 		ldc(a, "T");
 		a.areturn();
-		a.bind(notT);
+		a.labelBinding(notT);
 		// Leading '+': an explicitly positive number literal (+347, +2.5, +1/3) drops
 		// the sign when a digit follows, like the frontend tokenizer; any other '+'
 		// token stays a symbol.
-		int noPlus = a.label();
+		MethodCode.Label noPlus = a.newLabel();
 		a.aload(0);
 		a.invokevirtual(this.stringLength);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPLT, noPlus);
+		a.loadConstant(2);
+		a.if_icmplt(noPlus);
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('+');
-		a.branch(Opcode.IF_ICMPNE, noPlus);
+		a.loadConstant('+');
+		a.if_icmpne(noPlus);
 		a.aload(0);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, noPlus);
+		a.loadConstant('0');
+		a.if_icmplt(noPlus);
 		a.aload(0);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, noPlus);
+		a.loadConstant('9');
+		a.if_icmpgt(noPlus);
 		a.aload(0);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(0);
-		a.bind(noPlus);
+		a.labelBinding(noPlus);
 		// n = token.length(); slot2
 		a.aload(0);
 		a.invokevirtual(this.stringLength);
 		a.istore(2);
 		a.iload(2);
-		a.branch(Opcode.IFEQ, sym); // empty -> symbol
+		a.ifeq(sym); // empty -> symbol
 		// Ratio N/D: exactly one '/', digits (with grouping commas) on both sides, an
 		// optional leading '-'; built through _rat so normalization (2/4 -> 1/2) and the
 		// integer demotion (4/2 -> 2) match the frontend. Any other '/'-bearing token
 		// falls through to the symbol path.
-		int noRatio = a.label();
-		int rnumLoop = a.label();
-		int rnumNext = a.label();
-		int rnumDone = a.label();
-		int rdenLoop = a.label();
-		int rdenNext = a.label();
-		int rdenDone = a.label();
-		int rDivZero = a.label();
+		MethodCode.Label noRatio = a.newLabel();
+		MethodCode.Label rnumLoop = a.newLabel();
+		MethodCode.Label rnumNext = a.newLabel();
+		MethodCode.Label rnumDone = a.newLabel();
+		MethodCode.Label rdenLoop = a.newLabel();
+		MethodCode.Label rdenNext = a.newLabel();
+		MethodCode.Label rdenDone = a.newLabel();
+		MethodCode.Label rDivZero = a.newLabel();
 		a.aload(0);
-		a.iconst('/');
+		a.loadConstant('/');
 		a.invokevirtual(this.stringIndexOf);
 		a.istore(7); // si
 		a.iload(7);
-		a.branch(Opcode.IFLT, noRatio);
+		a.iflt(noRatio);
 		// numerator scan from j = ('-' prefix ? 1 : 0) to si-1
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(8); // j
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, rnumLoop);
-		a.iconst(1);
+		a.loadConstant('-');
+		a.if_icmpne(rnumLoop);
+		a.loadConstant(1);
 		a.istore(8);
-		a.bind(rnumLoop);
-		a.iconst(0);
+		a.labelBinding(rnumLoop);
+		a.loadConstant(0);
 		a.istore(9); // sawNumDigit
-		int rnumScan = a.label();
-		a.bind(rnumScan);
+		MethodCode.Label rnumScan = a.newLabel();
+		a.labelBinding(rnumScan);
 		a.iload(8);
 		a.iload(7);
-		a.branch(Opcode.IF_ICMPGE, rnumDone);
+		a.if_icmpge(rnumDone);
 		a.aload(0);
 		a.iload(8);
 		a.invokevirtual(this.stringCharAt);
 		a.istore(6);
 		a.iload(6);
-		a.iconst(',');
-		a.branch(Opcode.IF_ICMPEQ, rnumNext);
+		a.loadConstant(',');
+		a.if_icmpeq(rnumNext);
 		a.iload(6);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, sym);
+		a.loadConstant('0');
+		a.if_icmplt(sym);
 		a.iload(6);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, sym);
-		a.iconst(1);
+		a.loadConstant('9');
+		a.if_icmpgt(sym);
+		a.loadConstant(1);
 		a.istore(9);
-		a.bind(rnumNext);
+		a.labelBinding(rnumNext);
 		a.iinc(8, 1);
-		a.branch(Opcode.GOTO, rnumScan);
-		a.bind(rnumDone);
+		a.goto_(rnumScan);
+		a.labelBinding(rnumDone);
 		a.iload(9);
-		a.branch(Opcode.IFEQ, sym);
+		a.ifeq(sym);
 		// denominator scan from si+1 to n-1 (no sign allowed)
 		a.iload(7);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.iload(2);
-		a.branch(Opcode.IF_ICMPGE, sym); // empty denominator
+		a.if_icmpge(sym); // empty denominator
 		a.iload(7);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.istore(8);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(9); // sawDenDigit
-		a.bind(rdenLoop);
+		a.labelBinding(rdenLoop);
 		a.iload(8);
 		a.iload(2);
-		a.branch(Opcode.IF_ICMPGE, rdenDone);
+		a.if_icmpge(rdenDone);
 		a.aload(0);
 		a.iload(8);
 		a.invokevirtual(this.stringCharAt);
 		a.istore(6);
 		a.iload(6);
-		a.iconst(',');
-		a.branch(Opcode.IF_ICMPEQ, rdenNext);
+		a.loadConstant(',');
+		a.if_icmpeq(rdenNext);
 		a.iload(6);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, sym);
+		a.loadConstant('0');
+		a.if_icmplt(sym);
 		a.iload(6);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, sym);
-		a.iconst(1);
+		a.loadConstant('9');
+		a.if_icmpgt(sym);
+		a.loadConstant(1);
 		a.istore(9);
-		a.bind(rdenNext);
+		a.labelBinding(rdenNext);
 		a.iinc(8, 1);
-		a.branch(Opcode.GOTO, rdenLoop);
-		a.bind(rdenDone);
+		a.goto_(rdenLoop);
+		a.labelBinding(rdenDone);
 		a.iload(9);
-		a.branch(Opcode.IFEQ, sym);
+		a.ifeq(sym);
 		// numStr = token.substring(0, si).replace(",", "") (kept for the /0 message)
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(7);
 		a.invokevirtual(this.stringSubstring);
 		ldc(a, ",");
@@ -1236,16 +1187,16 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.stringReplace);
 		a.astore(5);
 		// num, den on the stack, den checked for zero before _rat
-		a.anew(this.bigIntegerClass);
+		a.new_(this.bigIntegerClass);
 		a.dup();
 		a.aload(5);
 		a.invokespecial(this.bigIntegerInit);
-		a.anew(this.bigIntegerClass);
+		a.new_(this.bigIntegerClass);
 		a.dup();
 		a.aload(0);
 		a.iload(7);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringSubstringFrom);
 		ldc(a, ",");
 		ldc(a, "");
@@ -1253,10 +1204,10 @@ final class JvmReadRuntimeBuilder {
 		a.invokespecial(this.bigIntegerInit);
 		a.dup();
 		a.invokevirtual(this.bigIntegerSignum);
-		a.branch(Opcode.IFEQ, rDivZero);
+		a.ifeq(rDivZero);
 		a.invokestatic(this.ratMethod);
 		a.areturn();
-		a.bind(rDivZero);
+		a.labelBinding(rDivZero);
 		a.pop();
 		a.pop();
 		sbNew(a, "Division by zero in ratio literal: ");
@@ -1264,36 +1215,36 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.sbAppendStr);
 		sbText(a, "/0");
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(noRatio);
-		a.iconst(0);
+		a.labelBinding(noRatio);
+		a.loadConstant(0);
 		a.istore(1); // i
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(3); // sawDigit
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(4); // sawDot
 		// Exponent state in slots 7/8/9 (free since the ratio scan above ended):
 		// sawExponent = a CL exponent marker has been consumed, expSign = 0 none /
 		// 1 '+' / 2 '-', expDigit = at least one digit followed the marker.
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(7);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(8);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(9);
 		// if token[0]=='-': i=1
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, vloop);
-		a.iconst(1);
+		a.loadConstant('-');
+		a.if_icmpne(vloop);
+		a.loadConstant(1);
 		a.istore(1);
-		a.bind(vloop);
+		a.labelBinding(vloop);
 		a.iload(1);
 		a.iload(2);
-		a.branch(Opcode.IF_ICMPGE, vend);
+		a.if_icmpge(vend);
 		a.aload(0);
 		a.iload(1);
 		a.invokevirtual(this.stringCharAt);
@@ -1302,101 +1253,101 @@ final class JvmReadRuntimeBuilder {
 		// directly after the marker. Anything else -- a second marker, a dot, a letter
 		// ("1d0x") -- sends the whole token to the symbol path, like the frontend.
 		a.iload(7);
-		a.branch(Opcode.IFNE, expState);
+		a.ifne(expState);
 		// digit?
 		a.iload(6);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, notDigit);
+		a.loadConstant('0');
+		a.if_icmplt(notDigit);
 		a.iload(6);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, notDigit);
-		a.iconst(1);
+		a.loadConstant('9');
+		a.if_icmpgt(notDigit);
+		a.loadConstant(1);
 		a.istore(3);
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(notDigit);
+		a.goto_(vnext);
+		a.labelBinding(notDigit);
 		a.iload(6);
-		a.iconst(',');
-		a.branch(Opcode.IF_ICMPNE, notComma);
-		a.branch(Opcode.GOTO, vnext); // grouping comma: skip
-		a.bind(notComma);
+		a.loadConstant(',');
+		a.if_icmpne(notComma);
+		a.goto_(vnext); // grouping comma: skip
+		a.labelBinding(notComma);
 		a.iload(6);
-		a.iconst('.');
-		a.branch(Opcode.IF_ICMPNE, notMarker);
+		a.loadConstant('.');
+		a.if_icmpne(notMarker);
 		a.iload(4);
-		a.branch(Opcode.IFNE, sym); // second dot -> symbol
-		a.iconst(1);
+		a.ifne(sym); // second dot -> symbol
+		a.loadConstant(1);
 		a.istore(4);
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(notMarker);
+		a.goto_(vnext);
+		a.labelBinding(notMarker);
 		// A CL exponent marker (the token is upcased, so only the uppercase spelling
 		// can appear) starts the exponent part: "1E5", ".5E2", "1.E5".
 		a.iload(6);
-		a.iconst('E');
-		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.loadConstant('E');
+		a.if_icmpeq(expMark);
 		a.iload(6);
-		a.iconst('S');
-		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.loadConstant('S');
+		a.if_icmpeq(expMark);
 		a.iload(6);
-		a.iconst('F');
-		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.loadConstant('F');
+		a.if_icmpeq(expMark);
 		a.iload(6);
-		a.iconst('D');
-		a.branch(Opcode.IF_ICMPEQ, expMark);
+		a.loadConstant('D');
+		a.if_icmpeq(expMark);
 		a.iload(6);
-		a.iconst('L');
-		a.branch(Opcode.IF_ICMPEQ, expMark);
-		a.branch(Opcode.GOTO, sym); // any other char -> symbol
-		a.bind(expMark);
-		a.iconst(1);
+		a.loadConstant('L');
+		a.if_icmpeq(expMark);
+		a.goto_(sym); // any other char -> symbol
+		a.labelBinding(expMark);
+		a.loadConstant(1);
 		a.istore(7);
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(expState);
+		a.goto_(vnext);
+		a.labelBinding(expState);
 		// Past an exponent marker: digits, and a sign only directly after the marker.
 		// Anything else -- a second marker, a dot, a letter ("1D0X") -- sends the whole
 		// token to the symbol path, like the frontend's numberFallbackSymbol.
 		a.iload(6);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, expBad);
+		a.loadConstant('0');
+		a.if_icmplt(expBad);
 		a.iload(6);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, expBad);
-		a.iconst(1);
+		a.loadConstant('9');
+		a.if_icmpgt(expBad);
+		a.loadConstant(1);
 		a.istore(9); // expDigit
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(expBad);
+		a.goto_(vnext);
+		a.labelBinding(expBad);
 		a.iload(6);
-		a.iconst('+');
-		a.branch(Opcode.IF_ICMPEQ, expSignOk);
+		a.loadConstant('+');
+		a.if_icmpeq(expSignOk);
 		a.iload(6);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, sym); // not a sign -> symbol
-		a.bind(expSignOk);
+		a.loadConstant('-');
+		a.if_icmpne(sym); // not a sign -> symbol
+		a.labelBinding(expSignOk);
 		a.iload(8);
-		a.branch(Opcode.IFNE, sym); // a sign was already consumed
+		a.ifne(sym); // a sign was already consumed
 		a.iload(9);
-		a.branch(Opcode.IFNE, sym); // the sign must come before any exponent digit
+		a.ifne(sym); // the sign must come before any exponent digit
 		a.iload(6);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, expPlus);
-		a.iconst(2);
+		a.loadConstant('-');
+		a.if_icmpne(expPlus);
+		a.loadConstant(2);
 		a.istore(8);
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(expPlus);
-		a.iconst(1);
+		a.goto_(vnext);
+		a.labelBinding(expPlus);
+		a.loadConstant(1);
 		a.istore(8);
-		a.branch(Opcode.GOTO, vnext);
-		a.bind(vnext);
+		a.goto_(vnext);
+		a.labelBinding(vnext);
 		a.iinc(1, 1);
-		a.branch(Opcode.GOTO, vloop);
-		a.bind(vend);
+		a.goto_(vloop);
+		a.labelBinding(vend);
 		a.iload(3);
-		a.branch(Opcode.IFEQ, sym); // no digit -> symbol
+		a.ifeq(sym); // no digit -> symbol
 		// A marker with no exponent digit ("1E", "1E+") is not a number.
 		a.iload(7);
-		a.branch(Opcode.IFEQ, expOk);
+		a.ifeq(expOk);
 		a.iload(9);
-		a.branch(Opcode.IFEQ, sym);
-		a.bind(expOk);
+		a.ifeq(sym);
+		a.labelBinding(expOk);
 		// stripped = token.replace(",", "") ; slot5
 		a.aload(0);
 		ldc(a, ",");
@@ -1406,14 +1357,14 @@ final class JvmReadRuntimeBuilder {
 		// double? -- a '.' or an exponent marker makes the token a float
 		a.iload(4);
 		a.iload(7);
-		a.op(Opcode.IOR);
-		a.branch(Opcode.IFEQ, intPath);
+		a.ior();
+		a.ifeq(intPath);
 		// Double.parseDouble knows only 'e'/'E' as an exponent marker: rewrite the
 		// other CL markers to 'e' (the token is upcased here, and a valid float token
 		// holds at most one marker, so replacing every spelling is safe -- the same
 		// normalization the frontend lexer applies).
 		a.iload(7);
-		a.branch(Opcode.IFEQ, markersDone);
+		a.ifeq(markersDone);
 		a.aload(5);
 		ldc(a, "S");
 		ldc(a, "e");
@@ -1434,57 +1385,57 @@ final class JvmReadRuntimeBuilder {
 		ldc(a, "e");
 		a.invokevirtual(this.stringReplace);
 		a.astore(5);
-		a.bind(markersDone);
+		a.labelBinding(markersDone);
 		a.aload(5);
 		a.invokestatic(this.doubleParse);
 		a.invokestatic(this.doubleValueOf);
 		a.areturn();
-		a.bind(intPath);
+		a.labelBinding(intPath);
 		// bi = new BigInteger(stripped)
-		a.anew(this.bigIntegerClass);
+		a.new_(this.bigIntegerClass);
 		a.dup();
 		a.aload(5);
 		a.invokespecial(this.bigIntegerInit);
 		// if bi.bitLength() < 64 -> Long.valueOf(bi.longValue()) else bi
 		a.dup();
 		a.invokevirtual(this.bigIntegerBitLength);
-		a.iconst(64);
-		a.branch(Opcode.IF_ICMPGE, big);
+		a.loadConstant(64);
+		a.if_icmpge(big);
 		a.invokevirtual(this.bigIntegerLongValue);
 		a.invokestatic(this.longValueOf);
 		a.areturn();
-		a.bind(big);
+		a.labelBinding(big);
 		a.areturn(); // bi (BigInteger) still on stack
-		a.bind(sym);
+		a.labelBinding(sym);
 		a.aload(0);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readFromString(Object strObj): parse the first datum from a string (the quotes of
 	// the runtime string representation are stripped first); returns null when empty.
-	private List<Integer> buildReadFromString() {
-		JvmAsm a = new JvmAsm();
-		int retNull = a.label();
-		int noTrailingWs = a.label();
+	private MethodCode buildReadFromString() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label retNull = a.newLabel();
+		MethodCode.Label noTrailingWs = a.newLabel();
 		a.aload(0);
 		a.checkcast(this.stringClass);
 		a.astore(1);
 		// raw = s.substring(1, s.length()-1)
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(1);
 		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(this.stringSubstring);
 		a.putstatic(this.readSrc);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.putstatic(this.readPos);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, retNull);
+		a.if_icmpge(retNull);
 		a.invokestatic(this.readExpr);
 		a.astore(2);
 		// CLHS 2.2 / 23.2: read consumes one whitespace character that terminates the
@@ -1493,102 +1444,102 @@ final class JvmReadRuntimeBuilder {
 		// _readPos right after this call; the returned datum is unaffected.
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, noTrailingWs);
+		a.if_icmpge(noTrailingWs);
 		charAtPos(a);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFEQ, noTrailingWs);
+		a.ifeq(noTrailingWs);
 		advance(a);
-		a.bind(noTrailingWs);
+		a.labelBinding(noTrailingWs);
 		a.aload(2);
 		a.areturn();
-		a.bind(retNull);
-		a.aconstNull();
+		a.labelBinding(retNull);
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// === # dispatch bodies ===
 
 	/** Emits {@code new StringBuilder(head)} leaving the builder on the stack. */
-	private void sbNew(JvmAsm a, String head) {
-		a.anew(this.stringBuilderClass);
+	private void sbNew(MethodCode a, String head) {
+		a.new_(this.stringBuilderClass);
 		a.dup();
 		ldc(a, head);
 		a.invokespecial(this.sbInitStr);
 	}
 
 	/** Appends the constant {@code text} to the StringBuilder on the stack. */
-	private void sbText(JvmAsm a, String text) {
+	private void sbText(MethodCode a, String text) {
 		ldc(a, text);
 		a.invokevirtual(this.sbAppendStr);
 	}
 
 	/** Finishes the StringBuilder on the stack and throws it via {@code _rdErr}. */
-	private void sbThrow(JvmAsm a) {
+	private void sbThrow(MethodCode a) {
 		a.invokevirtual(this.sbToString);
 		a.invokestatic(this.rdErr);
 	}
 
 	/** Emits a static-message throw via {@code _rdErr}. */
-	private void err(JvmAsm a, String message) {
+	private void err(MethodCode a, String message) {
 		ldc(a, message);
 		a.invokestatic(this.rdErr);
 	}
 
 	/** Pushes {@code _readSrc.charAt(_readPos + offset)}. */
-	private void charAtPosPlus(JvmAsm a, int offset) {
+	private void charAtPosPlus(MethodCode a, int offset) {
 		a.getstatic(this.readSrc);
 		a.getstatic(this.readPos);
-		a.iconst(offset);
-		a.op(Opcode.IADD);
+		a.loadConstant(offset);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
 	}
 
 	/** Branches to {@code target} when {@code _readPos + offset >= len}. */
-	private void branchIfPosPlusGeLen(JvmAsm a, int offset, int target) {
+	private void branchIfPosPlusGeLen(MethodCode a, int offset, MethodCode.Label target) {
 		a.getstatic(this.readPos);
-		a.iconst(offset);
-		a.op(Opcode.IADD);
+		a.loadConstant(offset);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, target);
+		a.if_icmpge(target);
 	}
 
 	// _readHash: the '#' dispatcher, mirroring the frontend lexer's dispatch set. The
 	// cursor is still AT the '#'; any token no dispatch claims falls back to the atom
 	// path, so #foo / #:g / #16r1f read as the symbols the frontend reads them as.
-	private List<Integer> buildReadHash() {
-		JvmAsm a = new JvmAsm();
-		int atom = a.label();
-		int notFn = a.label();
-		int notChar = a.label();
-		int notVec = a.label();
-		int notStructS = a.label();
-		int structOpen = a.label();
-		int pathnameOpen = a.label();
-		int notPathnameP = a.label();
-		int notBits = a.label();
-		int notSingle = a.label();
-		int singleOpen = a.label();
-		int notBf16 = a.label();
-		int bf16Open = a.label();
-		int bf16F = a.label();
-		int notDouble = a.label();
-		int doubleOpen = a.label();
-		int notDigit = a.label();
-		int dloop = a.label();
-		int dend = a.label();
-		int rankOverflow = a.label();
-		int notArrA = a.label();
-		int arrOpen = a.label();
-		int labelErr = a.label();
-		int notX = a.label();
-		int notO = a.label();
-		int notB = a.label();
-		int radix16 = a.label();
-		int radix8 = a.label();
-		int radix2 = a.label();
-		int notDot = a.label();
-		int notFeature = a.label();
+	private MethodCode buildReadHash() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label atom = a.newLabel();
+		MethodCode.Label notFn = a.newLabel();
+		MethodCode.Label notChar = a.newLabel();
+		MethodCode.Label notVec = a.newLabel();
+		MethodCode.Label notStructS = a.newLabel();
+		MethodCode.Label structOpen = a.newLabel();
+		MethodCode.Label pathnameOpen = a.newLabel();
+		MethodCode.Label notPathnameP = a.newLabel();
+		MethodCode.Label notBits = a.newLabel();
+		MethodCode.Label notSingle = a.newLabel();
+		MethodCode.Label singleOpen = a.newLabel();
+		MethodCode.Label notBf16 = a.newLabel();
+		MethodCode.Label bf16Open = a.newLabel();
+		MethodCode.Label bf16F = a.newLabel();
+		MethodCode.Label notDouble = a.newLabel();
+		MethodCode.Label doubleOpen = a.newLabel();
+		MethodCode.Label notDigit = a.newLabel();
+		MethodCode.Label dloop = a.newLabel();
+		MethodCode.Label dend = a.newLabel();
+		MethodCode.Label rankOverflow = a.newLabel();
+		MethodCode.Label notArrA = a.newLabel();
+		MethodCode.Label arrOpen = a.newLabel();
+		MethodCode.Label labelErr = a.newLabel();
+		MethodCode.Label notX = a.newLabel();
+		MethodCode.Label notO = a.newLabel();
+		MethodCode.Label notB = a.newLabel();
+		MethodCode.Label radix16 = a.newLabel();
+		MethodCode.Label radix8 = a.newLabel();
+		MethodCode.Label radix2 = a.newLabel();
+		MethodCode.Label notDot = a.newLabel();
+		MethodCode.Label notFeature = a.newLabel();
 		// if pos+1 >= len -> atom ("#" at end of input reads as the symbol #)
 		branchIfPosPlusGeLen(a, 1, atom);
 		// c2 = charAt(pos+1)
@@ -1596,214 +1547,214 @@ final class JvmReadRuntimeBuilder {
 		a.istore(0);
 		// "#'" -> (function inner)
 		a.iload(0);
-		a.iconst('\'');
-		a.branch(Opcode.IF_ICMPNE, notFn);
+		a.loadConstant('\'');
+		a.if_icmpne(notFn);
 		advance(a);
 		advance(a);
 		a.invokestatic(this.readExpr);
 		a.astore(3);
 		wrapWithSymbol(a, LispNames.FUNCTION, 3);
 		a.areturn();
-		a.bind(notFn);
+		a.labelBinding(notFn);
 		// "#\" -> character literal
 		a.iload(0);
-		a.iconst('\\');
-		a.branch(Opcode.IF_ICMPNE, notChar);
+		a.loadConstant('\\');
+		a.if_icmpne(notChar);
 		advance(a);
 		advance(a);
 		a.invokestatic(this.readCharLit);
 		a.areturn();
-		a.bind(notChar);
+		a.labelBinding(notChar);
 		// "#(" -> rank-1 vector
 		a.iload(0);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, notVec);
+		a.loadConstant('(');
+		a.if_icmpne(notVec);
 		advance(a);
 		advance(a);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokestatic(this.readArrayN);
 		a.areturn();
-		a.bind(notVec);
+		a.labelBinding(notVec);
 		// "#S(" / "#s(" -> structure literal ("#S" without the paren is a symbol)
 		a.iload(0);
-		a.iconst('S');
-		a.branch(Opcode.IF_ICMPEQ, structOpen);
+		a.loadConstant('S');
+		a.if_icmpeq(structOpen);
 		a.iload(0);
-		a.iconst('s');
-		a.branch(Opcode.IF_ICMPNE, notStructS);
-		a.bind(structOpen);
+		a.loadConstant('s');
+		a.if_icmpne(notStructS);
+		a.labelBinding(structOpen);
 		branchIfPosPlusGeLen(a, 2, atom);
 		charAtPosPlus(a, 2);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant('(');
+		a.if_icmpne(atom);
 		advance(a);
 		advance(a);
 		advance(a);
 		a.invokestatic(this.readStruct);
 		a.areturn();
-		a.bind(notStructS);
+		a.labelBinding(notStructS);
 		// "#P\"" / "#p\"" -> pathname literal ("#P" without a string is a symbol,
 		// like the frontend). The value is Object[]{PATHNAME layout, namestring};
 		// with the instance gate off no pathname value can exist, so the arm signals
 		// rather than answering a mistyped value.
 		a.iload(0);
-		a.iconst('P');
-		a.branch(Opcode.IF_ICMPEQ, pathnameOpen);
+		a.loadConstant('P');
+		a.if_icmpeq(pathnameOpen);
 		a.iload(0);
-		a.iconst('p');
-		a.branch(Opcode.IF_ICMPNE, notPathnameP);
-		a.bind(pathnameOpen);
+		a.loadConstant('p');
+		a.if_icmpne(notPathnameP);
+		a.labelBinding(pathnameOpen);
 		branchIfPosPlusGeLen(a, 2, atom);
 		charAtPosPlus(a, 2);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant('"');
+		a.if_icmpne(atom);
 		advance(a);
 		advance(a);
 		if (this.pathnameLayout != null) {
 			a.invokestatic(this.readStr);
 			a.astore(3);
-			a.iconst(2);
+			a.loadConstant(2);
 			a.anewarray(this.objectClass);
 			a.dup();
-			a.iconst(0);
+			a.loadConstant(0);
 			a.getstatic(this.pathnameLayout);
 			a.aastore();
 			a.dup();
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aload(3);
 			a.aastore();
 		}
 		else {
 			err(a, "#P pathname literals need the instance runtime, which this artifact was compiled without");
-			a.aconstNull();
+			a.aconst_null();
 		}
 		a.areturn();
-		a.bind(notPathnameP);
+		a.labelBinding(notPathnameP);
 		// "#*" -> bit vector (a general vector of 0/1, like the frontend)
 		a.iload(0);
-		a.iconst('*');
-		a.branch(Opcode.IF_ICMPNE, notBits);
+		a.loadConstant('*');
+		a.if_icmpne(notBits);
 		advance(a);
 		advance(a);
 		a.invokestatic(this.readBits);
 		a.areturn();
-		a.bind(notBits);
+		a.labelBinding(notBits);
 		// "#bf16(" (any case) -> packed bfloat16 array. Tried BEFORE the "#b" binary
 		// radix branch below (the frontend lexer orders them the same way): 'f' is not
 		// a binary digit, so the wrong order would fail rather than mis-read, but only
 		// the order keeps it so.
 		a.iload(0);
-		a.iconst('b');
-		a.branch(Opcode.IF_ICMPEQ, bf16Open);
+		a.loadConstant('b');
+		a.if_icmpeq(bf16Open);
 		a.iload(0);
-		a.iconst('B');
-		a.branch(Opcode.IF_ICMPNE, notBf16);
-		a.bind(bf16Open);
+		a.loadConstant('B');
+		a.if_icmpne(notBf16);
+		a.labelBinding(bf16Open);
 		branchIfPosPlusGeLen(a, 5, notBf16);
 		charAtPosPlus(a, 2);
-		a.iconst('F');
-		a.branch(Opcode.IF_ICMPEQ, bf16F);
+		a.loadConstant('F');
+		a.if_icmpeq(bf16F);
 		charAtPosPlus(a, 2);
-		a.iconst('f');
-		a.branch(Opcode.IF_ICMPNE, notBf16);
-		a.bind(bf16F);
+		a.loadConstant('f');
+		a.if_icmpne(notBf16);
+		a.labelBinding(bf16F);
 		charAtPosPlus(a, 3);
-		a.iconst('1');
-		a.branch(Opcode.IF_ICMPNE, notBf16);
+		a.loadConstant('1');
+		a.if_icmpne(notBf16);
 		charAtPosPlus(a, 4);
-		a.iconst('6');
-		a.branch(Opcode.IF_ICMPNE, notBf16);
+		a.loadConstant('6');
+		a.if_icmpne(notBf16);
 		charAtPosPlus(a, 5);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, notBf16);
+		a.loadConstant('(');
+		a.if_icmpne(notBf16);
 		for (int skip = 0; skip < 6; skip++) {
 			advance(a);
 		}
-		a.iconst(2);
+		a.loadConstant(2);
 		a.invokestatic(this.readPacked);
 		a.areturn();
-		a.bind(notBf16);
+		a.labelBinding(notBf16);
 		// "#f(" / "#F(" -> packed single-float array
 		a.iload(0);
-		a.iconst('f');
-		a.branch(Opcode.IF_ICMPEQ, singleOpen);
+		a.loadConstant('f');
+		a.if_icmpeq(singleOpen);
 		a.iload(0);
-		a.iconst('F');
-		a.branch(Opcode.IF_ICMPNE, notSingle);
-		a.bind(singleOpen);
+		a.loadConstant('F');
+		a.if_icmpne(notSingle);
+		a.labelBinding(singleOpen);
 		branchIfPosPlusGeLen(a, 2, atom);
 		charAtPosPlus(a, 2);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant('(');
+		a.if_icmpne(atom);
 		advance(a);
 		advance(a);
 		advance(a);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokestatic(this.readPacked);
 		a.areturn();
-		a.bind(notSingle);
+		a.labelBinding(notSingle);
 		// "#d(" / "#D(" -> packed double-float array
 		a.iload(0);
-		a.iconst('d');
-		a.branch(Opcode.IF_ICMPEQ, doubleOpen);
+		a.loadConstant('d');
+		a.if_icmpeq(doubleOpen);
 		a.iload(0);
-		a.iconst('D');
-		a.branch(Opcode.IF_ICMPNE, notDouble);
-		a.bind(doubleOpen);
+		a.loadConstant('D');
+		a.if_icmpne(notDouble);
+		a.labelBinding(doubleOpen);
 		branchIfPosPlusGeLen(a, 2, atom);
 		charAtPosPlus(a, 2);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant('(');
+		a.if_icmpne(atom);
 		advance(a);
 		advance(a);
 		advance(a);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokestatic(this.readPacked);
 		a.areturn();
-		a.bind(notDouble);
+		a.labelBinding(notDouble);
 		// "#<digits>" -> #nA( array, #n=/#n# labels (signaled), or a symbol
 		a.iload(0);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, notDigit);
+		a.loadConstant('0');
+		a.if_icmplt(notDigit);
 		a.iload(0);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, notDigit);
+		a.loadConstant('9');
+		a.if_icmpgt(notDigit);
 		a.getstatic(this.readPos);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.istore(1); // probe
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(2); // rank
-		a.bind(dloop);
+		a.labelBinding(dloop);
 		a.iload(1);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, dend);
+		a.if_icmpge(dend);
 		a.getstatic(this.readSrc);
 		a.iload(1);
 		a.invokevirtual(this.stringCharAt);
 		a.istore(0);
 		a.iload(0);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPLT, dend);
+		a.loadConstant('0');
+		a.if_icmplt(dend);
 		a.iload(0);
-		a.iconst('9');
-		a.branch(Opcode.IF_ICMPGT, dend);
+		a.loadConstant('9');
+		a.if_icmpgt(dend);
 		a.iload(2);
-		a.iconst(10);
-		a.op(Opcode.IMUL);
+		a.loadConstant(10);
+		a.imul();
 		a.iload(0);
-		a.iconst('0');
-		a.op(Opcode.ISUB);
-		a.op(Opcode.IADD);
+		a.loadConstant('0');
+		a.isub();
+		a.iadd();
 		a.istore(2);
 		// A rank this large cannot denote a real array; stopping here keeps the int
 		// accumulator from wrapping around into a small (wrong) rank.
 		a.iload(2);
-		a.iconst(20000);
-		a.branch(Opcode.IF_ICMPGT, rankOverflow);
+		a.loadConstant(20000);
+		a.if_icmpgt(rankOverflow);
 		a.iinc(1, 1);
-		a.branch(Opcode.GOTO, dloop);
-		a.bind(rankOverflow);
+		a.goto_(dloop);
+		a.labelBinding(rankOverflow);
 		sbNew(a, "Invalid array rank: ");
 		a.getstatic(this.readSrc);
 		a.getstatic(this.readPos);
@@ -1811,143 +1762,143 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.stringSubstring);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(dend);
+		a.labelBinding(dend);
 		a.iload(1);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, atom);
+		a.if_icmpge(atom);
 		a.getstatic(this.readSrc);
 		a.iload(1);
 		a.invokevirtual(this.stringCharAt);
 		a.istore(0);
 		a.iload(0);
-		a.iconst('A');
-		a.branch(Opcode.IF_ICMPEQ, arrOpen);
+		a.loadConstant('A');
+		a.if_icmpeq(arrOpen);
 		a.iload(0);
-		a.iconst('a');
-		a.branch(Opcode.IF_ICMPNE, notArrA);
-		a.bind(arrOpen);
+		a.loadConstant('a');
+		a.if_icmpne(notArrA);
+		a.labelBinding(arrOpen);
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, atom);
+		a.if_icmpge(atom);
 		a.getstatic(this.readSrc);
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringCharAt);
-		a.iconst('(');
-		a.branch(Opcode.IF_ICMPNE, atom);
+		a.loadConstant('(');
+		a.if_icmpne(atom);
 		// pos = probe + 2 (past "A(")
 		a.iload(1);
-		a.iconst(2);
-		a.op(Opcode.IADD);
+		a.loadConstant(2);
+		a.iadd();
 		a.putstatic(this.readPos);
 		a.iload(2);
 		a.invokestatic(this.readArrayN);
 		a.areturn();
-		a.bind(notArrA);
+		a.labelBinding(notArrA);
 		a.iload(0);
-		a.iconst('=');
-		a.branch(Opcode.IF_ICMPEQ, labelErr);
+		a.loadConstant('=');
+		a.if_icmpeq(labelErr);
 		a.iload(0);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, atom);
-		a.bind(labelErr);
+		a.loadConstant('#');
+		a.if_icmpne(atom);
+		a.labelBinding(labelErr);
 		err(a, "reader labels (#N=/#N#) are not supported by the compiled runtime reader");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(notDigit);
+		a.labelBinding(notDigit);
 		// "#x" / "#o" / "#b" -> radix integer
 		a.iload(0);
-		a.iconst('x');
-		a.branch(Opcode.IF_ICMPEQ, radix16);
+		a.loadConstant('x');
+		a.if_icmpeq(radix16);
 		a.iload(0);
-		a.iconst('X');
-		a.branch(Opcode.IF_ICMPNE, notX);
-		a.bind(radix16);
+		a.loadConstant('X');
+		a.if_icmpne(notX);
+		a.labelBinding(radix16);
 		advance(a);
 		advance(a);
-		a.iconst(16);
+		a.loadConstant(16);
 		a.iload(0);
 		a.invokestatic(this.readRadix);
 		a.areturn();
-		a.bind(notX);
+		a.labelBinding(notX);
 		a.iload(0);
-		a.iconst('o');
-		a.branch(Opcode.IF_ICMPEQ, radix8);
+		a.loadConstant('o');
+		a.if_icmpeq(radix8);
 		a.iload(0);
-		a.iconst('O');
-		a.branch(Opcode.IF_ICMPNE, notO);
-		a.bind(radix8);
+		a.loadConstant('O');
+		a.if_icmpne(notO);
+		a.labelBinding(radix8);
 		advance(a);
 		advance(a);
-		a.iconst(8);
+		a.loadConstant(8);
 		a.iload(0);
 		a.invokestatic(this.readRadix);
 		a.areturn();
-		a.bind(notO);
+		a.labelBinding(notO);
 		a.iload(0);
-		a.iconst('b');
-		a.branch(Opcode.IF_ICMPEQ, radix2);
+		a.loadConstant('b');
+		a.if_icmpeq(radix2);
 		a.iload(0);
-		a.iconst('B');
-		a.branch(Opcode.IF_ICMPNE, notB);
-		a.bind(radix2);
+		a.loadConstant('B');
+		a.if_icmpne(notB);
+		a.labelBinding(radix2);
 		advance(a);
 		advance(a);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.iload(0);
 		a.invokestatic(this.readRadix);
 		a.areturn();
-		a.bind(notB);
+		a.labelBinding(notB);
 		// "#." needs an evaluator at read time; a compiled artifact has none, so it is a
 		// permanent limit that SIGNALS instead of misreading (the frontend evaluates it).
 		a.iload(0);
-		a.iconst('.');
-		a.branch(Opcode.IF_ICMPNE, notDot);
+		a.loadConstant('.');
+		a.if_icmpne(notDot);
 		err(a, "#. read-time evaluation is not supported");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(notDot);
+		a.labelBinding(notDot);
 		// "#+" / "#-" need the feature set at read time; same permanent limit.
 		a.iload(0);
-		a.iconst('+');
-		a.branch(Opcode.IF_ICMPEQ, notFeature);
+		a.loadConstant('+');
+		a.if_icmpeq(notFeature);
 		a.iload(0);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, atom);
-		a.bind(notFeature);
+		a.loadConstant('-');
+		a.if_icmpne(atom);
+		a.labelBinding(notFeature);
 		err(a, "#+/#- feature conditionals are not supported by the compiled runtime reader");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
 		// fallthrough: the token reads as a symbol, like the frontend's readSymbol
-		a.bind(atom);
+		a.labelBinding(atom);
 		a.invokestatic(this.readAtom);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readCharLit: cursor just past "#\". The first character is taken literally; a
 	// letter starts a name scan; a length-1 token is that character verbatim; a longer
 	// token resolves through the (case-insensitive) frontend name table.
-	private List<Integer> buildReadCharLit() {
-		JvmAsm a = new JvmAsm();
-		int ok = a.label();
-		int box = a.label();
-		int scan = a.label();
-		int loop = a.label();
-		int scanEnd = a.label();
-		int named = a.label();
+	private MethodCode buildReadCharLit() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label ok = a.newLabel();
+		MethodCode.Label box = a.newLabel();
+		MethodCode.Label scan = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label scanEnd = a.newLabel();
+		MethodCode.Label named = a.newLabel();
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, ok);
+		a.if_icmplt(ok);
 		err(a, "Unexpected end of input after #\\");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(ok);
+		a.labelBinding(ok);
 		pos(a);
 		a.istore(1); // start
 		charAtPos(a);
@@ -1955,25 +1906,25 @@ final class JvmReadRuntimeBuilder {
 		advance(a);
 		a.iload(0);
 		a.invokestatic(this.charIsLetter);
-		a.branch(Opcode.IFNE, scan);
-		a.bind(box);
-		a.iconst(1);
-		a.newarrayInt();
+		a.ifne(scan);
+		a.labelBinding(box);
+		a.loadConstant(1);
+		a.newarray(TypeKind.INT);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(0);
 		a.iastore();
 		a.areturn();
-		a.bind(scan);
-		a.bind(loop);
+		a.labelBinding(scan);
+		a.labelBinding(loop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, scanEnd);
+		a.if_icmpge(scanEnd);
 		charAtPos(a);
 		a.istore(2);
 		a.iload(2);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFNE, scanEnd);
+		a.ifne(scanEnd);
 		stopIfSlot(a, 2, '(', scanEnd);
 		stopIfSlot(a, 2, ')', scanEnd);
 		stopIfSlot(a, 2, '\'', scanEnd);
@@ -1982,8 +1933,8 @@ final class JvmReadRuntimeBuilder {
 		stopIfSlot(a, 2, ',', scanEnd);
 		stopIfSlot(a, 2, '`', scanEnd);
 		advance(a);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(scanEnd);
+		a.goto_(loop);
+		a.labelBinding(scanEnd);
 		a.getstatic(this.readSrc);
 		a.iload(1);
 		pos(a);
@@ -1991,10 +1942,10 @@ final class JvmReadRuntimeBuilder {
 		a.astore(3); // token
 		a.aload(3);
 		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, named);
-		a.branch(Opcode.GOTO, box);
-		a.bind(named);
+		a.loadConstant(1);
+		a.if_icmpne(named);
+		a.goto_(box);
+		a.labelBinding(named);
 		charName(a, "space", 32);
 		charName(a, "newline", 10);
 		charName(a, "linefeed", 10);
@@ -2020,91 +1971,91 @@ final class JvmReadRuntimeBuilder {
 		a.aload(3);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
 		// the named branches jump back to `box` with the code point in slot 0
-		return a.finish();
+		return a;
 	}
 
 	/** One case-insensitive named-character branch; on a match boxes {@code code}. */
-	private void charName(JvmAsm a, String name, int code) {
-		int next = a.label();
+	private void charName(MethodCode a, String name, int code) {
+		MethodCode.Label next = a.newLabel();
 		a.aload(3);
 		ldc(a, name);
 		a.invokevirtual(this.stringEqualsIgnoreCase);
-		a.branch(Opcode.IFEQ, next);
-		a.iconst(1);
-		a.newarrayInt();
+		a.ifeq(next);
+		a.loadConstant(1);
+		a.newarray(TypeKind.INT);
 		a.dup();
-		a.iconst(0);
-		a.iconst(code);
+		a.loadConstant(0);
+		a.loadConstant(code);
 		a.iastore();
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 	}
 
-	private void stopIfSlot(JvmAsm a, int slot, char ch, int target) {
+	private void stopIfSlot(MethodCode a, int slot, char ch, MethodCode.Label target) {
 		a.iload(slot);
-		a.iconst(ch);
-		a.branch(Opcode.IF_ICMPEQ, target);
+		a.loadConstant(ch);
+		a.if_icmpeq(target);
 	}
 
 	// _readRadix(radix, marker): cursor just past "#x"/"#o"/"#b". An optional leading
 	// '-', then digits of the radix; bad digits (or a trailing symbol character) signal
 	// the frontend's "Invalid digits after #x: ..." message. Values past 63 bits stay
 	// BigInteger, matching the decimal classifier.
-	private List<Integer> buildReadRadix() {
-		JvmAsm a = new JvmAsm();
-		int noNeg = a.label();
-		int dloop = a.label();
-		int dend = a.label();
-		int hasDigits = a.label();
-		int good = a.label();
-		int noStrNeg = a.label();
-		int bigRet = a.label();
-		int errL = a.label();
-		int useEnd = a.label();
+	private MethodCode buildReadRadix() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label noNeg = a.newLabel();
+		MethodCode.Label dloop = a.newLabel();
+		MethodCode.Label dend = a.newLabel();
+		MethodCode.Label hasDigits = a.newLabel();
+		MethodCode.Label good = a.newLabel();
+		MethodCode.Label noStrNeg = a.newLabel();
+		MethodCode.Label bigRet = a.newLabel();
+		MethodCode.Label errL = a.newLabel();
+		MethodCode.Label useEnd = a.newLabel();
 		pos(a);
 		a.istore(2); // start
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(3); // neg
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, noNeg);
+		a.if_icmpge(noNeg);
 		charAtPos(a);
-		a.iconst('-');
-		a.branch(Opcode.IF_ICMPNE, noNeg);
-		a.iconst(1);
+		a.loadConstant('-');
+		a.if_icmpne(noNeg);
+		a.loadConstant(1);
 		a.istore(3);
 		advance(a);
-		a.bind(noNeg);
+		a.labelBinding(noNeg);
 		pos(a);
 		a.istore(4); // digitsStart
-		a.bind(dloop);
+		a.labelBinding(dloop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, dend);
+		a.if_icmpge(dend);
 		charAtPos(a);
 		a.iload(0);
 		a.invokestatic(this.charDigit);
-		a.branch(Opcode.IFLT, dend);
+		a.iflt(dend);
 		advance(a);
-		a.branch(Opcode.GOTO, dloop);
-		a.bind(dend);
+		a.goto_(dloop);
+		a.labelBinding(dend);
 		pos(a);
 		a.iload(4);
-		a.branch(Opcode.IF_ICMPGT, hasDigits);
-		a.branch(Opcode.GOTO, errL);
-		a.bind(hasDigits);
+		a.if_icmpgt(hasDigits);
+		a.goto_(errL);
+		a.labelBinding(hasDigits);
 		// a symbol character right after the digits invalidates the whole token
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, good);
+		a.if_icmpge(good);
 		charAtPos(a);
 		a.istore(6);
 		a.iload(6);
 		a.invokestatic(this.isWhitespace);
-		a.branch(Opcode.IFNE, good);
+		a.ifne(good);
 		stopIfSlot(a, 6, '(', good);
 		stopIfSlot(a, 6, ')', good);
 		stopIfSlot(a, 6, '\'', good);
@@ -2112,151 +2063,151 @@ final class JvmReadRuntimeBuilder {
 		stopIfSlot(a, 6, ';', good);
 		stopIfSlot(a, 6, ',', good);
 		stopIfSlot(a, 6, '`', good);
-		a.branch(Opcode.GOTO, errL);
-		a.bind(good);
+		a.goto_(errL);
+		a.labelBinding(good);
 		a.getstatic(this.readSrc);
 		a.iload(4);
 		pos(a);
 		a.invokevirtual(this.stringSubstring);
 		a.astore(5); // digits
 		a.iload(3);
-		a.branch(Opcode.IFEQ, noStrNeg);
+		a.ifeq(noStrNeg);
 		sbNew(a, "-");
 		a.aload(5);
 		a.invokevirtual(this.sbAppendStr);
 		a.invokevirtual(this.sbToString);
 		a.astore(5);
-		a.bind(noStrNeg);
-		a.anew(this.bigIntegerClass);
+		a.labelBinding(noStrNeg);
+		a.new_(this.bigIntegerClass);
 		a.dup();
 		a.aload(5);
 		a.iload(0);
 		a.invokespecial(this.bigIntegerInitRadix);
 		a.dup();
 		a.invokevirtual(this.bigIntegerBitLength);
-		a.iconst(64);
-		a.branch(Opcode.IF_ICMPGE, bigRet);
+		a.loadConstant(64);
+		a.if_icmpge(bigRet);
 		a.invokevirtual(this.bigIntegerLongValue);
 		a.invokestatic(this.longValueOf);
 		a.areturn();
-		a.bind(bigRet);
+		a.labelBinding(bigRet);
 		a.areturn();
-		a.bind(errL);
+		a.labelBinding(errL);
 		sbNew(a, "Invalid digits after #");
 		a.iload(1);
 		a.invokevirtual(this.sbAppendChar);
 		sbText(a, ": ");
 		// substring(start, min(pos + 1, len))
 		pos(a);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.istore(6);
 		a.iload(6);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLE, useEnd);
+		a.if_icmple(useEnd);
 		srcLen(a);
 		a.istore(6);
-		a.bind(useEnd);
+		a.labelBinding(useEnd);
 		a.getstatic(this.readSrc);
 		a.iload(2);
 		a.iload(6);
 		a.invokevirtual(this.stringSubstring);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readBits: cursor just past "#*"; consumes 0/1 characters into the general-array
 	// runtime shape (an ArrayList with a {dims, nil, nil, nil, "BIT"} header), like the
 	// frontend's bit-vector lowering -- there is no packed bit representation.
-	private List<Integer> buildReadBits() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int ok01 = a.label();
-		int done = a.label();
-		a.anew(this.arrayListClass);
+	private MethodCode buildReadBits() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label ok01 = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.new_(this.arrayListClass);
 		a.dup();
 		a.invokespecial(this.alInit);
 		a.astore(0);
 		a.aload(0);
-		a.aconstNull();
+		a.aconst_null();
 		a.invokevirtual(this.alAdd);
 		a.pop();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(1); // count
-		a.bind(loop);
+		a.labelBinding(loop);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		charAtPos(a);
 		a.istore(2);
 		a.iload(2);
-		a.iconst('0');
-		a.branch(Opcode.IF_ICMPEQ, ok01);
+		a.loadConstant('0');
+		a.if_icmpeq(ok01);
 		a.iload(2);
-		a.iconst('1');
-		a.branch(Opcode.IF_ICMPNE, done);
-		a.bind(ok01);
+		a.loadConstant('1');
+		a.if_icmpne(done);
+		a.labelBinding(ok01);
 		a.aload(0);
 		a.iload(2);
-		a.iconst('0');
-		a.op(Opcode.ISUB);
-		a.op(Opcode.I2L);
+		a.loadConstant('0');
+		a.isub();
+		a.i2l();
 		a.invokestatic(this.longValueOf);
 		a.invokevirtual(this.alAdd);
 		a.pop();
 		a.iinc(1, 1);
 		advance(a);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		// header = Object[]{ Object[]{Long(count)}, null, null, null, "BIT" } into
 		// slot 0 of the list: a bit vector read at run time is stamped with the
 		// remembered element type bit, like the frontend's #* lowering (.todo/043).
 		a.aload(0);
-		a.iconst(0);
-		a.iconst(5);
+		a.loadConstant(0);
+		a.loadConstant(5);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
-		a.iconst(1);
+		a.loadConstant(0);
+		a.loadConstant(1);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(1);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(this.longValueOf);
 		a.aastore();
 		a.aastore();
 		a.dup();
-		a.iconst(4);
+		a.loadConstant(4);
 		ldc(a, am.ik.rontolisp.LispNames.BIT);
 		a.aastore();
 		a.invokevirtual(this.alSet);
 		a.pop();
 		a.aload(0);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readArrayN(rank): cursor just past the opening '('; reads the grouped contents
 	// as a list, computes/validates dims like the frontend, and builds the general
 	// runtime array (ArrayList + {dims, nil, nil} header). #( is rank 1.
-	private List<Integer> buildReadArrayN() {
-		JvmAsm a = new JvmAsm();
-		int okRank = a.label();
+	private MethodCode buildReadArrayN() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label okRank = a.newLabel();
 		a.iload(0);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPGE, okRank);
+		a.loadConstant(1);
+		a.if_icmpge(okRank);
 		sbNew(a, "#");
 		a.iload(0);
 		a.invokevirtual(this.sbAppendInt);
 		sbText(a, "A: array rank must be >= 1");
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(okRank);
+		a.labelBinding(okRank);
 		a.invokestatic(this.readList);
 		a.astore(1); // rows
 		sbNew(a, "#");
@@ -2270,28 +2221,28 @@ final class JvmReadRuntimeBuilder {
 		a.aload(2);
 		a.invokestatic(this.rdDims);
 		a.astore(3); // dims
-		a.anew(this.arrayListClass);
+		a.new_(this.arrayListClass);
 		a.dup();
 		a.invokespecial(this.alInit);
 		a.astore(4); // out
 		a.aload(4);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.anewarray(this.objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(3);
 		a.aastore();
 		a.invokevirtual(this.alAdd);
 		a.pop();
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(3);
 		a.aload(4);
 		a.aload(2);
 		a.invokestatic(this.rdFlat);
 		a.aload(4);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readPacked(width): cursor just past "#d(" (width 0) / "#f(" (1) / "#bf16(" (2);
@@ -2299,41 +2250,41 @@ final class JvmReadRuntimeBuilder {
 	// the width), and the value is the packed double[]/float[]/short[] with the header
 	// JvmPackedFloatWidth lays out for that width. Locals: 0=width, 1=rows, 2=marker,
 	// 3=rank, 4=dims, 5=out, 6=n, 7=k, 8=arr, 9=base, 10=dim.
-	private List<Integer> buildReadPacked() {
-		JvmAsm a = new JvmAsm();
-		int dlab = a.label();
-		int blab = a.label();
-		int lab = a.label();
-		int dbl = a.label();
-		int bfl = a.label();
-		int bloop1 = a.label();
-		int bdone1 = a.label();
-		int bloop2 = a.label();
-		int bdone2 = a.label();
-		int floop1 = a.label();
-		int fdone1 = a.label();
-		int floop2 = a.label();
-		int fdone2 = a.label();
-		int dloop1 = a.label();
-		int ddone1 = a.label();
-		int dloop2 = a.label();
-		int ddone2 = a.label();
+	private MethodCode buildReadPacked() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label dlab = a.newLabel();
+		MethodCode.Label blab = a.newLabel();
+		MethodCode.Label lab = a.newLabel();
+		MethodCode.Label dbl = a.newLabel();
+		MethodCode.Label bfl = a.newLabel();
+		MethodCode.Label bloop1 = a.newLabel();
+		MethodCode.Label bdone1 = a.newLabel();
+		MethodCode.Label bloop2 = a.newLabel();
+		MethodCode.Label bdone2 = a.newLabel();
+		MethodCode.Label floop1 = a.newLabel();
+		MethodCode.Label fdone1 = a.newLabel();
+		MethodCode.Label floop2 = a.newLabel();
+		MethodCode.Label fdone2 = a.newLabel();
+		MethodCode.Label dloop1 = a.newLabel();
+		MethodCode.Label ddone1 = a.newLabel();
+		MethodCode.Label dloop2 = a.newLabel();
+		MethodCode.Label ddone2 = a.newLabel();
 		a.iload(0);
-		a.branch(Opcode.IFEQ, dlab);
+		a.ifeq(dlab);
 		a.iload(0);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPEQ, blab);
+		a.loadConstant(2);
+		a.if_icmpeq(blab);
 		ldc(a, "#f");
 		a.astore(2);
-		a.branch(Opcode.GOTO, lab);
-		a.bind(blab);
+		a.goto_(lab);
+		a.labelBinding(blab);
 		ldc(a, "#bf16");
 		a.astore(2);
-		a.branch(Opcode.GOTO, lab);
-		a.bind(dlab);
+		a.goto_(lab);
+		a.labelBinding(dlab);
 		ldc(a, "#d");
 		a.astore(2);
-		a.bind(lab);
+		a.labelBinding(lab);
 		a.invokestatic(this.readList);
 		a.astore(1); // rows
 		a.aload(1);
@@ -2344,12 +2295,12 @@ final class JvmReadRuntimeBuilder {
 		a.aload(2);
 		a.invokestatic(this.rdDims);
 		a.astore(4); // dims
-		a.anew(this.arrayListClass);
+		a.new_(this.arrayListClass);
 		a.dup();
 		a.invokespecial(this.alInit);
 		a.astore(5); // out (data only)
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(4);
 		a.aload(5);
 		a.aload(2);
@@ -2357,56 +2308,56 @@ final class JvmReadRuntimeBuilder {
 		a.aload(5);
 		a.invokevirtual(this.alSize);
 		a.istore(6); // n
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(3);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(9); // base = 1 + rank (the two CL widths; bfloat16 recomputes it)
 		a.iload(0);
-		a.branch(Opcode.IFEQ, dbl);
+		a.ifeq(dbl);
 		a.iload(0);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPEQ, bfl);
+		a.loadConstant(2);
+		a.if_icmpeq(bfl);
 		// single: float[base + n]
 		a.iload(9);
 		a.iload(6);
-		a.op(Opcode.IADD);
-		a.newarrayFloat();
+		a.iadd();
+		a.newarray(TypeKind.FLOAT);
 		a.astore(8);
 		a.aload(8);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(3);
 		a.i2f();
 		a.fastore();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(floop1);
+		a.labelBinding(floop1);
 		a.iload(7);
 		a.iload(3);
-		a.branch(Opcode.IF_ICMPGE, fdone1);
+		a.if_icmpge(fdone1);
 		a.aload(8);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(7);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(4);
 		a.iload(7);
 		a.aaload();
 		a.checkcast(this.longClass);
 		a.invokevirtual(this.longLongValue);
-		a.op(Opcode.L2F);
+		a.l2f();
 		a.fastore();
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, floop1);
-		a.bind(fdone1);
-		a.iconst(0);
+		a.goto_(floop1);
+		a.labelBinding(fdone1);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(floop2);
+		a.labelBinding(floop2);
 		a.iload(7);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, fdone2);
+		a.if_icmpge(fdone2);
 		a.aload(8);
 		a.iload(9);
 		a.iload(7);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(5);
 		a.iload(7);
 		a.invokevirtual(this.alGet);
@@ -2414,11 +2365,11 @@ final class JvmReadRuntimeBuilder {
 		a.d2f();
 		a.fastore();
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, floop2);
-		a.bind(fdone2);
+		a.goto_(floop2);
+		a.labelBinding(fdone2);
 		a.aload(8);
 		a.areturn();
-		a.bind(bfl);
+		a.labelBinding(bfl);
 		// bfloat16: short[base + n] with base = 1 + 2 * rank; every header word and
 		// element goes through JvmPackedFloatWidth.BFLOAT16 / _bf16Bits.
 		a.iload(3);
@@ -2426,18 +2377,18 @@ final class JvmReadRuntimeBuilder {
 		a.istore(9);
 		a.iload(9);
 		a.iload(6);
-		a.op(Opcode.IADD);
-		a.newarrayShort();
+		a.iadd();
+		a.newarray(TypeKind.SHORT);
 		a.astore(8);
 		a.aload(8);
 		a.iload(3);
 		JvmPackedFloatWidth.BFLOAT16.storeRank(a);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(bloop1);
+		a.labelBinding(bloop1);
 		a.iload(7);
 		a.iload(3);
-		a.branch(Opcode.IF_ICMPGE, bdone1);
+		a.if_icmpge(bdone1);
 		a.aload(4);
 		a.iload(7);
 		a.aaload();
@@ -2447,50 +2398,50 @@ final class JvmReadRuntimeBuilder {
 		a.istore(10);
 		JvmPackedFloatWidth.BFLOAT16.storeDim(a, 8, 7, 10);
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, bloop1);
-		a.bind(bdone1);
-		a.iconst(0);
+		a.goto_(bloop1);
+		a.labelBinding(bdone1);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(bloop2);
+		a.labelBinding(bloop2);
 		a.iload(7);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, bdone2);
+		a.if_icmpge(bdone2);
 		a.aload(8);
 		a.iload(9);
 		a.iload(7);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(5);
 		a.iload(7);
 		a.invokevirtual(this.alGet);
 		a.invokestatic(this.rdF);
 		JvmPackedFloatWidth.BFLOAT16.storeElem(a, this.bf16Bits);
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, bloop2);
-		a.bind(bdone2);
+		a.goto_(bloop2);
+		a.labelBinding(bdone2);
 		a.aload(8);
 		a.areturn();
-		a.bind(dbl);
+		a.labelBinding(dbl);
 		// double: double[base + n]
 		a.iload(9);
 		a.iload(6);
-		a.op(Opcode.IADD);
-		a.newarrayDouble();
+		a.iadd();
+		a.newarray(TypeKind.DOUBLE);
 		a.astore(8);
 		a.aload(8);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(3);
 		a.i2d();
 		a.dastore();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(dloop1);
+		a.labelBinding(dloop1);
 		a.iload(7);
 		a.iload(3);
-		a.branch(Opcode.IF_ICMPGE, ddone1);
+		a.if_icmpge(ddone1);
 		a.aload(8);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(7);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(4);
 		a.iload(7);
 		a.aaload();
@@ -2499,29 +2450,29 @@ final class JvmReadRuntimeBuilder {
 		a.l2d();
 		a.dastore();
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, dloop1);
-		a.bind(ddone1);
-		a.iconst(0);
+		a.goto_(dloop1);
+		a.labelBinding(ddone1);
+		a.loadConstant(0);
 		a.istore(7);
-		a.bind(dloop2);
+		a.labelBinding(dloop2);
 		a.iload(7);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, ddone2);
+		a.if_icmpge(ddone2);
 		a.aload(8);
 		a.iload(9);
 		a.iload(7);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(5);
 		a.iload(7);
 		a.invokevirtual(this.alGet);
 		a.invokestatic(this.rdF);
 		a.dastore();
 		a.iinc(7, 1);
-		a.branch(Opcode.GOTO, dloop2);
-		a.bind(ddone2);
+		a.goto_(dloop2);
+		a.labelBinding(ddone2);
 		a.aload(8);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _readStruct: cursor just past "#S(". Parses the type name and the slot name/value
@@ -2532,341 +2483,341 @@ final class JvmReadRuntimeBuilder {
 	// Object[]{layout, v1..vn} instance -- the
 	// exact shape %obj-new emits. Without the instance gate no defstruct exists, so any
 	// #S(...) resolves to the "not a defined structure type" error.
-	private List<Integer> buildReadStruct() {
-		JvmAsm a = new JvmAsm();
-		int ne1 = a.label();
-		int ne2 = a.label();
-		int goodName = a.label();
-		int badName = a.label();
-		int unq = a.label();
-		int splitDone = a.label();
-		int errNoType = a.label();
+	private MethodCode buildReadStruct() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label ne1 = a.newLabel();
+		MethodCode.Label ne2 = a.newLabel();
+		MethodCode.Label goodName = a.newLabel();
+		MethodCode.Label badName = a.newLabel();
+		MethodCode.Label unq = a.newLabel();
+		MethodCode.Label splitDone = a.newLabel();
+		MethodCode.Label errNoType = a.newLabel();
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, ne1);
+		a.if_icmplt(ne1);
 		err(a, "Unexpected end of input, expected ')'");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(ne1);
+		a.labelBinding(ne1);
 		charAtPos(a);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, ne2);
+		a.loadConstant(')');
+		a.if_icmpne(ne2);
 		advance(a);
 		err(a, "#S(): a structure literal needs a type name");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(ne2);
+		a.labelBinding(ne2);
 		a.invokestatic(this.readExpr);
 		a.astore(16); // nmObj
 		a.aload(16);
 		a.instanceOf(this.stringClass);
-		a.branch(Opcode.IFEQ, badName);
+		a.ifeq(badName);
 		a.aload(16);
 		a.checkcast(this.stringClass);
 		ldc(a, "\"");
 		a.invokevirtual(this.stringStartsWith);
-		a.branch(Opcode.IFEQ, goodName);
-		a.bind(badName);
+		a.ifeq(goodName);
+		a.labelBinding(badName);
 		sbNew(a, "#S: expected a structure type name, got ");
 		a.aload(16);
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(goodName);
+		a.labelBinding(goodName);
 		a.aload(16);
 		a.checkcast(this.stringClass);
 		a.astore(0); // name
 		a.aload(0);
-		a.iconst(':');
+		a.loadConstant(':');
 		a.invokevirtual(this.stringIndexOf);
 		a.istore(17); // ci
 		a.iload(17);
-		a.branch(Opcode.IFLT, unq);
+		a.iflt(unq);
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(17);
 		a.invokevirtual(this.stringSubstring);
 		a.astore(2); // tp
 		a.aload(0);
 		a.aload(0);
-		a.iconst(':');
+		a.loadConstant(':');
 		a.invokevirtual(this.stringLastIndexOf);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(1); // tm
-		a.branch(Opcode.GOTO, splitDone);
-		a.bind(unq);
-		a.aconstNull();
+		a.goto_(splitDone);
+		a.labelBinding(unq);
+		a.aconst_null();
 		a.astore(2);
 		a.aload(0);
 		a.astore(1);
-		a.bind(splitDone);
+		a.labelBinding(splitDone);
 		if (this.rdStructs == null) {
-			a.branch(Opcode.GOTO, errNoType);
-			a.bind(errNoType);
+			a.goto_(errNoType);
+			a.labelBinding(errNoType);
 			emitNoTypeError(a, "");
-			return a.finish();
+			return a;
 		}
-		int found = a.label();
-		int errClassHint = a.label();
+		MethodCode.Label found = a.newLabel();
+		MethodCode.Label errClassHint = a.newLabel();
 		// pass 1: exact struct match (a qualified spelling against its qualified entry,
 		// or an unqualified spelling against an unqualified entry)
-		int p1loop = a.label();
-		int p1next = a.label();
-		int p1end = a.label();
-		int p1qual = a.label();
-		a.iconst(0);
+		MethodCode.Label p1loop = a.newLabel();
+		MethodCode.Label p1next = a.newLabel();
+		MethodCode.Label p1end = a.newLabel();
+		MethodCode.Label p1qual = a.newLabel();
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(p1loop);
+		a.labelBinding(p1loop);
 		a.iload(4);
 		a.getstatic(this.rdStructs);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, p1end);
+		a.if_icmpge(p1end);
 		a.getstatic(this.rdStructs);
 		a.iload(4);
 		a.aaload();
 		a.astore(3); // entry
 		a.aload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.aload(1);
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, p1next);
+		a.ifeq(p1next);
 		a.aload(3);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.aaload();
-		a.branch(Opcode.IFNULL, p1next); // class entry
+		a.ifnull(p1next); // class entry
 		a.aload(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(this.stringClass);
 		a.astore(16); // epkg
 		a.aload(16);
 		a.invokevirtual(this.stringLength);
-		a.branch(Opcode.IFNE, p1qual);
+		a.ifne(p1qual);
 		a.aload(2);
-		a.branch(Opcode.IFNONNULL, p1next);
-		a.branch(Opcode.GOTO, found);
-		a.bind(p1qual);
+		a.ifnonnull(p1next);
+		a.goto_(found);
+		a.labelBinding(p1qual);
 		a.aload(2);
-		a.branch(Opcode.IFNULL, p1next);
+		a.ifnull(p1next);
 		a.aload(16);
 		a.aload(2);
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, p1next);
-		a.branch(Opcode.GOTO, found);
-		a.bind(p1next);
+		a.ifeq(p1next);
+		a.goto_(found);
+		a.labelBinding(p1next);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, p1loop);
-		a.bind(p1end);
+		a.goto_(p1loop);
+		a.labelBinding(p1end);
 		// pass 2: a qualified spelling falls back to an unqualified entry of the same
 		// member name (findStructTag's splitQualified fallback)
-		int passClass = a.label();
-		int p2loop = a.label();
-		int p2next = a.label();
-		int p2end = a.label();
+		MethodCode.Label passClass = a.newLabel();
+		MethodCode.Label p2loop = a.newLabel();
+		MethodCode.Label p2next = a.newLabel();
+		MethodCode.Label p2end = a.newLabel();
 		a.aload(2);
-		a.branch(Opcode.IFNULL, passClass);
-		a.iconst(0);
+		a.ifnull(passClass);
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(p2loop);
+		a.labelBinding(p2loop);
 		a.iload(4);
 		a.getstatic(this.rdStructs);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, p2end);
+		a.if_icmpge(p2end);
 		a.getstatic(this.rdStructs);
 		a.iload(4);
 		a.aaload();
 		a.astore(3);
 		a.aload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.aload(1);
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, p2next);
+		a.ifeq(p2next);
 		a.aload(3);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.aaload();
-		a.branch(Opcode.IFNULL, p2next);
+		a.ifnull(p2next);
 		a.aload(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(this.stringClass);
 		a.invokevirtual(this.stringLength);
-		a.branch(Opcode.IFNE, p2next);
-		a.branch(Opcode.GOTO, found);
-		a.bind(p2next);
+		a.ifne(p2next);
+		a.goto_(found);
+		a.labelBinding(p2next);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, p2loop);
-		a.bind(p2end);
-		a.bind(passClass);
+		a.goto_(p2loop);
+		a.labelBinding(p2end);
+		a.labelBinding(passClass);
 		// pass 3: a class of that name exists -> the "#S reads defstruct types only"
 		// hint, matching the fold's error
-		int p3loop = a.label();
-		int p3next = a.label();
-		int p3end = a.label();
-		a.iconst(0);
+		MethodCode.Label p3loop = a.newLabel();
+		MethodCode.Label p3next = a.newLabel();
+		MethodCode.Label p3end = a.newLabel();
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(p3loop);
+		a.labelBinding(p3loop);
 		a.iload(4);
 		a.getstatic(this.rdStructs);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, p3end);
+		a.if_icmpge(p3end);
 		a.getstatic(this.rdStructs);
 		a.iload(4);
 		a.aaload();
 		a.astore(3);
 		a.aload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.aload(1);
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, p3next);
+		a.ifeq(p3next);
 		a.aload(3);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.aaload();
-		a.branch(Opcode.IFNONNULL, p3next);
-		a.branch(Opcode.GOTO, errClassHint);
-		a.bind(p3next);
+		a.ifnonnull(p3next);
+		a.goto_(errClassHint);
+		a.labelBinding(p3next);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, p3loop);
-		a.bind(p3end);
-		a.branch(Opcode.GOTO, errNoType);
-		a.bind(found);
+		a.goto_(p3loop);
+		a.labelBinding(p3end);
+		a.goto_(errNoType);
+		a.labelBinding(found);
 		a.aload(3);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.aaload();
 		a.checkcast(this.stringArrayClass);
 		a.astore(5); // layout
 		a.aload(3);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
 		a.checkcast(this.stringArrayClass);
 		a.astore(12); // initTexts
 		a.aload(5);
 		a.arraylength();
-		a.iconst(3);
-		a.op(Opcode.ISUB);
+		a.loadConstant(3);
+		a.isub();
 		a.istore(6); // slotCount
 		a.iload(6);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.anewarray(this.objectClass);
 		a.astore(7); // inst
 		a.aload(7);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(5);
 		a.aastore();
 		// fill every slot with the layout as an "unset" sentinel: nil values are null,
 		// so unset needs a marker no read datum can be (identity to the layout array)
-		int sloop = a.label();
-		int sdone = a.label();
-		a.iconst(0);
+		MethodCode.Label sloop = a.newLabel();
+		MethodCode.Label sdone = a.newLabel();
+		a.loadConstant(0);
 		a.istore(11);
-		a.bind(sloop);
+		a.labelBinding(sloop);
 		a.iload(11);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, sdone);
+		a.if_icmpge(sdone);
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(11);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(5);
 		a.aastore();
 		a.iinc(11, 1);
-		a.branch(Opcode.GOTO, sloop);
-		a.bind(sdone);
+		a.goto_(sloop);
+		a.labelBinding(sdone);
 		// slot name/value pairs. Locals 18/19/20 are the :allow-other-keys state (seen,
 		// licensing) and the first unknown slot's display spelling, reported at the end
 		// when nothing licensed it -- recording instead of signalling keeps the single
 		// pass order-independent, since the marker may follow the unknown slot.
-		int pairLoop = a.label();
-		int pl1 = a.label();
-		int pl2 = a.label();
-		int badSlot = a.label();
-		int isCharSlot = a.label();
-		int haveSlotName = a.label();
-		int pv1 = a.label();
-		int pv2 = a.label();
-		int notAok = a.label();
-		int aokNil = a.label();
-		int kloop = a.label();
-		int knext = a.label();
-		int kdone = a.label();
-		int haveIdx = a.label();
-		int fillDefaults = a.label();
-		int fillInit = a.label();
-		a.iconst(0);
+		MethodCode.Label pairLoop = a.newLabel();
+		MethodCode.Label pl1 = a.newLabel();
+		MethodCode.Label pl2 = a.newLabel();
+		MethodCode.Label badSlot = a.newLabel();
+		MethodCode.Label isCharSlot = a.newLabel();
+		MethodCode.Label haveSlotName = a.newLabel();
+		MethodCode.Label pv1 = a.newLabel();
+		MethodCode.Label pv2 = a.newLabel();
+		MethodCode.Label notAok = a.newLabel();
+		MethodCode.Label aokNil = a.newLabel();
+		MethodCode.Label kloop = a.newLabel();
+		MethodCode.Label knext = a.newLabel();
+		MethodCode.Label kdone = a.newLabel();
+		MethodCode.Label haveIdx = a.newLabel();
+		MethodCode.Label fillDefaults = a.newLabel();
+		MethodCode.Label fillInit = a.newLabel();
+		a.loadConstant(0);
 		a.istore(18);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(19);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(20);
-		a.bind(pairLoop);
+		a.labelBinding(pairLoop);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, pl1);
+		a.if_icmplt(pl1);
 		err(a, "Unexpected end of input, expected ')'");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(pl1);
+		a.labelBinding(pl1);
 		charAtPos(a);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, pl2);
+		a.loadConstant(')');
+		a.if_icmpne(pl2);
 		advance(a);
-		a.branch(Opcode.GOTO, fillDefaults);
-		a.bind(pl2);
+		a.goto_(fillDefaults);
+		a.labelBinding(pl2);
 		a.invokestatic(this.readExpr);
 		a.astore(8); // snObj, normalized to a String display spelling below
 		a.aload(8);
 		a.instanceOf(this.stringClass);
-		a.branch(Opcode.IFEQ, isCharSlot);
+		a.ifeq(isCharSlot);
 		a.aload(8);
 		a.checkcast(this.stringClass);
 		ldc(a, "\"");
 		a.invokevirtual(this.stringStartsWith);
-		a.branch(Opcode.IFEQ, haveSlotName);
+		a.ifeq(haveSlotName);
 		// A string designator spells the name with _readStr's quote wrapping: strip it.
 		a.aload(8);
 		a.checkcast(this.stringClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(8);
 		a.checkcast(this.stringClass);
 		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(this.stringSubstring);
 		a.astore(8);
-		a.branch(Opcode.GOTO, haveSlotName);
-		a.bind(isCharSlot);
+		a.goto_(haveSlotName);
+		a.labelBinding(isCharSlot);
 		// A character designator is the one-code-point int[] _readCharLit boxes.
 		a.aload(8);
 		a.instanceOf(this.intArrayClass);
-		a.branch(Opcode.IFEQ, badSlot);
+		a.ifeq(badSlot);
 		a.aload(8);
 		a.checkcast(this.intArrayClass);
 		a.arraylength();
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, badSlot);
+		a.loadConstant(1);
+		a.if_icmpne(badSlot);
 		a.aload(8);
 		a.checkcast(this.intArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iaload();
 		a.invokestatic(this.charToString);
 		a.astore(8);
-		a.bind(haveSlotName);
+		a.labelBinding(haveSlotName);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, pv1);
+		a.if_icmplt(pv1);
 		err(a, "Unexpected end of input, expected ')'");
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(badSlot);
+		a.labelBinding(badSlot);
 		sbNew(a, "#S(");
 		a.aload(0);
 		a.invokevirtual(this.sbAppendStr);
@@ -2875,20 +2826,20 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(pv1);
+		a.labelBinding(pv1);
 		charAtPos(a);
-		a.iconst(')');
-		a.branch(Opcode.IF_ICMPNE, pv2);
+		a.loadConstant(')');
+		a.if_icmpne(pv2);
 		sbNew(a, "#S(");
 		a.aload(0);
 		a.invokevirtual(this.sbAppendStr);
 		sbText(a, " ...): odd number of slot name/value items in a structure literal");
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(pv2);
+		a.labelBinding(pv2);
 		a.invokestatic(this.readExpr);
 		a.astore(9); // value
 		a.aload(8);
@@ -2900,80 +2851,80 @@ final class JvmReadRuntimeBuilder {
 		a.aload(13);
 		ldc(a, "ALLOW-OTHER-KEYS");
 		a.invokevirtual(this.stringEqualsIgnoreCase);
-		a.branch(Opcode.IFEQ, notAok);
+		a.ifeq(notAok);
 		a.iload(18);
-		a.branch(Opcode.IFNE, pairLoop);
-		a.iconst(1);
+		a.ifne(pairLoop);
+		a.loadConstant(1);
 		a.istore(18);
 		a.aload(9);
-		a.branch(Opcode.IFNULL, aokNil);
-		a.iconst(1);
+		a.ifnull(aokNil);
+		a.loadConstant(1);
 		a.istore(19);
-		a.branch(Opcode.GOTO, pairLoop);
-		a.bind(aokNil);
-		a.iconst(0);
+		a.goto_(pairLoop);
+		a.labelBinding(aokNil);
+		a.loadConstant(0);
 		a.istore(19);
-		a.branch(Opcode.GOTO, pairLoop);
-		a.bind(notAok);
-		a.iconst(-1);
+		a.goto_(pairLoop);
+		a.labelBinding(notAok);
+		a.loadConstant(-1);
 		a.istore(10); // idx
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(11);
-		a.bind(kloop);
+		a.labelBinding(kloop);
 		a.iload(11);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, kdone);
+		a.if_icmpge(kdone);
 		a.aload(5);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.iload(11);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aaload();
 		a.aload(13);
 		a.invokevirtual(this.objectEquals);
-		a.branch(Opcode.IFEQ, knext);
+		a.ifeq(knext);
 		a.iload(11);
 		a.istore(10);
-		a.branch(Opcode.GOTO, kdone);
-		a.bind(knext);
+		a.goto_(kdone);
+		a.labelBinding(knext);
 		a.iinc(11, 1);
-		a.branch(Opcode.GOTO, kloop);
-		a.bind(kdone);
+		a.goto_(kloop);
+		a.labelBinding(kdone);
 		a.iload(10);
-		a.branch(Opcode.IFGE, haveIdx);
+		a.ifge(haveIdx);
 		// An unknown slot is recorded, not signalled: a later :allow-other-keys may
 		// license it, and only the first one is ever reported.
 		a.aload(20);
-		a.branch(Opcode.IFNONNULL, pairLoop);
+		a.ifnonnull(pairLoop);
 		a.aload(8);
 		a.astore(20);
-		a.branch(Opcode.GOTO, pairLoop);
-		a.bind(haveIdx);
+		a.goto_(pairLoop);
+		a.labelBinding(haveIdx);
 		// leftmost wins: store only while the slot still holds the sentinel
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(10);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aaload();
 		a.aload(5);
-		a.branch(Opcode.IF_ACMPNE, pairLoop);
+		a.if_acmpne(pairLoop);
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(10);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(9);
 		a.aastore();
-		a.branch(Opcode.GOTO, pairLoop);
-		a.bind(fillDefaults);
+		a.goto_(pairLoop);
+		a.labelBinding(fillDefaults);
 		a.iload(19);
-		a.branch(Opcode.IFNE, fillInit);
+		a.ifne(fillInit);
 		a.aload(20);
-		a.branch(Opcode.IFNULL, fillInit);
+		a.ifnull(fillInit);
 		sbNew(a, "#S(");
 		a.aload(0);
 		a.invokevirtual(this.sbAppendStr);
 		sbText(a, " ...): ");
 		a.aload(5);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.invokevirtual(this.sbAppendStr);
 		sbText(a, " has no slot named ");
@@ -2981,47 +2932,47 @@ final class JvmReadRuntimeBuilder {
 		a.checkcast(this.stringClass);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(fillInit);
-		int floop = a.label();
-		int fnext = a.label();
-		int fdone = a.label();
-		int setNil = a.label();
-		int parseText = a.label();
-		a.iconst(0);
+		a.labelBinding(fillInit);
+		MethodCode.Label floop = a.newLabel();
+		MethodCode.Label fnext = a.newLabel();
+		MethodCode.Label fdone = a.newLabel();
+		MethodCode.Label setNil = a.newLabel();
+		MethodCode.Label parseText = a.newLabel();
+		a.loadConstant(0);
 		a.istore(11);
-		a.bind(floop);
+		a.labelBinding(floop);
 		a.iload(11);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPGE, fdone);
+		a.if_icmpge(fdone);
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(11);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aaload();
 		a.aload(5);
-		a.branch(Opcode.IF_ACMPNE, fnext);
+		a.if_acmpne(fnext);
 		a.aload(12);
-		a.branch(Opcode.IFNULL, setNil);
+		a.ifnull(setNil);
 		a.aload(12);
 		a.iload(11);
 		a.aaload();
 		a.astore(13); // initform action
 		a.aload(13);
-		a.branch(Opcode.IFNULL, setNil);
+		a.ifnull(setNil);
 		a.aload(13);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst(EmittedReaderInitforms.SIGNAL_MARKER);
-		a.branch(Opcode.IF_ICMPNE, parseText);
+		a.loadConstant(EmittedReaderInitforms.SIGNAL_MARKER);
+		a.if_icmpne(parseText);
 		a.aload(13);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.stringSubstringFrom);
 		a.invokestatic(this.rdErr);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(parseText);
+		a.labelBinding(parseText);
 		// re-read the baked constant text in place (save/restore the reader state)
 		a.getstatic(this.readSrc);
 		a.astore(14);
@@ -3029,7 +2980,7 @@ final class JvmReadRuntimeBuilder {
 		a.istore(15);
 		a.aload(13);
 		a.putstatic(this.readSrc);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.putstatic(this.readPos);
 		a.invokestatic(this.readExpr);
 		a.astore(9);
@@ -3038,34 +2989,34 @@ final class JvmReadRuntimeBuilder {
 		a.iload(15);
 		a.putstatic(this.readPos);
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(11);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(9);
 		a.aastore();
-		a.branch(Opcode.GOTO, fnext);
-		a.bind(setNil);
+		a.goto_(fnext);
+		a.labelBinding(setNil);
 		a.aload(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(11);
-		a.op(Opcode.IADD);
-		a.aconstNull();
+		a.iadd();
+		a.aconst_null();
 		a.aastore();
-		a.bind(fnext);
+		a.labelBinding(fnext);
 		a.iinc(11, 1);
-		a.branch(Opcode.GOTO, floop);
-		a.bind(fdone);
+		a.goto_(floop);
+		a.labelBinding(fdone);
 		a.aload(7);
 		a.areturn();
-		a.bind(errClassHint);
+		a.labelBinding(errClassHint);
 		emitNoTypeError(a, " (it names a class; #S reads defstruct types only)");
-		a.bind(errNoType);
+		a.labelBinding(errNoType);
 		emitNoTypeError(a, "");
-		return a.finish();
+		return a;
 	}
 
 	/** Emits the "#S(NAME ...): NAME is not a defined structure type" throw. */
-	private void emitNoTypeError(JvmAsm a, String suffix) {
+	private void emitNoTypeError(MethodCode a, String suffix) {
 		sbNew(a, "#S(");
 		a.aload(0);
 		a.invokevirtual(this.sbAppendStr);
@@ -3074,97 +3025,97 @@ final class JvmReadRuntimeBuilder {
 		a.invokevirtual(this.sbAppendStr);
 		sbText(a, " is not a defined structure type" + suffix);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
 	}
 
 	// _rdLen(list, label): proper-list length; an improper tail signals.
-	private List<Integer> buildRdLen() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int done = a.label();
-		int isCons = a.label();
-		a.iconst(0);
+	private MethodCode buildRdLen() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label isCons = a.newLabel();
+		a.loadConstant(0);
 		a.istore(2);
 		a.aload(0);
 		a.astore(3);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.aload(3);
-		a.branch(Opcode.IFNULL, done);
+		a.ifnull(done);
 		a.aload(3);
 		a.invokestatic(this.rdConsp);
-		a.branch(Opcode.IFNE, isCons);
-		a.anew(this.stringBuilderClass);
+		a.ifne(isCons);
+		a.new_(this.stringBuilderClass);
 		a.dup();
 		a.aload(1);
 		a.invokespecial(this.sbInitStr);
 		sbText(a, ": contents must be proper lists");
 		sbThrow(a);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.ireturn();
-		a.bind(isCons);
+		a.labelBinding(isCons);
 		a.iinc(2, 1);
 		a.aload(3);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(3);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.iload(2);
 		a.ireturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdConsp: the runtime cons test (an Object[] that is not a ratio, closure or
 	// instance), mirroring the consp predicate's discriminators.
-	private List<Integer> buildRdConsp() {
-		JvmAsm a = new JvmAsm();
-		int no = a.label();
+	private MethodCode buildRdConsp() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label no = a.newLabel();
 		a.aload(0);
 		a.instanceOf(this.objectArrayClass);
-		a.branch(Opcode.IFEQ, no);
+		a.ifeq(no);
 		a.aload(0);
 		a.instanceOf(this.bigIntegerArrayClass);
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		a.aload(0);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(this.integerClass);
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		a.aload(0);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(this.stringArrayClass);
-		a.branch(Opcode.IFNE, no);
-		a.iconst(1);
+		a.ifne(no);
+		a.loadConstant(1);
 		a.ireturn();
-		a.bind(no);
-		a.iconst(0);
+		a.labelBinding(no);
+		a.loadConstant(0);
 		a.ireturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdLevel(v, label): one nested level of array contents -- nil or a proper list;
 	// anything else is the frontend's "expected a nested list" error.
-	private List<Integer> buildRdLevel() {
-		JvmAsm a = new JvmAsm();
-		int nn = a.label();
-		int bad = a.label();
+	private MethodCode buildRdLevel() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label nn = a.newLabel();
+		MethodCode.Label bad = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, nn);
-		a.aconstNull();
+		a.ifnonnull(nn);
+		a.aconst_null();
 		a.areturn();
-		a.bind(nn);
+		a.labelBinding(nn);
 		a.aload(0);
 		a.invokestatic(this.rdConsp);
-		a.branch(Opcode.IFEQ, bad);
+		a.ifeq(bad);
 		a.aload(0);
 		a.areturn();
-		a.bind(bad);
-		a.anew(this.stringBuilderClass);
+		a.labelBinding(bad);
+		a.new_(this.stringBuilderClass);
 		a.dup();
 		a.aload(1);
 		a.invokespecial(this.sbInitStr);
@@ -3173,78 +3124,78 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdDims(rows, rank, label): dimension sizes from the first-element chain, as the
 	// Object[]-of-Long shape the array header stores.
-	private List<Integer> buildRdDims() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int done = a.label();
-		int lvlNull = a.label();
-		int lvlSet = a.label();
+	private MethodCode buildRdDims() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label lvlNull = a.newLabel();
+		MethodCode.Label lvlSet = a.newLabel();
 		a.iload(1);
 		a.anewarray(this.objectClass);
 		a.astore(3);
 		a.aload(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.aload(2);
 		a.invokestatic(this.rdLen);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(this.longValueOf);
 		a.aastore();
 		a.aload(0);
 		a.astore(5);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(4);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(4);
 		a.iload(1);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(5);
-		a.branch(Opcode.IFNULL, lvlNull);
+		a.ifnull(lvlNull);
 		a.aload(5);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aload(2);
 		a.invokestatic(this.rdLevel);
 		a.astore(5);
-		a.branch(Opcode.GOTO, lvlSet);
-		a.bind(lvlNull);
-		a.aconstNull();
+		a.goto_(lvlSet);
+		a.labelBinding(lvlNull);
+		a.aconst_null();
 		a.astore(5);
-		a.bind(lvlSet);
+		a.labelBinding(lvlSet);
 		a.aload(3);
 		a.iload(4);
 		a.aload(5);
 		a.aload(2);
 		a.invokestatic(this.rdLen);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(this.longValueOf);
 		a.aastore();
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(3);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdFlat(items, depth, dims, out, label): validates one level against dims and
 	// appends the leaves to `out` in row-major order, recursing into nested levels.
-	private List<Integer> buildRdFlat() {
-		JvmAsm a = new JvmAsm();
-		int okCount = a.label();
-		int deeper = a.label();
-		int aloop = a.label();
-		int retv = a.label();
-		int bloop = a.label();
-		int retv2 = a.label();
+	private MethodCode buildRdFlat() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label okCount = a.newLabel();
+		MethodCode.Label deeper = a.newLabel();
+		MethodCode.Label aloop = a.newLabel();
+		MethodCode.Label retv = a.newLabel();
+		MethodCode.Label bloop = a.newLabel();
+		MethodCode.Label retv2 = a.newLabel();
 		a.aload(0);
 		a.aload(4);
 		a.invokestatic(this.rdLen);
@@ -3255,10 +3206,10 @@ final class JvmReadRuntimeBuilder {
 		a.checkcast(this.longClass);
 		a.invokevirtual(this.longLongValue);
 		a.iload(5);
-		a.op(Opcode.I2L);
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFEQ, okCount);
-		a.anew(this.stringBuilderClass);
+		a.i2l();
+		a.lcmp();
+		a.ifeq(okCount);
+		a.new_(this.stringBuilderClass);
 		a.dup();
 		a.aload(4);
 		a.invokespecial(this.sbInitStr);
@@ -3273,269 +3224,269 @@ final class JvmReadRuntimeBuilder {
 		a.iload(5);
 		a.invokevirtual(this.sbAppendInt);
 		sbThrow(a);
-		a.op(Opcode.RETURN);
-		a.bind(okCount);
+		a.return_();
+		a.labelBinding(okCount);
 		a.iload(1);
 		a.aload(2);
 		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPNE, deeper);
+		a.loadConstant(1);
+		a.isub();
+		a.if_icmpne(deeper);
 		a.aload(0);
 		a.astore(6);
-		a.bind(aloop);
+		a.labelBinding(aloop);
 		a.aload(6);
-		a.branch(Opcode.IFNULL, retv);
+		a.ifnull(retv);
 		a.aload(3);
 		a.aload(6);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.invokevirtual(this.alAdd);
 		a.pop();
 		a.aload(6);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(6);
-		a.branch(Opcode.GOTO, aloop);
-		a.bind(retv);
-		a.op(Opcode.RETURN);
-		a.bind(deeper);
+		a.goto_(aloop);
+		a.labelBinding(retv);
+		a.return_();
+		a.labelBinding(deeper);
 		a.aload(0);
 		a.astore(6);
-		a.bind(bloop);
+		a.labelBinding(bloop);
 		a.aload(6);
-		a.branch(Opcode.IFNULL, retv2);
+		a.ifnull(retv2);
 		a.aload(6);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aload(4);
 		a.invokestatic(this.rdLevel);
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.aload(2);
 		a.aload(3);
 		a.aload(4);
 		a.invokestatic(this.rdFlat);
 		a.aload(6);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(6);
-		a.branch(Opcode.GOTO, bloop);
-		a.bind(retv2);
-		a.op(Opcode.RETURN);
-		return a.finish();
+		a.goto_(bloop);
+		a.labelBinding(retv2);
+		a.return_();
+		return a;
 	}
 
 	// _rdErr(message): throw the reader error; a RuntimeException is what every emitted
 	// runtime helper throws, so handler-case catches it as a simple-error.
-	private List<Integer> buildRdErr() {
-		JvmAsm a = new JvmAsm();
-		a.anew(this.rtExClass);
+	private MethodCode buildRdErr() {
+		MethodCode a = new MethodCode();
+		a.new_(this.rtExClass);
 		a.dup();
 		a.aload(0);
 		a.invokespecial(this.rtExInit);
-		a.op(Opcode.ATHROW);
-		return a.finish();
+		a.athrow();
+		return a;
 	}
 
 	// _rdName(spelled): the package-stripped base name with the keyword marker dropped
 	// (:X, X and PKG::X all name slot X), mirroring the fold's slotIndexOf.
-	private List<Integer> buildRdName() {
-		JvmAsm a = new JvmAsm();
-		int n1 = a.label();
-		int strip = a.label();
-		int retn = a.label();
+	private MethodCode buildRdName() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label n1 = a.newLabel();
+		MethodCode.Label strip = a.newLabel();
+		MethodCode.Label retn = a.newLabel();
 		a.aload(0);
 		ldc(a, "#:");
 		a.invokevirtual(this.stringStartsWith);
-		a.branch(Opcode.IFEQ, n1);
+		a.ifeq(n1);
 		a.aload(0);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(0);
-		a.branch(Opcode.GOTO, strip);
-		a.bind(n1);
+		a.goto_(strip);
+		a.labelBinding(n1);
 		a.aload(0);
 		a.invokevirtual(this.stringLength);
-		a.branch(Opcode.IFEQ, retn);
+		a.ifeq(retn);
 		a.aload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(this.stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, strip);
+		a.loadConstant(':');
+		a.if_icmpne(strip);
 		a.aload(0);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(0);
-		a.bind(strip);
+		a.labelBinding(strip);
 		a.aload(0);
-		a.iconst(':');
+		a.loadConstant(':');
 		a.invokevirtual(this.stringLastIndexOf);
 		a.istore(1);
 		a.iload(1);
-		a.branch(Opcode.IFLT, retn);
+		a.iflt(retn);
 		a.aload(0);
 		a.iload(1);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokevirtual(this.stringSubstringFrom);
 		a.astore(0);
-		a.bind(retn);
+		a.labelBinding(retn);
 		a.aload(0);
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdF(leaf): coerce a packed-float leaf to double (integer, double, big integer or
 	// ratio), or the frontend's "expected a number" error.
-	private List<Integer> buildRdF() {
-		JvmAsm a = new JvmAsm();
-		int f1 = a.label();
-		int f2 = a.label();
-		int f3 = a.label();
-		int f4 = a.label();
+	private MethodCode buildRdF() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label f1 = a.newLabel();
+		MethodCode.Label f2 = a.newLabel();
+		MethodCode.Label f3 = a.newLabel();
+		MethodCode.Label f4 = a.newLabel();
 		a.aload(0);
 		a.instanceOf(this.longClass);
-		a.branch(Opcode.IFEQ, f1);
+		a.ifeq(f1);
 		a.aload(0);
 		a.checkcast(this.longClass);
 		a.invokevirtual(this.longLongValue);
 		a.l2d();
 		a.dreturn();
-		a.bind(f1);
+		a.labelBinding(f1);
 		a.aload(0);
 		a.instanceOf(this.doubleClass);
-		a.branch(Opcode.IFEQ, f2);
+		a.ifeq(f2);
 		a.aload(0);
 		a.checkcast(this.doubleClass);
 		a.invokevirtual(this.doubleDoubleValue);
 		a.dreturn();
-		a.bind(f2);
+		a.labelBinding(f2);
 		a.aload(0);
 		a.instanceOf(this.bigIntegerClass);
-		a.branch(Opcode.IFEQ, f3);
+		a.ifeq(f3);
 		a.aload(0);
 		a.checkcast(this.bigIntegerClass);
 		a.invokevirtual(this.bigIntegerDoubleValue);
 		a.dreturn();
-		a.bind(f3);
+		a.labelBinding(f3);
 		a.aload(0);
 		a.instanceOf(this.bigIntegerArrayClass);
-		a.branch(Opcode.IFEQ, f4);
+		a.ifeq(f4);
 		a.aload(0);
 		a.checkcast(this.bigIntegerArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.invokevirtual(this.bigIntegerDoubleValue);
 		a.aload(0);
 		a.checkcast(this.bigIntegerArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.invokevirtual(this.bigIntegerDoubleValue);
-		a.op(Opcode.DDIV);
+		a.ddiv();
 		a.dreturn();
-		a.bind(f4);
+		a.labelBinding(f4);
 		sbNew(a, "packed float array: expected a number, got ");
 		a.aload(0);
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.op(Opcode.DCONST_0);
+		a.dconst_0();
 		a.dreturn();
-		return a.finish();
+		return a;
 	}
 
 	// _rdInferRank(rows): 1 + the depth of the first-element chain, numpy style,
 	// mirroring the frontend's inferFloatArrayRank.
-	private List<Integer> buildRdInferRank() {
-		JvmAsm a = new JvmAsm();
-		int nn = a.label();
-		int loop = a.label();
-		int notNil = a.label();
-		int done = a.label();
+	private MethodCode buildRdInferRank() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label nn = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label notNil = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, nn);
-		a.iconst(1);
+		a.ifnonnull(nn);
+		a.loadConstant(1);
 		a.ireturn();
-		a.bind(nn);
+		a.labelBinding(nn);
 		a.aload(0);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.astore(1); // probe
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(2); // rank
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.aload(1);
-		a.branch(Opcode.IFNONNULL, notNil);
+		a.ifnonnull(notNil);
 		a.iinc(2, 1);
-		a.branch(Opcode.GOTO, done);
-		a.bind(notNil);
+		a.goto_(done);
+		a.labelBinding(notNil);
 		a.aload(1);
 		a.invokestatic(this.rdConsp);
-		a.branch(Opcode.IFEQ, done);
+		a.ifeq(done);
 		a.iinc(2, 1);
 		a.aload(1);
 		a.checkcast(this.objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.astore(1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.iload(2);
 		a.ireturn();
-		return a.finish();
+		return a;
 	}
 
-	private List<Integer> buildLoad() {
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int done = a.label();
-		MethodrefConstant eval = java.util.Objects.requireNonNull(this.evalRef);
-		MethodrefConstant paths = java.util.Objects.requireNonNull(this.pathsGet);
-		MethodrefConstant files = java.util.Objects.requireNonNull(this.filesReadString);
+	private MethodCode buildLoad() {
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		MethodRefEntry eval = java.util.Objects.requireNonNull(this.evalRef);
+		MethodRefEntry paths = java.util.Objects.requireNonNull(this.pathsGet);
+		MethodRefEntry files = java.util.Objects.requireNonNull(this.filesReadString);
 		// path = ((String) pathVal).substring(1, len-1)
 		a.aload(0);
 		a.checkcast(this.stringClass);
 		a.astore(1);
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(1);
 		a.invokevirtual(this.stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(this.stringSubstring);
 		a.astore(2); // path
 		// content = Files.readString(Paths.get(path, new String[0]))
 		a.aload(2);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.anewarray(this.stringClass);
 		a.invokestatic(paths);
 		a.invokestatic(files);
 		a.putstatic(this.readSrc);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.putstatic(this.readPos);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
 		srcLen(a);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.invokestatic(this.readExpr);
-		a.aconstNull();
+		a.aconst_null();
 		a.invokestatic(eval);
 		a.pop();
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		// t is the symbol "T" (the compiled runtime's true, like every other
 		// symbol), NOT the integer 1 -- the interpreter's load answers t.
 		ldc(a, "T");
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
 }

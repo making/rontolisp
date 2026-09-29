@@ -1,18 +1,20 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
@@ -173,67 +175,47 @@ final class JvmJavaDirectSites {
 	 */
 	static final int MAX_SPREAD = 200;
 
-	private static final int T_BOOLEAN = 4;
-
-	private static final int T_CHAR = 5;
-
-	private static final int T_FLOAT = 6;
-
-	private static final int T_DOUBLE = 7;
-
-	private static final int T_BYTE = 8;
-
-	private static final int T_SHORT = 9;
-
-	private static final int T_INT = 10;
-
-	private static final int T_LONG = 11;
-
 	/**
 	 * A method the direct sites add to the class.
 	 *
 	 * @param name its name
 	 * @param desc its descriptor
-	 * @param maxStack the declared {@code max_stack}
-	 * @param maxLocals the declared {@code max_locals}
-	 * @param code the body
-	 * @param exceptionTable the handlers
+	 * @param code the body, its handlers included
 	 */
-	record Method(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<ClassDefinition.Handler> exceptionTable) {
+	record Method(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	private final ConstantPool cp;
 
-	private final ClassConstant thisClass;
+	private final ClassEntry thisClass;
 
 	private final JavaClassLookup lookup;
 
-	private final MethodrefConstant lispToString;
+	private final MethodRefEntry lispToString;
 
-	private final Map<String, MethodrefConstant> sites = new LinkedHashMap<>();
+	private final Map<String, MethodRefEntry> sites = new LinkedHashMap<>();
 
 	private final List<Method> methods = new ArrayList<>();
 
-	private @Nullable MethodrefConstant host;
+	private @Nullable MethodRefEntry host;
 
-	private @Nullable MethodrefConstant lispArray;
+	private @Nullable MethodRefEntry lispArray;
 
-	private @Nullable MethodrefConstant lispTable;
+	private @Nullable MethodRefEntry lispTable;
 
-	private @Nullable MethodrefConstant arrayGuard;
+	private @Nullable MethodRefEntry arrayGuard;
 
-	private @Nullable MethodrefConstant tableGuard;
+	private @Nullable MethodRefEntry tableGuard;
 
-	private @Nullable MethodrefConstant unmarshal;
+	private @Nullable MethodRefEntry unmarshal;
 
-	private @Nullable MethodrefConstant arrayToList;
+	private @Nullable MethodRefEntry arrayToList;
 
-	private @Nullable MethodrefConstant kind;
+	private @Nullable MethodRefEntry kind;
 
-	private @Nullable MethodrefConstant sequence;
+	private @Nullable MethodRefEntry sequence;
 
-	private @Nullable MethodrefConstant strv;
+	private @Nullable MethodRefEntry strv;
 
 	// The specialized vector shapes the program can hold (its gates), and the program's
 	// _bf16Value when a bfloat16 vector can be one of them.
@@ -241,19 +223,19 @@ final class JvmJavaDirectSites {
 
 	private boolean intVectors;
 
-	private @Nullable MethodrefConstant bf16Value;
+	private @Nullable MethodRefEntry bf16Value;
 
-	private final Map<String, MethodrefConstant> costs = new LinkedHashMap<>();
+	private final Map<String, MethodRefEntry> costs = new LinkedHashMap<>();
 
 	private @Nullable JvmJavaImplementations implementations;
 
-	private final Map<String, MethodrefConstant> converts = new LinkedHashMap<>();
+	private final Map<String, MethodRefEntry> converts = new LinkedHashMap<>();
 
 	// _jfail and _jsig, named when first asked for and built by finishHelpers(), once
 	// every body is compiled: what they read depends on the whole program.
-	private @Nullable MethodrefConstant failure;
+	private @Nullable MethodRefEntry failure;
 
-	private @Nullable MethodrefConstant signal;
+	private @Nullable MethodRefEntry signal;
 
 	private boolean finished;
 
@@ -265,7 +247,7 @@ final class JvmJavaDirectSites {
 	 * @param name its name
 	 * @param desc its descriptor
 	 */
-	record Signals(FieldrefConstant field, Utf8Constant name, Utf8Constant desc) {
+	record Signals(FieldRefEntry field, Utf8Constant name, Utf8Constant desc) {
 	}
 
 	/**
@@ -275,8 +257,7 @@ final class JvmJavaDirectSites {
 	 * @param lispToString the program's {@code _lispToString}: how a message shows a
 	 * value
 	 */
-	JvmJavaDirectSites(ConstantPool cp, ClassConstant thisClass, JavaClassLookup lookup,
-			MethodrefConstant lispToString) {
+	JvmJavaDirectSites(ConstantPool cp, ClassEntry thisClass, JavaClassLookup lookup, MethodRefEntry lispToString) {
 		this.cp = cp;
 		this.thisClass = thisClass;
 		this.lookup = lookup;
@@ -289,7 +270,7 @@ final class JvmJavaDirectSites {
 	 * too, as the bridge's {@code marshal} does.
 	 * @param strv the helper, or {@code null} when the program has no arrays
 	 */
-	void strv(@Nullable MethodrefConstant strv) {
+	void strv(@Nullable MethodRefEntry strv) {
 		this.strv = strv;
 	}
 
@@ -304,7 +285,7 @@ final class JvmJavaDirectSites {
 	 * @param ints whether it carries the packed integer runtime
 	 * @param bf16Value the program's {@code _bf16Value(I)D}, present when {@code floats}
 	 */
-	void packedVectors(boolean floats, boolean ints, @Nullable MethodrefConstant bf16Value) {
+	void packedVectors(boolean floats, boolean ints, @Nullable MethodRefEntry bf16Value) {
 		if (floats && bf16Value == null) {
 			throw new IllegalArgumentException("the packed float runtime without _bf16Value");
 		}
@@ -332,7 +313,7 @@ final class JvmJavaDirectSites {
 	 * {@code _junm}: the bridge's {@code unmarshal}, made when first asked for.
 	 * @return the helper
 	 */
-	MethodrefConstant unmarshalHelper() {
+	MethodRefEntry unmarshalHelper() {
 		return unmarshal();
 	}
 
@@ -344,7 +325,7 @@ final class JvmJavaDirectSites {
 	 * @param target the return type
 	 * @return {@code _jcost$N(Object)I}
 	 */
-	MethodrefConstant returnedCost(JavaType target) {
+	MethodRefEntry returnedCost(JavaType target) {
 		return cost(target, false);
 	}
 
@@ -355,7 +336,7 @@ final class JvmJavaDirectSites {
 	 * @param target the return type
 	 * @return {@code _jconv$N(Object)T}
 	 */
-	MethodrefConstant returnedConvert(JavaType target) {
+	MethodRefEntry returnedConvert(JavaType target) {
 		return convert(target, false, true);
 	}
 
@@ -364,8 +345,8 @@ final class JvmJavaDirectSites {
 	 * leaving it. Built by {@link #finishHelpers}.
 	 * @return {@code _jsig(Throwable)Throwable}
 	 */
-	MethodrefConstant signalHelper() {
-		MethodrefConstant ref = this.signal;
+	MethodRefEntry signalHelper() {
+		MethodRefEntry ref = this.signal;
 		if (ref == null) {
 			ref = unfinishedHelper(SIGNAL, SIGNAL_DESC);
 			this.signal = ref;
@@ -373,8 +354,8 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	private MethodrefConstant failure() {
-		MethodrefConstant ref = this.failure;
+	private MethodRefEntry failure() {
+		MethodRefEntry ref = this.failure;
 		if (ref == null) {
 			ref = unfinishedHelper(FAIL, FAIL_DESC);
 			this.failure = ref;
@@ -382,12 +363,11 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	private MethodrefConstant unfinishedHelper(String name, String desc) {
+	private MethodRefEntry unfinishedHelper(String name, String desc) {
 		if (this.finished) {
 			throw new IllegalStateException(name + " asked for after the java: helpers were finished");
 		}
-		return this.cp.addMethodref(this.thisClass,
-				this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+		return this.cp.methodRef(this.thisClass, name, desc);
 	}
 
 	/**
@@ -418,13 +398,13 @@ final class JvmJavaDirectSites {
 			signalHelper();
 		}
 		Signals signals = null;
-		MethodrefConstant condTake = channel.used ? channel.condTake : null;
-		MethodrefConstant condPut = channel.used ? channel.condPut : null;
-		FieldrefConstant nleTl = channel.nleUsed ? channel.nleTlField : null;
+		MethodRefEntry condTake = channel.used ? channel.condTake : null;
+		MethodRefEntry condPut = channel.used ? channel.condPut : null;
+		FieldRefEntry nleTl = channel.nleUsed ? Objects.requireNonNull(channel.nleTlField).entry() : null;
 		if (this.signal != null) {
 			Utf8Constant name = this.cp.addUtf8(SIGNALS);
 			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
-			signals = new Signals(this.cp.addFieldref(this.thisClass, this.cp.addNameAndType(name, desc)), name, desc);
+			signals = new Signals(this.cp.fieldRef(this.thisClass, name.entry(), desc.entry()), name, desc);
 			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
 		}
 		if (this.failure != null) {
@@ -437,12 +417,12 @@ final class JvmJavaDirectSites {
 	// static Throwable _jsig(Throwable t): t's condition taken off _condTl, and the
 	// entry of _nleTl t is the exit of off the stack; then {t, that condition, that
 	// entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
-	private Method buildSignal(FieldrefConstant signals, @Nullable MethodrefConstant condTake,
-			@Nullable FieldrefConstant nleTl) {
-		JvmAsm a = new JvmAsm();
-		ClassConstant objects = cls("[Ljava/lang/Object;");
-		MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
-		MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+	private Method buildSignal(FieldRefEntry signals, @Nullable MethodRefEntry condTake,
+			@Nullable FieldRefEntry nleTl) {
+		MethodCode a = new MethodCode();
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		MethodRefEntry get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+		MethodRefEntry set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
 		// 0 = t, 1 = the record, 2 = a node, 3 = its depth, 4 = the condition, 5 = the
 		// exit. The condition leaves the channel with t: one Java swallows stays in the
 		// record, not on the channel.
@@ -451,149 +431,149 @@ final class JvmJavaDirectSites {
 			a.invokestatic(condTake);
 		}
 		else {
-			a.aconstNull();
+			a.aconst_null();
 		}
 		a.astore(4);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(5);
 		if (nleTl != null) {
-			int notItsExit = a.label();
+			MethodCode.Label notItsExit = a.newLabel();
 			a.getstatic(nleTl);
 			a.invokevirtual(get);
 			a.checkcast(objects);
 			a.astore(2);
 			a.aload(2);
-			a.branch(Opcode.IFNULL, notItsExit);
+			a.ifnull(notItsExit);
 			a.aload(2);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.aload(0);
-			a.branch(Opcode.IF_ACMPNE, notItsExit);
+			a.if_acmpne(notItsExit);
 			a.aload(2);
 			a.astore(5);
 			a.getstatic(nleTl);
 			a.aload(2);
-			a.iconst(3);
+			a.loadConstant(3);
 			a.aaload();
 			a.invokevirtual(set);
-			a.bind(notItsExit);
+			a.labelBinding(notItsExit);
 		}
-		int walk = a.label();
-		int cut = a.label();
-		int push = a.label();
+		MethodCode.Label walk = a.newLabel();
+		MethodCode.Label cut = a.newLabel();
+		MethodCode.Label push = a.newLabel();
 		a.getstatic(signals);
 		a.invokevirtual(get);
 		a.checkcast(objects);
 		a.astore(1);
 		a.aload(1);
 		a.astore(2);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(3);
-		a.bind(walk);
+		a.labelBinding(walk);
 		a.aload(2);
-		a.branch(Opcode.IFNULL, push);
+		a.ifnull(push);
 		a.iload(3);
-		a.iconst(am.ik.rontolisp.compiler.JavaImplementations.PENDING_SIGNALS - 1);
-		a.branch(Opcode.IF_ICMPGE, cut);
+		a.loadConstant(am.ik.rontolisp.compiler.JavaImplementations.PENDING_SIGNALS - 1);
+		a.if_icmpge(cut);
 		a.aload(2);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
 		a.checkcast(objects);
 		a.astore(2);
 		a.iinc(3, 1);
-		a.branch(Opcode.GOTO, walk);
-		a.bind(cut);
+		a.goto_(walk);
+		a.labelBinding(cut);
 		a.aload(2);
-		a.iconst(3);
-		a.aconstNull();
+		a.loadConstant(3);
+		a.aconst_null();
 		a.aastore();
-		a.bind(push);
+		a.labelBinding(push);
 		a.getstatic(signals);
-		a.iconst(4);
+		a.loadConstant(4);
 		a.anewarray(cls("java/lang/Object"));
 		int slot = 0;
 		for (int local : new int[] { 0, 4, 5, 1 }) {
 			a.dup();
-			a.iconst(slot++);
+			a.loadConstant(slot++);
 			a.aload(local);
 			a.aastore();
 		}
 		a.invokevirtual(set);
 		a.aload(0);
 		a.areturn();
-		return new Method(this.cp.addUtf8(SIGNAL), this.cp.addUtf8(SIGNAL_DESC), 6, 6, a.finish(), List.of());
+		return new Method(this.cp.addUtf8(SIGNAL), this.cp.addUtf8(SIGNAL_DESC), a);
 	}
 
 	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
 	// taken off with every newer node, its condition and exit entry put back -- else
 	// new RuntimeException(text + t), which carries no condition.
-	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable MethodrefConstant condPut,
-			@Nullable FieldrefConstant nleTl) {
-		JvmAsm a = new JvmAsm();
+	private Method buildFailure(@Nullable FieldRefEntry signals, @Nullable MethodRefEntry condPut,
+			@Nullable FieldRefEntry nleTl) {
+		MethodCode a = new MethodCode();
 		if (signals != null) {
-			ClassConstant objects = cls("[Ljava/lang/Object;");
-			MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
-			MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+			ClassEntry objects = cls("[Ljava/lang/Object;");
+			MethodRefEntry get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+			MethodRefEntry set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
 			// 0 = t, 1 = the text, 2 = a node, 3 = its exit entry
-			int walk = a.label();
-			int found = a.label();
-			int wrap = a.label();
+			MethodCode.Label walk = a.newLabel();
+			MethodCode.Label found = a.newLabel();
+			MethodCode.Label wrap = a.newLabel();
 			a.getstatic(signals);
 			a.invokevirtual(get);
 			a.checkcast(objects);
 			a.astore(2);
-			a.bind(walk);
+			a.labelBinding(walk);
 			a.aload(2);
-			a.branch(Opcode.IFNULL, wrap);
+			a.ifnull(wrap);
 			a.aload(2);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aaload();
 			a.aload(0);
-			a.branch(Opcode.IF_ACMPEQ, found);
+			a.if_acmpeq(found);
 			a.aload(2);
-			a.iconst(3);
+			a.loadConstant(3);
 			a.aaload();
 			a.checkcast(objects);
 			a.astore(2);
-			a.branch(Opcode.GOTO, walk);
-			a.bind(found);
+			a.goto_(walk);
+			a.labelBinding(found);
 			a.getstatic(signals);
 			a.aload(2);
-			a.iconst(3);
+			a.loadConstant(3);
 			a.aaload();
 			a.invokevirtual(set);
 			if (condPut != null) {
 				a.aload(0);
 				a.aload(2);
-				a.iconst(1);
+				a.loadConstant(1);
 				a.aaload();
 				a.invokestatic(condPut);
 				a.pop();
 			}
 			if (nleTl != null) {
-				int noExit = a.label();
+				MethodCode.Label noExit = a.newLabel();
 				a.aload(2);
-				a.iconst(2);
+				a.loadConstant(2);
 				a.aaload();
 				a.checkcast(objects);
 				a.astore(3);
 				a.aload(3);
-				a.branch(Opcode.IFNULL, noExit);
+				a.ifnull(noExit);
 				a.aload(3);
-				a.iconst(3);
+				a.loadConstant(3);
 				a.getstatic(nleTl);
 				a.invokevirtual(get);
 				a.aastore();
 				a.getstatic(nleTl);
 				a.aload(3);
 				a.invokevirtual(set);
-				a.bind(noExit);
+				a.labelBinding(noExit);
 			}
 			a.aload(0);
 			a.areturn();
-			a.bind(wrap);
+			a.labelBinding(wrap);
 		}
-		a.anew(cls("java/lang/RuntimeException"));
+		a.new_(cls("java/lang/RuntimeException"));
 		a.dup();
 		a.aload(1);
 		a.aload(0);
@@ -601,7 +581,7 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
 		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
 		a.areturn();
-		return new Method(this.cp.addUtf8(FAIL), this.cp.addUtf8(FAIL_DESC), 6, 4, a.finish(), List.of());
+		return new Method(this.cp.addUtf8(FAIL), this.cp.addUtf8(FAIL_DESC), a);
 	}
 
 	/**
@@ -614,10 +594,10 @@ final class JvmJavaDirectSites {
 	 * @return the method, in the {@code (Object...)Object} shape or, past
 	 * {@link #MAX_SPREAD} values, {@code (Object[])Object}
 	 */
-	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount) {
+	MethodRefEntry site(JavaSite site, boolean staticField, int valueCount) {
 		boolean packedValues = valueCount > MAX_SPREAD;
 		String key = shapeKey(site, staticField, packedValues);
-		MethodrefConstant cached = this.sites.get(key);
+		MethodRefEntry cached = this.sites.get(key);
 		if (cached != null) {
 			return cached;
 		}
@@ -632,7 +612,7 @@ final class JvmJavaDirectSites {
 		desc.append(")Ljava/lang/Object;");
 		Utf8Constant nameUtf = this.cp.addUtf8(name);
 		Utf8Constant descUtf = this.cp.addUtf8(desc.toString());
-		MethodrefConstant ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(nameUtf, descUtf));
+		MethodRefEntry ref = this.cp.methodRef(this.thisClass, nameUtf.entry(), descUtf.entry());
 		// Registered before it is built, which may add the shared helpers first.
 		this.sites.put(key, ref);
 		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues).build(nameUtf, descUtf));
@@ -665,29 +645,28 @@ final class JvmJavaDirectSites {
 
 	// --- constant-pool shorthands ---
 
-	private ClassConstant cls(String internalName) {
-		return this.cp.addClass(this.cp.addUtf8(internalName));
+	private ClassEntry cls(String internalName) {
+		return this.cp.classEntry(internalName);
 	}
 
-	private ClassConstant cls(JavaType type) {
+	private ClassEntry cls(JavaType type) {
 		return cls(internalName(type));
 	}
 
-	private MethodrefConstant method(String owner, String name, String desc) {
-		return this.cp.addMethodref(cls(owner), this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	private MethodRefEntry method(String owner, String name, String desc) {
+		return this.cp.methodRef(cls(owner), name, desc);
 	}
 
-	private MethodrefConstant interfaceMethod(String owner, String name, String desc) {
-		return this.cp.addInterfaceMethodref(cls(owner),
-				this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	private InterfaceMethodRefEntry interfaceMethod(String owner, String name, String desc) {
+		return this.cp.interfaceMethodRef(cls(owner), name, desc);
 	}
 
-	private FieldrefConstant field(String owner, String name, String desc) {
-		return this.cp.addFieldref(cls(owner), this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	private FieldRefEntry field(String owner, String name, String desc) {
+		return this.cp.fieldRef(cls(owner), name, desc);
 	}
 
-	private ConstantPool.StringConstant str(String value) {
-		return this.cp.addString(value);
+	private StringEntry str(String value) {
+		return this.cp.stringEntry(value);
 	}
 
 	/** A class constant's name: slashes, and an array's descriptor as it is. */
@@ -725,12 +704,12 @@ final class JvmJavaDirectSites {
 				|| name.startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
-	private MethodrefConstant host() {
-		MethodrefConstant ref = this.host;
+	private MethodRefEntry host() {
+		MethodRefEntry ref = this.host;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(HOST);
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.host = ref;
 			this.methods.add(buildHost(name, desc));
 		}
@@ -743,12 +722,12 @@ final class JvmJavaDirectSites {
 	 * it, so they cannot disagree about a value. Built on first use.
 	 * @return {@code _jlarr(Object)Z}
 	 */
-	MethodrefConstant lispArray() {
-		MethodrefConstant ref = this.lispArray;
+	MethodRefEntry lispArray() {
+		MethodRefEntry ref = this.lispArray;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(LISP_ARRAY);
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.lispArray = ref;
 			this.methods.add(buildLispArray(name, desc));
 		}
@@ -760,12 +739,12 @@ final class JvmJavaDirectSites {
 	 * {@code LinkedHashMap} by, shared as {@link #lispArray()} is. Built on first use.
 	 * @return {@code _jltab(Object)Z}
 	 */
-	MethodrefConstant lispTable() {
-		MethodrefConstant ref = this.lispTable;
+	MethodRefEntry lispTable() {
+		MethodRefEntry ref = this.lispTable;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(LISP_TABLE);
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.lispTable = ref;
 			this.methods.add(buildLispTable(name, desc));
 		}
@@ -778,12 +757,12 @@ final class JvmJavaDirectSites {
 	 * class alone. Built on first use.
 	 * @return {@code _jckarr(Object, String)Object}, the operator name second
 	 */
-	MethodrefConstant arrayGuard() {
-		MethodrefConstant ref = this.arrayGuard;
+	MethodRefEntry arrayGuard() {
+		MethodRefEntry ref = this.arrayGuard;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(ARRAY_GUARD);
 			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.arrayGuard = ref;
 			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), OperandTypes.Kind.ARRAY));
 		}
@@ -795,12 +774,12 @@ final class JvmJavaDirectSites {
 	 * program, as {@link #arrayGuard()} is for arrays. Built on first use.
 	 * @return {@code _jcktab(Object, String)Object}, the operator name second
 	 */
-	MethodrefConstant tableGuard() {
-		MethodrefConstant ref = this.tableGuard;
+	MethodRefEntry tableGuard() {
+		MethodRefEntry ref = this.tableGuard;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(TABLE_GUARD);
 			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.tableGuard = ref;
 			this.methods
 				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), OperandTypes.Kind.HASH_TABLE));
@@ -808,25 +787,25 @@ final class JvmJavaDirectSites {
 		return ref;
 	}
 
-	private MethodrefConstant unmarshal() {
-		MethodrefConstant ref = this.unmarshal;
+	private MethodRefEntry unmarshal() {
+		MethodRefEntry ref = this.unmarshal;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(UNMARSHAL);
 			Utf8Constant desc = this.cp.addUtf8(OBJECT_DESC);
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.unmarshal = ref;
-			MethodrefConstant toList = arrayToList();
+			MethodRefEntry toList = arrayToList();
 			this.methods.add(buildUnmarshal(name, desc, toList));
 		}
 		return ref;
 	}
 
-	private MethodrefConstant arrayToList() {
-		MethodrefConstant ref = this.arrayToList;
+	private MethodRefEntry arrayToList() {
+		MethodRefEntry ref = this.arrayToList;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(ARRAY_TO_LIST);
 			Utf8Constant desc = this.cp.addUtf8(OBJECT_DESC);
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.arrayToList = ref;
 			// _jarr and _junm call each other (an Object[] element is unmarshalled): the
 			// reference is published before the body naming _junm is built.
@@ -838,10 +817,10 @@ final class JvmJavaDirectSites {
 	// --- shared throws ---
 
 	/** {@code throw new RuntimeException(prefix + _lispToString(local))}. */
-	private void throwDescribing(JvmAsm a, String prefix, int slot) {
-		a.anew(cls("java/lang/RuntimeException"));
+	private void throwDescribing(MethodCode a, String prefix, int slot) {
+		a.new_(cls("java/lang/RuntimeException"));
 		a.dup();
-		a.ldcString(str(prefix));
+		a.ldc(str(prefix));
 		a.aload(slot);
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
@@ -850,10 +829,10 @@ final class JvmJavaDirectSites {
 	}
 
 	/** {@code throw new RuntimeException(message)}. */
-	private void throwMessage(JvmAsm a, String message) {
-		a.anew(cls("java/lang/RuntimeException"));
+	private void throwMessage(MethodCode a, String message) {
+		a.new_(cls("java/lang/RuntimeException"));
 		a.dup();
-		a.ldcString(str(message));
+		a.ldc(str(message));
 		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
 		a.athrow();
 	}
@@ -878,12 +857,12 @@ final class JvmJavaDirectSites {
 
 		private final JavaType type;
 
-		private final ClassConstant owner;
+		private final ClassEntry owner;
 
 		private final String operator;
 
 		// The handler of each bound class an argument check names: "No such class".
-		private final Map<String, Integer> boundMissing = new LinkedHashMap<>();
+		private final Map<String, MethodCode.Label> boundMissing = new LinkedHashMap<>();
 
 		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues) {
 			super(packedValues ? 1 + valueCount : valueCount);
@@ -899,7 +878,7 @@ final class JvmJavaDirectSites {
 			for (int i = 0; i < valueCount; i++) {
 				if (packedValues) {
 					this.a.aload(0);
-					this.a.iconst(i);
+					this.a.loadConstant(i);
 					this.a.aaload();
 					this.a.astore(1 + i);
 					this.valueSlots[i] = 1 + i;
@@ -911,8 +890,8 @@ final class JvmJavaDirectSites {
 		}
 
 		Method build(Utf8Constant name, Utf8Constant desc) {
-			int classMissing = this.a.label();
-			int memberFailed = this.a.label();
+			MethodCode.Label classMissing = this.a.newLabel();
+			MethodCode.Label memberFailed = this.a.newLabel();
 			boolean hasReceiver = this.site.operator() == JavaSite.Operator.CALL
 					|| (this.site.operator() == JavaSite.Operator.FIELD && !this.staticField);
 			if (hasReceiver) {
@@ -921,10 +900,10 @@ final class JvmJavaDirectSites {
 			else {
 				// The class first, as the bridge's loadClass does: a class the run-time
 				// class path lacks is "No such class", before any argument is looked at.
-				int start = this.a.pos();
-				this.a.ldcClass(this.owner);
+				MethodCode.Label start = this.a.newBoundLabel();
+				this.a.ldc(this.owner);
 				this.a.pop();
-				handle(start, this.a.pos(), classMissing, "java/lang/NoClassDefFoundError");
+				handle(start, this.a.newBoundLabel(), classMissing, "java/lang/NoClassDefFoundError");
 			}
 			int stackForCall;
 			@Nullable JavaType resultType;
@@ -958,64 +937,63 @@ final class JvmJavaDirectSites {
 				this.a.areturn();
 			}
 			// The handlers.
-			this.a.bind(classMissing);
+			this.a.labelBinding(classMissing);
 			this.a.pop();
 			throwMessage(this.a, "No such class: " + this.type.name());
-			for (Map.Entry<String, Integer> bound : this.boundMissing.entrySet()) {
-				this.a.bind(bound.getValue());
+			for (Map.Entry<String, MethodCode.Label> bound : this.boundMissing.entrySet()) {
+				this.a.labelBinding(bound.getValue());
 				this.a.pop();
 				throwMessage(this.a, "No such class: " + bound.getKey());
 			}
 			// What the member threw: through _jfail, which passes on what a function
 			// called
 			// back from Java raised and wraps anything else.
-			this.a.bind(memberFailed);
-			this.a.ldcString(str(failure));
+			this.a.labelBinding(memberFailed);
+			this.a.ldc(str(failure));
 			this.a.invokestatic(failure());
 			this.a.athrow();
-			return finish(name, desc, Math.max(8, stackForCall + 6));
+			return finish(name, desc);
 		}
 
 		// java:call / java:field on an object: a host object (the bridge's
 		// isJavaObject), then an instance of the site's class.
-		private void emitReceiverChecks(int classMissing) {
+		private void emitReceiverChecks(MethodCode.Label classMissing) {
 			int receiver = this.valueSlots[0];
 			boolean call = this.site.operator() == JavaSite.Operator.CALL;
-			int hostObject = this.a.label();
+			MethodCode.Label hostObject = this.a.newLabel();
 			this.a.aload(receiver);
 			this.a.invokestatic(host());
-			this.a.branch(Opcode.IFNE, hostObject);
+			this.a.ifne(hostObject);
 			throwDescribing(this.a, call ? "java:call expects a java object as the first argument, got "
 					: "java:field expects a class-name string or a java object, got ", receiver);
-			this.a.bind(hostObject);
-			int instance = this.a.label();
-			int start = this.a.pos();
+			this.a.labelBinding(hostObject);
+			MethodCode.Label instance = this.a.newLabel();
+			MethodCode.Label start = this.a.newBoundLabel();
 			this.a.aload(receiver);
 			this.a.instanceOf(this.owner);
-			handle(start, this.a.pos(), classMissing, "java/lang/NoClassDefFoundError");
-			this.a.branch(Opcode.IFNE, instance);
+			handle(start, this.a.newBoundLabel(), classMissing, "java/lang/NoClassDefFoundError");
+			this.a.ifne(instance);
 			throwDescribing(this.a, this.operator + ": the " + (call ? "receiver" : "object") + " is not a "
 					+ this.type.name() + ", got ", receiver);
-			this.a.bind(instance);
+			this.a.labelBinding(instance);
 		}
 
-		private void emitFieldRead(JavaField resolvedField, boolean hasReceiver, int memberFailed) {
+		private void emitFieldRead(JavaField resolvedField, boolean hasReceiver, MethodCode.Label memberFailed) {
 			if (!hasReceiver && !resolvedField.isStatic()) {
 				throw new IllegalStateException("a class-name java:field resolved to an instance field");
 			}
-			FieldrefConstant ref = field(internalName(this.type), resolvedField.name(),
-					descriptor(resolvedField.type()));
+			FieldRefEntry ref = field(internalName(this.type), resolvedField.name(), descriptor(resolvedField.type()));
 			if (resolvedField.isStatic()) {
-				int start = this.a.pos();
+				MethodCode.Label start = this.a.newBoundLabel();
 				this.a.getstatic(ref);
-				handle(start, this.a.pos(), memberFailed, "java/lang/Throwable");
+				handle(start, this.a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 			}
 			else {
 				this.a.aload(this.valueSlots[0]);
 				this.a.checkcast(this.owner);
-				int start = this.a.pos();
+				MethodCode.Label start = this.a.newBoundLabel();
 				this.a.getfield(ref);
-				handle(start, this.a.pos(), memberFailed, "java/lang/Throwable");
+				handle(start, this.a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 			}
 		}
 
@@ -1043,7 +1021,7 @@ final class JvmJavaDirectSites {
 				int array = this.nextSlot++;
 				int element = this.nextSlot;
 				this.nextSlot += width(component);
-				this.a.iconst(tail);
+				this.a.loadConstant(tail);
 				newArray(component);
 				this.a.astore(array);
 				for (int j = 0; j < tail; j++) {
@@ -1051,9 +1029,9 @@ final class JvmJavaDirectSites {
 							arguments.get(fixed + j));
 					store(component, element);
 					this.a.aload(array);
-					this.a.iconst(j);
+					this.a.loadConstant(j);
 					load(component, element);
-					this.a.op(arrayStore(component));
+					this.a.arrayStore(typeKind(component));
 				}
 				converted[fixed] = array;
 			}
@@ -1065,7 +1043,7 @@ final class JvmJavaDirectSites {
 		 * counted on.
 		 */
 		private void emitArgument(int index, int slot, JavaType target, JavaSite.Argument argument) {
-			int done = this.a.label();
+			MethodCode.Label done = this.a.newLabel();
 			List<JavaKind> kinds = argument.kinds();
 			boolean bothStrings = kinds.contains(JavaKind.Lisp.STRING) && kinds.contains(JavaKind.Lisp.STRING_1);
 			for (JavaKind kind : kinds) {
@@ -1075,15 +1053,15 @@ final class JvmJavaDirectSites {
 				if (kind instanceof JavaType host && !isHostKind(host)) {
 					continue; // the bridge's kindOf never answers it (a bignum's class)
 				}
-				int next = this.a.label();
+				MethodCode.Label next = this.a.newLabel();
 				emitKindTest(slot, kind, bothStrings, next);
 				emitConvert(slot, kind, target);
-				this.a.branch(Opcode.GOTO, done);
-				this.a.bind(next);
+				this.a.goto_(done);
+				this.a.labelBinding(next);
 			}
 			throwDescribing(this.a,
 					this.operator + ": argument " + (index + 1) + " is not " + argument.expected() + ", got ", slot);
-			this.a.bind(done);
+			this.a.labelBinding(done);
 			// The arms answer different reference types, which merge to their common
 			// superclass or Object: a class parameter needs its own type back.
 			if (!target.isPrimitive() && !target.isInterface() && !target.isArray()
@@ -1099,8 +1077,9 @@ final class JvmJavaDirectSites {
 		}
 
 		/** The call itself; answers the operand slots it needs. */
-		private int emitInvoke(JavaExecutable executable, int[] converted, boolean hasReceiver, int memberFailed) {
-			JvmAsm a = this.a;
+		private int emitInvoke(JavaExecutable executable, int[] converted, boolean hasReceiver,
+				MethodCode.Label memberFailed) {
+			MethodCode a = this.a;
 			List<? extends JavaType> params = executable.parameterTypes();
 			StringBuilder desc = new StringBuilder("(");
 			int slots = 0;
@@ -1111,21 +1090,21 @@ final class JvmJavaDirectSites {
 			desc.append(')').append(executable.isConstructor() ? "V" : descriptor(executable.returnType()));
 			String internal = internalName(this.type);
 			if (executable.isConstructor()) {
-				a.anew(this.owner);
+				a.new_(this.owner);
 				a.dup();
 				loadArguments(params, converted);
-				int start = a.pos();
+				MethodCode.Label start = a.newBoundLabel();
 				a.invokespecial(method(internal, "<init>", desc.toString()));
-				handle(start, a.pos(), memberFailed, "java/lang/Throwable");
+				handle(start, a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 				return slots + 2;
 			}
 			boolean ownerIsInterface = this.type.isInterface();
 			if (executable.isStatic()) {
 				loadArguments(params, converted);
-				int start = a.pos();
+				MethodCode.Label start = a.newBoundLabel();
 				a.invokestatic(ownerIsInterface ? interfaceMethod(internal, executable.name(), desc.toString())
 						: method(internal, executable.name(), desc.toString()));
-				handle(start, a.pos(), memberFailed, "java/lang/Throwable");
+				handle(start, a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 				return slots;
 			}
 			if (!hasReceiver) {
@@ -1134,14 +1113,14 @@ final class JvmJavaDirectSites {
 			a.aload(this.valueSlots[0]);
 			a.checkcast(this.owner);
 			loadArguments(params, converted);
-			int start = a.pos();
+			MethodCode.Label start = a.newBoundLabel();
 			if (ownerIsInterface) {
-				a.invokeinterface(interfaceMethod(internal, executable.name(), desc.toString()), slots + 1);
+				a.invokeinterface(interfaceMethod(internal, executable.name(), desc.toString()));
 			}
 			else {
 				a.invokevirtual(method(internal, executable.name(), desc.toString()));
 			}
-			handle(start, a.pos(), memberFailed, "java/lang/Throwable");
+			handle(start, a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 			return slots + 1;
 		}
 
@@ -1160,8 +1139,8 @@ final class JvmJavaDirectSites {
 		 * overload, which converts the arguments ({@code _jconv$N}), calls it and
 		 * converts its value back. Answers the operand slots the calls need.
 		 */
-		private int emitDispatch(boolean hasReceiver, int memberFailed) {
-			JvmAsm a = this.a;
+		private int emitDispatch(boolean hasReceiver, MethodCode.Label memberFailed) {
+			MethodCode a = this.a;
 			int firstValue = hasReceiver ? 1 : 0;
 			List<JavaSite.Argument> arguments = this.site.arguments();
 			List<JavaOverloads.Overload> overloads = this.site.overloads();
@@ -1192,51 +1171,51 @@ final class JvmJavaDirectSites {
 			int best = this.nextSlot++;
 			int bestCost = this.nextSlot++;
 			int total = this.nextSlot++;
-			a.iconst(-1);
+			a.loadConstant(-1);
 			a.istore(best);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(bestCost);
 			for (int k = 0; k < overloads.size(); k++) {
-				int next = a.label();
-				a.iconst(overloads.get(k).packed() ? JavaOverloads.COST_VARARGS : 0);
+				MethodCode.Label next = a.newLabel();
+				a.loadConstant(overloads.get(k).packed() ? JavaOverloads.COST_VARARGS : 0);
 				a.istore(total);
 				for (int i = 0; i < argc; i++) {
 					a.iload(costSlots[k][i]);
-					a.branch(Opcode.IFLT, next);
+					a.iflt(next);
 					a.iload(total);
 					a.iload(costSlots[k][i]);
 					a.iadd();
 					a.istore(total);
 				}
-				int take = a.label();
+				MethodCode.Label take = a.newLabel();
 				a.iload(best);
-				a.branch(Opcode.IFLT, take);
+				a.iflt(take);
 				a.iload(total);
 				a.iload(bestCost);
-				a.branch(Opcode.IF_ICMPGE, next);
-				a.bind(take);
-				a.iconst(k);
+				a.if_icmpge(next);
+				a.labelBinding(take);
+				a.loadConstant(k);
 				a.istore(best);
 				a.iload(total);
 				a.istore(bestCost);
-				a.bind(next);
+				a.labelBinding(next);
 			}
-			int found = a.label();
+			MethodCode.Label found = a.newLabel();
 			a.iload(best);
-			a.branch(Opcode.IFGE, found);
+			a.ifge(found);
 			String designator = Objects.requireNonNull(this.site.designator());
 			throwMessage(a, this.site.operator() == JavaSite.Operator.NEW
 					? "No matching constructor for " + designator + " with " + argc + " argument(s)"
 					: "No matching method " + this.type.name() + "." + designator + " with " + argc + " argument(s)");
-			a.bind(found);
+			a.labelBinding(found);
 			int stack = 0;
 			for (int k = 0; k < overloads.size(); k++) {
 				boolean last = k == overloads.size() - 1;
-				int nextArm = a.label();
+				MethodCode.Label nextArm = a.newLabel();
 				if (!last) {
 					a.iload(best);
-					a.iconst(k);
-					a.branch(Opcode.IF_ICMPNE, nextArm);
+					a.loadConstant(k);
+					a.if_icmpne(nextArm);
 				}
 				JavaOverloads.Overload overload = overloads.get(k);
 				JavaExecutable executable = overload.executable();
@@ -1245,7 +1224,7 @@ final class JvmJavaDirectSites {
 				emitUnmarshal(executable.isConstructor() ? this.type : executable.returnType());
 				a.areturn();
 				if (!last) {
-					a.bind(nextArm);
+					a.labelBinding(nextArm);
 				}
 			}
 			return stack;
@@ -1256,12 +1235,12 @@ final class JvmJavaDirectSites {
 		 * its kinds, or {@code nil} or a host object of its bound.
 		 */
 		private void emitCheck(int index, int slot, JavaSite.Argument argument) {
-			JvmAsm a = this.a;
+			MethodCode a = this.a;
 			String bound = argument.bound();
 			if (!argument.known() && bound == null) {
 				return;
 			}
-			int ok = a.label();
+			MethodCode.Label ok = a.newLabel();
 			if (argument.known()) {
 				List<JavaKind> kinds = argument.kinds();
 				boolean bothStrings = kinds.contains(JavaKind.Lisp.STRING) && kinds.contains(JavaKind.Lisp.STRING_1);
@@ -1270,36 +1249,36 @@ final class JvmJavaDirectSites {
 							|| (kind instanceof JavaType host && !isHostKind(host))) {
 						continue;
 					}
-					int next = a.label();
+					MethodCode.Label next = a.newLabel();
 					emitKindTest(slot, kind, bothStrings, next);
-					a.branch(Opcode.GOTO, ok);
-					a.bind(next);
+					a.goto_(ok);
+					a.labelBinding(next);
 				}
 			}
 			else {
 				String boundClass = Objects.requireNonNull(bound);
-				int fail = a.label();
+				MethodCode.Label fail = a.newLabel();
 				a.aload(slot);
-				a.branch(Opcode.IFNULL, ok);
+				a.ifnull(ok);
 				a.aload(slot);
 				a.invokestatic(kind());
-				a.iconst(KIND_HOST);
-				a.branch(Opcode.IF_ICMPNE, fail);
-				Integer missing = this.boundMissing.get(boundClass);
+				a.loadConstant(KIND_HOST);
+				a.if_icmpne(fail);
+				MethodCode.Label missing = this.boundMissing.get(boundClass);
 				if (missing == null) {
-					missing = a.label();
+					missing = a.newLabel();
 					this.boundMissing.put(boundClass, missing);
 				}
-				int start = a.pos();
+				MethodCode.Label start = a.newBoundLabel();
 				a.aload(slot);
 				a.instanceOf(cls(Objects.requireNonNull(JvmJavaDirectSites.this.lookup.find(boundClass), boundClass)));
-				handle(start, a.pos(), missing, "java/lang/NoClassDefFoundError");
-				a.branch(Opcode.IFNE, ok);
-				a.bind(fail);
+				handle(start, a.newBoundLabel(), missing, "java/lang/NoClassDefFoundError");
+				a.ifne(ok);
+				a.labelBinding(fail);
 			}
 			throwDescribing(a,
 					this.operator + ": argument " + (index + 1) + " is not " + argument.expected() + ", got ", slot);
-			a.bind(ok);
+			a.labelBinding(ok);
 		}
 
 		/**
@@ -1308,7 +1287,7 @@ final class JvmJavaDirectSites {
 		 * in parameter order.
 		 */
 		private int[] emitConverted(JavaOverloads.Overload overload, int firstValue) {
-			JvmAsm a = this.a;
+			MethodCode a = this.a;
 			List<JavaSite.Argument> arguments = this.site.arguments();
 			List<? extends JavaType> params = overload.executable().parameterTypes();
 			int fixed = overload.packed() ? params.size() - 1 : params.size();
@@ -1325,16 +1304,16 @@ final class JvmJavaDirectSites {
 			if (overload.packed()) {
 				JavaType component = Objects.requireNonNull(params.get(fixed).componentType());
 				int array = this.nextSlot++;
-				a.iconst(arguments.size() - fixed);
+				a.loadConstant(arguments.size() - fixed);
 				newArray(component);
 				a.astore(array);
 				for (int j = fixed; j < arguments.size(); j++) {
 					a.aload(array);
-					a.iconst(j - fixed);
+					a.loadConstant(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
 					boolean open = arguments.get(j).mayBeFunction();
 					a.invokestatic(convert(component, open, open));
-					a.op(arrayStore(component));
+					a.arrayStore(typeKind(component));
 				}
 				converted[fixed] = array;
 			}
@@ -1348,13 +1327,16 @@ final class JvmJavaDirectSites {
 	 * conversions every {@code java:} method shares -- a site's, and the helpers that
 	 * classify, cost and convert a value for one parameter type.
 	 */
+	private record PendingHandler(MethodCode.Label start, MethodCode.Label end, MethodCode.Label handler,
+			ClassEntry catchType) {
+	}
+
 	private class Body {
 
-		final JvmAsm a = new JvmAsm();
+		final MethodCode a = new MethodCode();
 
-		// {start, end, handler label, catch type}: a handler's position is known once
-		// its label is bound, after the body.
-		private final List<int[]> pendingHandlers = new ArrayList<>();
+		// A handler's entry is bound after the body, so the table is added last.
+		private final List<PendingHandler> pendingHandlers = new ArrayList<>();
 
 		int nextSlot;
 
@@ -1371,134 +1353,141 @@ final class JvmJavaDirectSites {
 			this.nextSlot = firstFree + 3;
 		}
 
-		void handle(int start, int end, int handlerLabel, String catchType) {
-			this.pendingHandlers.add(new int[] { start, end, handlerLabel, cls(catchType).index() });
+		void handle(MethodCode.Label start, MethodCode.Label end, MethodCode.Label handler, String catchType) {
+			this.pendingHandlers.add(new PendingHandler(start, end, handler, cls(catchType)));
 		}
 
-		Method finish(Utf8Constant name, Utf8Constant desc, int maxStack) {
-			List<Integer> code = this.a.finish();
-			List<ClassDefinition.Handler> handlers = new ArrayList<>();
-			for (int[] pending : this.pendingHandlers) {
-				handlers
-					.add(new ClassDefinition.Handler(pending[0], pending[1], this.a.position(pending[2]), pending[3]));
+		Method finish(Utf8Constant name, Utf8Constant desc) {
+			for (PendingHandler pending : this.pendingHandlers) {
+				this.a.exceptionCatch(pending.start(), pending.end(), pending.handler(), pending.catchType());
 			}
-			return new Method(name, desc, maxStack, this.nextSlot, code, handlers);
+			return new Method(name, desc, this.a);
 		}
 
 		/**
 		 * Falls through when the local holds a value of this kind, else jumps to fail.
 		 */
-		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, int fail) {
-			JvmAsm a = this.a;
+		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, MethodCode.Label fail) {
+			MethodCode a = this.a;
 			if (kind instanceof JavaImplementationType implementation) {
 				// An object a java:reify / java:proxy of the interface made: of a class
 				// generated for one (JvmJavaImplementations), implementing it.
 				a.aload(slot);
 				a.instanceOf(cls(implementations().baseClass()));
-				a.branch(Opcode.IFEQ, fail);
+				a.ifeq(fail);
 				a.aload(slot);
 				a.instanceOf(cls(implementation.iface()));
-				a.branch(Opcode.IFEQ, fail);
+				a.ifeq(fail);
 				return;
 			}
 			if (kind instanceof JavaType host) {
 				a.aload(slot);
-				a.branch(Opcode.IFNULL, fail);
+				a.ifnull(fail);
 				a.aload(slot);
 				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-				a.ldcClass(cls(host));
-				a.branch(Opcode.IF_ACMPNE, fail);
+				a.ldc(cls(host));
+				a.if_acmpne(fail);
 				if (mayHoldALispValue(host)) {
 					// A class the compiled representation also uses (a Lisp array is an
 					// ArrayList, a hash table a LinkedHashMap): _jhost tells them apart.
 					a.aload(slot);
 					a.invokestatic(host());
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 				return;
 			}
 			switch ((JavaKind.Lisp) kind) {
 				case NIL -> {
 					a.aload(slot);
-					a.branch(Opcode.IFNONNULL, fail);
+					a.ifnonnull(fail);
 				}
 				case T -> {
-					a.ldcString(str("T"));
+					a.ldc(str("T"));
 					a.aload(slot);
 					a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 				case INTEGER -> {
 					a.aload(slot);
 					a.instanceOf(cls("java/lang/Long"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 				case BIGNUM -> {
 					a.aload(slot);
 					a.instanceOf(cls("java/math/BigInteger"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 				case FLOAT -> {
 					a.aload(slot);
 					a.instanceOf(cls("java/lang/Double"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 				case CHAR, SUPPLEMENTARY_CHAR -> {
 					a.aload(slot);
 					a.instanceOf(cls("[I"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 					a.aload(slot);
 					a.checkcast(cls("[I"));
 					a.arraylength();
-					a.iconst(1);
-					a.branch(Opcode.IF_ICMPNE, fail);
+					a.loadConstant(1);
+					a.if_icmpne(fail);
 					codePoint(slot);
 					a.invokestatic(method("java/lang/Character", "isBmpCodePoint", "(I)Z"));
-					a.branch(kind == JavaKind.Lisp.CHAR ? Opcode.IFEQ : Opcode.IFNE, fail);
+					if (kind == JavaKind.Lisp.CHAR) {
+						a.ifeq(fail);
+					}
+					else {
+						a.ifne(fail);
+					}
 				}
 				case STRING, STRING_1 -> {
-					ClassConstant string = cls("java/lang/String");
-					MethodrefConstant length = method("java/lang/String", "length", "()I");
+					ClassEntry string = cls("java/lang/String");
+					MethodRefEntry length = method("java/lang/String", "length", "()I");
 					a.aload(slot);
 					a.instanceOf(string);
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 					a.aload(slot);
 					a.checkcast(string);
 					a.invokevirtual(length);
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 					a.aload(slot);
 					a.checkcast(string);
-					a.iconst(0);
+					a.loadConstant(0);
 					a.invokevirtual(method("java/lang/String", "charAt", "(I)C"));
-					a.iconst('"');
-					a.branch(Opcode.IF_ICMPNE, fail);
+					a.loadConstant('"');
+					a.if_icmpne(fail);
 					if (!bothStrings) {
 						// A one-character string is the quote-framed length 3.
 						a.aload(slot);
 						a.checkcast(string);
 						a.invokevirtual(length);
-						a.iconst(3);
-						a.branch(kind == JavaKind.Lisp.STRING_1 ? Opcode.IF_ICMPNE : Opcode.IF_ICMPEQ, fail);
+						a.loadConstant(3);
+						if (kind == JavaKind.Lisp.STRING_1) {
+							a.if_icmpne(fail);
+						}
+						else {
+							a.if_icmpeq(fail);
+						}
 					}
 				}
 				case FUNCTION -> {
-					ClassConstant objects = cls("[Ljava/lang/Object;");
+					ClassEntry objects = cls("[Ljava/lang/Object;");
 					a.aload(slot);
-					a.branch(Opcode.IFNULL, fail);
+					a.ifnull(fail);
 					a.aload(slot);
 					a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-					a.ldcClass(objects);
-					a.branch(Opcode.IF_ACMPNE, fail);
+					a.ldc(objects);
+					a.if_acmpne(fail);
 					a.aload(slot);
 					a.checkcast(objects);
 					a.arraylength();
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 					a.aload(slot);
 					a.checkcast(objects);
-					a.iconst(0);
+					a.loadConstant(0);
 					a.aaload();
 					a.instanceOf(cls("java/lang/Integer"));
-					a.branch(Opcode.IFEQ, fail);
+					a.ifeq(fail);
 				}
 			}
 		}
@@ -1508,7 +1497,7 @@ final class JvmJavaDirectSites {
 		 * convert).
 		 */
 		void emitConvert(int slot, JavaKind kind, JavaType target) {
-			JvmAsm a = this.a;
+			MethodCode a = this.a;
 			if (kind instanceof JavaType) {
 				a.aload(slot);
 				return;
@@ -1517,18 +1506,18 @@ final class JvmJavaDirectSites {
 			switch ((JavaKind.Lisp) kind) {
 				case NIL -> {
 					if ("boolean".equals(name)) {
-						a.iconst(0);
+						a.loadConstant(0);
 					}
 					else if ("java.lang.Boolean".equals(name)) {
 						a.getstatic(field("java/lang/Boolean", "FALSE", "Ljava/lang/Boolean;"));
 					}
 					else {
-						a.aconstNull();
+						a.aconst_null();
 					}
 				}
 				case T -> {
 					if ("boolean".equals(name)) {
-						a.iconst(1);
+						a.loadConstant(1);
 					}
 					else {
 						a.getstatic(field("java/lang/Boolean", "TRUE", "Ljava/lang/Boolean;"));
@@ -1565,15 +1554,15 @@ final class JvmJavaDirectSites {
 						}
 						default -> {
 							// The unquoted string: substring(1, length - 1).
-							ClassConstant string = cls("java/lang/String");
+							ClassEntry string = cls("java/lang/String");
 							a.aload(slot);
 							a.checkcast(string);
-							a.iconst(1);
+							a.loadConstant(1);
 							a.aload(slot);
 							a.checkcast(string);
 							a.invokevirtual(method("java/lang/String", "length", "()I"));
-							a.iconst(1);
-							a.op(Opcode.ISUB);
+							a.loadConstant(1);
+							a.isub();
 							a.invokevirtual(method("java/lang/String", "substring", "(II)Ljava/lang/String;"));
 						}
 					}
@@ -1585,10 +1574,10 @@ final class JvmJavaDirectSites {
 							|| "java.lang.Character".equals(name)
 							|| (!target.isPrimitive() && character != null && target.isAssignableFrom(character)));
 					if ("char".equals(name)) {
-						a.op(Opcode.I2C);
+						a.i2c();
 					}
 					else if (asChar) {
-						a.op(Opcode.I2C);
+						a.i2c();
 						a.invokestatic(method("java/lang/Character", "valueOf", "(C)Ljava/lang/Character;"));
 					}
 					else if (!"int".equals(name)) {
@@ -1598,10 +1587,10 @@ final class JvmJavaDirectSites {
 				case FUNCTION -> {
 					// The interface's generated proxy class over the function, as the
 					// bridge makes it a Proxy: of(new Object[] { function }).
-					a.iconst(1);
+					a.loadConstant(1);
 					a.anewarray(cls("java/lang/Object"));
 					a.dup();
-					a.iconst(0);
+					a.loadConstant(0);
 					a.aload(slot);
 					a.aastore();
 					a.invokestatic(implementations().proxyFactory(target));
@@ -1611,21 +1600,21 @@ final class JvmJavaDirectSites {
 
 		// The bridge's convertLong over the integer in the local.
 		void convertInteger(int slot, String target) {
-			JvmAsm a = this.a;
+			MethodCode a = this.a;
 			longValue(slot);
 			switch (target) {
 				case "long" -> {
 				}
 				case "int" -> a.l2i();
 				case "double" -> a.l2d();
-				case "float" -> a.op(Opcode.L2F);
+				case "float" -> a.l2f();
 				case "short" -> {
 					a.l2i();
-					a.op(Opcode.I2S);
+					a.i2s();
 				}
 				case "byte" -> {
 					a.l2i();
-					a.op(Opcode.I2B);
+					a.i2b();
 				}
 				case "java.lang.Integer" -> {
 					a.l2i();
@@ -1637,40 +1626,40 @@ final class JvmJavaDirectSites {
 					a.invokestatic(method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;"));
 				}
 				case "java.lang.Float" -> {
-					a.op(Opcode.L2F);
+					a.l2f();
 					a.invokestatic(method("java/lang/Float", "valueOf", "(F)Ljava/lang/Float;"));
 				}
 				case "java.lang.Short" -> {
 					a.l2i();
-					a.op(Opcode.I2S);
+					a.i2s();
 					a.invokestatic(method("java/lang/Short", "valueOf", "(S)Ljava/lang/Short;"));
 				}
 				case "java.lang.Byte" -> {
 					a.l2i();
-					a.op(Opcode.I2B);
+					a.i2b();
 					a.invokestatic(method("java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;"));
 				}
 				case "java.math.BigInteger" ->
 					a.invokestatic(method("java/math/BigInteger", "valueOf", "(J)Ljava/math/BigInteger;"));
 				default -> {
 					// Boxed to the narrowest type that holds it, like a fixnum.
-					int wide = a.label();
-					int end = a.label();
+					MethodCode.Label wide = a.newLabel();
+					MethodCode.Label end = a.newLabel();
 					a.lstore(this.longTemp);
 					a.lload(this.longTemp);
 					a.lload(this.longTemp);
 					a.l2i();
 					a.i2l();
 					a.lcmp();
-					a.branch(Opcode.IFNE, wide);
+					a.ifne(wide);
 					a.lload(this.longTemp);
 					a.l2i();
 					a.invokestatic(method("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;"));
-					a.branch(Opcode.GOTO, end);
-					a.bind(wide);
+					a.goto_(end);
+					a.labelBinding(wide);
 					a.lload(this.longTemp);
 					a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
-					a.bind(end);
+					a.labelBinding(end);
 				}
 			}
 		}
@@ -1690,7 +1679,7 @@ final class JvmJavaDirectSites {
 		void codePoint(int slot) {
 			this.a.aload(slot);
 			this.a.checkcast(cls("[I"));
-			this.a.iconst(0);
+			this.a.loadConstant(0);
 			this.a.iaload();
 		}
 
@@ -1698,7 +1687,7 @@ final class JvmJavaDirectSites {
 		void firstCharacter(int slot) {
 			this.a.aload(slot);
 			this.a.checkcast(cls("java/lang/String"));
-			this.a.iconst(1);
+			this.a.loadConstant(1);
 			this.a.invokevirtual(method("java/lang/String", "charAt", "(I)C"));
 		}
 
@@ -1724,28 +1713,27 @@ final class JvmJavaDirectSites {
 
 		void newArray(JavaType component) {
 			switch (component.name()) {
-				case "boolean" -> this.a.newarray(T_BOOLEAN);
-				case "char" -> this.a.newarray(T_CHAR);
-				case "float" -> this.a.newarray(T_FLOAT);
-				case "double" -> this.a.newarray(T_DOUBLE);
-				case "byte" -> this.a.newarray(T_BYTE);
-				case "short" -> this.a.newarray(T_SHORT);
-				case "int" -> this.a.newarray(T_INT);
-				case "long" -> this.a.newarray(T_LONG);
+				case "boolean", "char", "float", "double", "byte", "short", "int", "long" ->
+					this.a.newarray(typeKind(component));
 				default -> this.a.anewarray(cls(component));
 			}
 		}
 
-		static int arrayStore(JavaType component) {
-			return switch (component.name()) {
-				case "boolean", "byte" -> Opcode.BASTORE;
-				case "char" -> Opcode.CASTORE;
-				case "short" -> Opcode.SASTORE;
-				case "int" -> Opcode.IASTORE;
-				case "long" -> Opcode.LASTORE;
-				case "float" -> Opcode.FASTORE;
-				case "double" -> Opcode.DASTORE;
-				default -> Opcode.AASTORE;
+		/**
+		 * The kind of a Java type's value: a primitive's own, a reference for the rest
+		 * ({@code void} included).
+		 */
+		static TypeKind typeKind(JavaType type) {
+			return switch (type.name()) {
+				case "boolean" -> TypeKind.BOOLEAN;
+				case "byte" -> TypeKind.BYTE;
+				case "char" -> TypeKind.CHAR;
+				case "short" -> TypeKind.SHORT;
+				case "int" -> TypeKind.INT;
+				case "long" -> TypeKind.LONG;
+				case "float" -> TypeKind.FLOAT;
+				case "double" -> TypeKind.DOUBLE;
+				default -> TypeKind.REFERENCE;
 			};
 		}
 
@@ -1754,18 +1742,18 @@ final class JvmJavaDirectSites {
 		 * unmarshal makes of it, specialized to the declared type.
 		 */
 		void emitUnmarshal(JavaType declared) {
-			JvmAsm a = this.a;
+			MethodCode a = this.a;
 			switch (declared.name()) {
-				case "void" -> a.aconstNull();
+				case "void" -> a.aconst_null();
 				case "boolean" -> {
-					int nil = a.label();
-					int end = a.label();
-					a.branch(Opcode.IFEQ, nil);
-					a.ldcString(str("T"));
-					a.branch(Opcode.GOTO, end);
-					a.bind(nil);
-					a.aconstNull();
-					a.bind(end);
+					MethodCode.Label nil = a.newLabel();
+					MethodCode.Label end = a.newLabel();
+					a.ifeq(nil);
+					a.ldc(str("T"));
+					a.goto_(end);
+					a.labelBinding(nil);
+					a.aconst_null();
+					a.labelBinding(end);
 				}
 				case "byte", "short", "int" -> {
 					a.i2l();
@@ -1780,10 +1768,10 @@ final class JvmJavaDirectSites {
 				case "char" -> {
 					int charTemp = this.longTemp;
 					a.istore(charTemp);
-					a.iconst(1);
-					a.newarrayInt();
+					a.loadConstant(1);
+					a.newarray(TypeKind.INT);
 					a.dup();
-					a.iconst(0);
+					a.loadConstant(0);
 					a.iload(charTemp);
 					a.iastore();
 				}
@@ -1791,28 +1779,28 @@ final class JvmJavaDirectSites {
 					// The object itself, as the bridge answers it.
 				}
 				case "java.lang.String" -> nullOr(() -> {
-					a.ldcString(str("\""));
+					a.ldc(str("\""));
 					a.aload(this.objectTemp);
 					a.checkcast(cls("java/lang/String"));
 					a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
-					a.ldcString(str("\""));
+					a.ldc(str("\""));
 					a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
 				});
 				case "java.lang.Boolean" -> {
-					int nil = a.label();
-					int end = a.label();
+					MethodCode.Label nil = a.newLabel();
+					MethodCode.Label end = a.newLabel();
 					a.astore(this.objectTemp);
 					a.aload(this.objectTemp);
-					a.branch(Opcode.IFNULL, nil);
+					a.ifnull(nil);
 					a.aload(this.objectTemp);
 					a.checkcast(cls("java/lang/Boolean"));
 					a.invokevirtual(method("java/lang/Boolean", "booleanValue", "()Z"));
-					a.branch(Opcode.IFEQ, nil);
-					a.ldcString(str("T"));
-					a.branch(Opcode.GOTO, end);
-					a.bind(nil);
-					a.aconstNull();
-					a.bind(end);
+					a.ifeq(nil);
+					a.ldc(str("T"));
+					a.goto_(end);
+					a.labelBinding(nil);
+					a.aconst_null();
+					a.labelBinding(end);
 				}
 				case "java.lang.Integer", "java.lang.Short", "java.lang.Byte" -> nullOr(() -> {
 					a.aload(this.objectTemp);
@@ -1828,10 +1816,10 @@ final class JvmJavaDirectSites {
 					a.invokestatic(method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;"));
 				});
 				case "java.lang.Character" -> nullOr(() -> {
-					a.iconst(1);
-					a.newarrayInt();
+					a.loadConstant(1);
+					a.newarray(TypeKind.INT);
 					a.dup();
-					a.iconst(0);
+					a.loadConstant(0);
 					a.aload(this.objectTemp);
 					a.checkcast(cls("java/lang/Character"));
 					a.invokevirtual(method("java/lang/Character", "charValue", "()C"));
@@ -1849,16 +1837,16 @@ final class JvmJavaDirectSites {
 		// null stays nil; anything else is what the body leaves (reading the value from
 		// objectTemp).
 		void nullOr(Runnable body) {
-			int nil = this.a.label();
-			int end = this.a.label();
+			MethodCode.Label nil = this.a.newLabel();
+			MethodCode.Label end = this.a.newLabel();
 			this.a.astore(this.objectTemp);
 			this.a.aload(this.objectTemp);
-			this.a.branch(Opcode.IFNULL, nil);
+			this.a.ifnull(nil);
 			body.run();
-			this.a.branch(Opcode.GOTO, end);
-			this.a.bind(nil);
-			this.a.aconstNull();
-			this.a.bind(end);
+			this.a.goto_(end);
+			this.a.labelBinding(nil);
+			this.a.aconst_null();
+			this.a.labelBinding(end);
 		}
 
 		// A supertype of a box, of String, of BigInteger or of an array, or BigInteger's
@@ -1872,24 +1860,24 @@ final class JvmJavaDirectSites {
 
 	// --- the dispatch helpers ---
 
-	private MethodrefConstant kind() {
-		MethodrefConstant ref = this.kind;
+	private MethodRefEntry kind() {
+		MethodRefEntry ref = this.kind;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(KIND);
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.kind = ref;
 			this.methods.add(buildKind(name, desc, host()));
 		}
 		return ref;
 	}
 
-	private MethodrefConstant sequence() {
-		MethodrefConstant ref = this.sequence;
+	private MethodRefEntry sequence() {
+		MethodRefEntry ref = this.sequence;
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(SEQUENCE);
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.sequence = ref;
 			this.methods.add(buildSequence(name, desc));
 		}
@@ -1900,7 +1888,7 @@ final class JvmJavaDirectSites {
 	 * {@code _jcost$N}: what the bridge's {@code marshal} costs a value for this type --
 	 * an argument's, a function costing its proxy.
 	 */
-	private MethodrefConstant cost(JavaType target) {
+	private MethodRefEntry cost(JavaType target) {
 		return cost(target, true);
 	}
 
@@ -1908,13 +1896,13 @@ final class JvmJavaDirectSites {
 	 * {@code _jcost$N} for this type, with or without the function arm: a value a
 	 * {@code java:reify} / {@code java:proxy} function answers never makes a proxy.
 	 */
-	private MethodrefConstant cost(JavaType target, boolean functions) {
+	private MethodRefEntry cost(JavaType target, boolean functions) {
 		String key = target.name() + (functions ? "" : " returned");
-		MethodrefConstant ref = this.costs.get(key);
+		MethodRefEntry ref = this.costs.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(COST_PREFIX + this.costs.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			// Registered before it is built: a list of lists costs itself.
 			this.costs.put(key, ref);
 			this.methods.add(buildCost(name, desc, target, functions));
@@ -1930,13 +1918,13 @@ final class JvmJavaDirectSites {
 	 * object; a value a {@code java:reify} / {@code java:proxy} function answers takes
 	 * sequences without functions.
 	 */
-	private MethodrefConstant convert(JavaType target, boolean functions, boolean sequences) {
+	private MethodRefEntry convert(JavaType target, boolean functions, boolean sequences) {
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
-		MethodrefConstant ref = this.converts.get(key);
+		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(CONVERT_PREFIX + this.converts.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)" + descriptor(target));
-			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
 			this.converts.put(key, ref);
 			this.methods.add(buildConvert(name, desc, target, functions, sequences));
 		}
@@ -1962,8 +1950,8 @@ final class JvmJavaDirectSites {
 	}
 
 	// v = _strv(v): a mutable character vector as the string it spells.
-	private void render(JvmAsm a, int slot) {
-		MethodrefConstant render = this.strv;
+	private void render(MethodCode a, int slot) {
+		MethodRefEntry render = this.strv;
 		if (render != null) {
 			a.aload(slot);
 			a.invokestatic(render);
@@ -1971,161 +1959,151 @@ final class JvmJavaDirectSites {
 		}
 	}
 
-	private static int returnOpcode(JavaType type) {
-		return switch (type.name()) {
-			case "long" -> Opcode.LRETURN;
-			case "double" -> Opcode.DRETURN;
-			case "float" -> Opcode.FRETURN;
-			case "boolean", "byte", "char", "short", "int" -> Opcode.IRETURN;
-			default -> Opcode.ARETURN;
-		};
-	}
-
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
 	// index), a cons, a Lisp array (a specialized one too), a host object, or none (a
 	// symbol, a ratio, a hash table) -- tested in its order.
-	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodrefConstant hostTest) {
-		JvmAsm a = new JvmAsm();
-		ClassConstant string = cls("java/lang/String");
-		ClassConstant objects = cls("[Ljava/lang/Object;");
-		ClassConstant arrayList = cls("java/util/ArrayList");
-		MethodrefConstant length = method("java/lang/String", "length", "()I");
-		int notNil = a.label();
+	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodRefEntry hostTest) {
+		MethodCode a = new MethodCode();
+		ClassEntry string = cls("java/lang/String");
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		ClassEntry arrayList = cls("java/util/ArrayList");
+		MethodRefEntry length = method("java/lang/String", "length", "()I");
+		MethodCode.Label notNil = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, notNil);
+		a.ifnonnull(notNil);
 		returnCode(a, code(JavaKind.Lisp.NIL));
-		a.bind(notNil);
-		int notInteger = a.label();
+		a.labelBinding(notNil);
+		MethodCode.Label notInteger = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Long"));
-		a.branch(Opcode.IFEQ, notInteger);
+		a.ifeq(notInteger);
 		returnCode(a, code(JavaKind.Lisp.INTEGER));
-		a.bind(notInteger);
-		int notBignum = a.label();
+		a.labelBinding(notInteger);
+		MethodCode.Label notBignum = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/math/BigInteger"));
-		a.branch(Opcode.IFEQ, notBignum);
+		a.ifeq(notBignum);
 		returnCode(a, code(JavaKind.Lisp.BIGNUM));
-		a.bind(notBignum);
-		int notFloat = a.label();
+		a.labelBinding(notBignum);
+		MethodCode.Label notFloat = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Double"));
-		a.branch(Opcode.IFEQ, notFloat);
+		a.ifeq(notFloat);
 		returnCode(a, code(JavaKind.Lisp.FLOAT));
-		a.bind(notFloat);
+		a.labelBinding(notFloat);
 		// A character is an int[] of length 1; any other int[] is a host object.
-		int notChar = a.label();
-		int supplementary = a.label();
+		MethodCode.Label notChar = a.newLabel();
+		MethodCode.Label supplementary = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("[I"));
-		a.branch(Opcode.IFEQ, notChar);
+		a.ifeq(notChar);
 		a.aload(0);
 		a.checkcast(cls("[I"));
 		a.arraylength();
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, notChar);
+		a.loadConstant(1);
+		a.if_icmpne(notChar);
 		a.aload(0);
 		a.checkcast(cls("[I"));
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iaload();
 		a.invokestatic(method("java/lang/Character", "isBmpCodePoint", "(I)Z"));
-		a.branch(Opcode.IFEQ, supplementary);
+		a.ifeq(supplementary);
 		returnCode(a, code(JavaKind.Lisp.CHAR));
-		a.bind(supplementary);
+		a.labelBinding(supplementary);
 		returnCode(a, code(JavaKind.Lisp.SUPPLEMENTARY_CHAR));
-		a.bind(notChar);
+		a.labelBinding(notChar);
 		// A quote-framed string is a Lisp string (length 3: one character), "T" the
 		// symbol t, any other string another symbol.
-		int notString = a.label();
-		int symbol = a.label();
-		int longer = a.label();
+		MethodCode.Label notString = a.newLabel();
+		MethodCode.Label symbol = a.newLabel();
+		MethodCode.Label longer = a.newLabel();
 		a.aload(0);
 		a.instanceOf(string);
-		a.branch(Opcode.IFEQ, notString);
+		a.ifeq(notString);
 		a.aload(0);
 		a.checkcast(string);
 		a.invokevirtual(length);
-		a.branch(Opcode.IFEQ, symbol);
+		a.ifeq(symbol);
 		a.aload(0);
 		a.checkcast(string);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(method("java/lang/String", "charAt", "(I)C"));
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, symbol);
+		a.loadConstant('"');
+		a.if_icmpne(symbol);
 		a.aload(0);
 		a.checkcast(string);
 		a.invokevirtual(length);
-		a.iconst(3);
-		a.branch(Opcode.IF_ICMPNE, longer);
+		a.loadConstant(3);
+		a.if_icmpne(longer);
 		returnCode(a, code(JavaKind.Lisp.STRING_1));
-		a.bind(longer);
+		a.labelBinding(longer);
 		returnCode(a, code(JavaKind.Lisp.STRING));
-		a.bind(symbol);
-		int other = a.label();
-		a.ldcString(str("T"));
+		a.labelBinding(symbol);
+		MethodCode.Label other = a.newLabel();
+		a.ldc(str("T"));
 		a.aload(0);
 		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
-		a.branch(Opcode.IFEQ, other);
+		a.ifeq(other);
 		returnCode(a, code(JavaKind.Lisp.T));
-		a.bind(other);
+		a.labelBinding(other);
 		returnCode(a, KIND_NONE);
-		a.bind(notString);
+		a.labelBinding(notString);
 		// An exact Object[] is a function value (an Integer first) or a cons.
-		int notObjects = a.label();
-		int cons = a.label();
+		MethodCode.Label notObjects = a.newLabel();
+		MethodCode.Label cons = a.newLabel();
 		a.aload(0);
 		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-		a.ldcClass(objects);
-		a.branch(Opcode.IF_ACMPNE, notObjects);
+		a.ldc(objects);
+		a.if_acmpne(notObjects);
 		a.aload(0);
 		a.checkcast(objects);
 		a.arraylength();
-		a.branch(Opcode.IFEQ, cons);
+		a.ifeq(cons);
 		a.aload(0);
 		a.checkcast(objects);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(cls("java/lang/Integer"));
-		a.branch(Opcode.IFEQ, cons);
+		a.ifeq(cons);
 		returnCode(a, code(JavaKind.Lisp.FUNCTION));
-		a.bind(cons);
+		a.labelBinding(cons);
 		returnCode(a, KIND_CONS);
-		a.bind(notObjects);
+		a.labelBinding(notObjects);
 		// An ArrayList whose first element is an Object[] header is a Lisp array.
-		int notArray = a.label();
+		MethodCode.Label notArray = a.newLabel();
 		a.aload(0);
 		a.instanceOf(arrayList);
-		a.branch(Opcode.IFEQ, notArray);
+		a.ifeq(notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.branch(Opcode.IFNE, notArray);
+		a.ifne(notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
 		a.instanceOf(objects);
-		a.branch(Opcode.IFEQ, notArray);
+		a.ifeq(notArray);
 		returnCode(a, KIND_ARRAY);
-		a.bind(notArray);
+		a.labelBinding(notArray);
 		// A specialized array the program can hold: _jseq reads a rank-1 one.
 		for (String shape : packedShapes()) {
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.aload(0);
 			a.instanceOf(cls(shape));
-			a.branch(Opcode.IFEQ, next);
+			a.ifeq(next);
 			returnCode(a, KIND_ARRAY);
-			a.bind(next);
+			a.labelBinding(next);
 		}
 		// A host object (_jhost), or a value of no kind (a ratio, a hash table).
-		int none = a.label();
+		MethodCode.Label none = a.newLabel();
 		a.aload(0);
 		a.invokestatic(hostTest);
-		a.branch(Opcode.IFEQ, none);
+		a.ifeq(none);
 		returnCode(a, KIND_HOST);
-		a.bind(none);
+		a.labelBinding(none);
 		returnCode(a, KIND_NONE);
-		return new Method(name, desc, 3, 1, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	private static int code(JavaKind.Lisp kind) {
@@ -2147,8 +2125,8 @@ final class JvmJavaDirectSites {
 		return shapes;
 	}
 
-	private static void returnCode(JvmAsm a, int code) {
-		a.iconst(code);
+	private static void returnCode(MethodCode a, int code) {
+		a.loadConstant(code);
 		a.ireturn();
 	}
 
@@ -2158,127 +2136,127 @@ final class JvmJavaDirectSites {
 	// matrix. A packed fixnum vector's Long.MIN_VALUE is nil; a fill pointer bounds the
 	// elements; a specialized vector's are the values aref reads (emitPackedElements).
 	private Method buildSequence(Utf8Constant name, Utf8Constant desc) {
-		JvmAsm a = new JvmAsm();
-		ClassConstant objects = cls("[Ljava/lang/Object;");
-		ClassConstant arrayList = cls("java/util/ArrayList");
-		MethodrefConstant getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
-		MethodrefConstant get = method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;");
-		int notCons = a.label();
+		MethodCode a = new MethodCode();
+		ClassEntry objects = cls("[Ljava/lang/Object;");
+		ClassEntry arrayList = cls("java/util/ArrayList");
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodRefEntry get = method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;");
+		MethodCode.Label notCons = a.newLabel();
 		a.aload(0);
 		a.invokevirtual(getClass);
-		a.ldcClass(objects);
-		a.branch(Opcode.IF_ACMPNE, notCons);
+		a.ldc(objects);
+		a.if_acmpne(notCons);
 		// Count the cells (1 = cell, 2 = count), then copy the cars (3 = out, 4 = i).
-		int countLoop = a.label();
-		int counted = a.label();
-		int improper = a.label();
+		MethodCode.Label countLoop = a.newLabel();
+		MethodCode.Label counted = a.newLabel();
+		MethodCode.Label improper = a.newLabel();
 		a.aload(0);
 		a.astore(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(2);
-		a.bind(countLoop);
+		a.labelBinding(countLoop);
 		a.aload(1);
-		a.branch(Opcode.IFNULL, counted);
+		a.ifnull(counted);
 		a.aload(1);
 		a.invokevirtual(getClass);
-		a.ldcClass(objects);
-		a.branch(Opcode.IF_ACMPNE, improper);
+		a.ldc(objects);
+		a.if_acmpne(improper);
 		a.aload(1);
 		a.checkcast(objects);
 		a.arraylength();
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPNE, improper);
+		a.loadConstant(2);
+		a.if_icmpne(improper);
 		a.aload(1);
 		a.checkcast(objects);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(cls("java/lang/Integer"));
-		a.branch(Opcode.IFNE, improper);
+		a.ifne(improper);
 		a.iinc(2, 1);
 		a.aload(1);
 		a.checkcast(objects);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(1);
-		a.branch(Opcode.GOTO, countLoop);
-		a.bind(improper);
-		a.aconstNull();
+		a.goto_(countLoop);
+		a.labelBinding(improper);
+		a.aconst_null();
 		a.areturn();
-		a.bind(counted);
-		int copyLoop = a.label();
-		int copied = a.label();
+		a.labelBinding(counted);
+		MethodCode.Label copyLoop = a.newLabel();
+		MethodCode.Label copied = a.newLabel();
 		a.iload(2);
 		a.anewarray(cls("java/lang/Object"));
 		a.astore(3);
 		a.aload(0);
 		a.astore(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(copyLoop);
+		a.labelBinding(copyLoop);
 		a.iload(4);
 		a.iload(2);
-		a.branch(Opcode.IF_ICMPGE, copied);
+		a.if_icmpge(copied);
 		a.aload(3);
 		a.iload(4);
 		a.aload(1);
 		a.checkcast(objects);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aastore();
 		a.aload(1);
 		a.checkcast(objects);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(1);
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, copyLoop);
-		a.bind(copied);
+		a.goto_(copyLoop);
+		a.labelBinding(copied);
 		a.aload(3);
 		a.areturn();
-		a.bind(notCons);
+		a.labelBinding(notCons);
 		for (String shape : packedShapes()) {
 			emitPackedElements(a, shape);
 		}
 		// A Lisp array: slot 0 the {dims, fillPointer, ...} header (1 = header).
-		int rankOne = a.label();
+		MethodCode.Label rankOne = a.newLabel();
 		a.aload(0);
 		a.checkcast(arrayList);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(get);
 		a.checkcast(objects);
 		a.astore(1);
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.instanceOf(objects);
-		a.branch(Opcode.IFEQ, improper);
+		a.ifeq(improper);
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objects);
 		a.arraylength();
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPEQ, rankOne);
-		a.aconstNull();
+		a.loadConstant(1);
+		a.if_icmpeq(rankOne);
+		a.aconst_null();
 		a.areturn();
-		a.bind(rankOne);
+		a.labelBinding(rankOne);
 		// The PACKED shape: a length-6 header holding the long[] (2 = the long[]).
-		int boxed = a.label();
-		int packedLoop = a.label();
-		int packedDone = a.label();
-		int nil = a.label();
-		int stored = a.label();
+		MethodCode.Label boxed = a.newLabel();
+		MethodCode.Label packedLoop = a.newLabel();
+		MethodCode.Label packedDone = a.newLabel();
+		MethodCode.Label nil = a.newLabel();
+		MethodCode.Label stored = a.newLabel();
 		a.aload(1);
 		a.arraylength();
-		a.iconst(6);
-		a.branch(Opcode.IF_ICMPNE, boxed);
+		a.loadConstant(6);
+		a.if_icmpne(boxed);
 		a.aload(1);
-		a.iconst(5);
+		a.loadConstant(5);
 		a.aaload();
 		a.instanceOf(cls("[J"));
-		a.branch(Opcode.IFEQ, boxed);
+		a.ifeq(boxed);
 		a.aload(1);
-		a.iconst(5);
+		a.loadConstant(5);
 		a.aaload();
 		a.checkcast(cls("[J"));
 		a.astore(2);
@@ -2286,13 +2264,13 @@ final class JvmJavaDirectSites {
 		a.arraylength();
 		a.anewarray(cls("java/lang/Object"));
 		a.astore(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(packedLoop);
+		a.labelBinding(packedLoop);
 		a.iload(4);
 		a.aload(2);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, packedDone);
+		a.if_icmpge(packedDone);
 		a.aload(3);
 		a.iload(4);
 		a.aload(2);
@@ -2300,71 +2278,71 @@ final class JvmJavaDirectSites {
 		a.laload();
 		a.lstore(5);
 		a.lload(5);
-		a.ldc2Long(this.cp.addLong(Long.MIN_VALUE));
+		a.ldc(this.cp.entries().longEntry(Long.MIN_VALUE));
 		a.lcmp();
-		a.branch(Opcode.IFEQ, nil);
+		a.ifeq(nil);
 		a.lload(5);
 		a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
-		a.branch(Opcode.GOTO, stored);
-		a.bind(nil);
-		a.aconstNull();
-		a.bind(stored);
+		a.goto_(stored);
+		a.labelBinding(nil);
+		a.aconst_null();
+		a.labelBinding(stored);
 		a.aastore();
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, packedLoop);
-		a.bind(packedDone);
+		a.goto_(packedLoop);
+		a.labelBinding(packedDone);
 		a.aload(3);
 		a.areturn();
-		a.bind(boxed);
+		a.labelBinding(boxed);
 		// The elements after the header, up to the fill pointer (2 = the count).
-		int noFill = a.label();
-		int count = a.label();
-		int loop = a.label();
-		int done = a.label();
+		MethodCode.Label noFill = a.newLabel();
+		MethodCode.Label count = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.instanceOf(cls("java/lang/Long"));
-		a.branch(Opcode.IFEQ, noFill);
+		a.ifeq(noFill);
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.checkcast(cls("java/lang/Long"));
 		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
 		a.istore(2);
-		a.branch(Opcode.GOTO, count);
-		a.bind(noFill);
+		a.goto_(count);
+		a.labelBinding(noFill);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "size", "()I"));
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(2);
-		a.bind(count);
+		a.labelBinding(count);
 		a.iload(2);
 		a.anewarray(cls("java/lang/Object"));
 		a.astore(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(4);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(4);
 		a.iload(2);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(3);
 		a.iload(4);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.iload(4);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iadd();
 		a.invokevirtual(get);
 		a.aastore();
 		a.iinc(4, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(3);
 		a.areturn();
-		return new Method(name, desc, 6, 11, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// One specialized shape's arm of _jseq: when the value is of the array class, its
@@ -2375,16 +2353,16 @@ final class JvmJavaDirectSites {
 	// vector long[] {width, e...} and an octet vector byte[] {8, e...} (read unsigned;
 	// any other byte[] is a quantized matrix). Locals 7 = the array, 8 = the count, 9 =
 	// the elements, 10 = the index.
-	private void emitPackedElements(JvmAsm a, String shape) {
+	private void emitPackedElements(MethodCode a, String shape) {
 		int array = 7;
 		int count = 8;
 		int out = 9;
 		int index = 10;
-		int next = a.label();
-		int notVector = a.label();
+		MethodCode.Label next = a.newLabel();
+		MethodCode.Label notVector = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls(shape));
-		a.branch(Opcode.IFEQ, next);
+		a.ifeq(next);
 		a.aload(0);
 		a.checkcast(cls(shape));
 		a.astore(array);
@@ -2398,7 +2376,7 @@ final class JvmJavaDirectSites {
 				};
 				// Rank 1: slot 0 is 1.
 				a.aload(array);
-				a.iconst(0);
+				a.loadConstant(0);
 				switch (shape) {
 					case "[D" -> {
 						a.daload();
@@ -2410,47 +2388,47 @@ final class JvmJavaDirectSites {
 					}
 					default -> a.saload();
 				}
-				a.iconst(1);
-				a.branch(Opcode.IF_ICMPNE, notVector);
+				a.loadConstant(1);
+				a.if_icmpne(notVector);
 				offset = width.dataOffset(1);
 			}
 			case "[B" -> {
 				a.aload(array);
 				a.arraylength();
-				a.branch(Opcode.IFEQ, notVector);
+				a.ifeq(notVector);
 				a.aload(array);
-				a.iconst(0);
+				a.loadConstant(0);
 				a.baload();
-				a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				a.branch(Opcode.IF_ICMPNE, notVector);
+				a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				a.if_icmpne(notVector);
 				offset = 1;
 			}
 			default -> offset = 1; // [J: the width, then the elements
 		}
-		int loop = a.label();
-		int done = a.label();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(array);
 		a.arraylength();
-		a.iconst(offset);
-		a.op(Opcode.ISUB);
+		a.loadConstant(offset);
+		a.isub();
 		a.istore(count);
 		a.iload(count);
 		a.anewarray(cls("java/lang/Object"));
 		a.astore(out);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(index);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(index);
 		a.iload(count);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(out);
 		a.iload(index);
 		a.aload(array);
 		a.iload(index);
-		a.iconst(offset);
+		a.loadConstant(offset);
 		a.iadd();
-		MethodrefConstant doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-		MethodrefConstant longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
+		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		switch (shape) {
 			case "[D" -> {
 				a.daload();
@@ -2472,29 +2450,29 @@ final class JvmJavaDirectSites {
 			}
 			default -> {
 				a.baload();
-				a.iconst(0xFF);
-				a.op(Opcode.IAND);
+				a.loadConstant(0xFF);
+				a.iand();
 				a.i2l();
 				a.invokestatic(longValueOf);
 			}
 		}
 		a.aastore();
 		a.iinc(index, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(out);
 		a.areturn();
-		a.bind(notVector);
-		a.aconstNull();
+		a.labelBinding(notVector);
+		a.aconst_null();
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 	}
 
 	// _jcost$N(Object)I for one type: the bridge's marshal cost -- kindCost of a value's
 	// kind, a host object's class against the type, a sequence its base plus its
 	// elements' costs -- or NO_MATCH.
 	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions) {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		render(a, 0);
 		int code = 1;
 		a.aload(0);
@@ -2505,96 +2483,96 @@ final class JvmJavaDirectSites {
 			if (cost == JavaOverloads.NO_MATCH || (!functions && LISP_KINDS[c] == JavaKind.Lisp.FUNCTION)) {
 				continue;
 			}
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.iload(code);
-			a.iconst(c);
-			a.branch(Opcode.IF_ICMPNE, next);
-			a.iconst(cost);
+			a.loadConstant(c);
+			a.if_icmpne(next);
+			a.loadConstant(cost);
 			a.ireturn();
-			a.bind(next);
+			a.labelBinding(next);
 		}
 		JavaType element = sequenceElement(target);
 		if (element != null) {
-			int sequenceValue = a.label();
-			int notSequence = a.label();
-			int proper = a.label();
-			int loop = a.label();
-			int done = a.label();
-			int add = a.label();
+			MethodCode.Label sequenceValue = a.newLabel();
+			MethodCode.Label notSequence = a.newLabel();
+			MethodCode.Label proper = a.newLabel();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			MethodCode.Label add = a.newLabel();
 			int elements = 2;
 			int total = 3;
 			int index = 4;
 			int each = 5;
 			a.iload(code);
-			a.iconst(KIND_CONS);
-			a.branch(Opcode.IF_ICMPEQ, sequenceValue);
+			a.loadConstant(KIND_CONS);
+			a.if_icmpeq(sequenceValue);
 			a.iload(code);
-			a.iconst(KIND_ARRAY);
-			a.branch(Opcode.IF_ICMPNE, notSequence);
-			a.bind(sequenceValue);
+			a.loadConstant(KIND_ARRAY);
+			a.if_icmpne(notSequence);
+			a.labelBinding(sequenceValue);
 			a.aload(0);
 			a.invokestatic(sequence());
 			a.astore(elements);
 			a.aload(elements);
-			a.branch(Opcode.IFNONNULL, proper);
-			a.iconst(JavaOverloads.NO_MATCH);
+			a.ifnonnull(proper);
+			a.loadConstant(JavaOverloads.NO_MATCH);
 			a.ireturn();
-			a.bind(proper);
-			a.iconst(target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED);
+			a.labelBinding(proper);
+			a.loadConstant(target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED);
 			a.istore(total);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(index);
-			a.bind(loop);
+			a.labelBinding(loop);
 			a.iload(index);
 			a.aload(elements);
 			a.arraylength();
-			a.branch(Opcode.IF_ICMPGE, done);
+			a.if_icmpge(done);
 			a.aload(elements);
 			a.iload(index);
 			a.aaload();
 			a.invokestatic(cost(element, functions));
 			a.istore(each);
 			a.iload(each);
-			a.branch(Opcode.IFGE, add);
-			a.iconst(JavaOverloads.NO_MATCH);
+			a.ifge(add);
+			a.loadConstant(JavaOverloads.NO_MATCH);
 			a.ireturn();
-			a.bind(add);
+			a.labelBinding(add);
 			a.iload(total);
 			a.iload(each);
 			a.iadd();
 			a.istore(total);
 			a.iinc(index, 1);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(done);
+			a.goto_(loop);
+			a.labelBinding(done);
 			a.iload(total);
 			a.ireturn();
-			a.bind(notSequence);
+			a.labelBinding(notSequence);
 		}
 		if (!target.isPrimitive()) {
 			// A host object: its exact class, or a subclass, of the type.
-			int notHost = a.label();
-			int widen = a.label();
-			ClassConstant type = cls(target);
+			MethodCode.Label notHost = a.newLabel();
+			MethodCode.Label widen = a.newLabel();
+			ClassEntry type = cls(target);
 			a.iload(code);
-			a.iconst(KIND_HOST);
-			a.branch(Opcode.IF_ICMPNE, notHost);
+			a.loadConstant(KIND_HOST);
+			a.if_icmpne(notHost);
 			a.aload(0);
 			a.instanceOf(type);
-			a.branch(Opcode.IFEQ, notHost);
+			a.ifeq(notHost);
 			a.aload(0);
 			a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-			a.ldcClass(type);
-			a.branch(Opcode.IF_ACMPNE, widen);
-			a.iconst(JavaOverloads.COST_EXACT);
+			a.ldc(type);
+			a.if_acmpne(widen);
+			a.loadConstant(JavaOverloads.COST_EXACT);
 			a.ireturn();
-			a.bind(widen);
-			a.iconst(JavaOverloads.COST_WIDEN);
+			a.labelBinding(widen);
+			a.loadConstant(JavaOverloads.COST_WIDEN);
 			a.ireturn();
-			a.bind(notHost);
+			a.labelBinding(notHost);
 		}
-		a.iconst(JavaOverloads.NO_MATCH);
+		a.loadConstant(JavaOverloads.NO_MATCH);
 		a.ireturn();
-		return new Method(name, desc, 4, 6, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _jconv$N(Object)T for one type: the bridge's convert arm of the value's kind, a
@@ -2604,15 +2582,15 @@ final class JvmJavaDirectSites {
 	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions,
 			boolean sequences) {
 		Body body = new Body(2);
-		JvmAsm a = body.a;
+		MethodCode a = body.a;
 		int code = 1;
-		int reject = a.label();
+		MethodCode.Label reject = a.newLabel();
 		render(a, 0);
 		a.aload(0);
 		a.invokestatic(kind());
 		a.istore(code);
 		boolean reference = !target.isPrimitive();
-		ClassConstant type = cls(target);
+		ClassEntry type = cls(target);
 		boolean needsCast = reference && !"java.lang.Object".equals(target.name());
 		for (int c = 0; c < LISP_KINDS.length; c++) {
 			JavaKind.Lisp kind = LISP_KINDS[c];
@@ -2620,60 +2598,60 @@ final class JvmJavaDirectSites {
 					|| JavaOverloads.kindCost(kind, target, this.lookup) == JavaOverloads.NO_MATCH) {
 				continue;
 			}
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.iload(code);
-			a.iconst(c);
-			a.branch(Opcode.IF_ICMPNE, next);
+			a.loadConstant(c);
+			a.if_icmpne(next);
 			body.emitConvert(0, kind, target);
 			if (needsCast) {
 				a.checkcast(type);
 			}
-			a.op(returnOpcode(target));
-			a.bind(next);
+			a.return_(Body.typeKind(target));
+			a.labelBinding(next);
 		}
 		JavaType element = sequences ? sequenceElement(target) : null;
 		if (element != null) {
-			int sequenceValue = a.label();
-			int notSequence = a.label();
-			int loop = a.label();
-			int done = a.label();
+			MethodCode.Label sequenceValue = a.newLabel();
+			MethodCode.Label notSequence = a.newLabel();
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
 			int elements = body.nextSlot++;
 			int result = body.nextSlot++;
 			int index = body.nextSlot++;
 			a.iload(code);
-			a.iconst(KIND_CONS);
-			a.branch(Opcode.IF_ICMPEQ, sequenceValue);
+			a.loadConstant(KIND_CONS);
+			a.if_icmpeq(sequenceValue);
 			a.iload(code);
-			a.iconst(KIND_ARRAY);
-			a.branch(Opcode.IF_ICMPNE, notSequence);
-			a.bind(sequenceValue);
+			a.loadConstant(KIND_ARRAY);
+			a.if_icmpne(notSequence);
+			a.labelBinding(sequenceValue);
 			a.aload(0);
 			a.invokestatic(sequence());
 			a.astore(elements);
 			a.aload(elements);
-			a.branch(Opcode.IFNULL, reject);
-			MethodrefConstant each = convert(element, functions, sequences);
+			a.ifnull(reject);
+			MethodRefEntry each = convert(element, functions, sequences);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();
 				body.newArray(element);
 			}
 			else {
-				ClassConstant arrayList = cls("java/util/ArrayList");
-				a.anew(arrayList);
+				ClassEntry arrayList = cls("java/util/ArrayList");
+				a.new_(arrayList);
 				a.dup();
 				a.aload(elements);
 				a.arraylength();
 				a.invokespecial(method("java/util/ArrayList", "<init>", "(I)V"));
 			}
 			a.astore(result);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.istore(index);
-			a.bind(loop);
+			a.labelBinding(loop);
 			a.iload(index);
 			a.aload(elements);
 			a.arraylength();
-			a.branch(Opcode.IF_ICMPGE, done);
+			a.if_icmpge(done);
 			if (target.isArray()) {
 				a.aload(result);
 				a.checkcast(type);
@@ -2682,7 +2660,7 @@ final class JvmJavaDirectSites {
 				a.iload(index);
 				a.aaload();
 				a.invokestatic(each);
-				a.op(Body.arrayStore(element));
+				a.arrayStore(Body.typeKind(element));
 			}
 			else {
 				a.aload(result);
@@ -2695,35 +2673,35 @@ final class JvmJavaDirectSites {
 				a.pop();
 			}
 			a.iinc(index, 1);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(done);
+			a.goto_(loop);
+			a.labelBinding(done);
 			a.aload(result);
 			if (needsCast) {
 				a.checkcast(type);
 			}
 			a.areturn();
-			a.bind(notSequence);
+			a.labelBinding(notSequence);
 		}
 		if (reference) {
 			a.iload(code);
-			a.iconst(KIND_HOST);
-			a.branch(Opcode.IF_ICMPNE, reject);
+			a.loadConstant(KIND_HOST);
+			a.if_icmpne(reject);
 			a.aload(0);
 			if (needsCast) {
 				a.checkcast(type);
 			}
 			a.areturn();
 		}
-		a.bind(reject);
-		a.anew(cls("java/lang/IllegalStateException"));
+		a.labelBinding(reject);
+		a.new_(cls("java/lang/IllegalStateException"));
 		a.dup();
-		a.ldcString(str("java interop: the selected overload rejects "));
+		a.ldc(str("java interop: the selected overload rejects "));
 		a.aload(0);
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
 		a.invokespecial(method("java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V"));
 		a.athrow();
-		return body.finish(name, desc, 8);
+		return body.finish(name, desc);
 	}
 
 	// --- the shared helpers ---
@@ -2734,160 +2712,160 @@ final class JvmJavaDirectSites {
 	// array (_jlarr), not a Lisp hash table (_jltab), not a travelling runtime class's
 	// value (a complex number).
 	private Method buildHost(Utf8Constant name, Utf8Constant desc) {
-		JvmAsm a = new JvmAsm();
-		MethodrefConstant getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
-		int no = a.label();
+		MethodCode a = new MethodCode();
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodCode.Label no = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNULL, no);
+		a.ifnull(no);
 		for (String excluded : new String[] { "java/lang/Long", "java/lang/Double", "java/math/BigInteger",
 				"java/lang/String" }) {
 			a.aload(0);
 			a.instanceOf(cls(excluded));
-			a.branch(Opcode.IFNE, no);
+			a.ifne(no);
 		}
 		a.aload(0);
 		a.invokevirtual(getClass);
 		a.invokevirtual(method("java/lang/Class", "isArray", "()Z"));
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		// A Lisp array or a Lisp hash table: the shared tests.
 		a.aload(0);
 		a.invokestatic(lispArray());
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		a.aload(0);
 		a.invokestatic(lispTable());
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		// A value of a class that travels with the program (a complex number).
 		a.aload(0);
 		a.invokevirtual(getClass);
 		a.invokevirtual(method("java/lang/Class", "getName", "()Ljava/lang/String;"));
-		a.ldcString(str(RUNTIME_PACKAGE_PREFIX));
+		a.ldc(str(RUNTIME_PACKAGE_PREFIX));
 		a.invokevirtual(method("java/lang/String", "startsWith", "(Ljava/lang/String;)Z"));
-		a.branch(Opcode.IFNE, no);
-		a.iconst(1);
+		a.ifne(no);
+		a.loadConstant(1);
 		a.ireturn();
-		a.bind(no);
-		a.iconst(0);
+		a.labelBinding(no);
+		a.loadConstant(0);
 		a.ireturn();
-		return new Method(name, desc, 3, 1, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _jlarr(Object)Z: a non-empty ArrayList whose first element is an Object[] header.
 	private Method buildLispArray(Utf8Constant name, Utf8Constant desc) {
-		JvmAsm a = new JvmAsm();
-		ClassConstant arrayList = cls("java/util/ArrayList");
-		int no = a.label();
+		MethodCode a = new MethodCode();
+		ClassEntry arrayList = cls("java/util/ArrayList");
+		MethodCode.Label no = a.newLabel();
 		a.aload(0);
 		a.instanceOf(arrayList);
-		a.branch(Opcode.IFEQ, no);
+		a.ifeq(no);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.branch(Opcode.IFNE, no);
+		a.ifne(no);
 		a.aload(0);
 		a.checkcast(arrayList);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
 		a.instanceOf(cls("[Ljava/lang/Object;"));
 		a.ireturn();
-		a.bind(no);
-		a.iconst(0);
+		a.labelBinding(no);
+		a.loadConstant(0);
 		a.ireturn();
-		return new Method(name, desc, 2, 1, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _jckarr / _jcktab(Object v, String op)Object: v unless it is an instance of the
 	// class a Lisp array / table shares with a host collection and the shared test says
 	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
 	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
-	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodrefConstant lispTest,
+	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodRefEntry lispTest,
 			OperandTypes.Kind kind) {
-		JvmAsm a = new JvmAsm();
-		int pass = a.label();
-		int named = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label pass = a.newLabel();
+		MethodCode.Label named = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls(sharedClass));
-		a.branch(Opcode.IFEQ, pass);
+		a.ifeq(pass);
 		a.aload(0);
 		a.invokestatic(lispTest);
-		a.branch(Opcode.IFNE, pass);
+		a.ifne(pass);
 		// The accessor's type-error over the host value, as the interpreter's refusal of
 		// it is: _teRaw's unnamed report, renamed after the operator the site handed in
 		// (null for one that is no named operator).
 		a.aload(0);
-		a.ldcString(str(kind.typeName()));
+		a.ldc(str(kind.typeName()));
 		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
 		a.aload(1);
-		a.branch(Opcode.IFNONNULL, named);
+		a.ifnonnull(named);
 		a.athrow();
-		a.bind(named);
+		a.labelBinding(named);
 		a.aload(1);
-		a.ldcString(str(OperandTypes.FUNNEL_TYPE));
+		a.ldc(str(OperandTypes.FUNNEL_TYPE));
 		a.invokestatic(JvmOperandTypeRuntime.self(this.cp, this.thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		a.athrow();
-		a.bind(pass);
+		a.labelBinding(pass);
 		a.aload(0);
 		a.areturn();
-		return new Method(name, desc, 4, 2, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
 	private Method buildLispTable(Utf8Constant name, Utf8Constant desc) {
-		JvmAsm a = new JvmAsm();
-		ClassConstant linkedHashMap = cls(RontoHashTable.MAP_CLASS);
-		int no = a.label();
+		MethodCode a = new MethodCode();
+		ClassEntry linkedHashMap = cls(RontoHashTable.MAP_CLASS);
+		MethodCode.Label no = a.newLabel();
 		a.aload(0);
 		a.instanceOf(linkedHashMap);
-		a.branch(Opcode.IFEQ, no);
+		a.ifeq(no);
 		a.aload(0);
 		a.checkcast(linkedHashMap);
-		a.ldcString(str(RontoHashTable.ORDER_KEY));
+		a.ldc(str(RontoHashTable.ORDER_KEY));
 		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
 		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
 		a.ireturn();
-		a.bind(no);
-		a.iconst(0);
+		a.labelBinding(no);
+		a.loadConstant(0);
 		a.ireturn();
-		return new Method(name, desc, 2, 1, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _junm(Object)Object: the bridge's unmarshal.
-	private Method buildUnmarshal(Utf8Constant name, Utf8Constant desc, MethodrefConstant toList) {
-		JvmAsm a = new JvmAsm();
-		MethodrefConstant longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-		MethodrefConstant doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-		MethodrefConstant numberLongValue = method("java/lang/Number", "longValue", "()J");
-		MethodrefConstant concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		int notNull = a.label();
+	private Method buildUnmarshal(Utf8Constant name, Utf8Constant desc, MethodRefEntry toList) {
+		MethodCode a = new MethodCode();
+		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
+		MethodRefEntry numberLongValue = method("java/lang/Number", "longValue", "()J");
+		MethodRefEntry concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodCode.Label notNull = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, notNull);
-		a.aconstNull();
+		a.ifnonnull(notNull);
+		a.aconst_null();
 		a.areturn();
-		a.bind(notNull);
+		a.labelBinding(notNull);
 		// Boolean -> t / nil
-		int notBoolean = a.label();
-		int falseValue = a.label();
+		MethodCode.Label notBoolean = a.newLabel();
+		MethodCode.Label falseValue = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Boolean"));
-		a.branch(Opcode.IFEQ, notBoolean);
+		a.ifeq(notBoolean);
 		a.aload(0);
 		a.checkcast(cls("java/lang/Boolean"));
 		a.invokevirtual(method("java/lang/Boolean", "booleanValue", "()Z"));
-		a.branch(Opcode.IFEQ, falseValue);
-		a.ldcString(str("T"));
+		a.ifeq(falseValue);
+		a.ldc(str("T"));
 		a.areturn();
-		a.bind(falseValue);
-		a.aconstNull();
+		a.labelBinding(falseValue);
+		a.aconst_null();
 		a.areturn();
-		a.bind(notBoolean);
+		a.labelBinding(notBoolean);
 		// Integer / Short / Byte -> the long; Long / Double -> themselves
 		for (String box : new String[] { "java/lang/Integer", "java/lang/Long", "java/lang/Short", "java/lang/Byte",
 				"java/lang/Double" }) {
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.aload(0);
 			a.instanceOf(cls(box));
-			a.branch(Opcode.IFEQ, next);
+			a.ifeq(next);
 			a.aload(0);
 			if (!"java/lang/Long".equals(box) && !"java/lang/Double".equals(box)) {
 				a.checkcast(cls("java/lang/Number"));
@@ -2895,91 +2873,91 @@ final class JvmJavaDirectSites {
 				a.invokestatic(longValueOf);
 			}
 			a.areturn();
-			a.bind(next);
+			a.labelBinding(next);
 		}
 		// Float -> the double
-		int notFloat = a.label();
+		MethodCode.Label notFloat = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Float"));
-		a.branch(Opcode.IFEQ, notFloat);
+		a.ifeq(notFloat);
 		a.aload(0);
 		a.checkcast(cls("java/lang/Float"));
 		a.invokevirtual(method("java/lang/Float", "floatValue", "()F"));
 		a.f2d();
 		a.invokestatic(doubleValueOf);
 		a.areturn();
-		a.bind(notFloat);
+		a.labelBinding(notFloat);
 		// BigInteger -> a Lisp integer: the long when it fits, else the bignum itself
-		int notBignum = a.label();
-		int bignum = a.label();
-		ClassConstant bigInteger = cls("java/math/BigInteger");
+		MethodCode.Label notBignum = a.newLabel();
+		MethodCode.Label bignum = a.newLabel();
+		ClassEntry bigInteger = cls("java/math/BigInteger");
 		a.aload(0);
 		a.instanceOf(bigInteger);
-		a.branch(Opcode.IFEQ, notBignum);
+		a.ifeq(notBignum);
 		a.aload(0);
 		a.checkcast(bigInteger);
 		a.invokevirtual(method("java/math/BigInteger", "bitLength", "()I"));
-		a.iconst(64);
-		a.branch(Opcode.IF_ICMPGE, bignum);
+		a.loadConstant(64);
+		a.if_icmpge(bignum);
 		a.aload(0);
 		a.checkcast(bigInteger);
 		a.invokevirtual(method("java/math/BigInteger", "longValue", "()J"));
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(bignum);
+		a.labelBinding(bignum);
 		a.aload(0);
 		a.areturn();
-		a.bind(notBignum);
+		a.labelBinding(notBignum);
 		// Character -> int[]{code unit}
-		int notCharacter = a.label();
+		MethodCode.Label notCharacter = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Character"));
-		a.branch(Opcode.IFEQ, notCharacter);
-		a.iconst(1);
-		a.newarrayInt();
+		a.ifeq(notCharacter);
+		a.loadConstant(1);
+		a.newarray(TypeKind.INT);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.checkcast(cls("java/lang/Character"));
 		a.invokevirtual(method("java/lang/Character", "charValue", "()C"));
 		a.iastore();
 		a.areturn();
-		a.bind(notCharacter);
+		a.labelBinding(notCharacter);
 		// String -> the quote-framed Lisp string
-		int notString = a.label();
+		MethodCode.Label notString = a.newLabel();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/String"));
-		a.branch(Opcode.IFEQ, notString);
-		a.ldcString(str("\""));
+		a.ifeq(notString);
+		a.ldc(str("\""));
 		a.aload(0);
 		a.checkcast(cls("java/lang/String"));
 		a.invokevirtual(concat);
-		a.ldcString(str("\""));
+		a.ldc(str("\""));
 		a.invokevirtual(concat);
 		a.areturn();
-		a.bind(notString);
+		a.labelBinding(notString);
 		// An array -> a list; any other object stays itself.
 		a.aload(0);
 		a.invokestatic(toList);
 		a.areturn();
-		return new Method(name, desc, 5, 1, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 	// _jarr(Object)Object: the bridge's arrayToList over every array type (elements
 	// unmarshalled as Array.get would box them), or the value itself when it is no array.
-	private Method buildArrayToList(Utf8Constant name, Utf8Constant desc, MethodrefConstant unmarshal) {
-		JvmAsm a = new JvmAsm();
-		MethodrefConstant longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-		MethodrefConstant doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-		ClassConstant objectClass = cls("java/lang/Object");
+	private Method buildArrayToList(Utf8Constant name, Utf8Constant desc, MethodRefEntry unmarshal) {
+		MethodCode a = new MethodCode();
+		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
+		ClassEntry objectClass = cls("java/lang/Object");
 		String[] arrays = { "[Ljava/lang/Object;", "[I", "[J", "[D", "[F", "[S", "[B", "[C", "[Z" };
 		for (String array : arrays) {
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.aload(0);
 			a.instanceOf(cls(array));
-			a.branch(Opcode.IFEQ, next);
+			a.ifeq(next);
 			// result = nil; array = (T[]) value; i = array.length
-			a.aconstNull();
+			a.aconst_null();
 			a.astore(1);
 			a.aload(0);
 			a.checkcast(cls(array));
@@ -2987,17 +2965,17 @@ final class JvmJavaDirectSites {
 			a.aload(2);
 			a.arraylength();
 			a.istore(3);
-			int loop = a.label();
-			int done = a.label();
-			a.bind(loop);
+			MethodCode.Label loop = a.newLabel();
+			MethodCode.Label done = a.newLabel();
+			a.labelBinding(loop);
 			a.iinc(3, -1);
 			a.iload(3);
-			a.branch(Opcode.IFLT, done);
+			a.iflt(done);
 			// result = new Object[] { element(i), result }
-			a.iconst(2);
+			a.loadConstant(2);
 			a.anewarray(objectClass);
 			a.dup();
-			a.iconst(0);
+			a.loadConstant(0);
 			a.aload(2);
 			a.iload(3);
 			switch (array) {
@@ -3037,41 +3015,41 @@ final class JvmJavaDirectSites {
 					// A char element is a Character, unmarshalled to int[]{c}.
 					a.caload();
 					a.istore(4);
-					a.iconst(1);
-					a.newarrayInt();
+					a.loadConstant(1);
+					a.newarray(TypeKind.INT);
 					a.dup();
-					a.iconst(0);
+					a.loadConstant(0);
 					a.iload(4);
 					a.iastore();
 				}
 				default -> {
 					// boolean[]: t or nil.
-					int falseValue = a.label();
-					int stored = a.label();
+					MethodCode.Label falseValue = a.newLabel();
+					MethodCode.Label stored = a.newLabel();
 					a.baload();
-					a.branch(Opcode.IFEQ, falseValue);
-					a.ldcString(str("T"));
-					a.branch(Opcode.GOTO, stored);
-					a.bind(falseValue);
-					a.aconstNull();
-					a.bind(stored);
+					a.ifeq(falseValue);
+					a.ldc(str("T"));
+					a.goto_(stored);
+					a.labelBinding(falseValue);
+					a.aconst_null();
+					a.labelBinding(stored);
 				}
 			}
 			a.aastore();
 			a.dup();
-			a.iconst(1);
+			a.loadConstant(1);
 			a.aload(1);
 			a.aastore();
 			a.astore(1);
-			a.branch(Opcode.GOTO, loop);
-			a.bind(done);
+			a.goto_(loop);
+			a.labelBinding(done);
 			a.aload(1);
 			a.areturn();
-			a.bind(next);
+			a.labelBinding(next);
 		}
 		a.aload(0);
 		a.areturn();
-		return new Method(name, desc, 8, 5, a.finish(), List.of());
+		return new Method(name, desc, a);
 	}
 
 }

@@ -1,15 +1,16 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.compiler.BoundaryType;
@@ -59,9 +60,8 @@ import am.ik.rontolisp.compiler.JvmExportDirective;
  */
 final class JvmExportRuntimeBuilder {
 
-	/** An emitted method: name, descriptor, frame sizes, code, and its access level. */
-	record BuiltMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			boolean isPublic) {
+	/** An emitted method: name, descriptor, body, and its access level. */
+	record BuiltMethod(Utf8Constant name, Utf8Constant desc, MethodCode code, boolean isPublic) {
 	}
 
 	private static final String ARG_GUARD = "_exArg";
@@ -192,13 +192,13 @@ final class JvmExportRuntimeBuilder {
 	 * validated to exist with the declared arity)
 	 * @return the methods to add to the class, wrappers first
 	 */
-	static List<BuiltMethod> build(ConstantPool cp, ClassConstant thisClass, List<JvmExportDirective> decls,
+	static List<BuiltMethod> build(ConstantPool cp, ClassEntry thisClass, List<JvmExportDirective> decls,
 			Map<String, JvmLispCompiler.FunctionInfo> functions) {
 		return build(cp, thisClass, decls, functions, false);
 	}
 
 	/**
-	 * {@link #build(ConstantPool, ClassConstant, List, Map)} with the array-runtime flag:
+	 * {@link #build(ConstantPool, ClassEntry, List, Map)} with the array-runtime flag:
 	 * when the array runtime exists, a {@code :string}-returning export can answer a
 	 * MUTABLE character vector (a concatenate/subseq/format result), and the
 	 * {@code _exStr} unframe renders it through {@code _strv} before its frame check.
@@ -209,20 +209,21 @@ final class JvmExportRuntimeBuilder {
 	 * @param arrayRuntime whether the {@code _strv} normalizer is emitted
 	 * @return the export bridge methods
 	 */
-	static List<BuiltMethod> build(ConstantPool cp, ClassConstant thisClass, List<JvmExportDirective> decls,
+	static List<BuiltMethod> build(ConstantPool cp, ClassEntry thisClass, List<JvmExportDirective> decls,
 			Map<String, JvmLispCompiler.FunctionInfo> functions, boolean arrayRuntime) {
 		List<BuiltMethod> methods = new ArrayList<>();
 		Refs refs = new Refs(cp, thisClass, needsFloatArray(decls));
-		refs.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
-			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
-				: null;
+		refs.strvRef = arrayRuntime
+				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null;
 		boolean needArgGuard = false;
 		boolean needResultGuard = false;
 		boolean needUnframe = false;
 		boolean needBytesIn = false;
 		boolean needBytesOut = false;
 		for (JvmExportDirective decl : decls) {
-			MethodrefConstant target = java.util.Objects.requireNonNull(functions.get(decl.name())).methodref();
+			MethodRefEntry target = java.util.Objects.requireNonNull(functions.get(decl.name()))
+				.methodref()
+				.methodRefEntry();
 			methods.add(buildWrapper(cp, decl, target, refs));
 			for (BoundaryType t : decl.paramTypes()) {
 				needArgGuard |= t == BoundaryType.U8 || t == BoundaryType.U16 || t == BoundaryType.U32
@@ -254,31 +255,31 @@ final class JvmExportRuntimeBuilder {
 	/** The constant-pool references every builder below shares. */
 	private static final class Refs {
 
-		final MethodrefConstant longValueOf;
+		final MethodRefEntry longValueOf;
 
-		final MethodrefConstant longValue;
+		final MethodRefEntry longValue;
 
-		final MethodrefConstant doubleValueOf;
+		final MethodRefEntry doubleValueOf;
 
-		final MethodrefConstant numberDoubleValue;
+		final MethodRefEntry numberDoubleValue;
 
-		final MethodrefConstant concat;
+		final MethodRefEntry concat;
 
-		final MethodrefConstant valueOfLong;
+		final MethodRefEntry valueOfLong;
 
-		final MethodrefConstant charAt;
+		final MethodRefEntry charAt;
 
-		final MethodrefConstant length;
+		final MethodRefEntry length;
 
-		final MethodrefConstant substring;
+		final MethodRefEntry substring;
 
-		final MethodrefConstant lispToString;
+		final MethodRefEntry lispToString;
 
-		final MethodrefConstant readFromString;
+		final MethodRefEntry readFromString;
 
-		final MethodrefConstant argGuard;
+		final MethodRefEntry argGuard;
 
-		final MethodrefConstant resultGuard;
+		final MethodRefEntry resultGuard;
 
 		/**
 		 * {@code _strv}, or null without the array runtime: the {@code _exStr} unframe
@@ -286,123 +287,106 @@ final class JvmExportRuntimeBuilder {
 		 * concatenate/subseq/format-built export result crosses the handle boundary as
 		 * the string it spells.
 		 */
-		@Nullable MethodrefConstant strvRef;
+		@Nullable MethodRefEntry strvRef;
 
-		final MethodrefConstant unframe;
+		final MethodRefEntry unframe;
 
-		final MethodrefConstant bytesIn;
+		final MethodRefEntry bytesIn;
 
-		final MethodrefConstant bytesOut;
+		final MethodRefEntry bytesOut;
 
-		final ClassConstant longClass;
+		final ClassEntry longClass;
 
-		final ClassConstant stringClass;
+		final ClassEntry stringClass;
 
-		final ClassConstant thisClassConstant;
+		final ClassEntry thisClassConstant;
 
-		final @Nullable MethodrefConstant floatArrayArgument;
+		final @Nullable MethodRefEntry floatArrayArgument;
 
-		final @Nullable MethodrefConstant floatArrayResult;
+		final @Nullable MethodRefEntry floatArrayResult;
 
-		Refs(ConstantPool cp, ClassConstant thisClass, boolean floatArray) {
+		Refs(ConstantPool cp, ClassEntry thisClass, boolean floatArray) {
 			this.thisClassConstant = thisClass;
 			if (floatArray) {
-				ClassConstant boundary = cp.addClass(cp.addUtf8(BOUNDARY_CLASS));
-				this.floatArrayArgument = cp.addMethodref(boundary,
-						cp.addNameAndType(cp.addUtf8(ARRAY_ARG), cp.addUtf8(ARRAY_ARG_DESC)));
-				this.floatArrayResult = cp.addMethodref(boundary,
-						cp.addNameAndType(cp.addUtf8(ARRAY_RESULT), cp.addUtf8(ARRAY_RESULT_DESC)));
+				ClassEntry boundary = cp.classEntry(BOUNDARY_CLASS);
+				this.floatArrayArgument = cp.methodRef(boundary, ARRAY_ARG, ARRAY_ARG_DESC);
+				this.floatArrayResult = cp.methodRef(boundary, ARRAY_RESULT, ARRAY_RESULT_DESC);
 			}
 			else {
 				this.floatArrayArgument = null;
 				this.floatArrayResult = null;
 			}
-			this.longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-			this.stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-			ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-			ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-			this.longValueOf = cp.addMethodref(this.longClass,
-					cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-			this.longValue = cp.addMethodref(this.longClass,
-					cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-			this.doubleValueOf = cp.addMethodref(doubleClass,
-					cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
-			this.numberDoubleValue = cp.addMethodref(numberClass,
-					cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-			this.concat = cp.addMethodref(this.stringClass,
-					cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-			this.valueOfLong = cp.addMethodref(this.stringClass,
-					cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/String;")));
-			this.charAt = cp.addMethodref(this.stringClass,
-					cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
-			this.length = cp.addMethodref(this.stringClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-			this.substring = cp.addMethodref(this.stringClass,
-					cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
-			Utf8Constant unaryToString = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;");
-			this.lispToString = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8("_lispToString"), unaryToString));
-			this.readFromString = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_readFromString"),
-					cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-			this.argGuard = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8(ARG_GUARD), cp.addUtf8(ARG_GUARD_DESC)));
-			this.resultGuard = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8(RESULT_GUARD), cp.addUtf8(RESULT_GUARD_DESC)));
-			this.unframe = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(UNFRAME), cp.addUtf8(UNFRAME_DESC)));
-			this.bytesIn = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC)));
-			this.bytesOut = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC)));
+			this.longClass = cp.classEntry("java/lang/Long");
+			this.stringClass = cp.classEntry("java/lang/String");
+			ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+			ClassEntry numberClass = cp.classEntry("java/lang/Number");
+			this.longValueOf = cp.methodRef(this.longClass, "valueOf", "(J)Ljava/lang/Long;");
+			this.longValue = cp.methodRef(this.longClass, "longValue", "()J");
+			this.doubleValueOf = cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+			this.numberDoubleValue = cp.methodRef(numberClass, "doubleValue", "()D");
+			this.concat = cp.methodRef(this.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+			this.valueOfLong = cp.methodRef(this.stringClass, "valueOf", "(J)Ljava/lang/String;");
+			this.charAt = cp.methodRef(this.stringClass, "charAt", "(I)C");
+			this.length = cp.methodRef(this.stringClass, "length", "()I");
+			this.substring = cp.methodRef(this.stringClass, "substring", "(II)Ljava/lang/String;");
+			this.lispToString = cp.methodRef(thisClass, "_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;");
+			this.readFromString = cp.methodRef(thisClass, "_readFromString", "(Ljava/lang/Object;)Ljava/lang/Object;");
+			this.argGuard = cp.methodRef(thisClass, ARG_GUARD, ARG_GUARD_DESC);
+			this.resultGuard = cp.methodRef(thisClass, RESULT_GUARD, RESULT_GUARD_DESC);
+			this.unframe = cp.methodRef(thisClass, UNFRAME, UNFRAME_DESC);
+			this.bytesIn = cp.methodRef(thisClass, BYTES_IN, BYTES_IN_DESC);
+			this.bytesOut = cp.methodRef(thisClass, BYTES_OUT, BYTES_OUT_DESC);
 		}
 
 	}
 
-	private static BuiltMethod buildWrapper(ConstantPool cp, JvmExportDirective decl, MethodrefConstant target,
+	private static BuiltMethod buildWrapper(ConstantPool cp, JvmExportDirective decl, MethodRefEntry target,
 			Refs refs) {
-		JvmAsm asm = new JvmAsm();
+		MethodCode asm = new MethodCode();
 		int slot = 0;
 		List<BoundaryType> params = decl.paramTypes();
 		for (int i = 0; i < params.size(); i++) {
 			BoundaryType t = params.get(i);
 			switch (t) {
 				case S8, S16, S32 -> {
-					emitLoad(asm, Opcode.ILOAD, slot);
-					asm.code.add(Opcode.I2L);
-					invoke(asm, Opcode.INVOKESTATIC, refs.longValueOf);
+					asm.iload(slot);
+					asm.i2l();
+					asm.invokestatic(refs.longValueOf);
 					slot += 1;
 				}
 				case S64 -> {
-					emitLoad(asm, Opcode.LLOAD, slot);
-					invoke(asm, Opcode.INVOKESTATIC, refs.longValueOf);
+					asm.lload(slot);
+					asm.invokestatic(refs.longValueOf);
 					slot += 2;
 				}
 				case U8, U16 -> {
-					emitLoad(asm, Opcode.ILOAD, slot);
-					asm.code.add(Opcode.I2L);
+					asm.iload(slot);
+					asm.i2l();
 					emitArgGuard(asm, cp, refs, 0L, t == BoundaryType.U8 ? 255L : 65535L, decl, i);
-					invoke(asm, Opcode.INVOKESTATIC, refs.longValueOf);
+					asm.invokestatic(refs.longValueOf);
 					slot += 1;
 				}
 				case U32, U64 -> {
-					emitLoad(asm, Opcode.LLOAD, slot);
+					asm.lload(slot);
 					emitArgGuard(asm, cp, refs, 0L, t == BoundaryType.U32 ? 4294967295L : Long.MAX_VALUE, decl, i);
-					invoke(asm, Opcode.INVOKESTATIC, refs.longValueOf);
+					asm.invokestatic(refs.longValueOf);
 					slot += 2;
 				}
 				case FLOAT -> {
-					emitLoad(asm, Opcode.DLOAD, slot);
-					invoke(asm, Opcode.INVOKESTATIC, refs.doubleValueOf);
+					asm.dload(slot);
+					asm.invokestatic(refs.doubleValueOf);
 					slot += 2;
 				}
 				case BOOL -> {
-					emitLoad(asm, Opcode.ILOAD, slot);
-					int elseLabel = asm.label();
-					int endLabel = asm.label();
-					asm.branch(Opcode.IFEQ, elseLabel);
-					emitLdcString(asm, cp, "T");
-					asm.branch(Opcode.GOTO, endLabel);
-					asm.bind(elseLabel);
-					asm.code.add(Opcode.ACONST_NULL);
-					asm.bind(endLabel);
+					asm.iload(slot);
+					MethodCode.Label elseLabel = asm.newLabel();
+					MethodCode.Label endLabel = asm.newLabel();
+					asm.ifeq(elseLabel);
+					asm.ldc(cp.stringEntry("T"));
+					asm.goto_(endLabel);
+					asm.labelBinding(elseLabel);
+					asm.aconst_null();
+					asm.labelBinding(endLabel);
 					slot += 1;
 				}
 				case STRING -> {
@@ -411,158 +395,153 @@ final class JvmExportRuntimeBuilder {
 				}
 				case S_EXPR -> {
 					emitFrame(asm, cp, refs, slot);
-					invoke(asm, Opcode.INVOKESTATIC, refs.readFromString);
+					asm.invokestatic(refs.readFromString);
 					slot += 1;
 				}
 				case BYTES -> {
-					emitLoad(asm, Opcode.ALOAD, slot);
-					invoke(asm, Opcode.INVOKESTATIC, refs.bytesIn);
+					asm.aload(slot);
+					asm.invokestatic(refs.bytesIn);
 					slot += 1;
 				}
 				case FLOAT_VECTOR, FLOAT_MATRIX -> {
 					// The handle hands over the packed array it already holds -- no copy,
 					// which is this boundary type's whole point (.kb/jvm-export.md).
-					emitLoad(asm, Opcode.ALOAD, slot);
-					emitIntConst(asm, declaredRank(t));
-					emitLdcClass(asm, refs.thisClassConstant);
-					emitLdcString(asm, cp, "rontolisp:jvm-export " + decl.methodName() + " argument " + (i + 1) + " ("
-							+ t.designator().toLowerCase(Locale.ROOT) + ") ");
-					invoke(asm, Opcode.INVOKESTATIC, java.util.Objects.requireNonNull(refs.floatArrayArgument));
+					asm.aload(slot);
+					asm.loadConstant(declaredRank(t));
+					asm.ldc(refs.thisClassConstant);
+					asm.ldc(cp.stringEntry("rontolisp:jvm-export " + decl.methodName() + " argument " + (i + 1) + " ("
+							+ t.designator().toLowerCase(Locale.ROOT) + ") "));
+					asm.invokestatic(java.util.Objects.requireNonNull(refs.floatArrayArgument));
 					slot += 1;
 				}
 				case VOID -> throw new IllegalStateException(":void parameter survived parsing: " + decl);
 			}
 		}
-		invoke(asm, Opcode.INVOKESTATIC, target);
+		asm.invokestatic(target);
 		BoundaryType ret = decl.returnType();
 		switch (ret) {
 			case VOID -> {
-				asm.code.add(Opcode.POP);
-				asm.code.add(Opcode.RETURN);
+				asm.pop();
+				asm.return_();
 			}
 			case S8, S16, S32, U8, U16 -> {
 				BoundaryType.Range range = java.util.Objects.requireNonNull(ret.range());
 				emitResultGuard(asm, cp, refs, range.min().longValueExact(), range.max().longValueExact(), decl);
-				asm.code.add(Opcode.L2I);
-				asm.code.add(Opcode.IRETURN);
+				asm.l2i();
+				asm.ireturn();
 			}
 			case S64 -> {
 				emitResultGuard(asm, cp, refs, Long.MIN_VALUE, Long.MAX_VALUE, decl);
-				asm.code.add(Opcode.LRETURN);
+				asm.lreturn();
 			}
 			case U32 -> {
 				emitResultGuard(asm, cp, refs, 0L, 4294967295L, decl);
-				asm.code.add(Opcode.LRETURN);
+				asm.lreturn();
 			}
 			case U64 -> {
 				// Values at or above 2^63 do not exist in the signed 64-bit house
 				// representation, so [0, Long.MAX_VALUE] is the exactly-representable
 				// span of the declared type.
 				emitResultGuard(asm, cp, refs, 0L, Long.MAX_VALUE, decl);
-				asm.code.add(Opcode.LRETURN);
+				asm.lreturn();
 			}
 			case FLOAT -> {
-				asm.code.add(Opcode.CHECKCAST);
-				JvmRuntimeBuilder.emitU2(asm.code, cp.addClass(cp.addUtf8("java/lang/Number")).index());
-				invoke(asm, Opcode.INVOKEVIRTUAL, refs.numberDoubleValue);
-				asm.code.add(Opcode.DRETURN);
+				asm.checkcast(cp.classEntry("java/lang/Number"));
+				asm.invokevirtual(refs.numberDoubleValue);
+				asm.dreturn();
 			}
 			case BOOL -> {
-				int trueLabel = asm.label();
-				asm.branch(Opcode.IFNONNULL, trueLabel);
-				asm.code.add(Opcode.ICONST_0);
-				asm.code.add(Opcode.IRETURN);
-				asm.bind(trueLabel);
-				asm.code.add(Opcode.ICONST_1);
-				asm.code.add(Opcode.IRETURN);
+				MethodCode.Label trueLabel = asm.newLabel();
+				asm.ifnonnull(trueLabel);
+				asm.iconst_0();
+				asm.ireturn();
+				asm.labelBinding(trueLabel);
+				asm.iconst_1();
+				asm.ireturn();
 			}
 			case STRING -> {
-				invoke(asm, Opcode.INVOKESTATIC, refs.unframe);
-				asm.code.add(Opcode.ARETURN);
+				asm.invokestatic(refs.unframe);
+				asm.areturn();
 			}
 			case S_EXPR -> {
-				invoke(asm, Opcode.INVOKESTATIC, refs.lispToString);
-				asm.code.add(Opcode.ARETURN);
+				asm.invokestatic(refs.lispToString);
+				asm.areturn();
 			}
 			case BYTES -> {
-				invoke(asm, Opcode.INVOKESTATIC, refs.bytesOut);
-				asm.code.add(Opcode.ARETURN);
+				asm.invokestatic(refs.bytesOut);
+				asm.areturn();
 			}
 			case FLOAT_VECTOR, FLOAT_MATRIX -> {
 				// The handle ALIASES the array the function answered: no copy, and under
 				// --gpu no materialization until the caller actually reads an element.
-				emitIntConst(asm, declaredRank(ret));
-				emitLdcClass(asm, refs.thisClassConstant);
-				emitLdcString(asm, cp, "rontolisp:jvm-export " + decl.methodName() + " result ("
-						+ ret.designator().toLowerCase(Locale.ROOT) + ") ");
-				invoke(asm, Opcode.INVOKESTATIC, java.util.Objects.requireNonNull(refs.floatArrayResult));
-				asm.code.add(Opcode.ARETURN);
+				asm.loadConstant(declaredRank(ret));
+				asm.ldc(refs.thisClassConstant);
+				asm.ldc(cp.stringEntry("rontolisp:jvm-export " + decl.methodName() + " result ("
+						+ ret.designator().toLowerCase(Locale.ROOT) + ") "));
+				asm.invokestatic(java.util.Objects.requireNonNull(refs.floatArrayResult));
+				asm.areturn();
 			}
 		}
-		return new BuiltMethod(cp.addUtf8(decl.methodName()), cp.addUtf8(methodDesc(decl)), params.size() + 8,
-				Math.max(1, slot), asm.code, true);
+		return new BuiltMethod(cp.addUtf8(decl.methodName()), cp.addUtf8(methodDesc(decl)), asm, true);
 	}
 
 	// "…".concat(arg).concat("…"): a Lisp string stores its frame quotes
 	// (.kb/core-representation.md), so the incoming Java String gains them here — this
 	// is what keeps GREET("ron") from reading the r and n as the frame.
-	private static void emitFrame(JvmAsm asm, ConstantPool cp, Refs refs, int slot) {
-		emitLdcString(asm, cp, "\"");
-		emitLoad(asm, Opcode.ALOAD, slot);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
-		emitLdcString(asm, cp, "\"");
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
+	private static void emitFrame(MethodCode asm, ConstantPool cp, Refs refs, int slot) {
+		asm.ldc(cp.stringEntry("\""));
+		asm.aload(slot);
+		asm.invokevirtual(refs.concat);
+		asm.ldc(cp.stringEntry("\""));
+		asm.invokevirtual(refs.concat);
 	}
 
-	private static void emitArgGuard(JvmAsm asm, ConstantPool cp, Refs refs, long min, long max,
+	private static void emitArgGuard(MethodCode asm, ConstantPool cp, Refs refs, long min, long max,
 			JvmExportDirective decl, int paramIndex) {
-		emitLdc2(asm, cp, min);
-		emitLdc2(asm, cp, max);
-		emitLdcString(asm, cp,
-				"rontolisp:jvm-export " + decl.methodName() + " argument " + (paramIndex + 1) + " ("
-						+ decl.paramTypes().get(paramIndex).designator().toLowerCase(Locale.ROOT)
-						+ ") cannot carry the value exactly: ");
-		invoke(asm, Opcode.INVOKESTATIC, refs.argGuard);
+		asm.ldc(cp.entries().longEntry(min));
+		asm.ldc(cp.entries().longEntry(max));
+		asm.ldc(cp.stringEntry("rontolisp:jvm-export " + decl.methodName() + " argument " + (paramIndex + 1) + " ("
+				+ decl.paramTypes().get(paramIndex).designator().toLowerCase(Locale.ROOT)
+				+ ") cannot carry the value exactly: "));
+		asm.invokestatic(refs.argGuard);
 	}
 
-	private static void emitResultGuard(JvmAsm asm, ConstantPool cp, Refs refs, long min, long max,
+	private static void emitResultGuard(MethodCode asm, ConstantPool cp, Refs refs, long min, long max,
 			JvmExportDirective decl) {
-		emitLdc2(asm, cp, min);
-		emitLdc2(asm, cp, max);
-		emitLdcString(asm, cp, "rontolisp:jvm-export " + decl.methodName() + " result ("
-				+ decl.returnType().designator().toLowerCase(Locale.ROOT) + ") cannot carry the value exactly: ");
-		invoke(asm, Opcode.INVOKESTATIC, refs.resultGuard);
+		asm.ldc(cp.entries().longEntry(min));
+		asm.ldc(cp.entries().longEntry(max));
+		asm.ldc(cp.stringEntry("rontolisp:jvm-export " + decl.methodName() + " result ("
+				+ decl.returnType().designator().toLowerCase(Locale.ROOT) + ") cannot carry the value exactly: "));
+		asm.invokestatic(refs.resultGuard);
 	}
 
 	// _exArg(v, min, max, label): v when min <= v <= max, else
 	// IllegalArgumentException(label + v).
 	private static BuiltMethod buildArgGuard(ConstantPool cp, Refs refs) {
-		JvmAsm asm = new JvmAsm();
-		int throwLabel = asm.label();
-		asm.code.add(Opcode.LLOAD_0);
-		asm.code.add(Opcode.LLOAD_2);
-		asm.code.add(Opcode.LCMP);
-		asm.branch(Opcode.IFLT, throwLabel);
-		asm.code.add(Opcode.LLOAD_0);
-		emitLoad(asm, Opcode.LLOAD, 4);
-		asm.code.add(Opcode.LCMP);
-		asm.branch(Opcode.IFGT, throwLabel);
-		asm.code.add(Opcode.LLOAD_0);
-		asm.code.add(Opcode.LRETURN);
-		asm.bind(throwLabel);
-		ClassConstant iae = cp.addClass(cp.addUtf8("java/lang/IllegalArgumentException"));
-		MethodrefConstant iaeInit = cp.addMethodref(iae,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		asm.code.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(asm.code, iae.index());
-		asm.code.add(Opcode.DUP);
-		emitLoad(asm, Opcode.ALOAD, 6);
-		asm.code.add(Opcode.LLOAD_0);
-		invoke(asm, Opcode.INVOKESTATIC, refs.valueOfLong);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
-		invoke(asm, Opcode.INVOKESPECIAL, iaeInit);
-		asm.code.add(Opcode.ATHROW);
-		return new BuiltMethod(cp.addUtf8(ARG_GUARD), cp.addUtf8(ARG_GUARD_DESC), 6, 7, asm.code, false);
+		MethodCode asm = new MethodCode();
+		MethodCode.Label throwLabel = asm.newLabel();
+		asm.lload(0);
+		asm.lload(2);
+		asm.lcmp();
+		asm.iflt(throwLabel);
+		asm.lload(0);
+		asm.lload(4);
+		asm.lcmp();
+		asm.ifgt(throwLabel);
+		asm.lload(0);
+		asm.lreturn();
+		asm.labelBinding(throwLabel);
+		ClassEntry iae = cp.classEntry("java/lang/IllegalArgumentException");
+		MethodRefEntry iaeInit = cp.methodRef(iae, "<init>", "(Ljava/lang/String;)V");
+		asm.new_(iae);
+		asm.dup();
+		asm.aload(6);
+		asm.lload(0);
+		asm.invokestatic(refs.valueOfLong);
+		asm.invokevirtual(refs.concat);
+		asm.invokespecial(iaeInit);
+		asm.athrow();
+		return new BuiltMethod(cp.addUtf8(ARG_GUARD), cp.addUtf8(ARG_GUARD_DESC), asm, false);
 	}
 
 	// _exRes(value, min, max, label): the value's long when it is a Long within
@@ -571,55 +550,49 @@ final class JvmExportRuntimeBuilder {
 	// BigInteger is out of every declared range that fits a Java long, so it takes
 	// the range path's message shape through the type path).
 	private static BuiltMethod buildResultGuard(ConstantPool cp, Refs refs) {
-		JvmAsm asm = new JvmAsm();
-		int typeThrow = asm.label();
-		int rangeThrow = asm.label();
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.longClass.index());
-		asm.branch(Opcode.IFEQ, typeThrow);
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.longClass.index());
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.longValue);
-		emitStore(asm, Opcode.LSTORE, 6);
-		emitLoad(asm, Opcode.LLOAD, 6);
-		asm.code.add(Opcode.LLOAD_1);
-		asm.code.add(Opcode.LCMP);
-		asm.branch(Opcode.IFLT, rangeThrow);
-		emitLoad(asm, Opcode.LLOAD, 6);
-		asm.code.add(Opcode.LLOAD_3);
-		asm.code.add(Opcode.LCMP);
-		asm.branch(Opcode.IFGT, rangeThrow);
-		emitLoad(asm, Opcode.LLOAD, 6);
-		asm.code.add(Opcode.LRETURN);
-		asm.bind(rangeThrow);
-		ClassConstant arith = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
-		MethodrefConstant arithInit = cp.addMethodref(arith,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		asm.code.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(asm.code, arith.index());
-		asm.code.add(Opcode.DUP);
-		emitLoad(asm, Opcode.ALOAD, 5);
-		emitLoad(asm, Opcode.LLOAD, 6);
-		invoke(asm, Opcode.INVOKESTATIC, refs.valueOfLong);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
-		invoke(asm, Opcode.INVOKESPECIAL, arithInit);
-		asm.code.add(Opcode.ATHROW);
-		asm.bind(typeThrow);
-		ClassConstant cce = cp.addClass(cp.addUtf8("java/lang/ClassCastException"));
-		MethodrefConstant cceInit = cp.addMethodref(cce,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		asm.code.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(asm.code, cce.index());
-		asm.code.add(Opcode.DUP);
-		emitLoad(asm, Opcode.ALOAD, 5);
-		asm.code.add(Opcode.ALOAD_0);
-		invoke(asm, Opcode.INVOKESTATIC, refs.lispToString);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
-		invoke(asm, Opcode.INVOKESPECIAL, cceInit);
-		asm.code.add(Opcode.ATHROW);
-		return new BuiltMethod(cp.addUtf8(RESULT_GUARD), cp.addUtf8(RESULT_GUARD_DESC), 6, 8, asm.code, false);
+		MethodCode asm = new MethodCode();
+		MethodCode.Label typeThrow = asm.newLabel();
+		MethodCode.Label rangeThrow = asm.newLabel();
+		asm.aload(0);
+		asm.instanceOf(refs.longClass);
+		asm.ifeq(typeThrow);
+		asm.aload(0);
+		asm.checkcast(refs.longClass);
+		asm.invokevirtual(refs.longValue);
+		asm.lstore(6);
+		asm.lload(6);
+		asm.lload(1);
+		asm.lcmp();
+		asm.iflt(rangeThrow);
+		asm.lload(6);
+		asm.lload(3);
+		asm.lcmp();
+		asm.ifgt(rangeThrow);
+		asm.lload(6);
+		asm.lreturn();
+		asm.labelBinding(rangeThrow);
+		ClassEntry arith = cp.classEntry("java/lang/ArithmeticException");
+		MethodRefEntry arithInit = cp.methodRef(arith, "<init>", "(Ljava/lang/String;)V");
+		asm.new_(arith);
+		asm.dup();
+		asm.aload(5);
+		asm.lload(6);
+		asm.invokestatic(refs.valueOfLong);
+		asm.invokevirtual(refs.concat);
+		asm.invokespecial(arithInit);
+		asm.athrow();
+		asm.labelBinding(typeThrow);
+		ClassEntry cce = cp.classEntry("java/lang/ClassCastException");
+		MethodRefEntry cceInit = cp.methodRef(cce, "<init>", "(Ljava/lang/String;)V");
+		asm.new_(cce);
+		asm.dup();
+		asm.aload(5);
+		asm.aload(0);
+		asm.invokestatic(refs.lispToString);
+		asm.invokevirtual(refs.concat);
+		asm.invokespecial(cceInit);
+		asm.athrow();
+		return new BuiltMethod(cp.addUtf8(RESULT_GUARD), cp.addUtf8(RESULT_GUARD_DESC), asm, false);
 	}
 
 	// _exStr(value): the content between the frame quotes when the value is a stored
@@ -627,80 +600,74 @@ final class JvmExportRuntimeBuilder {
 	// SYMBOL, not a string, and throws too — answering it verbatim would silently
 	// conflate the two representations.
 	private static BuiltMethod buildUnframe(ConstantPool cp, Refs refs) {
-		JvmAsm asm = new JvmAsm();
-		int throwLabel = asm.label();
+		MethodCode asm = new MethodCode();
+		MethodCode.Label throwLabel = asm.newLabel();
 		// A mutable character vector (a concatenate/subseq/format-built result) renders
 		// to its quote-framed string first; everything else passes through unchanged.
 		if (refs.strvRef != null) {
-			asm.code.add(Opcode.ALOAD_0);
-			asm.code.add(Opcode.INVOKESTATIC);
-			JvmRuntimeBuilder.emitU2(asm.code, refs.strvRef.index());
-			asm.code.add(Opcode.ASTORE_0);
+			asm.aload(0);
+			asm.invokestatic(refs.strvRef);
+			asm.astore(0);
 		}
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.stringClass.index());
-		asm.branch(Opcode.IFEQ, throwLabel);
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.stringClass.index());
-		asm.code.add(Opcode.ASTORE_1);
-		asm.code.add(Opcode.ALOAD_1);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.length);
-		asm.code.add(Opcode.ISTORE_2);
-		asm.code.add(Opcode.ILOAD_2);
-		asm.code.add(Opcode.ICONST_2);
-		asm.branch(Opcode.IF_ICMPLT, throwLabel);
-		asm.code.add(Opcode.ALOAD_1);
-		asm.code.add(Opcode.ICONST_0);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.charAt);
-		asm.code.add(Opcode.BIPUSH);
-		asm.code.add(34); // '"'
-		asm.branch(Opcode.IF_ICMPNE, throwLabel);
-		asm.code.add(Opcode.ALOAD_1);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.ILOAD_2);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.ISUB);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.substring);
-		asm.code.add(Opcode.ARETURN);
-		asm.bind(throwLabel);
+		asm.aload(0);
+		asm.instanceOf(refs.stringClass);
+		asm.ifeq(throwLabel);
+		asm.aload(0);
+		asm.checkcast(refs.stringClass);
+		asm.astore(1);
+		asm.aload(1);
+		asm.invokevirtual(refs.length);
+		asm.istore(2);
+		asm.iload(2);
+		asm.iconst_2();
+		asm.if_icmplt(throwLabel);
+		asm.aload(1);
+		asm.iconst_0();
+		asm.invokevirtual(refs.charAt);
+		asm.loadConstant(34);
+		asm.if_icmpne(throwLabel);
+		asm.aload(1);
+		asm.iconst_1();
+		asm.iload(2);
+		asm.iconst_1();
+		asm.isub();
+		asm.invokevirtual(refs.substring);
+		asm.areturn();
+		asm.labelBinding(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return a string: ");
-		return new BuiltMethod(cp.addUtf8(UNFRAME), cp.addUtf8(UNFRAME_DESC), 5, 3, asm.code, false);
+		return new BuiltMethod(cp.addUtf8(UNFRAME), cp.addUtf8(UNFRAME_DESC), asm, false);
 	}
 
 	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector -- byte[]{8, e0, ...},
 	// the width-headered representation .kb/packed-integer-vectors.md pins -- holding a
 	// copy of the bytes.
 	private static BuiltMethod buildBytesIn(ConstantPool cp) {
-		MethodrefConstant arraycopy = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
-				cp.addNameAndType(cp.addUtf8("arraycopy"), cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V")));
-		JvmAsm asm = new JvmAsm();
+		MethodRefEntry arraycopy = cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
+				"(Ljava/lang/Object;ILjava/lang/Object;II)V");
+		MethodCode asm = new MethodCode();
 		// n = bytes.length; r = new byte[n + 1]; r[0] = 8;
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.ARRAYLENGTH);
-		asm.code.add(Opcode.ISTORE_1);
-		asm.code.add(Opcode.ILOAD_1);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.IADD);
-		asm.code.add(Opcode.NEWARRAY);
-		asm.code.add(8); // T_BYTE
-		asm.code.add(Opcode.ASTORE_2);
-		asm.code.add(Opcode.ALOAD_2);
-		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.BIPUSH);
-		asm.code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		asm.code.add(Opcode.BASTORE);
+		asm.aload(0);
+		asm.arraylength();
+		asm.istore(1);
+		asm.iload(1);
+		asm.iconst_1();
+		asm.iadd();
+		asm.newarray(TypeKind.BYTE);
+		asm.astore(2);
+		asm.aload(2);
+		asm.iconst_0();
+		asm.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		asm.bastore();
 		// System.arraycopy(bytes, 0, r, 1, n)
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.ALOAD_2);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.ILOAD_1);
-		invoke(asm, Opcode.INVOKESTATIC, arraycopy);
-		asm.code.add(Opcode.ALOAD_2);
-		asm.code.add(Opcode.ARETURN);
-		return new BuiltMethod(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC), 5, 3, asm.code, false);
+		asm.aload(0);
+		asm.iconst_0();
+		asm.aload(2);
+		asm.iconst_1();
+		asm.iload(1);
+		asm.invokestatic(arraycopy);
+		asm.aload(2);
+		asm.areturn();
+		return new BuiltMethod(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC), asm, false);
 	}
 
 	// _exBytesOut(value): the byte[] copy of a packed (unsigned-byte 8) vector
@@ -708,101 +675,46 @@ final class JvmExportRuntimeBuilder {
 	// quantized matrix, whose byte[] starts with its format code -- throws
 	// ClassCastException.
 	private static BuiltMethod buildBytesOut(ConstantPool cp, Refs refs) {
-		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
-		MethodrefConstant copyOfRange = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
-				cp.addNameAndType(cp.addUtf8("copyOfRange"), cp.addUtf8("([BII)[B")));
-		JvmAsm asm = new JvmAsm();
-		int throwLabel = asm.label();
+		ClassEntry byteArrayClass = cp.classEntry("[B");
+		MethodRefEntry copyOfRange = cp.methodRef(cp.classEntry("java/util/Arrays"), "copyOfRange", "([BII)[B");
+		MethodCode asm = new MethodCode();
+		MethodCode.Label throwLabel = asm.newLabel();
 		// if (value instanceof byte[] b && b[0] == 8) return Arrays.copyOfRange(b, 1,
 		// b.length)
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
-		asm.branch(Opcode.IFEQ, throwLabel);
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
-		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.BALOAD);
-		asm.code.add(Opcode.BIPUSH);
-		asm.code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		asm.branch(Opcode.IF_ICMPNE, throwLabel);
-		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
-		asm.code.add(Opcode.DUP);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.SWAP);
-		asm.code.add(Opcode.ARRAYLENGTH);
-		invoke(asm, Opcode.INVOKESTATIC, copyOfRange);
-		asm.code.add(Opcode.ARETURN);
-		asm.bind(throwLabel);
+		asm.aload(0);
+		asm.instanceOf(byteArrayClass);
+		asm.ifeq(throwLabel);
+		asm.aload(0);
+		asm.checkcast(byteArrayClass);
+		asm.iconst_0();
+		asm.baload();
+		asm.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		asm.if_icmpne(throwLabel);
+		asm.aload(0);
+		asm.checkcast(byteArrayClass);
+		asm.dup();
+		asm.iconst_1();
+		asm.swap();
+		asm.arraylength();
+		asm.invokestatic(copyOfRange);
+		asm.areturn();
+		asm.labelBinding(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return an (unsigned-byte 8) vector: ");
-		return new BuiltMethod(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC), 6, 1, asm.code, false);
+		return new BuiltMethod(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC), asm, false);
 	}
 
 	// new ClassCastException(prefix + _lispToString(value in slot 0)); throw
-	private static void emitThrowCce(JvmAsm asm, ConstantPool cp, Refs refs, String prefix) {
-		ClassConstant cce = cp.addClass(cp.addUtf8("java/lang/ClassCastException"));
-		MethodrefConstant cceInit = cp.addMethodref(cce,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		asm.code.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(asm.code, cce.index());
-		asm.code.add(Opcode.DUP);
-		emitLdcString(asm, cp, prefix);
-		asm.code.add(Opcode.ALOAD_0);
-		invoke(asm, Opcode.INVOKESTATIC, refs.lispToString);
-		invoke(asm, Opcode.INVOKEVIRTUAL, refs.concat);
-		invoke(asm, Opcode.INVOKESPECIAL, cceInit);
-		asm.code.add(Opcode.ATHROW);
-	}
-
-	private static void invoke(JvmAsm asm, int opcode, MethodrefConstant ref) {
-		asm.code.add(opcode);
-		JvmRuntimeBuilder.emitU2(asm.code, ref.index());
-	}
-
-	private static void emitLoad(JvmAsm asm, int opcode, int slot) {
-		asm.code.add(opcode);
-		asm.code.add(slot);
-	}
-
-	private static void emitStore(JvmAsm asm, int opcode, int slot) {
-		asm.code.add(opcode);
-		asm.code.add(slot);
-	}
-
-	private static void emitLdcString(JvmAsm asm, ConstantPool cp, String value) {
-		ConstantPool.StringConstant sc = cp.addString(value);
-		if (sc.index() <= 255) {
-			asm.code.add(Opcode.LDC);
-			asm.code.add(sc.index());
-		}
-		else {
-			asm.code.add(Opcode.LDC_W);
-			JvmRuntimeBuilder.emitU2(asm.code, sc.index());
-		}
-	}
-
-	private static void emitLdcClass(JvmAsm asm, ClassConstant clazz) {
-		if (clazz.index() <= 255) {
-			asm.code.add(Opcode.LDC);
-			asm.code.add(clazz.index());
-		}
-		else {
-			asm.code.add(Opcode.LDC_W);
-			JvmRuntimeBuilder.emitU2(asm.code, clazz.index());
-		}
-	}
-
-	private static void emitIntConst(JvmAsm asm, int value) {
-		asm.code.add(Opcode.BIPUSH);
-		asm.code.add(value);
-	}
-
-	private static void emitLdc2(JvmAsm asm, ConstantPool cp, long value) {
-		asm.code.add(Opcode.LDC2_W);
-		JvmRuntimeBuilder.emitU2(asm.code, cp.addLong(value).index());
+	private static void emitThrowCce(MethodCode asm, ConstantPool cp, Refs refs, String prefix) {
+		ClassEntry cce = cp.classEntry("java/lang/ClassCastException");
+		MethodRefEntry cceInit = cp.methodRef(cce, "<init>", "(Ljava/lang/String;)V");
+		asm.new_(cce);
+		asm.dup();
+		asm.ldc(cp.stringEntry(prefix));
+		asm.aload(0);
+		asm.invokestatic(refs.lispToString);
+		asm.invokevirtual(refs.concat);
+		asm.invokespecial(cceInit);
+		asm.athrow();
 	}
 
 }

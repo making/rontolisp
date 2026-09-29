@@ -1,16 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.runtime.RontoFetch;
 
@@ -56,7 +54,7 @@ final class JvmFetchRuntimeBuilder {
 	}
 
 	/** A ready-to-emit method body. */
-	record FetchMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record FetchMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -124,7 +122,7 @@ final class JvmFetchRuntimeBuilder {
 		// 11 plist cursor, 15 request-body value, 16 canonical method (String),
 		// 17 method scratch (unquoted String), 18 body text (null = none),
 		// 19 flattened request fields (ArrayList), 20 the current field pair.
-		Asm a = new Asm();
+		MethodCode a = new MethodCode();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
 		// Keyword-argument matching is case-insensitive (the reader upcases source
@@ -136,91 +134,85 @@ final class JvmFetchRuntimeBuilder {
 		// --- resolve the canonical method into slot 16: nil defaults to GET, otherwise
 		// it
 		// must match one of the supported methods (case-insensitively). ---
-		int methodDone = a.label();
+		MethodCode.Label methodDone = a.newLabel();
 		a.aload(10);
-		int methodGiven = a.label();
-		a.branch(Opcode.IFNONNULL, methodGiven);
-		a.ldc(methodConsts[0].index()); // "GET"
+		MethodCode.Label methodGiven = a.newLabel();
+		a.ifnonnull(methodGiven);
+		a.ldc(methodConsts[0].entry()); // "GET"
 		a.astore(16);
-		a.branch(Opcode.GOTO, methodDone);
-		a.bind(methodGiven);
+		a.goto_(methodDone);
+		a.labelBinding(methodGiven);
 		a.aload(10);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [methodStr]
 		a.astore(17);
 		for (ConstantPool.StringConstant m : methodConsts) {
-			int next = a.label();
+			MethodCode.Label next = a.newLabel();
 			a.aload(17);
-			a.ldc(m.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringEqualsIgnoreCase.index()); // [bool]
-			a.branch(Opcode.IFEQ, next);
-			a.ldc(m.index());
+			a.ldc(m.entry());
+			a.invokevirtual(stringEqualsIgnoreCase.methodRefEntry()); // [bool]
+			a.ifeq(next);
+			a.ldc(m.entry());
 			a.astore(16);
-			a.branch(Opcode.GOTO, methodDone);
-			a.bind(next);
+			a.goto_(methodDone);
+			a.labelBinding(next);
 		}
 		// none matched: throw new RuntimeException("fetch: unsupported method")
-		a.op(Opcode.NEW);
-		a.u2(runtimeExceptionClass.index());
-		a.op(Opcode.DUP);
-		a.ldc(unsupportedMsg.index());
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(runtimeExceptionInit.index());
-		a.op(Opcode.ATHROW);
-		a.bind(methodDone);
+		a.new_(runtimeExceptionClass.entry());
+		a.dup();
+		a.ldc(unsupportedMsg.entry());
+		a.invokespecial(runtimeExceptionInit.entry());
+		a.athrow();
+		a.labelBinding(methodDone);
 
 		// --- the request body into slot 18: nil stays null (no body), otherwise its
 		// text.
-		int bodyDone = a.label();
-		a.aconstNull();
+		MethodCode.Label bodyDone = a.newLabel();
+		a.aconst_null();
 		a.astore(18);
 		a.aload(15);
-		a.branch(Opcode.IFNULL, bodyDone);
+		a.ifnull(bodyDone);
 		a.aload(15);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [bodyStr]
 		a.astore(18);
-		a.bind(bodyDone);
+		a.labelBinding(bodyDone);
 
 		// --- the request-header alist (slot 9) flattened into name, value, ... (slot 19)
-		a.op(Opcode.NEW);
-		a.u2(arrayListClass.index());
-		a.op(Opcode.DUP);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(arrayListInit.index());
+		a.new_(arrayListClass.entry());
+		a.dup();
+		a.invokespecial(arrayListInit.entry());
 		a.astore(19);
 		a.aload(9);
 		a.astore(3); // cursor = request headers
-		int hLoop = a.label();
-		int hEnd = a.label();
-		a.bind(hLoop);
+		MethodCode.Label hLoop = a.newLabel();
+		MethodCode.Label hEnd = a.newLabel();
+		a.labelBinding(hLoop);
 		a.aload(3);
-		a.branch(Opcode.IFNULL, hEnd); // while cursor != null
+		a.ifnull(hEnd); // while cursor != null
 		// pair = ((Object[]) cursor)[0]
 		a.aload(3);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(objectArrayClass);
+		a.checkcast(objectArrayClass.entry());
 		a.astore(20);
 		for (int part = 0; part < 2; part++) {
 			a.aload(19);
 			a.aload(20);
-			a.iconst(part);
+			a.loadConstant(part);
 			a.aaload();
 			stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [list,
 																						// text]
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(arrayListAdd.index());
-			a.op(Opcode.POP);
+			a.invokevirtual(arrayListAdd.methodRefEntry());
+			a.pop();
 		}
 		// cursor = ((Object[]) cursor)[1]
 		a.aload(3);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(3);
-		a.branch(Opcode.GOTO, hLoop);
-		a.bind(hEnd);
+		a.goto_(hLoop);
+		a.labelBinding(hEnd);
 
 		// return RontoFetch.start(url, method, headers, body, defaultUserAgent): the
 		// request starts NOW, and what comes back is the future of the response plist.
@@ -228,15 +220,13 @@ final class JvmFetchRuntimeBuilder {
 		a.aload(16);
 		a.aload(19);
 		a.aload(18);
-		a.ldc(userAgentValue.index());
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(fetchStart.index());
+		a.ldc(userAgentValue.entry());
+		a.invokestatic(fetchStart.entry());
 		a.areturn();
 
-		List<Integer> code = a.finish();
 		Utf8Constant nameUtf8 = cp.addUtf8(METHOD_NAME);
 		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
-		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, 12, 21, code);
+		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, a);
 
 		return new FetchRuntime(fetch);
 	}
@@ -247,54 +237,53 @@ final class JvmFetchRuntimeBuilder {
 	 * against {@code key}; stores the matching value (or null) into {@code resultSlot},
 	 * using {@code cursorSlot} as scratch.
 	 */
-	private static void emitPlistGet(Asm a, ConstantPool.StringConstant key, int cursorSlot, int resultSlot,
+	private static void emitPlistGet(MethodCode a, ConstantPool.StringConstant key, int cursorSlot, int resultSlot,
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant stringEquals) {
 		a.aload(1);
 		a.astore(cursorSlot); // cursor = options
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(resultSlot);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		a.aload(cursorSlot);
-		a.branch(Opcode.IFNULL, end);
+		a.ifnull(end);
 		// key = car(cursor)
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(stringClass);
-		a.ldc(key.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringEquals.index()); // [bool]
-		int notMatch = a.label();
-		a.branch(Opcode.IFEQ, notMatch);
+		a.checkcast(stringClass.entry());
+		a.ldc(key.entry());
+		a.invokevirtual(stringEquals.methodRefEntry()); // [bool]
+		MethodCode.Label notMatch = a.newLabel();
+		a.ifeq(notMatch);
 		// value = car(cdr(cursor))
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(0);
 		a.aaload();
 		a.astore(resultSlot);
-		a.branch(Opcode.GOTO, end);
-		a.bind(notMatch);
+		a.goto_(end);
+		a.labelBinding(notMatch);
 		// cursor = cdr(cdr(cursor))
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(cursorSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
+		a.goto_(loop);
+		a.labelBinding(end);
 	}
 
 	/** Loads local {@code slot} (a quoted runtime String) and strips the quotes. */
-	private static void stripQuotes(Asm a, int slot, ClassConstant stringClass, MethodrefConstant stringLength,
+	private static void stripQuotes(MethodCode a, int slot, ClassConstant stringClass, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
 		a.aload(slot);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef);
@@ -307,142 +296,19 @@ final class JvmFetchRuntimeBuilder {
 	 * shape builds its upstream URL with {@code concatenate}); null without the array
 	 * runtime, where no character vector can exist.
 	 */
-	private static void stripQuotesValue(Asm a, ClassConstant stringClass, MethodrefConstant stringLength,
+	private static void stripQuotesValue(MethodCode a, ClassConstant stringClass, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
 		if (strvRef != null) {
-			a.op(Opcode.INVOKESTATIC);
-			a.u2(strvRef.index());
+			a.invokestatic(strvRef.entry());
 		}
-		a.checkcast(stringClass); // [s]
-		a.op(Opcode.DUP); // [s, s]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringLength.index()); // [s, len]
-		a.iconst(1);
-		a.op(Opcode.ISUB); // [s, len-1]
-		a.iconst(1);
-		a.op(Opcode.SWAP); // [s, 1, len-1]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringSubstring.index()); // [inner]
-	}
-
-	/** Minimal label-based assembler, mirroring the one in JvmEvalRuntimeBuilder. */
-	private static final class Asm {
-
-		private final List<Integer> code = new ArrayList<>();
-
-		private final Map<Integer, Integer> labelPos = new HashMap<>();
-
-		private final Map<Integer, List<Integer>> pending = new HashMap<>();
-
-		private int nextLabel = 0;
-
-		int label() {
-			return this.nextLabel++;
-		}
-
-		void bind(int label) {
-			int pos = this.code.size();
-			this.labelPos.put(label, pos);
-			List<Integer> ps = this.pending.remove(label);
-			if (ps != null) {
-				for (int bp : ps) {
-					JvmRuntimeBuilder.patchBranch(this.code, bp, pos);
-				}
-			}
-		}
-
-		void branch(int opcode, int label) {
-			int bp = this.code.size();
-			this.code.add(opcode);
-			JvmRuntimeBuilder.emitU2(this.code, 0);
-			Integer tgt = this.labelPos.get(label);
-			if (tgt != null) {
-				JvmRuntimeBuilder.patchBranch(this.code, bp, tgt);
-			}
-			else {
-				this.pending.computeIfAbsent(label, k -> new ArrayList<>()).add(bp);
-			}
-		}
-
-		void op(int opcode) {
-			this.code.add(opcode);
-		}
-
-		void u2(int value) {
-			JvmRuntimeBuilder.emitU2(this.code, value);
-		}
-
-		void aload(int slot) {
-			this.code.add(Opcode.ALOAD);
-			this.code.add(slot);
-		}
-
-		void astore(int slot) {
-			this.code.add(Opcode.ASTORE);
-			this.code.add(slot);
-		}
-
-		void aaload() {
-			this.code.add(Opcode.AALOAD);
-		}
-
-		void aastore() {
-			this.code.add(Opcode.AASTORE);
-		}
-
-		void aconstNull() {
-			this.code.add(Opcode.ACONST_NULL);
-		}
-
-		void iconst(int n) {
-			if (n == -1) {
-				this.code.add(Opcode.ICONST_M1);
-			}
-			else if (n >= 0 && n <= 5) {
-				this.code.add(Opcode.ICONST_0 + n);
-			}
-			else if (n >= -128 && n <= 127) {
-				this.code.add(Opcode.BIPUSH);
-				this.code.add(n & 0xFF);
-			}
-			else {
-				this.code.add(Opcode.SIPUSH);
-				JvmRuntimeBuilder.emitU2(this.code, n);
-			}
-		}
-
-		void ldc(int index) {
-			if (index <= 255) {
-				this.code.add(Opcode.LDC);
-				this.code.add(index);
-			}
-			else {
-				this.code.add(Opcode.LDC_W);
-				JvmRuntimeBuilder.emitU2(this.code, index);
-			}
-		}
-
-		void checkcast(ClassConstant c) {
-			this.code.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void anewarray(ClassConstant c) {
-			this.code.add(Opcode.ANEWARRAY);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		void areturn() {
-			this.code.add(Opcode.ARETURN);
-		}
-
-		List<Integer> finish() {
-			if (!this.pending.isEmpty()) {
-				throw new IllegalStateException("Unbound labels in http runtime assembly: " + this.pending.keySet());
-			}
-			return this.code;
-		}
-
+		a.checkcast(stringClass.entry()); // [s]
+		a.dup(); // [s, s]
+		a.invokevirtual(stringLength.methodRefEntry()); // [s, len]
+		a.loadConstant(1);
+		a.isub(); // [s, len-1]
+		a.loadConstant(1);
+		a.swap(); // [s, 1, len-1]
+		a.invokevirtual(stringSubstring.methodRefEntry()); // [inner]
 	}
 
 }

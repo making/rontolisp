@@ -1,13 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 import org.jspecify.annotations.Nullable;
 
@@ -104,7 +104,7 @@ final class JvmThrowableRecords {
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
 	 */
-	static MethodrefConstant tlMap(ConstantPool cp, ClassConstant thisClass) {
+	static MethodRefEntry tlMap(ConstantPool cp, ClassEntry thisClass) {
 		return self(cp, thisClass, TL_MAP, TL_MAP_DESC);
 	}
 
@@ -112,7 +112,7 @@ final class JvmThrowableRecords {
 	 * {@return {@code WeakHashMap.put}}
 	 * @param cp the constant pool
 	 */
-	static MethodrefConstant mapPut(ConstantPool cp) {
+	static MethodRefEntry mapPut(ConstantPool cp) {
 		return method(cp, WEAK_MAP, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 	}
 
@@ -120,16 +120,16 @@ final class JvmThrowableRecords {
 	 * {@return {@code WeakHashMap.get}}
 	 * @param cp the constant pool
 	 */
-	static MethodrefConstant mapGet(ConstantPool cp) {
+	static MethodRefEntry mapGet(ConstantPool cp) {
 		return method(cp, WEAK_MAP, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
 	}
 
-	static MethodrefConstant self(ConstantPool cp, ClassConstant thisClass, String name, String desc) {
-		return cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	static MethodRefEntry self(ConstantPool cp, ClassEntry thisClass, String name, String desc) {
+		return cp.methodRef(thisClass, name, desc);
 	}
 
-	private static MethodrefConstant method(ConstantPool cp, String owner, String name, String desc) {
-		return cp.addMethodref(cp.addClass(cp.addUtf8(owner)), cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	private static MethodRefEntry method(ConstantPool cp, String owner, String name, String desc) {
+		return cp.methodRef(cp.classEntry(owner), name, desc);
 	}
 
 	/**
@@ -144,123 +144,123 @@ final class JvmThrowableRecords {
 	 * the handlers ran
 	 * @return the methods
 	 */
-	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassConstant thisClass,
-			@Nullable FieldrefConstant condTl, boolean handlersRan) {
-		ClassConstant weakMap = cp.addClass(cp.addUtf8(WEAK_MAP));
-		MethodrefConstant tlGet = method(cp, "java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
-		MethodrefConstant tlSet = method(cp, "java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassEntry thisClass,
+			@Nullable FieldRefEntry condTl, boolean handlersRan) {
+		ClassEntry weakMap = cp.classEntry(WEAK_MAP);
+		MethodRefEntry tlGet = method(cp, "java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+		MethodRefEntry tlSet = method(cp, "java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
 		List<JvmNumericRuntimeBuilder.NumericMethod> methods = new ArrayList<>();
 
 		// _tlMap(ThreadLocal tl): (WeakHashMap) tl.get(), or a new one tl now holds.
-		JvmAsm m = new JvmAsm();
-		int have = m.label();
+		MethodCode m = new MethodCode();
+		MethodCode.Label have = m.newLabel();
 		m.aload(0);
 		m.invokevirtual(tlGet);
 		m.checkcast(weakMap);
 		m.astore(1);
 		m.aload(1);
-		m.branch(Opcode.IFNONNULL, have);
-		m.anew(weakMap);
+		m.ifnonnull(have);
+		m.new_(weakMap);
 		m.dup();
 		m.invokespecial(method(cp, WEAK_MAP, "<init>", "()V"));
 		m.astore(1);
 		m.aload(0);
 		m.aload(1);
 		m.invokevirtual(tlSet);
-		m.bind(have);
+		m.labelBinding(have);
 		m.aload(1);
 		m.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TL_MAP), cp.addUtf8(TL_MAP_DESC), m.finish(),
-				2, 2, List.of()));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TL_MAP), cp.addUtf8(TL_MAP_DESC),
+				JvmRuntimeBuilder.codeBytes(m), 2, 2, List.of()));
 		if (condTl == null) {
 			return methods;
 		}
 
 		// _condTake(Throwable t): the thread's map, when it has one, loses t's entry.
-		JvmAsm take = new JvmAsm();
-		int none = take.label();
+		MethodCode take = new MethodCode();
+		MethodCode.Label none = take.newLabel();
 		take.getstatic(condTl);
 		take.invokevirtual(tlGet);
 		take.checkcast(weakMap);
 		take.astore(1);
 		take.aload(1);
-		take.branch(Opcode.IFNULL, none);
+		take.ifnull(none);
 		take.aload(1);
 		take.aload(0);
 		take.invokevirtual(method(cp, WEAK_MAP, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;"));
 		take.areturn();
-		take.bind(none);
-		take.aconstNull();
+		take.labelBinding(none);
+		take.aconst_null();
 		take.areturn();
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_TAKE), cp.addUtf8(COND_TAKE_DESC),
-				take.finish(), 2, 2, List.of()));
+				JvmRuntimeBuilder.codeBytes(take), 2, 2, List.of()));
 
 		// _condPut(Throwable t, Object c): _tlMap(_condTl).put(t, c) unless c is null; t.
-		JvmAsm put = new JvmAsm();
-		int done = put.label();
+		MethodCode put = new MethodCode();
+		MethodCode.Label done = put.newLabel();
 		put.aload(1);
-		put.branch(Opcode.IFNULL, done);
+		put.ifnull(done);
 		put.getstatic(condTl);
 		put.invokestatic(tlMap(cp, thisClass));
 		put.aload(0);
 		put.aload(1);
 		put.invokevirtual(mapPut(cp));
 		put.pop();
-		put.bind(done);
+		put.labelBinding(done);
 		put.aload(0);
 		put.areturn();
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_PUT), cp.addUtf8(COND_PUT_DESC),
-				put.finish(), 3, 2, List.of()));
+				JvmRuntimeBuilder.codeBytes(put), 3, 2, List.of()));
 		if (!handlersRan) {
 			return methods;
 		}
-		ClassConstant objectArray = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		ClassEntry objectArray = cp.classEntry("[Ljava/lang/Object;");
 
 		// _condRan(Throwable t, Object c): _condPut(t, new Object[] {_condTl, c}).
-		JvmAsm ran = new JvmAsm();
+		MethodCode ran = new MethodCode();
 		ran.aload(0);
-		ran.iconst(2);
-		ran.anewarray(cp.addClass(cp.addUtf8("java/lang/Object")));
+		ran.loadConstant(2);
+		ran.anewarray(cp.classEntry("java/lang/Object"));
 		ran.dup();
-		ran.iconst(0);
+		ran.loadConstant(0);
 		ran.getstatic(condTl);
 		ran.aastore();
 		ran.dup();
-		ran.iconst(1);
+		ran.loadConstant(1);
 		ran.aload(1);
 		ran.aastore();
 		ran.invokestatic(self(cp, thisClass, COND_PUT, COND_PUT_DESC));
 		ran.areturn();
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_RAN), cp.addUtf8(COND_RAN_DESC),
-				ran.finish(), 5, 2, List.of()));
+				JvmRuntimeBuilder.codeBytes(ran), 5, 2, List.of()));
 
 		// _condOf(Object r): r[1] when r is a {_condTl, c} record, r otherwise.
-		JvmAsm of = new JvmAsm();
-		int plain = of.label();
+		MethodCode of = new MethodCode();
+		MethodCode.Label plain = of.newLabel();
 		of.aload(0);
 		of.instanceOf(objectArray);
-		of.branch(Opcode.IFEQ, plain);
+		of.ifeq(plain);
 		of.aload(0);
 		of.checkcast(objectArray);
 		of.astore(1);
 		of.aload(1);
 		of.arraylength();
-		of.iconst(2);
-		of.branch(Opcode.IF_ICMPNE, plain);
+		of.loadConstant(2);
+		of.if_icmpne(plain);
 		of.aload(1);
-		of.iconst(0);
+		of.loadConstant(0);
 		of.aaload();
 		of.getstatic(condTl);
-		of.branch(Opcode.IF_ACMPNE, plain);
+		of.if_acmpne(plain);
 		of.aload(1);
-		of.iconst(1);
+		of.loadConstant(1);
 		of.aaload();
 		of.areturn();
-		of.bind(plain);
+		of.labelBinding(plain);
 		of.aload(0);
 		of.areturn();
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_OF), cp.addUtf8(COND_OF_DESC),
-				of.finish(), 2, 2, List.of()));
+				JvmRuntimeBuilder.codeBytes(of), 2, 2, List.of()));
 		return methods;
 	}
 

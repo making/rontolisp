@@ -9,6 +9,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
@@ -155,13 +156,9 @@ final class JvmUncaughtHandler {
 	 *
 	 * @param name its name
 	 * @param desc its descriptor
-	 * @param maxStack the declared {@code max_stack}
-	 * @param maxLocals the declared {@code max_locals}
-	 * @param code the body
-	 * @param exceptionTable the handlers
+	 * @param code the body, its handlers included
 	 */
-	record Built(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<ClassDefinition.Handler> exceptionTable) {
+	record Built(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/**
@@ -387,129 +384,130 @@ final class JvmUncaughtHandler {
 				cp.addString(":"));
 		Refs r = new Refs(concat, equals, startsWith, charAt, length, valueOfInt, getClassName, getLineNumber);
 
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
+		MethodCode.Label start = a.newBoundLabel();
 		// trace = ex.getStackTrace()
 		a.aload(EX);
-		a.invokevirtual(getStackTrace);
+		a.invokevirtual(getStackTrace.methodRefEntry());
 		a.astore(TRACE);
 		// table / names: the constants, concatenated back when one did not hold them
 		emitJoined(a, cp, sites.tableChunks(), concat);
 		a.astore(TABLE);
 		emitJoined(a, cp, sites.nameChunks(), concat);
-		a.ldcString(cp.addString(String.valueOf(JvmSourceSites.NAME_SEPARATOR)));
-		a.invokevirtual(split);
+		a.ldc(cp.addString(String.valueOf(JvmSourceSites.NAME_SEPARATOR)).entry());
+		a.invokevirtual(split.methodRefEntry());
 		a.astore(NAMES);
 		a.aload(TRACE);
 		a.arraylength();
 		a.istore(COUNT);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(INDEX);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(LOCATION);
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(FUNCTION);
 
 		// Segment 0: the frames up to the first async boundary. The innermost frame at a
 		// site is the location, and the site's own function the one it is written in;
 		// the frames past it only lead to the boundary.
-		int segmentLoop = a.label();
-		int segmentEnd = a.label();
-		int segmentNext = a.label();
-		a.bind(segmentLoop);
+		MethodCode.Label segmentLoop = a.newLabel();
+		MethodCode.Label segmentEnd = a.newLabel();
+		MethodCode.Label segmentNext = a.newLabel();
+		a.labelBinding(segmentLoop);
 		emitNextFrame(a, s, r, segmentEnd);
 		a.iload(LOCATION);
-		a.branch(Opcode.IFNE, segmentNext);
+		a.ifne(segmentNext);
 		emitSiteOf(a, s, r, segmentNext);
 		a.iload(SITE);
 		a.istore(LOCATION);
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
-		a.iconst(2);
+		a.loadConstant(2);
 		a.iadd();
-		a.invokevirtual(charAt);
+		a.invokevirtual(charAt.methodRefEntry());
 		a.istore(SITE);
 		a.iload(SITE);
-		a.branch(Opcode.IFEQ, segmentNext);
+		a.ifeq(segmentNext);
 		a.aload(NAMES);
 		a.iload(SITE);
 		a.aaload();
 		a.astore(FUNCTION);
-		a.bind(segmentNext);
+		a.labelBinding(segmentNext);
 		a.iinc(INDEX, 1);
-		a.branch(Opcode.GOTO, segmentLoop);
-		a.bind(segmentEnd);
+		a.goto_(segmentLoop);
+		a.labelBinding(segmentEnd);
 
 		// " at FILE:LINE[ in FUNCTION]"
-		int noLocation = a.label();
+		MethodCode.Label noLocation = a.newLabel();
 		a.iload(LOCATION);
-		a.branch(Opcode.IFEQ, noLocation);
-		a.getstatic(systemErr);
-		a.ldcString(cp.addString(UncaughtReport.AT_PREFIX));
+		a.ifeq(noLocation);
+		a.getstatic(systemErr.entry());
+		a.ldc(cp.addString(UncaughtReport.AT_PREFIX).entry());
 		emitPosition(a, s, r, LOCATION);
-		int noFunction = a.label();
+		MethodCode.Label noFunction = a.newLabel();
 		a.aload(FUNCTION);
-		a.branch(Opcode.IFNULL, noFunction);
-		a.ldcString(cp.addString(UncaughtReport.IN_FUNCTION));
-		a.invokevirtual(concat);
+		a.ifnull(noFunction);
+		a.ldc(cp.addString(UncaughtReport.IN_FUNCTION).entry());
+		a.invokevirtual(concat.methodRefEntry());
 		a.aload(FUNCTION);
-		a.invokevirtual(concat);
-		a.bind(noFunction);
-		a.invokevirtual(printlnStr);
-		a.bind(noLocation);
+		a.invokevirtual(concat.methodRefEntry());
+		a.labelBinding(noFunction);
+		a.invokevirtual(printlnStr.methodRefEntry());
+		a.labelBinding(noLocation);
 
 		// One line per async boundary: the frame names the head, the frames after it
 		// (up to the next boundary) are the awaiter's.
-		int hopLoop = a.label();
-		int done = a.label();
-		a.bind(hopLoop);
+		MethodCode.Label hopLoop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(hopLoop);
 		a.iload(INDEX);
 		a.iload(COUNT);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.aload(TRACE);
 		a.iload(INDEX);
 		a.aaload();
-		a.invokevirtual(getFileName);
+		a.invokevirtual(getFileName.methodRefEntry());
 		a.astore(HEAD);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(AWAITED);
 		a.iinc(INDEX, 1);
-		int hopScan = a.label();
-		int hopEnd = a.label();
-		int hopNext = a.label();
-		a.bind(hopScan);
+		MethodCode.Label hopScan = a.newLabel();
+		MethodCode.Label hopEnd = a.newLabel();
+		MethodCode.Label hopNext = a.newLabel();
+		a.labelBinding(hopScan);
 		emitNextFrame(a, s, r, hopEnd);
 		a.iload(AWAITED);
-		a.branch(Opcode.IFNE, hopNext);
+		a.ifne(hopNext);
 		emitSiteOf(a, s, r, hopNext);
 		a.iload(SITE);
 		a.istore(AWAITED);
-		a.bind(hopNext);
+		a.labelBinding(hopNext);
 		a.iinc(INDEX, 1);
-		a.branch(Opcode.GOTO, hopScan);
-		a.bind(hopEnd);
+		a.goto_(hopScan);
+		a.labelBinding(hopEnd);
 		// " in HEAD[, awaited at FILE:LINE]"
-		a.getstatic(systemErr);
-		a.ldcString(cp.addString(UncaughtReport.ASYNC_PREFIX));
+		a.getstatic(systemErr.entry());
+		a.ldc(cp.addString(UncaughtReport.ASYNC_PREFIX).entry());
 		a.aload(HEAD);
-		a.invokevirtual(concat);
-		int notAwaited = a.label();
+		a.invokevirtual(concat.methodRefEntry());
+		MethodCode.Label notAwaited = a.newLabel();
 		a.iload(AWAITED);
-		a.branch(Opcode.IFEQ, notAwaited);
-		a.ldcString(cp.addString(UncaughtReport.AWAITED_AT));
-		a.invokevirtual(concat);
+		a.ifeq(notAwaited);
+		a.ldc(cp.addString(UncaughtReport.AWAITED_AT).entry());
+		a.invokevirtual(concat.methodRefEntry());
 		emitPosition(a, s, r, AWAITED);
-		a.bind(notAwaited);
-		a.invokevirtual(printlnStr);
-		a.branch(Opcode.GOTO, hopLoop);
-		a.bind(done);
-		int handler = a.code.size();
-		a.op0(Opcode.RETURN);
+		a.labelBinding(notAwaited);
+		a.invokevirtual(printlnStr.methodRefEntry());
+		a.goto_(hopLoop);
+		a.labelBinding(done);
+		MethodCode.Label end = a.newBoundLabel();
+		a.return_();
 		// catch (Throwable any): the report line is out already; stop here.
-		int handlerPc = a.code.size();
+		MethodCode.Label handler = a.newBoundLabel();
 		a.pop();
-		a.op0(Opcode.RETURN);
-		List<ClassDefinition.Handler> table = List.of(new ClassDefinition.Handler(0, handler, handlerPc, 0));
-		return new Built(cp.addUtf8(WHERE_METHOD), cp.addUtf8(WHERE_DESC), 8, AWAITED + 1, a.finish(), table);
+		a.return_();
+		a.exceptionCatch(start, end, handler, null);
+		return new Built(cp.addUtf8(WHERE_METHOD), cp.addUtf8(WHERE_DESC), a);
 	}
 
 	/**
@@ -520,18 +518,18 @@ final class JvmUncaughtHandler {
 	 */
 	static Built buildAsyncCross(ConstantPool cp) {
 		Frames f = new Frames(cp);
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// trace = t.getStackTrace(); out = Arrays.copyOf(trace, trace.length + 1)
 		a.aload(0);
-		a.invokevirtual(f.getStackTrace);
+		a.invokevirtual(f.getStackTrace.methodRefEntry());
 		a.astore(2);
 		a.aload(2);
 		a.aload(2);
 		a.arraylength();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iadd();
-		a.invokestatic(f.copyOf);
-		a.checkcast(f.frameArrayClass);
+		a.invokestatic(f.copyOf.entry());
+		a.checkcast(f.frameArrayClass.entry());
 		a.astore(3);
 		// out[trace.length] = new StackTraceElement(ASYNC_FRAME_CLASS, "crossed", head,
 		// -1)
@@ -542,9 +540,9 @@ final class JvmUncaughtHandler {
 		a.aastore();
 		a.aload(0);
 		a.aload(3);
-		a.invokevirtual(f.setStackTrace);
-		a.op0(Opcode.RETURN);
-		return new Built(cp.addUtf8(ASYNC_CROSS_METHOD), cp.addUtf8(ASYNC_CROSS_DESC), 8, 4, a.finish(), List.of());
+		a.invokevirtual(f.setStackTrace.methodRefEntry());
+		a.return_();
+		return new Built(cp.addUtf8(ASYNC_CROSS_METHOD), cp.addUtf8(ASYNC_CROSS_DESC), a);
 	}
 
 	/**
@@ -564,43 +562,43 @@ final class JvmUncaughtHandler {
 		MethodrefConstant throwableInit = method(cp, f.throwableClass, "<init>", "()V");
 		MethodrefConstant equals = method(cp, cp.addClass(cp.addUtf8("java/lang/String")), "equals",
 				"(Ljava/lang/Object;)Z");
-		JvmAsm a = new JvmAsm();
-		int skip = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label skip = a.newLabel();
 		// t.setStackTrace(stored): an earlier await's frames are a caught signal's
 		a.aload(0);
 		a.aload(1);
-		a.invokevirtual(f.setStackTrace);
+		a.invokevirtual(f.setStackTrace.methodRefEntry());
 		// trace = t.getStackTrace(); n = trace.length; if (n == 0) return
 		a.aload(0);
-		a.invokevirtual(f.getStackTrace);
+		a.invokevirtual(f.getStackTrace.methodRefEntry());
 		a.astore(1);
 		a.aload(1);
 		a.arraylength();
 		a.istore(2);
 		a.iload(2);
-		a.branch(Opcode.IFEQ, skip);
+		a.ifeq(skip);
 		// last = trace[n - 1]; a crossed boundary?
 		a.aload(1);
 		a.iload(2);
-		a.iconst(1);
-		a.op0(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.aaload();
 		a.astore(3);
-		a.ldcString(cp.addString(ASYNC_FRAME_CLASS));
+		a.ldc(cp.addString(ASYNC_FRAME_CLASS).entry());
 		a.aload(3);
-		a.invokevirtual(f.getClassName);
-		a.invokevirtual(equals);
-		a.branch(Opcode.IFEQ, skip);
-		a.ldcString(cp.addString(ASYNC_CROSSED));
+		a.invokevirtual(f.getClassName.methodRefEntry());
+		a.invokevirtual(equals.methodRefEntry());
+		a.ifeq(skip);
+		a.ldc(cp.addString(ASYNC_CROSSED).entry());
 		a.aload(3);
-		a.invokevirtual(f.getMethodName);
-		a.invokevirtual(equals);
-		a.branch(Opcode.IFEQ, skip);
+		a.invokevirtual(f.getMethodName.methodRefEntry());
+		a.invokevirtual(equals.methodRefEntry());
+		a.ifeq(skip);
 		// here = new Throwable().getStackTrace()
-		a.anew(f.throwableClass);
+		a.new_(f.throwableClass.entry());
 		a.dup();
-		a.invokespecial(throwableInit);
-		a.invokevirtual(f.getStackTrace);
+		a.invokespecial(throwableInit.entry());
+		a.invokevirtual(f.getStackTrace.methodRefEntry());
 		a.astore(4);
 		// out = Arrays.copyOf(trace, n + here.length)
 		a.aload(1);
@@ -608,33 +606,33 @@ final class JvmUncaughtHandler {
 		a.aload(4);
 		a.arraylength();
 		a.iadd();
-		a.invokestatic(f.copyOf);
-		a.checkcast(f.frameArrayClass);
+		a.invokestatic(f.copyOf.entry());
+		a.checkcast(f.frameArrayClass.entry());
 		a.astore(5);
 		// out[n - 1] = new StackTraceElement(ASYNC_FRAME_CLASS, "awaited", last.head, -1)
 		a.aload(5);
 		a.iload(2);
-		a.iconst(1);
-		a.op0(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		emitBoundaryFrame(a, f, cp.addString(ASYNC_AWAITED), () -> {
 			a.aload(3);
-			a.invokevirtual(f.getFileName);
+			a.invokevirtual(f.getFileName.methodRefEntry());
 		});
 		a.aastore();
 		// System.arraycopy(here, 0, out, n, here.length); t.setStackTrace(out)
 		a.aload(4);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(5);
 		a.iload(2);
 		a.aload(4);
 		a.arraylength();
-		a.invokestatic(arraycopy);
+		a.invokestatic(arraycopy.entry());
 		a.aload(0);
 		a.aload(5);
-		a.invokevirtual(f.setStackTrace);
-		a.bind(skip);
-		a.op0(Opcode.RETURN);
-		return new Built(cp.addUtf8(ASYNC_AWAITED_METHOD), cp.addUtf8(ASYNC_AWAITED_DESC), 8, 6, a.finish(), List.of());
+		a.invokevirtual(f.setStackTrace.methodRefEntry());
+		a.labelBinding(skip);
+		a.return_();
+		return new Built(cp.addUtf8(ASYNC_AWAITED_METHOD), cp.addUtf8(ASYNC_AWAITED_DESC), a);
 	}
 
 	/** The string constants {@code _where} compares frames against. */
@@ -694,14 +692,14 @@ final class JvmUncaughtHandler {
 	 * Pushes {@code new StackTraceElement(ASYNC_FRAME_CLASS, state, head, -1)}, the head
 	 * pushed by {@code head}.
 	 */
-	private static void emitBoundaryFrame(JvmAsm a, Frames f, StringConstant state, Runnable head) {
-		a.anew(f.frameClass);
+	private static void emitBoundaryFrame(MethodCode a, Frames f, StringConstant state, Runnable head) {
+		a.new_(f.frameClass.entry());
 		a.dup();
-		a.ldcString(f.boundaryClass);
-		a.ldcString(state);
+		a.ldc(f.boundaryClass.entry());
+		a.ldc(state.entry());
 		head.run();
-		a.iconst(-1);
-		a.invokespecial(f.frameInit);
+		a.loadConstant(-1);
+		a.invokespecial(f.frameInit.entry());
 	}
 
 	/**
@@ -709,21 +707,21 @@ final class JvmUncaughtHandler {
 	 * {@code FRAME_CLASS}, jumping to {@code end} past the last frame or at an async
 	 * boundary.
 	 */
-	private static void emitNextFrame(JvmAsm a, Strings s, Refs r, int end) {
+	private static void emitNextFrame(MethodCode a, Strings s, Refs r, MethodCode.Label end) {
 		a.iload(INDEX);
 		a.iload(COUNT);
-		a.branch(Opcode.IF_ICMPGE, end);
+		a.if_icmpge(end);
 		a.aload(TRACE);
 		a.iload(INDEX);
 		a.aaload();
 		a.astore(FRAME);
 		a.aload(FRAME);
-		a.invokevirtual(r.getClassName());
+		a.invokevirtual(r.getClassName().methodRefEntry());
 		a.astore(FRAME_CLASS);
 		a.aload(FRAME_CLASS);
-		a.ldcString(s.boundary());
-		a.invokevirtual(r.equals());
-		a.branch(Opcode.IFNE, end);
+		a.ldc(s.boundary().entry());
+		a.invokevirtual(r.equals().methodRefEntry());
+		a.ifne(end);
 	}
 
 	/**
@@ -731,33 +729,33 @@ final class JvmUncaughtHandler {
 	 * {@code SITE_BASE}; jumps to {@code none} for a frame of another class, a frame with
 	 * no line, and a number past the table.
 	 */
-	private static void emitSiteOf(JvmAsm a, Strings s, Refs r, int none) {
-		int ours = a.label();
+	private static void emitSiteOf(MethodCode a, Strings s, Refs r, MethodCode.Label none) {
+		MethodCode.Label ours = a.newLabel();
 		a.aload(FRAME_CLASS);
-		a.ldcString(s.self());
-		a.invokevirtual(r.equals());
-		a.branch(Opcode.IFNE, ours);
+		a.ldc(s.self().entry());
+		a.invokevirtual(r.equals().methodRefEntry());
+		a.ifne(ours);
 		a.aload(FRAME_CLASS);
-		a.ldcString(s.part());
-		a.invokevirtual(r.startsWith());
-		a.branch(Opcode.IFEQ, none);
-		a.bind(ours);
+		a.ldc(s.part().entry());
+		a.invokevirtual(r.startsWith().methodRefEntry());
+		a.ifeq(none);
+		a.labelBinding(ours);
 		a.aload(FRAME);
-		a.invokevirtual(r.getLineNumber());
+		a.invokevirtual(r.getLineNumber().methodRefEntry());
 		a.istore(SITE);
 		a.iload(SITE);
-		a.branch(Opcode.IFLE, none);
+		a.ifle(none);
 		// site k's three chars end at 3k
 		a.iload(SITE);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.imul();
 		a.aload(TABLE);
-		a.invokevirtual(r.length());
-		a.branch(Opcode.IF_ICMPGT, none);
+		a.invokevirtual(r.length().methodRefEntry());
+		a.if_icmpgt(none);
 		a.iload(SITE);
-		a.iconst(1);
-		a.op0(Opcode.ISUB);
-		a.iconst(3);
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(3);
 		a.imul();
 		a.istore(SITE_BASE);
 	}
@@ -766,36 +764,36 @@ final class JvmUncaughtHandler {
 	 * Appends {@code FILE:LINE} of the site in {@code siteLocal} to the string on top of
 	 * the stack.
 	 */
-	private static void emitPosition(JvmAsm a, Strings s, Refs r, int siteLocal) {
+	private static void emitPosition(MethodCode a, Strings s, Refs r, int siteLocal) {
 		a.iload(siteLocal);
-		a.iconst(1);
-		a.op0(Opcode.ISUB);
-		a.iconst(3);
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(3);
 		a.imul();
 		a.istore(SITE_BASE);
 		a.aload(NAMES);
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
-		a.invokevirtual(r.charAt());
+		a.invokevirtual(r.charAt().methodRefEntry());
 		a.aaload();
-		a.invokevirtual(r.concat());
-		a.ldcString(s.colon());
-		a.invokevirtual(r.concat());
+		a.invokevirtual(r.concat().methodRefEntry());
+		a.ldc(s.colon().entry());
+		a.invokevirtual(r.concat().methodRefEntry());
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iadd();
-		a.invokevirtual(r.charAt());
-		a.invokestatic(r.valueOfInt());
-		a.invokevirtual(r.concat());
+		a.invokevirtual(r.charAt().methodRefEntry());
+		a.invokestatic(r.valueOfInt().entry());
+		a.invokevirtual(r.concat().methodRefEntry());
 	}
 
 	/** Pushes the concatenation of the chunks, each a string constant. */
-	private static void emitJoined(JvmAsm a, ConstantPool cp, List<String> chunks, MethodrefConstant concat) {
+	private static void emitJoined(MethodCode a, ConstantPool cp, List<String> chunks, MethodrefConstant concat) {
 		for (int i = 0; i < chunks.size(); i++) {
-			a.ldcString(cp.addString(chunks.get(i)));
+			a.ldc(cp.addString(chunks.get(i)).entry());
 			if (i > 0) {
-				a.invokevirtual(concat);
+				a.invokevirtual(concat.methodRefEntry());
 			}
 		}
 	}

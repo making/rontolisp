@@ -350,6 +350,22 @@ public final class MethodCode {
 		return this.op(Opcode.ICONST_1);
 	}
 
+	public MethodCode iconst_2() {
+		return this.op(Opcode.ICONST_2);
+	}
+
+	public MethodCode iconst_3() {
+		return this.op(Opcode.ICONST_3);
+	}
+
+	public MethodCode iconst_4() {
+		return this.op(Opcode.ICONST_4);
+	}
+
+	public MethodCode iconst_5() {
+		return this.op(Opcode.ICONST_5);
+	}
+
 	public MethodCode lconst_0() {
 		return this.op(Opcode.LCONST_0);
 	}
@@ -360,6 +376,14 @@ public final class MethodCode {
 
 	public MethodCode fconst_0() {
 		return this.op(Opcode.FCONST_0);
+	}
+
+	public MethodCode fconst_1() {
+		return this.op(Opcode.FCONST_1);
+	}
+
+	public MethodCode fconst_2() {
+		return this.op(Opcode.FCONST_2);
 	}
 
 	public MethodCode dconst_0() {
@@ -676,6 +700,26 @@ public final class MethodCode {
 		return this.op(Opcode.DNEG);
 	}
 
+	public MethodCode fadd() {
+		return this.op(Opcode.FADD);
+	}
+
+	public MethodCode fsub() {
+		return this.op(Opcode.FSUB);
+	}
+
+	public MethodCode fmul() {
+		return this.op(Opcode.FMUL);
+	}
+
+	public MethodCode fdiv() {
+		return this.op(Opcode.FDIV);
+	}
+
+	public MethodCode fneg() {
+		return this.op(Opcode.FNEG);
+	}
+
 	public MethodCode i2l() {
 		return this.op(Opcode.I2L);
 	}
@@ -686,6 +730,34 @@ public final class MethodCode {
 
 	public MethodCode i2c() {
 		return this.op(Opcode.I2C);
+	}
+
+	public MethodCode i2b() {
+		return this.op(Opcode.I2B);
+	}
+
+	public MethodCode i2s() {
+		return this.op(Opcode.I2S);
+	}
+
+	public MethodCode i2f() {
+		return this.op(Opcode.I2F);
+	}
+
+	public MethodCode l2f() {
+		return this.op(Opcode.L2F);
+	}
+
+	public MethodCode f2i() {
+		return this.op(Opcode.F2I);
+	}
+
+	public MethodCode f2d() {
+		return this.op(Opcode.F2D);
+	}
+
+	public MethodCode d2f() {
+		return this.op(Opcode.D2F);
 	}
 
 	public MethodCode l2i() {
@@ -714,6 +786,14 @@ public final class MethodCode {
 
 	public MethodCode dcmpg() {
 		return this.op(Opcode.DCMPG);
+	}
+
+	public MethodCode fcmpl() {
+		return this.op(Opcode.FCMPL);
+	}
+
+	public MethodCode fcmpg() {
+		return this.op(Opcode.FCMPG);
 	}
 
 	// --- fields and invocations
@@ -855,6 +935,42 @@ public final class MethodCode {
 		return this.op(Opcode.CASTORE);
 	}
 
+	/**
+	 * Stores into an array of the given element kind.
+	 * @param kind the element kind ({@code BOOLEAN} and {@code BYTE} share
+	 * {@code bastore})
+	 * @return this
+	 */
+	public MethodCode arrayStore(TypeKind kind) {
+		return this.op(switch (kind) {
+			case BOOLEAN, BYTE -> Opcode.BASTORE;
+			case CHAR -> Opcode.CASTORE;
+			case SHORT -> Opcode.SASTORE;
+			case INT -> Opcode.IASTORE;
+			case LONG -> Opcode.LASTORE;
+			case FLOAT -> Opcode.FASTORE;
+			case DOUBLE -> Opcode.DASTORE;
+			case REFERENCE -> Opcode.AASTORE;
+			case VOID -> throw new IllegalArgumentException("no void array");
+		});
+	}
+
+	public MethodCode faload() {
+		return this.op(Opcode.FALOAD);
+	}
+
+	public MethodCode fastore() {
+		return this.op(Opcode.FASTORE);
+	}
+
+	public MethodCode saload() {
+		return this.op(Opcode.SALOAD);
+	}
+
+	public MethodCode sastore() {
+		return this.op(Opcode.SASTORE);
+	}
+
 	// --- returns and throws
 	// -------------------------------------------------------------
 
@@ -874,8 +990,28 @@ public final class MethodCode {
 		return this.op(Opcode.DRETURN);
 	}
 
+	public MethodCode freturn() {
+		return this.op(Opcode.FRETURN);
+	}
+
 	public MethodCode return_() {
 		return this.op(Opcode.RETURN);
+	}
+
+	/**
+	 * Returns a value of the given kind, or nothing for {@code VOID}.
+	 * @param kind the returned kind
+	 * @return this
+	 */
+	public MethodCode return_(TypeKind kind) {
+		return this.op(switch (kind) {
+			case INT, BOOLEAN, BYTE, CHAR, SHORT -> Opcode.IRETURN;
+			case LONG -> Opcode.LRETURN;
+			case FLOAT -> Opcode.FRETURN;
+			case DOUBLE -> Opcode.DRETURN;
+			case REFERENCE -> Opcode.ARETURN;
+			case VOID -> Opcode.RETURN;
+		});
 	}
 
 	public MethodCode athrow() {

@@ -1,5 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -7,10 +12,8 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.RenderCycleGuard;
 import am.ik.rontolisp.compiler.OperandTypes;
@@ -348,93 +351,69 @@ final class JvmArrayRuntimeBuilder {
 			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER);
 
 	/** An array helper method body ready to be emitted into the generated class. */
-	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record ArrayMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	private JvmArrayRuntimeBuilder() {
 	}
 
-	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
-			ClassConstant selfClass, boolean usesFloatArray) {
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		MethodrefConstant alInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant alAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant alSet = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(ILjava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant longIntValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant alRemove = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant rmGet = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
-		MethodrefConstant rmSet = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
-		MethodrefConstant undisplace = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC)));
+	static List<ArrayMethod> build(ConstantPool cp, ClassEntry objectClass, ClassEntry objectArrayClass,
+			ClassEntry selfClass, boolean usesFloatArray) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		MethodRefEntry alInit = cp.methodRef(arrayListClass, "<init>", "()V");
+		MethodRefEntry alAdd = cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry alGet = cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry alSet = cp.methodRef(arrayListClass, "set", "(ILjava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry longIntValue = cp.methodRef(longClass, "intValue", "()I");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry alSize = cp.methodRef(arrayListClass, "size", "()I");
+		MethodRefEntry alRemove = cp.methodRef(arrayListClass, "remove", "(I)Ljava/lang/Object;");
+		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry rmGet = cp.methodRef(selfClass, RM_GET, RM_GET_DESC);
+		MethodRefEntry rmSet = cp.methodRef(selfClass, RM_SET, RM_SET_DESC);
+		MethodRefEntry undisplace = cp.methodRef(selfClass, UNDISPLACE, UNDISPLACE_DESC);
 		// Every subscript an accessor below indexes with is checked against the
 		// dimension it indexes (JvmOperandTypeRuntime): an out-of-range one is the
 		// access's type-error, named by its operator's wrapper.
-		MethodrefConstant ckBound = cp.addMethodref(selfClass, cp.addNameAndType(
-				cp.addUtf8(JvmOperandTypeRuntime.CK_BOUND), cp.addUtf8(JvmOperandTypeRuntime.CK_BOUND_DESC)));
-		MethodrefConstant makeDisplaced = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC)));
-		MethodrefConstant widen = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC)));
-		MethodrefConstant defaultElement = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC)));
-		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
-		MethodrefConstant longLongValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		MethodRefEntry ckBound = cp.methodRef(selfClass, JvmOperandTypeRuntime.CK_BOUND,
+				JvmOperandTypeRuntime.CK_BOUND_DESC);
+		MethodRefEntry makeDisplaced = cp.methodRef(selfClass, MAKE_DISPLACED, MAKE_DISPLACED_DESC);
+		MethodRefEntry widen = cp.methodRef(selfClass, WIDEN, WIDEN_DESC);
+		MethodRefEntry defaultElement = cp.methodRef(selfClass, DEFAULT_ELEMENT, DEFAULT_ELEMENT_DESC);
+		ClassEntry longArrayClass = cp.classEntry("[J");
+		MethodRefEntry longLongValue = cp.methodRef(longClass, "longValue", "()J");
 		// The PACKED displacement targets: a packed integer vector is a byte[]{8, e0,
 		// ...} or a long[]{width, e0, ...} and a packed float array a
 		// double[]/float[]{rank, dims..., e0, ...}. (A quantized matrix, the other
 		// byte[], is no array a view can be displaced to.)
-		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
+		ClassEntry byteArrayClass = cp.classEntry("[B");
 		// A view over one is an ordinary displaced header whose slot 3 holds that array
 		// instead of an ArrayList or a String, so the walk ends on it exactly as it ends
 		// on a string view's target.
-		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
-		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
-		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
+		ClassEntry doubleArrayClass = cp.classEntry("[D");
+		ClassEntry floatArrayClass = cp.classEntry("[F");
+		ClassEntry shortArrayClass = cp.classEntry("[S");
 		// The bfloat16 conversion pair the _fv* tier emits (JvmFloatArrayRuntimeBuilder),
 		// referenced only when that tier is emitted: a short[] cannot exist otherwise,
 		// and the compiler refuses a class that calls an own method it does not declare.
 		// The short[] arms of the displaced-view helpers are emitted under the same gate.
-		MethodrefConstant bf16Value = usesFloatArray
-				? cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE),
-						cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)))
-				: null;
-		MethodrefConstant bf16Bits = usesFloatArray
-				? cp.addMethodref(selfClass, cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_BITS),
-						cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC)))
-				: null;
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		MethodrefConstant numberLongValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
-		ClassConstant doubleBoxClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		MethodrefConstant doubleBoxValueOf = cp.addMethodref(doubleBoxClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
+		MethodRefEntry bf16Value = usesFloatArray ? cp.methodRef(selfClass, JvmFloatArrayRuntimeBuilder.BF16_VALUE,
+				JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC) : null;
+		MethodRefEntry bf16Bits = usesFloatArray ? cp.methodRef(selfClass, JvmFloatArrayRuntimeBuilder.BF16_BITS,
+				JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC) : null;
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		MethodRefEntry numberLongValue = cp.methodRef(numberClass, "longValue", "()J");
+		MethodRefEntry numberDoubleValue = cp.methodRef(numberClass, "doubleValue", "()D");
+		ClassEntry doubleBoxClass = cp.classEntry("java/lang/Double");
+		MethodRefEntry doubleBoxValueOf = cp.methodRef(doubleBoxClass, "valueOf", "(D)Ljava/lang/Double;");
 		// The shared numeric coercion the packed float accessors already use: any
 		// numeric value (Long, BigInteger, ratio, Double) as a Double.
-		MethodrefConstant dblCoerce = cp.addMethodref(selfClass, cp.addNameAndType(
-				cp.addUtf8(JvmNumericRuntimeBuilder.DBL), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant arraysFillLong = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
-				cp.addNameAndType(cp.addUtf8("fill"), cp.addUtf8("([JJ)V")));
-		am.ik.jvm.ConstantPool.LongConstant nilSentinel = cp.addLong(NIL_SENTINEL);
+		MethodRefEntry dblCoerce = cp.methodRef(selfClass, JvmNumericRuntimeBuilder.DBL,
+				"(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry arraysFillLong = cp.methodRef(cp.classEntry("java/util/Arrays"), "fill", "([JJ)V");
+		LongEntry nilSentinel = cp.entries().longEntry(NIL_SENTINEL);
 
 		List<ArrayMethod> methods = new ArrayList<>();
 
@@ -443,10 +422,10 @@ final class JvmArrayRuntimeBuilder {
 		// element count from dims (a Long for the rank-1 shorthand, otherwise a cons
 		// list of Longs); wrap them with the fill pointer and the adjustable flag into
 		// the 3-element slot-0 header; repeat total times: list.add(init).
-		JvmAsm m = new JvmAsm();
+		MethodCode m = new MethodCode();
 		int dims = 0, init = 1, fp = 2, adj = 3, list = 4, total = 5, dimsArr = 6, idx = 7, cur = 8, n = 9, fpVal = 10,
 				v = 11;
-		m.anew(arrayListClass);
+		m.new_(arrayListClass);
 		m.dup();
 		m.invokespecial(alInit);
 		m.astore(list);
@@ -456,49 +435,49 @@ final class JvmArrayRuntimeBuilder {
 		// nil or an integer (excluding the sentinel value, which must stay
 		// representable): the data is a flat long[] behind a length-6 header
 		// {dims, null, null, null, null, data} and the list holds ONLY the header.
-		int generalPath = m.label();
-		int packedNilFill = m.label();
-		int packedGo = m.label();
+		MethodCode.Label generalPath = m.newLabel();
+		MethodCode.Label packedNilFill = m.newLabel();
+		MethodCode.Label packedGo = m.newLabel();
 		int fillVal = 12, data = 14;
 		m.aload(fpVal);
-		m.branch(Opcode.IFNONNULL, generalPath);
+		m.ifnonnull(generalPath);
 		m.aload(adj);
-		m.branch(Opcode.IFNONNULL, generalPath);
+		m.ifnonnull(generalPath);
 		m.aload(init);
-		m.branch(Opcode.IFNULL, packedNilFill);
+		m.ifnull(packedNilFill);
 		m.aload(init);
 		m.instanceOf(longClass);
-		m.branch(Opcode.IFEQ, generalPath);
+		m.ifeq(generalPath);
 		m.aload(init);
 		m.checkcast(longClass);
 		m.invokevirtual(longLongValue);
 		m.lstore(fillVal);
 		m.lload(fillVal);
-		m.ldc2Long(nilSentinel);
-		m.op(Opcode.LCMP);
-		m.branch(Opcode.IFEQ, generalPath);
-		m.branch(Opcode.GOTO, packedGo);
-		m.bind(packedNilFill);
-		m.ldc2Long(nilSentinel);
+		m.ldc(nilSentinel);
+		m.lcmp();
+		m.ifeq(generalPath);
+		m.goto_(packedGo);
+		m.labelBinding(packedNilFill);
+		m.ldc(nilSentinel);
 		m.lstore(fillVal);
-		m.bind(packedGo);
+		m.labelBinding(packedGo);
 		// data = new long[total]; Arrays.fill(data, fillVal)
 		m.iload(total);
-		m.newarrayLong();
+		m.newarray(TypeKind.LONG);
 		m.astore(data);
 		m.aload(data);
 		m.lload(fillVal);
 		m.invokestatic(arraysFillLong);
 		// list.add(new Object[]{dimsArr, null, null, null, null, data}); return list
 		m.aload(list);
-		m.iconst(6);
+		m.loadConstant(6);
 		m.anewarray(objectClass);
 		m.dup();
-		m.iconst(0);
+		m.loadConstant(0);
 		m.aload(dimsArr);
 		m.aastore();
 		m.dup();
-		m.iconst(5);
+		m.loadConstant(5);
 		m.aload(data);
 		m.aastore();
 		m.invokevirtual(alAdd);
@@ -506,42 +485,42 @@ final class JvmArrayRuntimeBuilder {
 		m.aload(list);
 		m.areturn();
 		// list.add(new Object[]{dimsArr, fpVal, adj}); fill init total times
-		m.bind(generalPath);
+		m.labelBinding(generalPath);
 		m.aload(list);
-		m.iconst(3);
+		m.loadConstant(3);
 		m.anewarray(objectClass);
 		m.dup();
-		m.iconst(0);
+		m.loadConstant(0);
 		m.aload(dimsArr);
 		m.aastore();
 		m.dup();
-		m.iconst(1);
+		m.loadConstant(1);
 		m.aload(fpVal);
 		m.aastore();
 		m.dup();
-		m.iconst(2);
+		m.loadConstant(2);
 		m.aload(adj);
 		m.aastore();
 		m.invokevirtual(alAdd);
 		m.pop();
-		m.iconst(0);
+		m.loadConstant(0);
 		m.istore(idx);
-		int loop = m.label();
-		int end = m.label();
-		m.bind(loop);
+		MethodCode.Label loop = m.newLabel();
+		MethodCode.Label end = m.newLabel();
+		m.labelBinding(loop);
 		m.iload(idx);
 		m.iload(total);
-		m.branch(Opcode.IF_ICMPGE, end);
+		m.if_icmpge(end);
 		m.aload(list);
 		m.aload(init);
 		m.invokevirtual(alAdd);
 		m.pop();
 		m.iinc(idx, 1);
-		m.branch(Opcode.GOTO, loop);
-		m.bind(end);
+		m.goto_(loop);
+		m.labelBinding(end);
 		m.aload(list);
 		m.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), 5, 15, m.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), m));
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
 		// follows the displacement chain, so every accessor goes through it. A string
@@ -550,21 +529,17 @@ final class JvmArrayRuntimeBuilder {
 		// requested character index is translated BY CODE POINT via _cpoff(s, i)
 		// -> s.codePointAt(codeUnit) so a supplementary code point counts as one
 		// indexed element -- matching the (length s) contract everywhere else.
-		ClassConstant strClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		ClassEntry strClass = cp.classEntry("java/lang/String");
 		// A String is a string only quote-framed: a symbol is the other String, and no
 		// array (the test stringp makes, JvmStringpCompiler).
-		MethodrefConstant strCharAt = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
-		MethodrefConstant strCpOffset = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_METHOD),
-						cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_DESC)));
-		MethodrefConstant strCodePointAt = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
-		MethodrefConstant strCount = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_METHOD),
-						cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_DESC)));
-		JvmAsm a1 = new JvmAsm();
-		int a1NotString = a1.label();
+		MethodRefEntry strCharAt = cp.methodRef(strClass, "charAt", "(I)C");
+		MethodRefEntry strCpOffset = cp.methodRef(selfClass, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
+				JvmStringIndexRuntimeBuilder.OFFSET_DESC);
+		MethodRefEntry strCodePointAt = cp.methodRef(strClass, "codePointAt", "(I)I");
+		MethodRefEntry strCount = cp.methodRef(selfClass, JvmStringIndexRuntimeBuilder.COUNT_METHOD,
+				JvmStringIndexRuntimeBuilder.COUNT_DESC);
+		MethodCode a1 = new MethodCode();
+		MethodCode.Label a1NotString = a1.newLabel();
 		emitStringTest(a1, strClass, strCharAt, 0, a1NotString);
 		// s = (String) arr; codeUnit = _cpoff(s, ((Long)i).intValue());
 		// return int[]{s.codePointAt(codeUnit)}.
@@ -583,147 +558,144 @@ final class JvmArrayRuntimeBuilder {
 		a1.istore(5); // slot 5: cp
 		// Box cp as int[1]{cp} -- the runtime CHARACTER representation on the JVM
 		// compile path.
-		a1.iconst(1);
-		a1.newarrayInt();
-		a1.op(Opcode.DUP);
-		a1.iconst(0);
+		a1.loadConstant(1);
+		a1.newarray(TypeKind.INT);
+		a1.dup();
+		a1.loadConstant(0);
 		a1.iload(5);
 		a1.iastore();
 		a1.areturn();
-		a1.bind(a1NotString);
+		a1.labelBinding(a1NotString);
 		emitArrayCheck(a1, cp, selfClass, arrayListClass, null, null, 0);
 		// A flat access (rank 1, or row-major-aref at any rank): the bound is the total
 		// size.
 		emitFlatBound(a1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
 				4, 5);
 		a1.aload(0);
-		a1.iconst(1);
+		a1.loadConstant(1);
 		a1.aload(1);
 		a1.iload(5);
 		a1.invokestatic(ckBound);
-		a1.op(Opcode.IADD);
+		a1.iadd();
 		a1.invokestatic(rmGet);
 		a1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), 4, 6, a1.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), a1));
 
 		// _aref2(arr, i, j): cols = dims[1]; return _rmGet(arr, 1 + i * cols + j)
-		JvmAsm a2 = new JvmAsm();
+		MethodCode a2 = new MethodCode();
 		emitFlat2(a2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 4);
 		a2.istore(3);
 		a2.aload(0);
 		a2.iload(3);
 		a2.invokestatic(rmGet);
 		a2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), 5, 5, a2.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), a2));
 
 		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val. A string passes
 		// the
 		// check: no store routes one here, and it fails the cast below as it always did.
-		JvmAsm s1 = new JvmAsm();
+		MethodCode s1 = new MethodCode();
 		emitArrayCheck(s1, cp, selfClass, arrayListClass, strClass, strCharAt, 0);
 		emitFlatBound(s1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
 				4, 5);
 		s1.aload(0);
-		s1.iconst(1);
+		s1.loadConstant(1);
 		s1.aload(1);
 		s1.iload(5);
 		s1.invokestatic(ckBound);
-		s1.op(Opcode.IADD);
+		s1.iadd();
 		s1.aload(2);
 		s1.invokestatic(rmSet);
 		s1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 6, s1.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), s1));
 
 		// _arrayDims(arr): the dimension sizes as a fresh cons list, built backwards
 		// over the dims Object[] in the slot-0 header (the sizes are already boxed
 		// Longs). A cons is an Object[]{car, cdr} and nil is null, matching the compiled
 		// cons representation.
-		JvmAsm d = new JvmAsm();
+		MethodCode d = new MethodCode();
 		int dArr = 0, dDims = 1, dResult = 2, dJ = 3;
 		// A runtime string carries no header at all, but it IS a rank-1 character array:
 		// its dimensions are the one-element list of its length in code points. Every
 		// other shape reader -- array-rank, array-dimension, array-total-size,
 		// array-row-major-index -- expands through array-dimensions, so this one arm is
 		// what lets all of them accept a string, as the interpreter's do.
-		int dNotString = d.label();
+		MethodCode.Label dNotString = d.newLabel();
 		emitStringTest(d, strClass, strCharAt, dArr, dNotString);
-		d.iconst(2);
+		d.loadConstant(2);
 		d.anewarray(objectClass);
 		d.dup();
-		d.iconst(0);
+		d.loadConstant(0);
 		d.aload(dArr);
 		d.checkcast(strClass);
 		d.invokestatic(strCount);
-		d.op(Opcode.I2L);
+		d.i2l();
 		d.invokestatic(longValueOf);
 		d.aastore();
 		d.areturn();
-		d.bind(dNotString);
+		d.labelBinding(dNotString);
 		emitArrayCheck(d, cp, selfClass, arrayListClass, null, null, dArr);
 		d.aload(dArr);
 		d.checkcast(arrayListClass);
-		d.iconst(0);
+		d.loadConstant(0);
 		d.invokevirtual(alGet);
 		d.checkcast(objectArrayClass);
-		d.iconst(0);
+		d.loadConstant(0);
 		d.aaload();
 		d.checkcast(objectArrayClass);
 		d.astore(dDims);
-		d.aconstNull();
+		d.aconst_null();
 		d.astore(dResult);
 		d.aload(dDims);
 		d.arraylength();
-		d.iconst(1);
-		d.op(Opcode.ISUB);
+		d.loadConstant(1);
+		d.isub();
 		d.istore(dJ);
-		int dLoop = d.label();
-		int dDone = d.label();
-		d.bind(dLoop);
+		MethodCode.Label dLoop = d.newLabel();
+		MethodCode.Label dDone = d.newLabel();
+		d.labelBinding(dLoop);
 		d.iload(dJ);
-		d.branch(Opcode.IFLT, dDone);
+		d.iflt(dDone);
 		// result = new Object[]{dims[j], result}
-		d.iconst(2);
+		d.loadConstant(2);
 		d.anewarray(objectClass);
 		d.dup();
-		d.iconst(0);
+		d.loadConstant(0);
 		d.aload(dDims);
 		d.iload(dJ);
 		d.aaload();
 		d.aastore();
 		d.dup();
-		d.iconst(1);
+		d.loadConstant(1);
 		d.aload(dResult);
 		d.aastore();
 		d.astore(dResult);
 		d.iinc(dJ, -1);
-		d.branch(Opcode.GOTO, dLoop);
-		d.bind(dDone);
+		d.goto_(dLoop);
+		d.labelBinding(dDone);
 		d.aload(dResult);
 		d.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(DIMS_DESC), 6, 4, d.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(DIMS_DESC), d));
 
 		// _arrayCheckRank(arr, given): rank = 1 for a string, else the length of the
 		// header's boxed dims (the same derivation DIMS uses, without building the cons
 		// list). A mismatch against `given` throws; a match returns `arr` unchanged.
 		// Locals: 0=arr, 1=given, 2=rank, 3=dims (Object[]), 4=giv.
-		ClassConstant crSbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant crSbInit = cp.addMethodref(crSbClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant crSbAppendStr = cp.addMethodref(crSbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant crSbAppendInt = cp.addMethodref(crSbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant crSbToString = cp.addMethodref(crSbClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassEntry crSbClass = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry crSbInit = cp.methodRef(crSbClass, "<init>", "()V");
+		MethodRefEntry crSbAppendStr = cp.methodRef(crSbClass, "append",
+				"(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry crSbAppendInt = cp.methodRef(crSbClass, "append", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry crSbToString = cp.methodRef(crSbClass, "toString", "()Ljava/lang/String;");
 		int crArr = 0, crGiven = 1, crRank = 2, crDims = 3, crGiv = 4;
-		JvmAsm cr = new JvmAsm();
-		int crNotString = cr.label();
-		int crHaveRank = cr.label();
+		MethodCode cr = new MethodCode();
+		MethodCode.Label crNotString = cr.newLabel();
+		MethodCode.Label crHaveRank = cr.newLabel();
 		emitStringTest(cr, strClass, strCharAt, crArr, crNotString);
-		cr.iconst(1);
+		cr.loadConstant(1);
 		cr.istore(crRank);
-		cr.branch(Opcode.GOTO, crHaveRank);
-		cr.bind(crNotString);
+		cr.goto_(crHaveRank);
+		cr.labelBinding(crNotString);
 		// Anything but an array (a general one is an ArrayList; the packed families were
 		// answered by the _iv/_fv check a step up the chain) is the ARRAY type-error, for
 		// the operator's wrapper at the call site to name: the cast failed with a
@@ -731,23 +703,23 @@ final class JvmArrayRuntimeBuilder {
 		emitArrayCheck(cr, cp, selfClass, arrayListClass, null, null, crArr);
 		cr.aload(crArr);
 		cr.checkcast(arrayListClass);
-		cr.iconst(0);
+		cr.loadConstant(0);
 		cr.invokevirtual(alGet);
 		cr.checkcast(objectArrayClass);
-		cr.iconst(0);
+		cr.loadConstant(0);
 		cr.aaload();
 		cr.checkcast(objectArrayClass);
 		cr.astore(crDims);
 		cr.aload(crDims);
 		cr.arraylength();
 		cr.istore(crRank);
-		cr.bind(crHaveRank);
+		cr.labelBinding(crHaveRank);
 		emitRankCheckAndReturn(cp, cr, longClass, longIntValue, crSbClass, crSbInit, crSbAppendStr, crSbAppendInt,
 				crSbToString, rtExClass, rtExInit, crArr, crGiven, crRank, crGiv);
-		methods.add(new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), 6, 5, cr.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), cr));
 
 		// _aset2(arr, i, j, val): _rmSet(arr, 1 + i * cols + j, val) -- returns val
-		JvmAsm s2 = new JvmAsm();
+		MethodCode s2 = new MethodCode();
 		emitFlat2(s2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 5);
 		s2.istore(4);
 		s2.aload(0);
@@ -755,132 +727,132 @@ final class JvmArrayRuntimeBuilder {
 		s2.aload(3);
 		s2.invokestatic(rmSet);
 		s2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), 5, 6, s2.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), s2));
 
 		// _arefN(arr, subs): return _rmGet(arr, 1 + flatIndex(arr, subs))
-		JvmAsm an = new JvmAsm();
+		MethodCode an = new MethodCode();
 		emitFlatN(an, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 1, 2, 3, 4, 5);
 		an.aload(0);
-		an.iconst(1);
+		an.loadConstant(1);
 		an.iload(2);
-		an.op(Opcode.IADD);
+		an.iadd();
 		an.invokestatic(rmGet);
 		an.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(AREFN_DESC), 4, 6, an.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(AREFN_DESC), an));
 
 		// _asetN(arr, subs, val): _rmSet(arr, 1 + flatIndex(arr, subs), val)
-		JvmAsm sn = new JvmAsm();
+		MethodCode sn = new MethodCode();
 		emitFlatN(sn, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 1, 3, 4, 5, 6);
 		sn.aload(0);
-		sn.iconst(1);
+		sn.loadConstant(1);
 		sn.iload(3);
-		sn.op(Opcode.IADD);
+		sn.iadd();
 		sn.aload(2);
 		sn.invokestatic(rmSet);
 		sn.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), 4, 7, sn.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), sn));
 
 		// _ckArr(x): x when it is an array of any representation, else the unnamed ARRAY
 		// report (CK_ARRAY). The string test is stringp's: a String whose first char is
 		// the quote framing it. Locals: 0 = x.
-		JvmAsm ck = new JvmAsm();
-		int ckPass = ck.label();
-		int ckNotString = ck.label();
-		int ckFail = ck.label();
+		MethodCode ck = new MethodCode();
+		MethodCode.Label ckPass = ck.newLabel();
+		MethodCode.Label ckNotString = ck.newLabel();
+		MethodCode.Label ckFail = ck.newLabel();
 		ck.aload(0);
 		ck.instanceOf(arrayListClass);
-		ck.branch(Opcode.IFNE, ckPass);
+		ck.ifne(ckPass);
 		ck.aload(0);
 		ck.instanceOf(strClass);
-		ck.branch(Opcode.IFEQ, ckNotString);
+		ck.ifeq(ckNotString);
 		emitStringTest(ck, strClass, strCharAt, 0, ckFail);
-		ck.branch(Opcode.GOTO, ckPass);
-		ck.bind(ckNotString);
-		for (ClassConstant packed : List.of(longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
+		ck.goto_(ckPass);
+		ck.labelBinding(ckNotString);
+		for (ClassEntry packed : List.of(longArrayClass, doubleArrayClass, floatArrayClass, shortArrayClass,
 				byteArrayClass)) {
 			ck.aload(0);
 			ck.instanceOf(packed);
-			ck.branch(Opcode.IFNE, ckPass);
+			ck.ifne(ckPass);
 		}
-		ck.bind(ckFail);
+		ck.labelBinding(ckFail);
 		ck.aload(0);
-		ck.ldcString(cp.addString(OperandTypes.Kind.ARRAY.typeName()));
+		ck.ldc(cp.stringEntry(OperandTypes.Kind.ARRAY.typeName()));
 		ck.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
-		ck.op(Opcode.ATHROW);
-		ck.bind(ckPass);
+		ck.athrow();
+		ck.labelBinding(ckPass);
 		ck.aload(0);
 		ck.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(CK_ARRAY), cp.addUtf8(CK_ARRAY_DESC), 2, 1, ck.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(CK_ARRAY), cp.addUtf8(CK_ARRAY_DESC), ck));
 
 		// _ckFp(x): x when it is a general vector with a fill pointer, else the unnamed
 		// report of (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) -- after _ckArr,
 		// which throws the ARRAY one for a value that is no array at all. Locals: 0 = x.
-		MethodrefConstant teOf = JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_OF,
+		MethodRefEntry teOf = JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_OF,
 				JvmOperandTypeRuntime.TE_OF_DESC);
-		JvmAsm cfp = new JvmAsm();
-		int cfpRefuse = cfp.label();
+		MethodCode cfp = new MethodCode();
+		MethodCode.Label cfpRefuse = cfp.newLabel();
 		cfp.aload(0);
 		cfp.instanceOf(arrayListClass);
-		cfp.branch(Opcode.IFEQ, cfpRefuse);
+		cfp.ifeq(cfpRefuse);
 		emitLoadHeader(cfp, arrayListClass, objectArrayClass, alGet, 0);
-		cfp.iconst(1);
+		cfp.loadConstant(1);
 		cfp.aaload();
-		cfp.branch(Opcode.IFNULL, cfpRefuse);
+		cfp.ifnull(cfpRefuse);
 		cfp.aload(0);
 		cfp.areturn();
-		cfp.bind(cfpRefuse);
+		cfp.labelBinding(cfpRefuse);
 		cfp.aload(0);
 		cfp.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, CK_ARRAY, CK_ARRAY_DESC));
 		cfp.pop();
 		cfp.aload(0);
 		emitTypeValue(cfp, cp, objectClass, longValueOf, OperandTypes.FILL_POINTER_VECTOR_TYPE);
 		cfp.invokestatic(teOf);
-		cfp.op(Opcode.ATHROW);
-		methods.add(new ArrayMethod(cp.addUtf8(CK_FILL_POINTER), cp.addUtf8(CK_ARRAY_DESC), 24, 1, cfp.finish()));
+		cfp.athrow();
+		methods.add(new ArrayMethod(cp.addUtf8(CK_FILL_POINTER), cp.addUtf8(CK_ARRAY_DESC), cfp));
 
 		// _fillPointer(arr): the fill pointer (a Long); _ckFp at the site has checked the
 		// array carries one. Locals: 0 = arr.
-		JvmAsm fpm = new JvmAsm();
+		MethodCode fpm = new MethodCode();
 		emitLoadHeader(fpm, arrayListClass, objectArrayClass, alGet, 0);
-		fpm.iconst(1);
+		fpm.loadConstant(1);
 		fpm.aaload();
 		fpm.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), 3, 1, fpm.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), fpm));
 
 		// _setFillPointer(arr, value): the store behind _ckFp; returns value. A value
 		// that
 		// is no integer in [0, dimension] is the unnamed report of (INTEGER 0
 		// dimension), for the (SETF FILL-POINTER) wrapper to name. Locals: 0 = arr,
 		// 1 = value, 2 = header, 3 = cap (int), 4-5 = v (long).
-		JvmAsm sfp = new JvmAsm();
+		MethodCode sfp = new MethodCode();
 		emitLoadHeader(sfp, arrayListClass, objectArrayClass, alGet, 0);
 		sfp.astore(2);
 		emitLoadDim0(sfp, longClass, objectArrayClass, longIntValue, 2);
 		sfp.istore(3);
-		int sfpBad = sfp.label();
-		int sfpOk = sfp.label();
+		MethodCode.Label sfpBad = sfp.newLabel();
+		MethodCode.Label sfpOk = sfp.newLabel();
 		sfp.aload(1);
 		sfp.instanceOf(longClass);
-		sfp.branch(Opcode.IFEQ, sfpBad);
+		sfp.ifeq(sfpBad);
 		sfp.aload(1);
 		sfp.checkcast(longClass);
 		sfp.invokevirtual(longLongValue);
 		sfp.lstore(4);
 		sfp.lload(4);
-		sfp.op(Opcode.LCONST_0);
-		sfp.op(Opcode.LCMP);
-		sfp.branch(Opcode.IFLT, sfpBad);
+		sfp.lconst_0();
+		sfp.lcmp();
+		sfp.iflt(sfpBad);
 		sfp.lload(4);
 		sfp.iload(3);
 		sfp.i2l();
-		sfp.op(Opcode.LCMP);
-		sfp.branch(Opcode.IFGT, sfpBad);
-		sfp.branch(Opcode.GOTO, sfpOk);
-		sfp.bind(sfpBad);
+		sfp.lcmp();
+		sfp.ifgt(sfpBad);
+		sfp.goto_(sfpOk);
+		sfp.labelBinding(sfpBad);
 		sfp.aload(1);
-		emitList(sfp, objectClass, List.of(() -> sfp.ldcString(cp.addString(OperandTypes.INTEGER_TYPE)), () -> {
-			sfp.op(Opcode.LCONST_0);
+		emitList(sfp, objectClass, List.of(() -> sfp.ldc(cp.stringEntry(OperandTypes.INTEGER_TYPE)), () -> {
+			sfp.lconst_0();
 			sfp.invokestatic(longValueOf);
 		}, () -> {
 			sfp.iload(3);
@@ -888,69 +860,66 @@ final class JvmArrayRuntimeBuilder {
 			sfp.invokestatic(longValueOf);
 		}));
 		sfp.invokestatic(teOf);
-		sfp.op(Opcode.ATHROW);
-		sfp.bind(sfpOk);
+		sfp.athrow();
+		sfp.labelBinding(sfpOk);
 		sfp.aload(2);
-		sfp.iconst(1);
+		sfp.loadConstant(1);
 		sfp.aload(1);
 		sfp.aastore();
 		sfp.aload(1);
 		sfp.areturn();
-		methods
-			.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), 12, 6, sfp.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), sfp));
 
 		// _arrayHasFillPointer(arr): "t" when the header carries a fill pointer, else
 		// nil (null). Locals: 0 = arr.
-		JvmAsm hfp = new JvmAsm();
+		MethodCode hfp = new MethodCode();
 		emitHeaderSlotToBool(hfp, arrayListClass, objectArrayClass, alGet, cp, 1);
-		methods
-			.add(new ArrayMethod(cp.addUtf8(HAS_FILL_POINTER), cp.addUtf8(HAS_FILL_POINTER_DESC), 3, 1, hfp.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(HAS_FILL_POINTER), cp.addUtf8(HAS_FILL_POINTER_DESC), hfp));
 
 		// _adjustableArrayP(arr): "t" when the array was created :adjustable (the raw
 		// truthy argument is stored verbatim), else nil. Locals: 0 = arr.
-		JvmAsm adp = new JvmAsm();
+		MethodCode adp = new MethodCode();
 		emitHeaderSlotToBool(adp, arrayListClass, objectArrayClass, alGet, cp, 2);
-		methods.add(new ArrayMethod(cp.addUtf8(ADJUSTABLE_ARRAY_P), cp.addUtf8(ADJUSTABLE_ARRAY_P_DESC), 3, 1,
-				adp.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ADJUSTABLE_ARRAY_P), cp.addUtf8(ADJUSTABLE_ARRAY_P_DESC), adp));
 
 		// _vectorPush(val, arr): store val at the fill pointer and return the index used
 		// (a Long), or nil (null) when the vector is full. Locals: 0 = val, 1 = arr,
 		// 2 = header, 3 = fp (int), 4 = cap (int).
-		JvmAsm vp = new JvmAsm();
+		MethodCode vp = new MethodCode();
 		emitLoadHeader(vp, arrayListClass, objectArrayClass, alGet, 1);
 		vp.astore(2);
 		emitLoadFillPointer(vp, longClass, longIntValue, 2);
 		vp.istore(3);
 		emitLoadDim0(vp, longClass, objectArrayClass, longIntValue, 2);
 		vp.istore(4);
-		int vpStore = vp.label();
+		MethodCode.Label vpStore = vp.newLabel();
 		vp.iload(3);
 		vp.iload(4);
-		vp.branch(Opcode.IF_ICMPLT, vpStore);
-		vp.aconstNull();
+		vp.if_icmplt(vpStore);
+		vp.aconst_null();
 		vp.areturn();
-		vp.bind(vpStore);
+		vp.labelBinding(vpStore);
 		emitStoreAtFillPointerAndAdvance(vp, rmSet, longValueOf, 0, 1, 2, 3);
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH), cp.addUtf8(VECTOR_PUSH_DESC), 6, 5, vp.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH), cp.addUtf8(VECTOR_PUSH_DESC), vp));
 
 		// _vectorPop(arr): decrement the fill pointer and return the element it passed.
 		// Locals: 0 = arr, 1 = header, 2 = fp (int).
-		JvmAsm vpop = new JvmAsm();
+		MethodCode vpop = new MethodCode();
 		emitLoadHeader(vpop, arrayListClass, objectArrayClass, alGet, 0);
 		vpop.astore(1);
 		emitLoadFillPointer(vpop, longClass, longIntValue, 1);
 		vpop.istore(2);
-		int vpopOk = vpop.label();
+		MethodCode.Label vpopOk = vpop.newLabel();
 		vpop.iload(2);
-		vpop.branch(Opcode.IFNE, vpopOk);
-		emitThrow(vpop, rtExClass, rtExInit, cp.addString(OperandTypes.VECTOR_POP_EMPTY));
-		vpop.bind(vpopOk);
+		vpop.ifne(vpopOk);
+		emitThrow(vpop, rtExClass, rtExInit, cp.stringEntry(OperandTypes.VECTOR_POP_EMPTY));
+		vpop.labelBinding(vpopOk);
 		vpop.aload(1);
-		vpop.iconst(1);
+		vpop.loadConstant(1);
 		vpop.iload(2);
-		vpop.iconst(1);
-		vpop.op(Opcode.ISUB);
-		vpop.op(Opcode.I2L);
+		vpop.loadConstant(1);
+		vpop.isub();
+		vpop.i2l();
 		vpop.invokestatic(longValueOf);
 		vpop.aastore();
 		// _rmGet(arr, 1 + (fp - 1)) == _rmGet(arr, fp) -- through the displacement-aware
@@ -959,24 +928,24 @@ final class JvmArrayRuntimeBuilder {
 		vpop.iload(2);
 		vpop.invokestatic(rmGet);
 		vpop.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), 6, 3, vpop.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), vpop));
 
 		// _vectorPushExtend(val, arr, ext): like _vectorPush but grows the backing store
 		// when the vector is full, updating the stored dimension size. ext is the shared
 		// "not supplied" sentinel (ArrayGrowth.NO_EXTENSION) when the optional argument
 		// was omitted. Locals: 0 = val, 1 = arr, 2 = ext, 3 = header,
 		// 4 = fp (int), 5 = cap (int), 6 = ext (int), 7 = newCap (int), 8 = the fill.
-		JvmAsm vpe = new JvmAsm();
+		MethodCode vpe = new MethodCode();
 		emitLoadHeader(vpe, arrayListClass, objectArrayClass, alGet, 1);
 		vpe.astore(3);
 		emitLoadFillPointer(vpe, longClass, longIntValue, 3);
 		vpe.istore(4);
 		emitLoadDim0(vpe, longClass, objectArrayClass, longIntValue, 3);
 		vpe.istore(5);
-		int vpeStore = vpe.label();
+		MethodCode.Label vpeStore = vpe.newLabel();
 		vpe.iload(4);
 		vpe.iload(5);
-		vpe.branch(Opcode.IF_ICMPLT, vpeStore);
+		vpe.if_icmplt(vpeStore);
 		// A full DISPLACED view stops being a view first: its elements move into storage
 		// of its own and the displacement is dropped, so the growth below extends that
 		// storage instead of running past the end of the target (SBCL 2.2.9 does the
@@ -994,30 +963,30 @@ final class JvmArrayRuntimeBuilder {
 		vpe.checkcast(longClass);
 		vpe.invokevirtual(longIntValue);
 		vpe.istore(6);
-		int vpeDefaultGrowth = vpe.label();
-		int vpeDoubleCap = vpe.label();
-		int vpeCapReady = vpe.label();
+		MethodCode.Label vpeDefaultGrowth = vpe.newLabel();
+		MethodCode.Label vpeDoubleCap = vpe.newLabel();
+		MethodCode.Label vpeCapReady = vpe.newLabel();
 		vpe.iload(6);
-		vpe.iconst(ArrayGrowth.NO_EXTENSION);
-		vpe.branch(Opcode.IF_ICMPLE, vpeDefaultGrowth);
+		vpe.loadConstant(ArrayGrowth.NO_EXTENSION);
+		vpe.if_icmple(vpeDefaultGrowth);
 		vpe.iload(5);
 		vpe.iload(6);
-		vpe.op(Opcode.IADD);
+		vpe.iadd();
 		vpe.istore(7);
-		vpe.branch(Opcode.GOTO, vpeCapReady);
-		vpe.bind(vpeDefaultGrowth);
+		vpe.goto_(vpeCapReady);
+		vpe.labelBinding(vpeDefaultGrowth);
 		vpe.iload(5);
-		vpe.iconst(ArrayGrowth.MIN_CAPACITY);
-		vpe.branch(Opcode.IF_ICMPGE, vpeDoubleCap);
-		vpe.iconst(ArrayGrowth.MIN_CAPACITY);
+		vpe.loadConstant(ArrayGrowth.MIN_CAPACITY);
+		vpe.if_icmpge(vpeDoubleCap);
+		vpe.loadConstant(ArrayGrowth.MIN_CAPACITY);
 		vpe.istore(7);
-		vpe.branch(Opcode.GOTO, vpeCapReady);
-		vpe.bind(vpeDoubleCap);
+		vpe.goto_(vpeCapReady);
+		vpe.labelBinding(vpeDoubleCap);
 		vpe.iload(5);
-		vpe.iconst(ArrayGrowth.GROWTH_FACTOR);
-		vpe.op(Opcode.IMUL);
+		vpe.loadConstant(ArrayGrowth.GROWTH_FACTOR);
+		vpe.imul();
 		vpe.istore(7);
-		vpe.bind(vpeCapReady);
+		vpe.labelBinding(vpeCapReady);
 		// while (list.size() - 1 < newCap) list.add(_arrayDefaultElement(arr)) -- the
 		// slots the growth OPENS take the REMEMBERED element type's own zero, the same
 		// fill make-array gives an unsupplied element, so a vector asked to hold
@@ -1027,37 +996,36 @@ final class JvmArrayRuntimeBuilder {
 		vpe.aload(1);
 		vpe.invokestatic(defaultElement);
 		vpe.astore(8);
-		int growLoop = vpe.label();
-		int growDone = vpe.label();
-		vpe.bind(growLoop);
+		MethodCode.Label growLoop = vpe.newLabel();
+		MethodCode.Label growDone = vpe.newLabel();
+		vpe.labelBinding(growLoop);
 		vpe.aload(1);
 		vpe.checkcast(arrayListClass);
 		vpe.invokevirtual(alSize);
-		vpe.iconst(1);
-		vpe.op(Opcode.ISUB);
+		vpe.loadConstant(1);
+		vpe.isub();
 		vpe.iload(7);
-		vpe.branch(Opcode.IF_ICMPGE, growDone);
+		vpe.if_icmpge(growDone);
 		vpe.aload(1);
 		vpe.checkcast(arrayListClass);
 		vpe.aload(8);
 		vpe.invokevirtual(alAdd);
 		vpe.pop();
-		vpe.branch(Opcode.GOTO, growLoop);
-		vpe.bind(growDone);
+		vpe.goto_(growLoop);
+		vpe.labelBinding(growDone);
 		// dims[0] = Long.valueOf(newCap)
 		vpe.aload(3);
-		vpe.iconst(0);
+		vpe.loadConstant(0);
 		vpe.aaload();
 		vpe.checkcast(objectArrayClass);
-		vpe.iconst(0);
+		vpe.loadConstant(0);
 		vpe.iload(7);
-		vpe.op(Opcode.I2L);
+		vpe.i2l();
 		vpe.invokestatic(longValueOf);
 		vpe.aastore();
-		vpe.bind(vpeStore);
+		vpe.labelBinding(vpeStore);
 		emitStoreAtFillPointerAndAdvance(vpe, rmSet, longValueOf, 0, 1, 3, 4);
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), 6, 9,
-				vpe.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), vpe));
 
 		// _rmGet(list, idx): the single data-read primitive (idx is the 1-based list
 		// index). Follows the displacement chain: while the header is a 5-element
@@ -1065,36 +1033,36 @@ final class JvmArrayRuntimeBuilder {
 		// hop to the target list. A length-6 header is the PACKED shape: the element is
 		// read from the long[] in header[5] (the sentinel reads back as nil).
 		// Locals: 0 = list, 1 = idx, 2 = header, 3/4 = v (long).
-		JvmAsm rg = new JvmAsm();
-		int rgGeneral = rg.label();
-		int rgBox = rg.label();
-		int rgString = rg.label();
+		MethodCode rg = new MethodCode();
+		MethodCode.Label rgGeneral = rg.newLabel();
+		MethodCode.Label rgBox = rg.newLabel();
+		MethodCode.Label rgString = rg.newLabel();
 		emitResolveDisplacement(rg, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 2);
 		emitLandedOnString(rg, 2, rgString);
 		rg.aload(2);
 		rg.arraylength();
-		rg.iconst(6);
-		rg.branch(Opcode.IF_ICMPNE, rgGeneral);
+		rg.loadConstant(6);
+		rg.if_icmpne(rgGeneral);
 		rg.aload(2);
-		rg.iconst(5);
+		rg.loadConstant(5);
 		rg.aaload();
 		rg.checkcast(longArrayClass);
 		rg.iload(1);
-		rg.iconst(1);
-		rg.op(Opcode.ISUB);
+		rg.loadConstant(1);
+		rg.isub();
 		rg.laload();
 		rg.lstore(3);
 		rg.lload(3);
-		rg.ldc2Long(nilSentinel);
-		rg.op(Opcode.LCMP);
-		rg.branch(Opcode.IFNE, rgBox);
-		rg.aconstNull();
+		rg.ldc(nilSentinel);
+		rg.lcmp();
+		rg.ifne(rgBox);
+		rg.aconst_null();
 		rg.areturn();
-		rg.bind(rgBox);
+		rg.labelBinding(rgBox);
 		rg.lload(3);
 		rg.invokestatic(longValueOf);
 		rg.areturn();
-		rg.bind(rgGeneral);
+		rg.labelBinding(rgGeneral);
 		rg.aload(0);
 		rg.checkcast(arrayListClass);
 		rg.iload(1);
@@ -1103,10 +1071,10 @@ final class JvmArrayRuntimeBuilder {
 		// The NON-ARRAY target arm: header[3] is what the view aliases -- a PACKED
 		// vector (the elements live unboxed in it) or the immutable runtime string a
 		// string view aliases.
-		rg.bind(rgString);
-		int rgRealString = rg.label();
+		rg.labelBinding(rgString);
+		MethodCode.Label rgRealString = rg.newLabel();
 		rg.aload(2);
-		rg.iconst(3);
+		rg.loadConstant(3);
 		rg.aaload();
 		rg.astore(7);
 		emitPackedTargetGet(rg, 7, 1, byteArrayClass, longArrayClass, doubleArrayClass, floatArrayClass,
@@ -1116,72 +1084,71 @@ final class JvmArrayRuntimeBuilder {
 		// through _cpoff (the content lives in [1, length-1), inside the framing
 		// quotes) and boxes as the runtime CHARACTER int[]{cp}, exactly like _aref1's
 		// own string branch.
-		rg.bind(rgRealString);
+		rg.labelBinding(rgRealString);
 		rg.aload(2);
-		rg.iconst(3);
+		rg.loadConstant(3);
 		rg.aaload();
 		rg.checkcast(strClass);
 		rg.astore(5);
 		rg.aload(5);
 		rg.aload(5);
 		rg.iload(1);
-		rg.iconst(1);
-		rg.op(Opcode.ISUB);
+		rg.loadConstant(1);
+		rg.isub();
 		rg.invokestatic(strCpOffset);
 		rg.invokevirtual(strCodePointAt);
 		rg.istore(6);
-		rg.iconst(1);
-		rg.newarrayInt();
-		rg.op(Opcode.DUP);
-		rg.iconst(0);
+		rg.loadConstant(1);
+		rg.newarray(TypeKind.INT);
+		rg.dup();
+		rg.loadConstant(0);
 		rg.iload(6);
 		rg.iastore();
 		rg.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), 6, 8, rg.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), rg));
 
 		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
 		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
 		// value -- or the sentinel integer itself -- widens the array in place first
 		// and falls through to the boxed store.
 		// Locals: 0 = list, 1 = idx, 2 = val, 3 = header, 4/5 = v (long).
-		JvmAsm rs = new JvmAsm();
-		int rsGeneral = rs.label();
-		int rsWiden = rs.label();
-		int rsString = rs.label();
-		MethodrefConstant strToCharVec = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC)));
+		MethodCode rs = new MethodCode();
+		MethodCode.Label rsGeneral = rs.newLabel();
+		MethodCode.Label rsWiden = rs.newLabel();
+		MethodCode.Label rsString = rs.newLabel();
+		MethodRefEntry strToCharVec = cp.methodRef(selfClass, STR_TO_CHAR_VEC, STR_TO_CHAR_VEC_DESC);
 		emitResolveDisplacement(rs, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 0, 1, 3);
 		emitLandedOnString(rs, 3, rsString);
 		rs.aload(3);
 		rs.arraylength();
-		rs.iconst(6);
-		rs.branch(Opcode.IF_ICMPNE, rsGeneral);
+		rs.loadConstant(6);
+		rs.if_icmpne(rsGeneral);
 		rs.aload(2);
 		rs.instanceOf(longClass);
-		rs.branch(Opcode.IFEQ, rsWiden);
+		rs.ifeq(rsWiden);
 		rs.aload(2);
 		rs.checkcast(longClass);
 		rs.invokevirtual(longLongValue);
 		rs.lstore(4);
 		rs.lload(4);
-		rs.ldc2Long(nilSentinel);
-		rs.op(Opcode.LCMP);
-		rs.branch(Opcode.IFEQ, rsWiden);
+		rs.ldc(nilSentinel);
+		rs.lcmp();
+		rs.ifeq(rsWiden);
 		rs.aload(3);
-		rs.iconst(5);
+		rs.loadConstant(5);
 		rs.aaload();
 		rs.checkcast(longArrayClass);
 		rs.iload(1);
-		rs.iconst(1);
-		rs.op(Opcode.ISUB);
+		rs.loadConstant(1);
+		rs.isub();
 		rs.lload(4);
 		rs.lastore();
 		rs.aload(2);
 		rs.areturn();
-		rs.bind(rsWiden);
+		rs.labelBinding(rsWiden);
 		rs.aload(0);
 		rs.invokestatic(widen);
-		rs.bind(rsGeneral);
+		rs.labelBinding(rsGeneral);
 		rs.aload(0);
 		rs.checkcast(arrayListClass);
 		rs.iload(1);
@@ -1194,10 +1161,10 @@ final class JvmArrayRuntimeBuilder {
 		// unboxed slot (masked to the element width for an integer vector, narrowed to
 		// the backing width for a float array, and answering the value AS STORED --
 		// which is what a store straight into the target answers).
-		rs.bind(rsString);
-		int rsRealString = rs.label();
+		rs.labelBinding(rsString);
+		MethodCode.Label rsRealString = rs.newLabel();
 		rs.aload(3);
-		rs.iconst(3);
+		rs.loadConstant(3);
 		rs.aaload();
 		rs.astore(7);
 		emitPackedTargetSet(rs, cp, 7, 1, 2, 8, 9, 10, 11, 12, 14, byteArrayClass, longArrayClass, doubleArrayClass,
@@ -1208,21 +1175,21 @@ final class JvmArrayRuntimeBuilder {
 		// vector holding the same characters -- and store into that; every later access
 		// through this view (and through array-displacement's answer) sees the promoted
 		// vector, so the view behaves as a mutable string from here on.
-		rs.bind(rsRealString);
+		rs.labelBinding(rsRealString);
 		rs.aload(3);
-		rs.iconst(3);
+		rs.loadConstant(3);
 		rs.aaload();
 		rs.checkcast(strClass);
 		rs.invokestatic(strToCharVec);
 		rs.astore(6);
 		rs.aload(3);
-		rs.iconst(3);
+		rs.loadConstant(3);
 		rs.aload(6);
 		rs.aastore();
 		rs.aload(6);
 		rs.astore(0);
-		rs.branch(Opcode.GOTO, rsGeneral);
-		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), 8, 16, rs.finish()));
+		rs.goto_(rsGeneral);
+		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), rs));
 
 		// _strToCharVec(s): the immutable runtime string s copied into a fresh mutable
 		// character vector -- an ArrayList whose slot 0 is the length-4 header
@@ -1230,49 +1197,49 @@ final class JvmArrayRuntimeBuilder {
 		// per character. Characters are read BY CODE POINT (_cpoff + codePointAt), so a
 		// supplementary code point becomes one element, as everywhere else.
 		// Locals: 0 = s, 1 = n, 2 = list, 3 = i.
-		JvmAsm tv = new JvmAsm();
+		MethodCode tv = new MethodCode();
 		tv.aload(0);
 		tv.invokestatic(strCount);
 		tv.istore(1);
-		tv.anew(arrayListClass);
+		tv.new_(arrayListClass);
 		tv.dup();
 		tv.invokespecial(alInit);
 		tv.astore(2);
 		tv.aload(2);
-		tv.iconst(4);
+		tv.loadConstant(4);
 		tv.anewarray(objectClass);
 		tv.dup();
-		tv.iconst(0);
-		tv.iconst(1);
+		tv.loadConstant(0);
+		tv.loadConstant(1);
 		tv.anewarray(objectClass);
 		tv.dup();
-		tv.iconst(0);
+		tv.loadConstant(0);
 		tv.iload(1);
-		tv.op(Opcode.I2L);
+		tv.i2l();
 		tv.invokestatic(longValueOf);
 		tv.aastore();
 		tv.aastore();
 		tv.dup();
-		tv.iconst(1);
+		tv.loadConstant(1);
 		tv.iload(1);
-		tv.op(Opcode.I2L);
+		tv.i2l();
 		tv.invokestatic(longValueOf);
 		tv.aastore();
 		tv.invokevirtual(alAdd);
 		tv.pop();
-		tv.iconst(0);
+		tv.loadConstant(0);
 		tv.istore(3);
-		int tvLoop = tv.label();
-		int tvDone = tv.label();
-		tv.bind(tvLoop);
+		MethodCode.Label tvLoop = tv.newLabel();
+		MethodCode.Label tvDone = tv.newLabel();
+		tv.labelBinding(tvLoop);
 		tv.iload(3);
 		tv.iload(1);
-		tv.branch(Opcode.IF_ICMPGE, tvDone);
+		tv.if_icmpge(tvDone);
 		tv.aload(2);
-		tv.iconst(1);
-		tv.newarrayInt();
-		tv.op(Opcode.DUP);
-		tv.iconst(0);
+		tv.loadConstant(1);
+		tv.newarray(TypeKind.INT);
+		tv.dup();
+		tv.loadConstant(0);
 		tv.aload(0);
 		tv.aload(0);
 		tv.iload(3);
@@ -1282,11 +1249,11 @@ final class JvmArrayRuntimeBuilder {
 		tv.invokevirtual(alAdd);
 		tv.pop();
 		tv.iinc(3, 1);
-		tv.branch(Opcode.GOTO, tvLoop);
-		tv.bind(tvDone);
+		tv.goto_(tvLoop);
+		tv.labelBinding(tvDone);
 		tv.aload(2);
 		tv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC), 10, 4, tv.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC), tv));
 
 		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
 		// the boxed shape IN PLACE -- header replaced by {dims, null, null, null, et},
@@ -1294,19 +1261,19 @@ final class JvmArrayRuntimeBuilder {
 		// null/nil). A non-packed array passes through untouched; the ArrayList object
 		// is the array's identity, so every alias sees the widened shape.
 		// Locals: 0 = list, 1 = header, 2 = data, 3 = i, 4/5 = v (long).
-		JvmAsm wd = new JvmAsm();
-		int wdDone = wd.label();
-		int wdLoop = wd.label();
-		int wdBox = wd.label();
-		int wdAdd = wd.label();
+		MethodCode wd = new MethodCode();
+		MethodCode.Label wdDone = wd.newLabel();
+		MethodCode.Label wdLoop = wd.newLabel();
+		MethodCode.Label wdBox = wd.newLabel();
+		MethodCode.Label wdAdd = wd.newLabel();
 		emitLoadHeader(wd, arrayListClass, objectArrayClass, alGet, 0);
 		wd.astore(1);
 		wd.aload(1);
 		wd.arraylength();
-		wd.iconst(6);
-		wd.branch(Opcode.IF_ICMPNE, wdDone);
+		wd.loadConstant(6);
+		wd.if_icmpne(wdDone);
 		wd.aload(1);
-		wd.iconst(5);
+		wd.loadConstant(5);
 		wd.aaload();
 		wd.checkcast(longArrayClass);
 		wd.astore(2);
@@ -1315,31 +1282,31 @@ final class JvmArrayRuntimeBuilder {
 		// asked for (unsigned-byte 8) still answers it after a store widened it.
 		wd.aload(0);
 		wd.checkcast(arrayListClass);
-		wd.iconst(0);
-		wd.iconst(5);
+		wd.loadConstant(0);
+		wd.loadConstant(5);
 		wd.anewarray(objectClass);
 		wd.dup();
-		wd.iconst(0);
+		wd.loadConstant(0);
 		wd.aload(1);
-		wd.iconst(0);
+		wd.loadConstant(0);
 		wd.aaload();
 		wd.aastore();
 		wd.dup();
-		wd.iconst(4);
+		wd.loadConstant(4);
 		wd.aload(1);
-		wd.iconst(4);
+		wd.loadConstant(4);
 		wd.aaload();
 		wd.aastore();
 		wd.invokevirtual(alSet);
 		wd.pop();
 		// for (i = 0; i < data.length; i++) list.add(box(data[i]))
-		wd.iconst(0);
+		wd.loadConstant(0);
 		wd.istore(3);
-		wd.bind(wdLoop);
+		wd.labelBinding(wdLoop);
 		wd.iload(3);
 		wd.aload(2);
 		wd.arraylength();
-		wd.branch(Opcode.IF_ICMPGE, wdDone);
+		wd.if_icmpge(wdDone);
 		wd.aload(2);
 		wd.iload(3);
 		wd.laload();
@@ -1347,22 +1314,22 @@ final class JvmArrayRuntimeBuilder {
 		wd.aload(0);
 		wd.checkcast(arrayListClass);
 		wd.lload(4);
-		wd.ldc2Long(nilSentinel);
-		wd.op(Opcode.LCMP);
-		wd.branch(Opcode.IFNE, wdBox);
-		wd.aconstNull();
-		wd.branch(Opcode.GOTO, wdAdd);
-		wd.bind(wdBox);
+		wd.ldc(nilSentinel);
+		wd.lcmp();
+		wd.ifne(wdBox);
+		wd.aconst_null();
+		wd.goto_(wdAdd);
+		wd.labelBinding(wdBox);
 		wd.lload(4);
 		wd.invokestatic(longValueOf);
-		wd.bind(wdAdd);
+		wd.labelBinding(wdAdd);
 		wd.invokevirtual(alAdd);
 		wd.pop();
 		wd.iinc(3, 1);
-		wd.branch(Opcode.GOTO, wdLoop);
-		wd.bind(wdDone);
-		wd.op(Opcode.RETURN);
-		methods.add(new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), 7, 6, wd.finish()));
+		wd.goto_(wdLoop);
+		wd.labelBinding(wdDone);
+		wd.return_();
+		methods.add(new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), wd));
 
 		// _arrayMakeDisplaced(dims, target, offset, fp, adj): a displaced view -- a fresh
 		// ArrayList holding ONLY the 5-element header {dimsArr, fp, adj, target,
@@ -1375,49 +1342,49 @@ final class JvmArrayRuntimeBuilder {
 		// 6 = total, 7 = dimsArr, 8 = idx, 9 = cur, 10 = n, 11 = off (int),
 		// 12 = targetHeader, 13 = targetTotal (product scratch), 14 = m (product
 		// scratch), 15 = headerSize, 16 = fpVal, 17 = fp scratch (int).
-		JvmAsm md = new JvmAsm();
+		MethodCode md = new MethodCode();
 		int mdDims = 0, mdTarget = 1, mdOffset = 2, mdFp = 3, mdAdj = 4, mdList = 5, mdTotal = 6, mdDimsArr = 7,
 				mdIdx = 8, mdCur = 9, mdN = 10, mdOff = 11, mdTargetHeader = 12, mdProduct = 13, mdM = 14,
 				mdHeaderSize = 15, mdFpVal = 16, mdFpScratch = 17;
-		md.anew(arrayListClass);
+		md.new_(arrayListClass);
 		md.dup();
 		md.invokespecial(alInit);
 		md.astore(mdList);
 		emitParseDims(md, objectClass, longClass, objectArrayClass, longIntValue, mdDims, mdDimsArr, mdTotal, mdCur,
 				mdN, mdIdx);
 		// off = offsetArg == null ? 0 : ((Long) offsetArg).intValue()
-		int offGiven = md.label();
-		int offDone = md.label();
+		MethodCode.Label offGiven = md.newLabel();
+		MethodCode.Label offDone = md.newLabel();
 		md.aload(mdOffset);
-		md.branch(Opcode.IFNONNULL, offGiven);
-		md.iconst(0);
+		md.ifnonnull(offGiven);
+		md.loadConstant(0);
 		md.istore(mdOff);
-		md.branch(Opcode.GOTO, offDone);
-		md.bind(offGiven);
+		md.goto_(offDone);
+		md.labelBinding(offGiven);
 		md.aload(mdOffset);
 		md.checkcast(longClass);
 		md.invokevirtual(longIntValue);
 		md.istore(mdOff);
-		md.bind(offDone);
+		md.labelBinding(offDone);
 		// targetTotal = the target's element count, and headerSize = 7 when the target
 		// is a STRING (an immutable runtime string, a mutable character vector, or
 		// another string view) so the result is a string VIEW rather than a bare array
 		// view: 7 is the header-length tag _strv and stringp read, exactly as 4 marks a
 		// character vector. The shape follows the TARGET, not :element-type -- the
 		// portable substring idiom passes the target's own (array-element-type seq).
-		int mdStr = md.label();
-		int mdHaveTotal = md.label();
-		int mdViewTag = md.label();
-		int mdIv = md.label();
-		int mdOctets = md.label();
-		int mdDv = md.label();
-		int mdFv = md.label();
-		int mdBv = md.label();
-		md.iconst(5);
+		MethodCode.Label mdStr = md.newLabel();
+		MethodCode.Label mdHaveTotal = md.newLabel();
+		MethodCode.Label mdViewTag = md.newLabel();
+		MethodCode.Label mdIv = md.newLabel();
+		MethodCode.Label mdOctets = md.newLabel();
+		MethodCode.Label mdDv = md.newLabel();
+		MethodCode.Label mdFv = md.newLabel();
+		MethodCode.Label mdBv = md.newLabel();
+		md.loadConstant(5);
 		md.istore(mdHeaderSize);
 		md.aload(mdTarget);
 		md.instanceOf(strClass);
-		md.branch(Opcode.IFNE, mdStr);
+		md.ifne(mdStr);
 		// A PACKED target's element count is its representation's own: an integer
 		// vector is byte[]{8, e0, ...} or long[]{width, e0, ...} (length - 1 elements)
 		// and a float array double[]/float[]{rank, dims..., e0, ...} (length - 1 -
@@ -1425,79 +1392,79 @@ final class JvmArrayRuntimeBuilder {
 		// target makes a string view.
 		md.aload(mdTarget);
 		md.instanceOf(byteArrayClass);
-		md.branch(Opcode.IFNE, mdOctets);
+		md.ifne(mdOctets);
 		md.aload(mdTarget);
 		md.instanceOf(longArrayClass);
-		md.branch(Opcode.IFNE, mdIv);
+		md.ifne(mdIv);
 		md.aload(mdTarget);
 		md.instanceOf(doubleArrayClass);
-		md.branch(Opcode.IFNE, mdDv);
+		md.ifne(mdDv);
 		md.aload(mdTarget);
 		md.instanceOf(floatArrayClass);
-		md.branch(Opcode.IFNE, mdFv);
+		md.ifne(mdFv);
 		md.aload(mdTarget);
 		md.instanceOf(shortArrayClass);
-		md.branch(Opcode.IFNE, mdBv);
+		md.ifne(mdBv);
 		emitLoadHeader(md, arrayListClass, objectArrayClass, alGet, mdTarget);
 		md.astore(mdTargetHeader);
 		emitDimsProduct(md, longClass, objectArrayClass, longIntValue, mdTargetHeader, mdProduct, mdM);
 		md.istore(mdProduct);
 		md.aload(mdTargetHeader);
 		md.arraylength();
-		md.iconst(4);
-		md.branch(Opcode.IF_ICMPEQ, mdViewTag);
+		md.loadConstant(4);
+		md.if_icmpeq(mdViewTag);
 		md.aload(mdTargetHeader);
 		md.arraylength();
-		md.iconst(7);
-		md.branch(Opcode.IF_ICMPEQ, mdViewTag);
-		md.branch(Opcode.GOTO, mdHaveTotal);
-		md.bind(mdOctets);
+		md.loadConstant(7);
+		md.if_icmpeq(mdViewTag);
+		md.goto_(mdHaveTotal);
+		md.labelBinding(mdOctets);
 		md.aload(mdTarget);
 		md.checkcast(byteArrayClass);
 		md.arraylength();
-		md.iconst(1);
-		md.op(Opcode.ISUB);
+		md.loadConstant(1);
+		md.isub();
 		md.istore(mdProduct);
-		md.branch(Opcode.GOTO, mdHaveTotal);
-		md.bind(mdIv);
+		md.goto_(mdHaveTotal);
+		md.labelBinding(mdIv);
 		md.aload(mdTarget);
 		md.checkcast(longArrayClass);
 		md.arraylength();
-		md.iconst(1);
-		md.op(Opcode.ISUB);
+		md.loadConstant(1);
+		md.isub();
 		md.istore(mdProduct);
-		md.branch(Opcode.GOTO, mdHaveTotal);
-		md.bind(mdDv);
+		md.goto_(mdHaveTotal);
+		md.labelBinding(mdDv);
 		md.aload(mdTarget);
 		md.checkcast(doubleArrayClass);
 		md.arraylength();
 		md.aload(mdTarget);
 		md.checkcast(doubleArrayClass);
-		md.iconst(0);
+		md.loadConstant(0);
 		md.daload();
 		md.d2i();
-		md.iconst(1);
-		md.op(Opcode.IADD);
-		md.op(Opcode.ISUB);
+		md.loadConstant(1);
+		md.iadd();
+		md.isub();
 		md.istore(mdProduct);
-		md.branch(Opcode.GOTO, mdHaveTotal);
-		md.bind(mdFv);
+		md.goto_(mdHaveTotal);
+		md.labelBinding(mdFv);
 		md.aload(mdTarget);
 		md.checkcast(floatArrayClass);
 		md.arraylength();
 		md.aload(mdTarget);
 		md.checkcast(floatArrayClass);
-		md.iconst(0);
+		md.loadConstant(0);
 		md.faload();
 		md.f2i();
-		md.iconst(1);
-		md.op(Opcode.IADD);
-		md.op(Opcode.ISUB);
+		md.loadConstant(1);
+		md.iadd();
+		md.isub();
 		md.istore(mdProduct);
-		md.branch(Opcode.GOTO, mdHaveTotal);
+		md.goto_(mdHaveTotal);
 		// A bfloat16 target: length - (1 + 2 * rank), the two-slot header
 		// (JvmPackedFloatWidth.BFLOAT16 owns the offset).
-		md.bind(mdBv);
+		md.labelBinding(mdBv);
 		md.aload(mdTarget);
 		md.checkcast(shortArrayClass);
 		md.arraylength();
@@ -1505,33 +1472,33 @@ final class JvmArrayRuntimeBuilder {
 		md.checkcast(shortArrayClass);
 		JvmPackedFloatWidth.BFLOAT16.loadRank(md);
 		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(md);
-		md.op(Opcode.ISUB);
+		md.isub();
 		md.istore(mdProduct);
-		md.branch(Opcode.GOTO, mdHaveTotal);
-		md.bind(mdStr);
+		md.goto_(mdHaveTotal);
+		md.labelBinding(mdStr);
 		md.aload(mdTarget);
 		md.checkcast(strClass);
 		md.invokestatic(strCount);
 		md.istore(mdProduct);
-		md.bind(mdViewTag);
-		md.iconst(7);
+		md.labelBinding(mdViewTag);
+		md.loadConstant(7);
 		md.istore(mdHeaderSize);
-		md.bind(mdHaveTotal);
+		md.labelBinding(mdHaveTotal);
 		// require 0 <= off and total + off <= targetTotal
-		int mdBad = md.label();
-		int mdOk = md.label();
+		MethodCode.Label mdBad = md.newLabel();
+		MethodCode.Label mdOk = md.newLabel();
 		md.iload(mdOff);
-		md.branch(Opcode.IFLT, mdBad);
+		md.iflt(mdBad);
 		md.iload(mdTotal);
 		md.iload(mdOff);
-		md.op(Opcode.IADD);
+		md.iadd();
 		md.iload(mdProduct);
-		md.branch(Opcode.IF_ICMPGT, mdBad);
-		md.branch(Opcode.GOTO, mdOk);
-		md.bind(mdBad);
+		md.if_icmpgt(mdBad);
+		md.goto_(mdOk);
+		md.labelBinding(mdBad);
 		emitThrow(md, rtExClass, rtExInit,
-				cp.addString("make-array: :displaced-to array is too small for the requested view"));
-		md.bind(mdOk);
+				cp.stringEntry("make-array: :displaced-to array is too small for the requested view"));
+		md.labelBinding(mdOk);
 		// The fill pointer is resolved against the VIEW's own element count, by the same
 		// rule _arrayMake uses (null / range-checked Long / t -> the size).
 		emitResolveFillPointer(md, longClass, longIntValue, rtExClass, rtExInit, cp, mdFp, mdDimsArr, mdTotal, mdFpVal,
@@ -1542,32 +1509,32 @@ final class JvmArrayRuntimeBuilder {
 		md.iload(mdHeaderSize);
 		md.anewarray(objectClass);
 		md.dup();
-		md.iconst(0);
+		md.loadConstant(0);
 		md.aload(mdDimsArr);
 		md.aastore();
 		md.dup();
-		md.iconst(1);
+		md.loadConstant(1);
 		md.aload(mdFpVal);
 		md.aastore();
 		md.dup();
-		md.iconst(2);
+		md.loadConstant(2);
 		md.aload(mdAdj);
 		md.aastore();
 		md.dup();
-		md.iconst(3);
+		md.loadConstant(3);
 		md.aload(mdTarget);
 		md.aastore();
 		md.dup();
-		md.iconst(4);
+		md.loadConstant(4);
 		md.iload(mdOff);
-		md.op(Opcode.I2L);
+		md.i2l();
 		md.invokestatic(longValueOf);
 		md.aastore();
 		md.invokevirtual(alAdd);
 		md.pop();
 		md.aload(mdList);
 		md.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), 6, 18, md.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), md));
 
 		// _arrayUndisplace(arr): copy a displaced view's CURRENT contents into data slots
 		// of its own and drop the displacement, keeping the dims, the fill pointer and
@@ -1582,37 +1549,37 @@ final class JvmArrayRuntimeBuilder {
 		// array, which is what SBCL 2.2.9 does.
 		// Locals: 0 = arr, 1 = header, 2 = total, 3 = elems, 4 = i, 5 = newHeader,
 		// 6 = product scratch, 7 = walk cursor, 8 = et, 9 = target scratch.
-		JvmAsm un = new JvmAsm();
+		MethodCode un = new MethodCode();
 		// An immutable string owns its characters and carries no header at all (a
 		// string VIEW is a length-7 header, not a String), so it is returned unchanged
 		// like any other undisplaced array -- adjust-array's expansion calls this
 		// unconditionally, on every representation it accepts. Mirrors
 		// _arrayDispTarget's same check.
-		int unNotString = un.label();
+		MethodCode.Label unNotString = un.newLabel();
 		un.aload(0);
 		un.instanceOf(strClass);
-		un.branch(Opcode.IFEQ, unNotString);
+		un.ifeq(unNotString);
 		un.aload(0);
 		un.areturn();
-		un.bind(unNotString);
+		un.labelBinding(unNotString);
 		emitLoadHeader(un, arrayListClass, objectArrayClass, alGet, 0);
 		un.astore(1);
-		int unDisplaced = un.label();
+		MethodCode.Label unDisplaced = un.newLabel();
 		un.aload(1);
 		un.arraylength();
-		un.iconst(4);
-		un.branch(Opcode.IF_ICMPGE, unDisplaced);
+		un.loadConstant(4);
+		un.if_icmpge(unDisplaced);
 		un.aload(0);
 		un.areturn();
-		un.bind(unDisplaced);
-		int unGo = un.label();
+		un.labelBinding(unDisplaced);
+		MethodCode.Label unGo = un.newLabel();
 		un.aload(1);
-		un.iconst(3);
+		un.loadConstant(3);
 		un.aaload();
-		un.branch(Opcode.IFNONNULL, unGo);
+		un.ifnonnull(unGo);
 		un.aload(0);
 		un.areturn();
-		un.bind(unGo);
+		un.labelBinding(unGo);
 		emitDimsProduct(un, longClass, objectArrayClass, longIntValue, 1, 2, 6);
 		un.istore(2);
 		// elems[i] = _rmGet(arr, 1 + i) -- read through the chain BEFORE the header is
@@ -1620,113 +1587,113 @@ final class JvmArrayRuntimeBuilder {
 		un.iload(2);
 		un.anewarray(objectClass);
 		un.astore(3);
-		un.iconst(0);
+		un.loadConstant(0);
 		un.istore(4);
-		int unRead = un.label();
-		int unReadDone = un.label();
-		un.bind(unRead);
+		MethodCode.Label unRead = un.newLabel();
+		MethodCode.Label unReadDone = un.newLabel();
+		un.labelBinding(unRead);
 		un.iload(4);
 		un.iload(2);
-		un.branch(Opcode.IF_ICMPGE, unReadDone);
+		un.if_icmpge(unReadDone);
 		un.aload(3);
 		un.iload(4);
 		un.aload(0);
-		un.iconst(1);
+		un.loadConstant(1);
 		un.iload(4);
-		un.op(Opcode.IADD);
+		un.iadd();
 		un.invokestatic(rmGet);
 		un.aastore();
 		un.iinc(4, 1);
-		un.branch(Opcode.GOTO, unRead);
-		un.bind(unReadDone);
+		un.goto_(unRead);
+		un.labelBinding(unReadDone);
 		// et: the element type the CHAIN END remembers, read exactly as
 		// _arrayElementType reads it (it hops the same way and stops on the same facts).
 		// The view answered this while it was still a view, so the freed offset slot has
 		// to keep answering it -- an array's element type is fixed when it is made.
-		int unWalk = un.label();
-		int unWalkDone = un.label();
-		int unWalkOwn = un.label();
-		un.aconstNull();
+		MethodCode.Label unWalk = un.newLabel();
+		MethodCode.Label unWalkDone = un.newLabel();
+		MethodCode.Label unWalkOwn = un.newLabel();
+		un.aconst_null();
 		un.astore(8);
 		un.aload(1);
 		un.astore(7);
-		un.bind(unWalk);
+		un.labelBinding(unWalk);
 		un.aload(7);
 		un.arraylength();
-		un.iconst(4);
-		un.branch(Opcode.IF_ICMPLE, unWalkDone);
+		un.loadConstant(4);
+		un.if_icmple(unWalkDone);
 		un.aload(7);
-		un.iconst(3);
+		un.loadConstant(3);
 		un.aaload();
 		un.astore(9);
 		un.aload(9);
-		un.branch(Opcode.IFNULL, unWalkOwn);
+		un.ifnull(unWalkOwn);
 		// A PACKED chain end's element type IS its representation, so the freed offset
 		// slot records it exactly as it records a general array's remembered label: the
 		// view answered it while it was a view, and an array's element type is fixed
 		// when it is made.
-		int unNotPacked = un.label();
+		MethodCode.Label unNotPacked = un.newLabel();
 		emitPackedElementTypeInto(un, cp, 9, 8, byteArrayClass, longArrayClass, doubleArrayClass, floatArrayClass,
 				shortArrayClass, longValueOf, objectClass, unNotPacked, unWalkDone);
-		un.bind(unNotPacked);
+		un.labelBinding(unNotPacked);
 		// A String chain end remembers nothing here: character-ness is the length-7
 		// header's own answer (7 -> 4 below), not a remembered designator.
 		un.aload(9);
 		un.instanceOf(arrayListClass);
-		un.branch(Opcode.IFEQ, unWalkDone);
+		un.ifeq(unWalkDone);
 		emitLoadHeader(un, arrayListClass, objectArrayClass, alGet, 9);
 		un.astore(7);
-		un.branch(Opcode.GOTO, unWalk);
-		un.bind(unWalkOwn);
+		un.goto_(unWalk);
+		un.labelBinding(unWalkOwn);
 		un.aload(7);
-		un.iconst(4);
+		un.loadConstant(4);
 		un.aaload();
 		un.astore(8);
-		un.bind(unWalkDone);
-		int unString = un.label();
-		int unThree = un.label();
-		int unLenReady = un.label();
-		int unNoEt = un.label();
+		un.labelBinding(unWalkDone);
+		MethodCode.Label unString = un.newLabel();
+		MethodCode.Label unThree = un.newLabel();
+		MethodCode.Label unLenReady = un.newLabel();
+		MethodCode.Label unNoEt = un.newLabel();
 		un.aload(1);
 		un.arraylength();
-		un.iconst(7);
-		un.branch(Opcode.IF_ICMPEQ, unString);
+		un.loadConstant(7);
+		un.if_icmpeq(unString);
 		un.aload(8);
-		un.branch(Opcode.IFNULL, unThree);
-		un.iconst(5);
-		un.branch(Opcode.GOTO, unLenReady);
-		un.bind(unThree);
-		un.iconst(3);
-		un.branch(Opcode.GOTO, unLenReady);
-		un.bind(unString);
-		un.iconst(4);
-		un.bind(unLenReady);
+		un.ifnull(unThree);
+		un.loadConstant(5);
+		un.goto_(unLenReady);
+		un.labelBinding(unThree);
+		un.loadConstant(3);
+		un.goto_(unLenReady);
+		un.labelBinding(unString);
+		un.loadConstant(4);
+		un.labelBinding(unLenReady);
 		un.anewarray(objectClass);
 		emitCopyHeaderSlots(un, 1, 3);
 		un.astore(5);
 		un.aload(5);
 		un.arraylength();
-		un.iconst(5);
-		un.branch(Opcode.IF_ICMPNE, unNoEt);
+		un.loadConstant(5);
+		un.if_icmpne(unNoEt);
 		un.aload(5);
-		un.iconst(4);
+		un.loadConstant(4);
 		un.aload(8);
 		un.aastore();
-		un.bind(unNoEt);
+		un.labelBinding(unNoEt);
 		un.aload(0);
 		un.checkcast(arrayListClass);
-		un.iconst(0);
+		un.loadConstant(0);
 		un.aload(5);
 		un.invokevirtual(alSet);
 		un.pop();
-		un.iconst(0);
+		un.loadConstant(0);
 		un.istore(4);
-		int unFill = un.label();
-		int unFillDone = un.label();
-		un.bind(unFill);
+		MethodCode.Label unFill = un.newLabel();
+		MethodCode.Label unFillDone = un.newLabel();
+		un.labelBinding(unFill);
 		un.iload(4);
 		un.iload(2);
-		un.branch(Opcode.IF_ICMPGE, unFillDone);
+		un.if_icmpge(unFillDone);
 		un.aload(0);
 		un.checkcast(arrayListClass);
 		un.aload(3);
@@ -1735,11 +1702,11 @@ final class JvmArrayRuntimeBuilder {
 		un.invokevirtual(alAdd);
 		un.pop();
 		un.iinc(4, 1);
-		un.branch(Opcode.GOTO, unFill);
-		un.bind(unFillDone);
+		un.goto_(unFill);
+		un.labelBinding(unFillDone);
 		un.aload(0);
 		un.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), 9, 10, un.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), un));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1748,7 +1715,7 @@ final class JvmArrayRuntimeBuilder {
 		// (a freshly made temp with neither fill pointer nor adjustability) must take
 		// the boxed shape before it. Locals: 0 = a, 1 = b, 2 = headerA, 3 = headerB,
 		// 4 = i.
-		JvmAsm bc = new JvmAsm();
+		MethodCode bc = new MethodCode();
 		bc.aload(0);
 		bc.invokestatic(widen);
 		bc.aload(1);
@@ -1759,68 +1726,68 @@ final class JvmArrayRuntimeBuilder {
 		bc.astore(3);
 		// headerA[0] = headerB[0]; headerA[1] = headerB[1]
 		bc.aload(2);
-		bc.iconst(0);
+		bc.loadConstant(0);
 		bc.aload(3);
-		bc.iconst(0);
+		bc.loadConstant(0);
 		bc.aaload();
 		bc.aastore();
 		bc.aload(2);
-		bc.iconst(1);
+		bc.loadConstant(1);
 		bc.aload(3);
-		bc.iconst(1);
+		bc.loadConstant(1);
 		bc.aaload();
 		bc.aastore();
 		// while (a.size() > b.size()) a.remove(a.size() - 1)
-		int shrinkLoop = bc.label();
-		int shrinkDone = bc.label();
-		bc.bind(shrinkLoop);
+		MethodCode.Label shrinkLoop = bc.newLabel();
+		MethodCode.Label shrinkDone = bc.newLabel();
+		bc.labelBinding(shrinkLoop);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
 		bc.aload(1);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
-		bc.branch(Opcode.IF_ICMPLE, shrinkDone);
+		bc.if_icmple(shrinkDone);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
-		bc.iconst(1);
-		bc.op(Opcode.ISUB);
+		bc.loadConstant(1);
+		bc.isub();
 		bc.invokevirtual(alRemove);
 		bc.pop();
-		bc.branch(Opcode.GOTO, shrinkLoop);
-		bc.bind(shrinkDone);
+		bc.goto_(shrinkLoop);
+		bc.labelBinding(shrinkDone);
 		// while (a.size() < b.size()) a.add(null)
-		int growLoop2 = bc.label();
-		int growDone2 = bc.label();
-		bc.bind(growLoop2);
+		MethodCode.Label growLoop2 = bc.newLabel();
+		MethodCode.Label growDone2 = bc.newLabel();
+		bc.labelBinding(growLoop2);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
 		bc.aload(1);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
-		bc.branch(Opcode.IF_ICMPGE, growDone2);
+		bc.if_icmpge(growDone2);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
-		bc.aconstNull();
+		bc.aconst_null();
 		bc.invokevirtual(alAdd);
 		bc.pop();
-		bc.branch(Opcode.GOTO, growLoop2);
-		bc.bind(growDone2);
+		bc.goto_(growLoop2);
+		bc.labelBinding(growDone2);
 		// for (i = 1; i < b.size(); i++) a.set(i, b.get(i))
-		bc.iconst(1);
+		bc.loadConstant(1);
 		bc.istore(4);
-		int copyLoop = bc.label();
-		int copyDone = bc.label();
-		bc.bind(copyLoop);
+		MethodCode.Label copyLoop = bc.newLabel();
+		MethodCode.Label copyDone = bc.newLabel();
+		bc.labelBinding(copyLoop);
 		bc.iload(4);
 		bc.aload(1);
 		bc.checkcast(arrayListClass);
 		bc.invokevirtual(alSize);
-		bc.branch(Opcode.IF_ICMPGE, copyDone);
+		bc.if_icmpge(copyDone);
 		bc.aload(0);
 		bc.checkcast(arrayListClass);
 		bc.iload(4);
@@ -1831,11 +1798,11 @@ final class JvmArrayRuntimeBuilder {
 		bc.invokevirtual(alSet);
 		bc.pop();
 		bc.iinc(4, 1);
-		bc.branch(Opcode.GOTO, copyLoop);
-		bc.bind(copyDone);
+		bc.goto_(copyLoop);
+		bc.labelBinding(copyDone);
 		bc.aload(0);
 		bc.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME), cp.addUtf8(ARRAY_BECOME_DESC), 5, 5, bc.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME), cp.addUtf8(ARRAY_BECOME_DESC), bc));
 
 		// _arrayBecomeDisplaced(a, dims, target, offset, fp): turn a (an adjustable
 		// array) IN PLACE into a displaced view over target and return a -- the in-place
@@ -1847,7 +1814,7 @@ final class JvmArrayRuntimeBuilder {
 		// and slot 0 replaced by the moved header; the ArrayList object IS a's identity,
 		// so eq holds. Locals: 0 = a, 1 = dims, 2 = target, 3 = offset, 4 = fp,
 		// 5 = headerA, 6 = hdr.
-		JvmAsm bd = new JvmAsm();
+		MethodCode bd = new MethodCode();
 		emitLoadHeader(bd, arrayListClass, objectArrayClass, alGet, 0);
 		bd.astore(5);
 		bd.aload(1);
@@ -1855,98 +1822,97 @@ final class JvmArrayRuntimeBuilder {
 		bd.aload(3);
 		bd.aload(4);
 		bd.aload(5);
-		bd.iconst(2);
+		bd.loadConstant(2);
 		bd.aaload();
 		bd.invokestatic(makeDisplaced);
 		bd.checkcast(arrayListClass);
-		bd.iconst(0);
+		bd.loadConstant(0);
 		bd.invokevirtual(alGet);
 		bd.astore(6);
 		// while (a.size() > 1) a.remove(a.size() - 1)
-		int bdShrink = bd.label();
-		int bdDone = bd.label();
-		bd.bind(bdShrink);
+		MethodCode.Label bdShrink = bd.newLabel();
+		MethodCode.Label bdDone = bd.newLabel();
+		bd.labelBinding(bdShrink);
 		bd.aload(0);
 		bd.checkcast(arrayListClass);
 		bd.invokevirtual(alSize);
-		bd.iconst(1);
-		bd.branch(Opcode.IF_ICMPLE, bdDone);
+		bd.loadConstant(1);
+		bd.if_icmple(bdDone);
 		bd.aload(0);
 		bd.checkcast(arrayListClass);
 		bd.aload(0);
 		bd.checkcast(arrayListClass);
 		bd.invokevirtual(alSize);
-		bd.iconst(1);
-		bd.op(Opcode.ISUB);
+		bd.loadConstant(1);
+		bd.isub();
 		bd.invokevirtual(alRemove);
 		bd.pop();
-		bd.branch(Opcode.GOTO, bdShrink);
-		bd.bind(bdDone);
+		bd.goto_(bdShrink);
+		bd.labelBinding(bdDone);
 		// a.set(0, hdr)
 		bd.aload(0);
 		bd.checkcast(arrayListClass);
-		bd.iconst(0);
+		bd.loadConstant(0);
 		bd.aload(6);
 		bd.invokevirtual(alSet);
 		bd.pop();
 		bd.aload(0);
 		bd.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME_DISPLACED), cp.addUtf8(ARRAY_BECOME_DISPLACED_DESC), 6, 7,
-				bd.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME_DISPLACED), cp.addUtf8(ARRAY_BECOME_DISPLACED_DESC), bd));
 
 		// _arrayDispTarget(arr): the displacement target, or null (nil).
 		// Locals: 0 = arr, 1 = header.
-		JvmAsm dt = new JvmAsm();
-		int dtNil = dt.label();
+		MethodCode dt = new MethodCode();
+		MethodCode.Label dtNil = dt.newLabel();
 		// A runtime string owns its storage and carries no header (a string VIEW is a
 		// length-7 header, not a String), so it answers nil like any other undisplaced
 		// array.
 		dt.aload(0);
 		dt.instanceOf(strClass);
-		dt.branch(Opcode.IFNE, dtNil);
+		dt.ifne(dtNil);
 		emitLoadHeader(dt, arrayListClass, objectArrayClass, alGet, 0);
 		dt.astore(1);
 		dt.aload(1);
 		dt.arraylength();
-		dt.iconst(4);
-		dt.branch(Opcode.IF_ICMPLE, dtNil);
+		dt.loadConstant(4);
+		dt.if_icmple(dtNil);
 		dt.aload(1);
-		dt.iconst(3);
+		dt.loadConstant(3);
 		dt.aaload();
 		dt.areturn();
-		dt.bind(dtNil);
-		dt.aconstNull();
+		dt.labelBinding(dtNil);
+		dt.aconst_null();
 		dt.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DISP_TARGET), cp.addUtf8(DISP_TARGET_DESC), 3, 2, dt.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(DISP_TARGET), cp.addUtf8(DISP_TARGET_DESC), dt));
 
 		// _arrayDispOffset(arr): the displacement offset, or 0. Displacement is a
 		// length-5+ header WITH a non-null target -- a packed array's length-6 header
 		// has a null slot 3 and must answer 0 like any other non-displaced array.
 		// Locals: 0 = arr, 1 = header.
-		JvmAsm dofs = new JvmAsm();
-		int dofsNone = dofs.label();
+		MethodCode dofs = new MethodCode();
+		MethodCode.Label dofsNone = dofs.newLabel();
 		dofs.aload(0);
 		dofs.instanceOf(strClass);
-		dofs.branch(Opcode.IFNE, dofsNone);
+		dofs.ifne(dofsNone);
 		emitLoadHeader(dofs, arrayListClass, objectArrayClass, alGet, 0);
 		dofs.astore(1);
 		dofs.aload(1);
 		dofs.arraylength();
-		dofs.iconst(4);
-		dofs.branch(Opcode.IF_ICMPLE, dofsNone);
+		dofs.loadConstant(4);
+		dofs.if_icmple(dofsNone);
 		dofs.aload(1);
-		dofs.iconst(3);
+		dofs.loadConstant(3);
 		dofs.aaload();
-		dofs.branch(Opcode.IFNULL, dofsNone);
+		dofs.ifnull(dofsNone);
 		dofs.aload(1);
-		dofs.iconst(4);
+		dofs.loadConstant(4);
 		dofs.aaload();
 		dofs.areturn();
-		dofs.bind(dofsNone);
-		dofs.op(Opcode.LCONST_0);
+		dofs.labelBinding(dofsNone);
+		dofs.lconst_0();
 		dofs.invokestatic(longValueOf);
 		dofs.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DISP_OFFSET), cp.addUtf8(DISP_OFFSET_DESC), 3, 2, dofs.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(DISP_OFFSET), cp.addUtf8(DISP_OFFSET_DESC), dofs));
 
 		// _charVecMake(dims, init, fp, adj): _arrayMake with the returned list's slot-0
 		// header replaced by a length-4 copy {dims, fp, adj, null} -- the mutable
@@ -1959,28 +1925,26 @@ final class JvmArrayRuntimeBuilder {
 		// representation of its own: the value is the plain general array, without the
 		// marker and without a fill pointer (which rank-n _arrayMake would reject
 		// anyway). Same runtime rank test, same fallback, as _ivMake.
-		MethodrefConstant selfArrayMake = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC)));
-		MethodrefConstant selfMakeTyped = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC)));
-		JvmAsm cv = new JvmAsm();
-		int cvRank1 = cv.label();
-		int cvTryList = cv.label();
-		int cvGeneral = cv.label();
+		MethodRefEntry selfArrayMake = cp.methodRef(selfClass, MAKE, MAKE_DESC);
+		MethodRefEntry selfMakeTyped = cp.methodRef(selfClass, MAKE_TYPED, MAKE_TYPED_DESC);
+		MethodCode cv = new MethodCode();
+		MethodCode.Label cvRank1 = cv.newLabel();
+		MethodCode.Label cvTryList = cv.newLabel();
+		MethodCode.Label cvGeneral = cv.newLabel();
 		cv.aload(0);
 		cv.instanceOf(longClass);
-		cv.branch(Opcode.IFEQ, cvTryList);
-		cv.branch(Opcode.GOTO, cvRank1);
-		cv.bind(cvTryList);
+		cv.ifeq(cvTryList);
+		cv.goto_(cvRank1);
+		cv.labelBinding(cvTryList);
 		cv.aload(0);
 		cv.instanceOf(objectArrayClass);
-		cv.branch(Opcode.IFEQ, cvGeneral);
+		cv.ifeq(cvGeneral);
 		cv.aload(0);
 		cv.checkcast(objectArrayClass);
-		cv.iconst(1);
+		cv.loadConstant(1);
 		cv.aaload();
-		cv.branch(Opcode.IFNONNULL, cvGeneral);
-		cv.bind(cvRank1);
+		cv.ifnonnull(cvGeneral);
+		cv.labelBinding(cvRank1);
 		cv.aload(0);
 		cv.aload(1);
 		cv.aload(2);
@@ -1994,19 +1958,19 @@ final class JvmArrayRuntimeBuilder {
 		cv.invokestatic(widen);
 		emitLoadHeader(cv, arrayListClass, objectArrayClass, alGet, 4);
 		cv.astore(5);
-		cv.iconst(4);
+		cv.loadConstant(4);
 		cv.anewarray(objectClass);
 		cv.astore(6);
 		for (int slot = 0; slot < 3; slot++) {
 			cv.aload(6);
-			cv.iconst(slot);
+			cv.loadConstant(slot);
 			cv.aload(5);
-			cv.iconst(slot);
+			cv.loadConstant(slot);
 			cv.aaload();
 			cv.aastore();
 		}
 		cv.aload(4);
-		cv.iconst(0);
+		cv.loadConstant(0);
 		cv.aload(6);
 		cv.invokevirtual(alSet);
 		cv.pop();
@@ -2016,15 +1980,15 @@ final class JvmArrayRuntimeBuilder {
 		// one is the rank-1 marker's, not the program's) -- but REMEMBERING that the
 		// element type asked for was character, which is the only trace it leaves above
 		// rank 1.
-		cv.bind(cvGeneral);
+		cv.labelBinding(cvGeneral);
 		cv.aload(0);
 		cv.aload(1);
-		cv.aconstNull();
+		cv.aconst_null();
 		cv.aload(3);
-		cv.iconst(am.ik.rontolisp.ArrayElementTypes.CHARACTER);
+		cv.loadConstant(am.ik.rontolisp.ArrayElementTypes.CHARACTER);
 		cv.invokestatic(selfMakeTyped);
 		cv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), 5, 7, cv.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), cv));
 
 		// _arrayMakeTyped(dims, init, fp, adj, code): _arrayMake plus the REMEMBERED
 		// element type in header slot 4. That slot is free on every non-displaced array
@@ -2033,9 +1997,9 @@ final class JvmArrayRuntimeBuilder {
 		// up its long[], and only the ordinary length-3 header has to grow to 5.
 		// Locals: 0..3 = the _arrayMake arguments, 4 = code (int), 5 = list, 6 = header,
 		// 7 = et.
-		JvmAsm mt = new JvmAsm();
-		int mtHaveEt = mt.label();
-		int mtGrow = mt.label();
+		MethodCode mt = new MethodCode();
+		MethodCode.Label mtHaveEt = mt.newLabel();
+		MethodCode.Label mtGrow = mt.newLabel();
 		mt.aload(0);
 		mt.aload(1);
 		mt.aload(2);
@@ -2043,43 +2007,43 @@ final class JvmArrayRuntimeBuilder {
 		mt.invokestatic(selfArrayMake);
 		mt.astore(5);
 		emitElementTypeForCode(mt, cp, objectClass, longValueOf, 4, 7, mtHaveEt);
-		mt.bind(mtHaveEt);
+		mt.labelBinding(mtHaveEt);
 		emitLoadHeader(mt, arrayListClass, objectArrayClass, alGet, 5);
 		mt.astore(6);
 		mt.aload(6);
 		mt.arraylength();
-		mt.iconst(5);
-		mt.branch(Opcode.IF_ICMPLT, mtGrow);
+		mt.loadConstant(5);
+		mt.if_icmplt(mtGrow);
 		mt.aload(6);
-		mt.iconst(4);
+		mt.loadConstant(4);
 		mt.aload(7);
 		mt.aastore();
 		mt.aload(5);
 		mt.areturn();
 		// list.set(0, new Object[]{header[0], header[1], header[2], null, et})
-		mt.bind(mtGrow);
+		mt.labelBinding(mtGrow);
 		mt.aload(5);
 		mt.checkcast(arrayListClass);
-		mt.iconst(0);
-		mt.iconst(5);
+		mt.loadConstant(0);
+		mt.loadConstant(5);
 		mt.anewarray(objectClass);
 		for (int slot = 0; slot < 3; slot++) {
 			mt.dup();
-			mt.iconst(slot);
+			mt.loadConstant(slot);
 			mt.aload(6);
-			mt.iconst(slot);
+			mt.loadConstant(slot);
 			mt.aaload();
 			mt.aastore();
 		}
 		mt.dup();
-		mt.iconst(4);
+		mt.loadConstant(4);
 		mt.aload(7);
 		mt.aastore();
 		mt.invokevirtual(alSet);
 		mt.pop();
 		mt.aload(5);
 		mt.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC), 9, 8, mt.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC), mt));
 
 		// _arrayElementType(o): the remembered element type, or the boolean t. A
 		// DISPLACED array HOPS: slot 4 is its offset, not a type, and a view owns no
@@ -2090,52 +2054,52 @@ final class JvmArrayRuntimeBuilder {
 		// accepts. A chain that ends on a String never reaches here: the caller's
 		// stringp arm answers character for a string view first.
 		// Locals: 0 = o (re-assigned by the hop), 1 = header, 2 = scratch.
-		JvmAsm aet = new JvmAsm();
-		int aetT = aet.label();
-		int aetTop = aet.label();
-		int aetOwn = aet.label();
-		int aetNotPacked = aet.label();
-		int aetPackedDone = aet.label();
-		aet.bind(aetTop);
+		MethodCode aet = new MethodCode();
+		MethodCode.Label aetT = aet.newLabel();
+		MethodCode.Label aetTop = aet.newLabel();
+		MethodCode.Label aetOwn = aet.newLabel();
+		MethodCode.Label aetNotPacked = aet.newLabel();
+		MethodCode.Label aetPackedDone = aet.newLabel();
+		aet.labelBinding(aetTop);
 		// The hop may land on a PACKED target, whose element type is its representation
 		// rather than a remembered label -- the same answer read a different way.
 		emitPackedElementTypeInto(aet, cp, 0, 2, byteArrayClass, longArrayClass, doubleArrayClass, floatArrayClass,
 				shortArrayClass, longValueOf, objectClass, aetNotPacked, aetPackedDone);
-		aet.bind(aetPackedDone);
+		aet.labelBinding(aetPackedDone);
 		aet.aload(2);
 		aet.areturn();
-		aet.bind(aetNotPacked);
+		aet.labelBinding(aetNotPacked);
 		aet.aload(0);
 		aet.instanceOf(arrayListClass);
-		aet.branch(Opcode.IFEQ, aetT);
+		aet.ifeq(aetT);
 		emitLoadHeader(aet, arrayListClass, objectArrayClass, alGet, 0);
 		aet.astore(1);
 		aet.aload(1);
 		aet.arraylength();
-		aet.iconst(4);
-		aet.branch(Opcode.IF_ICMPLE, aetT);
+		aet.loadConstant(4);
+		aet.if_icmple(aetT);
 		aet.aload(1);
-		aet.iconst(3);
+		aet.loadConstant(3);
 		aet.aaload();
 		aet.astore(2);
 		aet.aload(2);
-		aet.branch(Opcode.IFNULL, aetOwn);
+		aet.ifnull(aetOwn);
 		aet.aload(2);
 		aet.astore(0);
-		aet.branch(Opcode.GOTO, aetTop);
-		aet.bind(aetOwn);
+		aet.goto_(aetTop);
+		aet.labelBinding(aetOwn);
 		aet.aload(1);
-		aet.iconst(4);
+		aet.loadConstant(4);
 		aet.aaload();
 		aet.astore(2);
 		aet.aload(2);
-		aet.branch(Opcode.IFNULL, aetT);
+		aet.ifnull(aetT);
 		aet.aload(2);
 		aet.areturn();
-		aet.bind(aetT);
-		aet.ldcString(cp.addString("T"));
+		aet.labelBinding(aetT);
+		aet.ldc(cp.stringEntry("T"));
 		aet.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 9, 3, aet.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), aet));
 
 		// _arrayDefaultElement(o): the element an UNSUPPLIED slot of o takes -- the
 		// remembered element type's own zero -- or null (nil) when nothing is remembered.
@@ -2146,79 +2110,77 @@ final class JvmArrayRuntimeBuilder {
 		// type VALUE -- an Object[] cons for (unsigned-byte n), the name string
 		// otherwise. Mirrors am.ik.rontolisp.ArrayElementTypes.defaultElement.
 		// Locals: 0 = o, 1 = header, 2 = et.
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
-		JvmAsm de = new JvmAsm();
-		int deNil = de.label();
-		int deChar = de.label();
-		int deInt = de.label();
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry stringEquals = cp.methodRef(stringClass, "equals", "(Ljava/lang/Object;)Z");
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		MethodRefEntry doubleValueOf = cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+		MethodCode de = new MethodCode();
+		MethodCode.Label deNil = de.newLabel();
+		MethodCode.Label deChar = de.newLabel();
+		MethodCode.Label deInt = de.newLabel();
 		// A runtime string IS a rank-1 character array, so it answers the character zero
 		// even though it carries no header at all.
 		de.aload(0);
 		de.instanceOf(stringClass);
-		de.branch(Opcode.IFNE, deChar);
+		de.ifne(deChar);
 		de.aload(0);
 		de.instanceOf(arrayListClass);
-		de.branch(Opcode.IFEQ, deNil);
+		de.ifeq(deNil);
 		emitLoadHeader(de, arrayListClass, objectArrayClass, alGet, 0);
 		de.astore(1);
 		de.aload(1);
 		de.arraylength();
-		de.iconst(4);
-		de.branch(Opcode.IF_ICMPEQ, deChar);
+		de.loadConstant(4);
+		de.if_icmpeq(deChar);
 		de.aload(1);
 		de.arraylength();
-		de.iconst(5);
-		de.branch(Opcode.IF_ICMPLT, deNil);
+		de.loadConstant(5);
+		de.if_icmplt(deNil);
 		de.aload(1);
-		de.iconst(3);
+		de.loadConstant(3);
 		de.aaload();
-		de.branch(Opcode.IFNONNULL, deNil);
+		de.ifnonnull(deNil);
 		de.aload(1);
-		de.iconst(4);
+		de.loadConstant(4);
 		de.aaload();
 		de.astore(2);
 		de.aload(2);
-		de.branch(Opcode.IFNULL, deNil);
+		de.ifnull(deNil);
 		de.aload(2);
 		de.instanceOf(objectArrayClass);
-		de.branch(Opcode.IFNE, deInt);
-		de.ldcString(cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE));
+		de.ifne(deInt);
+		de.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.CHARACTER_TYPE));
 		de.aload(2);
 		de.invokevirtual(stringEquals);
-		de.branch(Opcode.IFNE, deChar);
+		de.ifne(deChar);
 		// A bit vector's zero is the integer 0, not the float 0.0 the two float
 		// widths take below: the stamp is a name string like theirs, so it needs
 		// its own arm before the float fallthrough (.todo/043).
-		de.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT));
+		de.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BIT));
 		de.aload(2);
 		de.invokevirtual(stringEquals);
-		de.branch(Opcode.IFNE, deInt);
+		de.ifne(deInt);
 		// The only remaining remembered names are the two float widths.
-		de.op(Opcode.DCONST_0);
+		de.dconst_0();
 		de.invokestatic(doubleValueOf);
 		de.areturn();
 		// A runtime character is a length-1 int[] holding the code point.
-		de.bind(deChar);
-		de.iconst(1);
-		de.newarrayInt();
+		de.labelBinding(deChar);
+		de.loadConstant(1);
+		de.newarray(TypeKind.INT);
 		de.dup();
-		de.iconst(0);
-		de.iconst(am.ik.rontolisp.ArrayElementTypes.DEFAULT_CHARACTER);
+		de.loadConstant(0);
+		de.loadConstant(am.ik.rontolisp.ArrayElementTypes.DEFAULT_CHARACTER);
 		de.iastore();
 		de.areturn();
-		de.bind(deInt);
-		de.op(Opcode.LCONST_0);
+		de.labelBinding(deInt);
+		de.lconst_0();
 		de.invokestatic(longValueOf);
 		de.areturn();
-		de.bind(deNil);
-		de.aconstNull();
+		de.labelBinding(deNil);
+		de.aconst_null();
 		de.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC), 4, 3, de.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC), de));
 
 		// _arrayAdoptElementType(dst, src): make the freshly built general array dst
 		// remember what src remembers, and return dst. adjust-array does not change an
@@ -2233,18 +2195,17 @@ final class JvmArrayRuntimeBuilder {
 		// already a character vector, or is displaced (slot 3 non-null, where slot 4 is
 		// the offset), keeps what it has. Locals: 0 = dst, 1 = src, 2 = et, 3 = header,
 		// 4 = src's header.
-		MethodrefConstant selfElementType = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC)));
-		am.ik.jvm.ConstantPool.StringConstant characterName = cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE);
-		JvmAsm ad = new JvmAsm();
-		int adDone = ad.label();
-		int adChar = ad.label();
-		int adStamp = ad.label();
-		int adGrow = ad.label();
-		int adNotDisplaced = ad.label();
-		int adHaveEt = ad.label();
-		int adSrcChar = ad.label();
-		int adSrcGeneral = ad.label();
+		MethodRefEntry selfElementType = cp.methodRef(selfClass, ELEMENT_TYPE, ELEMENT_TYPE_DESC);
+		StringEntry characterName = cp.stringEntry(am.ik.rontolisp.LispNames.CHARACTER_TYPE);
+		MethodCode ad = new MethodCode();
+		MethodCode.Label adDone = ad.newLabel();
+		MethodCode.Label adChar = ad.newLabel();
+		MethodCode.Label adStamp = ad.newLabel();
+		MethodCode.Label adGrow = ad.newLabel();
+		MethodCode.Label adNotDisplaced = ad.newLabel();
+		MethodCode.Label adHaveEt = ad.newLabel();
+		MethodCode.Label adSrcChar = ad.newLabel();
+		MethodCode.Label adSrcGeneral = ad.newLabel();
 		// et: the element type SRC remembers, read from the same header facts
 		// _arrayDefaultElement reads and in the same order. A runtime string carries no
 		// header but IS a rank-1 character array, and a length-4 header is the character
@@ -2252,104 +2213,103 @@ final class JvmArrayRuntimeBuilder {
 		// is why _arrayElementType alone (slot 4 or t) cannot answer for it.
 		ad.aload(1);
 		ad.instanceOf(strClass);
-		ad.branch(Opcode.IFNE, adSrcChar);
+		ad.ifne(adSrcChar);
 		ad.aload(1);
 		ad.instanceOf(arrayListClass);
-		ad.branch(Opcode.IFEQ, adSrcGeneral);
+		ad.ifeq(adSrcGeneral);
 		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 1);
 		ad.astore(4);
 		ad.aload(4);
 		ad.arraylength();
-		ad.iconst(4);
-		ad.branch(Opcode.IF_ICMPNE, adSrcGeneral);
-		ad.bind(adSrcChar);
-		ad.ldcString(characterName);
+		ad.loadConstant(4);
+		ad.if_icmpne(adSrcGeneral);
+		ad.labelBinding(adSrcChar);
+		ad.ldc(characterName);
 		ad.astore(2);
-		ad.branch(Opcode.GOTO, adHaveEt);
-		ad.bind(adSrcGeneral);
+		ad.goto_(adHaveEt);
+		ad.labelBinding(adSrcGeneral);
 		ad.aload(1);
 		ad.invokestatic(selfElementType);
 		ad.astore(2);
-		ad.bind(adHaveEt);
+		ad.labelBinding(adHaveEt);
 		// t is remembered as nothing at all, so there is nothing to carry over.
-		ad.ldcString(cp.addString("T"));
+		ad.ldc(cp.stringEntry("T"));
 		ad.aload(2);
 		ad.invokevirtual(stringEquals);
-		ad.branch(Opcode.IFNE, adDone);
+		ad.ifne(adDone);
 		ad.aload(0);
 		ad.instanceOf(arrayListClass);
-		ad.branch(Opcode.IFEQ, adDone);
+		ad.ifeq(adDone);
 		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 0);
 		ad.astore(3);
 		ad.aload(3);
 		ad.arraylength();
-		ad.iconst(4);
-		ad.branch(Opcode.IF_ICMPEQ, adDone);
+		ad.loadConstant(4);
+		ad.if_icmpeq(adDone);
 		ad.aload(3);
 		ad.arraylength();
-		ad.iconst(5);
-		ad.branch(Opcode.IF_ICMPLT, adNotDisplaced);
+		ad.loadConstant(5);
+		ad.if_icmplt(adNotDisplaced);
 		ad.aload(3);
-		ad.iconst(3);
+		ad.loadConstant(3);
 		ad.aaload();
-		ad.branch(Opcode.IFNONNULL, adDone);
-		ad.bind(adNotDisplaced);
-		ad.ldcString(characterName);
+		ad.ifnonnull(adDone);
+		ad.labelBinding(adNotDisplaced);
+		ad.ldc(characterName);
 		ad.aload(2);
 		ad.invokevirtual(stringEquals);
-		ad.branch(Opcode.IFEQ, adStamp);
+		ad.ifeq(adStamp);
 		ad.aload(3);
-		ad.iconst(0);
+		ad.loadConstant(0);
 		ad.aaload();
 		ad.checkcast(objectArrayClass);
 		ad.arraylength();
-		ad.iconst(1);
-		ad.branch(Opcode.IF_ICMPEQ, adChar);
-		ad.bind(adStamp);
+		ad.loadConstant(1);
+		ad.if_icmpeq(adChar);
+		ad.labelBinding(adStamp);
 		ad.aload(3);
 		ad.arraylength();
-		ad.iconst(5);
-		ad.branch(Opcode.IF_ICMPLT, adGrow);
+		ad.loadConstant(5);
+		ad.if_icmplt(adGrow);
 		ad.aload(3);
-		ad.iconst(4);
+		ad.loadConstant(4);
 		ad.aload(2);
 		ad.aastore();
-		ad.branch(Opcode.GOTO, adDone);
+		ad.goto_(adDone);
 		// dst.set(0, new Object[]{dims, fp, adj, null, et})
-		ad.bind(adGrow);
+		ad.labelBinding(adGrow);
 		ad.aload(0);
 		ad.checkcast(arrayListClass);
-		ad.iconst(0);
-		ad.iconst(5);
+		ad.loadConstant(0);
+		ad.loadConstant(5);
 		ad.anewarray(objectClass);
 		emitCopyHeaderSlots(ad, 3, 3);
 		ad.dup();
-		ad.iconst(4);
+		ad.loadConstant(4);
 		ad.aload(2);
 		ad.aastore();
 		ad.invokevirtual(alSet);
 		ad.pop();
-		ad.branch(Opcode.GOTO, adDone);
+		ad.goto_(adDone);
 		// dst.set(0, new Object[]{dims, fp, adj, null}) -- the character vector marker,
 		// over the BOXED data it implies.
-		ad.bind(adChar);
+		ad.labelBinding(adChar);
 		ad.aload(0);
 		ad.invokestatic(widen);
 		emitLoadHeader(ad, arrayListClass, objectArrayClass, alGet, 0);
 		ad.astore(3);
 		ad.aload(0);
 		ad.checkcast(arrayListClass);
-		ad.iconst(0);
-		ad.iconst(4);
+		ad.loadConstant(0);
+		ad.loadConstant(4);
 		ad.anewarray(objectClass);
 		emitCopyHeaderSlots(ad, 3, 3);
 		ad.invokevirtual(alSet);
 		ad.pop();
-		ad.bind(adDone);
+		ad.labelBinding(adDone);
 		ad.aload(0);
 		ad.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC), 7, 5,
-				ad.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC), ad));
 
 		// _arrayAlike(seq, n): a fresh zero-filled rank-1 array of length n of the same
 		// KIND as seq. The kind is _arrayElementType's answer, not seq's runtime class:
@@ -2363,10 +2323,9 @@ final class JvmArrayRuntimeBuilder {
 		// arm answers for it first). The interpreter's %array-alike is keyed the same
 		// way (Environment.packedCopyForElementType). Locals: 0 = seq, 1 = n, 2 = et,
 		// 3 = ni, 4 = arr, 5 = k.
-		MethodrefConstant selfElementTypeForAlike = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC)));
-		JvmAsm al = new JvmAsm();
-		int alNotInt = al.label();
+		MethodRefEntry selfElementTypeForAlike = cp.methodRef(selfClass, ELEMENT_TYPE, ELEMENT_TYPE_DESC);
+		MethodCode al = new MethodCode();
+		MethodCode.Label alNotInt = al.newLabel();
 		al.aload(0);
 		al.invokestatic(selfElementTypeForAlike);
 		al.astore(2);
@@ -2376,89 +2335,88 @@ final class JvmArrayRuntimeBuilder {
 		al.istore(3);
 		// (unsigned-byte w): a byte[]{8, 0...} at width 8, else a long[]{w, 0...} -- the
 		// width is the cons's cadr (in k, as an int).
-		int alWide = al.label();
+		MethodCode.Label alWide = al.newLabel();
 		al.aload(2);
 		al.instanceOf(objectArrayClass);
-		al.branch(Opcode.IFEQ, alNotInt);
+		al.ifeq(alNotInt);
 		al.aload(2);
 		al.checkcast(objectArrayClass);
-		al.iconst(1);
+		al.loadConstant(1);
 		al.aaload();
 		al.checkcast(objectArrayClass);
-		al.iconst(0);
+		al.loadConstant(0);
 		al.aaload();
 		al.checkcast(longClass);
 		al.invokevirtual(longIntValue);
 		al.istore(5);
 		al.iload(5);
-		al.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-		al.branch(Opcode.IF_ICMPNE, alWide);
+		al.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		al.if_icmpne(alWide);
 		al.iload(3);
-		al.iconst(1);
-		al.op(Opcode.IADD);
-		al.newarrayByte();
+		al.loadConstant(1);
+		al.iadd();
+		al.newarray(TypeKind.BYTE);
 		al.dup();
-		al.iconst(0);
-		al.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		al.loadConstant(0);
+		al.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
 		al.bastore();
 		al.areturn();
-		al.bind(alWide);
+		al.labelBinding(alWide);
 		al.iload(3);
-		al.iconst(1);
-		al.op(Opcode.IADD);
-		al.newarrayLong();
+		al.loadConstant(1);
+		al.iadd();
+		al.newarray(TypeKind.LONG);
 		al.astore(4);
 		al.aload(4);
-		al.iconst(0);
+		al.loadConstant(0);
 		al.iload(5);
 		al.i2l();
 		al.lastore();
 		al.aload(4);
 		al.areturn();
-		al.bind(alNotInt);
+		al.labelBinding(alNotInt);
 		// A float width: the backing at that width with a fresh rank-1 header, laid out
 		// by JvmPackedFloatWidth -- the one place that knows each width's header.
 		for (JvmPackedFloatWidth w : JvmPackedFloatWidth.values()) {
-			int next = al.label();
-			al.ldcString(cp.addString(switch (w) {
+			MethodCode.Label next = al.newLabel();
+			al.ldc(cp.stringEntry(switch (w) {
 				case DOUBLE -> am.ik.rontolisp.LispNames.DOUBLE_FLOAT;
 				case SINGLE -> am.ik.rontolisp.LispNames.SINGLE_FLOAT;
 				case BFLOAT16 -> am.ik.rontolisp.LispNames.BFLOAT16;
 			}));
 			al.aload(2);
 			al.invokevirtual(stringEquals);
-			al.branch(Opcode.IFEQ, next);
+			al.ifeq(next);
 			al.iload(3);
-			al.iconst(w.dataOffset(1));
-			al.op(Opcode.IADD);
+			al.loadConstant(w.dataOffset(1));
+			al.iadd();
 			w.newBacking(al);
 			al.astore(4);
 			al.aload(4);
-			al.iconst(1);
+			al.loadConstant(1);
 			w.storeRank(al);
-			al.iconst(0);
+			al.loadConstant(0);
 			al.istore(5);
 			w.storeDim(al, 4, 5, 3);
 			al.aload(4);
 			al.areturn();
-			al.bind(next);
+			al.labelBinding(next);
 		}
 		// Anything else: the general nil-filled vector, stamped with what seq
 		// remembers -- a bit vector IS the general boxed array stamped bit, so the
 		// copy keeps the stamp the way adjust-array carries it (.todo/820). T is
 		// remembered as nothing, so the adopt is a no-op for a plain vector.
 		al.aload(1);
-		al.aconstNull();
-		al.aconstNull();
-		al.aconstNull();
+		al.aconst_null();
+		al.aconst_null();
+		al.aconst_null();
 		al.invokestatic(selfArrayMake);
 		al.astore(4);
 		al.aload(4);
 		al.aload(0);
-		al.invokestatic(cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC))));
+		al.invokestatic(cp.methodRef(selfClass, ADOPT_ELEMENT_TYPE, ADOPT_ELEMENT_TYPE_DESC));
 		al.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ALIKE), cp.addUtf8(ALIKE_DESC), 6, 6, al.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ALIKE), cp.addUtf8(ALIKE_DESC), al));
 
 		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
 		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the
@@ -2467,106 +2425,101 @@ final class JvmArrayRuntimeBuilder {
 		// appends via StringBuilder.appendCodePoint(int) so a supplementary code point
 		// expands to its two-unit UTF-16 pair rather than being narrowed to 16 bits.
 		// Locals: 0 = o, 1 = list, 2 = header, 3 = n (int), 4 = sb, 5 = i (int).
-		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		ClassConstant intArrayClass = cp.addClass(cp.addUtf8("[I"));
-		MethodrefConstant sbInit = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant sbAppendCodePoint = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("appendCodePoint"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbAppendStr = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		am.ik.jvm.ConstantPool.StringConstant quoteStr = cp.addString("\"");
-		MethodrefConstant strSubstring = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
-		JvmAsm sv = new JvmAsm();
-		int svNotCv = sv.label();
-		int svView = sv.label();
-		int svRender = sv.label();
-		int svStr = sv.label();
+		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
+		ClassEntry intArrayClass = cp.classEntry("[I");
+		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry sbAppendCodePoint = cp.methodRef(sbClass, "appendCodePoint", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbAppendStr = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
+		StringEntry quoteStr = cp.stringEntry("\"");
+		MethodRefEntry strSubstring = cp.methodRef(strClass, "substring", "(II)Ljava/lang/String;");
+		MethodCode sv = new MethodCode();
+		MethodCode.Label svNotCv = sv.newLabel();
+		MethodCode.Label svView = sv.newLabel();
+		MethodCode.Label svRender = sv.newLabel();
+		MethodCode.Label svStr = sv.newLabel();
 		sv.aload(0);
 		sv.instanceOf(arrayListClass);
-		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.ifeq(svNotCv);
 		sv.aload(0);
 		sv.checkcast(arrayListClass);
 		sv.astore(1);
 		sv.aload(1);
 		sv.invokevirtual(alSize);
-		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.ifeq(svNotCv);
 		sv.aload(1);
-		sv.iconst(0);
+		sv.loadConstant(0);
 		sv.invokevirtual(alGet);
 		sv.instanceOf(objectArrayClass);
-		sv.branch(Opcode.IFEQ, svNotCv);
+		sv.ifeq(svNotCv);
 		sv.aload(1);
-		sv.iconst(0);
+		sv.loadConstant(0);
 		sv.invokevirtual(alGet);
 		sv.checkcast(objectArrayClass);
 		sv.astore(2);
 		sv.aload(2);
 		sv.arraylength();
-		sv.iconst(7);
-		sv.branch(Opcode.IF_ICMPEQ, svView);
+		sv.loadConstant(7);
+		sv.if_icmpeq(svView);
 		sv.aload(2);
 		sv.arraylength();
-		sv.iconst(4);
-		sv.branch(Opcode.IF_ICMPNE, svNotCv);
+		sv.loadConstant(4);
+		sv.if_icmpne(svNotCv);
 		// A character vector reads its own slots: base = 1, and
 		// n = header[1] != null ? fill pointer : dims[0]
-		sv.iconst(1);
+		sv.loadConstant(1);
 		sv.istore(6);
 		emitActiveLength(sv, longClass, objectArrayClass, longIntValue, 2, 3);
-		sv.branch(Opcode.GOTO, svRender);
+		sv.goto_(svRender);
 		// A STRING VIEW (length-7 header) has no storage of its own: n is its
 		// dimension, and the walk hands back either the character vector it aliases
 		// (rendered element by element from the resolved base) or the immutable string
 		// it aliases (sliced by code point in one substring).
-		sv.bind(svView);
+		sv.labelBinding(svView);
 		// The view's OWN fill pointer bounds the rendering when it has one -- a
 		// :displaced-to view may carry one, and then it is the string's length. Read it
 		// before the walk below overwrites the header local.
 		emitActiveLength(sv, longClass, objectArrayClass, longIntValue, 2, 3);
-		sv.iconst(1);
+		sv.loadConstant(1);
 		sv.istore(6);
 		emitResolveDisplacement(sv, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 6, 2);
 		emitLandedOnString(sv, 2, svStr);
 		sv.aload(2);
 		sv.arraylength();
-		sv.iconst(4);
-		sv.branch(Opcode.IF_ICMPNE, svNotCv);
+		sv.loadConstant(4);
+		sv.if_icmpne(svNotCv);
 		// sb = new StringBuilder("\""); for i in 0..n-1: sb.append(char at base + i)
-		sv.bind(svRender);
-		sv.anew(sbClass);
+		sv.labelBinding(svRender);
+		sv.new_(sbClass);
 		sv.dup();
-		sv.ldcString(quoteStr);
+		sv.ldc(quoteStr);
 		sv.invokespecial(sbInit);
 		sv.astore(4);
-		sv.iconst(0);
+		sv.loadConstant(0);
 		sv.istore(5);
-		int svLoop = sv.label();
-		int svDone = sv.label();
-		sv.bind(svLoop);
+		MethodCode.Label svLoop = sv.newLabel();
+		MethodCode.Label svDone = sv.newLabel();
+		sv.labelBinding(svLoop);
 		sv.iload(5);
 		sv.iload(3);
-		sv.branch(Opcode.IF_ICMPGE, svDone);
+		sv.if_icmpge(svDone);
 		sv.aload(4);
 		sv.aload(1);
 		sv.checkcast(arrayListClass);
 		sv.iload(6);
 		sv.iload(5);
-		sv.op(Opcode.IADD);
+		sv.iadd();
 		sv.invokevirtual(alGet);
 		sv.checkcast(intArrayClass);
-		sv.iconst(0);
+		sv.loadConstant(0);
 		sv.iaload();
 		sv.invokevirtual(sbAppendCodePoint);
 		sv.pop();
 		sv.iinc(5, 1);
-		sv.branch(Opcode.GOTO, svLoop);
-		sv.bind(svDone);
+		sv.goto_(svLoop);
+		sv.labelBinding(svDone);
 		sv.aload(4);
-		sv.ldcString(quoteStr);
+		sv.ldc(quoteStr);
 		sv.invokevirtual(sbAppendStr);
 		sv.pop();
 		sv.aload(4);
@@ -2574,45 +2527,45 @@ final class JvmArrayRuntimeBuilder {
 		sv.areturn();
 		// s = (String) header[3]; the view's characters are s[base - 1 .. base - 1 + n)
 		// by CODE POINT, so both ends translate through _cpoff.
-		sv.bind(svStr);
+		sv.labelBinding(svStr);
 		sv.aload(2);
-		sv.iconst(3);
+		sv.loadConstant(3);
 		sv.aaload();
 		sv.checkcast(strClass);
 		sv.astore(7);
-		sv.anew(sbClass);
+		sv.new_(sbClass);
 		sv.dup();
-		sv.ldcString(quoteStr);
+		sv.ldc(quoteStr);
 		sv.invokespecial(sbInit);
 		sv.astore(4);
 		sv.aload(4);
 		sv.aload(7);
 		sv.aload(7);
 		sv.iload(6);
-		sv.iconst(1);
-		sv.op(Opcode.ISUB);
+		sv.loadConstant(1);
+		sv.isub();
 		sv.invokestatic(strCpOffset);
 		sv.aload(7);
 		sv.iload(6);
-		sv.iconst(1);
-		sv.op(Opcode.ISUB);
+		sv.loadConstant(1);
+		sv.isub();
 		sv.iload(3);
-		sv.op(Opcode.IADD);
+		sv.iadd();
 		sv.invokestatic(strCpOffset);
 		sv.invokevirtual(strSubstring);
 		sv.invokevirtual(sbAppendStr);
 		sv.pop();
 		sv.aload(4);
-		sv.ldcString(quoteStr);
+		sv.ldc(quoteStr);
 		sv.invokevirtual(sbAppendStr);
 		sv.pop();
 		sv.aload(4);
 		sv.invokevirtual(sbToString);
 		sv.areturn();
-		sv.bind(svNotCv);
+		sv.labelBinding(svNotCv);
 		sv.aload(0);
 		sv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), 7, 8, sv.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), sv));
 
 		// _subseqCv(o, start, end): the string subseq lane answering a MUTABLE character
 		// vector (.todo/559 step 2 -- a copy-seq/subseq result has a writable identity,
@@ -2624,133 +2577,128 @@ final class JvmArrayRuntimeBuilder {
 		// the result is a SIMPLE string like the other backends'. Locals: 0 = o,
 		// 1 = start, 2 = end, 3 = header, 4 = len, 5 = n, 6 = out, 7 = i, 8 = s,
 		// 9 = a, 10 = b.
-		MethodrefConstant scStrToCharVec = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC)));
-		MethodrefConstant strLength = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		MethodrefConstant strConcat = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		MethodRefEntry scStrToCharVec = cp.methodRef(selfClass, STR_TO_CHAR_VEC, STR_TO_CHAR_VEC_DESC);
+		MethodRefEntry strLength = cp.methodRef(strClass, "length", "()I");
+		MethodRefEntry strConcat = cp.methodRef(strClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		// The scStr bounds check's message pieces (LispNames.SUBSEQ's exact interpreter
 		// text, todo a42): "SUBSEQ: invalid bounds " + start + ", " + end + " for string
 		// of length " + cpLen.
-		MethodrefConstant intToStr = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
-		am.ik.jvm.ConstantPool.StringConstant subseqBoundsPrefix = cp
-			.addString(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ");
-		am.ik.jvm.ConstantPool.StringConstant subseqBoundsComma = cp.addString(", ");
-		am.ik.jvm.ConstantPool.StringConstant subseqBoundsForStringOfLength = cp.addString(" for string of length ");
-		JvmAsm sc = new JvmAsm();
-		int scStr = sc.label();
-		int scCv = sc.label();
+		MethodRefEntry intToStr = cp.methodRef(strClass, "valueOf", "(I)Ljava/lang/String;");
+		StringEntry subseqBoundsPrefix = cp.addString(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ").entry();
+		StringEntry subseqBoundsComma = cp.addString(", ").entry();
+		StringEntry subseqBoundsForStringOfLength = cp.stringEntry(" for string of length ");
+		MethodCode sc = new MethodCode();
+		MethodCode.Label scStr = sc.newLabel();
+		MethodCode.Label scCv = sc.newLabel();
 		sc.aload(0);
 		sc.instanceOf(arrayListClass);
-		sc.branch(Opcode.IFEQ, scStr);
+		sc.ifeq(scStr);
 		sc.aload(0);
 		sc.checkcast(arrayListClass);
 		sc.invokevirtual(alSize);
-		sc.branch(Opcode.IFLE, scStr);
+		sc.ifle(scStr);
 		sc.aload(0);
 		sc.checkcast(arrayListClass);
-		sc.iconst(0);
+		sc.loadConstant(0);
 		sc.invokevirtual(alGet);
 		sc.instanceOf(objectArrayClass);
-		sc.branch(Opcode.IFEQ, scStr);
+		sc.ifeq(scStr);
 		sc.aload(0);
 		sc.checkcast(arrayListClass);
-		sc.iconst(0);
+		sc.loadConstant(0);
 		sc.invokevirtual(alGet);
 		sc.checkcast(objectArrayClass);
 		sc.astore(3);
 		sc.aload(3);
 		sc.arraylength();
-		sc.iconst(4);
-		sc.branch(Opcode.IF_ICMPEQ, scCv);
+		sc.loadConstant(4);
+		sc.if_icmpeq(scCv);
 		sc.aload(3);
 		sc.arraylength();
-		sc.iconst(7);
-		sc.branch(Opcode.IF_ICMPNE, scStr);
-		sc.bind(scCv);
+		sc.loadConstant(7);
+		sc.if_icmpne(scStr);
+		sc.labelBinding(scCv);
 		// len = header[1] != null (the fill pointer) ? its int : dims[0]
-		int scUseDim = sc.label();
-		int scHaveLen = sc.label();
+		MethodCode.Label scUseDim = sc.newLabel();
+		MethodCode.Label scHaveLen = sc.newLabel();
 		sc.aload(3);
-		sc.iconst(1);
+		sc.loadConstant(1);
 		sc.aaload();
-		sc.branch(Opcode.IFNULL, scUseDim);
+		sc.ifnull(scUseDim);
 		sc.aload(3);
-		sc.iconst(1);
+		sc.loadConstant(1);
 		sc.aaload();
 		sc.checkcast(longClass);
 		sc.invokevirtual(longIntValue);
 		sc.istore(4);
-		sc.branch(Opcode.GOTO, scHaveLen);
-		sc.bind(scUseDim);
+		sc.goto_(scHaveLen);
+		sc.labelBinding(scUseDim);
 		emitLoadDim0(sc, longClass, objectArrayClass, longIntValue, 3);
 		sc.istore(4);
-		sc.bind(scHaveLen);
+		sc.labelBinding(scHaveLen);
 		// n = (end < 0 ? len : end) - start
-		int scUseEnd = sc.label();
-		int scHaveN = sc.label();
+		MethodCode.Label scUseEnd = sc.newLabel();
+		MethodCode.Label scHaveN = sc.newLabel();
 		sc.iload(2);
-		sc.branch(Opcode.IFGE, scUseEnd);
+		sc.ifge(scUseEnd);
 		sc.iload(4);
 		sc.istore(5);
-		sc.branch(Opcode.GOTO, scHaveN);
-		sc.bind(scUseEnd);
+		sc.goto_(scHaveN);
+		sc.labelBinding(scUseEnd);
 		sc.iload(2);
 		sc.istore(5);
-		sc.bind(scHaveN);
+		sc.labelBinding(scHaveN);
 		sc.iload(5);
 		sc.iload(1);
-		sc.op(Opcode.ISUB);
+		sc.isub();
 		sc.istore(5);
 		// out = new ArrayList holding the length-4 header {dims{n}, null, null, null}
-		sc.anew(arrayListClass);
+		sc.new_(arrayListClass);
 		sc.dup();
 		sc.invokespecial(alInit);
 		sc.astore(6);
 		sc.aload(6);
-		sc.iconst(4);
+		sc.loadConstant(4);
 		sc.anewarray(objectClass);
 		sc.dup();
-		sc.iconst(0);
-		sc.iconst(1);
+		sc.loadConstant(0);
+		sc.loadConstant(1);
 		sc.anewarray(objectClass);
 		sc.dup();
-		sc.iconst(0);
+		sc.loadConstant(0);
 		sc.iload(5);
-		sc.op(Opcode.I2L);
+		sc.i2l();
 		sc.invokestatic(longValueOf);
 		sc.aastore();
 		sc.aastore();
 		sc.invokevirtual(alAdd);
 		sc.pop();
 		// for i in 0..n-1: out.add(_rmGet(o, 1 + start + i))
-		sc.iconst(0);
+		sc.loadConstant(0);
 		sc.istore(7);
-		int scLoop = sc.label();
-		int scDone = sc.label();
-		sc.bind(scLoop);
+		MethodCode.Label scLoop = sc.newLabel();
+		MethodCode.Label scDone = sc.newLabel();
+		sc.labelBinding(scLoop);
 		sc.iload(7);
 		sc.iload(5);
-		sc.branch(Opcode.IF_ICMPGE, scDone);
+		sc.if_icmpge(scDone);
 		sc.aload(6);
 		sc.aload(0);
-		sc.iconst(1);
+		sc.loadConstant(1);
 		sc.iload(1);
-		sc.op(Opcode.IADD);
+		sc.iadd();
 		sc.iload(7);
-		sc.op(Opcode.IADD);
+		sc.iadd();
 		sc.invokestatic(rmGet);
 		sc.invokevirtual(alAdd);
 		sc.pop();
 		sc.iinc(7, 1);
-		sc.branch(Opcode.GOTO, scLoop);
-		sc.bind(scDone);
+		sc.goto_(scLoop);
+		sc.labelBinding(scDone);
 		sc.aload(6);
 		sc.areturn();
 		// The immutable arm: slice by CODE POINT and convert once.
-		sc.bind(scStr);
+		sc.labelBinding(scStr);
 		sc.aload(0);
 		sc.checkcast(strClass);
 		sc.astore(8);
@@ -2761,75 +2709,75 @@ final class JvmArrayRuntimeBuilder {
 		sc.aload(8);
 		sc.invokestatic(strCount);
 		sc.istore(11);
-		int scHaveEndCk = sc.label();
-		int scGotEndCk = sc.label();
+		MethodCode.Label scHaveEndCk = sc.newLabel();
+		MethodCode.Label scGotEndCk = sc.newLabel();
 		sc.iload(2);
-		sc.branch(Opcode.IFGE, scHaveEndCk);
+		sc.ifge(scHaveEndCk);
 		sc.iload(11);
 		sc.istore(12);
-		sc.branch(Opcode.GOTO, scGotEndCk);
-		sc.bind(scHaveEndCk);
+		sc.goto_(scGotEndCk);
+		sc.labelBinding(scHaveEndCk);
 		sc.iload(2);
 		sc.istore(12);
-		sc.bind(scGotEndCk);
-		int scBoundsOk = sc.label();
-		int scBoundsBad = sc.label();
+		sc.labelBinding(scGotEndCk);
+		MethodCode.Label scBoundsOk = sc.newLabel();
+		MethodCode.Label scBoundsBad = sc.newLabel();
 		sc.iload(1);
-		sc.branch(Opcode.IFLT, scBoundsBad);
+		sc.iflt(scBoundsBad);
 		sc.iload(12);
 		sc.iload(11);
-		sc.branch(Opcode.IF_ICMPGT, scBoundsBad);
+		sc.if_icmpgt(scBoundsBad);
 		sc.iload(1);
 		sc.iload(12);
-		sc.branch(Opcode.IF_ICMPGT, scBoundsBad);
-		sc.branch(Opcode.GOTO, scBoundsOk);
-		sc.bind(scBoundsBad);
-		sc.anew(rtExClass);
+		sc.if_icmpgt(scBoundsBad);
+		sc.goto_(scBoundsOk);
+		sc.labelBinding(scBoundsBad);
+		sc.new_(rtExClass);
 		sc.dup();
-		sc.ldcString(subseqBoundsPrefix);
+		sc.ldc(subseqBoundsPrefix);
 		sc.iload(1);
 		sc.invokestatic(intToStr);
 		sc.invokevirtual(strConcat);
-		sc.ldcString(subseqBoundsComma);
+		sc.ldc(subseqBoundsComma);
 		sc.invokevirtual(strConcat);
 		sc.iload(12);
 		sc.invokestatic(intToStr);
 		sc.invokevirtual(strConcat);
-		sc.ldcString(subseqBoundsForStringOfLength);
+		sc.ldc(subseqBoundsForStringOfLength);
 		sc.invokevirtual(strConcat);
 		sc.iload(11);
 		sc.invokestatic(intToStr);
 		sc.invokevirtual(strConcat);
 		sc.invokespecial(rtExInit);
 		sc.athrow();
-		sc.bind(scBoundsOk);
+		sc.labelBinding(scBoundsOk);
 		sc.aload(8);
 		sc.iload(1);
 		sc.invokestatic(strCpOffset);
 		sc.istore(9);
-		int scHaveEnd = sc.label();
-		int scGotB = sc.label();
+		MethodCode.Label scHaveEnd = sc.newLabel();
+		MethodCode.Label scGotB = sc.newLabel();
 		sc.iload(2);
-		sc.branch(Opcode.IFGE, scHaveEnd);
+		sc.ifge(scHaveEnd);
 		sc.aload(8);
 		sc.invokevirtual(strLength);
-		sc.iconst(1);
-		sc.op(Opcode.ISUB);
+		sc.loadConstant(1);
+		sc.isub();
 		sc.istore(10);
-		sc.branch(Opcode.GOTO, scGotB);
-		sc.bind(scHaveEnd);
+		sc.goto_(scGotB);
+		sc.labelBinding(scHaveEnd);
 		sc.aload(8);
 		sc.iload(2);
 		sc.invokestatic(strCpOffset);
 		sc.istore(10);
-		sc.bind(scGotB);
-		sc.ldcString(quoteStr);
+		sc.labelBinding(scGotB);
+		sc.ldc(quoteStr);
 		sc.aload(8);
 		sc.iload(9);
 		sc.iload(10);
 		sc.invokevirtual(strSubstring);
 		sc.invokevirtual(strConcat);
-		sc.ldcString(quoteStr);
+		sc.ldc(quoteStr);
 		sc.invokevirtual(strConcat);
 		sc.invokestatic(scStrToCharVec);
 		sc.astore(6);
@@ -2837,15 +2785,15 @@ final class JvmArrayRuntimeBuilder {
 		// promotion-path _strToCharVec stamps.
 		sc.aload(6);
 		sc.checkcast(arrayListClass);
-		sc.iconst(0);
+		sc.loadConstant(0);
 		sc.invokevirtual(alGet);
 		sc.checkcast(objectArrayClass);
-		sc.iconst(1);
-		sc.aconstNull();
+		sc.loadConstant(1);
+		sc.aconst_null();
 		sc.aastore();
 		sc.aload(6);
 		sc.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), 10, 13, sc.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), sc));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED
 		// String -- an actual runtime string -- converts once through _strToCharVec
@@ -2854,39 +2802,39 @@ final class JvmArrayRuntimeBuilder {
 		// shares the java.lang.String representation bare (no quotes), and read-line's
 		// eof-value or a symbol flowing out of a producer expression must not be
 		// laundered through the string conversion. Locals: 0 = o, 1 = cv.
-		JvmAsm tm = new JvmAsm();
-		int tmPass = tm.label();
+		MethodCode tm = new MethodCode();
+		MethodCode.Label tmPass = tm.newLabel();
 		tm.aload(0);
 		tm.instanceOf(strClass);
-		tm.branch(Opcode.IFEQ, tmPass);
+		tm.ifeq(tmPass);
 		tm.aload(0);
 		tm.checkcast(strClass);
 		tm.invokevirtual(strLength);
-		tm.branch(Opcode.IFLE, tmPass);
+		tm.ifle(tmPass);
 		tm.aload(0);
 		tm.checkcast(strClass);
-		tm.iconst(0);
+		tm.loadConstant(0);
 		tm.invokevirtual(strCharAt);
-		tm.iconst('"');
-		tm.branch(Opcode.IF_ICMPNE, tmPass);
+		tm.loadConstant('"');
+		tm.if_icmpne(tmPass);
 		tm.aload(0);
 		tm.checkcast(strClass);
 		tm.invokestatic(scStrToCharVec);
 		tm.astore(1);
 		tm.aload(1);
 		tm.checkcast(arrayListClass);
-		tm.iconst(0);
+		tm.loadConstant(0);
 		tm.invokevirtual(alGet);
 		tm.checkcast(objectArrayClass);
-		tm.iconst(1);
-		tm.aconstNull();
+		tm.loadConstant(1);
+		tm.aconst_null();
 		tm.aastore();
 		tm.aload(1);
 		tm.areturn();
-		tm.bind(tmPass);
+		tm.labelBinding(tmPass);
 		tm.aload(0);
 		tm.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_MUT_STR), cp.addUtf8(TO_MUT_STR_DESC), 3, 2, tm.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(TO_MUT_STR), cp.addUtf8(TO_MUT_STR_DESC), tm));
 
 		return methods;
 	}
@@ -2904,44 +2852,44 @@ final class JvmArrayRuntimeBuilder {
 	// and headerSlot keeps the view's own header so the caller can read slot 3 as the
 	// string. That is the one exit where {@code header.length > 4 && header[3] != null}
 	// still holds afterwards, so a single test tells the caller it landed on a string.
-	private static void emitResolveDisplacement(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant longIntValue, int listSlot,
-			int idxSlot, int headerSlot) {
-		int loop = a.label();
-		int done = a.label();
-		a.bind(loop);
+	private static void emitResolveDisplacement(MethodCode a, ClassEntry arrayListClass, ClassEntry longClass,
+			ClassEntry objectArrayClass, MethodRefEntry alGet, MethodRefEntry longIntValue, int listSlot, int idxSlot,
+			int headerSlot) {
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(loop);
 		emitLoadHeader(a, arrayListClass, objectArrayClass, alGet, listSlot);
 		a.astore(headerSlot);
 		a.aload(headerSlot);
 		a.arraylength();
-		a.iconst(4);
-		a.branch(Opcode.IF_ICMPLE, done);
+		a.loadConstant(4);
+		a.if_icmple(done);
 		a.aload(headerSlot);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
-		a.branch(Opcode.IFNULL, done);
+		a.ifnull(done);
 		// idx += ((Long) header[4]).intValue()
 		a.iload(idxSlot);
 		a.aload(headerSlot);
-		a.iconst(4);
+		a.loadConstant(4);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(idxSlot);
 		// A non-array target is the immutable string a string view aliases: stop here.
 		a.aload(headerSlot);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
 		a.instanceOf(arrayListClass);
-		a.branch(Opcode.IFEQ, done);
+		a.ifeq(done);
 		// list = header[3]
 		a.aload(headerSlot);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
 		a.astore(listSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 	}
 
 	// Stores into etSlot the element type of the PACKED value in targetSlot -- the cons
@@ -2951,74 +2899,74 @@ final class JvmArrayRuntimeBuilder {
 	// what {@code _ivElementType} / {@code _fvElementType} answer and what
 	// {@code _arrayDefaultElement} reads back out of header slot 4, so a view over a
 	// packed target and the un-displaced array it becomes give the same answer.
-	private static void emitPackedElementTypeInto(JvmAsm a, ConstantPool cp, int targetSlot, int etSlot,
-			ClassConstant byteArrayClass, ClassConstant longArrayClass, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant shortArrayClass, MethodrefConstant longValueOf,
-			ClassConstant objectClass, int notPacked, int done) {
-		int tryLong = a.label();
-		int tryDouble = a.label();
-		int tryFloat = a.label();
-		int tryShort = a.label();
+	private static void emitPackedElementTypeInto(MethodCode a, ConstantPool cp, int targetSlot, int etSlot,
+			ClassEntry byteArrayClass, ClassEntry longArrayClass, ClassEntry doubleArrayClass,
+			ClassEntry floatArrayClass, ClassEntry shortArrayClass, MethodRefEntry longValueOf, ClassEntry objectClass,
+			MethodCode.Label notPacked, MethodCode.Label done) {
+		MethodCode.Label tryLong = a.newLabel();
+		MethodCode.Label tryDouble = a.newLabel();
+		MethodCode.Label tryFloat = a.newLabel();
+		MethodCode.Label tryShort = a.newLabel();
 		a.aload(targetSlot);
 		a.instanceOf(byteArrayClass);
-		a.branch(Opcode.IFEQ, tryLong);
+		a.ifeq(tryLong);
 		emitUnsignedByteSpec(a, cp, objectClass, longValueOf, () -> {
-			a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
 			a.i2l();
 		});
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(tryLong);
+		a.goto_(done);
+		a.labelBinding(tryLong);
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, tryDouble);
+		a.ifeq(tryDouble);
 		emitUnsignedByteSpec(a, cp, objectClass, longValueOf, () -> {
 			a.aload(targetSlot);
 			a.checkcast(longArrayClass);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.laload();
 		});
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(tryDouble);
+		a.goto_(done);
+		a.labelBinding(tryDouble);
 		a.aload(targetSlot);
 		a.instanceOf(doubleArrayClass);
-		a.branch(Opcode.IFEQ, tryFloat);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT));
+		a.ifeq(tryFloat);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.DOUBLE_FLOAT));
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(tryFloat);
+		a.goto_(done);
+		a.labelBinding(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, tryShort);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT));
+		a.ifeq(tryShort);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.SINGLE_FLOAT));
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(tryShort);
+		a.goto_(done);
+		a.labelBinding(tryShort);
 		a.aload(targetSlot);
 		a.instanceOf(shortArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BFLOAT16));
+		a.ifeq(notPacked);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BFLOAT16));
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
+		a.goto_(done);
 	}
 
 	// Pushes new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(width), null}}, the
 	// width pushed as a long by pushWidth.
-	private static void emitUnsignedByteSpec(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
-			MethodrefConstant longValueOf, Runnable pushWidth) {
-		a.iconst(2);
+	private static void emitUnsignedByteSpec(MethodCode a, ConstantPool cp, ClassEntry objectClass,
+			MethodRefEntry longValueOf, Runnable pushWidth) {
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
+		a.loadConstant(0);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.iconst(2);
+		a.loadConstant(1);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		pushWidth.run();
 		a.invokestatic(longValueOf);
 		a.aastore();
@@ -3032,84 +2980,84 @@ final class JvmArrayRuntimeBuilder {
 	// {@code l[1 + flat]}, which the 1-based index already IS, and a float array's at
 	// {@code d[1 + rank + flat]} == {@code d[rank + idx]} (and, at bfloat16, at
 	// {@code s[1 + 2 * rank + flat]} == {@code s[2 * rank + idx]}).
-	private static void emitPackedTargetGet(JvmAsm a, int targetSlot, int idxSlot, ClassConstant byteArrayClass,
-			ClassConstant longArrayClass, ClassConstant doubleArrayClass, ClassConstant floatArrayClass,
-			ClassConstant shortArrayClass, @Nullable MethodrefConstant bf16Value, MethodrefConstant longValueOf,
-			MethodrefConstant doubleBoxValueOf, int notPacked) {
-		int tryLong = a.label();
-		int tryDouble = a.label();
-		int tryFloat = a.label();
-		int tryShort = a.label();
+	private static void emitPackedTargetGet(MethodCode a, int targetSlot, int idxSlot, ClassEntry byteArrayClass,
+			ClassEntry longArrayClass, ClassEntry doubleArrayClass, ClassEntry floatArrayClass,
+			ClassEntry shortArrayClass, @Nullable MethodRefEntry bf16Value, MethodRefEntry longValueOf,
+			MethodRefEntry doubleBoxValueOf, MethodCode.Label notPacked) {
+		MethodCode.Label tryLong = a.newLabel();
+		MethodCode.Label tryDouble = a.newLabel();
+		MethodCode.Label tryFloat = a.newLabel();
+		MethodCode.Label tryShort = a.newLabel();
 		a.aload(targetSlot);
 		a.instanceOf(byteArrayClass);
-		a.branch(Opcode.IFEQ, tryLong);
+		a.ifeq(tryLong);
 		a.aload(targetSlot);
 		a.checkcast(byteArrayClass);
 		a.iload(idxSlot);
 		a.baload();
-		a.iconst(0xFF);
-		a.op(Opcode.IAND);
+		a.loadConstant(0xFF);
+		a.iand();
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(tryLong);
+		a.labelBinding(tryLong);
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, tryDouble);
+		a.ifeq(tryDouble);
 		a.aload(targetSlot);
 		a.checkcast(longArrayClass);
 		a.iload(idxSlot);
 		a.laload();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(tryDouble);
+		a.labelBinding(tryDouble);
 		a.aload(targetSlot);
 		a.instanceOf(doubleArrayClass);
-		a.branch(Opcode.IFEQ, tryFloat);
+		a.ifeq(tryFloat);
 		a.aload(targetSlot);
 		a.checkcast(doubleArrayClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.daload();
 		a.d2i();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.daload();
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
-		a.bind(tryFloat);
+		a.labelBinding(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, tryShort);
+		a.ifeq(tryShort);
 		a.aload(targetSlot);
 		a.checkcast(floatArrayClass);
 		a.dup();
-		a.iconst(0);
+		a.loadConstant(0);
 		a.faload();
 		a.f2i();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.faload();
 		a.f2d();
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
-		a.bind(tryShort);
+		a.labelBinding(tryShort);
 		if (bf16Value == null) {
-			a.branch(Opcode.GOTO, notPacked);
+			a.goto_(notPacked);
 			return;
 		}
 		a.aload(targetSlot);
 		a.instanceOf(shortArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		a.aload(targetSlot);
 		a.checkcast(shortArrayClass);
 		a.dup();
 		JvmPackedFloatWidth.BFLOAT16.loadRank(a);
 		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(a);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		JvmPackedFloatWidth.BFLOAT16.loadElem(a, bf16Value);
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
@@ -3121,35 +3069,35 @@ final class JvmArrayRuntimeBuilder {
 	// width (a non-integer is the same type error a direct store gives), a float array
 	// narrows to its backing width -- so a store through a view is a store into the
 	// target, spelled through one more indirection.
-	private static void emitPackedTargetSet(JvmAsm a, ConstantPool cp, int targetSlot, int idxSlot, int valSlot,
-			int ivArrSlot, int dvArrSlot, int fvArrSlot, int ixSlot, int vSlot, int dvalSlot,
-			ClassConstant byteArrayClass, ClassConstant longArrayClass, ClassConstant doubleArrayClass,
-			ClassConstant floatArrayClass, ClassConstant shortArrayClass, @Nullable MethodrefConstant bf16Value,
-			@Nullable MethodrefConstant bf16Bits, ClassConstant numberClass, MethodrefConstant numberLongValue,
-			MethodrefConstant numberDoubleValue, MethodrefConstant longValueOf, MethodrefConstant doubleBoxValueOf,
-			MethodrefConstant dblCoerce, ClassConstant rtExClass, MethodrefConstant rtExInit, int notPacked) {
-		int tryLong = a.label();
-		int tryDouble = a.label();
-		int tryFloat = a.label();
-		int tryShort = a.label();
-		int intOk = a.label();
-		int octetOk = a.label();
-		ConstantPool.StringConstant storesIntegers = cp.addString("%aset: a packed integer vector stores integers");
+	private static void emitPackedTargetSet(MethodCode a, ConstantPool cp, int targetSlot, int idxSlot, int valSlot,
+			int ivArrSlot, int dvArrSlot, int fvArrSlot, int ixSlot, int vSlot, int dvalSlot, ClassEntry byteArrayClass,
+			ClassEntry longArrayClass, ClassEntry doubleArrayClass, ClassEntry floatArrayClass,
+			ClassEntry shortArrayClass, @Nullable MethodRefEntry bf16Value, @Nullable MethodRefEntry bf16Bits,
+			ClassEntry numberClass, MethodRefEntry numberLongValue, MethodRefEntry numberDoubleValue,
+			MethodRefEntry longValueOf, MethodRefEntry doubleBoxValueOf, MethodRefEntry dblCoerce, ClassEntry rtExClass,
+			MethodRefEntry rtExInit, MethodCode.Label notPacked) {
+		MethodCode.Label tryLong = a.newLabel();
+		MethodCode.Label tryDouble = a.newLabel();
+		MethodCode.Label tryFloat = a.newLabel();
+		MethodCode.Label tryShort = a.newLabel();
+		MethodCode.Label intOk = a.newLabel();
+		MethodCode.Label octetOk = a.newLabel();
+		StringEntry storesIntegers = cp.stringEntry("%aset: a packed integer vector stores integers");
 		// An octet vector: b[idx] = (byte) v, answering v & 0xFF -- the value as stored.
 		a.aload(targetSlot);
 		a.instanceOf(byteArrayClass);
-		a.branch(Opcode.IFEQ, tryLong);
+		a.ifeq(tryLong);
 		a.aload(valSlot);
 		a.instanceOf(numberClass);
-		a.branch(Opcode.IFNE, octetOk);
+		a.ifne(octetOk);
 		emitThrow(a, rtExClass, rtExInit, storesIntegers);
-		a.bind(octetOk);
+		a.labelBinding(octetOk);
 		a.aload(valSlot);
 		a.checkcast(numberClass);
 		a.invokevirtual(numberLongValue);
 		a.l2i();
-		a.iconst(0xFF);
-		a.op(Opcode.IAND);
+		a.loadConstant(0xFF);
+		a.iand();
 		a.istore(ixSlot);
 		a.aload(targetSlot);
 		a.checkcast(byteArrayClass);
@@ -3160,35 +3108,35 @@ final class JvmArrayRuntimeBuilder {
 		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(tryLong);
+		a.labelBinding(tryLong);
 		a.aload(targetSlot);
 		a.instanceOf(longArrayClass);
-		a.branch(Opcode.IFEQ, tryDouble);
+		a.ifeq(tryDouble);
 		a.aload(targetSlot);
 		a.checkcast(longArrayClass);
 		a.astore(ivArrSlot);
 		a.aload(valSlot);
 		a.instanceOf(numberClass);
-		a.branch(Opcode.IFNE, intOk);
+		a.ifne(intOk);
 		emitThrow(a, rtExClass, rtExInit, storesIntegers);
-		a.bind(intOk);
+		a.labelBinding(intOk);
 		a.aload(valSlot);
 		a.checkcast(numberClass);
 		a.invokevirtual(numberLongValue);
 		a.lstore(vSlot);
 		// width = (int) l[0]; v &= (1L << width) - 1
 		a.aload(ivArrSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.laload();
 		a.l2i();
 		a.istore(ixSlot);
 		a.lload(vSlot);
-		a.op(Opcode.LCONST_1);
+		a.lconst_1();
 		a.iload(ixSlot);
-		a.op(Opcode.LSHL);
-		a.op(Opcode.LCONST_1);
-		a.op(Opcode.LSUB);
-		a.op(Opcode.LAND);
+		a.lshl();
+		a.lconst_1();
+		a.lsub();
+		a.land();
 		a.lstore(vSlot);
 		a.aload(ivArrSlot);
 		a.iload(idxSlot);
@@ -3197,19 +3145,19 @@ final class JvmArrayRuntimeBuilder {
 		a.lload(vSlot);
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(tryDouble);
+		a.labelBinding(tryDouble);
 		a.aload(targetSlot);
 		a.instanceOf(doubleArrayClass);
-		a.branch(Opcode.IFEQ, tryFloat);
+		a.ifeq(tryFloat);
 		a.aload(targetSlot);
 		a.checkcast(doubleArrayClass);
 		a.astore(dvArrSlot);
 		a.aload(dvArrSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.daload();
 		a.d2i();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(ixSlot);
 		a.aload(valSlot);
 		a.invokestatic(dblCoerce);
@@ -3223,19 +3171,19 @@ final class JvmArrayRuntimeBuilder {
 		a.dload(dvalSlot);
 		a.invokestatic(doubleBoxValueOf);
 		a.areturn();
-		a.bind(tryFloat);
+		a.labelBinding(tryFloat);
 		a.aload(targetSlot);
 		a.instanceOf(floatArrayClass);
-		a.branch(Opcode.IFEQ, tryShort);
+		a.ifeq(tryShort);
 		a.aload(targetSlot);
 		a.checkcast(floatArrayClass);
 		a.astore(fvArrSlot);
 		a.aload(fvArrSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.faload();
 		a.f2i();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(ixSlot);
 		a.aload(valSlot);
 		a.invokestatic(dblCoerce);
@@ -3257,24 +3205,24 @@ final class JvmArrayRuntimeBuilder {
 		a.areturn();
 		// A bfloat16 target: the slot is fvArrSlot again (a slot's type is per path),
 		// the index 2 * rank + idx, the store and the read-back through the pair.
-		a.bind(tryShort);
+		a.labelBinding(tryShort);
 		if (bf16Value == null || bf16Bits == null) {
-			a.branch(Opcode.GOTO, notPacked);
+			a.goto_(notPacked);
 			return;
 		}
 		a.aload(targetSlot);
 		a.instanceOf(shortArrayClass);
-		a.branch(Opcode.IFEQ, notPacked);
+		a.ifeq(notPacked);
 		a.aload(targetSlot);
 		a.checkcast(shortArrayClass);
 		a.astore(fvArrSlot);
 		a.aload(fvArrSlot);
 		JvmPackedFloatWidth.BFLOAT16.loadRank(a);
 		JvmPackedFloatWidth.BFLOAT16.emitDataOffset(a);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.iload(idxSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(ixSlot);
 		a.aload(valSlot);
 		a.invokestatic(dblCoerce);
@@ -3295,34 +3243,34 @@ final class JvmArrayRuntimeBuilder {
 	// Emits the "the displacement walk ended on a STRING target" test: leaves 1 on the
 	// stack when headerSlot holds a length &gt; 4 header whose slot 3 is non-null (see
 	// emitResolveDisplacement), 0 otherwise. Costs two compares on the ordinary path.
-	private static void emitLandedOnString(JvmAsm a, int headerSlot, int yes) {
-		int no = a.label();
+	private static void emitLandedOnString(MethodCode a, int headerSlot, MethodCode.Label yes) {
+		MethodCode.Label no = a.newLabel();
 		a.aload(headerSlot);
 		a.arraylength();
-		a.iconst(4);
-		a.branch(Opcode.IF_ICMPLE, no);
+		a.loadConstant(4);
+		a.if_icmple(no);
 		a.aload(headerSlot);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
-		a.branch(Opcode.IFNONNULL, yes);
-		a.bind(no);
+		a.ifnonnull(yes);
+		a.labelBinding(no);
 	}
 
 	// Parses a make-array dimensions argument in the local dims (a Long for the rank-1
 	// shorthand, otherwise a cons list of Longs) into an Object[] of boxed Long sizes
 	// (dimsArr) and the int total element count (total). cur/n/idx are scratch slots.
-	private static void emitParseDims(JvmAsm m, ClassConstant objectClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant longIntValue, int dims, int dimsArr, int total, int cur,
-			int n, int idx) {
+	private static void emitParseDims(MethodCode m, ClassEntry objectClass, ClassEntry longClass,
+			ClassEntry objectArrayClass, MethodRefEntry longIntValue, int dims, int dimsArr, int total, int cur, int n,
+			int idx) {
 		m.aload(dims);
 		m.instanceOf(longClass);
-		int notLong = m.label();
-		m.branch(Opcode.IFEQ, notLong);
+		MethodCode.Label notLong = m.newLabel();
+		m.ifeq(notLong);
 		// 1-D integer shorthand: dimsArr = {dims}; total = ((Long) dims).intValue()
-		m.iconst(1);
+		m.loadConstant(1);
 		m.anewarray(objectClass);
 		m.dup();
-		m.iconst(0);
+		m.loadConstant(0);
 		m.aload(dims);
 		m.aastore();
 		m.astore(dimsArr);
@@ -3330,49 +3278,49 @@ final class JvmArrayRuntimeBuilder {
 		m.checkcast(longClass);
 		m.invokevirtual(longIntValue);
 		m.istore(total);
-		int afterDims = m.label();
-		m.branch(Opcode.GOTO, afterDims);
+		MethodCode.Label afterDims = m.newLabel();
+		m.goto_(afterDims);
 		// cons list of dimensions: first count the length (n), then copy the sizes
 		// into dimsArr while multiplying total.
-		m.bind(notLong);
-		m.iconst(0);
+		m.labelBinding(notLong);
+		m.loadConstant(0);
 		m.istore(n);
 		m.aload(dims);
 		m.astore(cur);
-		int countLoop = m.label();
-		int countDone = m.label();
-		m.bind(countLoop);
+		MethodCode.Label countLoop = m.newLabel();
+		MethodCode.Label countDone = m.newLabel();
+		m.labelBinding(countLoop);
 		m.aload(cur);
 		m.instanceOf(objectArrayClass);
-		m.branch(Opcode.IFEQ, countDone);
+		m.ifeq(countDone);
 		m.iinc(n, 1);
 		m.aload(cur);
 		m.checkcast(objectArrayClass);
-		m.iconst(1);
+		m.loadConstant(1);
 		m.aaload();
 		m.astore(cur);
-		m.branch(Opcode.GOTO, countLoop);
-		m.bind(countDone);
+		m.goto_(countLoop);
+		m.labelBinding(countDone);
 		m.iload(n);
 		m.anewarray(objectClass);
 		m.astore(dimsArr);
-		m.iconst(1);
+		m.loadConstant(1);
 		m.istore(total);
-		m.iconst(0);
+		m.loadConstant(0);
 		m.istore(idx);
 		m.aload(dims);
 		m.astore(cur);
-		int fillLoop = m.label();
-		m.bind(fillLoop);
+		MethodCode.Label fillLoop = m.newLabel();
+		m.labelBinding(fillLoop);
 		m.iload(idx);
 		m.iload(n);
-		m.branch(Opcode.IF_ICMPGE, afterDims);
+		m.if_icmpge(afterDims);
 		// dimsArr[idx] = car(cur)
 		m.aload(dimsArr);
 		m.iload(idx);
 		m.aload(cur);
 		m.checkcast(objectArrayClass);
-		m.iconst(0);
+		m.loadConstant(0);
 		m.aaload();
 		m.aastore();
 		// total *= ((Long) dimsArr[idx]).intValue()
@@ -3382,85 +3330,85 @@ final class JvmArrayRuntimeBuilder {
 		m.aaload();
 		m.checkcast(longClass);
 		m.invokevirtual(longIntValue);
-		m.op(Opcode.IMUL);
+		m.imul();
 		m.istore(total);
 		// cur = cdr(cur)
 		m.aload(cur);
 		m.checkcast(objectArrayClass);
-		m.iconst(1);
+		m.loadConstant(1);
 		m.aaload();
 		m.astore(cur);
 		m.iinc(idx, 1);
-		m.branch(Opcode.GOTO, fillLoop);
-		m.bind(afterDims);
+		m.goto_(fillLoop);
+		m.labelBinding(afterDims);
 	}
 
 	// Pushes the int product of the boxed Long dimension sizes of the header in
 	// headerSlot (the total element count), using productSlot/mSlot as scratch.
-	private static void emitDimsProduct(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
-			MethodrefConstant longIntValue, int headerSlot, int productSlot, int mSlot) {
-		a.iconst(1);
+	private static void emitDimsProduct(MethodCode a, ClassEntry longClass, ClassEntry objectArrayClass,
+			MethodRefEntry longIntValue, int headerSlot, int productSlot, int mSlot) {
+		a.loadConstant(1);
 		a.istore(productSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(mSlot);
-		int loop = a.label();
-		int done = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(mSlot);
 		a.aload(headerSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.iload(productSlot);
 		a.aload(headerSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.iload(mSlot);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.istore(productSlot);
 		a.iinc(mSlot, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.iload(productSlot);
 	}
 
 	// Pushes the slot-0 header Object[] of the array in arrSlot.
 	// Copies the first `count` slots of the header in headerSlot into the fresh Object[]
 	// on top of the stack (which is left there), leaving the remaining slots null.
-	private static void emitCopyHeaderSlots(JvmAsm a, int headerSlot, int count) {
+	private static void emitCopyHeaderSlots(MethodCode a, int headerSlot, int count) {
 		for (int i = 0; i < count; i++) {
 			a.dup();
-			a.iconst(i);
+			a.loadConstant(i);
 			a.aload(headerSlot);
-			a.iconst(i);
+			a.loadConstant(i);
 			a.aaload();
 			a.aastore();
 		}
 	}
 
-	private static void emitLoadHeader(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
-			MethodrefConstant alGet, int arrSlot) {
+	private static void emitLoadHeader(MethodCode a, ClassEntry arrayListClass, ClassEntry objectArrayClass,
+			MethodRefEntry alGet, int arrSlot) {
 		a.aload(arrSlot);
 		a.checkcast(arrayListClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(alGet);
 		a.checkcast(objectArrayClass);
 	}
 
 	// Pushes the int first dimension size of the header in headerSlot.
-	private static void emitLoadDim0(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
-			MethodrefConstant longIntValue, int headerSlot) {
+	private static void emitLoadDim0(MethodCode a, ClassEntry longClass, ClassEntry objectArrayClass,
+			MethodRefEntry longIntValue, int headerSlot) {
 		a.aload(headerSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
@@ -3470,30 +3418,30 @@ final class JvmArrayRuntimeBuilder {
 	// is non-null, else null (nil). A non-array argument (a plain string handed to
 	// adjustable-array-p, cl-ppcre's gather-strings collector) is nil, not a cast
 	// error.
-	private static void emitHeaderSlotToBool(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
-			MethodrefConstant alGet, ConstantPool cp, int slot) {
-		int isNil = a.label();
+	private static void emitHeaderSlotToBool(MethodCode a, ClassEntry arrayListClass, ClassEntry objectArrayClass,
+			MethodRefEntry alGet, ConstantPool cp, int slot) {
+		MethodCode.Label isNil = a.newLabel();
 		a.aload(0);
 		a.instanceOf(arrayListClass);
-		a.branch(Opcode.IFEQ, isNil);
+		a.ifeq(isNil);
 		emitLoadHeader(a, arrayListClass, objectArrayClass, alGet, 0);
-		a.iconst(slot);
+		a.loadConstant(slot);
 		a.aaload();
-		a.branch(Opcode.IFNULL, isNil);
-		a.ldcString(cp.addString("T"));
+		a.ifnull(isNil);
+		a.ldc(cp.stringEntry("T"));
 		a.areturn();
-		a.bind(isNil);
-		a.aconstNull();
+		a.labelBinding(isNil);
+		a.aconst_null();
 		a.areturn();
 	}
 
 	// Pushes the int fill pointer of the header in headerSlot, which _ckFp at the site
 	// has
 	// checked carries one.
-	private static void emitLoadFillPointer(JvmAsm a, ClassConstant longClass, MethodrefConstant longIntValue,
+	private static void emitLoadFillPointer(MethodCode a, ClassEntry longClass, MethodRefEntry longIntValue,
 			int headerSlot) {
 		a.aload(headerSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
@@ -3502,8 +3450,8 @@ final class JvmArrayRuntimeBuilder {
 	// Pushes a type spelled as nested lists of symbol names and Longs
 	// (OperandTypes.FILL_POINTER_VECTOR_TYPE) as the Lisp value it spells: a String is a
 	// symbol, a list a chain of Object[2] conses.
-	private static void emitTypeValue(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
-			MethodrefConstant longValueOf, Object type) {
+	private static void emitTypeValue(MethodCode a, ConstantPool cp, ClassEntry objectClass, MethodRefEntry longValueOf,
+			Object type) {
 		if (type instanceof List<?> list) {
 			List<Runnable> elements = new java.util.ArrayList<>();
 			for (Object element : list) {
@@ -3513,27 +3461,27 @@ final class JvmArrayRuntimeBuilder {
 			emitList(a, objectClass, elements);
 		}
 		else if (type instanceof Long n) {
-			a.ldc2Long(cp.addLong(n));
+			a.ldc(cp.entries().longEntry(n));
 			a.invokestatic(longValueOf);
 		}
 		else {
-			a.ldcString(cp.addString((String) type));
+			a.ldc(cp.stringEntry((String) type));
 		}
 	}
 
 	// Pushes a proper list of what each element pushes: {e0, {e1, ... null}}.
-	private static void emitList(JvmAsm a, ClassConstant objectClass, List<Runnable> elements) {
+	private static void emitList(MethodCode a, ClassEntry objectClass, List<Runnable> elements) {
 		for (Runnable element : elements) {
-			a.iconst(2);
+			a.loadConstant(2);
 			a.anewarray(objectClass);
 			a.dup();
-			a.iconst(0);
+			a.loadConstant(0);
 			element.run();
 			a.aastore();
 			a.dup();
-			a.iconst(1);
+			a.loadConstant(1);
 		}
-		a.aconstNull();
+		a.aconst_null();
 		for (int i = 0; i < elements.size(); i++) {
 			a.aastore();
 		}
@@ -3545,83 +3493,82 @@ final class JvmArrayRuntimeBuilder {
 	// element count, and anything else -- i.e. t -- is that count. Only a rank-1 array
 	// may carry one. A DISPLACED view resolves it exactly the same way: total is the
 	// VIEW's element count, never the target's.
-	private static void emitResolveFillPointer(JvmAsm m, ClassConstant longClass, MethodrefConstant longIntValue,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, ConstantPool cp, int fp, int dimsArr, int total,
-			int fpVal, int v) {
-		m.aconstNull();
+	private static void emitResolveFillPointer(MethodCode m, ClassEntry longClass, MethodRefEntry longIntValue,
+			ClassEntry rtExClass, MethodRefEntry rtExInit, ConstantPool cp, int fp, int dimsArr, int total, int fpVal,
+			int v) {
+		m.aconst_null();
 		m.astore(fpVal);
-		int afterFp = m.label();
+		MethodCode.Label afterFp = m.newLabel();
 		m.aload(fp);
-		m.branch(Opcode.IFNULL, afterFp);
-		int rankOk = m.label();
+		m.ifnull(afterFp);
+		MethodCode.Label rankOk = m.newLabel();
 		m.aload(dimsArr);
 		m.arraylength();
-		m.iconst(1);
-		m.branch(Opcode.IF_ICMPEQ, rankOk);
-		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer requires a rank-1 array"));
-		m.bind(rankOk);
-		int fpIsT = m.label();
+		m.loadConstant(1);
+		m.if_icmpeq(rankOk);
+		emitThrow(m, rtExClass, rtExInit, cp.stringEntry("make-array: :fill-pointer requires a rank-1 array"));
+		m.labelBinding(rankOk);
+		MethodCode.Label fpIsT = m.newLabel();
 		m.aload(fp);
 		m.instanceOf(longClass);
-		m.branch(Opcode.IFEQ, fpIsT);
+		m.ifeq(fpIsT);
 		m.aload(fp);
 		m.checkcast(longClass);
 		m.invokevirtual(longIntValue);
 		m.istore(v);
-		int fpBad = m.label();
-		int fpLongOk = m.label();
+		MethodCode.Label fpBad = m.newLabel();
+		MethodCode.Label fpLongOk = m.newLabel();
 		m.iload(v);
-		m.branch(Opcode.IFLT, fpBad);
+		m.iflt(fpBad);
 		m.iload(v);
 		m.iload(total);
-		m.branch(Opcode.IF_ICMPGT, fpBad);
-		m.branch(Opcode.GOTO, fpLongOk);
-		m.bind(fpBad);
-		emitThrow(m, rtExClass, rtExInit, cp.addString("make-array: :fill-pointer out of range"));
-		m.bind(fpLongOk);
+		m.if_icmpgt(fpBad);
+		m.goto_(fpLongOk);
+		m.labelBinding(fpBad);
+		emitThrow(m, rtExClass, rtExInit, cp.stringEntry("make-array: :fill-pointer out of range"));
+		m.labelBinding(fpLongOk);
 		m.aload(fp);
 		m.astore(fpVal);
-		m.branch(Opcode.GOTO, afterFp);
+		m.goto_(afterFp);
 		// :fill-pointer t -> the vector size (dimsArr[0] is already the boxed Long)
-		m.bind(fpIsT);
+		m.labelBinding(fpIsT);
 		m.aload(dimsArr);
-		m.iconst(0);
+		m.loadConstant(0);
 		m.aaload();
 		m.astore(fpVal);
-		m.bind(afterFp);
+		m.labelBinding(afterFp);
 	}
 
 	// Stores the array's ACTIVE length into nSlot: the header's fill pointer (slot 1)
 	// when it carries one, otherwise dimension 0. Shared by every reader that stops at
 	// the fill pointer -- and a DISPLACED view's header carries the slot too.
-	private static void emitActiveLength(JvmAsm a, ClassConstant longClass, ClassConstant objectArrayClass,
-			MethodrefConstant longIntValue, int headerSlot, int nSlot) {
-		int useDim = a.label();
-		int haveN = a.label();
+	private static void emitActiveLength(MethodCode a, ClassEntry longClass, ClassEntry objectArrayClass,
+			MethodRefEntry longIntValue, int headerSlot, int nSlot) {
+		MethodCode.Label useDim = a.newLabel();
+		MethodCode.Label haveN = a.newLabel();
 		a.aload(headerSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.branch(Opcode.IFNULL, useDim);
+		a.ifnull(useDim);
 		a.aload(headerSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(nSlot);
-		a.branch(Opcode.GOTO, haveN);
-		a.bind(useDim);
+		a.goto_(haveN);
+		a.labelBinding(useDim);
 		emitLoadDim0(a, longClass, objectArrayClass, longIntValue, headerSlot);
 		a.istore(nSlot);
-		a.bind(haveN);
+		a.labelBinding(haveN);
 	}
 
-	private static void emitThrow(JvmAsm a, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			am.ik.jvm.ConstantPool.StringConstant message) {
-		a.anew(rtExClass);
+	private static void emitThrow(MethodCode a, ClassEntry rtExClass, MethodRefEntry rtExInit, StringEntry message) {
+		a.new_(rtExClass);
 		a.dup();
-		a.ldcString(message);
+		a.ldc(message);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
+		a.athrow();
 	}
 
 	// Shared tail of every _*CheckRank helper: unbox `given` (local givenSlot) to int
@@ -3629,36 +3576,35 @@ final class JvmArrayRuntimeBuilder {
 	// rankSlot); a match returns arr (local arrSlot) unchanged, a mismatch throws
 	// new RuntimeException("aref: expected " + rank + " subscripts, got " + given) --
 	// the wording LispArray/LispFloatArray#flatIndex use in the interpreter.
-	private static void emitRankCheckAndReturn(ConstantPool cp, JvmAsm a, ClassConstant longClass,
-			MethodrefConstant longIntValue, ClassConstant sbClass, MethodrefConstant sbInit,
-			MethodrefConstant sbAppendStr, MethodrefConstant sbAppendInt, MethodrefConstant sbToString,
-			ClassConstant rtExClass, MethodrefConstant rtExInit, int arrSlot, int givenSlot, int rankSlot,
-			int givSlot) {
+	private static void emitRankCheckAndReturn(ConstantPool cp, MethodCode a, ClassEntry longClass,
+			MethodRefEntry longIntValue, ClassEntry sbClass, MethodRefEntry sbInit, MethodRefEntry sbAppendStr,
+			MethodRefEntry sbAppendInt, MethodRefEntry sbToString, ClassEntry rtExClass, MethodRefEntry rtExInit,
+			int arrSlot, int givenSlot, int rankSlot, int givSlot) {
 		a.aload(givenSlot);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(givSlot);
-		int ok = a.label();
+		MethodCode.Label ok = a.newLabel();
 		a.iload(rankSlot);
 		a.iload(givSlot);
-		a.branch(Opcode.IF_ICMPEQ, ok);
-		a.anew(rtExClass);
+		a.if_icmpeq(ok);
+		a.new_(rtExClass);
 		a.dup();
-		a.anew(sbClass);
+		a.new_(sbClass);
 		a.dup();
 		a.invokespecial(sbInit);
-		a.ldcString(cp.addString("aref: expected "));
+		a.ldc(cp.stringEntry("aref: expected "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldcString(cp.addString(" subscripts, got "));
+		a.ldc(cp.addString(" subscripts, got ").entry());
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
 		a.invokevirtual(sbToString);
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
-		a.bind(ok);
+		a.athrow();
+		a.labelBinding(ok);
 		a.aload(arrSlot);
 		a.areturn();
 	}
@@ -3668,25 +3614,25 @@ final class JvmArrayRuntimeBuilder {
 	// through _rmSet, not ArrayList.set, so a DISPLACED fill-pointered view writes
 	// THROUGH to its target's storage the way SBCL's does -- the view holds no data
 	// slots of its own.
-	private static void emitStoreAtFillPointerAndAdvance(JvmAsm a, MethodrefConstant rmSet,
-			MethodrefConstant longValueOf, int valSlot, int arrSlot, int headerSlot, int fpSlot) {
+	private static void emitStoreAtFillPointerAndAdvance(MethodCode a, MethodRefEntry rmSet, MethodRefEntry longValueOf,
+			int valSlot, int arrSlot, int headerSlot, int fpSlot) {
 		a.aload(arrSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(fpSlot);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.aload(valSlot);
 		a.invokestatic(rmSet);
 		a.pop();
 		a.aload(headerSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(fpSlot);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.op(Opcode.I2L);
+		a.loadConstant(1);
+		a.iadd();
+		a.i2l();
 		a.invokestatic(longValueOf);
 		a.aastore();
 		a.iload(fpSlot);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
 	}
@@ -3703,38 +3649,28 @@ final class JvmArrayRuntimeBuilder {
 	 * ({@code _lispToDisplayString})
 	 * @return the two helper methods
 	 */
-	static List<ArrayMethod> buildToStringMethods(ConstantPool cp, MethodrefConstant lispToString,
-			MethodrefConstant lispToDisplayString, ClassConstant selfClass,
-			JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
-		MethodrefConstant rmGet = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC)));
-		ClassConstant sbClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant longIntValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant sbInit = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant sbAppend = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = cp.addMethodref(sbClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant stringValueOfInt = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
-		MethodrefConstant elementType = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC)));
+	static List<ArrayMethod> buildToStringMethods(ConstantPool cp, MethodRefEntry lispToString,
+			MethodRefEntry lispToDisplayString, ClassEntry selfClass, JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
+		MethodRefEntry rmGet = cp.methodRef(selfClass, RM_GET, RM_GET_DESC);
+		ClassEntry sbClass = cp.classEntry("java/lang/StringBuilder");
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry alGet = cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry alSize = cp.methodRef(arrayListClass, "size", "()I");
+		MethodRefEntry longIntValue = cp.methodRef(longClass, "intValue", "()I");
+		MethodRefEntry sbInit = cp.methodRef(sbClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry sbAppend = cp.methodRef(sbClass, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
+		MethodRefEntry stringValueOfInt = cp.methodRef(stringClass, "valueOf", "(I)Ljava/lang/String;");
+		MethodRefEntry elementType = cp.methodRef(selfClass, ELEMENT_TYPE, ELEMENT_TYPE_DESC);
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC), 7, 12,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC),
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet, elementType, renderGuard)));
-		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC), 7, 12,
+		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC),
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet, elementType, renderGuard)));
 		return methods;
@@ -3747,14 +3683,14 @@ final class JvmArrayRuntimeBuilder {
 	// one, so a fill-pointer vector prints only up to it. Locals: 0=arr, 1=list, 2=sb,
 	// 3=n (element count), 4=dims (Object[]), 5=k, 6=j (dimension), 7=stride,
 	// 8=m (stride scratch), 9=rank, 10=header (Object[]).
-	private static List<Integer> buildToString(ConstantPool cp, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant alGet, MethodrefConstant alSize,
-			MethodrefConstant longIntValue, MethodrefConstant sbInit, MethodrefConstant sbAppend,
-			MethodrefConstant sbToString, MethodrefConstant stringValueOfInt, MethodrefConstant elementFormat,
-			MethodrefConstant rmGet, MethodrefConstant elementType, JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
+	private static MethodCode buildToString(ConstantPool cp, ClassEntry arrayListClass, ClassEntry longClass,
+			ClassEntry objectArrayClass, MethodRefEntry alGet, MethodRefEntry alSize, MethodRefEntry longIntValue,
+			MethodRefEntry sbInit, MethodRefEntry sbAppend, MethodRefEntry sbToString, MethodRefEntry stringValueOfInt,
+			MethodRefEntry elementFormat, MethodRefEntry rmGet, MethodRefEntry elementType,
+			JvmRuntimeBuilder.RenderGuardRefs renderGuard) {
 		int arr = 0, list = 1, sb = 2, n = 3, dimsArr = 4, k = 5, j = 6, stride = 7, m = 8, rank = 9, header = 10,
 				guardScratch = 11;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// The cycle guard (the shared RenderGuardRefs discipline over the
 		// _renderPath/_renderDepth statics, kept in step by
 		// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite): an array
@@ -3763,81 +3699,81 @@ final class JvmArrayRuntimeBuilder {
 		// the *print-level* cutoff marker. A packed array routes here through its
 		// boxed-general conversion, so it opens the same one frame the interpreter's
 		// packed renderers open.
-		int pathInited = a.label();
-		a.getstatic(renderGuard.pathField());
-		a.branch(Opcode.IFNONNULL, pathInited);
-		a.iconst(RenderCycleGuard.MAX_RENDER_DEPTH);
-		a.anewarray(renderGuard.objectClass());
-		a.putstatic(renderGuard.pathField());
-		a.bind(pathInited);
-		a.iconst(0);
+		MethodCode.Label pathInited = a.newLabel();
+		a.getstatic(renderGuard.pathField().entry());
+		a.ifnonnull(pathInited);
+		a.loadConstant(RenderCycleGuard.MAX_RENDER_DEPTH);
+		a.anewarray(renderGuard.objectClass().entry());
+		a.putstatic(renderGuard.pathField().entry());
+		a.labelBinding(pathInited);
+		a.loadConstant(0);
 		a.istore(guardScratch);
-		int scanLoop = a.label();
-		int scanDone = a.label();
-		int scanMiss = a.label();
-		a.bind(scanLoop);
+		MethodCode.Label scanLoop = a.newLabel();
+		MethodCode.Label scanDone = a.newLabel();
+		MethodCode.Label scanMiss = a.newLabel();
+		a.labelBinding(scanLoop);
 		a.iload(guardScratch);
-		a.getstatic(renderGuard.depthField());
-		a.branch(Opcode.IF_ICMPGE, scanDone);
-		a.getstatic(renderGuard.pathField());
+		a.getstatic(renderGuard.depthField().entry());
+		a.if_icmpge(scanDone);
+		a.getstatic(renderGuard.pathField().entry());
 		a.iload(guardScratch);
 		a.aaload();
 		a.aload(arr);
-		a.branch(Opcode.IF_ACMPNE, scanMiss);
-		a.ldcString(renderGuard.depthMarkerStr());
+		a.if_acmpne(scanMiss);
+		a.ldc(renderGuard.depthMarkerStr().entry());
 		a.areturn();
-		a.bind(scanMiss);
+		a.labelBinding(scanMiss);
 		a.iinc(guardScratch, 1);
-		a.branch(Opcode.GOTO, scanLoop);
-		a.bind(scanDone);
-		int underCap = a.label();
-		a.getstatic(renderGuard.depthField());
+		a.goto_(scanLoop);
+		a.labelBinding(scanDone);
+		MethodCode.Label underCap = a.newLabel();
+		a.getstatic(renderGuard.depthField().entry());
 		a.istore(guardScratch);
 		a.iload(guardScratch);
-		a.iconst(RenderCycleGuard.MAX_RENDER_DEPTH);
-		a.branch(Opcode.IF_ICMPLT, underCap);
-		a.ldcString(renderGuard.depthMarkerStr());
+		a.loadConstant(RenderCycleGuard.MAX_RENDER_DEPTH);
+		a.if_icmplt(underCap);
+		a.ldc(renderGuard.depthMarkerStr().entry());
 		a.areturn();
-		a.bind(underCap);
-		a.getstatic(renderGuard.pathField());
+		a.labelBinding(underCap);
+		a.getstatic(renderGuard.pathField().entry());
 		a.iload(guardScratch);
 		a.aload(arr);
 		a.aastore();
 		a.iload(guardScratch);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.putstatic(renderGuard.depthField());
+		a.loadConstant(1);
+		a.iadd();
+		a.putstatic(renderGuard.depthField().entry());
 		// list = (ArrayList) arr; header = (Object[]) list.get(0)
 		a.aload(arr);
 		a.checkcast(arrayListClass);
 		a.astore(list);
 		a.aload(list);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(alGet);
 		a.checkcast(objectArrayClass);
 		a.astore(header);
 		// n = header[1] != null ? fill pointer : product of the dims (the total element
 		// count; a displaced array holds no data slots, so size() - 1 would be wrong)
-		int useSize = a.label();
-		int afterN = a.label();
+		MethodCode.Label useSize = a.newLabel();
+		MethodCode.Label afterN = a.newLabel();
 		a.aload(header);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.branch(Opcode.IFNULL, useSize);
+		a.ifnull(useSize);
 		a.aload(header);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(n);
-		a.branch(Opcode.GOTO, afterN);
-		a.bind(useSize);
+		a.goto_(afterN);
+		a.labelBinding(useSize);
 		emitDimsProduct(a, longClass, objectArrayClass, longIntValue, header, stride, m);
 		a.istore(n);
-		a.bind(afterN);
+		a.labelBinding(afterN);
 		// dims = (Object[]) header[0]; rank = dims.length
 		a.aload(header);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.astore(dimsArr);
@@ -3854,277 +3790,275 @@ final class JvmArrayRuntimeBuilder {
 		// through in %array-alike before (.kb/subseq-runtime.md). Locals k/j are
 		// reused: the check loop runs before the general path initializes them,
 		// and the build loop reuses k.
-		ClassConstant bitStringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant bitStringEquals = cp.addMethodref(bitStringClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		int bitGeneral = a.label();
+		ClassEntry bitStringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry bitStringEquals = cp.methodRef(bitStringClass, "equals", "(Ljava/lang/Object;)Z");
+		MethodCode.Label bitGeneral = a.newLabel();
 		a.iload(rank);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, bitGeneral);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT));
+		a.loadConstant(1);
+		a.if_icmpne(bitGeneral);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BIT));
 		a.aload(arr);
 		a.invokestatic(elementType);
 		a.invokevirtual(bitStringEquals);
-		a.branch(Opcode.IFEQ, bitGeneral);
+		a.ifeq(bitGeneral);
 		// Validate: every element a Long 0/1 (read displaced-aware via _rmGet).
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int bitCheckLoop = a.label();
-		int bitCheckDone = a.label();
-		a.bind(bitCheckLoop);
+		MethodCode.Label bitCheckLoop = a.newLabel();
+		MethodCode.Label bitCheckDone = a.newLabel();
+		a.labelBinding(bitCheckLoop);
 		a.iload(k);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, bitCheckDone);
+		a.if_icmpge(bitCheckDone);
 		a.aload(list);
 		a.iload(k);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokestatic(rmGet);
 		a.dup();
 		a.instanceOf(longClass);
-		int bitIsLong = a.label();
-		a.branch(Opcode.IFNE, bitIsLong);
+		MethodCode.Label bitIsLong = a.newLabel();
+		a.ifne(bitIsLong);
 		a.pop();
-		a.branch(Opcode.GOTO, bitGeneral);
-		a.bind(bitIsLong);
+		a.goto_(bitGeneral);
+		a.labelBinding(bitIsLong);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
 		a.istore(j);
 		a.iload(j);
-		int bitCheckNext = a.label();
-		a.branch(Opcode.IFEQ, bitCheckNext);
+		MethodCode.Label bitCheckNext = a.newLabel();
+		a.ifeq(bitCheckNext);
 		a.iload(j);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, bitGeneral);
-		a.bind(bitCheckNext);
+		a.loadConstant(1);
+		a.if_icmpne(bitGeneral);
+		a.labelBinding(bitCheckNext);
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, bitCheckLoop);
-		a.bind(bitCheckDone);
+		a.goto_(bitCheckLoop);
+		a.labelBinding(bitCheckDone);
 		// Build "#*" + bits.
-		a.anew(sbClass(cp));
+		a.new_(sbClass(cp));
 		a.dup();
-		a.ldcString(cp.addString("#*"));
+		a.ldc(cp.stringEntry("#*"));
 		a.invokespecial(sbInit);
 		a.astore(sb);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int bitBuildLoop = a.label();
-		int bitBuildDone = a.label();
-		a.bind(bitBuildLoop);
+		MethodCode.Label bitBuildLoop = a.newLabel();
+		MethodCode.Label bitBuildDone = a.newLabel();
+		a.labelBinding(bitBuildLoop);
 		a.iload(k);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, bitBuildDone);
+		a.if_icmpge(bitBuildDone);
 		a.aload(sb);
 		a.aload(list);
 		a.iload(k);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokestatic(rmGet);
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
-		int bitIsOne = a.label();
-		int bitAppended = a.label();
-		a.branch(Opcode.IFNE, bitIsOne);
-		a.ldcString(cp.addString("0"));
-		a.branch(Opcode.GOTO, bitAppended);
-		a.bind(bitIsOne);
-		a.ldcString(cp.addString("1"));
-		a.bind(bitAppended);
+		MethodCode.Label bitIsOne = a.newLabel();
+		MethodCode.Label bitAppended = a.newLabel();
+		a.ifne(bitIsOne);
+		a.ldc(cp.stringEntry("0"));
+		a.goto_(bitAppended);
+		a.labelBinding(bitIsOne);
+		a.ldc(cp.stringEntry("1"));
+		a.labelBinding(bitAppended);
 		a.invokevirtual(sbAppend);
 		a.pop();
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, bitBuildLoop);
-		a.bind(bitBuildDone);
+		a.goto_(bitBuildLoop);
+		a.labelBinding(bitBuildDone);
 		a.aload(sb);
 		a.invokevirtual(sbToString);
-		int bitPopClamp = a.label();
-		a.getstatic(renderGuard.depthField());
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		MethodCode.Label bitPopClamp = a.newLabel();
+		a.getstatic(renderGuard.depthField().entry());
+		a.loadConstant(1);
+		a.isub();
 		a.istore(guardScratch);
 		a.iload(guardScratch);
-		a.branch(Opcode.IFLT, bitPopClamp);
-		a.getstatic(renderGuard.pathField());
+		a.iflt(bitPopClamp);
+		a.getstatic(renderGuard.pathField().entry());
 		a.iload(guardScratch);
-		a.op(Opcode.ACONST_NULL);
+		a.aconst_null();
 		a.aastore();
 		a.iload(guardScratch);
-		a.putstatic(renderGuard.depthField());
+		a.putstatic(renderGuard.depthField().entry());
 		a.areturn();
-		a.bind(bitPopClamp);
-		a.iconst(0);
-		a.putstatic(renderGuard.depthField());
+		a.labelBinding(bitPopClamp);
+		a.loadConstant(0);
+		a.putstatic(renderGuard.depthField().entry());
 		a.areturn();
-		a.bind(bitGeneral);
+		a.labelBinding(bitGeneral);
 		// sb = new StringBuilder("#"); rank 1 appends "(", rank n appends n then "A(",
 		// and rank 0 appends "0A" with NO paren -- #0A<datum> is the whole rank-0
 		// syntax, so the closing paren at the tail is skipped for it too.
-		a.anew(sbClass(cp));
+		a.new_(sbClass(cp));
 		a.dup();
-		a.ldcString(cp.addString("#"));
+		a.ldc(cp.stringEntry("#"));
 		a.invokespecial(sbInit);
 		a.astore(sb);
-		int rankN = a.label();
-		int rank0 = a.label();
-		int afterPrefix = a.label();
+		MethodCode.Label rankN = a.newLabel();
+		MethodCode.Label rank0 = a.newLabel();
+		MethodCode.Label afterPrefix = a.newLabel();
 		a.iload(rank);
-		a.branch(Opcode.IFEQ, rank0);
+		a.ifeq(rank0);
 		a.iload(rank);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, rankN);
-		appendStr(a, sb, sbAppend, cp.addString("("));
-		a.branch(Opcode.GOTO, afterPrefix);
-		a.bind(rank0);
-		appendStr(a, sb, sbAppend, cp.addString("0A"));
-		a.branch(Opcode.GOTO, afterPrefix);
-		a.bind(rankN);
+		a.loadConstant(1);
+		a.if_icmpne(rankN);
+		appendStr(a, sb, sbAppend, cp.stringEntry("("));
+		a.goto_(afterPrefix);
+		a.labelBinding(rank0);
+		appendStr(a, sb, sbAppend, cp.stringEntry("0A"));
+		a.goto_(afterPrefix);
+		a.labelBinding(rankN);
 		a.aload(sb);
 		a.iload(rank);
 		a.invokestatic(stringValueOfInt);
 		a.invokevirtual(sbAppend);
 		a.pop();
-		appendStr(a, sb, sbAppend, cp.addString("A("));
-		a.bind(afterPrefix);
+		appendStr(a, sb, sbAppend, cp.stringEntry("A("));
+		a.labelBinding(afterPrefix);
 		// k = 0
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(k);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label end = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(k);
 		a.iload(n);
-		a.branch(Opcode.IF_ICMPGE, end);
+		a.if_icmpge(end);
 		// if (k != 0) sb.append(" ")
-		int noSpace = a.label();
+		MethodCode.Label noSpace = a.newLabel();
 		a.iload(k);
-		a.branch(Opcode.IFEQ, noSpace);
-		appendStr(a, sb, sbAppend, cp.addString(" "));
-		a.bind(noSpace);
+		a.ifeq(noSpace);
+		appendStr(a, sb, sbAppend, cp.stringEntry(" "));
+		a.labelBinding(noSpace);
 		// opens: for j in 1..rank-1 (outermost first): if (k % stride(j) == 0) "("
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(j);
-		int openLoop = a.label();
-		int openDone = a.label();
-		a.bind(openLoop);
+		MethodCode.Label openLoop = a.newLabel();
+		MethodCode.Label openDone = a.newLabel();
+		a.labelBinding(openLoop);
 		a.iload(j);
 		a.iload(rank);
-		a.branch(Opcode.IF_ICMPGE, openDone);
+		a.if_icmpge(openDone);
 		emitStride(a, longClass, longIntValue, dimsArr, j, stride, m, rank);
-		int noOpen = a.label();
+		MethodCode.Label noOpen = a.newLabel();
 		a.iload(k);
 		a.iload(stride);
-		a.op(Opcode.IREM);
-		a.branch(Opcode.IFNE, noOpen);
-		appendStr(a, sb, sbAppend, cp.addString("("));
-		a.bind(noOpen);
+		a.irem();
+		a.ifne(noOpen);
+		appendStr(a, sb, sbAppend, cp.stringEntry("("));
+		a.labelBinding(noOpen);
 		a.iinc(j, 1);
-		a.branch(Opcode.GOTO, openLoop);
-		a.bind(openDone);
+		a.goto_(openLoop);
+		a.labelBinding(openDone);
 		// sb.append(elementFormat(_rmGet(list, k + 1))) -- displaced-aware element read
 		a.aload(sb);
 		a.aload(list);
 		a.iload(k);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.invokestatic(rmGet);
 		a.invokestatic(elementFormat);
 		a.invokevirtual(sbAppend);
 		a.pop();
 		// closes: for j in rank-1..1 (innermost first): if ((k+1) % stride(j) == 0) ")"
 		a.iload(rank);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(j);
-		int closeLoop = a.label();
-		int closeDone = a.label();
-		a.bind(closeLoop);
+		MethodCode.Label closeLoop = a.newLabel();
+		MethodCode.Label closeDone = a.newLabel();
+		a.labelBinding(closeLoop);
 		a.iload(j);
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPLT, closeDone);
+		a.loadConstant(1);
+		a.if_icmplt(closeDone);
 		emitStride(a, longClass, longIntValue, dimsArr, j, stride, m, rank);
-		int noClose = a.label();
+		MethodCode.Label noClose = a.newLabel();
 		a.iload(k);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.iload(stride);
-		a.op(Opcode.IREM);
-		a.branch(Opcode.IFNE, noClose);
-		appendStr(a, sb, sbAppend, cp.addString(")"));
-		a.bind(noClose);
+		a.irem();
+		a.ifne(noClose);
+		appendStr(a, sb, sbAppend, cp.stringEntry(")"));
+		a.labelBinding(noClose);
 		a.iinc(j, -1);
-		a.branch(Opcode.GOTO, closeLoop);
-		a.bind(closeDone);
+		a.goto_(closeLoop);
+		a.labelBinding(closeDone);
 		// k++; loop
 		a.iinc(k, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
+		a.goto_(loop);
+		a.labelBinding(end);
 		// sb.append(")"); return sb.toString() -- under the guard's pop, the twin of
 		// JvmRuntimeBuilder.emitRenderGuardExitAndReturn: over one read, clamped so a
 		// rendering race between request threads can at worst misplace a marker. A
 		// rank-0 array opened no paren, so it closes none.
-		int noRparen = a.label();
+		MethodCode.Label noRparen = a.newLabel();
 		a.iload(rank);
-		a.branch(Opcode.IFEQ, noRparen);
-		appendStr(a, sb, sbAppend, cp.addString(")"));
-		a.bind(noRparen);
+		a.ifeq(noRparen);
+		appendStr(a, sb, sbAppend, cp.stringEntry(")"));
+		a.labelBinding(noRparen);
 		a.aload(sb);
 		a.invokevirtual(sbToString);
-		int popClamp = a.label();
-		a.getstatic(renderGuard.depthField());
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		MethodCode.Label popClamp = a.newLabel();
+		a.getstatic(renderGuard.depthField().entry());
+		a.loadConstant(1);
+		a.isub();
 		a.istore(guardScratch);
 		a.iload(guardScratch);
-		a.branch(Opcode.IFLT, popClamp);
-		a.getstatic(renderGuard.pathField());
+		a.iflt(popClamp);
+		a.getstatic(renderGuard.pathField().entry());
 		a.iload(guardScratch);
-		a.op(Opcode.ACONST_NULL);
+		a.aconst_null();
 		a.aastore();
 		a.iload(guardScratch);
-		a.putstatic(renderGuard.depthField());
+		a.putstatic(renderGuard.depthField().entry());
 		a.areturn();
-		a.bind(popClamp);
-		a.iconst(0);
-		a.putstatic(renderGuard.depthField());
+		a.labelBinding(popClamp);
+		a.loadConstant(0);
+		a.putstatic(renderGuard.depthField().entry());
 		a.areturn();
-		return a.finish();
+		return a;
 	}
 
-	private static ClassConstant sbClass(ConstantPool cp) {
-		return cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
+	private static ClassEntry sbClass(ConstantPool cp) {
+		return cp.classEntry("java/lang/StringBuilder");
 	}
 
 	// stride = product of ((Long) dims[m]).intValue() for m in j..rank-1.
-	private static void emitStride(JvmAsm a, ClassConstant longClass, MethodrefConstant longIntValue, int dimsArrSlot,
+	private static void emitStride(MethodCode a, ClassEntry longClass, MethodRefEntry longIntValue, int dimsArrSlot,
 			int jSlot, int strideSlot, int mSlot, int rankSlot) {
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(strideSlot);
 		a.iload(jSlot);
 		a.istore(mSlot);
-		int strideLoop = a.label();
-		int strideDone = a.label();
-		a.bind(strideLoop);
+		MethodCode.Label strideLoop = a.newLabel();
+		MethodCode.Label strideDone = a.newLabel();
+		a.labelBinding(strideLoop);
 		a.iload(mSlot);
 		a.iload(rankSlot);
-		a.branch(Opcode.IF_ICMPGE, strideDone);
+		a.if_icmpge(strideDone);
 		a.iload(strideSlot);
 		a.aload(dimsArrSlot);
 		a.iload(mSlot);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(longIntValue);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.istore(strideSlot);
 		a.iinc(mSlot, 1);
-		a.branch(Opcode.GOTO, strideLoop);
-		a.bind(strideDone);
+		a.goto_(strideLoop);
+		a.labelBinding(strideDone);
 	}
 
 	// sb.append(str); discard the returned StringBuilder.
-	private static void appendStr(JvmAsm a, int sbSlot, MethodrefConstant sbAppend,
-			am.ik.jvm.ConstantPool.StringConstant str) {
+	private static void appendStr(MethodCode a, int sbSlot, MethodRefEntry sbAppend, StringEntry str) {
 		a.aload(sbSlot);
-		a.ldcString(str);
+		a.ldc(str);
 		a.invokevirtual(sbAppend);
 		a.pop();
 	}
@@ -4133,22 +4067,22 @@ final class JvmArrayRuntimeBuilder {
 	// j in slot 2, and the dims are the Object[] dimension header, loaded into dimsSlot:
 	// each subscript is checked against ITS OWN dimension first (_ckBound), so a column
 	// past its dimension is out of range rather than folding into the next row.
-	private static void emitFlat2(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue,
-			MethodrefConstant ckBound, int dimsSlot) {
+	private static void emitFlat2(MethodCode a, ClassEntry arrayListClass, ClassEntry longClass,
+			ClassEntry objectArrayClass, MethodRefEntry get, MethodRefEntry intValue, MethodRefEntry ckBound,
+			int dimsSlot) {
 		emitLoadDims(a, arrayListClass, objectArrayClass, get, 0);
 		a.astore(dimsSlot);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(1);
 		emitDim(a, longClass, intValue, dimsSlot, 0);
 		a.invokestatic(ckBound);
 		emitDim(a, longClass, intValue, dimsSlot, 1);
-		a.op(Opcode.IMUL);
-		a.op(Opcode.IADD);
+		a.imul();
+		a.iadd();
 		a.aload(2);
 		emitDim(a, longClass, intValue, dimsSlot, 1);
 		a.invokestatic(ckBound);
-		a.op(Opcode.IADD);
+		a.iadd();
 	}
 
 	/**
@@ -4157,17 +4091,17 @@ final class JvmArrayRuntimeBuilder {
 	 * the other {@code String}, and no array. Falls through for a string. Peak operand
 	 * stack: 2.
 	 */
-	private static void emitStringTest(JvmAsm a, ClassConstant strClass, MethodrefConstant strCharAt, int slot,
-			int notString) {
+	private static void emitStringTest(MethodCode a, ClassEntry strClass, MethodRefEntry strCharAt, int slot,
+			MethodCode.Label notString) {
 		a.aload(slot);
 		a.instanceOf(strClass);
-		a.branch(Opcode.IFEQ, notString);
+		a.ifeq(notString);
 		a.aload(slot);
 		a.checkcast(strClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(strCharAt);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, notString);
+		a.loadConstant('"');
+		a.if_icmpne(notString);
 	}
 
 	/**
@@ -4179,24 +4113,24 @@ final class JvmArrayRuntimeBuilder {
 	 * the cast that followed failed with a {@code ClassCastException} that carried no
 	 * datum.
 	 */
-	private static void emitArrayCheck(JvmAsm a, ConstantPool cp, ClassConstant selfClass, ClassConstant arrayListClass,
-			@Nullable ClassConstant strClass, @Nullable MethodrefConstant strCharAt, int slot) {
-		int pass = a.label();
+	private static void emitArrayCheck(MethodCode a, ConstantPool cp, ClassEntry selfClass, ClassEntry arrayListClass,
+			@Nullable ClassEntry strClass, @Nullable MethodRefEntry strCharAt, int slot) {
+		MethodCode.Label pass = a.newLabel();
 		a.aload(slot);
 		a.instanceOf(arrayListClass);
-		a.branch(Opcode.IFNE, pass);
+		a.ifne(pass);
 		if (strClass != null && strCharAt != null) {
-			int notString = a.label();
+			MethodCode.Label notString = a.newLabel();
 			emitStringTest(a, strClass, strCharAt, slot, notString);
-			a.branch(Opcode.GOTO, pass);
-			a.bind(notString);
+			a.goto_(pass);
+			a.labelBinding(notString);
 		}
 		a.aload(slot);
-		a.ldcString(cp.addString(OperandTypes.Kind.ARRAY.typeName()));
+		a.ldc(cp.stringEntry(OperandTypes.Kind.ARRAY.typeName()));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
-		a.op(Opcode.ATHROW);
-		a.bind(pass);
+		a.athrow();
+		a.labelBinding(pass);
 	}
 
 	// Stores into totalSlot the total size of the general array in slot 0 -- the bound
@@ -4205,74 +4139,74 @@ final class JvmArrayRuntimeBuilder {
 	// only for a displaced view, whose storage is its target's, the product of its own
 	// dims. Every load but the view's is one the element access makes anyway, so the JIT
 	// shares them. headerSlot and kSlot are scratch.
-	private static void emitFlatBound(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
-			ClassConstant longArrayClass, MethodrefConstant get, MethodrefConstant size, ClassConstant longClass,
-			MethodrefConstant intValue, int headerSlot, int kSlot, int totalSlot) {
-		int notPacked = a.label();
-		int boxed = a.label();
-		int done = a.label();
+	private static void emitFlatBound(MethodCode a, ClassEntry arrayListClass, ClassEntry objectArrayClass,
+			ClassEntry longArrayClass, MethodRefEntry get, MethodRefEntry size, ClassEntry longClass,
+			MethodRefEntry intValue, int headerSlot, int kSlot, int totalSlot) {
+		MethodCode.Label notPacked = a.newLabel();
+		MethodCode.Label boxed = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(0);
 		a.checkcast(arrayListClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(get);
 		a.checkcast(objectArrayClass);
 		a.astore(headerSlot);
 		a.aload(headerSlot);
 		a.arraylength();
-		a.iconst(6);
-		a.branch(Opcode.IF_ICMPNE, notPacked);
+		a.loadConstant(6);
+		a.if_icmpne(notPacked);
 		a.aload(headerSlot);
-		a.iconst(5);
+		a.loadConstant(5);
 		a.aaload();
 		a.checkcast(longArrayClass);
 		a.arraylength();
 		a.istore(totalSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(notPacked);
+		a.goto_(done);
+		a.labelBinding(notPacked);
 		// a displaced view: header length > 4 with a target in slot 3
 		a.aload(headerSlot);
 		a.arraylength();
-		a.iconst(4);
-		a.branch(Opcode.IF_ICMPLE, boxed);
+		a.loadConstant(4);
+		a.if_icmple(boxed);
 		a.aload(headerSlot);
-		a.iconst(3);
+		a.loadConstant(3);
 		a.aaload();
-		a.branch(Opcode.IFNULL, boxed);
+		a.ifnull(boxed);
 		a.aload(headerSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.astore(headerSlot);
 		emitTotalSize(a, longClass, intValue, headerSlot, kSlot, totalSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(boxed);
+		a.goto_(done);
+		a.labelBinding(boxed);
 		a.aload(0);
 		a.checkcast(arrayListClass);
 		a.invokevirtual(size);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(totalSlot);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	// Pushes the Object[] dimension header of the general array in arrSlot:
 	// (Object[]) ((Object[]) ((ArrayList) arr).get(0))[0].
-	private static void emitLoadDims(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
-			MethodrefConstant get, int arrSlot) {
+	private static void emitLoadDims(MethodCode a, ClassEntry arrayListClass, ClassEntry objectArrayClass,
+			MethodRefEntry get, int arrSlot) {
 		a.aload(arrSlot);
 		a.checkcast(arrayListClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(get);
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 	}
 
 	// Pushes dimension k of the dims Object[] in dimsSlot as an int.
-	private static void emitDim(JvmAsm a, ClassConstant longClass, MethodrefConstant intValue, int dimsSlot, int k) {
+	private static void emitDim(MethodCode a, ClassEntry longClass, MethodRefEntry intValue, int dimsSlot, int k) {
 		a.aload(dimsSlot);
-		a.iconst(k);
+		a.loadConstant(k);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
@@ -4280,40 +4214,40 @@ final class JvmArrayRuntimeBuilder {
 
 	// Stores into totalSlot the total size of the dims Object[] in dimsSlot -- the
 	// product of its dimensions, 1 for rank 0 -- the bound of a flat access.
-	private static void emitTotalSize(JvmAsm a, ClassConstant longClass, MethodrefConstant intValue, int dimsSlot,
+	private static void emitTotalSize(MethodCode a, ClassEntry longClass, MethodRefEntry intValue, int dimsSlot,
 			int kSlot, int totalSlot) {
 		// rank 1, the common case: the one dimension, no loop
-		int general = a.label();
-		int done = a.label();
+		MethodCode.Label general = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.aload(dimsSlot);
 		a.arraylength();
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPNE, general);
+		a.loadConstant(1);
+		a.if_icmpne(general);
 		emitDim(a, longClass, intValue, dimsSlot, 0);
 		a.istore(totalSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(general);
-		a.iconst(1);
+		a.goto_(done);
+		a.labelBinding(general);
+		a.loadConstant(1);
 		a.istore(totalSlot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(kSlot);
-		int loop = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(kSlot);
 		a.aload(dimsSlot);
 		a.arraylength();
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.iload(totalSlot);
 		a.aload(dimsSlot);
 		a.iload(kSlot);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.istore(totalSlot);
 		a.iinc(kSlot, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 	}
 
 	// Computes the Horner flat index over an Object[] of Long subscripts (in the slot
@@ -4321,9 +4255,9 @@ final class JvmArrayRuntimeBuilder {
 	// flat = 0; for k in 0..: flat = flat * dims[k] + subs[k], each subscript checked
 	// against its own dimension (_ckBound). The fold starts at 0 (not at subs[0]) so an
 	// EMPTY subscript array -- a rank-0 array -- answers 0.
-	private static void emitFlatN(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue,
-			MethodrefConstant ckBound, int subs, int flat, int kSlot, int nSlot, int dimsSlot) {
+	private static void emitFlatN(MethodCode a, ClassEntry arrayListClass, ClassEntry longClass,
+			ClassEntry objectArrayClass, MethodRefEntry get, MethodRefEntry intValue, MethodRefEntry ckBound, int subs,
+			int flat, int kSlot, int nSlot, int dimsSlot) {
 		// dims = (Object[]) ((Object[]) ((ArrayList) arr).get(0))[0]
 		emitLoadDims(a, arrayListClass, objectArrayClass, get, 0);
 		a.astore(dimsSlot);
@@ -4337,23 +4271,23 @@ final class JvmArrayRuntimeBuilder {
 		// flat = 0; for k in 0..n-1: flat = flat * dims[k] + subs[k]. Starting the fold
 		// at 0 rather than at subs[0] is what makes an EMPTY subscript array -- a rank-0
 		// array -- answer 0 instead of reading a subscript that is not there.
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(flat);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(kSlot);
-		int loop = a.label();
-		int done = a.label();
-		a.bind(loop);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(loop);
 		a.iload(kSlot);
 		a.iload(nSlot);
-		a.branch(Opcode.IF_ICMPGE, done);
+		a.if_icmpge(done);
 		a.iload(flat);
 		a.aload(dimsSlot);
 		a.iload(kSlot);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
-		a.op(Opcode.IMUL);
+		a.imul();
 		a.aload(subs);
 		a.iload(kSlot);
 		a.aaload();
@@ -4363,11 +4297,11 @@ final class JvmArrayRuntimeBuilder {
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
 		a.invokestatic(ckBound);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.istore(flat);
 		a.iinc(kSlot, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 	}
 
 	// Emits the ArrayElementTypes code -> element type VALUE switch: reads the int in
@@ -4375,10 +4309,10 @@ final class JvmArrayRuntimeBuilder {
 	// runtime shape array-element-type answers -- a name string for the symbol types,
 	// the cons {"UNSIGNED-BYTE", {Long, null}} for the packed integer widths -- built
 	// once at allocation rather than at every read.
-	private static void emitElementTypeForCode(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
-			MethodrefConstant longValueOf, int codeSlot, int etSlot, int done) {
+	private static void emitElementTypeForCode(MethodCode a, ConstantPool cp, ClassEntry objectClass,
+			MethodRefEntry longValueOf, int codeSlot, int etSlot, MethodCode.Label done) {
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.CHARACTER,
-				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.CHARACTER_TYPE)));
+				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.CHARACTER_TYPE)));
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_8,
 				() -> emitUnsignedByte(a, cp, objectClass, longValueOf, 8));
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_16,
@@ -4386,53 +4320,54 @@ final class JvmArrayRuntimeBuilder {
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.UNSIGNED_BYTE_32,
 				() -> emitUnsignedByte(a, cp, objectClass, longValueOf, 32));
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.SINGLE_FLOAT,
-				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.SINGLE_FLOAT)));
+				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.SINGLE_FLOAT)));
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.DOUBLE_FLOAT,
-				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.DOUBLE_FLOAT)));
+				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.DOUBLE_FLOAT)));
 		// A GENERAL array that merely REMEMBERS bfloat16 decodes here too. The packed
 		// bfloat16 representation itself does not reach this backend yet; this arm only
 		// keeps array-element-type from answering nothing for a remembered width.
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BFLOAT16,
-				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BFLOAT16)));
+				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BFLOAT16)));
 		// A bit vector is the general boxed array stamped bit: the stamp is the whole
 		// representation, so it decodes to the name the same way (.todo/043).
 		emitElementTypeCase(a, codeSlot, etSlot, done, am.ik.rontolisp.ArrayElementTypes.BIT,
-				() -> a.ldcString(cp.addString(am.ik.rontolisp.LispNames.BIT)));
+				() -> a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.BIT)));
 		// ArrayElementTypes.T, which never reaches here: nothing is remembered for it.
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
+		a.goto_(done);
 	}
 
-	private static void emitElementTypeCase(JvmAsm a, int codeSlot, int etSlot, int done, int code, Runnable value) {
-		int next = a.label();
+	private static void emitElementTypeCase(MethodCode a, int codeSlot, int etSlot, MethodCode.Label done, int code,
+			Runnable value) {
+		MethodCode.Label next = a.newLabel();
 		a.iload(codeSlot);
-		a.iconst(code);
-		a.branch(Opcode.IF_ICMPNE, next);
+		a.loadConstant(code);
+		a.if_icmpne(next);
 		value.run();
 		a.astore(etSlot);
-		a.branch(Opcode.GOTO, done);
-		a.bind(next);
+		a.goto_(done);
+		a.labelBinding(next);
 	}
 
 	// new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(width), null}} -- the cons
 	// (unsigned-byte width), in the two-slot Object[] a cons cell is on this backend.
-	private static void emitUnsignedByte(JvmAsm a, ConstantPool cp, ClassConstant objectClass,
-			MethodrefConstant longValueOf, int width) {
-		a.iconst(2);
+	private static void emitUnsignedByte(MethodCode a, ConstantPool cp, ClassEntry objectClass,
+			MethodRefEntry longValueOf, int width) {
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.ldcString(cp.addString(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
+		a.loadConstant(0);
+		a.ldc(cp.stringEntry(am.ik.rontolisp.LispNames.UNSIGNED_BYTE));
 		a.aastore();
 		a.dup();
-		a.iconst(1);
-		a.iconst(2);
+		a.loadConstant(1);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.iconst(width);
-		a.op(Opcode.I2L);
+		a.loadConstant(0);
+		a.loadConstant(width);
+		a.i2l();
 		a.invokestatic(longValueOf);
 		a.aastore();
 		a.aastore();

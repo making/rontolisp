@@ -12,6 +12,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.LongConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
@@ -4267,127 +4268,127 @@ final class JvmNumericRuntimeBuilder {
 		ConstantPool.DoubleConstant ten = cp.addDouble(10.0);
 
 		final int x = 4, d = 6, n = 7, scale = 8, i = 10, s = 11, min = 12, out = 13, split = 14;
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// x = ((Number) _dbl(value)).doubleValue()
 		a.aload(0);
-		a.invokestatic(rDbl);
-		a.checkcast(numberClass);
-		a.invokevirtual(numDoubleValue);
+		a.invokestatic(rDbl.entry());
+		a.checkcast(numberClass.entry());
+		a.invokevirtual(numDoubleValue.methodRefEntry());
 		a.dstore(x);
 		// d = min(max(places, 0), MAX_DIGITS); n likewise
 		emitClampedIntArg(a, 1, d, numberClass, numIntValue, mathMaxI, mathMinI);
 		emitClampedIntArg(a, 2, n, numberClass, numIntValue, mathMaxI, mathMinI);
 		// scale = 1.0; for (i = 0; i < d; i++) scale *= 10.0
-		a.op(Opcode.DCONST_1);
+		a.dconst_1();
 		a.dstore(scale);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.istore(i);
-		int scaleTop = a.label(), scaleEnd = a.label();
-		a.bind(scaleTop);
+		MethodCode.Label scaleTop = a.newLabel(), scaleEnd = a.newLabel();
+		a.labelBinding(scaleTop);
 		a.iload(i);
 		a.iload(d);
-		a.branch(Opcode.IF_ICMPGE, scaleEnd);
+		a.if_icmpge(scaleEnd);
 		a.dload(scale);
-		a.ldc2Double(ten);
+		a.ldc(ten.entry());
 		a.dmul();
 		a.dstore(scale);
 		a.iinc(i, 1);
-		a.branch(Opcode.GOTO, scaleTop);
-		a.bind(scaleEnd);
+		a.goto_(scaleTop);
+		a.labelBinding(scaleEnd);
 		// s = Long.toString((long) Math.abs(Math.rint(x * scale)))
 		a.dload(x);
 		a.dload(scale);
 		a.dmul();
-		a.invokestatic(mathRint);
-		a.invokestatic(mathAbsD);
-		a.op(Opcode.D2L);
-		a.invokestatic(longToString);
+		a.invokestatic(mathRint.entry());
+		a.invokestatic(mathAbsD.entry());
+		a.d2l();
+		a.invokestatic(longToString.entry());
 		a.astore(s);
 		// min = max(d + 1, n + d); while (s.length() < min) s = "0".concat(s)
 		a.iload(d);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.iload(n);
 		a.iload(d);
-		a.op(Opcode.IADD);
-		a.invokestatic(mathMaxI);
+		a.iadd();
+		a.invokestatic(mathMaxI.entry());
 		a.istore(min);
-		int padTop = a.label(), padEnd = a.label();
-		a.bind(padTop);
+		MethodCode.Label padTop = a.newLabel(), padEnd = a.newLabel();
+		a.labelBinding(padTop);
 		a.aload(s);
-		a.invokevirtual(strLength);
+		a.invokevirtual(strLength.methodRefEntry());
 		a.iload(min);
-		a.branch(Opcode.IF_ICMPGE, padEnd);
-		a.ldcString(cp.addString("0"));
+		a.if_icmpge(padEnd);
+		a.ldc(cp.addString("0").entry());
 		a.aload(s);
-		a.invokevirtual(strConcat);
+		a.invokevirtual(strConcat.methodRefEntry());
 		a.astore(s);
-		a.branch(Opcode.GOTO, padTop);
-		a.bind(padEnd);
+		a.goto_(padTop);
+		a.labelBinding(padEnd);
 		// split = s.length() - d
 		a.aload(s);
-		a.invokevirtual(strLength);
+		a.invokevirtual(strLength.methodRefEntry());
 		a.iload(d);
-		a.op(Opcode.ISUB);
+		a.isub();
 		a.istore(split);
 		// out = (x < 0.0) ? "\"-" : (plus != null ? "\"+" : "\"") -- the opening frame
 		// quote and the sign in one constant. dcmpg answers 1 for a NaN, which is not
 		// negative, exactly as `value < 0.0` is false for one.
-		int negative = a.label(), plain = a.label(), haveSign = a.label();
+		MethodCode.Label negative = a.newLabel(), plain = a.newLabel(), haveSign = a.newLabel();
 		a.dload(x);
-		a.op(Opcode.DCONST_0);
-		a.op(Opcode.DCMPG);
-		a.branch(Opcode.IFLT, negative);
+		a.dconst_0();
+		a.dcmpg();
+		a.iflt(negative);
 		a.aload(3);
-		a.branch(Opcode.IFNULL, plain);
-		a.ldcString(cp.addString("\"+"));
-		a.branch(Opcode.GOTO, haveSign);
-		a.bind(plain);
-		a.ldcString(cp.addString("\""));
-		a.branch(Opcode.GOTO, haveSign);
-		a.bind(negative);
-		a.ldcString(cp.addString("\"-"));
-		a.bind(haveSign);
+		a.ifnull(plain);
+		a.ldc(cp.addString("\"+").entry());
+		a.goto_(haveSign);
+		a.labelBinding(plain);
+		a.ldc(cp.addString("\"").entry());
+		a.goto_(haveSign);
+		a.labelBinding(negative);
+		a.ldc(cp.addString("\"-").entry());
+		a.labelBinding(haveSign);
 		a.astore(out);
 		// out = out.concat(s.substring(0, split))
 		a.aload(out);
 		a.aload(s);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(split);
-		a.invokevirtual(strSub2);
-		a.invokevirtual(strConcat);
+		a.invokevirtual(strSub2.methodRefEntry());
+		a.invokevirtual(strConcat.methodRefEntry());
 		a.astore(out);
 		// if (d > 0) out = out.concat(".").concat(s.substring(split))
-		int noPoint = a.label();
+		MethodCode.Label noPoint = a.newLabel();
 		a.iload(d);
-		a.branch(Opcode.IFLE, noPoint);
+		a.ifle(noPoint);
 		a.aload(out);
-		a.ldcString(cp.addString("."));
-		a.invokevirtual(strConcat);
+		a.ldc(cp.addString(".").entry());
+		a.invokevirtual(strConcat.methodRefEntry());
 		a.aload(s);
 		a.iload(split);
-		a.invokevirtual(strSub1);
-		a.invokevirtual(strConcat);
+		a.invokevirtual(strSub1.methodRefEntry());
+		a.invokevirtual(strConcat.methodRefEntry());
 		a.astore(out);
-		a.bind(noPoint);
+		a.labelBinding(noPoint);
 		// return out.concat("\"") -- the closing frame quote
 		a.aload(out);
-		a.ldcString(cp.addString("\""));
-		a.invokevirtual(strConcat);
+		a.ldc(cp.addString("\"").entry());
+		a.invokevirtual(strConcat.methodRefEntry());
 		a.areturn();
-		return new NumericMethod(name, desc, a.finish(), 6, 16, List.of());
+		return new NumericMethod(name, desc, JvmRuntimeBuilder.codeBytes(a), 6, 16, List.of());
 	}
 
 	// Loads argument slot `arg` as an int and stores it clamped into [0, MAX_DIGITS].
-	private static void emitClampedIntArg(JvmAsm a, int arg, int slot, ClassConstant numberClass,
+	private static void emitClampedIntArg(MethodCode a, int arg, int slot, ClassConstant numberClass,
 			MethodrefConstant numIntValue, MethodrefConstant mathMaxI, MethodrefConstant mathMinI) {
 		a.aload(arg);
-		a.checkcast(numberClass);
-		a.invokevirtual(numIntValue);
-		a.iconst(0);
-		a.invokestatic(mathMaxI);
-		a.iconst(am.ik.rontolisp.compiler.FixedDecimal.MAX_DIGITS);
-		a.invokestatic(mathMinI);
+		a.checkcast(numberClass.entry());
+		a.invokevirtual(numIntValue.methodRefEntry());
+		a.loadConstant(0);
+		a.invokestatic(mathMaxI.entry());
+		a.loadConstant(am.ik.rontolisp.compiler.FixedDecimal.MAX_DIGITS);
+		a.invokestatic(mathMinI.entry());
 		a.istore(slot);
 	}
 

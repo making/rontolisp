@@ -1,10 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
-import am.ik.jvm.OperandStack;
 
 /**
  * The shared code-point walk behind {@code string-upcase} / {@code string-downcase} /
@@ -79,63 +79,63 @@ final class JvmStringCaseFold {
 		int chSlot = ctx.allocTemp();
 		int wsSlot = capitalize ? ctx.allocTemp() : -1;
 
-		JvmAsm asm = new JvmAsm();
-		int loop = asm.label();
-		int end = asm.label();
+		MethodCode asm = ctx.body;
+		MethodCode.Label loop = asm.newLabel();
+		MethodCode.Label end = asm.newLabel();
 
 		// sb = new StringBuilder()
-		asm.anew(sbClass);
+		asm.new_(sbClass.entry());
 		asm.dup();
-		asm.invokespecial(sbInit);
+		asm.invokespecial(sbInit.entry());
 		asm.astore(sbSlot);
 		if (capitalize) {
 			// ws = 1 (the string starts at a word boundary)
-			asm.iconst(1);
+			asm.loadConstant(1);
 			asm.istore(wsSlot);
 		}
-		asm.iconst(0);
+		asm.loadConstant(0);
 		asm.istore(iSlot);
 
-		asm.bind(loop);
+		asm.labelBinding(loop);
 		asm.iload(iSlot);
 		asm.aload(sSlot);
-		asm.invokevirtual(stringLength);
-		asm.branch(Opcode.IF_ICMPGE, end);
+		asm.invokevirtual(stringLength.methodRefEntry());
+		asm.if_icmpge(end);
 		// cp = s.codePointAt(i) -- walks by code point, so a supplementary code point
 		// (surrogate pair) is one indexed step.
 		asm.aload(sSlot);
 		asm.iload(iSlot);
-		asm.invokevirtual(stringCodePointAt);
+		asm.invokevirtual(stringCodePointAt.methodRefEntry());
 		asm.istore(chSlot);
 		if (capitalize) {
-			int notAlnum = asm.label();
-			int down = asm.label();
-			int ws0 = asm.label();
-			int cont = asm.label();
+			MethodCode.Label notAlnum = asm.newLabel();
+			MethodCode.Label down = asm.newLabel();
+			MethodCode.Label ws0 = asm.newLabel();
+			MethodCode.Label cont = asm.newLabel();
 			// if (!isLetterOrDigit(cp)) goto notAlnum
 			asm.iload(chSlot);
-			asm.invokestatic(isLetterOrDigit);
-			asm.branch(Opcode.IFEQ, notAlnum);
+			asm.invokestatic(isLetterOrDigit.entry());
+			asm.ifeq(notAlnum);
 			// alphanumeric: upcase at word start, else downcase.
 			asm.iload(wsSlot);
-			asm.branch(Opcode.IFEQ, down);
+			asm.ifeq(down);
 			emitAppendFolded(asm, sbSlot, chSlot, toUpper, sbAppendCodePoint);
-			asm.branch(Opcode.GOTO, ws0);
-			asm.bind(down);
+			asm.goto_(ws0);
+			asm.labelBinding(down);
 			emitAppendFolded(asm, sbSlot, chSlot, toLower, sbAppendCodePoint);
-			asm.bind(ws0);
-			asm.iconst(0);
+			asm.labelBinding(ws0);
+			asm.loadConstant(0);
 			asm.istore(wsSlot);
-			asm.branch(Opcode.GOTO, cont);
+			asm.goto_(cont);
 			// non-alphanumeric: append as-is, reset the word boundary
-			asm.bind(notAlnum);
+			asm.labelBinding(notAlnum);
 			asm.aload(sbSlot);
 			asm.iload(chSlot);
-			asm.invokevirtual(sbAppendCodePoint);
+			asm.invokevirtual(sbAppendCodePoint.methodRefEntry());
 			asm.pop();
-			asm.iconst(1);
+			asm.loadConstant(1);
 			asm.istore(wsSlot);
-			asm.bind(cont);
+			asm.labelBinding(cont);
 		}
 		else {
 			// Append the folded code point via StringBuilder.appendCodePoint(int) so a
@@ -145,24 +145,23 @@ final class JvmStringCaseFold {
 		// i += Character.charCount(cp) -- 1 for BMP, 2 for a surrogate pair.
 		asm.iload(iSlot);
 		asm.iload(chSlot);
-		asm.invokestatic(charCharCount);
-		asm.op(Opcode.IADD);
+		asm.invokestatic(charCharCount.entry());
+		asm.iadd();
 		asm.istore(iSlot);
-		asm.branch(Opcode.GOTO, loop);
+		asm.goto_(loop);
 
-		asm.bind(end);
+		asm.labelBinding(end);
 		asm.aload(sbSlot);
-		asm.invokevirtual(sbToString);
+		asm.invokevirtual(sbToString.methodRefEntry());
 
-		ctx.emitBlock(asm.finish(), OperandStack.Slot.REF);
 	}
 
-	private static void emitAppendFolded(JvmAsm asm, int sbSlot, int chSlot, MethodrefConstant fold,
+	private static void emitAppendFolded(MethodCode asm, int sbSlot, int chSlot, MethodrefConstant fold,
 			MethodrefConstant sbAppendCodePoint) {
 		asm.aload(sbSlot);
 		asm.iload(chSlot);
-		asm.invokestatic(fold);
-		asm.invokevirtual(sbAppendCodePoint);
+		asm.invokestatic(fold.entry());
+		asm.invokevirtual(sbAppendCodePoint.methodRefEntry());
 		asm.pop();
 	}
 

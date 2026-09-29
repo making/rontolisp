@@ -13,6 +13,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -2625,18 +2626,19 @@ final class JvmIntFusionCompiler {
 	 * authoritative, else the shadow.
 	 */
 	static JvmNumericRuntimeBuilder.NumericMethod buildUbRead(ConstantPool cp, MethodrefConstant longValueOf) {
-		JvmAsm a = new JvmAsm();
-		int useShadow = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label useShadow = a.newLabel();
 		a.iload(3);
-		a.branch(Opcode.IFEQ, useShadow);
+		a.ifeq(useShadow);
 		a.lload(1);
-		a.invokestatic(longValueOf);
+		a.invokestatic(longValueOf.entry());
 		a.areturn();
-		a.bind(useShadow);
+		a.labelBinding(useShadow);
 		a.aload(0);
 		a.areturn();
 		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_ubRead"),
-				cp.addUtf8("(Ljava/lang/Object;JI)Ljava/lang/Object;"), a.code, 2, 4, List.of());
+				cp.addUtf8("(Ljava/lang/Object;JI)Ljava/lang/Object;"), JvmRuntimeBuilder.codeBytes(a), 2, 4,
+				List.of());
 	}
 
 	/**
@@ -2651,75 +2653,75 @@ final class JvmIntFusionCompiler {
 		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
 		MethodrefConstant arithExInit = cp.addMethodref(arithEx,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		JvmAsm a = new JvmAsm();
-		int hugeNeg = a.label();
-		int rightShift = a.label();
-		int leftShift = a.label();
-		int overflow = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label hugeNeg = a.newLabel();
+		MethodCode.Label rightShift = a.newLabel();
+		MethodCode.Label leftShift = a.newLabel();
+		MethodCode.Label overflow = a.newLabel();
 		// count < -64: the value shifts down to its sign.
 		a.lload(2);
-		a.iconst(-64);
-		a.op(Opcode.I2L);
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFLT, hugeNeg);
+		a.loadConstant(-64);
+		a.i2l();
+		a.lcmp();
+		a.iflt(hugeNeg);
 		// count > 63: no shift of a full-width value stays in range (v == 0 bails
 		// too -- the fallback answers it exactly).
 		a.lload(2);
-		a.iconst(63);
-		a.op(Opcode.I2L);
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFGT, overflow);
+		a.loadConstant(63);
+		a.i2l();
+		a.lcmp();
+		a.ifgt(overflow);
 		// int c = (int) count -- exact: the count is within [-64, 63].
 		a.lload(2);
 		a.l2i();
 		a.istore(4);
 		a.iload(4);
-		a.branch(Opcode.IFGT, leftShift);
+		a.ifgt(leftShift);
 		// c <= -64: the value shifts down to its sign.
 		a.iload(4);
-		a.iconst(-64);
-		a.branch(Opcode.IF_ICMPGT, rightShift);
+		a.loadConstant(-64);
+		a.if_icmpgt(rightShift);
 		a.lload(0);
-		a.iconst(63);
-		a.op(Opcode.LSHR);
-		a.op(Opcode.LRETURN);
+		a.loadConstant(63);
+		a.lshr();
+		a.lreturn();
 		// -64 < c <= 0: v >> -c.
-		a.bind(rightShift);
+		a.labelBinding(rightShift);
 		a.lload(0);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(4);
-		a.op(Opcode.ISUB);
-		a.op(Opcode.LSHR);
-		a.op(Opcode.LRETURN);
+		a.isub();
+		a.lshr();
+		a.lreturn();
 		// c > 0: kept only when the shift round-trips.
-		a.bind(leftShift);
+		a.labelBinding(leftShift);
 		a.iload(4);
-		a.iconst(64);
-		a.branch(Opcode.IF_ICMPGE, overflow);
+		a.loadConstant(64);
+		a.if_icmpge(overflow);
 		a.lload(0);
 		a.iload(4);
-		a.op(Opcode.LSHL);
+		a.lshl();
 		a.lstore(5);
 		a.lload(5);
 		a.iload(4);
-		a.op(Opcode.LSHR);
+		a.lshr();
 		a.lload(0);
-		a.op(Opcode.LCMP);
-		a.branch(Opcode.IFNE, overflow);
+		a.lcmp();
+		a.ifne(overflow);
 		a.lload(5);
-		a.op(Opcode.LRETURN);
-		a.bind(overflow);
-		a.anew(arithEx);
+		a.lreturn();
+		a.labelBinding(overflow);
+		a.new_(arithEx.entry());
 		a.dup();
-		a.invokespecial(arithExInit);
-		a.op(Opcode.ATHROW);
-		a.bind(hugeNeg);
+		a.invokespecial(arithExInit.entry());
+		a.athrow();
+		a.labelBinding(hugeNeg);
 		a.lload(0);
-		a.iconst(63);
-		a.op(Opcode.LSHR);
-		a.op(Opcode.LRETURN);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"), a.code, 5, 7,
-				List.of());
+		a.loadConstant(63);
+		a.lshr();
+		a.lreturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"),
+				JvmRuntimeBuilder.codeBytes(a), 5, 7, List.of());
 	}
 
 }

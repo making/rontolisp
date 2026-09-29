@@ -1,14 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.OperandTypes;
 
@@ -41,7 +41,7 @@ import am.ik.rontolisp.compiler.OperandTypes;
 final class JvmLengthRuntimeBuilder {
 
 	/** A length runtime method body ready to be emitted into the generated class. */
-	record LengthMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record LengthMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_length";
@@ -63,55 +63,50 @@ final class JvmLengthRuntimeBuilder {
 	 * decides
 	 * @return the method
 	 */
-	static LengthMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
-			MethodrefConstant longValueOf, ClassConstant selfClass, @Nullable MethodrefConstant lispArray) {
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+	static LengthMethod build(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry stringClass,
+			MethodRefEntry longValueOf, ClassEntry selfClass, @Nullable MethodRefEntry lispArray) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry rtExClass = cp.classEntry("java/lang/RuntimeException");
 		// _scount(s) returns the CHARACTER-visible length of the content inside the
 		// surrounding quote framing, so a supplementary code point in it counts as one
 		// character -- and answers without re-counting a string it has already proven
 		// free of surrogate pairs (JvmStringIndexRuntimeBuilder).
-		MethodrefConstant stringCharCount = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_METHOD),
-						cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_DESC)));
-		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant startsWith = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodRefEntry stringCharCount = cp.methodRef(selfClass, JvmStringIndexRuntimeBuilder.COUNT_METHOD,
+				JvmStringIndexRuntimeBuilder.COUNT_DESC);
+		MethodRefEntry alGet = cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry alSize = cp.methodRef(arrayListClass, "size", "()I");
+		MethodRefEntry startsWith = cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z");
+		MethodRefEntry rtExInit = cp.methodRef(rtExClass, "<init>", "(Ljava/lang/String;)V");
 
 		// Slots: 0 = v, 1/2 = count (long accumulator for the list case), 3 = the
 		// array's slot-0 header (Object[]).
-		JvmAsm a = new JvmAsm();
-		int notString = a.label();
-		int notArray = a.label();
-		int rank1 = a.label();
-		int loop = a.label();
-		int done = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notString = a.newLabel();
+		MethodCode.Label notArray = a.newLabel();
+		MethodCode.Label rank1 = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 
 		// String: return _scount(v) -- the character-visible length inside the
 		// surrounding quote framing. A supplementary code point counts as one character,
 		// matching (length "😀") == 1 on every backend after todo 153.
-		int notSequence = a.label();
+		MethodCode.Label notSequence = a.newLabel();
 		a.aload(0);
 		a.instanceOf(stringClass);
-		a.branch(Opcode.IFEQ, notString);
+		a.ifeq(notString);
 		// A symbol is a String too, without the quote framing: no sequence.
 		a.aload(0);
 		a.checkcast(stringClass);
-		a.ldcString(cp.addString("\""));
+		a.ldc(cp.stringEntry("\""));
 		a.invokevirtual(startsWith);
-		a.branch(Opcode.IFEQ, notSequence);
+		a.ifeq(notSequence);
 		a.aload(0);
 		a.checkcast(stringClass);
 		a.invokestatic(stringCharCount);
-		a.op(Opcode.I2L);
+		a.i2l();
 		a.invokestatic(longValueOf);
 		a.areturn();
-		a.bind(notString);
+		a.labelBinding(notString);
 
 		// Array: an ArrayList whose slot 0 is the {dims, fillPointer, adjustable}
 		// header. The fill pointer, when present, is the effective length. A host
@@ -123,90 +118,86 @@ final class JvmLengthRuntimeBuilder {
 		else {
 			a.instanceOf(arrayListClass);
 		}
-		a.branch(Opcode.IFEQ, notArray);
+		a.ifeq(notArray);
 		a.aload(0);
 		a.checkcast(arrayListClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.invokevirtual(alGet);
 		a.checkcast(objectArrayClass);
 		a.astore(3);
 		a.aload(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
 		a.arraylength();
-		a.iconst(1);
-		a.branch(Opcode.IF_ICMPEQ, rank1);
+		a.loadConstant(1);
+		a.if_icmpeq(rank1);
 		// rank 2+: not a sequence.
-		a.anew(rtExClass);
+		a.new_(rtExClass);
 		a.dup();
-		a.ldcString(cp.addString("length: argument is not a sequence (multidimensional array)"));
+		a.ldc(cp.stringEntry("length: argument is not a sequence (multidimensional array)"));
 		a.invokespecial(rtExInit);
-		a.op(Opcode.ATHROW);
-		a.bind(rank1);
-		int noFillPointer = a.label();
+		a.athrow();
+		a.labelBinding(rank1);
+		MethodCode.Label noFillPointer = a.newLabel();
 		a.aload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
-		a.branch(Opcode.IFNULL, noFillPointer);
+		a.ifnull(noFillPointer);
 		a.aload(3);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.areturn();
-		a.bind(noFillPointer);
+		a.labelBinding(noFillPointer);
 		// dims[0] (already a boxed Long): equals size() - 1 for an ordinary vector and
 		// stays correct for a displaced one (which holds no data slots).
 		a.aload(3);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.areturn();
-		a.bind(notArray);
+		a.labelBinding(notArray);
 
 		// List: count cons cells (Object[]) until the value is no longer a cons. The walk
 		// must end at nil: anything else -- a non-list, a dotted list's tail -- is no
 		// sequence.
-		a.op(Opcode.LCONST_0);
-		a.op(Opcode.LSTORE);
-		a.op0(1);
-		a.bind(loop);
+		a.lconst_0();
+		a.lstore(1);
+		a.labelBinding(loop);
 		a.aload(0);
 		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, done);
-		a.op(Opcode.LLOAD);
-		a.op0(1);
-		a.op(Opcode.LCONST_1);
-		a.op(Opcode.LADD);
-		a.op(Opcode.LSTORE);
-		a.op0(1);
+		a.ifeq(done);
+		a.lload(1);
+		a.lconst_1();
+		a.ladd();
+		a.lstore(1);
 		a.aload(0);
 		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(0);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, notSequence);
-		a.op(Opcode.LLOAD);
-		a.op0(1);
+		a.ifnonnull(notSequence);
+		a.lload(1);
 		a.invokestatic(longValueOf);
 		a.areturn();
 		// throw _opTypeErr(_teRaw(v, "SEQUENCE"), "LENGTH", "SEQUENCE")
-		a.bind(notSequence);
+		a.labelBinding(notSequence);
 		a.aload(0);
-		a.ldcString(cp.addString(OperandTypes.Kind.SEQUENCE.name()));
+		a.ldc(cp.stringEntry(OperandTypes.Kind.SEQUENCE.name()));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
-		a.ldcString(cp.addString(LispNames.LENGTH));
-		a.ldcString(cp.addString(OperandTypes.Kind.SEQUENCE.name()));
+		a.ldc(cp.stringEntry(LispNames.LENGTH));
+		a.ldc(cp.stringEntry(OperandTypes.Kind.SEQUENCE.name()));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
-		a.op(Opcode.ATHROW);
+		a.athrow();
 
-		return new LengthMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 4, 4, a.finish());
+		return new LengthMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
 	}
 
 }

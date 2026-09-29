@@ -1,13 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
@@ -74,7 +75,7 @@ final class JvmStringIndexRuntimeBuilder {
 	/**
 	 * A string-index runtime method body ready to be emitted into the generated class.
 	 */
-	record StringIndexMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
+	record StringIndexMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
 	}
 
 	/** {@code _cpoff(String, int) -> int}: the UTF-16 offset of character {@code i}. */
@@ -139,24 +140,18 @@ final class JvmStringIndexRuntimeBuilder {
 	private JvmStringIndexRuntimeBuilder() {
 	}
 
-	static List<StringIndexMethod> build(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass,
+	static List<StringIndexMethod> build(ConstantPool cp, ClassEntry selfClass, ClassEntry stringClass,
 			boolean usesArrays) {
-		MethodrefConstant stringLength = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		MethodrefConstant codePointCount = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("codePointCount"), cp.addUtf8("(II)I")));
-		MethodrefConstant offsetByCodePoints = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("offsetByCodePoints"), cp.addUtf8("(II)I")));
-		Utf8Constant fieldDesc = cp.addUtf8(FIELD_DESC);
-		FieldrefConstant slot0 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(FIELDS[0]), fieldDesc));
-		FieldrefConstant slot1 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(FIELDS[1]), fieldDesc));
-		Utf8Constant wideDesc = cp.addUtf8(WIDE_FIELD_DESC);
-		FieldrefConstant wide0 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(WIDE_FIELDS[0]), wideDesc));
-		FieldrefConstant wide1 = cp.addFieldref(selfClass, cp.addNameAndType(cp.addUtf8(WIDE_FIELDS[1]), wideDesc));
-		ClassConstant intArrayClass = cp.addClass(cp.addUtf8("[I"));
-		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
-		MethodrefConstant indexOf = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(INDEX_METHOD), cp.addUtf8(INDEX_DESC)));
+		MethodRefEntry stringLength = cp.methodRef(stringClass, "length", "()I");
+		MethodRefEntry codePointCount = cp.methodRef(stringClass, "codePointCount", "(II)I");
+		MethodRefEntry offsetByCodePoints = cp.methodRef(stringClass, "offsetByCodePoints", "(II)I");
+		FieldRefEntry slot0 = cp.fieldRef(selfClass, FIELDS[0], FIELD_DESC);
+		FieldRefEntry slot1 = cp.fieldRef(selfClass, FIELDS[1], FIELD_DESC);
+		FieldRefEntry wide0 = cp.fieldRef(selfClass, WIDE_FIELDS[0], WIDE_FIELD_DESC);
+		FieldRefEntry wide1 = cp.fieldRef(selfClass, WIDE_FIELDS[1], WIDE_FIELD_DESC);
+		ClassEntry intArrayClass = cp.classEntry("[I");
+		ClassEntry objectClass = cp.classEntry("java/lang/Object");
+		MethodRefEntry indexOf = cp.methodRef(selfClass, INDEX_METHOD, INDEX_DESC);
 		return List.of(buildOffset(cp, offsetByCodePoints, slot0, slot1, indexOf),
 				buildCount(cp, stringLength, slot0, slot1, indexOf), buildIndex(cp, stringLength, codePointCount,
 						offsetByCodePoints, slot0, slot1, wide0, wide1, intArrayClass, objectClass, stringClass),
@@ -168,258 +163,253 @@ final class JvmStringIndexRuntimeBuilder {
 	// raises the same gate), else _cpoff + codePointAt on the immutable string. A
 	// non-string, non-character-vector argument throws the unnamed STRING report, which
 	// the site's operator wrapper names (JvmCharCompiler).
-	private static StringIndexMethod buildCharRef(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass,
+	private static StringIndexMethod buildCharRef(ConstantPool cp, ClassEntry selfClass, ClassEntry stringClass,
 			boolean usesArrays) {
 		// Slots: 0 = o, 1 = i, 2 = header scratch, 3 = s.
-		MethodrefConstant strCpOffset = cp.addMethodref(selfClass,
-				cp.addNameAndType(cp.addUtf8(OFFSET_METHOD), cp.addUtf8(OFFSET_DESC)));
-		MethodrefConstant strCodePointAt = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
-		JvmAsm a = new JvmAsm();
+		MethodRefEntry strCpOffset = cp.methodRef(selfClass, OFFSET_METHOD, OFFSET_DESC);
+		MethodRefEntry strCodePointAt = cp.methodRef(stringClass, "codePointAt", "(I)I");
+		MethodCode a = new MethodCode();
 		if (usesArrays) {
-			ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-			ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
-			ClassConstant intArrayClass = cp.addClass(cp.addUtf8("[I"));
-			MethodrefConstant alSize = cp.addMethodref(arrayListClass,
-					cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-			MethodrefConstant alGet = cp.addMethodref(arrayListClass,
-					cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-			MethodrefConstant rmGet = cp.addMethodref(selfClass, cp.addNameAndType(
-					cp.addUtf8(JvmArrayRuntimeBuilder.RM_GET), cp.addUtf8(JvmArrayRuntimeBuilder.RM_GET_DESC)));
-			int str = a.label();
-			int vec = a.label();
+			ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+			ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
+			ClassEntry intArrayClass = cp.classEntry("[I");
+			MethodRefEntry alSize = cp.methodRef(arrayListClass, "size", "()I");
+			MethodRefEntry alGet = cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+			MethodRefEntry rmGet = cp.methodRef(selfClass, JvmArrayRuntimeBuilder.RM_GET,
+					JvmArrayRuntimeBuilder.RM_GET_DESC);
+			MethodCode.Label str = a.newLabel();
+			MethodCode.Label vec = a.newLabel();
 			a.aload(0);
 			a.instanceOf(arrayListClass);
-			a.branch(Opcode.IFEQ, str);
+			a.ifeq(str);
 			a.aload(0);
 			a.checkcast(arrayListClass);
 			a.invokevirtual(alSize);
-			a.branch(Opcode.IFLE, str);
+			a.ifle(str);
 			a.aload(0);
 			a.checkcast(arrayListClass);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.invokevirtual(alGet);
 			a.astore(2);
 			a.aload(2);
 			a.instanceOf(objectArrayClass);
-			a.branch(Opcode.IFEQ, str);
+			a.ifeq(str);
 			// header length 4 = character vector, 7 = string view; both read their
 			// element (a boxed CHARACTER int[]{cp}) through _rmGet's displacement walk.
 			a.aload(2);
 			a.checkcast(objectArrayClass);
 			a.arraylength();
-			a.iconst(4);
-			a.branch(Opcode.IF_ICMPEQ, vec);
+			a.loadConstant(4);
+			a.if_icmpeq(vec);
 			a.aload(2);
 			a.checkcast(objectArrayClass);
 			a.arraylength();
-			a.iconst(7);
-			a.branch(Opcode.IF_ICMPNE, str);
-			a.bind(vec);
+			a.loadConstant(7);
+			a.if_icmpne(str);
+			a.labelBinding(vec);
 			a.aload(0);
-			a.iconst(1);
+			a.loadConstant(1);
 			a.iload(1);
-			a.op(Opcode.IADD);
+			a.iadd();
 			a.invokestatic(rmGet);
 			a.checkcast(intArrayClass);
-			a.iconst(0);
+			a.loadConstant(0);
 			a.iaload();
 			a.ireturn();
-			a.bind(str);
+			a.labelBinding(str);
 		}
 		// Anything but a quote-framed String (a symbol is a bare one) is no string: the
 		// unnamed STRING report, named CHAR's / SCHAR's by the call site's wrapper.
-		int notString = a.label();
+		MethodCode.Label notString = a.newLabel();
 		a.aload(0);
 		a.instanceOf(stringClass);
-		a.branch(Opcode.IFEQ, notString);
+		a.ifeq(notString);
 		a.aload(0);
 		a.checkcast(stringClass);
 		a.astore(3);
 		a.aload(3);
-		a.ldcString(cp.addString("\""));
-		a.invokevirtual(cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z"))));
-		a.branch(Opcode.IFEQ, notString);
+		a.ldc(cp.stringEntry("\""));
+		a.invokevirtual(cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z"));
+		a.ifeq(notString);
 		a.aload(3);
 		a.aload(3);
 		a.iload(1);
 		a.invokestatic(strCpOffset);
 		a.invokevirtual(strCodePointAt);
 		a.ireturn();
-		a.bind(notString);
+		a.labelBinding(notString);
 		a.aload(0);
-		a.ldcString(cp.addString(OperandTypes.Kind.STRING.name()));
+		a.ldc(cp.stringEntry(OperandTypes.Kind.STRING.name()));
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
 		a.athrow();
-		return new StringIndexMethod(cp.addUtf8(CHARREF_METHOD), cp.addUtf8(CHARREF_DESC), 4, 4, a.finish());
+		return new StringIndexMethod(cp.addUtf8(CHARREF_METHOD), cp.addUtf8(CHARREF_DESC), a);
 	}
 
 	// _cpoff(s, i): 1 + i for a flat string, else the nearest breakpoint plus a walk of
 	// at most STRIDE - 1 characters.
-	private static StringIndexMethod buildOffset(ConstantPool cp, MethodrefConstant offsetByCodePoints,
-			FieldrefConstant slot0, FieldrefConstant slot1, MethodrefConstant indexOf) {
+	private static StringIndexMethod buildOffset(ConstantPool cp, MethodRefEntry offsetByCodePoints,
+			FieldRefEntry slot0, FieldRefEntry slot1, MethodRefEntry indexOf) {
 		// Slots: 0 = s, 1 = i, 2 = table, 3 = breakpoint number.
-		JvmAsm a = new JvmAsm();
-		int direct = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label direct = a.newLabel();
 		emitRememberedProbe(a, slot0, slot1, direct);
 		a.aload(0);
 		a.invokestatic(indexOf);
 		a.astore(2);
 		a.aload(2);
-		a.branch(Opcode.IFNULL, direct);
+		a.ifnull(direct);
 		// k = i >>> STRIDE_SHIFT; return s.offsetByCodePoints(t[1 + k], i - (k << SHIFT))
 		a.iload(1);
-		a.iconst(STRIDE_SHIFT);
-		a.op(Opcode.IUSHR);
+		a.loadConstant(STRIDE_SHIFT);
+		a.iushr();
 		a.istore(3);
 		a.aload(0);
 		a.aload(2);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(3);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.iaload();
 		a.iload(1);
 		a.iload(3);
-		a.iconst(STRIDE_SHIFT);
-		a.op(Opcode.ISHL);
-		a.op(Opcode.ISUB);
+		a.loadConstant(STRIDE_SHIFT);
+		a.ishl();
+		a.isub();
 		a.invokevirtual(offsetByCodePoints);
 		a.ireturn();
-		a.bind(direct);
-		a.iconst(1);
+		a.labelBinding(direct);
+		a.loadConstant(1);
 		a.iload(1);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.ireturn();
-		return new StringIndexMethod(cp.addUtf8(OFFSET_METHOD), cp.addUtf8(OFFSET_DESC), 5, 4, a.finish());
+		return new StringIndexMethod(cp.addUtf8(OFFSET_METHOD), cp.addUtf8(OFFSET_DESC), a);
 	}
 
 	// _scount(s): length - 2 for a flat string -- the same fact, so the same memory
 	// answers both -- else the count the breakpoint table's slot 0 carries.
-	private static StringIndexMethod buildCount(ConstantPool cp, MethodrefConstant stringLength, FieldrefConstant slot0,
-			FieldrefConstant slot1, MethodrefConstant indexOf) {
+	private static StringIndexMethod buildCount(ConstantPool cp, MethodRefEntry stringLength, FieldRefEntry slot0,
+			FieldRefEntry slot1, MethodRefEntry indexOf) {
 		// Slots: 0 = s, 1 = table.
-		JvmAsm a = new JvmAsm();
-		int direct = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label direct = a.newLabel();
 		emitRememberedProbe(a, slot0, slot1, direct);
 		a.aload(0);
 		a.invokestatic(indexOf);
 		a.astore(1);
 		a.aload(1);
-		a.branch(Opcode.IFNULL, direct);
+		a.ifnull(direct);
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iaload();
 		a.ireturn();
-		a.bind(direct);
+		a.labelBinding(direct);
 		a.aload(0);
 		a.invokevirtual(stringLength);
-		a.iconst(2);
-		a.op(Opcode.ISUB);
+		a.loadConstant(2);
+		a.isub();
 		a.ireturn();
-		return new StringIndexMethod(cp.addUtf8(COUNT_METHOD), cp.addUtf8(COUNT_DESC), 3, 2, a.finish());
+		return new StringIndexMethod(cp.addUtf8(COUNT_METHOD), cp.addUtf8(COUNT_DESC), a);
 	}
 
 	// _cpidx(s): the remembered breakpoint table, or null once s is proven flat. The
 	// slow half of both helpers: the surrogate-pair probe, the one-pass table build and
 	// the two memories live here so neither caller repeats them.
-	private static StringIndexMethod buildIndex(ConstantPool cp, MethodrefConstant stringLength,
-			MethodrefConstant codePointCount, MethodrefConstant offsetByCodePoints, FieldrefConstant slot0,
-			FieldrefConstant slot1, FieldrefConstant wide0, FieldrefConstant wide1, ClassConstant intArrayClass,
-			ClassConstant objectClass, ClassConstant stringClass) {
+	private static StringIndexMethod buildIndex(ConstantPool cp, MethodRefEntry stringLength,
+			MethodRefEntry codePointCount, MethodRefEntry offsetByCodePoints, FieldRefEntry slot0, FieldRefEntry slot1,
+			FieldRefEntry wide0, FieldRefEntry wide1, ClassEntry intArrayClass, ClassEntry objectClass,
+			ClassEntry stringClass) {
 		// Slots: 0 = s, 1 = entry, 2 = len, 3 = count, 4 = table, 5 = last breakpoint,
 		// 6 = breakpoint number, 7 = code-unit offset.
-		JvmAsm a = new JvmAsm();
-		int miss0 = a.label();
-		int miss1 = a.label();
-		int build = a.label();
-		int loop = a.label();
-		int done = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label miss0 = a.newLabel();
+		MethodCode.Label miss1 = a.newLabel();
+		MethodCode.Label build = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		emitWideProbe(a, wide0, intArrayClass, miss0);
-		a.bind(miss0);
+		a.labelBinding(miss0);
 		emitWideProbe(a, wide1, intArrayClass, miss1);
-		a.bind(miss1);
+		a.labelBinding(miss1);
 		// len = s.length(); count = s.codePointCount(1, len - 1);
 		a.aload(0);
 		a.invokevirtual(stringLength);
 		a.istore(2);
 		a.aload(0);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(2);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.invokevirtual(codePointCount);
 		a.istore(3);
 		a.iload(3);
 		a.iload(2);
-		a.iconst(2);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPNE, build);
+		a.loadConstant(2);
+		a.isub();
+		a.if_icmpne(build);
 		// Flat: remember the proof and answer "no table".
 		emitRememberFlat(a, stringLength, slot0, slot1);
-		a.aconstNull();
+		a.aconst_null();
 		a.areturn();
-		a.bind(build);
+		a.labelBinding(build);
 		// last = count >>> STRIDE_SHIFT; t = new int[last + 2]; t[0] = count; t[1] = 1;
 		a.iload(3);
-		a.iconst(STRIDE_SHIFT);
-		a.op(Opcode.IUSHR);
+		a.loadConstant(STRIDE_SHIFT);
+		a.iushr();
 		a.istore(5);
 		a.iload(5);
-		a.iconst(2);
-		a.op(Opcode.IADD);
-		a.newarrayInt();
+		a.loadConstant(2);
+		a.iadd();
+		a.newarray(TypeKind.INT);
 		a.astore(4);
 		a.aload(4);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(3);
 		a.iastore();
 		a.aload(4);
-		a.iconst(1);
-		a.iconst(1);
+		a.loadConstant(1);
+		a.loadConstant(1);
 		a.iastore();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(7);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.istore(6);
 		// for (k = 1; k <= last; k++) { off = s.offsetByCodePoints(off, STRIDE);
 		// t[1 + k] = off; }
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(6);
 		a.iload(5);
-		a.branch(Opcode.IF_ICMPGT, done);
+		a.if_icmpgt(done);
 		a.aload(0);
 		a.iload(7);
-		a.iconst(STRIDE);
+		a.loadConstant(STRIDE);
 		a.invokevirtual(offsetByCodePoints);
 		a.istore(7);
 		a.aload(4);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(6);
-		a.op(Opcode.IADD);
+		a.iadd();
 		a.iload(7);
 		a.iastore();
 		a.iinc(6, 1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		// entry = new Object[]{s, t}; wide1 = wide0; wide0 = entry (VOLATILE stores, so
 		// the filled table is published with the reference that names it).
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.astore(1);
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aload(0);
 		a.aastore();
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(4);
 		a.aastore();
 		emitRememberWide(a, stringLength, stringClass, wide0, wide1);
 		a.aload(4);
 		a.areturn();
-		return new StringIndexMethod(cp.addUtf8(INDEX_METHOD), cp.addUtf8(INDEX_DESC), 5, 8, a.finish());
+		return new StringIndexMethod(cp.addUtf8(INDEX_METHOD), cp.addUtf8(INDEX_DESC), a);
 	}
 
 	// Stores s into whichever flat slot holds the SHORTER string (an empty slot first).
@@ -429,59 +419,59 @@ final class JvmStringIndexRuntimeBuilder {
 	// exactly that, one fresh short string per token interleaved with every index into
 	// the document, so the document was re-proven at O(n) every few characters and a
 	// 10.8-million-character parse never finished (.kb/string-index-cost.md).
-	private static void emitRememberFlat(JvmAsm a, MethodrefConstant stringLength, FieldrefConstant slot0,
-			FieldrefConstant slot1) {
-		int store0 = a.label();
-		int store1 = a.label();
-		int done = a.label();
+	private static void emitRememberFlat(MethodCode a, MethodRefEntry stringLength, FieldRefEntry slot0,
+			FieldRefEntry slot1) {
+		MethodCode.Label store0 = a.newLabel();
+		MethodCode.Label store1 = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.getstatic(slot0);
-		a.branch(Opcode.IFNULL, store0);
+		a.ifnull(store0);
 		a.getstatic(slot1);
-		a.branch(Opcode.IFNULL, store1);
+		a.ifnull(store1);
 		a.getstatic(slot0);
 		a.invokevirtual(stringLength);
 		a.getstatic(slot1);
 		a.invokevirtual(stringLength);
-		a.branch(Opcode.IF_ICMPGT, store1);
-		a.bind(store0);
+		a.if_icmpgt(store1);
+		a.labelBinding(store0);
 		a.aload(0);
 		a.putstatic(slot0);
-		a.branch(Opcode.GOTO, done);
-		a.bind(store1);
+		a.goto_(done);
+		a.labelBinding(store1);
 		a.aload(0);
 		a.putstatic(slot1);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	// The same rule for the breakpoint-table pair, reading each incumbent's length
 	// through its entry's string. Local 1 holds the entry to store.
-	private static void emitRememberWide(JvmAsm a, MethodrefConstant stringLength, ClassConstant stringClass,
-			FieldrefConstant wide0, FieldrefConstant wide1) {
-		int store0 = a.label();
-		int store1 = a.label();
-		int done = a.label();
+	private static void emitRememberWide(MethodCode a, MethodRefEntry stringLength, ClassEntry stringClass,
+			FieldRefEntry wide0, FieldRefEntry wide1) {
+		MethodCode.Label store0 = a.newLabel();
+		MethodCode.Label store1 = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.getstatic(wide0);
-		a.branch(Opcode.IFNULL, store0);
+		a.ifnull(store0);
 		a.getstatic(wide1);
-		a.branch(Opcode.IFNULL, store1);
+		a.ifnull(store1);
 		emitEntryStringLength(a, wide0, stringClass, stringLength);
 		emitEntryStringLength(a, wide1, stringClass, stringLength);
-		a.branch(Opcode.IF_ICMPGT, store1);
-		a.bind(store0);
+		a.if_icmpgt(store1);
+		a.labelBinding(store0);
 		a.aload(1);
 		a.putstatic(wide0);
-		a.branch(Opcode.GOTO, done);
-		a.bind(store1);
+		a.goto_(done);
+		a.labelBinding(store1);
 		a.aload(1);
 		a.putstatic(wide1);
-		a.bind(done);
+		a.labelBinding(done);
 	}
 
 	// Pushes ((String) slot[0]).length().
-	private static void emitEntryStringLength(JvmAsm a, FieldrefConstant slot, ClassConstant stringClass,
-			MethodrefConstant stringLength) {
+	private static void emitEntryStringLength(MethodCode a, FieldRefEntry slot, ClassEntry stringClass,
+			MethodRefEntry stringLength) {
 		a.getstatic(slot);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.checkcast(stringClass);
 		a.invokevirtual(stringLength);
@@ -489,31 +479,33 @@ final class JvmStringIndexRuntimeBuilder {
 
 	// entry = slot; if (entry != null && entry[0] == s) return (int[]) entry[1]; else
 	// fall through to miss with an empty operand stack.
-	private static void emitWideProbe(JvmAsm a, FieldrefConstant slot, ClassConstant intArrayClass, int miss) {
+	private static void emitWideProbe(MethodCode a, FieldRefEntry slot, ClassEntry intArrayClass,
+			MethodCode.Label miss) {
 		a.getstatic(slot);
 		a.astore(1);
 		a.aload(1);
-		a.branch(Opcode.IFNULL, miss);
+		a.ifnull(miss);
 		a.aload(1);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.aaload();
 		a.aload(0);
-		a.branch(Opcode.IF_ACMPNE, miss);
+		a.if_acmpne(miss);
 		a.aload(1);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aaload();
 		a.checkcast(intArrayClass);
 		a.areturn();
 	}
 
 	// if (s == slot0 || s == slot1) goto hit -- the remembered "no surrogate pair" fact.
-	private static void emitRememberedProbe(JvmAsm a, FieldrefConstant slot0, FieldrefConstant slot1, int hit) {
+	private static void emitRememberedProbe(MethodCode a, FieldRefEntry slot0, FieldRefEntry slot1,
+			MethodCode.Label hit) {
 		a.aload(0);
 		a.getstatic(slot0);
-		a.branch(Opcode.IF_ACMPEQ, hit);
+		a.if_acmpeq(hit);
 		a.aload(0);
 		a.getstatic(slot1);
-		a.branch(Opcode.IF_ACMPEQ, hit);
+		a.if_acmpeq(hit);
 	}
 
 }

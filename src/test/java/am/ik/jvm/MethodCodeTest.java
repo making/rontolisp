@@ -27,6 +27,20 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
  */
 class MethodCodeTest {
 
+	// An array store and a return chosen by kind, as CodeBuilder's arrayStore/return_:
+	// char[] { c } through castore, its element back through ireturn.
+	@Test
+	void anArrayStoreAndAReturnByKindWriteTheKindsInstruction() throws Exception {
+		Fixture f = new Fixture("Kinds");
+		MethodCode c = new MethodCode();
+		c.iconst_1().newarray(TypeKind.CHAR).astore(1);
+		c.aload(1).iconst_0().iload(0).arrayStore(TypeKind.CHAR);
+		c.aload(1).iconst_0().caload().return_(TypeKind.CHAR);
+		f.add("run", "(I)C", c);
+		assertThat(opcodes(f.write(), "run")).contains(Opcode.CASTORE, Opcode.IRETURN);
+		assertThat(f.load().getMethod("run", int.class).invoke(null, (int) 'q')).isEqualTo('q');
+	}
+
 	@Test
 	void aLoopBranchesForwardAndBackToItsLabels() throws Exception {
 		Fixture f = new Fixture("Loop");

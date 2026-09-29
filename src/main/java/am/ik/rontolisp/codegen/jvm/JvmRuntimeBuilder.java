@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MemberRefEntry;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -13,6 +14,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispNames;
@@ -503,47 +505,49 @@ final class JvmRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
 		MethodrefConstant startsWith = cp.addMethodref(stringClass,
 				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		JvmAsm a = new JvmAsm();
-		int notNull = a.label();
-		int notSymbol = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label notNull = a.newLabel();
+		MethodCode.Label notSymbol = a.newLabel();
 		a.aload(0);
-		a.branch(Opcode.IFNONNULL, notNull);
-		a.anew(runtimeEx);
+		a.ifnonnull(notNull);
+		a.new_(runtimeEx.entry());
 		a.dup();
-		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + "NIL"
-				+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX));
-		a.invokespecial(exCtor);
+		a.ldc(cp
+			.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + "NIL"
+					+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
+			.entry());
+		a.invokespecial(exCtor.entry());
 		a.areturn();
-		a.bind(notNull);
+		a.labelBinding(notNull);
 		// a symbol is its bare name; a string keeps its framing quote
 		a.aload(0);
-		a.instanceOf(stringClass);
-		a.branch(Opcode.IFEQ, notSymbol);
+		a.instanceOf(stringClass.entry());
+		a.ifeq(notSymbol);
 		a.aload(0);
-		a.checkcast(stringClass);
-		a.ldcString(cp.addString("\""));
-		a.invokevirtual(startsWith);
-		a.branch(Opcode.IFNE, notSymbol);
-		a.anew(runtimeEx);
+		a.checkcast(stringClass.entry());
+		a.ldc(cp.addString("\"").entry());
+		a.invokevirtual(startsWith.methodRefEntry());
+		a.ifne(notSymbol);
+		a.new_(runtimeEx.entry());
 		a.dup();
-		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX));
+		a.ldc(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX).entry());
 		a.aload(0);
-		a.checkcast(stringClass);
-		a.invokevirtual(concat);
-		a.ldcString(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX));
-		a.invokevirtual(concat);
-		a.invokespecial(exCtor);
+		a.checkcast(stringClass.entry());
+		a.invokevirtual(concat.methodRefEntry());
+		a.ldc(cp.addString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX).entry());
+		a.invokevirtual(concat.methodRefEntry());
+		a.invokespecial(exCtor.entry());
 		a.areturn();
-		a.bind(notSymbol);
-		a.anew(runtimeEx);
+		a.labelBinding(notSymbol);
+		a.new_(runtimeEx.entry());
 		a.dup();
-		a.ldcString(cp.addString(ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX));
+		a.ldc(cp.addString(ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX).entry());
 		a.aload(0);
-		a.invokestatic(lispToString);
-		a.invokevirtual(concat);
-		a.invokespecial(exCtor);
+		a.invokestatic(lispToString.entry());
+		a.invokevirtual(concat.methodRefEntry());
+		a.invokespecial(exCtor.entry());
 		a.areturn();
-		return a.code;
+		return a.code();
 	}
 
 	/**
@@ -701,75 +705,76 @@ final class JvmRuntimeBuilder {
 			ClassConstant runtimeEx, MethodrefConstant exCtor, MethodrefConstant msgRef, boolean named) {
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required.
 		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4;
-		JvmAsm a = new JvmAsm();
-		int loop = a.label();
-		int counted = a.label();
-		int variadic = a.label();
-		int bad = a.label();
-		int ok = a.label();
-		a.iconst(0);
+		MethodCode a = new MethodCode();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label counted = a.newLabel();
+		MethodCode.Label variadic = a.newLabel();
+		MethodCode.Label bad = a.newLabel();
+		MethodCode.Label ok = a.newLabel();
+		a.loadConstant(0);
 		a.istore(got);
 		a.aload(argList);
 		a.astore(cursor);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.aload(cursor);
-		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, counted);
+		a.instanceOf(objectArrayClass.entry());
+		a.ifeq(counted);
 		a.iinc(got, 1);
 		a.aload(cursor);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
+		a.checkcast(objectArrayClass.entry());
+		a.loadConstant(1);
 		a.aaload();
 		a.astore(cursor);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(counted);
-		int proper = a.label();
+		a.goto_(loop);
+		a.labelBinding(counted);
+		MethodCode.Label proper = a.newLabel();
 		a.aload(cursor);
-		a.branch(Opcode.IFNULL, proper);
+		a.ifnull(proper);
 		ClassConstant simpleError = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		a.anew(simpleError);
+		a.new_(simpleError.entry());
 		a.dup();
-		a.ldcString(cp.addString(cp.addUtf8(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE)));
-		a.invokespecial(cp.addMethodref(simpleError,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))));
-		a.op(Opcode.ATHROW);
-		a.bind(proper);
+		a.ldc(cp.addString(cp.addUtf8(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE)).entry());
+		a.invokespecial(cp
+			.addMethodref(simpleError, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")))
+			.entry());
+		a.athrow();
+		a.labelBinding(proper);
 		a.iload(shape);
 		if (named) {
 			// the operator bits above ARITY_OPERATOR_SHIFT shifted out first
-			a.iconst(Integer.SIZE - ARITY_OPERATOR_SHIFT);
-			a.op(Opcode.ISHL);
-			a.iconst(Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
+			a.loadConstant(Integer.SIZE - ARITY_OPERATOR_SHIFT);
+			a.ishl();
+			a.loadConstant(Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
 		}
 		else {
-			a.iconst(1);
+			a.loadConstant(1);
 		}
-		a.op(Opcode.IUSHR);
+		a.iushr();
 		a.istore(required);
 		// a &rest tail makes the required count a lower bound
 		a.iload(shape);
-		a.iconst(1);
-		a.op(Opcode.IAND);
-		a.branch(Opcode.IFNE, variadic);
+		a.loadConstant(1);
+		a.iand();
+		a.ifne(variadic);
 		a.iload(got);
 		a.iload(required);
-		a.branch(Opcode.IF_ICMPEQ, ok);
-		a.branch(Opcode.GOTO, bad);
-		a.bind(variadic);
+		a.if_icmpeq(ok);
+		a.goto_(bad);
+		a.labelBinding(variadic);
 		a.iload(got);
 		a.iload(required);
-		a.branch(Opcode.IF_ICMPGE, ok);
-		a.bind(bad);
-		a.anew(runtimeEx);
+		a.if_icmpge(ok);
+		a.labelBinding(bad);
+		a.new_(runtimeEx.entry());
 		a.dup();
 		a.iload(shape);
 		a.iload(got);
-		a.invokestatic(msgRef);
-		a.invokespecial(exCtor);
-		a.op(Opcode.ATHROW);
-		a.bind(ok);
-		a.op(Opcode.RETURN);
-		return a.code;
+		a.invokestatic(msgRef.entry());
+		a.invokespecial(exCtor.entry());
+		a.athrow();
+		a.labelBinding(ok);
+		a.return_();
+		return a.code();
 	}
 
 	/**
@@ -1416,71 +1421,71 @@ final class JvmRuntimeBuilder {
 			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringIndexOfFrom,
 			MethodrefConstant stringSubstring, MethodrefConstant stringReplace, MethodrefConstant stringConcat,
 			MethodrefConstant symEscMethod) {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		int slotS = 0, slotN = 1;
-		int framed = a.label();
-		int symbol = a.label();
-		int returnAsIs = a.label();
-		int escape = a.label();
+		MethodCode.Label framed = a.newLabel();
+		MethodCode.Label symbol = a.newLabel();
+		MethodCode.Label returnAsIs = a.newLabel();
+		MethodCode.Label escape = a.newLabel();
 		// int n = s.length(); if (n < 2) goto symbol;
 		a.aload(slotS);
-		a.invokevirtual(stringLength);
+		a.invokevirtual(stringLength.methodRefEntry());
 		a.istore(slotN);
 		a.iload(slotN);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPGE, framed);
-		a.branch(Opcode.GOTO, symbol);
+		a.loadConstant(2);
+		a.if_icmpge(framed);
+		a.goto_(symbol);
 		// if (s.charAt(0) != '"') goto symbol -- a symbol name, escaped by _symEsc
-		a.bind(framed);
+		a.labelBinding(framed);
 		a.aload(slotS);
-		a.iconst(0);
-		a.invokevirtual(stringCharAt);
-		a.iconst('"');
-		a.branch(Opcode.IF_ICMPNE, symbol);
+		a.loadConstant(0);
+		a.invokevirtual(stringCharAt.methodRefEntry());
+		a.loadConstant('"');
+		a.if_icmpne(symbol);
 		// Nothing to escape when the content holds no '\' and the only '"' at or after
 		// index 1 is the closing frame: if (s.indexOf('\\') >= 0) goto escape;
 		a.aload(slotS);
-		a.iconst('\\');
-		a.invokevirtual(stringIndexOf);
-		a.branch(Opcode.IFGE, escape);
+		a.loadConstant('\\');
+		a.invokevirtual(stringIndexOf.methodRefEntry());
+		a.ifge(escape);
 		// if (s.indexOf('"', 1) != n - 1) goto escape;
 		a.aload(slotS);
-		a.iconst('"');
-		a.iconst(1);
-		a.invokevirtual(stringIndexOfFrom);
+		a.loadConstant('"');
+		a.loadConstant(1);
+		a.invokevirtual(stringIndexOfFrom.methodRefEntry());
 		a.iload(slotN);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPNE, escape);
-		a.bind(returnAsIs);
+		a.loadConstant(1);
+		a.isub();
+		a.if_icmpne(escape);
+		a.labelBinding(returnAsIs);
 		a.aload(slotS);
 		a.areturn();
 		// return "\"" + s.substring(1, n - 1).replace("\\", "\\\\").replace("\"", "\\\"")
 		// + "\"" -- the backslash first, or the backslashes this very step introduces
 		// would be escaped again.
-		a.bind(escape);
-		a.ldcString(cp.addString("\""));
+		a.labelBinding(escape);
+		a.ldc(cp.addString("\"").entry());
 		a.aload(slotS);
-		a.iconst(1);
+		a.loadConstant(1);
 		a.iload(slotN);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.invokevirtual(stringSubstring);
-		a.ldcString(cp.addString("\\"));
-		a.ldcString(cp.addString("\\\\"));
-		a.invokevirtual(stringReplace);
-		a.ldcString(cp.addString("\""));
-		a.ldcString(cp.addString("\\\""));
-		a.invokevirtual(stringReplace);
-		a.invokevirtual(stringConcat);
-		a.ldcString(cp.addString("\""));
-		a.invokevirtual(stringConcat);
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(stringSubstring.methodRefEntry());
+		a.ldc(cp.addString("\\").entry());
+		a.ldc(cp.addString("\\\\").entry());
+		a.invokevirtual(stringReplace.methodRefEntry());
+		a.ldc(cp.addString("\"").entry());
+		a.ldc(cp.addString("\\\"").entry());
+		a.invokevirtual(stringReplace.methodRefEntry());
+		a.invokevirtual(stringConcat.methodRefEntry());
+		a.ldc(cp.addString("\"").entry());
+		a.invokevirtual(stringConcat.methodRefEntry());
 		a.areturn();
-		a.bind(symbol);
+		a.labelBinding(symbol);
 		a.aload(slotS);
-		a.invokestatic(symEscMethod);
+		a.invokestatic(symEscMethod.entry());
 		a.areturn();
-		return a.finish();
+		return codeBytes(a);
 	}
 
 	/**
@@ -1508,109 +1513,109 @@ final class JvmRuntimeBuilder {
 	static List<Integer> buildSymEscBody(ConstantPool cp, MethodrefConstant stringLength,
 			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringSubstring,
 			MethodrefConstant stringReplace, MethodrefConstant stringConcat) {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
 		// tmp = 6 (String, the substring/concat scratch).
 		int slotS = 0, slotN = 1, slotPrefixEnd = 2, slotI = 3, slotC = 4, slotIdx = 5, slotTmp = 6;
-		int checkSharpColon = a.label();
-		int scanQualifier = a.label();
-		int havePrefix = a.label();
-		int loopTop = a.label();
-		int doEscape = a.label();
-		int returnAsIs = a.label();
-		int notLower = a.label();
+		MethodCode.Label checkSharpColon = a.newLabel();
+		MethodCode.Label scanQualifier = a.newLabel();
+		MethodCode.Label havePrefix = a.newLabel();
+		MethodCode.Label loopTop = a.newLabel();
+		MethodCode.Label doEscape = a.newLabel();
+		MethodCode.Label returnAsIs = a.newLabel();
+		MethodCode.Label notLower = a.newLabel();
 		// n = s.length();
 		a.aload(slotS);
-		a.invokevirtual(stringLength);
+		a.invokevirtual(stringLength.methodRefEntry());
 		a.istore(slotN);
 		// prefixEnd: a keyword's ':' (LispSymbol.isKeyword), else an uninterned
 		// symbol's "#:" marker, else a package qualifier's colon(s)
 		// (LispSymbol.qualifierEnd) -- all printed verbatim, never escaped, exactly
 		// like the interpreter's LispSymbol.print(). 0 when none apply.
 		a.iload(slotN);
-		a.branch(Opcode.IFEQ, checkSharpColon);
+		a.ifeq(checkSharpColon);
 		a.aload(slotS);
-		a.iconst(0);
-		a.invokevirtual(stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, checkSharpColon);
-		a.iconst(1);
+		a.loadConstant(0);
+		a.invokevirtual(stringCharAt.methodRefEntry());
+		a.loadConstant(':');
+		a.if_icmpne(checkSharpColon);
+		a.loadConstant(1);
 		a.istore(slotPrefixEnd);
-		a.branch(Opcode.GOTO, havePrefix);
-		a.bind(checkSharpColon);
+		a.goto_(havePrefix);
+		a.labelBinding(checkSharpColon);
 		a.iload(slotN);
-		a.iconst(2);
-		a.branch(Opcode.IF_ICMPLT, scanQualifier);
+		a.loadConstant(2);
+		a.if_icmplt(scanQualifier);
 		a.aload(slotS);
-		a.iconst(0);
-		a.invokevirtual(stringCharAt);
-		a.iconst('#');
-		a.branch(Opcode.IF_ICMPNE, scanQualifier);
+		a.loadConstant(0);
+		a.invokevirtual(stringCharAt.methodRefEntry());
+		a.loadConstant('#');
+		a.if_icmpne(scanQualifier);
 		a.aload(slotS);
-		a.iconst(1);
-		a.invokevirtual(stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, scanQualifier);
-		a.iconst(2);
+		a.loadConstant(1);
+		a.invokevirtual(stringCharAt.methodRefEntry());
+		a.loadConstant(':');
+		a.if_icmpne(scanQualifier);
+		a.loadConstant(2);
 		a.istore(slotPrefixEnd);
-		a.branch(Opcode.GOTO, havePrefix);
-		a.bind(scanQualifier);
+		a.goto_(havePrefix);
+		a.labelBinding(scanQualifier);
 		// idx = s.indexOf(':'); prefixEnd = (idx <= 0) ? 0
 		// : (idx+1<n && s.charAt(idx+1)==':') ? idx+2 : idx+1
 		a.aload(slotS);
-		a.iconst(':');
-		a.invokevirtual(stringIndexOf);
+		a.loadConstant(':');
+		a.invokevirtual(stringIndexOf.methodRefEntry());
 		a.istore(slotIdx);
 		a.iload(slotIdx);
-		int idxLePos = a.label();
-		a.branch(Opcode.IFLE, idxLePos);
+		MethodCode.Label idxLePos = a.newLabel();
+		a.ifle(idxLePos);
 		a.iload(slotIdx);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.iload(slotN);
-		int notDoubleColon = a.label();
-		a.branch(Opcode.IF_ICMPGE, notDoubleColon);
+		MethodCode.Label notDoubleColon = a.newLabel();
+		a.if_icmpge(notDoubleColon);
 		a.aload(slotS);
 		a.iload(slotIdx);
-		a.iconst(1);
-		a.op(Opcode.IADD);
-		a.invokevirtual(stringCharAt);
-		a.iconst(':');
-		a.branch(Opcode.IF_ICMPNE, notDoubleColon);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(stringCharAt.methodRefEntry());
+		a.loadConstant(':');
+		a.if_icmpne(notDoubleColon);
 		a.iload(slotIdx);
-		a.iconst(2);
-		a.op(Opcode.IADD);
+		a.loadConstant(2);
+		a.iadd();
 		a.istore(slotPrefixEnd);
-		a.branch(Opcode.GOTO, havePrefix);
-		a.bind(notDoubleColon);
+		a.goto_(havePrefix);
+		a.labelBinding(notDoubleColon);
 		a.iload(slotIdx);
-		a.iconst(1);
-		a.op(Opcode.IADD);
+		a.loadConstant(1);
+		a.iadd();
 		a.istore(slotPrefixEnd);
-		a.branch(Opcode.GOTO, havePrefix);
-		a.bind(idxLePos);
-		a.iconst(0);
+		a.goto_(havePrefix);
+		a.labelBinding(idxLePos);
+		a.loadConstant(0);
 		a.istore(slotPrefixEnd);
-		a.bind(havePrefix);
+		a.labelBinding(havePrefix);
 		// needsPipes: the empty member (prefixEnd == n), or a member byte that is
 		// ASCII lowercase or non-constituent (LispSymbol.needsEscape's mirror).
 		a.iload(slotPrefixEnd);
 		a.istore(slotI);
-		a.bind(loopTop);
+		a.labelBinding(loopTop);
 		a.iload(slotI);
 		a.iload(slotN);
-		a.branch(Opcode.IF_ICMPGE, returnAsIs);
+		a.if_icmpge(returnAsIs);
 		a.aload(slotS);
 		a.iload(slotI);
-		a.invokevirtual(stringCharAt);
+		a.invokevirtual(stringCharAt.methodRefEntry());
 		a.istore(slotC);
 		a.iload(slotC);
-		a.iconst('a');
-		a.branch(Opcode.IF_ICMPLT, notLower);
+		a.loadConstant('a');
+		a.if_icmplt(notLower);
 		a.iload(slotC);
-		a.iconst('z');
-		a.branch(Opcode.IF_ICMPLE, doEscape);
-		a.bind(notLower);
+		a.loadConstant('z');
+		a.if_icmple(doEscape);
+		a.labelBinding(notLower);
 		// Non-constituent characters (LispSymbol.isBareConstituent's mirror): ASCII
 		// whitespace, the reader's list/string/quote/comment/backquote/comma
 		// terminators, and '|' / '\' themselves (reader-special even though the
@@ -1618,50 +1623,50 @@ final class JvmRuntimeBuilder {
 		for (char forbidden : new char[] { ' ', '\t', '\n', '\r', '\f', '(', ')', '\'', '"', ';', ',', '`', '|',
 				'\\' }) {
 			a.iload(slotC);
-			a.iconst(forbidden);
-			a.branch(Opcode.IF_ICMPEQ, doEscape);
+			a.loadConstant(forbidden);
+			a.if_icmpeq(doEscape);
 		}
 		a.iinc(slotI, 1);
-		a.branch(Opcode.GOTO, loopTop);
-		a.bind(returnAsIs);
+		a.goto_(loopTop);
+		a.labelBinding(returnAsIs);
 		a.aload(slotS);
 		a.areturn();
 		// return (prefixEnd == 0 ? "" : s.substring(0, prefixEnd)) + "|"
 		// + member.replace("\\", "\\\\").replace("|", "\\|") + "|", where member is
 		// s.substring(prefixEnd) -- the empty member (prefixEnd == n) needs no
 		// replace calls, String.substring(n, n) already being "".
-		a.bind(doEscape);
+		a.labelBinding(doEscape);
 		a.aload(slotS);
 		a.iload(slotPrefixEnd);
 		a.iload(slotN);
-		a.invokevirtual(stringSubstring);
-		a.ldcString(cp.addString("\\"));
-		a.ldcString(cp.addString("\\\\"));
-		a.invokevirtual(stringReplace);
-		a.ldcString(cp.addString("|"));
-		a.ldcString(cp.addString("\\|"));
-		a.invokevirtual(stringReplace);
+		a.invokevirtual(stringSubstring.methodRefEntry());
+		a.ldc(cp.addString("\\").entry());
+		a.ldc(cp.addString("\\\\").entry());
+		a.invokevirtual(stringReplace.methodRefEntry());
+		a.ldc(cp.addString("|").entry());
+		a.ldc(cp.addString("\\|").entry());
+		a.invokevirtual(stringReplace.methodRefEntry());
 		a.astore(slotTmp);
-		a.ldcString(cp.addString("|"));
+		a.ldc(cp.addString("|").entry());
 		a.aload(slotTmp);
-		a.invokevirtual(stringConcat);
-		a.ldcString(cp.addString("|"));
-		a.invokevirtual(stringConcat);
+		a.invokevirtual(stringConcat.methodRefEntry());
+		a.ldc(cp.addString("|").entry());
+		a.invokevirtual(stringConcat.methodRefEntry());
 		a.astore(slotTmp);
 		a.iload(slotPrefixEnd);
-		int noPrefixPos = a.label();
-		a.branch(Opcode.IFEQ, noPrefixPos);
+		MethodCode.Label noPrefixPos = a.newLabel();
+		a.ifeq(noPrefixPos);
 		a.aload(slotS);
-		a.iconst(0);
+		a.loadConstant(0);
 		a.iload(slotPrefixEnd);
-		a.invokevirtual(stringSubstring);
+		a.invokevirtual(stringSubstring.methodRefEntry());
 		a.aload(slotTmp);
-		a.invokevirtual(stringConcat);
+		a.invokevirtual(stringConcat.methodRefEntry());
 		a.areturn();
-		a.bind(noPrefixPos);
+		a.labelBinding(noPrefixPos);
 		a.aload(slotTmp);
 		a.areturn();
-		return a.finish();
+		return codeBytes(a);
 	}
 
 	/**
@@ -1674,7 +1679,7 @@ final class JvmRuntimeBuilder {
 	 */
 	static List<Integer> buildCharPrin1Body(ConstantPool cp, MethodrefConstant stringConcat,
 			MethodrefConstant characterToString) {
-		JvmAsm a = new JvmAsm();
+		MethodCode a = new MethodCode();
 		emitCharNameCase(a, cp, ' ', "#\\Space");
 		emitCharNameCase(a, cp, '\n', "#\\Newline");
 		emitCharNameCase(a, cp, '\t', "#\\Tab");
@@ -1684,22 +1689,22 @@ final class JvmRuntimeBuilder {
 		emitCharNameCase(a, cp, 0, "#\\Nul");
 		emitCharNameCase(a, cp, 127, "#\\Rubout");
 		// default: "#\".concat(Character.toString(codePoint))
-		a.ldcString(cp.addString("#\\"));
+		a.ldc(cp.addString("#\\").entry());
 		a.iload(0);
-		a.invokestatic(characterToString);
-		a.invokevirtual(stringConcat);
+		a.invokestatic(characterToString.entry());
+		a.invokevirtual(stringConcat.methodRefEntry());
 		a.areturn();
-		return a.finish();
+		return codeBytes(a);
 	}
 
-	private static void emitCharNameCase(JvmAsm a, ConstantPool cp, int ch, String result) {
-		int next = a.label();
+	private static void emitCharNameCase(MethodCode a, ConstantPool cp, int ch, String result) {
+		MethodCode.Label next = a.newLabel();
 		a.iload(0);
-		a.iconst(ch);
-		a.branch(Opcode.IF_ICMPNE, next);
-		a.ldcString(cp.addString(result));
+		a.loadConstant(ch);
+		a.if_icmpne(next);
+		a.ldc(cp.addString(result).entry());
 		a.areturn();
-		a.bind(next);
+		a.labelBinding(next);
 	}
 
 	// Emits the ratio branch of _lispToString/_lispToDisplayString: if the value in
@@ -2482,8 +2487,8 @@ final class JvmRuntimeBuilder {
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
 			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix,
-			@org.jspecify.annotations.Nullable MethodrefConstant lispArray,
-			@org.jspecify.annotations.Nullable MethodrefConstant lispTable) {
+			@org.jspecify.annotations.Nullable MemberRefEntry lispArray,
+			@org.jspecify.annotations.Nullable MemberRefEntry lispTable) {
 	}
 
 	/**
@@ -3462,6 +3467,23 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, objectToString.index());
 		code.add(Opcode.ARETURN);
+	}
+
+	/**
+	 * The code bytes of a body assembled on {@link MethodCode}, for a method record that
+	 * still carries bytes. Such a record has nowhere to put a branch past the signed
+	 * 16-bit offset or an exception handler, so the body may have neither.
+	 * @param body the body, every label bound
+	 * @return its code bytes
+	 * @throws IllegalStateException when a label is unbound, or the body has a long
+	 * branch or a handler
+	 */
+	static List<Integer> codeBytes(MethodCode body) {
+		body.checkComplete();
+		if (!body.longBranches().isEmpty() || !body.handlers().isEmpty()) {
+			throw new IllegalStateException("a body carried as code bytes has a long branch or a handler");
+		}
+		return body.code();
 	}
 
 	/**

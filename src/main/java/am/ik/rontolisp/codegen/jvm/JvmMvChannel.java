@@ -2,13 +2,13 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.IntConsumer;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 
 import org.jspecify.annotations.Nullable;
@@ -141,42 +141,36 @@ record JvmMvChannel(FieldrefConstant field, JvmMvChannel.@Nullable PerThread per
 
 	/**
 	 * Pushes the calling thread's channel value.
-	 * @param op emits an opcode
-	 * @param u2 emits a two-byte operand
+	 * @param code the body
 	 */
-	void emitLoad(IntConsumer op, IntConsumer u2) {
+	void emitLoad(MethodCode code) {
 		if (this.perThread == null) {
-			op.accept(Opcode.GETSTATIC);
-			u2.accept(this.field.index());
+			code.getstatic(this.field.entry());
 			return;
 		}
-		op.accept(Opcode.INVOKESTATIC);
-		u2.accept(this.perThread.get().index());
+		code.invokestatic(this.perThread.get().entry());
 	}
 
 	/**
 	 * Pops the value on the stack into the calling thread's channel.
-	 * @param op emits an opcode
-	 * @param u2 emits a two-byte operand
+	 * @param code the body
 	 */
-	void emitStore(IntConsumer op, IntConsumer u2) {
+	void emitStore(MethodCode code) {
 		if (this.perThread == null) {
-			op.accept(Opcode.PUTSTATIC);
-			u2.accept(this.field.index());
+			code.putstatic(this.field.entry());
 			return;
 		}
-		op.accept(Opcode.INVOKESTATIC);
-		u2.accept(this.perThread.set().index());
+		code.invokestatic(this.perThread.set().entry());
 	}
 
-	/** {@link #emitLoad(IntConsumer, IntConsumer)} into a method body. */
+	/** {@link #emitLoad(MethodCode)} into a compile context's body. */
 	void emitLoad(JvmLispCompiler.Ctx ctx) {
-		emitLoad(ctx::emit, ctx::emitU2);
+		emitLoad(ctx.body);
 	}
 
-	/** {@link #emitStore(IntConsumer, IntConsumer)} into a method body. */
+	/** {@link #emitStore(MethodCode)} into a compile context's body. */
 	void emitStore(JvmLispCompiler.Ctx ctx) {
-		emitStore(ctx::emit, ctx::emitU2);
+		emitStore(ctx.body);
 	}
 
 	/** Clears the calling thread's channel: the value just produced is one value. */

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -167,7 +168,7 @@ final class JvmJavaInteropCompiler {
 				functions.add(args.get(i));
 			}
 		}
-		MethodrefConstant factory = sites.implementations().factory(implementation);
+		MethodRefEntry factory = sites.implementations().factory(implementation);
 		JvmEmitHelper.emitIntConst(ctx, functions.size());
 		ctx.emit(Opcode.ANEWARRAY);
 		ctx.emitU2(ctx.objectClass.index());
@@ -214,7 +215,7 @@ final class JvmJavaInteropCompiler {
 				firstArgument = 1;
 			}
 		}
-		MethodrefConstant method = sites.direct().site(site, staticField, values.size());
+		MethodRefEntry method = sites.direct().site(site, staticField, values.size());
 		boolean packed = values.size() > JvmJavaDirectSites.MAX_SPREAD;
 		if (packed) {
 			JvmEmitHelper.emitIntConst(ctx, values.size());

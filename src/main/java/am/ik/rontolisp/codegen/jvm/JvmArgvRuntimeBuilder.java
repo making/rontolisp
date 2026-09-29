@@ -1,14 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the {@code _argv} runtime helper behind the {@code %host-argv} primitive: the
@@ -43,8 +43,8 @@ final class JvmArgvRuntimeBuilder {
 	static final String DESC = "()Ljava/lang/Object;";
 
 	/** The emitted helper: its name/descriptor plus the code and frame sizes. */
-	record ArgvRuntime(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			Utf8Constant fieldName, Utf8Constant fieldDesc, FieldrefConstant field) {
+	record ArgvRuntime(Utf8Constant name, Utf8Constant desc, MethodCode code, Utf8Constant fieldName,
+			Utf8Constant fieldDesc, FieldRefEntry field) {
 	}
 
 	private JvmArgvRuntimeBuilder() {
@@ -54,74 +54,74 @@ final class JvmArgvRuntimeBuilder {
 		return AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC;
 	}
 
-	static ArgvRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			MethodrefConstant stringConcat, String className) {
+	static ArgvRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass, MethodRefEntry stringConcat,
+			String className) {
 		Utf8Constant fieldName = cp.addUtf8(FIELD);
 		Utf8Constant fieldDesc = cp.addUtf8(FIELD_DESC);
-		FieldrefConstant field = cp.addFieldref(thisClass, cp.addNameAndType(fieldName, fieldDesc));
+		FieldRefEntry field = cp.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
 		// Runtime strings carry their quotes, argv0 included: the class name is a
 		// compile-time constant, so it is minted already quoted.
-		ConstantPool.StringConstant argv0Str = cp.addString("\"" + className.replace('/', '.') + "\"");
-		ConstantPool.StringConstant quoteStr = cp.addString("\"");
+		StringEntry argv0Str = cp.stringEntry("\"" + className.replace('/', '.') + "\"");
+		StringEntry quoteStr = cp.stringEntry("\"");
 
 		// Slots: 0=args (String[]), 1=i (int), 2=acc (Object)
-		JvmAsm a = new JvmAsm();
-		int noArgv = a.label();
-		int loop = a.label();
-		int done = a.label();
+		MethodCode a = new MethodCode();
+		MethodCode.Label noArgv = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
 		a.getstatic(field);
 		a.astore(0);
 		a.aload(0);
-		a.branch(Opcode.IFNULL, noArgv);
+		a.ifnull(noArgv);
 		// acc = null; for (i = args.length - 1; i >= 0; i--)
-		a.aconstNull();
+		a.aconst_null();
 		a.astore(2);
 		a.aload(0);
 		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
+		a.loadConstant(1);
+		a.isub();
 		a.istore(1);
-		a.bind(loop);
+		a.labelBinding(loop);
 		a.iload(1);
-		a.branch(Opcode.IFLT, done);
+		a.iflt(done);
 		// acc = new Object[] { "\"" + args[i] + "\"", acc };
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.ldcString(quoteStr);
+		a.loadConstant(0);
+		a.ldc(quoteStr);
 		a.aload(0);
 		a.iload(1);
 		a.aaload();
 		a.invokevirtual(stringConcat);
-		a.ldcString(quoteStr);
+		a.ldc(quoteStr);
 		a.invokevirtual(stringConcat);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(2);
 		a.aastore();
 		a.astore(2);
 		a.iinc(1, -1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(done);
+		a.goto_(loop);
+		a.labelBinding(done);
 		// return new Object[] { "<class name>", acc };
-		a.iconst(2);
+		a.loadConstant(2);
 		a.anewarray(objectClass);
 		a.dup();
-		a.iconst(0);
-		a.ldcString(argv0Str);
+		a.loadConstant(0);
+		a.ldc(argv0Str);
 		a.aastore();
 		a.dup();
-		a.iconst(1);
+		a.loadConstant(1);
 		a.aload(2);
 		a.aastore();
 		a.areturn();
 		// No main ran: there is no command line to answer, and nil says so.
-		a.bind(noArgv);
-		a.aconstNull();
+		a.labelBinding(noArgv);
+		a.aconst_null();
 		a.areturn();
-		return new ArgvRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), 6, 3, a.finish(), fieldName, fieldDesc, field);
+		return new ArgvRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), a, fieldName, fieldDesc, field);
 	}
 
 }

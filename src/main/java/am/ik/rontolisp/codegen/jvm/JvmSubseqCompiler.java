@@ -1,7 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -10,7 +12,6 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.Opcode;
-import am.ik.jvm.OperandStack;
 
 /**
  * Compiles {@code subseq} for strings and lists: {@code (subseq seq start [end])}.
@@ -51,17 +52,19 @@ final class JvmSubseqCompiler {
 			return;
 		}
 		List<LispVal> args = cons.toList();
-		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
-		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
-		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I").methodRefEntry();
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;")
+			.methodRefEntry();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
+			.methodRefEntry();
 		// _cpoff(s, i): the UTF-16 code-unit index of the i-th CHARACTER inside the
 		// framing quotes. Used to translate a character range (start, end) into code-unit
 		// offsets so a supplementary code point in the middle is one indexed step,
 		// matching (length s) after todo 153.
-		int cpOffset = JvmEmitHelper
+		MethodRefEntry cpOffset = JvmEmitHelper
 			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
 					JvmStringIndexRuntimeBuilder.OFFSET_DESC)
-			.index();
+			.methodRefEntry();
 		StringConstant quote = ctx.cp.addString("\"");
 
 		int seqSlot = ctx.allocTemp();
@@ -77,8 +80,8 @@ final class JvmSubseqCompiler {
 		int iSlot = ctx.allocTemp();
 		int resultSlot = ctx.allocTemp();
 
-		// Pre-compile the argument expressions into slots (compileExpr writes to
-		// ctx.code; the dispatch assembly below is self-contained and appended after).
+		// Pre-compile the argument expressions into slots; the dispatch below follows
+		// them in the same body.
 		// seq = arg, UNNORMALIZED: a mutable character vector reads its elements
 		// directly in _subseqCv (rendering it here would both cost O(source) per slice
 		// and launder the mutable representation away, .todo/559).
@@ -116,11 +119,11 @@ final class JvmSubseqCompiler {
 		ctx.emit(Opcode.ISTORE);
 		ctx.emit(endSlot);
 
-		JvmAsm asm = new JvmAsm();
-		int listLabel = asm.label();
-		int doneLabel = asm.label();
+		MethodCode asm = ctx.body;
+		MethodCode.Label listLabel = asm.newLabel();
+		MethodCode.Label doneLabel = asm.newLabel();
 		// result = null
-		asm.aconstNull();
+		asm.aconst_null();
 		asm.astore(resultSlot);
 		if (ctx.usesArrays) {
 			// ---- STRING PATH, mutable result (.todo/559 step 2) ----
@@ -128,197 +131,187 @@ final class JvmSubseqCompiler {
 			// representation, so a copy-seq/subseq result has a writable identity like
 			// the interpreter's. A character vector reads its elements directly (no
 			// rendered string), an immutable String slices by code point.
-			int cvLabel = asm.label();
+			MethodCode.Label cvLabel = asm.newLabel();
 			asm.aload(seqSlot);
-			asm.instanceOf(ctx.stringClass);
-			asm.branch(Opcode.IFNE, cvLabel);
+			asm.instanceOf(ctx.stringClass.entry());
+			asm.ifne(cvLabel);
 			asm.aload(seqSlot);
-			asm.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")));
-			asm.branch(Opcode.IFEQ, listLabel);
-			asm.bind(cvLabel);
+			asm.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry());
+			asm.ifeq(listLabel);
+			asm.labelBinding(cvLabel);
 			asm.aload(seqSlot);
 			asm.iload(startSlot);
 			asm.iload(endSlot);
-			asm.op(Opcode.INVOKESTATIC);
-			asm.u2(JvmEmitHelper
+			asm.invokestatic(JvmEmitHelper
 				.selfMethod(ctx, className, JvmArrayRuntimeBuilder.SUBSEQ_CV, JvmArrayRuntimeBuilder.SUBSEQ_CV_DESC)
-				.index());
+				.entry());
 			asm.astore(resultSlot);
-			asm.branch(Opcode.GOTO, doneLabel);
+			asm.goto_(doneLabel);
 		}
 		else {
 			// Without the array runtime no character vector can exist and the mutable
 			// representation is unavailable, so the result stays the immutable slice.
 			// if (!(seq instanceof String)) goto listLabel
 			asm.aload(seqSlot);
-			asm.instanceOf(ctx.stringClass);
-			asm.branch(Opcode.IFEQ, listLabel);
+			asm.instanceOf(ctx.stringClass.entry());
+			asm.ifeq(listLabel);
 
 			// A subseq range on a string is a CHARACTER range: translate (start, end) to
 			// code-unit offsets via s.offsetByCodePoints(1, N) so a supplementary code
 			// point in the middle counts as one indexed step (matching the (length s)
 			// contract).
 			asm.aload(seqSlot);
-			asm.checkcast(ctx.stringClass);
+			asm.checkcast(ctx.stringClass.entry());
 			asm.astore(sSlot);
 			// a = _cpoff(s, start) -- the offset of character `start` past the leading
 			// quote.
 			asm.aload(sSlot);
 			asm.iload(startSlot);
-			asm.op(Opcode.INVOKESTATIC);
-			asm.u2(cpOffset);
+			asm.invokestatic(cpOffset);
 			asm.istore(aSlot);
 			// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
-			int haveEnd = asm.label();
-			int gotB = asm.label();
+			MethodCode.Label haveEnd = asm.newLabel();
+			MethodCode.Label gotB = asm.newLabel();
 			asm.iload(endSlot);
-			asm.branch(Opcode.IFGE, haveEnd);
+			asm.ifge(haveEnd);
 			asm.aload(sSlot);
-			asm.op(Opcode.INVOKEVIRTUAL);
-			asm.u2(length);
-			asm.iconst(1);
-			asm.op(Opcode.ISUB);
+			asm.invokevirtual(length);
+			asm.loadConstant(1);
+			asm.isub();
 			asm.istore(bSlot);
-			asm.branch(Opcode.GOTO, gotB);
-			asm.bind(haveEnd);
+			asm.goto_(gotB);
+			asm.labelBinding(haveEnd);
 			asm.aload(sSlot);
 			asm.iload(endSlot);
-			asm.op(Opcode.INVOKESTATIC);
-			asm.u2(cpOffset);
+			asm.invokestatic(cpOffset);
 			asm.istore(bSlot);
-			asm.bind(gotB);
+			asm.labelBinding(gotB);
 			// result = "\"" + s.substring(a, b) + "\""
-			asm.ldcString(quote);
+			asm.ldc(quote.entry());
 			asm.aload(sSlot);
 			asm.iload(aSlot);
 			asm.iload(bSlot);
-			asm.op(Opcode.INVOKEVIRTUAL);
-			asm.u2(substring);
-			asm.op(Opcode.INVOKEVIRTUAL);
-			asm.u2(concat);
-			asm.ldcString(quote);
-			asm.op(Opcode.INVOKEVIRTUAL);
-			asm.u2(concat);
+			asm.invokevirtual(substring);
+			asm.invokevirtual(concat);
+			asm.ldc(quote.entry());
+			asm.invokevirtual(concat);
 			asm.astore(resultSlot);
-			asm.branch(Opcode.GOTO, doneLabel);
+			asm.goto_(doneLabel);
 		}
 
 		// ---- LIST PATH ----
-		asm.bind(listLabel);
+		asm.labelBinding(listLabel);
 		if (!ctx.usesArrays) {
 			// No %subseq-runtime dispatch ran ahead of this lane (expandSubseqCompat
 			// answers null without arrays), so a value that is neither a string nor a
 			// list reaches it: SUBSEQ's SEQUENCE type-error, as the dispatch's own arm.
-			int isList = asm.label();
+			MethodCode.Label isList = asm.newLabel();
 			asm.aload(seqSlot);
-			asm.branch(Opcode.IFNULL, isList);
+			asm.ifnull(isList);
 			asm.aload(seqSlot);
-			asm.instanceOf(ctx.objectArrayClass);
-			asm.branch(Opcode.IFNE, isList);
+			asm.instanceOf(ctx.objectArrayClass.entry());
+			asm.ifne(isList);
 			asm.aload(seqSlot);
-			asm.ldcString(ctx.cp.addString(OperandTypes.Kind.SEQUENCE.name()));
-			asm.op(Opcode.INVOKESTATIC);
-			asm.u2(JvmEmitHelper
+			asm.ldc(ctx.cp.addString(OperandTypes.Kind.SEQUENCE.name()).entry());
+			asm.invokestatic(JvmEmitHelper
 				.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-				.index());
-			asm.ldcString(ctx.cp.addString(LispNames.SUBSEQ));
-			asm.ldcString(ctx.cp.addString(OperandTypes.FUNNEL_TYPE));
-			asm.op(Opcode.INVOKESTATIC);
-			asm.u2(JvmEmitHelper
+				.entry());
+			asm.ldc(ctx.cp.addString(LispNames.SUBSEQ).entry());
+			asm.ldc(ctx.cp.addString(OperandTypes.FUNNEL_TYPE).entry());
+			asm.invokestatic(JvmEmitHelper
 				.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-				.index());
-			asm.op(Opcode.ATHROW);
-			asm.bind(isList);
+				.entry());
+			asm.athrow();
+			asm.labelBinding(isList);
 		}
 		// node = seq
 		asm.aload(seqSlot);
 		asm.astore(nodeSlot);
 		// skip the first `start` cells: i = 0; while (i < start && node != null) cdr
-		int skipLoop = asm.label();
-		int skipDone = asm.label();
-		asm.iconst(0);
+		MethodCode.Label skipLoop = asm.newLabel();
+		MethodCode.Label skipDone = asm.newLabel();
+		asm.loadConstant(0);
 		asm.istore(iSlot);
-		asm.bind(skipLoop);
+		asm.labelBinding(skipLoop);
 		asm.iload(iSlot);
 		asm.iload(startSlot);
-		asm.branch(Opcode.IF_ICMPGE, skipDone);
+		asm.if_icmpge(skipDone);
 		asm.aload(nodeSlot);
-		asm.branch(Opcode.IFNULL, skipDone);
+		asm.ifnull(skipDone);
 		asm.aload(nodeSlot);
-		asm.checkcast(ctx.objectArrayClass);
-		asm.iconst(1);
+		asm.checkcast(ctx.objectArrayClass.entry());
+		asm.loadConstant(1);
 		asm.aaload();
 		asm.astore(nodeSlot);
 		asm.iinc(iSlot, 1);
-		asm.branch(Opcode.GOTO, skipLoop);
-		asm.bind(skipDone);
+		asm.goto_(skipLoop);
+		asm.labelBinding(skipDone);
 		// head = null; tail = null; i = start
-		asm.aconstNull();
+		asm.aconst_null();
 		asm.astore(headSlot);
-		asm.aconstNull();
+		asm.aconst_null();
 		asm.astore(tailSlot);
 		asm.iload(startSlot);
 		asm.istore(iSlot);
-		int buildLoop = asm.label();
-		int buildDone = asm.label();
-		int doBody = asm.label();
-		asm.bind(buildLoop);
+		MethodCode.Label buildLoop = asm.newLabel();
+		MethodCode.Label buildDone = asm.newLabel();
+		MethodCode.Label doBody = asm.newLabel();
+		asm.labelBinding(buildLoop);
 		// while node != null
 		asm.aload(nodeSlot);
-		asm.branch(Opcode.IFNULL, buildDone);
+		asm.ifnull(buildDone);
 		// and (end < 0 || i < end)
 		asm.iload(endSlot);
-		asm.branch(Opcode.IFLT, doBody);
+		asm.iflt(doBody);
 		asm.iload(iSlot);
 		asm.iload(endSlot);
-		asm.branch(Opcode.IF_ICMPGE, buildDone);
-		asm.bind(doBody);
+		asm.if_icmpge(buildDone);
+		asm.labelBinding(doBody);
 		// newcons = new Object[2]; newcons[0] = node[0]; newcons[1] = null
-		asm.iconst(2);
-		asm.anewarray(ctx.objectClass);
+		asm.loadConstant(2);
+		asm.anewarray(ctx.objectClass.entry());
 		asm.dup();
-		asm.iconst(0);
+		asm.loadConstant(0);
 		asm.aload(nodeSlot);
-		asm.checkcast(ctx.objectArrayClass);
-		asm.iconst(0);
+		asm.checkcast(ctx.objectArrayClass.entry());
+		asm.loadConstant(0);
 		asm.aaload();
 		asm.aastore();
 		asm.astore(newSlot);
 		// if (head == null) { head = tail = newcons } else { tail[1] = newcons; tail =
 		// newcons }
-		int appendTail = asm.label();
-		int afterAppend = asm.label();
+		MethodCode.Label appendTail = asm.newLabel();
+		MethodCode.Label afterAppend = asm.newLabel();
 		asm.aload(headSlot);
-		asm.branch(Opcode.IFNONNULL, appendTail);
+		asm.ifnonnull(appendTail);
 		asm.aload(newSlot);
 		asm.astore(headSlot);
 		asm.aload(newSlot);
 		asm.astore(tailSlot);
-		asm.branch(Opcode.GOTO, afterAppend);
-		asm.bind(appendTail);
+		asm.goto_(afterAppend);
+		asm.labelBinding(appendTail);
 		asm.aload(tailSlot);
-		asm.checkcast(ctx.objectArrayClass);
-		asm.iconst(1);
+		asm.checkcast(ctx.objectArrayClass.entry());
+		asm.loadConstant(1);
 		asm.aload(newSlot);
 		asm.aastore();
 		asm.aload(newSlot);
 		asm.astore(tailSlot);
-		asm.bind(afterAppend);
+		asm.labelBinding(afterAppend);
 		// node = node[1]; i++
 		asm.aload(nodeSlot);
-		asm.checkcast(ctx.objectArrayClass);
-		asm.iconst(1);
+		asm.checkcast(ctx.objectArrayClass.entry());
+		asm.loadConstant(1);
 		asm.aaload();
 		asm.astore(nodeSlot);
 		asm.iinc(iSlot, 1);
-		asm.branch(Opcode.GOTO, buildLoop);
-		asm.bind(buildDone);
+		asm.goto_(buildLoop);
+		asm.labelBinding(buildDone);
 		asm.aload(headSlot);
 		asm.astore(resultSlot);
 
-		asm.bind(doneLabel);
+		asm.labelBinding(doneLabel);
 		asm.aload(resultSlot);
-		ctx.emitBlock(asm.finish(), OperandStack.Slot.REF);
 	}
 
 }
