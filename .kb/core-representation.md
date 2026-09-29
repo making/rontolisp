@@ -199,8 +199,9 @@ reference for the SHAPE only.
 - **Interpreter**: `LispLambda` carries a `name` field that `LispEvaluator.evalDefun` fills with the
   resolved registered name; `print()` answers the tag. Built-ins (`LispFunction`) already named
   themselves.
-- **JVM**: a static `_funName(I)Ljava/lang/String;` built by `JvmRuntimeBuilder.buildFunNameBody`
-  over a `SortedMap` of the dispatchable defuns; `_lispToString`/`_lispToDisplayString` emit
+- **JVM**: a static `_funName(I)Ljava/lang/String;` built by `JvmRuntimeBuilder.buildFunNameMethods`
+  over a `SortedMap` of the dispatchable defuns (segmented like `_invoke_<arity>`, so `_funName`
+  may be a router over `_funName$k`); `_lispToString`/`_lispToDisplayString` emit
   `emitFuncValPrint` (slot-2 local, so both declare maxLocals 3). The method is OMITTED when the map is empty: a program with no
   nameable function value is byte-identical to a build that never knew the feature.
 - **JVM** keeps its table on `dispatchableFuncIds`: the registry already spells every one of those
