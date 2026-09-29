@@ -99,15 +99,15 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
 ## Emission on `java.lang.classfile`
 **Where it stands (2026-09-29):** every class is WRITTEN by the API (above). Every method body
 has a typed, `CodeBuilder`-shaped layer, `am.ik.jvm.MethodCode` (`Ctx.body` for a compile
-context; a builder makes its own). On it: the hash-table slice, and every builder that had an
+context; a builder makes its own). On it: the hash-table slice, every builder that had an
 assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thread, fetch,
 HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
-`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone). The rest still write code
-bytes (`Ctx.emit`/`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The
-remaining slices are `.todo/a86`-`a91`: the I/O and socket builders, the core runtime
-builders, the small builders with `JvmLispCompiler`'s own code, the expression compilers in
-two halves, then `MethodCode` storing instruction records so the code bytes, their decoders
-and `am.ik.jvm.Opcode` go.
+`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone) -- and the I/O and socket
+runtimes with `_flushStreams`, the first raw lists. The rest still write code bytes
+(`Ctx.emit`/`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining
+slices are `.todo/a87`-`a91`: the core runtime builders, the small builders with
+`JvmLispCompiler`'s own code, the expression compilers in two halves, then `MethodCode` storing
+instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
@@ -143,9 +143,21 @@ jose suite and 28 example compiles (`java:` interop, jvm-export with and without
 commit id in a version string (`lisp-implementation-version`, `uiop/os:lisp-version-string`,
 the `rontolisp:fetch` user agent).
 
-**How a slice moves** (the recipe both slices used; tools in
-`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, `README.md`
-there):
+**The first raw-list slice** (2026-09-29): `JvmIoRuntimeBuilder`, `JvmSocketRuntimeBuilder` and
+`JvmFlushStreamsBuilder`, byte-identical by the same comparisons (the 4,857 programs and every
+CLI compile above; the difference is the build timestamp in the version strings) plus programs
+switching on every gate of the two runtimes at once. The raw lists wrote the one-byte local
+forms (`aload_1`) the layer writes as `aload 1`, so these bodies measure a little LARGER than
+they did; no budget reads a runtime helper, and the written class is the same. The premise
+"a position read can be a source, a target or a handler bound" measured on the three files:
+203 reads, 192 branch sources patched to the current position, 4 backward-branch targets, 6
+handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions held in an
+`int p = -1` sentinel and 7 lists of positions each patched by one loop.
+
+**How a slice moves** (the recipe every slice used; tools in
+`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, and for a raw list
+`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/`, each with a
+`README.md`):
 
 - Calls map one to one: `label()`/`bind` -> `newLabel()`/`labelBinding`, `branch(Opcode.X, l)`
   -> `x(l)`, `op(Opcode.X)` -> `x()`, `op(X); u2(e.index())` -> the typed call on `e`, `iconst`
@@ -167,6 +179,14 @@ there):
   (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
   `aconst_null` compiles and emits the wrong code. javac catches the opcode half
   (`lstore()` has no zero-argument form) -- fix the pair by hand.
+- A raw list: `raw.py` rewrites the instructions (a pool operand loses its `.index()`), a
+  position read right before a branch to a label bound where `patchBranch(code, p,
+  code.size())` stood, a list of positions patched by one loop to one label, and a backward
+  branch to a label bound at its target (`newBoundLabel()`). Left to a hand: a handler bound
+  (`newBoundLabel()`, then `exceptionCatch`), a sentinel `int p = -1` (a `@Nullable` label),
+  an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
+  the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
+  code already on the layer called on a field that became an entry.
 - Verify by bytes, not only by tests: `Cmp.java` compiles a directory of programs with both
   jars in process (`extract.py` pulls them out of the tests, `runchunks.sh` runs chunks in
   parallel, ~4 min for the 4,857), `cmpcli.sh` the CLI programs; `MethodDiff.java` names what

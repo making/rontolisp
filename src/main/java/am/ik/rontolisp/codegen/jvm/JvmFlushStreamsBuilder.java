@@ -1,14 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds {@code _flushStreams()V}: flush every {@code java.io.Flushable} left in the
@@ -34,88 +31,58 @@ final class JvmFlushStreamsBuilder {
 	private JvmFlushStreamsBuilder() {
 	}
 
-	static JvmIoRuntimeBuilder.IoMethod build(ConstantPool cp, ClassConstant thisClass) {
-		FieldrefConstant streams = cp.addFieldref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD), cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC)));
-		ClassConstant flushable = cp.addClass(cp.addUtf8("java/io/Flushable"));
-		MethodrefConstant flush = cp.addInterfaceMethodref(flushable,
-				cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
-		ClassConstant ioException = cp.addClass(cp.addUtf8("java/io/IOException"));
+	static JvmIoRuntimeBuilder.IoMethod build(ConstantPool cp, ClassEntry thisClass) {
+		FieldRefEntry streams = cp.fieldRef(thisClass, JvmIoRuntimeBuilder.STREAMS_FIELD,
+				JvmIoRuntimeBuilder.STREAMS_DESC);
+		ClassEntry flushable = cp.classEntry("java/io/Flushable");
+		InterfaceMethodRefEntry flush = cp.interfaceMethodRef(flushable, "flush", "()V");
+		ClassEntry ioException = cp.classEntry("java/io/IOException");
 		// Slots: 0=table, 1=index, 2=entry
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// Object[] table = _streams; if (table == null) return;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, streams.index());
-		code.add(Opcode.ASTORE_0);
-		code.add(Opcode.ALOAD_0);
-		int ifTablePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.RETURN);
-		patchBranch(code, ifTablePos, code.size());
+		code.getstatic(streams);
+		code.astore(0);
+		code.aload(0);
+		MethodCode.Label ifTable = code.newLabel();
+		code.ifnonnull(ifTable);
+		code.return_();
+		code.labelBinding(ifTable);
 		// for (int i = 0; i < table.length; i++)
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE_1);
-		int loop = code.size();
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifDonePos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.iconst_0();
+		code.istore(1);
+		MethodCode.Label loop = code.newBoundLabel();
+		code.iload(1);
+		code.aload(0);
+		code.arraylength();
+		MethodCode.Label ifDone = code.newLabel();
+		code.if_icmpge(ifDone);
 		// Object entry = table[i]; if (entry instanceof Flushable)
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, flushable.index());
-		int ifNotFlushablePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.iload(1);
+		code.aaload();
+		code.astore(2);
+		code.aload(2);
+		code.instanceOf(flushable);
+		MethodCode.Label ifNotFlushable = code.newLabel();
+		code.ifeq(ifNotFlushable);
 		// try { ((Flushable) entry).flush(); } catch (IOException e) { }
-		int tryStart = code.size();
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, flushable.index());
-		code.add(Opcode.INVOKEINTERFACE);
-		emitU2(code, flush.index());
-		code.add(1);
-		code.add(0);
-		int tryEnd = code.size();
-		int gotoNextPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		int handler = code.size();
-		code.add(Opcode.POP);
-		int next = code.size();
-		patchBranch(code, ifNotFlushablePos, next);
-		patchBranch(code, gotoNextPos, next);
-		code.add(Opcode.IINC);
-		code.add(1);
-		code.add(1);
-		int gotoLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoLoopPos, loop);
-		patchBranch(code, ifDonePos, code.size());
-		code.add(Opcode.RETURN);
-		List<ClassDefinition.Handler> handlers = List
-			.of(new ClassDefinition.Handler(tryStart, tryEnd, handler, ioException.index()));
-		return new JvmIoRuntimeBuilder.IoMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 2, 3, code, 0, handlers);
-	}
-
-	private static void emitU2(List<Integer> code, int value) {
-		// The shared writer keeps a pool index past 65535 whole
-		// (JvmRuntimeBuilder.emitU2).
-		JvmRuntimeBuilder.emitU2(code, value);
-	}
-
-	private static void patchBranch(List<Integer> code, int branchPos, int target) {
-		int offset = target - branchPos;
-		code.set(branchPos + 1, (offset >> 8) & 0xFF);
-		code.set(branchPos + 2, offset & 0xFF);
+		MethodCode.Label tryStart = code.newBoundLabel();
+		code.aload(2);
+		code.checkcast(flushable);
+		code.invokeinterface(flush);
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		MethodCode.Label gotoNext = code.newLabel();
+		code.goto_(gotoNext);
+		MethodCode.Label handler = code.newBoundLabel();
+		code.pop();
+		code.labelBinding(ifNotFlushable);
+		code.labelBinding(gotoNext);
+		code.iinc(1, 1);
+		code.goto_(loop);
+		code.labelBinding(ifDone);
+		code.return_();
+		code.exceptionCatch(tryStart, tryEnd, handler, ioException);
+		return new JvmIoRuntimeBuilder.IoMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), code);
 	}
 
 }

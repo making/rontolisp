@@ -151,7 +151,7 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
   opens through the internal `%open-or-nil` (`Jvm/WasmOpenCompiler`), which answers nil on
   failure, and the expansion tests it and calls `%file-error`. WASM `_open` answers
   `ref.null eq` on a non-zero errno; JVM `_open` catches `IOException` in its own exception
-  table (`IoMethod.exceptionTable`, the one runtime method that has one) and answers null. A
+  table (`exceptionCatch` in `JvmIoRuntimeBuilder.buildOpen`) and answers null. A
   computed option dispatches onto literal `open` leaves FIRST, each leaf lowering separately.
   `%file-error` itself is the `%program-error` split (`lowerFileError`): a typed
   `%error-cond` over a `%obj-new` behind a landing pad, plain `%error` otherwise -- so the

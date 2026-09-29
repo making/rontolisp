@@ -1,20 +1,18 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 import am.ik.jvm.AccessFlag;
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
@@ -40,21 +38,15 @@ final class JvmIoRuntimeBuilder {
 	/**
 	 * A stream-runtime method body ready to be emitted into the generated class.
 	 * {@code extraFlags} is OR-ed into the emitted access flags --
-	 * {@code ACC_SYNCHRONIZED} for the two methods that mutate the stream table (see
-	 * {@link #ADD_STREAM_METHOD}). {@code exceptionTable} is the body's handler table,
-	 * empty for every method but {@code _open}.
+	 * {@code ACC_SYNCHRONIZED} for the methods that mutate the stream table (see
+	 * {@link #ADD_STREAM_METHOD}).
 	 */
-	record IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			int extraFlags, List<ClassDefinition.Handler> exceptionTable) {
+	record IoMethod(Utf8Constant name, Utf8Constant desc, MethodCode code, int extraFlags) {
 
-		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
-			this(name, desc, maxStack, maxLocals, code, 0);
+		IoMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+			this(name, desc, code, 0);
 		}
 
-		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-				int extraFlags) {
-			this(name, desc, maxStack, maxLocals, code, extraFlags, List.of());
-		}
 	}
 
 	static final String STREAMS_FIELD = "_streams";
@@ -263,175 +255,175 @@ final class JvmIoRuntimeBuilder {
 
 	private final ConstantPool cp;
 
-	private final FieldrefConstant streamsField;
+	private final FieldRefEntry streamsField;
 
-	private final FieldrefConstant streamCountField;
+	private final FieldRefEntry streamCountField;
 
-	private final ClassConstant objectClass;
+	private final ClassEntry objectClass;
 
-	private final ClassConstant stringClass;
+	private final ClassEntry stringClass;
 
-	private final ClassConstant longClass;
+	private final ClassEntry longClass;
 
-	private final ClassConstant bufferedReaderClass;
+	private final ClassEntry bufferedReaderClass;
 
-	private final ClassConstant bufferedWriterClass;
+	private final ClassEntry bufferedWriterClass;
 
-	private final ClassConstant fileReaderClass;
+	private final ClassEntry fileReaderClass;
 
-	private final ClassConstant fileWriterClass;
+	private final ClassEntry fileWriterClass;
 
-	private final ClassConstant writerClass;
+	private final ClassEntry writerClass;
 
-	private final ClassConstant bufferedInputStreamClass;
+	private final ClassEntry bufferedInputStreamClass;
 
-	private final ClassConstant bufferedOutputStreamClass;
+	private final ClassEntry bufferedOutputStreamClass;
 
-	private final ClassConstant fileInputStreamClass;
+	private final ClassEntry fileInputStreamClass;
 
-	private final ClassConstant fileOutputStreamClass;
+	private final ClassEntry fileOutputStreamClass;
 
-	private final ClassConstant inputStreamClass;
+	private final ClassEntry inputStreamClass;
 
-	private final ClassConstant outputStreamClass;
+	private final ClassEntry outputStreamClass;
 
-	private final ClassConstant runtimeExceptionClass;
+	private final ClassEntry runtimeExceptionClass;
 
-	private final MethodrefConstant arraysCopyOf;
+	private final MethodRefEntry arraysCopyOf;
 
-	private final MethodrefConstant addStreamRef;
+	private final MethodRefEntry addStreamRef;
 
-	private final MethodrefConstant stringLength;
+	private final MethodRefEntry stringLength;
 
-	private final MethodrefConstant stringSubstring;
+	private final MethodRefEntry stringSubstring;
 
-	private final MethodrefConstant stringConcat;
+	private final MethodRefEntry stringConcat;
 
-	private final MethodrefConstant longValueOf;
+	private final MethodRefEntry longValueOf;
 
-	private final MethodrefConstant longValue;
+	private final MethodRefEntry longValue;
 
-	private final MethodrefConstant fileReaderInit;
+	private final MethodRefEntry fileReaderInit;
 
-	private final MethodrefConstant fileWriterInit;
+	private final MethodRefEntry fileWriterInit;
 
 	/**
 	 * {@code FileWriter(String, boolean append)} -- the append arm of the {@code _open}
 	 * mode branch ({@code :if-exists :append}, mode 5).
 	 */
-	private final MethodrefConstant fileWriterAppendInit;
+	private final MethodRefEntry fileWriterAppendInit;
 
-	private final MethodrefConstant bufferedReaderInit;
+	private final MethodRefEntry bufferedReaderInit;
 
-	private final MethodrefConstant bufferedWriterInit;
+	private final MethodRefEntry bufferedWriterInit;
 
-	private final MethodrefConstant bufferedReaderReadLine;
+	private final MethodRefEntry bufferedReaderReadLine;
 
-	private final MethodrefConstant bufferedReaderClose;
+	private final MethodRefEntry bufferedReaderClose;
 
-	private final MethodrefConstant writerWrite;
+	private final MethodRefEntry writerWrite;
 
-	private final MethodrefConstant writerClose;
+	private final MethodRefEntry writerClose;
 
-	private final MethodrefConstant bufferedInputStreamInit;
+	private final MethodRefEntry bufferedInputStreamInit;
 
-	private final MethodrefConstant bufferedOutputStreamInit;
+	private final MethodRefEntry bufferedOutputStreamInit;
 
-	private final MethodrefConstant fileInputStreamInit;
+	private final MethodRefEntry fileInputStreamInit;
 
-	private final MethodrefConstant fileOutputStreamInit;
+	private final MethodRefEntry fileOutputStreamInit;
 
 	/**
 	 * {@code FileOutputStream(String, boolean append)} -- the binary append arm of the
 	 * {@code _open} mode branch (mode 7).
 	 */
-	private final MethodrefConstant fileOutputStreamAppendInit;
+	private final MethodRefEntry fileOutputStreamAppendInit;
 
-	private final MethodrefConstant inputStreamRead;
+	private final MethodRefEntry inputStreamRead;
 
-	private final MethodrefConstant inputStreamClose;
+	private final MethodRefEntry inputStreamClose;
 
-	private final MethodrefConstant outputStreamWrite;
+	private final MethodRefEntry outputStreamWrite;
 
-	private final MethodrefConstant outputStreamClose;
+	private final MethodRefEntry outputStreamClose;
 
-	private final MethodrefConstant runtimeExceptionInit;
+	private final MethodRefEntry runtimeExceptionInit;
 
-	private final FieldrefConstant systemOut;
+	private final FieldRefEntry systemOut;
 
-	private final MethodrefConstant printlnStr;
+	private final MethodRefEntry printlnStr;
 
-	private final MethodrefConstant readLineHelper;
+	private final MethodRefEntry readLineHelper;
 
-	private final MethodrefConstant printStr;
+	private final MethodRefEntry printStr;
 
-	private final MethodrefConstant stringCharAt;
+	private final MethodRefEntry stringCharAt;
 
-	private final FieldrefConstant colField;
+	private final FieldRefEntry colField;
 
-	private final ClassConstant stringWriterClass;
+	private final ClassEntry stringWriterClass;
 
-	private final MethodrefConstant stringWriterInit;
+	private final MethodRefEntry stringWriterInit;
 
-	private final MethodrefConstant stringWriterToString;
+	private final MethodRefEntry stringWriterToString;
 
-	private final MethodrefConstant stringWriterGetBuffer;
+	private final MethodRefEntry stringWriterGetBuffer;
 
-	private final MethodrefConstant stringBufferSetLength;
+	private final MethodRefEntry stringBufferSetLength;
 
-	private final ClassConstant stringReaderClass;
+	private final ClassEntry stringReaderClass;
 
-	private final MethodrefConstant stringReaderInit;
+	private final MethodRefEntry stringReaderInit;
 
-	private final MethodrefConstant writeStrMethod;
+	private final MethodRefEntry writeStrMethod;
 
-	private final ConstantPool.StringConstant tStr;
+	private final StringEntry tStr;
 
-	private final ConstantPool.StringConstant quoteStr;
+	private final StringEntry quoteStr;
 
-	private final ConstantPool.StringConstant newlineStr;
+	private final StringEntry newlineStr;
 
-	private final ConstantPool.StringConstant eofStr;
+	private final StringEntry eofStr;
 
-	private final ConstantPool.StringConstant charEofStr;
+	private final StringEntry charEofStr;
 
-	private final FieldrefConstant stdinReaderField;
+	private final FieldRefEntry stdinReaderField;
 
-	private final FieldrefConstant systemIn;
+	private final FieldRefEntry systemIn;
 
-	private final ClassConstant inputStreamReaderClass;
+	private final ClassEntry inputStreamReaderClass;
 
-	private final MethodrefConstant inputStreamReaderInit;
+	private final MethodRefEntry inputStreamReaderInit;
 
-	private final MethodrefConstant bufferedReaderRead;
+	private final MethodRefEntry bufferedReaderRead;
 
-	private final MethodrefConstant bufferedReaderMark;
+	private final MethodRefEntry bufferedReaderMark;
 
-	private final MethodrefConstant bufferedReaderReset;
+	private final MethodRefEntry bufferedReaderReset;
 
-	private final MethodrefConstant characterIsHighSurrogate;
+	private final MethodRefEntry characterIsHighSurrogate;
 
-	private final MethodrefConstant characterIsLowSurrogate;
+	private final MethodRefEntry characterIsLowSurrogate;
 
-	private final MethodrefConstant characterToCodePoint;
+	private final MethodRefEntry characterToCodePoint;
 
-	private final MethodrefConstant printStreamFlush;
+	private final MethodRefEntry printStreamFlush;
 
-	private final MethodrefConstant writerFlush;
+	private final MethodRefEntry writerFlush;
 
-	private final MethodrefConstant outputStreamFlush;
+	private final MethodRefEntry outputStreamFlush;
 
-	private final MethodrefConstant bufferedReaderReady;
+	private final MethodRefEntry bufferedReaderReady;
 
-	private final MethodrefConstant inputStreamAvailable;
+	private final MethodRefEntry inputStreamAvailable;
 
-	private final MethodrefConstant socketIsClosed;
+	private final MethodRefEntry socketIsClosed;
 
-	private final ClassConstant fileClass;
+	private final ClassEntry fileClass;
 
-	private final MethodrefConstant fileInit;
+	private final MethodRefEntry fileInit;
 
-	private final MethodrefConstant fileExists;
+	private final MethodRefEntry fileExists;
 
 	/**
 	 * {@code %list-directory} support, minted only when the program calls it:
@@ -439,13 +431,13 @@ final class JvmIoRuntimeBuilder {
 	 * exactly the primitive's "not there" answer), {@code File.isDirectory()} for the
 	 * per-entry kind, and the {@code File(File, String)} constructor that joins the two.
 	 */
-	@Nullable private final MethodrefConstant fileList;
+	@Nullable private final MethodRefEntry fileList;
 
-	@Nullable private final MethodrefConstant fileIsDirectory;
+	@Nullable private final MethodRefEntry fileIsDirectory;
 
-	@Nullable private final MethodrefConstant fileInitChild;
+	@Nullable private final MethodRefEntry fileInitChild;
 
-	private final ConstantPool.@Nullable StringConstant slashQuoteStr;
+	@Nullable private final StringEntry slashQuoteStr;
 
 	/**
 	 * Whether the program calls {@code %list-directory}; see
@@ -473,16 +465,16 @@ final class JvmIoRuntimeBuilder {
 	 * {@code RontoStringInputStream(String)}: every string input stream is built
 	 * positioned, so {@code listen} answers uniformly.
 	 */
-	private final @Nullable MethodrefConstant stringInputStreamInit;
+	private final @Nullable MethodRefEntry stringInputStreamInit;
 
 	/** {@code RontoStringInputStream}, beside {@link #stringInputStreamInit}. */
-	private final @Nullable ClassConstant stringInputStreamClass;
+	private final @Nullable ClassEntry stringInputStreamClass;
 
 	/**
 	 * {@code RontoStringInputStream.hasRemaining()}, beside
 	 * {@link #stringInputStreamInit}.
 	 */
-	private final @Nullable MethodrefConstant stringInputHasRemaining;
+	private final @Nullable MethodRefEntry stringInputHasRemaining;
 
 	/**
 	 * The positioned CHARACTER file streams ({@code runtime/RontoCharFileReader} /
@@ -501,32 +493,32 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private final boolean quantizedBuffer;
 
-	@Nullable private final MethodrefConstant fileLastModified;
+	@Nullable private final MethodRefEntry fileLastModified;
 
-	@Nullable private final MethodrefConstant fileMkdirs;
+	@Nullable private final MethodRefEntry fileMkdirs;
 
-	@Nullable private final MethodrefConstant fileDelete;
+	@Nullable private final MethodRefEntry fileDelete;
 
-	@Nullable private final MethodrefConstant fileRenameTo;
+	@Nullable private final MethodRefEntry fileRenameTo;
 
-	@Nullable private final MethodrefConstant fileLengthRef;
+	@Nullable private final MethodRefEntry fileLengthRef;
 
-	@Nullable private final FieldrefConstant streamPathsField;
+	@Nullable private final FieldRefEntry streamPathsField;
 
-	@Nullable private final MethodrefConstant setStreamPathRef;
+	@Nullable private final MethodRefEntry setStreamPathRef;
 
-	@Nullable private final MethodrefConstant forceOutputRef;
+	@Nullable private final MethodRefEntry forceOutputRef;
 
 	/**
 	 * The {@code _streamPositions} side table and the position helpers, non-null only for
 	 * a program that calls {@code file-position} at all, so every other artifact keeps
 	 * its bytes.
 	 */
-	@Nullable private final FieldrefConstant streamPositionsField;
+	@Nullable private final FieldRefEntry streamPositionsField;
 
-	@Nullable private final MethodrefConstant storeStreamPositionRef;
+	@Nullable private final MethodRefEntry storeStreamPositionRef;
 
-	@Nullable private final MethodrefConstant bumpStreamPositionRef;
+	@Nullable private final MethodRefEntry bumpStreamPositionRef;
 
 	/**
 	 * The file re-open refs {@code _filePosition}'s set half needs, minted only with the
@@ -534,22 +526,22 @@ final class JvmIoRuntimeBuilder {
 	 * {@code FileChannel.open} over {@code StandardOpenOption.WRITE},
 	 * {@code FileChannel.position(long)} and {@code Channels.newOutputStream}.
 	 */
-	@Nullable private final MethodrefConstant fileInputStreamGetChannel;
+	@Nullable private final MethodRefEntry fileInputStreamGetChannel;
 
-	@Nullable private final MethodrefConstant pathOf;
+	@Nullable private final MethodRefEntry pathOf;
 
-	@Nullable private final MethodrefConstant fileChannelOpen;
+	@Nullable private final MethodRefEntry fileChannelOpen;
 
-	@Nullable private final MethodrefConstant fileChannelPosition;
+	@Nullable private final MethodRefEntry fileChannelPosition;
 
-	@Nullable private final MethodrefConstant channelsNewOutputStream;
+	@Nullable private final MethodRefEntry channelsNewOutputStream;
 
-	@Nullable private final ClassConstant openOptionClass;
+	@Nullable private final ClassEntry openOptionClass;
 
-	@Nullable private final FieldrefConstant standardOpenOptionWrite;
+	@Nullable private final FieldRefEntry standardOpenOptionWrite;
 
 	/** The {@code file-position} set-half's negative-position error message. */
-	private final ConstantPool.@Nullable StringConstant negPositionMsg;
+	@Nullable private final StringEntry negPositionMsg;
 
 	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
@@ -572,7 +564,7 @@ final class JvmIoRuntimeBuilder {
 	 * with them, so a program that never names {@code *error-output*} does not even carry
 	 * the constant.
 	 */
-	@Nullable private final FieldrefConstant systemErr;
+	@Nullable private final FieldRefEntry systemErr;
 
 	/**
 	 * {@code _strv}, minted only when the array runtime exists: a string reaching a
@@ -581,7 +573,7 @@ final class JvmIoRuntimeBuilder {
 	 * needs the rendered form. Without the array runtime no character vector can exist
 	 * and the reference must not be minted -- the method it names is not emitted.
 	 */
-	@Nullable private final MethodrefConstant strvRef;
+	@Nullable private final MethodRefEntry strvRef;
 
 	/**
 	 * The constant-pool entries of {@code _readSeqChars}, minted only for a program that
@@ -589,13 +581,13 @@ final class JvmIoRuntimeBuilder {
 	 */
 	@Nullable private final CharSequenceIo charSequenceIo;
 
-	private JvmIoRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
-			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer, boolean bidirectionalStreams) {
+	private JvmIoRuntimeBuilder(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass, ClassEntry stringClass,
+			ClassEntry longClass, MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, FieldRefEntry systemOut,
+			MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
+			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
+			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
+			boolean quantizedBuffer, boolean bidirectionalStreams) {
 		this.sockets = sockets;
 		this.ioStreams = bidirectionalStreams ? IoStreams.mint(cp) : null;
 		this.charFileStreams = fileMeta.characterPosition() ? CharFileStreams.mint(cp) : null;
@@ -605,11 +597,10 @@ final class JvmIoRuntimeBuilder {
 		this.fileMeta = fileMeta;
 		this.packedSequenceIo = packedSequenceIo ? PackedSequenceIo.mint(cp, thisClass) : null;
 		this.charSequenceIo = charSequenceIo ? CharSequenceIo.mint(cp) : null;
-		this.strvRef = arrayRuntime ? cp.addMethodref(thisClass, cp
-			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
+		this.strvRef = arrayRuntime
+				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null;
+		this.systemErr = errorOutput ? cp.fieldRef(cp.classEntry("java/lang/System"), "err", "Ljava/io/PrintStream;")
 				: null;
-		this.systemErr = errorOutput ? cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
-				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;"))) : null;
 		this.cp = cp;
 		this.objectClass = objectClass;
 		this.stringClass = stringClass;
@@ -622,221 +613,153 @@ final class JvmIoRuntimeBuilder {
 		this.systemOut = systemOut;
 		this.printlnStr = printlnStr;
 		this.readLineHelper = readLineHelper;
-		this.streamsField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STREAMS_FIELD), cp.addUtf8(STREAMS_DESC)));
-		this.streamCountField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STREAM_COUNT_FIELD), cp.addUtf8(STREAM_COUNT_DESC)));
-		ClassConstant arraysClass = cp.addClass(cp.addUtf8("java/util/Arrays"));
-		this.arraysCopyOf = cp.addMethodref(arraysClass,
-				cp.addNameAndType(cp.addUtf8("copyOf"), cp.addUtf8("([Ljava/lang/Object;I)[Ljava/lang/Object;")));
-		this.addStreamRef = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(ADD_STREAM_METHOD), cp.addUtf8(ADD_STREAM_DESC)));
-		this.bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
-		this.bufferedWriterClass = cp.addClass(cp.addUtf8("java/io/BufferedWriter"));
-		this.fileReaderClass = cp.addClass(cp.addUtf8("java/io/FileReader"));
-		this.fileWriterClass = cp.addClass(cp.addUtf8("java/io/FileWriter"));
-		this.writerClass = cp.addClass(cp.addUtf8("java/io/Writer"));
-		this.fileReaderInit = cp.addMethodref(this.fileReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileWriterInit = cp.addMethodref(this.fileWriterClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileWriterAppendInit = cp.addMethodref(this.fileWriterClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V")));
-		this.bufferedReaderInit = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/Reader;)V")));
-		this.bufferedWriterInit = cp.addMethodref(this.bufferedWriterClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/Writer;)V")));
-		this.bufferedReaderReadLine = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("readLine"), cp.addUtf8("()Ljava/lang/String;")));
-		this.bufferedReaderClose = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		this.writerWrite = cp.addMethodref(this.writerClass,
-				cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.writerClose = cp.addMethodref(this.writerClass, cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		this.bufferedInputStreamClass = cp.addClass(cp.addUtf8("java/io/BufferedInputStream"));
-		this.bufferedOutputStreamClass = cp.addClass(cp.addUtf8("java/io/BufferedOutputStream"));
-		this.fileInputStreamClass = cp.addClass(cp.addUtf8("java/io/FileInputStream"));
-		this.fileOutputStreamClass = cp.addClass(cp.addUtf8("java/io/FileOutputStream"));
-		this.inputStreamClass = cp.addClass(cp.addUtf8("java/io/InputStream"));
-		this.outputStreamClass = cp.addClass(cp.addUtf8("java/io/OutputStream"));
-		this.runtimeExceptionClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		this.bufferedInputStreamInit = cp.addMethodref(this.bufferedInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
-		this.bufferedOutputStreamInit = cp.addMethodref(this.bufferedOutputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/OutputStream;)V")));
-		this.fileInputStreamInit = cp.addMethodref(this.fileInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileOutputStreamInit = cp.addMethodref(this.fileOutputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileOutputStreamAppendInit = cp.addMethodref(this.fileOutputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V")));
-		this.inputStreamRead = cp.addMethodref(this.inputStreamClass,
-				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
-		this.inputStreamClose = cp.addMethodref(this.inputStreamClass,
-				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		this.outputStreamWrite = cp.addMethodref(this.outputStreamClass,
-				cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(I)V")));
-		this.outputStreamClose = cp.addMethodref(this.outputStreamClass,
-				cp.addNameAndType(cp.addUtf8("close"), cp.addUtf8("()V")));
-		this.runtimeExceptionInit = cp.addMethodref(this.runtimeExceptionClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.tStr = cp.addString("T");
-		this.quoteStr = cp.addString("\"");
-		this.newlineStr = cp.addString("\n");
-		this.eofStr = cp.addString("read-byte: end of file");
-		ClassConstant printStreamClass = cp.addClass(cp.addUtf8("java/io/PrintStream"));
-		this.printStr = cp.addMethodref(printStreamClass,
-				cp.addNameAndType(cp.addUtf8("print"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.stringCharAt = cp.addMethodref(this.stringClass,
-				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
-		this.colField = cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFreshLineCompiler.COL_FIELD),
-				cp.addUtf8(JvmFreshLineCompiler.COL_DESC)));
-		this.stringWriterClass = cp.addClass(cp.addUtf8("java/io/StringWriter"));
-		this.stringWriterInit = cp.addMethodref(this.stringWriterClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		this.stringWriterToString = cp.addMethodref(this.stringWriterClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		this.streamsField = cp.fieldRef(thisClass, STREAMS_FIELD, STREAMS_DESC);
+		this.streamCountField = cp.fieldRef(thisClass, STREAM_COUNT_FIELD, STREAM_COUNT_DESC);
+		ClassEntry arraysClass = cp.classEntry("java/util/Arrays");
+		this.arraysCopyOf = cp.methodRef(arraysClass, "copyOf", "([Ljava/lang/Object;I)[Ljava/lang/Object;");
+		this.addStreamRef = cp.methodRef(thisClass, ADD_STREAM_METHOD, ADD_STREAM_DESC);
+		this.bufferedReaderClass = cp.classEntry("java/io/BufferedReader");
+		this.bufferedWriterClass = cp.classEntry("java/io/BufferedWriter");
+		this.fileReaderClass = cp.classEntry("java/io/FileReader");
+		this.fileWriterClass = cp.classEntry("java/io/FileWriter");
+		this.writerClass = cp.classEntry("java/io/Writer");
+		this.fileReaderInit = cp.methodRef(this.fileReaderClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileWriterInit = cp.methodRef(this.fileWriterClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileWriterAppendInit = cp.methodRef(this.fileWriterClass, "<init>", "(Ljava/lang/String;Z)V");
+		this.bufferedReaderInit = cp.methodRef(this.bufferedReaderClass, "<init>", "(Ljava/io/Reader;)V");
+		this.bufferedWriterInit = cp.methodRef(this.bufferedWriterClass, "<init>", "(Ljava/io/Writer;)V");
+		this.bufferedReaderReadLine = cp.methodRef(this.bufferedReaderClass, "readLine", "()Ljava/lang/String;");
+		this.bufferedReaderClose = cp.methodRef(this.bufferedReaderClass, "close", "()V");
+		this.writerWrite = cp.methodRef(this.writerClass, "write", "(Ljava/lang/String;)V");
+		this.writerClose = cp.methodRef(this.writerClass, "close", "()V");
+		this.bufferedInputStreamClass = cp.classEntry("java/io/BufferedInputStream");
+		this.bufferedOutputStreamClass = cp.classEntry("java/io/BufferedOutputStream");
+		this.fileInputStreamClass = cp.classEntry("java/io/FileInputStream");
+		this.fileOutputStreamClass = cp.classEntry("java/io/FileOutputStream");
+		this.inputStreamClass = cp.classEntry("java/io/InputStream");
+		this.outputStreamClass = cp.classEntry("java/io/OutputStream");
+		this.runtimeExceptionClass = cp.classEntry("java/lang/RuntimeException");
+		this.bufferedInputStreamInit = cp.methodRef(this.bufferedInputStreamClass, "<init>",
+				"(Ljava/io/InputStream;)V");
+		this.bufferedOutputStreamInit = cp.methodRef(this.bufferedOutputStreamClass, "<init>",
+				"(Ljava/io/OutputStream;)V");
+		this.fileInputStreamInit = cp.methodRef(this.fileInputStreamClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileOutputStreamInit = cp.methodRef(this.fileOutputStreamClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileOutputStreamAppendInit = cp.methodRef(this.fileOutputStreamClass, "<init>", "(Ljava/lang/String;Z)V");
+		this.inputStreamRead = cp.methodRef(this.inputStreamClass, "read", "()I");
+		this.inputStreamClose = cp.methodRef(this.inputStreamClass, "close", "()V");
+		this.outputStreamWrite = cp.methodRef(this.outputStreamClass, "write", "(I)V");
+		this.outputStreamClose = cp.methodRef(this.outputStreamClass, "close", "()V");
+		this.runtimeExceptionInit = cp.methodRef(this.runtimeExceptionClass, "<init>", "(Ljava/lang/String;)V");
+		this.tStr = cp.stringEntry("T");
+		this.quoteStr = cp.stringEntry("\"");
+		this.newlineStr = cp.stringEntry("\n");
+		this.eofStr = cp.stringEntry("read-byte: end of file");
+		ClassEntry printStreamClass = cp.classEntry("java/io/PrintStream");
+		this.printStr = cp.methodRef(printStreamClass, "print", "(Ljava/lang/String;)V");
+		this.stringCharAt = cp.methodRef(this.stringClass, "charAt", "(I)C");
+		this.colField = cp.fieldRef(thisClass, JvmFreshLineCompiler.COL_FIELD, JvmFreshLineCompiler.COL_DESC);
+		this.stringWriterClass = cp.classEntry("java/io/StringWriter");
+		this.stringWriterInit = cp.methodRef(this.stringWriterClass, "<init>", "()V");
+		this.stringWriterToString = cp.methodRef(this.stringWriterClass, "toString", "()Ljava/lang/String;");
 		// get-output-stream-string CLEARS the stream as it answers (CL 21.2), which on
 		// this backend is StringWriter.getBuffer().setLength(0).
-		this.stringWriterGetBuffer = cp.addMethodref(this.stringWriterClass,
-				cp.addNameAndType(cp.addUtf8("getBuffer"), cp.addUtf8("()Ljava/lang/StringBuffer;")));
-		this.stringBufferSetLength = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StringBuffer")),
-				cp.addNameAndType(cp.addUtf8("setLength"), cp.addUtf8("(I)V")));
+		this.stringWriterGetBuffer = cp.methodRef(this.stringWriterClass, "getBuffer", "()Ljava/lang/StringBuffer;");
+		this.stringBufferSetLength = cp.methodRef(cp.classEntry("java/lang/StringBuffer"), "setLength", "(I)V");
 		this.stringPositions = fileMeta.position() ? JvmStringStreamPositions.mint(cp, fileMeta.stringInputPositions(),
-				this.stringWriterClass.entry(), this.stringWriterGetBuffer.methodRefEntry()) : null;
+				this.stringWriterClass, this.stringWriterGetBuffer) : null;
 		this.stringInputStreamClass = fileMeta.stringInputs()
-				? cp.addClass(cp.addUtf8(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS)) : null;
-		this.stringInputStreamInit = this.stringInputStreamClass != null ? cp.addMethodref(this.stringInputStreamClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))) : null;
-		this.stringInputHasRemaining = this.stringInputStreamClass != null ? cp.addMethodref(
-				this.stringInputStreamClass, cp.addNameAndType(cp.addUtf8("hasRemaining"), cp.addUtf8("()Z"))) : null;
-		this.stringReaderClass = cp.addClass(cp.addUtf8("java/io/StringReader"));
-		this.stringReaderInit = cp.addMethodref(this.stringReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.writeStrMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(WRITE_STR_METHOD), cp.addUtf8(WRITE_STR_DESC)));
+				? cp.classEntry(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS) : null;
+		this.stringInputStreamInit = this.stringInputStreamClass != null
+				? cp.methodRef(this.stringInputStreamClass, "<init>", "(Ljava/lang/String;)V") : null;
+		this.stringInputHasRemaining = this.stringInputStreamClass != null
+				? cp.methodRef(this.stringInputStreamClass, "hasRemaining", "()Z") : null;
+		this.stringReaderClass = cp.classEntry("java/io/StringReader");
+		this.stringReaderInit = cp.methodRef(this.stringReaderClass, "<init>", "(Ljava/lang/String;)V");
+		this.writeStrMethod = cp.methodRef(thisClass, WRITE_STR_METHOD, WRITE_STR_DESC);
 		// read-char support: the lazily initialized _stdinReader field (shared with the
 		// _readLine helper), BufferedReader.read() and the boxed Character result.
-		this.charEofStr = cp.addString(am.ik.rontolisp.ClosRegistry.END_OF_FILE_MESSAGE);
-		this.stdinReaderField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8("_stdinReader"), cp.addUtf8("Ljava/io/BufferedReader;")));
-		this.systemIn = cp.addFieldref(cp.addClass(cp.addUtf8("java/lang/System")),
-				cp.addNameAndType(cp.addUtf8("in"), cp.addUtf8("Ljava/io/InputStream;")));
-		this.inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
-		this.inputStreamReaderInit = cp.addMethodref(this.inputStreamReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
-		this.bufferedReaderRead = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
-		this.bufferedReaderMark = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("mark"), cp.addUtf8("(I)V")));
-		this.bufferedReaderReset = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("reset"), cp.addUtf8("()V")));
-		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		this.characterIsHighSurrogate = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("isHighSurrogate"), cp.addUtf8("(C)Z")));
-		this.characterIsLowSurrogate = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("isLowSurrogate"), cp.addUtf8("(C)Z")));
-		this.characterToCodePoint = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("toCodePoint"), cp.addUtf8("(CC)I")));
+		this.charEofStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.END_OF_FILE_MESSAGE);
+		this.stdinReaderField = cp.fieldRef(thisClass, "_stdinReader", "Ljava/io/BufferedReader;");
+		this.systemIn = cp.fieldRef(cp.classEntry("java/lang/System"), "in", "Ljava/io/InputStream;");
+		this.inputStreamReaderClass = cp.classEntry("java/io/InputStreamReader");
+		this.inputStreamReaderInit = cp.methodRef(this.inputStreamReaderClass, "<init>", "(Ljava/io/InputStream;)V");
+		this.bufferedReaderRead = cp.methodRef(this.bufferedReaderClass, "read", "()I");
+		this.bufferedReaderMark = cp.methodRef(this.bufferedReaderClass, "mark", "(I)V");
+		this.bufferedReaderReset = cp.methodRef(this.bufferedReaderClass, "reset", "()V");
+		ClassEntry characterClass = cp.classEntry("java/lang/Character");
+		this.characterIsHighSurrogate = cp.methodRef(characterClass, "isHighSurrogate", "(C)Z");
+		this.characterIsLowSurrogate = cp.methodRef(characterClass, "isLowSurrogate", "(C)Z");
+		this.characterToCodePoint = cp.methodRef(characterClass, "toCodePoint", "(CC)I");
 		// force-output / listen support: flush on the three writer shapes, readiness
 		// probes on the two reader shapes.
-		this.printStreamFlush = cp.addMethodref(printStreamClass,
-				cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
-		this.writerFlush = cp.addMethodref(this.writerClass, cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
-		this.outputStreamFlush = cp.addMethodref(this.outputStreamClass,
-				cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")));
-		this.bufferedReaderReady = cp.addMethodref(this.bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("ready"), cp.addUtf8("()Z")));
-		this.inputStreamAvailable = cp.addMethodref(this.inputStreamClass,
-				cp.addNameAndType(cp.addUtf8("available"), cp.addUtf8("()I")));
-		this.socketIsClosed = cp.addMethodref(cp.addClass(cp.addUtf8("java/net/Socket")),
-				cp.addNameAndType(cp.addUtf8("isClosed"), cp.addUtf8("()Z")));
+		this.printStreamFlush = cp.methodRef(printStreamClass, "flush", "()V");
+		this.writerFlush = cp.methodRef(this.writerClass, "flush", "()V");
+		this.outputStreamFlush = cp.methodRef(this.outputStreamClass, "flush", "()V");
+		this.bufferedReaderReady = cp.methodRef(this.bufferedReaderClass, "ready", "()Z");
+		this.inputStreamAvailable = cp.methodRef(this.inputStreamClass, "available", "()I");
+		this.socketIsClosed = cp.methodRef(cp.classEntry("java/net/Socket"), "isClosed", "()Z");
 		// probe-file support: java.io.File.exists() -- the one file question that must
 		// not open (and therefore must not signal) on a missing path.
-		this.fileClass = cp.addClass(cp.addUtf8("java/io/File"));
-		this.fileInit = cp.addMethodref(this.fileClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		this.fileExists = cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("exists"), cp.addUtf8("()Z")));
+		this.fileClass = cp.classEntry("java/io/File");
+		this.fileInit = cp.methodRef(this.fileClass, "<init>", "(Ljava/lang/String;)V");
+		this.fileExists = cp.methodRef(this.fileClass, "exists", "()Z");
 		// %list-directory support, minted only for a program that calls it so every
 		// other artifact keeps its original bytes.
-		this.fileList = listDirectory ? cp.addMethodref(this.fileClass,
-				cp.addNameAndType(cp.addUtf8("list"), cp.addUtf8("()[Ljava/lang/String;"))) : null;
+		this.fileList = listDirectory ? cp.methodRef(this.fileClass, "list", "()[Ljava/lang/String;") : null;
 		// Also minted for %make-directories: mkdirs' boolean answers false both for a
 		// directory that already exists (success) and for one the host refused (failure),
 		// so isDirectory() re-checks afterwards to tell them apart -- the WASM
 		// verify-by-opening precedent (.kb/read-load-streams.md).
 		this.fileIsDirectory = (listDirectory || fileMeta.makeDirectories())
-				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("isDirectory"), cp.addUtf8("()Z")))
-				: null;
+				? cp.methodRef(this.fileClass, "isDirectory", "()Z") : null;
 		this.fileInitChild = listDirectory
-				? cp.addMethodref(this.fileClass,
-						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/File;Ljava/lang/String;)V")))
-				: null;
-		this.slashQuoteStr = listDirectory ? cp.addString("/\"") : null;
+				? cp.methodRef(this.fileClass, "<init>", "(Ljava/io/File;Ljava/lang/String;)V") : null;
+		this.slashQuoteStr = listDirectory ? cp.stringEntry("/\"") : null;
 		// The file-metadata trio, each minted only for a program that calls it so every
 		// other artifact keeps its original bytes (the %list-directory rule above).
-		this.fileLastModified = fileMeta.writeDate()
-				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("lastModified"), cp.addUtf8("()J")))
+		this.fileLastModified = fileMeta.writeDate() ? cp.methodRef(this.fileClass, "lastModified", "()J") : null;
+		this.fileMkdirs = fileMeta.makeDirectories() ? cp.methodRef(this.fileClass, "mkdirs", "()Z") : null;
+		this.fileDelete = fileMeta.deleteFile() ? cp.methodRef(this.fileClass, "delete", "()Z") : null;
+		this.fileRenameTo = fileMeta.renameFile() ? cp.methodRef(this.fileClass, "renameTo", "(Ljava/io/File;)Z")
 				: null;
-		this.fileMkdirs = fileMeta.makeDirectories()
-				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("mkdirs"), cp.addUtf8("()Z"))) : null;
-		this.fileDelete = fileMeta.deleteFile()
-				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("delete"), cp.addUtf8("()Z"))) : null;
-		this.fileRenameTo = fileMeta.renameFile() ? cp.addMethodref(this.fileClass,
-				cp.addNameAndType(cp.addUtf8("renameTo"), cp.addUtf8("(Ljava/io/File;)Z"))) : null;
 		this.fileLengthRef = (fileMeta.fileLength() || fileMeta.position())
-				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
+				? cp.methodRef(this.fileClass, "length", "()J") : null;
 		// file-position needs the _streamPaths side table (to know a handle is a file
 		// stream and to re-open at an offset) exactly as file-length does, so the path
 		// refs are shared: minted for either operator.
 		final boolean streamPathsWanted = fileMeta.fileLength() || fileMeta.position();
-		this.streamPathsField = streamPathsWanted ? cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STREAM_PATHS_FIELD), cp.addUtf8(STREAM_PATHS_DESC))) : null;
-		this.setStreamPathRef = streamPathsWanted ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(SET_STREAM_PATH_METHOD), cp.addUtf8(SET_STREAM_PATH_DESC))) : null;
-		this.forceOutputRef = streamPathsWanted ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(FORCE_OUTPUT_METHOD), cp.addUtf8(FORCE_OUTPUT_DESC))) : null;
+		this.streamPathsField = streamPathsWanted ? cp.fieldRef(thisClass, STREAM_PATHS_FIELD, STREAM_PATHS_DESC)
+				: null;
+		this.setStreamPathRef = streamPathsWanted
+				? cp.methodRef(thisClass, SET_STREAM_PATH_METHOD, SET_STREAM_PATH_DESC) : null;
+		this.forceOutputRef = streamPathsWanted ? cp.methodRef(thisClass, FORCE_OUTPUT_METHOD, FORCE_OUTPUT_DESC)
+				: null;
 		// The file-position machinery is gated on its own operator so a program that only
 		// wants file-length pays nothing beyond what it already did.
 		this.streamPositionsField = fileMeta.position()
-				? cp.addFieldref(thisClass,
-						cp.addNameAndType(cp.addUtf8(STREAM_POSITIONS_FIELD), cp.addUtf8(STREAM_POSITIONS_DESC)))
-				: null;
-		this.storeStreamPositionRef = fileMeta.position() ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STORE_STREAM_POSITION_METHOD), cp.addUtf8(STORE_STREAM_POSITION_DESC)))
-				: null;
-		this.bumpStreamPositionRef = fileMeta.position() ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(BUMP_STREAM_POSITION_METHOD), cp.addUtf8(BUMP_STREAM_POSITION_DESC)))
-				: null;
+				? cp.fieldRef(thisClass, STREAM_POSITIONS_FIELD, STREAM_POSITIONS_DESC) : null;
+		this.storeStreamPositionRef = fileMeta.position()
+				? cp.methodRef(thisClass, STORE_STREAM_POSITION_METHOD, STORE_STREAM_POSITION_DESC) : null;
+		this.bumpStreamPositionRef = fileMeta.position()
+				? cp.methodRef(thisClass, BUMP_STREAM_POSITION_METHOD, BUMP_STREAM_POSITION_DESC) : null;
 		this.fileInputStreamGetChannel = fileMeta.position()
-				? cp.addMethodref(this.fileInputStreamClass,
-						cp.addNameAndType(cp.addUtf8("getChannel"), cp.addUtf8("()Ljava/nio/channels/FileChannel;")))
-				: null;
+				? cp.methodRef(this.fileInputStreamClass, "getChannel", "()Ljava/nio/channels/FileChannel;") : null;
 		this.pathOf = fileMeta.position()
-				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/file/Path")),
-						cp.addNameAndType(cp.addUtf8("of"), cp.addUtf8("(Ljava/lang/String;)Ljava/nio/file/Path;")))
+				? cp.methodRef(cp.classEntry("java/nio/file/Path"), "of", "(Ljava/lang/String;)Ljava/nio/file/Path;")
 				: null;
-		this.fileChannelOpen = fileMeta.position()
-				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/FileChannel")),
-						cp.addNameAndType(cp.addUtf8("open"), cp.addUtf8(
-								"(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/nio/channels/FileChannel;")))
+		this.fileChannelOpen = fileMeta.position() ? cp.methodRef(cp.classEntry("java/nio/channels/FileChannel"),
+				"open", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/nio/channels/FileChannel;") : null;
+		this.fileChannelPosition = fileMeta.position() ? cp.methodRef(cp.classEntry("java/nio/channels/FileChannel"),
+				"position", "(J)Ljava/nio/channels/FileChannel;") : null;
+		this.channelsNewOutputStream = fileMeta.position() ? cp.methodRef(cp.classEntry("java/nio/channels/Channels"),
+				"newOutputStream", "(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;") : null;
+		this.openOptionClass = fileMeta.position() ? cp.classEntry("java/nio/file/OpenOption") : null;
+		this.standardOpenOptionWrite = fileMeta.position() ? cp
+			.fieldRef(cp.classEntry("java/nio/file/StandardOpenOption"), "WRITE", "Ljava/nio/file/StandardOpenOption;")
 				: null;
-		this.fileChannelPosition = fileMeta.position()
-				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/FileChannel")),
-						cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)Ljava/nio/channels/FileChannel;")))
+		this.negPositionMsg = fileMeta.position() ? cp.stringEntry("file-position: position must be non-negative")
 				: null;
-		this.channelsNewOutputStream = fileMeta
-			.position()
-					? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/Channels")),
-							cp.addNameAndType(cp.addUtf8("newOutputStream"),
-									cp.addUtf8("(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;")))
-					: null;
-		this.openOptionClass = fileMeta.position() ? cp.addClass(cp.addUtf8("java/nio/file/OpenOption")) : null;
-		this.standardOpenOptionWrite = fileMeta.position()
-				? cp.addFieldref(cp.addClass(cp.addUtf8("java/nio/file/StandardOpenOption")),
-						cp.addNameAndType(cp.addUtf8("WRITE"), cp.addUtf8("Ljava/nio/file/StandardOpenOption;")))
-				: null;
-		this.negPositionMsg = fileMeta.position() ? cp.addString("file-position: position must be non-negative") : null;
 	}
 
 	/**
@@ -879,13 +802,13 @@ final class JvmIoRuntimeBuilder {
 
 	}
 
-	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant stringClass, ClassConstant longClass, MethodrefConstant longValueOf,
-			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
-			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
-			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer, boolean bidirectionalStreams) {
+	static JvmIoRuntimeBuilder create(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			ClassEntry stringClass, ClassEntry longClass, MethodRefEntry longValueOf, MethodRefEntry longValue,
+			MethodRefEntry stringLength, MethodRefEntry stringSubstring, MethodRefEntry stringConcat,
+			FieldRefEntry systemOut, MethodRefEntry printlnStr, MethodRefEntry readLineHelper,
+			JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets, boolean errorOutput, boolean listDirectory,
+			FileMeta fileMeta, boolean packedSequenceIo, boolean charSequenceIo, boolean arrayRuntime,
+			boolean quantizedBuffer, boolean bidirectionalStreams) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
 				errorOutput, listDirectory, fileMeta, packedSequenceIo, charSequenceIo, arrayRuntime, quantizedBuffer,
@@ -898,19 +821,15 @@ final class JvmIoRuntimeBuilder {
 	 * {@code ArrayList} whose slot 0 is the length-4 header and whose elements follow),
 	 * and the block read the transfer is made of.
 	 */
-	private record CharSequenceIo(ClassConstant arrayListClass, ClassConstant objectArrayClass,
-			MethodrefConstant listGet, MethodrefConstant listSet, MethodrefConstant readBlock) {
+	private record CharSequenceIo(ClassEntry arrayListClass, ClassEntry objectArrayClass, MethodRefEntry listGet,
+			MethodRefEntry listSet, MethodRefEntry readBlock) {
 
 		static CharSequenceIo mint(ConstantPool cp) {
-			ClassConstant arrayList = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-			return new CharSequenceIo(arrayList, cp.addClass(cp.addUtf8("[Ljava/lang/Object;")),
-					cp.addMethodref(arrayList,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
-					cp.addMethodref(arrayList,
-							cp.addNameAndType(cp.addUtf8("set"),
-									cp.addUtf8("(ILjava/lang/Object;)Ljava/lang/Object;"))),
-					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/BufferedReader")),
-							cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("([CII)I"))));
+			ClassEntry arrayList = cp.classEntry("java/util/ArrayList");
+			return new CharSequenceIo(arrayList, cp.classEntry("[Ljava/lang/Object;"),
+					cp.methodRef(arrayList, "get", "(I)Ljava/lang/Object;"),
+					cp.methodRef(arrayList, "set", "(ILjava/lang/Object;)Ljava/lang/Object;"),
+					cp.methodRef(cp.classEntry("java/io/BufferedReader"), "read", "([CII)I"));
 		}
 
 	}
@@ -988,117 +907,81 @@ final class JvmIoRuntimeBuilder {
 	 * @param writerPosition {@code ()J}
 	 * @param writerSeek {@code (J)V}
 	 */
-	private record CharFileStreams(ClassConstant reader, MethodrefConstant readerInit, MethodrefConstant readerPosition,
-			MethodrefConstant readerSeek, ClassConstant writer, MethodrefConstant writerInit,
-			MethodrefConstant writerPosition, MethodrefConstant writerSeek) {
+	private record CharFileStreams(ClassEntry reader, MethodRefEntry readerInit, MethodRefEntry readerPosition,
+			MethodRefEntry readerSeek, ClassEntry writer, MethodRefEntry writerInit, MethodRefEntry writerPosition,
+			MethodRefEntry writerSeek) {
 
 		static CharFileStreams mint(ConstantPool cp) {
-			ClassConstant reader = cp.addClass(cp.addUtf8(CHAR_FILE_READER_CLASS));
-			ClassConstant writer = cp.addClass(cp.addUtf8(CHAR_FILE_WRITER_CLASS));
-			return new CharFileStreams(reader,
-					cp.addMethodref(reader,
-							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
-					cp.addMethodref(reader, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
-					cp.addMethodref(reader, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))), writer,
-					cp.addMethodref(writer,
-							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V"))),
-					cp.addMethodref(writer, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
-					cp.addMethodref(writer, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))));
+			ClassEntry reader = cp.classEntry(CHAR_FILE_READER_CLASS);
+			ClassEntry writer = cp.classEntry(CHAR_FILE_WRITER_CLASS);
+			return new CharFileStreams(reader, cp.methodRef(reader, "<init>", "(Ljava/lang/String;)V"),
+					cp.methodRef(reader, "position", "()J"), cp.methodRef(reader, "position", "(J)V"), writer,
+					cp.methodRef(writer, "<init>", "(Ljava/lang/String;Z)V"), cp.methodRef(writer, "position", "()J"),
+					cp.methodRef(writer, "position", "(J)V"));
 		}
 
 	}
 
-	private record IoStreams(ClassConstant type, MethodrefConstant init, MethodrefConstant readByte,
-			MethodrefConstant writeByte, MethodrefConstant readCodePoint, MethodrefConstant peekCodePoint,
-			MethodrefConstant readLine, MethodrefConstant position, MethodrefConstant seek, MethodrefConstant length,
-			MethodrefConstant ready) {
+	private record IoStreams(ClassEntry type, MethodRefEntry init, MethodRefEntry readByte, MethodRefEntry writeByte,
+			MethodRefEntry readCodePoint, MethodRefEntry peekCodePoint, MethodRefEntry readLine,
+			MethodRefEntry position, MethodRefEntry seek, MethodRefEntry length, MethodRefEntry ready) {
 
 		static IoStreams mint(ConstantPool cp) {
-			ClassConstant type = cp.addClass(cp.addUtf8(IO_FILE_STREAM_CLASS));
-			return new IoStreams(type,
-					cp.addMethodref(type,
-							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("readByte"), cp.addUtf8("()I"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("writeByte"), cp.addUtf8("(I)V"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("readCodePoint"), cp.addUtf8("()I"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("peekCodePoint"), cp.addUtf8("()I"))),
-					cp.addMethodref(type,
-							cp.addNameAndType(cp.addUtf8("readLine"), cp.addUtf8("()Ljava/lang/String;"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))),
-					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("ready"), cp.addUtf8("()Z"))));
+			ClassEntry type = cp.classEntry(IO_FILE_STREAM_CLASS);
+			return new IoStreams(type, cp.methodRef(type, "<init>", "(Ljava/lang/String;I)V"),
+					cp.methodRef(type, "readByte", "()I"), cp.methodRef(type, "writeByte", "(I)V"),
+					cp.methodRef(type, "readCodePoint", "()I"), cp.methodRef(type, "peekCodePoint", "()I"),
+					cp.methodRef(type, "readLine", "()Ljava/lang/String;"), cp.methodRef(type, "position", "()J"),
+					cp.methodRef(type, "position", "(J)V"), cp.methodRef(type, "length", "()J"),
+					cp.methodRef(type, "ready", "()Z"));
 		}
 
 	}
 
-	private record PackedSequenceIo(ClassConstant floatArrayClass, ClassConstant doubleArrayClass,
-			ClassConstant shortArrayClass, ClassConstant longArrayClass, ClassConstant byteBufferClass,
-			MethodrefConstant readNBytes, MethodrefConstant byteBufferWrap, MethodrefConstant byteBufferOrder,
-			FieldrefConstant littleEndian, MethodrefConstant asFloatBuffer, MethodrefConstant asDoubleBuffer,
-			MethodrefConstant asShortBuffer, MethodrefConstant floatBufferGet, MethodrefConstant doubleBufferGet,
-			MethodrefConstant shortBufferGet, MethodrefConstant floatBufferPut, MethodrefConstant doubleBufferPut,
-			MethodrefConstant shortBufferPut, MethodrefConstant bbGet, MethodrefConstant bbGetShort,
-			MethodrefConstant bbGetInt, MethodrefConstant bbPut, MethodrefConstant bbPutShort,
-			MethodrefConstant bbPutInt, MethodrefConstant outputStreamWriteBytes, StringConstant boundsMessage,
-			ClassConstant byteArrayClass, MethodrefConstant qmInt, MethodrefConstant bbGetBytes,
-			MethodrefConstant bbPutBytes) {
+	private record PackedSequenceIo(ClassEntry floatArrayClass, ClassEntry doubleArrayClass, ClassEntry shortArrayClass,
+			ClassEntry longArrayClass, ClassEntry byteBufferClass, MethodRefEntry readNBytes,
+			MethodRefEntry byteBufferWrap, MethodRefEntry byteBufferOrder, FieldRefEntry littleEndian,
+			MethodRefEntry asFloatBuffer, MethodRefEntry asDoubleBuffer, MethodRefEntry asShortBuffer,
+			MethodRefEntry floatBufferGet, MethodRefEntry doubleBufferGet, MethodRefEntry shortBufferGet,
+			MethodRefEntry floatBufferPut, MethodRefEntry doubleBufferPut, MethodRefEntry shortBufferPut,
+			MethodRefEntry bbGet, MethodRefEntry bbGetShort, MethodRefEntry bbGetInt, MethodRefEntry bbPut,
+			MethodRefEntry bbPutShort, MethodRefEntry bbPutInt, MethodRefEntry outputStreamWriteBytes,
+			StringEntry boundsMessage, ClassEntry byteArrayClass, MethodRefEntry qmInt, MethodRefEntry bbGetBytes,
+			MethodRefEntry bbPutBytes) {
 
-		static PackedSequenceIo mint(ConstantPool cp, ClassConstant thisClass) {
-			ClassConstant byteBuffer = cp.addClass(cp.addUtf8("java/nio/ByteBuffer"));
-			ClassConstant floatBuffer = cp.addClass(cp.addUtf8("java/nio/FloatBuffer"));
-			ClassConstant doubleBuffer = cp.addClass(cp.addUtf8("java/nio/DoubleBuffer"));
-			ClassConstant shortBuffer = cp.addClass(cp.addUtf8("java/nio/ShortBuffer"));
-			ClassConstant byteOrder = cp.addClass(cp.addUtf8("java/nio/ByteOrder"));
-			return new PackedSequenceIo(cp.addClass(cp.addUtf8("[F")), cp.addClass(cp.addUtf8("[D")),
-					cp.addClass(cp.addUtf8("[S")), cp.addClass(cp.addUtf8("[J")), byteBuffer,
-					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/InputStream")),
-							cp.addNameAndType(cp.addUtf8("readNBytes"), cp.addUtf8("(I)[B"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("wrap"), cp.addUtf8("([B)Ljava/nio/ByteBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("order"),
-									cp.addUtf8("(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;"))),
-					cp.addFieldref(byteOrder,
-							cp.addNameAndType(cp.addUtf8("LITTLE_ENDIAN"), cp.addUtf8("Ljava/nio/ByteOrder;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("asFloatBuffer"), cp.addUtf8("()Ljava/nio/FloatBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("asDoubleBuffer"), cp.addUtf8("()Ljava/nio/DoubleBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("asShortBuffer"), cp.addUtf8("()Ljava/nio/ShortBuffer;"))),
-					cp.addMethodref(floatBuffer,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
-					cp.addMethodref(doubleBuffer,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
-					cp.addMethodref(shortBuffer,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([SII)Ljava/nio/ShortBuffer;"))),
-					cp.addMethodref(floatBuffer,
-							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([FII)Ljava/nio/FloatBuffer;"))),
-					cp.addMethodref(doubleBuffer,
-							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([DII)Ljava/nio/DoubleBuffer;"))),
-					cp.addMethodref(shortBuffer,
-							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([SII)Ljava/nio/ShortBuffer;"))),
-					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()B"))),
-					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getShort"), cp.addUtf8("()S"))),
-					cp.addMethodref(byteBuffer, cp.addNameAndType(cp.addUtf8("getInt"), cp.addUtf8("()I"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("(B)Ljava/nio/ByteBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("putShort"), cp.addUtf8("(S)Ljava/nio/ByteBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("putInt"), cp.addUtf8("(I)Ljava/nio/ByteBuffer;"))),
-					cp.addMethodref(cp.addClass(cp.addUtf8("java/io/OutputStream")),
-							cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("([B)V"))),
-					cp.addString("read-sequence/write-sequence: :start/:end exceed the buffer size"),
-					cp.addClass(cp.addUtf8("[B")),
-					cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.INT),
-									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.INT_DESC))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("([BII)Ljava/nio/ByteBuffer;"))),
-					cp.addMethodref(byteBuffer,
-							cp.addNameAndType(cp.addUtf8("put"), cp.addUtf8("([BII)Ljava/nio/ByteBuffer;"))));
+		static PackedSequenceIo mint(ConstantPool cp, ClassEntry thisClass) {
+			ClassEntry byteBuffer = cp.classEntry("java/nio/ByteBuffer");
+			ClassEntry floatBuffer = cp.classEntry("java/nio/FloatBuffer");
+			ClassEntry doubleBuffer = cp.classEntry("java/nio/DoubleBuffer");
+			ClassEntry shortBuffer = cp.classEntry("java/nio/ShortBuffer");
+			ClassEntry byteOrder = cp.classEntry("java/nio/ByteOrder");
+			return new PackedSequenceIo(cp.classEntry("[F"), cp.classEntry("[D"), cp.classEntry("[S"),
+					cp.classEntry("[J"), byteBuffer,
+					cp.methodRef(cp.classEntry("java/io/InputStream"), "readNBytes", "(I)[B"),
+					cp.methodRef(byteBuffer, "wrap", "([B)Ljava/nio/ByteBuffer;"),
+					cp.methodRef(byteBuffer, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;"),
+					cp.fieldRef(byteOrder, "LITTLE_ENDIAN", "Ljava/nio/ByteOrder;"),
+					cp.methodRef(byteBuffer, "asFloatBuffer", "()Ljava/nio/FloatBuffer;"),
+					cp.methodRef(byteBuffer, "asDoubleBuffer", "()Ljava/nio/DoubleBuffer;"),
+					cp.methodRef(byteBuffer, "asShortBuffer", "()Ljava/nio/ShortBuffer;"),
+					cp.methodRef(floatBuffer, "get", "([FII)Ljava/nio/FloatBuffer;"),
+					cp.methodRef(doubleBuffer, "get", "([DII)Ljava/nio/DoubleBuffer;"),
+					cp.methodRef(shortBuffer, "get", "([SII)Ljava/nio/ShortBuffer;"),
+					cp.methodRef(floatBuffer, "put", "([FII)Ljava/nio/FloatBuffer;"),
+					cp.methodRef(doubleBuffer, "put", "([DII)Ljava/nio/DoubleBuffer;"),
+					cp.methodRef(shortBuffer, "put", "([SII)Ljava/nio/ShortBuffer;"),
+					cp.methodRef(byteBuffer, "get", "()B"), cp.methodRef(byteBuffer, "getShort", "()S"),
+					cp.methodRef(byteBuffer, "getInt", "()I"),
+					cp.methodRef(byteBuffer, "put", "(B)Ljava/nio/ByteBuffer;"),
+					cp.methodRef(byteBuffer, "putShort", "(S)Ljava/nio/ByteBuffer;"),
+					cp.methodRef(byteBuffer, "putInt", "(I)Ljava/nio/ByteBuffer;"),
+					cp.methodRef(cp.classEntry("java/io/OutputStream"), "write", "([B)V"),
+					cp.stringEntry("read-sequence/write-sequence: :start/:end exceed the buffer size"),
+					cp.classEntry("[B"),
+					cp.methodRef(thisClass, JvmQuantizedMatrixRuntimeBuilder.INT,
+							JvmQuantizedMatrixRuntimeBuilder.INT_DESC),
+					cp.methodRef(byteBuffer, "get", "([BII)Ljava/nio/ByteBuffer;"),
+					cp.methodRef(byteBuffer, "put", "([BII)Ljava/nio/ByteBuffer;"));
 		}
 	}
 
@@ -1109,123 +992,109 @@ final class JvmIoRuntimeBuilder {
 	 * program can name {@code *error-output*} ({@link #errorOutput}), and the branch body
 	 * must return -- both tests fall through to the original code.
 	 * @param code the method body under construction
-	 * @param handleLoad the {@code aload} opcode that pushes the handle argument
+	 * @param handleSlot the local holding the handle argument
 	 * @param stderrBody appends the branch body (which must end in a return)
 	 */
-	private void emitStderrBranch(List<Integer> code, int handleLoad, Runnable stderrBody) {
+	private void emitStderrBranch(MethodCode code, int handleSlot, Runnable stderrBody) {
 		if (!this.errorOutput) {
 			return;
 		}
-		code.add(handleLoad);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifNotHandlePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(handleLoad);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ICONST_2);
-		int ifNotStderrPos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
+		code.aload(handleSlot);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifNotHandle = code.newLabel();
+		code.ifeq(ifNotHandle);
+		code.aload(handleSlot);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.iconst_2();
+		MethodCode.Label ifNotStderr = code.newLabel();
+		code.if_icmpne(ifNotStderr);
 		stderrBody.run();
-		patchBranch(code, ifNotHandlePos, code.size());
-		patchBranch(code, ifNotStderrPos, code.size());
+		code.labelBinding(ifNotHandle);
+		code.labelBinding(ifNotStderr);
 	}
 
 	/** Returns all stream-runtime method bodies to emit. */
 	List<IoMethod> methods() {
 		List<IoMethod> ms = new ArrayList<>();
-		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), 3, 3,
-				buildAddStream(), AccessFlag.ACC_SYNCHRONIZED));
-		List<ClassDefinition.Handler> openHandlers = new ArrayList<>();
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 4, buildOpen(openHandlers), 0,
-				openHandlers));
+		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), buildAddStream(),
+				AccessFlag.ACC_SYNCHRONIZED));
+		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), buildOpen()));
 		// synchronized with _addStream: the entry is nulled out on the CURRENT table, so
 		// a close racing a table growth must not write into the array being replaced.
-		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), 4, 3, buildClose(),
+		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), buildClose(),
 				AccessFlag.ACC_SYNCHRONIZED));
-		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), 4, 2,
-				buildProbeFile()));
+		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), buildProbeFile()));
 		if (this.listDirectory) {
-			ms.add(new IoMethod(this.cp.addUtf8(LIST_DIRECTORY_METHOD), this.cp.addUtf8(LIST_DIRECTORY_DESC), 5, 7,
+			ms.add(new IoMethod(this.cp.addUtf8(LIST_DIRECTORY_METHOD), this.cp.addUtf8(LIST_DIRECTORY_DESC),
 					buildListDirectory()));
 		}
 		if (this.fileMeta.writeDate()) {
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_WRITE_DATE_METHOD), this.cp.addUtf8(FILE_WRITE_DATE_DESC), 6, 4,
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_WRITE_DATE_METHOD), this.cp.addUtf8(FILE_WRITE_DATE_DESC),
 					buildFileWriteDate()));
 		}
 		if (this.fileMeta.makeDirectories()) {
-			ms.add(new IoMethod(this.cp.addUtf8(MAKE_DIRECTORIES_METHOD), this.cp.addUtf8(MAKE_DIRECTORIES_DESC), 4, 2,
+			ms.add(new IoMethod(this.cp.addUtf8(MAKE_DIRECTORIES_METHOD), this.cp.addUtf8(MAKE_DIRECTORIES_DESC),
 					buildMakeDirectories()));
 		}
 		if (this.fileMeta.deleteFile()) {
-			ms.add(new IoMethod(this.cp.addUtf8(DELETE_FILE_METHOD), this.cp.addUtf8(DELETE_FILE_DESC), 4, 2,
+			ms.add(new IoMethod(this.cp.addUtf8(DELETE_FILE_METHOD), this.cp.addUtf8(DELETE_FILE_DESC),
 					buildDeleteFile()));
 		}
 		if (this.fileMeta.renameFile()) {
-			ms.add(new IoMethod(this.cp.addUtf8(RENAME_FILE_METHOD), this.cp.addUtf8(RENAME_FILE_DESC), 5, 4,
+			ms.add(new IoMethod(this.cp.addUtf8(RENAME_FILE_METHOD), this.cp.addUtf8(RENAME_FILE_DESC),
 					buildRenameFile()));
 		}
 		if (this.fileMeta.streamPaths()) {
-			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC), 4, 4,
+			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC),
 					buildSetStreamPath(), AccessFlag.ACC_SYNCHRONIZED));
 		}
 		if (this.fileMeta.fileLength()) {
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_LENGTH_METHOD), this.cp.addUtf8(FILE_LENGTH_DESC), 4, 4,
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_LENGTH_METHOD), this.cp.addUtf8(FILE_LENGTH_DESC),
 					buildFileLength()));
 		}
 		if (this.fileMeta.position()) {
 			ms.add(new IoMethod(this.cp.addUtf8(STORE_STREAM_POSITION_METHOD),
-					this.cp.addUtf8(STORE_STREAM_POSITION_DESC), 7, 4, buildStoreStreamPosition(),
+					this.cp.addUtf8(STORE_STREAM_POSITION_DESC), buildStoreStreamPosition(),
 					AccessFlag.ACC_SYNCHRONIZED));
 			ms.add(new IoMethod(this.cp.addUtf8(BUMP_STREAM_POSITION_METHOD),
-					this.cp.addUtf8(BUMP_STREAM_POSITION_DESC), 7, 8, buildBumpStreamPosition(),
+					this.cp.addUtf8(BUMP_STREAM_POSITION_DESC), buildBumpStreamPosition(),
 					AccessFlag.ACC_SYNCHRONIZED));
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_POSITION_METHOD), this.cp.addUtf8(FILE_POSITION_DESC), 12, 10,
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_POSITION_METHOD), this.cp.addUtf8(FILE_POSITION_DESC),
 					buildFilePosition()));
 		}
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
-				buildWriteLine()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4,
-				this.ioStreams != null ? 3 : 2, buildReadLineStream()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
-		// The socket arms below take one extra local each (the table entry), so a
-		// socket-free program keeps the exact frame sizes it always had.
-		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5,
-				this.sockets != null ? 7 : 6, buildReadChar()));
-		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), 5, 6, buildPeekChar()));
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
-				buildWriteByte()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), buildWriteLine()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC),
+				buildReadLineStream()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), buildReadByte()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), buildReadChar()));
+		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), buildPeekChar()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), buildWriteByte()));
 		if (this.packedSequenceIo != null) {
-			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_PACKED_METHOD), this.cp.addUtf8(READ_SEQ_PACKED_DESC), 6, 14,
+			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_PACKED_METHOD), this.cp.addUtf8(READ_SEQ_PACKED_DESC),
 					buildSeqPacked(true)));
-			ms.add(new IoMethod(this.cp.addUtf8(WRITE_SEQ_PACKED_METHOD), this.cp.addUtf8(WRITE_SEQ_PACKED_DESC), 6, 14,
+			ms.add(new IoMethod(this.cp.addUtf8(WRITE_SEQ_PACKED_METHOD), this.cp.addUtf8(WRITE_SEQ_PACKED_DESC),
 					buildSeqPacked(false)));
 		}
 		if (this.charSequenceIo != null) {
-			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_CHARS_METHOD), this.cp.addUtf8(READ_SEQ_CHARS_DESC), 7, 17,
+			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_CHARS_METHOD), this.cp.addUtf8(READ_SEQ_CHARS_DESC),
 					buildReadSeqChars()));
 		}
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4,
-				this.sockets != null ? 4 : 3, buildWriteString()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), buildWriteStr()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC),
+				buildWriteString()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), 3, 1, buildMakeStringOutputStream()));
+				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), buildMakeStringOutputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), 5, 2, buildMakeStringInputStream()));
+				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), buildMakeStringInputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
-				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), 3, 3, buildStringStreamContents()));
-		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), 4, 3,
-				buildFreshLine()));
-		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC), 4, 2,
+				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), buildStringStreamContents()));
+		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), buildFreshLine()));
+		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC),
 				buildForceOutput()));
-		ms.add(new IoMethod(this.cp.addUtf8(LISTEN_METHOD), this.cp.addUtf8(LISTEN_DESC), 4, 2, buildListen()));
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_STREAM_P_METHOD), this.cp.addUtf8(OPEN_STREAM_P_DESC), 4, 2,
+		ms.add(new IoMethod(this.cp.addUtf8(LISTEN_METHOD), this.cp.addUtf8(LISTEN_DESC), buildListen()));
+		ms.add(new IoMethod(this.cp.addUtf8(OPEN_STREAM_P_METHOD), this.cp.addUtf8(OPEN_STREAM_P_DESC),
 				buildOpenStreamP()));
 		return ms;
 	}
@@ -1237,105 +1106,80 @@ final class JvmIoRuntimeBuilder {
 	 * contents, so the check is exact; any other writer's column is unknown, so a newline
 	 * is always written (the same rule on every backend).
 	 */
-	private List<Integer> buildFreshLine() {
+	private MethodCode buildFreshLine() {
 		// Slots: 0=dest, 1=entry, 2=contents (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The *error-output* designator has no table entry (and stderr's column is
 		// unknown), so it takes the always-write rule through _writeStr.
-		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
-			emitLdc(code, this.newlineStr.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.writeStrMethod.index());
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ARETURN);
+		emitStderrBranch(code, 0, () -> {
+			code.ldc(this.newlineStr);
+			code.aload(0);
+			code.invokestatic(this.writeStrMethod);
+			code.aconst_null();
+			code.areturn();
 		});
 		// if (!(dest instanceof Long)) { if (_col != 0) { print "\n"; _col = 0; } }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.colField.index());
-		int ifAtStartPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemOut.index());
-		code.add(Opcode.LDC_W);
-		emitU2(code, this.newlineStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.printStr.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.colField.index());
-		patchBranch(code, ifAtStartPos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifHandlePos, code.size());
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifne(ifHandle);
+		code.getstatic(this.colField);
+		MethodCode.Label ifAtStart = code.newLabel();
+		code.ifeq(ifAtStart);
+		code.getstatic(this.systemOut);
+		code.ldc(this.newlineStr);
+		code.invokevirtual(this.printStr);
+		code.iconst_0();
+		code.putstatic(this.colField);
+		code.labelBinding(ifAtStart);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifHandle);
 		// entry = _streams[(int) ((Long) dest).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_1);
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.astore(1);
 		// if (entry instanceof StringWriter) { newline only when mid-line }
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.stringWriterClass.index());
-		int ifNotStringWriterPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringWriterClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringWriterToString.index());
-		code.add(Opcode.ASTORE_2);
+		code.aload(1);
+		code.instanceOf(this.stringWriterClass);
+		MethodCode.Label ifNotStringWriter = code.newLabel();
+		code.ifeq(ifNotStringWriter);
+		code.aload(1);
+		code.checkcast(this.stringWriterClass);
+		code.invokevirtual(this.stringWriterToString);
+		code.astore(2);
 		// if (contents.length() == 0 || contents.charAt(len - 1) == '\n') return null;
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		int ifEmptyPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringCharAt.index());
-		code.add(Opcode.BIPUSH);
-		code.add(10);
-		int ifNewlinePos = code.size();
-		code.add(Opcode.IF_ICMPEQ);
-		emitU2(code, 0);
-		int gotoWritePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifEmptyPos, code.size());
-		patchBranch(code, ifNewlinePos, code.size());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, gotoWritePos, code.size());
-		patchBranch(code, ifNotStringWriterPos, code.size());
+		code.aload(2);
+		code.invokevirtual(this.stringLength);
+		MethodCode.Label ifEmpty = code.newLabel();
+		code.ifeq(ifEmpty);
+		code.aload(2);
+		code.aload(2);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringCharAt);
+		code.loadConstant(10);
+		MethodCode.Label ifNewline = code.newLabel();
+		code.if_icmpeq(ifNewline);
+		MethodCode.Label gotoWrite = code.newLabel();
+		code.goto_(gotoWrite);
+		code.labelBinding(ifEmpty);
+		code.labelBinding(ifNewline);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(gotoWrite);
+		code.labelBinding(ifNotStringWriter);
 		// _writeStr("\n", dest); return null;
-		code.add(Opcode.LDC_W);
-		emitU2(code, this.newlineStr.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.writeStrMethod.index());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.ldc(this.newlineStr);
+		code.aload(0);
+		code.invokestatic(this.writeStrMethod);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -1345,98 +1189,70 @@ final class JvmIoRuntimeBuilder {
 	 * socket entry its output stream, a writer/output-stream entry itself. Anything else
 	 * (an input stream, a closed slot) is a no-op -- flushing never signals here.
 	 */
-	private List<Integer> buildForceOutput() {
+	private MethodCode buildForceOutput() {
 		// Slots: 0=handle, 1=entry
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The *error-output* designator: System.err.flush(); return null;
-		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.printStreamFlush.index());
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ARETURN);
+		emitStderrBranch(code, 0, () -> {
+			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
+			code.invokevirtual(this.printStreamFlush);
+			code.aconst_null();
+			code.areturn();
 		});
 		// if (!(handle instanceof Long)) { System.out.flush(); return null; }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemOut.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.printStreamFlush.index());
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifHandlePos, code.size());
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifne(ifHandle);
+		code.getstatic(this.systemOut);
+		code.invokevirtual(this.printStreamFlush);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifHandle);
 		// entry = _streams[(int) ((Long) handle).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_1);
-		List<Integer> gotoDones = new ArrayList<>();
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.astore(1);
+		MethodCode.Label done = code.newLabel();
 		if (this.sockets != null) {
 			// if (entry instanceof Socket) { entry.getOutputStream().flush(); }
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.socketGetOutputStream().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.outputStreamFlush.index());
-			gotoDones.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
+			code.aload(1);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(1);
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.sockets.socketGetOutputStream());
+			code.invokevirtual(this.outputStreamFlush);
+			code.goto_(done);
+			code.labelBinding(ifNotSocket);
 		}
 		// if (entry instanceof Writer) ((Writer) entry).flush();
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.writerClass.index());
-		int ifNotWriterPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.writerClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.writerFlush.index());
-		gotoDones.add(code.size());
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotWriterPos, code.size());
+		code.aload(1);
+		code.instanceOf(this.writerClass);
+		MethodCode.Label ifNotWriter = code.newLabel();
+		code.ifeq(ifNotWriter);
+		code.aload(1);
+		code.checkcast(this.writerClass);
+		code.invokevirtual(this.writerFlush);
+		code.goto_(done);
+		code.labelBinding(ifNotWriter);
 		// else if (entry instanceof OutputStream) ((OutputStream) entry).flush();
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.outputStreamClass.index());
-		int ifNotOutputPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.outputStreamClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamFlush.index());
-		patchBranch(code, ifNotOutputPos, code.size());
-		for (int gotoDone : gotoDones) {
-			patchBranch(code, gotoDone, code.size());
-		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.instanceOf(this.outputStreamClass);
+		MethodCode.Label ifNotOutput = code.newLabel();
+		code.ifeq(ifNotOutput);
+		code.aload(1);
+		code.checkcast(this.outputStreamClass);
+		code.invokevirtual(this.outputStreamFlush);
+		code.labelBinding(ifNotOutput);
+		code.labelBinding(done);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -1447,93 +1263,66 @@ final class JvmIoRuntimeBuilder {
 	 * non-handle designator (the {@code t} standard-output designator) answers T; any
 	 * other value answers nil.
 	 */
-	private List<Integer> buildOpenStreamP() {
+	private MethodCode buildOpenStreamP() {
 		// Slots: 0=handle, 1=idx (int)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The *error-output* designator names no table slot but is always open.
-		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
-			emitLdc(code, this.tStr.index());
-			code.add(Opcode.ARETURN);
+		emitStderrBranch(code, 0, () -> {
+			code.ldc(this.tStr);
+			code.areturn();
 		});
-		List<Integer> gotoNils = new ArrayList<>();
+		MethodCode.Label returnNil = code.newLabel();
 		// A non-Long designator: T for the t stream designator, nil for anything else.
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifHandlePos, code.size());
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifne(ifHandle);
+		code.aload(0);
+		code.ifnull(returnNil);
+		code.ldc(this.tStr);
+		code.areturn();
+		code.labelBinding(ifHandle);
 		// _streams == null -> nil
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
+		code.getstatic(this.streamsField);
+		code.ifnull(returnNil);
 		// idx = (int) handle; idx < 0 || idx >= _streams.length -> nil
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ISTORE_1);
-		code.add(Opcode.ILOAD_1);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ARRAYLENGTH);
-		gotoNils.add(code.size());
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.istore(1);
+		code.iload(1);
+		code.iflt(returnNil);
+		code.iload(1);
+		code.getstatic(this.streamsField);
+		code.arraylength();
+		code.if_icmpge(returnNil);
 		// entry == null -> nil
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.AALOAD);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
+		code.getstatic(this.streamsField);
+		code.iload(1);
+		code.aaload();
+		code.ifnull(returnNil);
 		if (this.sockets != null) {
 			// A socket the peer (or a foreign close) shut: isClosed() -> nil.
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamsField.index());
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamsField.index());
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.socketIsClosed.index());
-			gotoNils.add(code.size());
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
+			code.getstatic(this.streamsField);
+			code.iload(1);
+			code.aaload();
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.getstatic(this.streamsField);
+			code.iload(1);
+			code.aaload();
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.socketIsClosed);
+			code.ifne(returnNil);
+			code.labelBinding(ifNotSocket);
 		}
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
-		for (int gotoNil : gotoNils) {
-			patchBranch(code, gotoNil, code.size());
-		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.ldc(this.tStr);
+		code.areturn();
+		code.labelBinding(returnNil);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -1545,101 +1334,65 @@ final class JvmIoRuntimeBuilder {
 	 * reader entry {@code ready()}, a byte-stream entry {@code available()}. A non-input
 	 * entry answers nil.
 	 */
-	private List<Integer> buildListen() {
+	private MethodCode buildListen() {
 		// Slots: 0=handle, 1=entry
-		List<Integer> code = new ArrayList<>();
-		List<Integer> gotoNils = new ArrayList<>();
-		List<Integer> gotoTs = new ArrayList<>();
+		MethodCode code = new MethodCode();
+		MethodCode.Label returnNil = code.newLabel();
+		MethodCode.Label returnT = code.newLabel();
 		// if (!(handle instanceof Long)) { stdin probe }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifne(ifHandle);
 		// if (_stdinReader != null) return _stdinReader.ready() ? "T" : null;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		int ifNoReaderPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReady.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		gotoTs.add(code.size());
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNoReaderPos, code.size());
+		code.getstatic(this.stdinReaderField);
+		MethodCode.Label ifNoReader = code.newLabel();
+		code.ifnull(ifNoReader);
+		code.getstatic(this.stdinReaderField);
+		code.invokevirtual(this.bufferedReaderReady);
+		code.ifeq(returnNil);
+		code.goto_(returnT);
+		code.labelBinding(ifNoReader);
 		// return System.in.available() > 0 ? "T" : null;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemIn.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamAvailable.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFLE);
-		emitU2(code, 0);
-		gotoTs.add(code.size());
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifHandlePos, code.size());
+		code.getstatic(this.systemIn);
+		code.invokevirtual(this.inputStreamAvailable);
+		code.ifle(returnNil);
+		code.goto_(returnT);
+		code.labelBinding(ifHandle);
 		// entry = _streams[(int) ((Long) handle).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_1);
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.astore(1);
 		if (this.sockets != null) {
 			// if (entry instanceof Socket) return in.available() > 0 ? "T" : null;
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.socketGetInputStream().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.inputStreamAvailable.index());
-			gotoNils.add(code.size());
-			code.add(Opcode.IFLE);
-			emitU2(code, 0);
-			gotoTs.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
+			code.aload(1);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(1);
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.sockets.socketGetInputStream());
+			code.invokevirtual(this.inputStreamAvailable);
+			code.ifle(returnNil);
+			code.goto_(returnT);
+			code.labelBinding(ifNotSocket);
 		}
 		if (this.ioStreams != null) {
 			// A bidirectional stream is ready while its cursor is before the end.
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.ioStreams.type().index());
-			int ifNotIoPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.ioStreams.type().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.ioStreams.ready().index());
-			gotoNils.add(code.size());
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			gotoTs.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotIoPos, code.size());
+			code.aload(1);
+			code.instanceOf(this.ioStreams.type());
+			MethodCode.Label ifNotIo = code.newLabel();
+			code.ifeq(ifNotIo);
+			code.aload(1);
+			code.checkcast(this.ioStreams.type());
+			code.invokevirtual(this.ioStreams.ready());
+			code.ifeq(returnNil);
+			code.goto_(returnT);
+			code.labelBinding(ifNotIo);
 		}
 		// if (entry instanceof RontoStringInputStream) return hasRemaining() ? "T" :
 		// null. A string input stream answers whether a character remains, not
@@ -1648,69 +1401,42 @@ final class JvmIoRuntimeBuilder {
 		// never depends on whether the program names file-position; the
 		// unread-char cell rides ahead of this helper (the %unread-listen rewrite).
 		if (this.stringInputStreamClass != null && this.stringInputHasRemaining != null) {
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.stringInputStreamClass.index());
-			int ifNotStringInputPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.stringInputStreamClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.stringInputHasRemaining.index());
-			gotoNils.add(code.size());
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			gotoTs.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotStringInputPos, code.size());
+			code.aload(1);
+			code.instanceOf(this.stringInputStreamClass);
+			MethodCode.Label ifNotStringInput = code.newLabel();
+			code.ifeq(ifNotStringInput);
+			code.aload(1);
+			code.checkcast(this.stringInputStreamClass);
+			code.invokevirtual(this.stringInputHasRemaining);
+			code.ifeq(returnNil);
+			code.goto_(returnT);
+			code.labelBinding(ifNotStringInput);
 		}
 		// if (entry instanceof BufferedReader) return ready() ? "T" : null;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.bufferedReaderClass.index());
-		int ifNotReaderPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReady.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		gotoTs.add(code.size());
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotReaderPos, code.size());
+		code.aload(1);
+		code.instanceOf(this.bufferedReaderClass);
+		MethodCode.Label ifNotReader = code.newLabel();
+		code.ifeq(ifNotReader);
+		code.aload(1);
+		code.checkcast(this.bufferedReaderClass);
+		code.invokevirtual(this.bufferedReaderReady);
+		code.ifeq(returnNil);
+		code.goto_(returnT);
+		code.labelBinding(ifNotReader);
 		// if (entry instanceof InputStream) return available() > 0 ? "T" : null;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.inputStreamClass.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.inputStreamClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamAvailable.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFLE);
-		emitU2(code, 0);
-		for (int gotoT : gotoTs) {
-			patchBranch(code, gotoT, code.size());
-		}
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
-		for (int gotoNil : gotoNils) {
-			patchBranch(code, gotoNil, code.size());
-		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.instanceOf(this.inputStreamClass);
+		code.ifeq(returnNil);
+		code.aload(1);
+		code.checkcast(this.inputStreamClass);
+		code.invokevirtual(this.inputStreamAvailable);
+		code.ifle(returnNil);
+		code.labelBinding(returnT);
+		code.ldc(this.tStr);
+		code.areturn();
+		code.labelBinding(returnNil);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -1724,27 +1450,23 @@ final class JvmIoRuntimeBuilder {
 	 * {@code IOException} from the open answers null -- the WASM {@code _open}'s contract
 	 * -- and the shared {@code open} lowering signals the {@code file-error}
 	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}).
-	 * @param handlers receives the body's one exception-table entry
 	 */
-	private List<Integer> buildOpen(List<ClassDefinition.Handler> handlers) {
+	private MethodCode buildOpen() {
 		// Slots: 0=path (Object), 1=mode (int), 2=p (String), 3=stream
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// p = ((String) path).substring(1, length - 1);
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE_2);
+		code.checkcast(this.stringClass);
+		code.astore(2);
+		code.aload(2);
+		code.iconst_1();
+		code.aload(2);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(2);
 		// stream = switch (mode) { case 0 -> new BufferedReader(new FileReader(p));
 		// case 1 -> new BufferedWriter(new FileWriter(p));
 		// case 2 -> new BufferedInputStream(new FileInputStream(p));
@@ -1753,54 +1475,46 @@ final class JvmIoRuntimeBuilder {
 		// default -> new BufferedOutputStream(new FileOutputStream(p, true)); };
 		// (5 and 7 are the OpenModes.APPEND_BIT arms -- :if-exists :append.)
 		int[] modes = { 0, 1, 2, 3, 5 };
-		int tryStart = code.size();
-		List<Integer> gotoStorePositions = new ArrayList<>();
-		int nextTestPos = -1;
+		MethodCode.Label tryStart = code.newBoundLabel();
+		MethodCode.Label store = code.newLabel();
+		MethodCode.@Nullable Label nextTest = null;
 		if (this.ioStreams != null) {
 			// The BIDIRECTIONAL arm comes FIRST and tests the two bits rather than the
 			// whole mode, because :io and :overwrite multiply out with the element type
 			// and the disposition into eight of them and all eight are the same object:
 			// stream = new RontoIoFileStream(p, mode).
-			code.add(Opcode.ILOAD_1);
-			emitIntConst(code, OpenModes.IO_BIT | OpenModes.OVERWRITE_BIT);
-			code.add(Opcode.IAND);
-			int notBidirectional = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.NEW);
-			emitU2(code, this.ioStreams.type().index());
-			code.add(Opcode.DUP);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.INVOKESPECIAL);
-			emitU2(code, this.ioStreams.init().index());
-			code.add(Opcode.ASTORE_3);
-			gotoStorePositions.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, notBidirectional, code.size());
+			code.iload(1);
+			code.loadConstant(OpenModes.IO_BIT | OpenModes.OVERWRITE_BIT);
+			code.iand();
+			MethodCode.Label notBidirectional = code.newLabel();
+			code.ifeq(notBidirectional);
+			code.new_(this.ioStreams.type());
+			code.dup();
+			code.aload(2);
+			code.iload(1);
+			code.invokespecial(this.ioStreams.init());
+			code.astore(3);
+			code.goto_(store);
+			code.labelBinding(notBidirectional);
 		}
 		for (int mode : modes) {
-			if (nextTestPos >= 0) {
-				patchBranch(code, nextTestPos, code.size());
+			if (nextTest != null) {
+				code.labelBinding(nextTest);
 			}
-			code.add(Opcode.ILOAD_1);
-			emitIntConst(code, mode);
-			nextTestPos = code.size();
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
+			code.iload(1);
+			code.loadConstant(mode);
+			nextTest = code.newLabel();
+			code.if_icmpne(nextTest);
 			CharFileStreams chars = this.charFileStreams;
 			switch (mode) {
 				case 0 -> {
 					if (chars != null) {
 						// stream = new RontoCharFileReader(p)
-						code.add(Opcode.NEW);
-						emitU2(code, chars.reader().index());
-						code.add(Opcode.DUP);
-						code.add(Opcode.ALOAD_2);
-						code.add(Opcode.INVOKESPECIAL);
-						emitU2(code, chars.readerInit().index());
-						code.add(Opcode.ASTORE_3);
+						code.new_(chars.reader());
+						code.dup();
+						code.aload(2);
+						code.invokespecial(chars.readerInit());
+						code.astore(3);
 					}
 					else {
 						emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
@@ -1810,14 +1524,12 @@ final class JvmIoRuntimeBuilder {
 				case 1, 5 -> {
 					if (chars != null) {
 						// stream = new RontoCharFileWriter(p, append)
-						code.add(Opcode.NEW);
-						emitU2(code, chars.writer().index());
-						code.add(Opcode.DUP);
-						code.add(Opcode.ALOAD_2);
-						code.add((mode == 5) ? Opcode.ICONST_1 : Opcode.ICONST_0);
-						code.add(Opcode.INVOKESPECIAL);
-						emitU2(code, chars.writerInit().index());
-						code.add(Opcode.ASTORE_3);
+						code.new_(chars.writer());
+						code.dup();
+						code.aload(2);
+						code.loadConstant(mode == 5 ? 1 : 0);
+						code.invokespecial(chars.writerInit());
+						code.astore(3);
 					}
 					else if (mode == 1) {
 						emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
@@ -1834,61 +1546,48 @@ final class JvmIoRuntimeBuilder {
 						this.fileOutputStreamInit, this.bufferedOutputStreamInit, false);
 				default -> throw new IllegalStateException("unreachable open mode " + mode);
 			}
-			gotoStorePositions.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
+			code.goto_(store);
 		}
-		patchBranch(code, nextTestPos, code.size());
+		code.labelBinding(Objects.requireNonNull(nextTest));
 		emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass,
 				this.fileOutputStreamAppendInit, this.bufferedOutputStreamInit, true);
-		int tryEnd = code.size();
-		for (int pos : gotoStorePositions) {
-			patchBranch(code, pos, code.size());
-		}
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		code.labelBinding(store);
 		// return _addStream(stream); -- or, for a program that asks for file-length,
 		// return _setStreamPath(_addStream(stream), p), which records the namestring the
 		// Reader/Writer itself does not remember.
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
+		code.aload(3);
+		code.invokestatic(this.addStreamRef);
 		if (this.fileMeta.streamPaths()) {
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, Objects.requireNonNull(this.setStreamPathRef).index());
+			code.aload(2);
+			code.invokestatic(Objects.requireNonNull(this.setStreamPathRef));
 		}
 		if (this.fileMeta.position()) {
 			// An appending BINARY stream starts at the end of the file (sbcl), so its
 			// counter starts there: if (mode == 7) _storeStreamPosition(handle,
 			// Long.valueOf(new File(p).length())). A character one asks its channel.
-			code.add(Opcode.ILOAD_1);
-			emitIntConst(code, OpenModes.OUTPUT_BIT | OpenModes.BINARY_BIT | OpenModes.APPEND_BIT);
-			int notBinaryAppend = code.size();
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
-			code.add(Opcode.DUP);
-			code.add(Opcode.NEW);
-			emitU2(code, this.fileClass.index());
-			code.add(Opcode.DUP);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INVOKESPECIAL);
-			emitU2(code, this.fileInit.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, Objects.requireNonNull(this.fileLengthRef).index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.longValueOf.index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, Objects.requireNonNull(this.storeStreamPositionRef).index());
-			code.add(Opcode.POP);
-			patchBranch(code, notBinaryAppend, code.size());
+			code.iload(1);
+			code.loadConstant(OpenModes.OUTPUT_BIT | OpenModes.BINARY_BIT | OpenModes.APPEND_BIT);
+			MethodCode.Label notBinaryAppend = code.newLabel();
+			code.if_icmpne(notBinaryAppend);
+			code.dup();
+			code.new_(this.fileClass);
+			code.dup();
+			code.aload(2);
+			code.invokespecial(this.fileInit);
+			code.invokevirtual(Objects.requireNonNull(this.fileLengthRef));
+			code.invokestatic(this.longValueOf);
+			code.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
+			code.pop();
+			code.labelBinding(notBinaryAppend);
 		}
-		code.add(Opcode.ARETURN);
+		code.areturn();
 		// catch (IOException e) { return null; }
-		int handlerPc = code.size();
-		code.add(Opcode.POP);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		handlers.add(new ClassDefinition.Handler(tryStart, tryEnd, handlerPc,
-				this.cp.addClass(this.cp.addUtf8("java/io/IOException")).index()));
+		MethodCode.Label handler = code.newBoundLabel();
+		code.pop();
+		code.aconst_null();
+		code.areturn();
+		code.exceptionCatch(tryStart, tryEnd, handler, this.cp.classEntry("java/io/IOException"));
 		return code;
 	}
 
@@ -1899,43 +1598,36 @@ final class JvmIoRuntimeBuilder {
 	 * rontolisp's namestring stands in for the truename. Unlike {@code _open} this never
 	 * throws on a missing path; that is the whole point of the primitive.
 	 */
-	private List<Integer> buildProbeFile() {
+	private MethodCode buildProbeFile() {
 		// Slots: 0=path (Object), 1=p (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// p = ((String) path).substring(1, length - 1);
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE_1);
+		code.checkcast(this.stringClass);
+		code.astore(1);
+		code.aload(1);
+		code.iconst_1();
+		code.aload(1);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(1);
 		// if (!new File(p).exists()) return null;
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.fileExists.index());
-		int ifMissingPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifMissingPos, code.size());
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(this.fileExists);
+		MethodCode.Label ifMissing = code.newLabel();
+		code.ifne(ifMissing);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifMissing);
 		// return path;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -1947,39 +1639,34 @@ final class JvmIoRuntimeBuilder {
 	 * cannot be determined". (A file genuinely stamped at the Unix epoch therefore reads
 	 * as unknown; no other JDK call distinguishes them without throwing.)
 	 */
-	private List<Integer> buildFileWriteDate() {
+	private MethodCode buildFileWriteDate() {
 		// Slots: 0=path (Object), 1=p (String), 2/3=millis (long)
-		List<Integer> code = new ArrayList<>();
-		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
+		MethodCode code = new MethodCode();
+		emitStripQuotes(code, 0, 1);
 		// millis = new File(p).lastModified();
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileLastModified).index());
-		code.add(Opcode.DUP2);
-		code.add(Opcode.LSTORE_2);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileLastModified));
+		code.dup2();
+		code.lstore(2);
 		// if (millis == 0L) return null;
-		code.add(Opcode.LCONST_0);
-		code.add(Opcode.LCMP);
-		int ifKnownPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifKnownPos, code.size());
+		code.lconst_0();
+		code.lcmp();
+		MethodCode.Label ifKnown = code.newLabel();
+		code.ifne(ifKnown);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifKnown);
 		// return Long.valueOf(millis / 1000 + 2208988800L);
-		code.add(Opcode.LLOAD_2);
+		code.lload(2);
 		emitLongConst(code, 1000L);
-		code.add(Opcode.LDIV);
+		code.ldiv();
 		emitLongConst(code, 2208988800L);
-		code.add(Opcode.LADD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
-		code.add(Opcode.ARETURN);
+		code.ladd();
+		code.invokestatic(this.longValueOf);
+		code.areturn();
 		return code;
 	}
 
@@ -1992,35 +1679,28 @@ final class JvmIoRuntimeBuilder {
 	 * (.kb/read-load-streams.md): "a refused directory is a file-error" is the Lisp
 	 * {@code ensure-directories-exist} above it, not here.
 	 */
-	private List<Integer> buildMakeDirectories() {
+	private MethodCode buildMakeDirectories() {
 		// Slots: 0=path (Object), 1=p (String)
-		List<Integer> code = new ArrayList<>();
-		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileMkdirs).index());
-		code.add(Opcode.POP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileIsDirectory).index());
-		int ifDirPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifDirPos, code.size());
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
+		MethodCode code = new MethodCode();
+		emitStripQuotes(code, 0, 1);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileMkdirs));
+		code.pop();
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileIsDirectory));
+		MethodCode.Label ifDir = code.newLabel();
+		code.ifne(ifDir);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifDir);
+		code.ldc(this.tStr);
+		code.areturn();
 		return code;
 	}
 
@@ -2029,26 +1709,22 @@ final class JvmIoRuntimeBuilder {
 	 * null when there was nothing to remove or the host refused -- the "a missing file is
 	 * a file-error" decision belongs to the Lisp {@code delete-file} above it, not here.
 	 */
-	private List<Integer> buildDeleteFile() {
+	private MethodCode buildDeleteFile() {
 		// Slots: 0=path (Object), 1=p (String)
-		List<Integer> code = new ArrayList<>();
-		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileDelete).index());
-		int ifDeletedPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifDeletedPos, code.size());
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
+		MethodCode code = new MethodCode();
+		emitStripQuotes(code, 0, 1);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileDelete));
+		MethodCode.Label ifDeleted = code.newLabel();
+		code.ifne(ifDeleted);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifDeleted);
+		code.ldc(this.tStr);
+		code.areturn();
 		return code;
 	}
 
@@ -2059,34 +1735,28 @@ final class JvmIoRuntimeBuilder {
 	 * above it, not here. {@code File.renameTo} is the one JDK call that needs no
 	 * exception table, which is what keeps this a plain emitted body.
 	 */
-	private List<Integer> buildRenameFile() {
+	private MethodCode buildRenameFile() {
 		// Slots: 0=from (Object), 1=to (Object), 2=f (String), 3=t (String)
-		List<Integer> code = new ArrayList<>();
-		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_2, Opcode.ALOAD_2);
-		emitStripQuotes(code, Opcode.ALOAD_1, Opcode.ASTORE_3, Opcode.ALOAD_3);
+		MethodCode code = new MethodCode();
+		emitStripQuotes(code, 0, 2);
+		emitStripQuotes(code, 1, 3);
 		// new File(f).renameTo(new File(t))
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileRenameTo).index());
-		int ifRenamedPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifRenamedPos, code.size());
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(2);
+		code.invokespecial(this.fileInit);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(3);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileRenameTo));
+		MethodCode.Label ifRenamed = code.newLabel();
+		code.ifne(ifRenamed);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifRenamed);
+		code.ldc(this.tStr);
+		code.areturn();
 		return code;
 	}
 
@@ -2096,59 +1766,50 @@ final class JvmIoRuntimeBuilder {
 	 * {@code synchronized} for the same reason {@code _addStream} is: served requests
 	 * open files concurrently, and the growth swaps the array.
 	 */
-	private List<Integer> buildSetStreamPath() {
+	private MethodCode buildSetStreamPath() {
 		// Slots: 0=handle, 1=path, 2=arr, 3=idx (int)
-		List<Integer> code = new ArrayList<>();
-		FieldrefConstant paths = Objects.requireNonNull(this.streamPathsField);
+		MethodCode code = new MethodCode();
+		FieldRefEntry paths = Objects.requireNonNull(this.streamPathsField);
 		// idx = (int) ((Long) handle).longValue();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ISTORE_3);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.istore(3);
 		// arr = _streamPaths == null ? new Object[16] : _streamPaths;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, paths.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		int ifHavePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.BIPUSH);
-		code.add(16);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.objectClass.index());
-		code.add(Opcode.ASTORE_2);
-		patchBranch(code, ifHavePos, code.size());
+		code.getstatic(paths);
+		code.astore(2);
+		code.aload(2);
+		MethodCode.Label ifHave = code.newLabel();
+		code.ifnonnull(ifHave);
+		code.loadConstant(16);
+		code.anewarray(this.objectClass);
+		code.astore(2);
+		code.labelBinding(ifHave);
 		// if (idx >= arr.length) arr = Arrays.copyOf(arr, (idx + 1) * 2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifFitsPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.IMUL);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.arraysCopyOf.index());
-		code.add(Opcode.ASTORE_2);
-		patchBranch(code, ifFitsPos, code.size());
+		code.iload(3);
+		code.aload(2);
+		code.arraylength();
+		MethodCode.Label ifFits = code.newLabel();
+		code.if_icmplt(ifFits);
+		code.aload(2);
+		code.iload(3);
+		code.iconst_1();
+		code.iadd();
+		code.iconst_2();
+		code.imul();
+		code.invokestatic(this.arraysCopyOf);
+		code.astore(2);
+		code.labelBinding(ifFits);
 		// arr[idx] = path; _streamPaths = arr; return handle;
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, paths.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(2);
+		code.iload(3);
+		code.aload(1);
+		code.aastore();
+		code.aload(2);
+		code.putstatic(paths);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -2160,78 +1821,56 @@ final class JvmIoRuntimeBuilder {
 	 * which already knows every entry kind), so the answer counts what has been WRITTEN
 	 * rather than what happens to have reached the disk.
 	 */
-	private List<Integer> buildFileLength() {
+	private MethodCode buildFileLength() {
 		// Slots: 0=handle, 1=arr, 2=idx (int), 3=p
-		List<Integer> code = new ArrayList<>();
-		FieldrefConstant paths = Objects.requireNonNull(this.streamPathsField);
-		List<Integer> gotoNils = new ArrayList<>();
+		MethodCode code = new MethodCode();
+		FieldRefEntry paths = Objects.requireNonNull(this.streamPathsField);
+		MethodCode.Label returnNil = code.newLabel();
 		// arr = _streamPaths; if (arr == null) return null;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, paths.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
+		code.getstatic(paths);
+		code.astore(1);
+		code.aload(1);
+		code.ifnull(returnNil);
 		// if (!(handle instanceof Long)) return null;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		gotoNils.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		code.ifeq(returnNil);
 		// idx = (int) handle;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ISTORE_2);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.istore(2);
 		// if (idx < 0 || idx >= arr.length) return null;
-		code.add(Opcode.ILOAD_2);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARRAYLENGTH);
-		gotoNils.add(code.size());
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.iload(2);
+		code.iflt(returnNil);
+		code.iload(2);
+		code.aload(1);
+		code.arraylength();
+		code.if_icmpge(returnNil);
 		// p = arr[idx]; if (p == null) return null;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_3);
-		code.add(Opcode.ALOAD_3);
-		gotoNils.add(code.size());
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
+		code.aload(1);
+		code.iload(2);
+		code.aaload();
+		code.astore(3);
+		code.aload(3);
+		code.ifnull(returnNil);
 		// _forceOutput(handle);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, Objects.requireNonNull(this.forceOutputRef).index());
-		code.add(Opcode.POP);
+		code.aload(0);
+		code.invokestatic(Objects.requireNonNull(this.forceOutputRef));
+		code.pop();
 		// return Long.valueOf(new File((String) p).length());
-		code.add(Opcode.NEW);
-		emitU2(code, this.fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.fileInit.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, Objects.requireNonNull(this.fileLengthRef).index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
-		code.add(Opcode.ARETURN);
-		for (int gotoNil : gotoNils) {
-			patchBranch(code, gotoNil, code.size());
-		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.new_(this.fileClass);
+		code.dup();
+		code.aload(3);
+		code.checkcast(this.stringClass);
+		code.invokespecial(this.fileInit);
+		code.invokevirtual(Objects.requireNonNull(this.fileLengthRef));
+		code.invokestatic(this.longValueOf);
+		code.areturn();
+		code.labelBinding(returnNil);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -2242,21 +1881,21 @@ final class JvmIoRuntimeBuilder {
 	 * {@code _filePosition}'s set half (an exact position) and by
 	 * {@code _bumpStreamPosition} (after it reads the current one).
 	 */
-	private List<Integer> buildStoreStreamPosition() {
+	private MethodCode buildStoreStreamPosition() {
 		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=pos, 2=arr, 3=idx (int)
 		a.aload(0);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(3);
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
 		a.astore(2);
 		a.aload(2);
 		MethodCode.Label have = a.newLabel();
 		a.ifnonnull(have);
 		a.loadConstant(16);
-		a.anewarray(this.objectClass.entry());
+		a.anewarray(this.objectClass);
 		a.astore(2);
 		a.labelBinding(have);
 		a.iload(3);
@@ -2270,7 +1909,7 @@ final class JvmIoRuntimeBuilder {
 		a.iadd();
 		a.loadConstant(2);
 		a.imul();
-		a.invokestatic(this.arraysCopyOf.entry());
+		a.invokestatic(this.arraysCopyOf);
 		a.astore(2);
 		a.labelBinding(fits);
 		a.aload(2);
@@ -2278,10 +1917,10 @@ final class JvmIoRuntimeBuilder {
 		a.aload(1);
 		a.aastore();
 		a.aload(2);
-		a.putstatic(Objects.requireNonNull(this.streamPositionsField).entry());
+		a.putstatic(Objects.requireNonNull(this.streamPositionsField));
 		a.aload(0);
 		a.areturn();
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	/**
@@ -2290,20 +1929,20 @@ final class JvmIoRuntimeBuilder {
 	 * the byte primitives to call it unconditionally after a transfer: a non-file handle
 	 * (a socket, a character file stream, a standard stream, a closed slot) is a no-op.
 	 */
-	private List<Integer> buildBumpStreamPosition() {
+	private MethodCode buildBumpStreamPosition() {
 		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=delta (int), 2=idx (int), 3=arr, 4=paths, 5=val, 6=cur
 		// (long)
 		a.aload(0);
-		a.instanceOf(this.longClass.entry());
+		a.instanceOf(this.longClass);
 		MethodCode.Label notHandle = a.newLabel();
 		a.ifeq(notHandle);
 		a.aload(0);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(2);
-		a.getstatic(Objects.requireNonNull(this.streamPathsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamPathsField));
 		a.astore(4);
 		a.aload(4);
 		MethodCode.Label noPaths = a.newLabel();
@@ -2323,7 +1962,7 @@ final class JvmIoRuntimeBuilder {
 		a.ifnull(notFile);
 		// cur = (arr = _streamPositions) != null && idx < arr.length
 		// && (val = arr[idx]) != null ? ((Long) val).longValue() : 0L
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
 		a.astore(3);
 		a.lconst_0();
 		a.lstore(6);
@@ -2343,8 +1982,8 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label curNull2 = a.newLabel();
 		a.ifnull(curNull2);
 		a.aload(5);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.lstore(6);
 		a.labelBinding(noArr);
 		a.labelBinding(idxOob2);
@@ -2354,11 +1993,11 @@ final class JvmIoRuntimeBuilder {
 		a.iload(1);
 		a.i2l();
 		a.ladd();
-		a.invokestatic(this.longValueOf.entry());
+		a.invokestatic(this.longValueOf);
 		// _storeStreamPosition(handle, Long.valueOf(cur)); return null;
 		a.aload(0);
 		a.swap();
-		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef).entry());
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
 		a.pop();
 		MethodCode.Label done = a.newLabel();
 		a.goto_(done);
@@ -2370,7 +2009,7 @@ final class JvmIoRuntimeBuilder {
 		a.labelBinding(done);
 		a.aconst_null();
 		a.areturn();
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	/**
@@ -2382,17 +2021,17 @@ final class JvmIoRuntimeBuilder {
 	 * that offset (flushing an output stream first, keeping everything before the
 	 * offset). Either answers "T" on success, null where it cannot.
 	 */
-	private List<Integer> buildFilePosition() {
+	private MethodCode buildFilePosition() {
 		MethodCode a = new MethodCode();
 		// Slots: 0=handle, 1=pos, 2=idx (int), 3=paths, 4=p, 5=entry, 6=arr, 7=n (long,
 		// slots 7-8), 9=stream/val
 		a.aload(0);
-		a.instanceOf(this.longClass.entry());
+		a.instanceOf(this.longClass);
 		MethodCode.Label notHandle = a.newLabel();
 		a.ifeq(notHandle);
 		a.aload(0);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(2);
 		if (this.stringPositions != null) {
@@ -2401,18 +2040,17 @@ final class JvmIoRuntimeBuilder {
 			MethodCode.Label notInTable = a.newLabel();
 			a.iflt(notInTable);
 			a.iload(2);
-			a.getstatic(Objects.requireNonNull(this.streamsField).entry());
+			a.getstatic(Objects.requireNonNull(this.streamsField));
 			a.arraylength();
 			a.if_icmpge(notInTable);
-			a.getstatic(Objects.requireNonNull(this.streamsField).entry());
+			a.getstatic(Objects.requireNonNull(this.streamsField));
 			a.iload(2);
 			a.aaload();
 			a.astore(5);
-			this.stringPositions.emit(a, 5, 1, 7, this.longClass.entry(), this.longValue.methodRefEntry(),
-					this.longValueOf.methodRefEntry(), this.tStr.entry());
+			this.stringPositions.emit(a, 5, 1, 7, this.longClass, this.longValue, this.longValueOf, this.tStr);
 			a.labelBinding(notInTable);
 		}
-		a.getstatic(Objects.requireNonNull(this.streamPathsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamPathsField));
 		a.astore(3);
 		a.aload(3);
 		MethodCode.Label noPaths = a.newLabel();
@@ -2433,7 +2071,7 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label noPathVal = a.newLabel();
 		a.ifnull(noPathVal);
 		// entry = _streams[idx]
-		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamsField));
 		a.iload(2);
 		a.aaload();
 		a.astore(5);
@@ -2444,21 +2082,21 @@ final class JvmIoRuntimeBuilder {
 			// makes file-position real for a CHARACTER :io stream, which the
 			// Reader/Writer arms below cannot answer for.
 			a.aload(5);
-			a.instanceOf(this.ioStreams.type().entry());
-			MethodCode.Label notIoPos = a.newLabel();
-			a.ifeq(notIoPos);
+			a.instanceOf(this.ioStreams.type());
+			MethodCode.Label notIo = a.newLabel();
+			a.ifeq(notIo);
 			a.aload(1);
 			MethodCode.Label ioSet = a.newLabel();
 			a.ifnonnull(ioSet);
 			a.aload(5);
-			a.checkcast(this.ioStreams.type().entry());
-			a.invokevirtual(this.ioStreams.position().methodRefEntry());
-			a.invokestatic(this.longValueOf.entry());
+			a.checkcast(this.ioStreams.type());
+			a.invokevirtual(this.ioStreams.position());
+			a.invokestatic(this.longValueOf);
 			a.areturn();
 			a.labelBinding(ioSet);
 			a.aload(1);
-			a.checkcast(this.longClass.entry());
-			a.invokevirtual(this.longValue.methodRefEntry());
+			a.checkcast(this.longClass);
+			a.invokevirtual(this.longValue);
 			a.lstore(7);
 			a.lload(7);
 			a.lconst_0();
@@ -2466,12 +2104,12 @@ final class JvmIoRuntimeBuilder {
 			ioNeg = a.newLabel();
 			a.iflt(ioNeg);
 			a.aload(5);
-			a.checkcast(this.ioStreams.type().entry());
+			a.checkcast(this.ioStreams.type());
 			a.lload(7);
-			a.invokevirtual(this.ioStreams.seek().methodRefEntry());
-			a.ldc(this.tStr.entry());
+			a.invokevirtual(this.ioStreams.seek());
+			a.ldc(this.tStr);
 			a.areturn();
-			a.labelBinding(notIoPos);
+			a.labelBinding(notIo);
 		}
 		List<MethodCode.Label> charNegs = new ArrayList<>();
 		if (this.charFileStreams != null) {
@@ -2484,14 +2122,14 @@ final class JvmIoRuntimeBuilder {
 		}
 		// Only a BINARY entry (an InputStream/OutputStream) has a byte position.
 		a.aload(5);
-		a.instanceOf(this.inputStreamClass.entry());
+		a.instanceOf(this.inputStreamClass);
 		MethodCode.Label notBinaryIn = a.newLabel();
 		a.ifeq(notBinaryIn);
 		MethodCode.Label isBinary = a.newLabel();
 		a.goto_(isBinary);
 		a.labelBinding(notBinaryIn);
 		a.aload(5);
-		a.instanceOf(this.outputStreamClass.entry());
+		a.instanceOf(this.outputStreamClass);
 		MethodCode.Label notBinaryOut = a.newLabel();
 		a.ifeq(notBinaryOut);
 		a.labelBinding(isBinary);
@@ -2499,7 +2137,7 @@ final class JvmIoRuntimeBuilder {
 		a.aload(1);
 		MethodCode.Label setPos = a.newLabel();
 		a.ifnonnull(setPos);
-		a.getstatic(Objects.requireNonNull(this.streamPositionsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
 		a.astore(6);
 		// return arr != null && idx < arr.length && arr[idx] != null ? arr[idx]
 		// : Long.valueOf(0L)
@@ -2524,13 +2162,13 @@ final class JvmIoRuntimeBuilder {
 		a.labelBinding(posIdxOob);
 		a.labelBinding(posNull);
 		a.lconst_0();
-		a.invokestatic(this.longValueOf.entry());
+		a.invokestatic(this.longValueOf);
 		a.areturn();
 		// --- the set half -----------------------------------------------------
 		a.labelBinding(setPos);
 		a.aload(1);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.lstore(7);
 		a.lload(7);
 		a.lconst_0();
@@ -2538,76 +2176,76 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label posNeg = a.newLabel();
 		a.iflt(posNeg);
 		a.aload(0);
-		a.invokestatic(Objects.requireNonNull(this.forceOutputRef).entry());
+		a.invokestatic(Objects.requireNonNull(this.forceOutputRef));
 		a.pop();
 		// input arm
 		a.aload(5);
-		a.instanceOf(this.inputStreamClass.entry());
+		a.instanceOf(this.inputStreamClass);
 		MethodCode.Label notInput = a.newLabel();
 		a.ifeq(notInput);
 		// fis = new FileInputStream(p); fis.getChannel().position(n)
-		a.new_(this.fileInputStreamClass.entry());
+		a.new_(this.fileInputStreamClass);
 		a.dup();
 		a.aload(4);
-		a.checkcast(this.stringClass.entry());
-		a.invokespecial(this.fileInputStreamInit.entry());
+		a.checkcast(this.stringClass);
+		a.invokespecial(this.fileInputStreamInit);
 		a.astore(9);
 		a.aload(9);
-		a.invokevirtual(Objects.requireNonNull(this.fileInputStreamGetChannel).methodRefEntry());
+		a.invokevirtual(Objects.requireNonNull(this.fileInputStreamGetChannel));
 		a.lload(7);
-		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition).methodRefEntry());
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
 		a.pop();
 		// _streams[idx] = new BufferedInputStream(fis); close the old entry
-		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamsField));
 		a.iload(2);
-		a.new_(this.bufferedInputStreamClass.entry());
+		a.new_(this.bufferedInputStreamClass);
 		a.dup();
 		a.aload(9);
-		a.invokespecial(this.bufferedInputStreamInit.entry());
+		a.invokespecial(this.bufferedInputStreamInit);
 		a.aastore();
 		a.aload(5);
-		a.checkcast(this.inputStreamClass.entry());
-		a.invokevirtual(this.inputStreamClose.methodRefEntry());
+		a.checkcast(this.inputStreamClass);
+		a.invokevirtual(this.inputStreamClose);
 		MethodCode.Label setDone = a.newLabel();
 		a.goto_(setDone);
 		a.labelBinding(notInput);
 		// output arm: FileChannel.open(Path.of(p), WRITE).position(n)
 		a.aload(4);
-		a.checkcast(this.stringClass.entry());
-		a.invokestatic(Objects.requireNonNull(this.pathOf).entry());
+		a.checkcast(this.stringClass);
+		a.invokestatic(Objects.requireNonNull(this.pathOf));
 		a.loadConstant(1);
-		a.anewarray(Objects.requireNonNull(this.openOptionClass).entry());
+		a.anewarray(Objects.requireNonNull(this.openOptionClass));
 		a.dup();
 		a.loadConstant(0);
-		a.getstatic(Objects.requireNonNull(this.standardOpenOptionWrite).entry());
+		a.getstatic(Objects.requireNonNull(this.standardOpenOptionWrite));
 		a.aastore();
-		a.invokestatic(Objects.requireNonNull(this.fileChannelOpen).entry());
+		a.invokestatic(Objects.requireNonNull(this.fileChannelOpen));
 		a.astore(9);
 		a.aload(9);
 		a.lload(7);
-		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition).methodRefEntry());
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
 		a.pop();
 		// _streams[idx] = new BufferedOutputStream(Channels.newOutputStream(ch))
-		a.getstatic(Objects.requireNonNull(this.streamsField).entry());
+		a.getstatic(Objects.requireNonNull(this.streamsField));
 		a.iload(2);
-		a.new_(this.bufferedOutputStreamClass.entry());
+		a.new_(this.bufferedOutputStreamClass);
 		a.dup();
 		a.aload(9);
-		a.invokestatic(Objects.requireNonNull(this.channelsNewOutputStream).entry());
-		a.invokespecial(this.bufferedOutputStreamInit.entry());
+		a.invokestatic(Objects.requireNonNull(this.channelsNewOutputStream));
+		a.invokespecial(this.bufferedOutputStreamInit);
 		a.aastore();
 		a.aload(5);
-		a.checkcast(this.outputStreamClass.entry());
-		a.invokevirtual(this.outputStreamClose.methodRefEntry());
+		a.checkcast(this.outputStreamClass);
+		a.invokevirtual(this.outputStreamClose);
 		a.labelBinding(setDone);
 		// _storeStreamPosition(handle, Long.valueOf(n)); return "T";
 		a.lload(7);
-		a.invokestatic(this.longValueOf.entry());
+		a.invokestatic(this.longValueOf);
 		a.aload(0);
 		a.swap();
-		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef).entry());
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
 		a.pop();
-		a.ldc(this.tStr.entry());
+		a.ldc(this.tStr);
 		a.areturn();
 		// --- the nil exits ----------------------------------------------------
 		a.labelBinding(notHandle);
@@ -2626,12 +2264,12 @@ final class JvmIoRuntimeBuilder {
 		for (MethodCode.Label charNeg : charNegs) {
 			a.labelBinding(charNeg);
 		}
-		a.new_(this.runtimeExceptionClass.entry());
+		a.new_(this.runtimeExceptionClass);
 		a.dup();
-		a.ldc(java.util.Objects.requireNonNull(this.negPositionMsg).entry());
-		a.invokespecial(this.runtimeExceptionInit.entry());
+		a.ldc(java.util.Objects.requireNonNull(this.negPositionMsg));
+		a.invokespecial(this.runtimeExceptionInit);
 		a.athrow();
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	/**
@@ -2640,24 +2278,24 @@ final class JvmIoRuntimeBuilder {
 	 * slot 1, null) and {@code position(n)} then "T" for the set. A negative position
 	 * branches to the label added to {@code negs}, bound by the caller at its error.
 	 */
-	private void emitOwnCursorArm(MethodCode a, ClassConstant type, MethodrefConstant position, MethodrefConstant seek,
+	private void emitOwnCursorArm(MethodCode a, ClassEntry type, MethodRefEntry position, MethodRefEntry seek,
 			List<MethodCode.Label> negs) {
 		a.aload(5);
-		a.instanceOf(type.entry());
+		a.instanceOf(type);
 		MethodCode.Label notThis = a.newLabel();
 		a.ifeq(notThis);
 		a.aload(1);
 		MethodCode.Label set = a.newLabel();
 		a.ifnonnull(set);
 		a.aload(5);
-		a.checkcast(type.entry());
-		a.invokevirtual(position.methodRefEntry());
-		a.invokestatic(this.longValueOf.entry());
+		a.checkcast(type);
+		a.invokevirtual(position);
+		a.invokestatic(this.longValueOf);
 		a.areturn();
 		a.labelBinding(set);
 		a.aload(1);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.lstore(7);
 		a.lload(7);
 		a.lconst_0();
@@ -2666,52 +2304,47 @@ final class JvmIoRuntimeBuilder {
 		a.iflt(neg);
 		negs.add(neg);
 		a.aload(5);
-		a.checkcast(type.entry());
+		a.checkcast(type);
 		a.lload(7);
-		a.invokevirtual(seek.methodRefEntry());
-		a.ldc(this.tStr.entry());
+		a.invokevirtual(seek);
+		a.ldc(this.tStr);
 		a.areturn();
 		a.labelBinding(notThis);
 	}
 
-	/**
-	 * Emits {@code <store> = ((String) <load>).substring(1, length - 1)} -- the quote
-	 * stripping every path-taking helper starts with (a rontolisp string value carries
-	 * its quotes).
-	 */
 	// Renders a mutable character vector on the stack into the runtime string when the
 	// array runtime exists (a no-op call for any other value); without it no character
 	// vector can exist and nothing is emitted.
-	private void emitStrvOnStack(List<Integer> code) {
+	private void emitStrvOnStack(MethodCode code) {
 		if (this.strvRef == null) {
 			return;
 		}
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.strvRef.index());
+		code.invokestatic(this.strvRef);
 	}
 
-	private void emitStripQuotes(List<Integer> code, int argLoad, int store, int load) {
-		code.add(argLoad);
+	/**
+	 * Emits {@code <target> = ((String) <arg>).substring(1, length - 1)} -- the quote
+	 * stripping every path-taking helper starts with (a rontolisp string value carries
+	 * its quotes).
+	 */
+	private void emitStripQuotes(MethodCode code, int argSlot, int targetSlot) {
+		code.aload(argSlot);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(store);
-		code.add(load);
-		code.add(Opcode.ICONST_1);
-		code.add(load);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		code.add(store);
+		code.checkcast(this.stringClass);
+		code.astore(targetSlot);
+		code.aload(targetSlot);
+		code.iconst_1();
+		code.aload(targetSlot);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(targetSlot);
 	}
 
 	/** Pushes a raw {@code long} constant. */
-	private void emitLongConst(List<Integer> code, long value) {
-		code.add(Opcode.LDC2_W);
-		emitU2(code, this.cp.addLong(value).index());
+	private void emitLongConst(MethodCode code, long value) {
+		code.ldc(this.cp.entries().longEntry(value));
 	}
 
 	/**
@@ -2725,7 +2358,7 @@ final class JvmIoRuntimeBuilder {
 	 * kept -- the caller ({@code directory}, in the prelude) sorts, so every backend
 	 * answers alike.
 	 */
-	private List<Integer> buildListDirectory() {
+	private MethodCode buildListDirectory() {
 		// Slots: 0=path, 1=p (String), 2=dir (File), 3=names (String[]), 4=i (int),
 		// 5=acc (Object), 6=entry (String)
 		MethodCode a = new MethodCode();
@@ -2737,26 +2370,26 @@ final class JvmIoRuntimeBuilder {
 		// p = ((String) path).substring(1, length - 1);
 		a.aload(0);
 		if (this.strvRef != null) {
-			a.invokestatic(this.strvRef.entry());
+			a.invokestatic(this.strvRef);
 		}
-		a.checkcast(this.stringClass.entry());
+		a.checkcast(this.stringClass);
 		a.astore(1);
 		a.aload(1);
 		a.loadConstant(1);
 		a.aload(1);
-		a.invokevirtual(this.stringLength.methodRefEntry());
+		a.invokevirtual(this.stringLength);
 		a.loadConstant(1);
 		a.isub();
-		a.invokevirtual(this.stringSubstring.methodRefEntry());
+		a.invokevirtual(this.stringSubstring);
 		a.astore(1);
 		// dir = new File(p); names = dir.list(); if (names == null) return null;
-		a.new_(this.fileClass.entry());
+		a.new_(this.fileClass);
 		a.dup();
 		a.aload(1);
-		a.invokespecial(this.fileInit.entry());
+		a.invokespecial(this.fileInit);
 		a.astore(2);
 		a.aload(2);
-		a.invokevirtual(java.util.Objects.requireNonNull(this.fileList).methodRefEntry());
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileList));
 		a.astore(3);
 		a.aload(3);
 		a.ifnull(notADirectory);
@@ -2772,35 +2405,35 @@ final class JvmIoRuntimeBuilder {
 		a.iload(4);
 		a.iflt(done);
 		// entry = "\"" + names[i]; then + "/\"" for a subdirectory, + "\"" otherwise
-		a.ldc(this.quoteStr.entry());
+		a.ldc(this.quoteStr);
 		a.aload(3);
 		a.iload(4);
 		a.aaload();
-		a.invokevirtual(this.stringConcat.methodRefEntry());
+		a.invokevirtual(this.stringConcat);
 		a.astore(6);
-		a.new_(this.fileClass.entry());
+		a.new_(this.fileClass);
 		a.dup();
 		a.aload(2);
 		a.aload(3);
 		a.iload(4);
 		a.aaload();
-		a.invokespecial(java.util.Objects.requireNonNull(this.fileInitChild).entry());
-		a.invokevirtual(java.util.Objects.requireNonNull(this.fileIsDirectory).methodRefEntry());
+		a.invokespecial(java.util.Objects.requireNonNull(this.fileInitChild));
+		a.invokevirtual(java.util.Objects.requireNonNull(this.fileIsDirectory));
 		a.ifeq(notSubdir);
 		a.aload(6);
-		a.ldc(java.util.Objects.requireNonNull(this.slashQuoteStr).entry());
-		a.invokevirtual(this.stringConcat.methodRefEntry());
+		a.ldc(java.util.Objects.requireNonNull(this.slashQuoteStr));
+		a.invokevirtual(this.stringConcat);
 		a.astore(6);
 		a.goto_(joined);
 		a.labelBinding(notSubdir);
 		a.aload(6);
-		a.ldc(this.quoteStr.entry());
-		a.invokevirtual(this.stringConcat.methodRefEntry());
+		a.ldc(this.quoteStr);
+		a.invokevirtual(this.stringConcat);
 		a.astore(6);
 		a.labelBinding(joined);
 		// acc = new Object[] { entry, acc };
 		a.loadConstant(2);
-		a.anewarray(this.objectClass.entry());
+		a.anewarray(this.objectClass);
 		a.dup();
 		a.loadConstant(0);
 		a.aload(6);
@@ -2815,10 +2448,10 @@ final class JvmIoRuntimeBuilder {
 		a.labelBinding(done);
 		// return new Object[] { "T", acc };
 		a.loadConstant(2);
-		a.anewarray(this.objectClass.entry());
+		a.anewarray(this.objectClass);
 		a.dup();
 		a.loadConstant(0);
-		a.ldc(this.tStr.entry());
+		a.ldc(this.tStr);
 		a.aastore();
 		a.dup();
 		a.loadConstant(1);
@@ -2828,222 +2461,166 @@ final class JvmIoRuntimeBuilder {
 		a.labelBinding(notADirectory);
 		a.aconst_null();
 		a.areturn();
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	/**
 	 * Emits {@code slot3 = new <buffered>(new <file>(p))} where {@code p} is the path in
 	 * slot 2 -- one arm of the {@code _open} mode branch.
 	 */
-	private void emitOpenStream(List<Integer> code, ClassConstant bufferedClass, ClassConstant fileClass,
-			MethodrefConstant fileInit, MethodrefConstant bufferedInit, boolean append) {
-		code.add(Opcode.NEW);
-		emitU2(code, bufferedClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, fileClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_2);
+	private void emitOpenStream(MethodCode code, ClassEntry bufferedClass, ClassEntry fileClass,
+			MethodRefEntry fileInit, MethodRefEntry bufferedInit, boolean append) {
+		code.new_(bufferedClass);
+		code.dup();
+		code.new_(fileClass);
+		code.dup();
+		code.aload(2);
 		if (append) {
 			// FileWriter(String, boolean) / FileOutputStream(String, boolean): the
 			// append flag keeps an existing file's content and writes past its end.
-			code.add(Opcode.ICONST_1);
+			code.iconst_1();
 		}
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, fileInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, bufferedInit.index());
-		code.add(Opcode.ASTORE_3);
+		code.invokespecial(fileInit);
+		code.invokespecial(bufferedInit);
+		code.astore(3);
 	}
 
 	/**
 	 * {@code _closeStream(Object handle) -> t}. Closes the table entry (reader or writer)
 	 * and nulls it out.
 	 */
-	private List<Integer> buildClose() {
+	private MethodCode buildClose() {
 		// Slots: 0=handle, 1=idx (int), 2=stream
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The process standard error outlives a close of it (CL lets a program try), so
 		// a later warn still reaches stderr.
-		emitStderrBranch(code, Opcode.ALOAD_0, () -> {
-			emitLdc(code, this.tStr.index());
-			code.add(Opcode.ARETURN);
+		emitStderrBranch(code, 0, () -> {
+			code.ldc(this.tStr);
+			code.areturn();
 		});
 		// idx = (int) ((Long) handle).longValue();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ISTORE_1);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.istore(1);
 		// stream = _streams[idx];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_2);
+		code.getstatic(this.streamsField);
+		code.iload(1);
+		code.aaload();
+		code.astore(2);
 		// if (stream == null) return "t"; -- closing an ALREADY-CLOSED stream is not an
 		// error in CL, it answers true and does nothing (the interpreter's close says the
 		// same). Without the guard the chain below reached the Writer arm with null and
 		// the close threw a NullPointerException.
-		code.add(Opcode.ALOAD_2);
-		int ifOpenPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifOpenPos, code.size());
+		code.aload(2);
+		MethodCode.Label ifOpen = code.newLabel();
+		code.ifnonnull(ifOpen);
+		code.ldc(this.tStr);
+		code.areturn();
+		code.labelBinding(ifOpen);
 		// Socket entries first (only when the program uses tcp built-ins): a Socket /
 		// ServerSocket is neither a reader/writer nor a raw byte stream, so the chain
 		// below would fail on it.
-		List<Integer> socketGotoDones = new ArrayList<>();
+		MethodCode.Label closed = code.newLabel();
 		if (this.sockets != null) {
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.socketClose().index());
-			socketGotoDones.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.serverSocketClass().index());
-			int ifNotListenerPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.serverSocketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.serverSocketClose().index());
-			socketGotoDones.add(code.size());
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotListenerPos, code.size());
+			code.aload(2);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(2);
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.sockets.socketClose());
+			code.goto_(closed);
+			code.labelBinding(ifNotSocket);
+			code.aload(2);
+			code.instanceOf(this.sockets.serverSocketClass());
+			MethodCode.Label ifNotListener = code.newLabel();
+			code.ifeq(ifNotListener);
+			code.aload(2);
+			code.checkcast(this.sockets.serverSocketClass());
+			code.invokevirtual(this.sockets.serverSocketClose());
+			code.goto_(closed);
+			code.labelBinding(ifNotListener);
 		}
 		// if (stream instanceof BufferedReader) ((BufferedReader) stream).close();
 		// else if (stream instanceof InputStream) ((InputStream) stream).close();
 		// else if (stream instanceof OutputStream) ((OutputStream) stream).close();
 		// else ((Writer) stream).close();
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.bufferedReaderClass.index());
-		int ifNotReaderPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderClose.index());
-		int gotoDonePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotReaderPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.inputStreamClass.index());
-		int ifNotInputPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.inputStreamClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamClose.index());
-		int gotoDonePos1 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotInputPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.outputStreamClass.index());
-		int ifNotOutputPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.outputStreamClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamClose.index());
-		int gotoDonePos2 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotOutputPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.writerClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.writerClose.index());
-		patchBranch(code, gotoDonePos, code.size());
-		patchBranch(code, gotoDonePos1, code.size());
-		patchBranch(code, gotoDonePos2, code.size());
-		for (int socketGotoDone : socketGotoDones) {
-			patchBranch(code, socketGotoDone, code.size());
-		}
+		code.aload(2);
+		code.instanceOf(this.bufferedReaderClass);
+		MethodCode.Label ifNotReader = code.newLabel();
+		code.ifeq(ifNotReader);
+		code.aload(2);
+		code.checkcast(this.bufferedReaderClass);
+		code.invokevirtual(this.bufferedReaderClose);
+		code.goto_(closed);
+		code.labelBinding(ifNotReader);
+		code.aload(2);
+		code.instanceOf(this.inputStreamClass);
+		MethodCode.Label ifNotInput = code.newLabel();
+		code.ifeq(ifNotInput);
+		code.aload(2);
+		code.checkcast(this.inputStreamClass);
+		code.invokevirtual(this.inputStreamClose);
+		code.goto_(closed);
+		code.labelBinding(ifNotInput);
+		code.aload(2);
+		code.instanceOf(this.outputStreamClass);
+		MethodCode.Label ifNotOutput = code.newLabel();
+		code.ifeq(ifNotOutput);
+		code.aload(2);
+		code.checkcast(this.outputStreamClass);
+		code.invokevirtual(this.outputStreamClose);
+		code.goto_(closed);
+		code.labelBinding(ifNotOutput);
+		code.aload(2);
+		code.checkcast(this.writerClass);
+		code.invokevirtual(this.writerClose);
+		code.labelBinding(closed);
 		// _streams[idx] = null; return "t";
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.AASTORE);
+		code.getstatic(this.streamsField);
+		code.iload(1);
+		code.aconst_null();
+		code.aastore();
 		// The path side table is released with the entry, so file-length on a CLOSED
 		// handle answers nil rather than the length the file happens to have now -- the
 		// interpreter (which removes the map entry in close) says the same. file-position
 		// runs the same rule, so its position table is cleared too.
 		if (this.fileMeta.streamPaths()) {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, Objects.requireNonNull(this.streamPathsField).index());
-			int ifNoPathsPos = code.size();
-			code.add(Opcode.IFNULL);
-			emitU2(code, 0);
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamPathsField.index());
-			code.add(Opcode.ARRAYLENGTH);
-			int ifOutOfRangePos = code.size();
-			code.add(Opcode.IF_ICMPGE);
-			emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamPathsField.index());
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.AASTORE);
-			patchBranch(code, ifNoPathsPos, code.size());
-			patchBranch(code, ifOutOfRangePos, code.size());
+			code.getstatic(Objects.requireNonNull(this.streamPathsField));
+			MethodCode.Label ifNoPaths = code.newLabel();
+			code.ifnull(ifNoPaths);
+			code.iload(1);
+			code.getstatic(this.streamPathsField);
+			code.arraylength();
+			MethodCode.Label ifOutOfRange = code.newLabel();
+			code.if_icmpge(ifOutOfRange);
+			code.getstatic(this.streamPathsField);
+			code.iload(1);
+			code.aconst_null();
+			code.aastore();
+			code.labelBinding(ifNoPaths);
+			code.labelBinding(ifOutOfRange);
 		}
 		if (this.fileMeta.position()) {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, Objects.requireNonNull(this.streamPositionsField).index());
-			int ifNoPositionsPos = code.size();
-			code.add(Opcode.IFNULL);
-			emitU2(code, 0);
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamPositionsField.index());
-			code.add(Opcode.ARRAYLENGTH);
-			int ifOutOfRangePosPos = code.size();
-			code.add(Opcode.IF_ICMPGE);
-			emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamPositionsField.index());
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.AASTORE);
-			patchBranch(code, ifNoPositionsPos, code.size());
-			patchBranch(code, ifOutOfRangePosPos, code.size());
+			code.getstatic(Objects.requireNonNull(this.streamPositionsField));
+			MethodCode.Label ifNoPositions = code.newLabel();
+			code.ifnull(ifNoPositions);
+			code.iload(1);
+			code.getstatic(this.streamPositionsField);
+			code.arraylength();
+			MethodCode.Label ifOutOfRangePos = code.newLabel();
+			code.if_icmpge(ifOutOfRangePos);
+			code.getstatic(this.streamPositionsField);
+			code.iload(1);
+			code.aconst_null();
+			code.aastore();
+			code.labelBinding(ifNoPositions);
+			code.labelBinding(ifOutOfRangePos);
 		}
-		emitLdc(code, this.tStr.index());
-		code.add(Opcode.ARETURN);
+		code.ldc(this.tStr);
+		code.areturn();
 		return code;
 	}
 
@@ -3052,95 +2629,76 @@ final class JvmIoRuntimeBuilder {
 	 * (without the surrounding quotes) plus a newline to the stream, or to standard
 	 * output when the handle is {@code null}.
 	 */
-	private List<Integer> buildWriteLine() {
+	private MethodCode buildWriteLine() {
 		// Slots: 0=str, 1=handle, 2=content (String), 3=writer
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// content = ((String) str).substring(1, length - 1);
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE_2);
+		code.checkcast(this.stringClass);
+		code.astore(2);
+		code.aload(2);
+		code.iconst_1();
+		code.aload(2);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(2);
 		// The *error-output* designator: System.err.println(content); return str;
-		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.printlnStr.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ARETURN);
+		emitStderrBranch(code, 1, () -> {
+			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
+			code.aload(2);
+			code.invokevirtual(this.printlnStr);
+			code.aload(0);
+			code.areturn();
 		});
 		// if (!(handle instanceof Long)) { System.out.println(content); _col = 0;
 		// return str; } -- null and the designator t both mean standard output.
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifStreamPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemOut.index());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.printlnStr.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.colField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifStreamPos, code.size());
+		code.aload(1);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifStream = code.newLabel();
+		code.ifne(ifStream);
+		code.getstatic(this.systemOut);
+		code.aload(2);
+		code.invokevirtual(this.printlnStr);
+		code.iconst_0();
+		code.putstatic(this.colField);
+		code.aload(0);
+		code.areturn();
+		code.labelBinding(ifStream);
 		// writer = (Writer) _streams[(int) ((Long) handle).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
+		code.getstatic(this.streamsField);
+		code.aload(1);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
 		if (this.sockets != null) {
 			// if (entry instanceof Socket) return _sockWriteLine(str, entry);
-			code.add(Opcode.ASTORE_3);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.sockets.sockWriteLine().index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotSocketPos, code.size());
-			code.add(Opcode.ALOAD_3);
+			code.astore(3);
+			code.aload(3);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(0);
+			code.aload(3);
+			code.invokestatic(this.sockets.sockWriteLine());
+			code.areturn();
+			code.labelBinding(ifNotSocket);
+			code.aload(3);
 		}
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.writerClass.index());
-		code.add(Opcode.ASTORE_3);
+		code.checkcast(this.writerClass);
+		code.astore(3);
 		// writer.write(content); writer.write("\n"); return str;
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.writerWrite.index());
-		code.add(Opcode.ALOAD_3);
-		emitLdc(code, this.newlineStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.writerWrite.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(3);
+		code.aload(2);
+		code.invokevirtual(this.writerWrite);
+		code.aload(3);
+		code.ldc(this.newlineStr);
+		code.invokevirtual(this.writerWrite);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -3150,106 +2708,84 @@ final class JvmIoRuntimeBuilder {
 	 * t, what {@code *standard-input*} holds by default) and wraps it with the internal
 	 * {@code '"'} prefix/suffix string format; returns {@code null} (nil) on EOF.
 	 */
-	private List<Integer> buildReadLineStream() {
+	private MethodCode buildReadLineStream() {
 		// Slots: 0=handle, 1=line (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (!(handle instanceof Long)) return _readLine();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifStreamPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.readLineHelper.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifStreamPos, code.size());
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifStream = code.newLabel();
+		code.ifne(ifStream);
+		code.invokestatic(this.readLineHelper);
+		code.areturn();
+		code.labelBinding(ifStream);
 		// line = ((BufferedReader) _streams[(int) handle]).readLine();
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
 		if (this.sockets != null) {
 			// if (entry instanceof Socket) return _sockReadLine(entry);
-			code.add(Opcode.ASTORE_1);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.sockets.sockReadLine().index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotSocketPos, code.size());
-			code.add(Opcode.ALOAD_1);
+			code.astore(1);
+			code.aload(1);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(1);
+			code.invokestatic(this.sockets.sockReadLine());
+			code.areturn();
+			code.labelBinding(ifNotSocket);
+			code.aload(1);
 		}
-		int afterIoLine = -1;
+		MethodCode.@Nullable Label afterIoLine = null;
 		if (this.ioStreams != null) {
 			// A bidirectional stream reads its line off the shared cursor. End of file
 			// is ready()'s answer, not a null line: the travelling class cannot spell
 			// @Nullable (.kb/jvm-export.md).
-			code.add(Opcode.ASTORE_2);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.ioStreams.type().index());
-			int notIo = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.ioStreams.type().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.ioStreams.ready().index());
-			int haveLine = code.size();
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ARETURN);
-			patchBranch(code, haveLine, code.size());
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.ioStreams.type().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.ioStreams.readLine().index());
-			code.add(Opcode.ASTORE_1);
-			afterIoLine = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, notIo, code.size());
-			code.add(Opcode.ALOAD_2);
+			code.astore(2);
+			code.aload(2);
+			code.instanceOf(this.ioStreams.type());
+			MethodCode.Label notIo = code.newLabel();
+			code.ifeq(notIo);
+			code.aload(2);
+			code.checkcast(this.ioStreams.type());
+			code.invokevirtual(this.ioStreams.ready());
+			MethodCode.Label haveLine = code.newLabel();
+			code.ifne(haveLine);
+			code.aconst_null();
+			code.areturn();
+			code.labelBinding(haveLine);
+			code.aload(2);
+			code.checkcast(this.ioStreams.type());
+			code.invokevirtual(this.ioStreams.readLine());
+			code.astore(1);
+			afterIoLine = code.newLabel();
+			code.goto_(afterIoLine);
+			code.labelBinding(notIo);
+			code.aload(2);
 		}
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReadLine.index());
-		code.add(Opcode.ASTORE_1);
-		if (afterIoLine >= 0) {
-			patchBranch(code, afterIoLine, code.size());
+		code.checkcast(this.bufferedReaderClass);
+		code.invokevirtual(this.bufferedReaderReadLine);
+		code.astore(1);
+		if (afterIoLine != null) {
+			code.labelBinding(afterIoLine);
 		}
 		// if (line == null) return null;
-		code.add(Opcode.ALOAD_1);
-		int ifLinePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifLinePos, code.size());
+		code.aload(1);
+		MethodCode.Label ifLine = code.newLabel();
+		code.ifnonnull(ifLine);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifLine);
 		// return "\"".concat(line).concat("\"");
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		code.add(Opcode.ARETURN);
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		code.areturn();
 		return code;
 	}
 
@@ -3275,128 +2811,99 @@ final class JvmIoRuntimeBuilder {
 	 * ARE handles 0, 1 and 2. Reading handle 0 as standard input therefore hijacked a
 	 * real file/socket -- which is what it did to the cl-postgres handshake.
 	 */
-	private List<Integer> buildReadByte() {
+	private MethodCode buildReadByte() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=in (InputStream), 4=b (int)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (!(handle instanceof Long)) in = System.in;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifeq(ifHandle);
 		// in = (InputStream) _streams[(int) ((Long) handle).longValue()];
 		// (a Socket entry contributes its input stream instead)
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		int afterIoByte = -1;
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		MethodCode.@Nullable Label afterIoByte = null;
 		if (this.ioStreams != null) {
 			// A bidirectional stream is neither an InputStream nor an OutputStream: the
 			// octet comes off the one cursor its character reads and writes share.
-			code.add(Opcode.ASTORE_3);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.ioStreams.type().index());
-			int notIoByte = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.ioStreams.type().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.ioStreams.readByte().index());
-			code.add(Opcode.ISTORE);
-			code.add(4);
-			afterIoByte = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, notIoByte, code.size());
-			code.add(Opcode.ALOAD_3);
+			code.astore(3);
+			code.aload(3);
+			code.instanceOf(this.ioStreams.type());
+			MethodCode.Label notIoByte = code.newLabel();
+			code.ifeq(notIoByte);
+			code.aload(3);
+			code.checkcast(this.ioStreams.type());
+			code.invokevirtual(this.ioStreams.readByte());
+			code.istore(4);
+			afterIoByte = code.newLabel();
+			code.goto_(afterIoByte);
+			code.labelBinding(notIoByte);
+			code.aload(3);
 		}
 		if (this.sockets != null) {
-			code.add(Opcode.ASTORE_3);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.socketGetInputStream().index());
-			code.add(Opcode.ASTORE_3);
-			int gotoReadPos = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.inputStreamClass.index());
-			code.add(Opcode.ASTORE_3);
-			patchBranch(code, gotoReadPos, code.size());
+			code.astore(3);
+			code.aload(3);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(3);
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.sockets.socketGetInputStream());
+			code.astore(3);
+			MethodCode.Label gotoRead = code.newLabel();
+			code.goto_(gotoRead);
+			code.labelBinding(ifNotSocket);
+			code.aload(3);
+			code.checkcast(this.inputStreamClass);
+			code.astore(3);
+			code.labelBinding(gotoRead);
 		}
 		else {
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.inputStreamClass.index());
-			code.add(Opcode.ASTORE_3);
+			code.checkcast(this.inputStreamClass);
+			code.astore(3);
 		}
-		int gotoStdReadPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifHandlePos, code.size());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemIn.index());
-		code.add(Opcode.ASTORE_3);
-		patchBranch(code, gotoStdReadPos, code.size());
+		MethodCode.Label gotoStdRead = code.newLabel();
+		code.goto_(gotoStdRead);
+		code.labelBinding(ifHandle);
+		code.getstatic(this.systemIn);
+		code.astore(3);
+		code.labelBinding(gotoStdRead);
 		// b = in.read();
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.inputStreamRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(4);
-		if (afterIoByte >= 0) {
-			patchBranch(code, afterIoByte, code.size());
+		code.aload(3);
+		code.invokevirtual(this.inputStreamRead);
+		code.istore(4);
+		if (afterIoByte != null) {
+			code.labelBinding(afterIoByte);
 		}
 		// if (b >= 0) { advance the file stream's position; return Long.valueOf((long)
 		// b); }
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		int ifEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		emitBumpPosition(code, 0, () -> code.add(Opcode.ICONST_1));
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		code.add(Opcode.I2L);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifEofPos, code.size());
+		code.iload(4);
+		MethodCode.Label ifEof = code.newLabel();
+		code.iflt(ifEof);
+		emitBumpPosition(code, 0, () -> code.iconst_1());
+		code.iload(4);
+		code.i2l();
+		code.invokestatic(this.longValueOf);
+		code.areturn();
+		code.labelBinding(ifEof);
 		// if (eofErrorP == null) return eofValue;
-		code.add(Opcode.ALOAD_1);
-		int ifThrowPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifThrowPos, code.size());
+		code.aload(1);
+		MethodCode.Label ifThrow = code.newLabel();
+		code.ifnonnull(ifThrow);
+		code.aload(2);
+		code.areturn();
+		code.labelBinding(ifThrow);
 		// throw new RuntimeException("read-byte: end of file");
-		code.add(Opcode.NEW);
-		emitU2(code, this.runtimeExceptionClass.index());
-		code.add(Opcode.DUP);
-		emitLdc(code, this.eofStr.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.runtimeExceptionInit.index());
-		code.add(Opcode.ATHROW);
+		code.new_(this.runtimeExceptionClass);
+		code.dup();
+		code.ldc(this.eofStr);
+		code.invokespecial(this.runtimeExceptionInit);
+		code.athrow();
 		return code;
 	}
 
@@ -3415,136 +2922,100 @@ final class JvmIoRuntimeBuilder {
 	 * aligned. Matches {@code Environment.READ_CHAR} on the interpreter and the
 	 * code-point walk on the WASM binary stream.
 	 */
-	private List<Integer> buildReadChar() {
+	private MethodCode buildReadChar() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
 		// 5=low (int), 6=entry/char (socket programs only)
-		List<Integer> code = new ArrayList<>();
-		int ifSocketEofPos = -1;
+		MethodCode code = new MethodCode();
+		MethodCode.@Nullable Label ifSocketEof = null;
 		if (this.sockets != null) {
 			// if (handle instanceof Long && _streams[idx] instanceof Socket) {
 			// c = _sockReadChar(entry); if (c != null) return c; goto EOF; }
 			// A socket entry is a raw Socket, never the BufferedReader the resolver
 			// below casts to -- and it must stay one: a Reader would buffer ahead and
 			// swallow bytes a following read-byte/read-line owes the caller.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.longClass.index());
-			int ifNotHandlePos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamsField.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.longClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.longValue.index());
-			code.add(Opcode.L2I);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.ASTORE);
-			code.add(6);
-			code.add(Opcode.ALOAD);
-			code.add(6);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD);
-			code.add(6);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.sockets.sockReadChar().index());
-			code.add(Opcode.ASTORE);
-			code.add(6);
-			code.add(Opcode.ALOAD);
-			code.add(6);
-			ifSocketEofPos = code.size();
-			code.add(Opcode.IFNULL);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD);
-			code.add(6);
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotHandlePos, code.size());
-			patchBranch(code, ifNotSocketPos, code.size());
+			code.aload(0);
+			code.instanceOf(this.longClass);
+			MethodCode.Label ifNotHandle = code.newLabel();
+			code.ifeq(ifNotHandle);
+			code.getstatic(this.streamsField);
+			code.aload(0);
+			code.checkcast(this.longClass);
+			code.invokevirtual(this.longValue);
+			code.l2i();
+			code.aaload();
+			code.astore(6);
+			code.aload(6);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(6);
+			code.invokestatic(this.sockets.sockReadChar());
+			code.astore(6);
+			code.aload(6);
+			ifSocketEof = code.newLabel();
+			code.ifnull(ifSocketEof);
+			code.aload(6);
+			code.areturn();
+			code.labelBinding(ifNotHandle);
+			code.labelBinding(ifNotSocket);
 		}
 		emitIoCharArm(code, false, 4);
 		emitResolveReader(code);
 		// READ: c = r.read();
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(4);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(4);
 		// if (c < 0) goto EOF;
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		int ifEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
+		code.iload(4);
+		MethodCode.Label ifEof = code.newLabel();
+		code.iflt(ifEof);
 		// if (!Character.isHighSurrogate((char) c)) goto BOX;
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterIsHighSurrogate.index());
-		int ifNotHighPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.iload(4);
+		code.i2c();
+		code.invokestatic(this.characterIsHighSurrogate);
+		MethodCode.Label ifNotHigh = code.newLabel();
+		code.ifeq(ifNotHigh);
 		// r.mark(1);
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderMark.index());
+		code.aload(3);
+		code.iconst_1();
+		code.invokevirtual(this.bufferedReaderMark);
 		// low = r.read();
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(5);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(5);
 		// if (low < 0) goto BOX; -- EOF on the low half, keep the raw surrogate.
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		int ifLowEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
+		code.iload(5);
+		MethodCode.Label ifLowEof = code.newLabel();
+		code.iflt(ifLowEof);
 		// if (!Character.isLowSurrogate((char) low)) goto RESET;
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterIsLowSurrogate.index());
-		int ifNotLowPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.iload(5);
+		code.i2c();
+		code.invokestatic(this.characterIsLowSurrogate);
+		MethodCode.Label ifNotLow = code.newLabel();
+		code.ifeq(ifNotLow);
 		// c = Character.toCodePoint((char) c, (char) low);
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		code.add(Opcode.I2C);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterToCodePoint.index());
-		code.add(Opcode.ISTORE);
-		code.add(4);
-		int gotoBoxAfterCombinePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
+		code.iload(4);
+		code.i2c();
+		code.iload(5);
+		code.i2c();
+		code.invokestatic(this.characterToCodePoint);
+		code.istore(4);
+		MethodCode.Label gotoBoxAfterCombine = code.newLabel();
+		code.goto_(gotoBoxAfterCombine);
 		// RESET: r.reset(); goto BOX (the raw high surrogate stays in c).
-		patchBranch(code, ifNotLowPos, code.size());
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReset.index());
+		code.labelBinding(ifNotLow);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderReset);
 		// BOX: return int[1]{c} -- the runtime CHARACTER representation.
-		patchBranch(code, ifNotHighPos, code.size());
-		patchBranch(code, ifLowEofPos, code.size());
-		patchBranch(code, gotoBoxAfterCombinePos, code.size());
+		code.labelBinding(ifNotHigh);
+		code.labelBinding(ifLowEof);
+		code.labelBinding(gotoBoxAfterCombine);
 		emitBoxCodePoint(code, 4);
 		// EOF: if (eofErrorP == null) return eofValue; -- the socket arm's nil (peer
 		// closed) lands here too, so a socket answers the same eof contract as a file.
-		patchBranch(code, ifEofPos, code.size());
-		if (ifSocketEofPos >= 0) {
-			patchBranch(code, ifSocketEofPos, code.size());
+		code.labelBinding(ifEof);
+		if (ifSocketEof != null) {
+			code.labelBinding(ifSocketEof);
 		}
 		emitCharEof(code);
 		return code;
@@ -3558,98 +3029,75 @@ final class JvmIoRuntimeBuilder {
 	 * {@code Environment}'s {@code %peek-char} on the interpreter and
 	 * {@code _peek_char}'s pushback cell on WASM.
 	 */
-	private List<Integer> buildPeekChar() {
+	private MethodCode buildPeekChar() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
 		// 5=low (int)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		emitIoCharArm(code, true, 4);
 		emitResolveReader(code);
 		// r.mark(2);
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderMark.index());
+		code.aload(3);
+		code.iconst_2();
+		code.invokevirtual(this.bufferedReaderMark);
 		// c = r.read();
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(4);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(4);
 		// if (c < 0) goto EOF;
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		int ifEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
+		code.iload(4);
+		MethodCode.Label ifEof = code.newLabel();
+		code.iflt(ifEof);
 		// if (!Character.isHighSurrogate((char) c)) goto BOX;
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterIsHighSurrogate.index());
-		int ifNotHighPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.iload(4);
+		code.i2c();
+		code.invokestatic(this.characterIsHighSurrogate);
+		MethodCode.Label ifNotHigh = code.newLabel();
+		code.ifeq(ifNotHigh);
 		// low = r.read();
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderRead.index());
-		code.add(Opcode.ISTORE);
-		code.add(5);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderRead);
+		code.istore(5);
 		// if (low < 0) goto BOX;
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		int ifLowEofPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
+		code.iload(5);
+		MethodCode.Label ifLowEof = code.newLabel();
+		code.iflt(ifLowEof);
 		// if (!Character.isLowSurrogate((char) low)) goto BOX;
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterIsLowSurrogate.index());
-		int ifNotLowPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.iload(5);
+		code.i2c();
+		code.invokestatic(this.characterIsLowSurrogate);
+		MethodCode.Label ifNotLow = code.newLabel();
+		code.ifeq(ifNotLow);
 		// c = Character.toCodePoint((char) c, (char) low);
-		code.add(Opcode.ILOAD);
-		code.add(4);
-		code.add(Opcode.I2C);
-		code.add(Opcode.ILOAD);
-		code.add(5);
-		code.add(Opcode.I2C);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.characterToCodePoint.index());
-		code.add(Opcode.ISTORE);
-		code.add(4);
+		code.iload(4);
+		code.i2c();
+		code.iload(5);
+		code.i2c();
+		code.invokestatic(this.characterToCodePoint);
+		code.istore(4);
 		// BOX: r.reset(); return int[1]{c}.
-		patchBranch(code, ifNotHighPos, code.size());
-		patchBranch(code, ifLowEofPos, code.size());
-		patchBranch(code, ifNotLowPos, code.size());
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReset.index());
+		code.labelBinding(ifNotHigh);
+		code.labelBinding(ifLowEof);
+		code.labelBinding(ifNotLow);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderReset);
 		emitBoxCodePoint(code, 4);
 		// EOF: rewind (the mark is still live) and take the eof branch.
-		patchBranch(code, ifEofPos, code.size());
-		code.add(Opcode.ALOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.bufferedReaderReset.index());
+		code.labelBinding(ifEof);
+		code.aload(3);
+		code.invokevirtual(this.bufferedReaderReset);
 		emitCharEof(code);
 		return code;
 	}
 
 	/** {@code return int[1]{slot}} -- the runtime CHARACTER representation. */
-	private static void emitBoxCodePoint(List<Integer> code, int slot) {
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.NEWARRAY);
-		code.add(10); // T_INT
-		code.add(Opcode.DUP);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ILOAD);
-		code.add(slot);
-		code.add(Opcode.IASTORE);
-		code.add(Opcode.ARETURN);
+	private static void emitBoxCodePoint(MethodCode code, int slot) {
+		code.iconst_1();
+		code.newarray(TypeKind.INT);
+		code.dup();
+		code.iconst_0();
+		code.iload(slot);
+		code.iastore();
+		code.areturn();
 	}
 
 	/**
@@ -3660,21 +3108,18 @@ final class JvmIoRuntimeBuilder {
 	 * {@code LispMacroExpander.expandReadEofSignal}, which reaches the helper with a nil
 	 * eof-error-p and decides in Lisp.
 	 */
-	private void emitCharEof(List<Integer> code) {
-		code.add(Opcode.ALOAD_1);
-		int ifThrowPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifThrowPos, code.size());
-		code.add(Opcode.NEW);
-		emitU2(code, this.runtimeExceptionClass.index());
-		code.add(Opcode.DUP);
-		emitLdc(code, this.charEofStr.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.runtimeExceptionInit.index());
-		code.add(Opcode.ATHROW);
+	private void emitCharEof(MethodCode code) {
+		code.aload(1);
+		MethodCode.Label ifThrow = code.newLabel();
+		code.ifnonnull(ifThrow);
+		code.aload(2);
+		code.areturn();
+		code.labelBinding(ifThrow);
+		code.new_(this.runtimeExceptionClass);
+		code.dup();
+		code.ldc(this.charEofStr);
+		code.invokespecial(this.runtimeExceptionInit);
+		code.athrow();
 	}
 
 	/**
@@ -3687,48 +3132,36 @@ final class JvmIoRuntimeBuilder {
 	 * @param peek whether the character is left in place
 	 * @param cpSlot the local the code point goes in
 	 */
-	private void emitIoCharArm(List<Integer> code, boolean peek, int cpSlot) {
+	private void emitIoCharArm(MethodCode code, boolean peek, int cpSlot) {
 		if (this.ioStreams == null) {
 			return;
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int notHandle = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.DUP);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.ioStreams.type().index());
-		int notIo = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.ioStreams.type().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, (peek ? this.ioStreams.peekCodePoint() : this.ioStreams.readCodePoint()).index());
-		code.add(Opcode.ISTORE);
-		code.add(cpSlot);
-		code.add(Opcode.ILOAD);
-		code.add(cpSlot);
-		int ioEof = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label notHandle = code.newLabel();
+		code.ifeq(notHandle);
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.dup();
+		code.instanceOf(this.ioStreams.type());
+		MethodCode.Label notIo = code.newLabel();
+		code.ifeq(notIo);
+		code.checkcast(this.ioStreams.type());
+		code.invokevirtual((peek ? this.ioStreams.peekCodePoint() : this.ioStreams.readCodePoint()));
+		code.istore(cpSlot);
+		code.iload(cpSlot);
+		MethodCode.Label ioEof = code.newLabel();
+		code.iflt(ioEof);
 		emitBoxCodePoint(code, cpSlot);
-		patchBranch(code, ioEof, code.size());
+		code.labelBinding(ioEof);
 		emitCharEof(code);
-		patchBranch(code, notIo, code.size());
-		code.add(Opcode.POP);
-		patchBranch(code, notHandle, code.size());
+		code.labelBinding(notIo);
+		code.pop();
+		code.labelBinding(notHandle);
 	}
 
 	/**
@@ -3737,58 +3170,42 @@ final class JvmIoRuntimeBuilder {
 	 * (lazily initializing the {@code _stdinReader} field the {@code _readLine} helper
 	 * shares), otherwise the table entry.
 	 */
-	private void emitResolveReader(List<Integer> code) {
+	private void emitResolveReader(MethodCode code) {
 		// if (handle instanceof Long) goto STREAM;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifStreamPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifStream = code.newLabel();
+		code.ifne(ifStream);
 		// if (_stdinReader == null) _stdinReader = new BufferedReader(new
 		// InputStreamReader(System.in));
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		int ifHavePos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.NEW);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.inputStreamReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemIn.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.inputStreamReaderInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.bufferedReaderInit.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		patchBranch(code, ifHavePos, code.size());
+		code.getstatic(this.stdinReaderField);
+		MethodCode.Label ifHave = code.newLabel();
+		code.ifnonnull(ifHave);
+		code.new_(this.bufferedReaderClass);
+		code.dup();
+		code.new_(this.inputStreamReaderClass);
+		code.dup();
+		code.getstatic(this.systemIn);
+		code.invokespecial(this.inputStreamReaderInit);
+		code.invokespecial(this.bufferedReaderInit);
+		code.putstatic(this.stdinReaderField);
+		code.labelBinding(ifHave);
 		// r = _stdinReader; goto READ;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.stdinReaderField.index());
-		code.add(Opcode.ASTORE_3);
-		int gotoReadPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifStreamPos, code.size());
+		code.getstatic(this.stdinReaderField);
+		code.astore(3);
+		MethodCode.Label gotoRead = code.newLabel();
+		code.goto_(gotoRead);
+		code.labelBinding(ifStream);
 		// STREAM: r = (BufferedReader) _streams[(int) ((Long) handle).longValue()];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.ASTORE_3);
-		patchBranch(code, gotoReadPos, code.size());
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.checkcast(this.bufferedReaderClass);
+		code.astore(3);
+		code.labelBinding(gotoRead);
 	}
 
 	/**
@@ -3805,133 +3222,107 @@ final class JvmIoRuntimeBuilder {
 	 * {@code emitStderrBranch} gate -- which is exactly the condition under which the
 	 * table reserves 0/1/2 in the first place.
 	 */
-	private List<Integer> buildWriteByte() {
+	private MethodCode buildWriteByte() {
 		// Slots: 0=byteObj, 1=handle, 2=out (OutputStream)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The *error-output* designator: System.err.write(b); return byteObj;
-		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
+		emitStderrBranch(code, 1, () -> {
+			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
 			emitByteValue(code);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.outputStreamWrite.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ARETURN);
+			code.invokevirtual(this.outputStreamWrite);
+			code.aload(0);
+			code.areturn();
 		});
 		// if (!(handle instanceof Long)) out = System.out;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifHandlePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(1);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifHandle = code.newLabel();
+		code.ifeq(ifHandle);
 		// out = (OutputStream) _streams[(int) ((Long) handle).longValue()];
 		// (a Socket entry contributes its output stream instead)
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
+		code.getstatic(this.streamsField);
+		code.aload(1);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
 		if (this.ioStreams != null) {
 			// A bidirectional stream writes the octet at its own cursor and answers.
-			code.add(Opcode.ASTORE_2);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.ioStreams.type().index());
-			int notIoByte = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.ioStreams.type().index());
+			code.astore(2);
+			code.aload(2);
+			code.instanceOf(this.ioStreams.type());
+			MethodCode.Label notIoByte = code.newLabel();
+			code.ifeq(notIoByte);
+			code.aload(2);
+			code.checkcast(this.ioStreams.type());
 			emitByteValue(code);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.ioStreams.writeByte().index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ARETURN);
-			patchBranch(code, notIoByte, code.size());
-			code.add(Opcode.ALOAD_2);
+			code.invokevirtual(this.ioStreams.writeByte());
+			code.aload(0);
+			code.areturn();
+			code.labelBinding(notIoByte);
+			code.aload(2);
 		}
 		if (this.sockets != null) {
-			code.add(Opcode.ASTORE_2);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.sockets.socketClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.sockets.socketGetOutputStream().index());
-			code.add(Opcode.ASTORE_2);
-			int gotoWritePos = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNotSocketPos, code.size());
-			code.add(Opcode.ALOAD_2);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.outputStreamClass.index());
-			code.add(Opcode.ASTORE_2);
-			patchBranch(code, gotoWritePos, code.size());
+			code.astore(2);
+			code.aload(2);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(2);
+			code.checkcast(this.sockets.socketClass());
+			code.invokevirtual(this.sockets.socketGetOutputStream());
+			code.astore(2);
+			MethodCode.Label gotoWrite = code.newLabel();
+			code.goto_(gotoWrite);
+			code.labelBinding(ifNotSocket);
+			code.aload(2);
+			code.checkcast(this.outputStreamClass);
+			code.astore(2);
+			code.labelBinding(gotoWrite);
 		}
 		else {
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.outputStreamClass.index());
-			code.add(Opcode.ASTORE_2);
+			code.checkcast(this.outputStreamClass);
+			code.astore(2);
 		}
-		int gotoWriteBytePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifHandlePos, code.size());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemOut.index());
+		MethodCode.Label gotoWriteByte = code.newLabel();
+		code.goto_(gotoWriteByte);
+		code.labelBinding(ifHandle);
+		code.getstatic(this.systemOut);
 		// The cast is what makes the two paths MERGE as an OutputStream: without it the
 		// frame joins PrintStream with OutputStream as Object and the verifier rejects
 		// the write below.
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.outputStreamClass.index());
-		code.add(Opcode.ASTORE_2);
+		code.checkcast(this.outputStreamClass);
+		code.astore(2);
 		// _col = b ^ '\n' -- zero exactly when the octet just written IS a newline,
 		// which is the only thing the field means (fresh-line tests it against zero).
 		// A raw byte moves the standard-output column like a character does, or a
 		// (write-byte 10 t) followed by fresh-line would emit a second newline here
 		// while the interpreter emits none. Branchless, so the frame stays flat.
 		emitByteValue(code);
-		code.add(Opcode.BIPUSH);
-		code.add(10);
-		code.add(Opcode.IXOR);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.colField.index());
-		patchBranch(code, gotoWriteBytePos, code.size());
+		code.loadConstant(10);
+		code.ixor();
+		code.putstatic(this.colField);
+		code.labelBinding(gotoWriteByte);
 		// out.write((int) ((Long) byteObj).longValue()); return byteObj;
-		code.add(Opcode.ALOAD_2);
+		code.aload(2);
 		emitByteValue(code);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamWrite.index());
+		code.invokevirtual(this.outputStreamWrite);
 		// advance a file stream's position after the byte lands on it (stdout and any
 		// other non-file designator no-op inside _bumpStreamPosition)
-		emitBumpPosition(code, 1, () -> code.add(Opcode.ICONST_1));
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		emitBumpPosition(code, 1, () -> code.iconst_1());
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
 	/**
 	 * Pushes {@code (int) ((Long) byteObj).longValue()} -- slot 0 of {@code _writeByte}.
 	 */
-	private void emitByteValue(List<Integer> code) {
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
+	private void emitByteValue(MethodCode code) {
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
 	}
 
 	/**
@@ -3940,16 +3331,14 @@ final class JvmIoRuntimeBuilder {
 	 * the {@code int} byte count on the stack; the helper itself no-ops for any stream
 	 * that is not a binary file stream, so the call sites need no guard.
 	 */
-	private void emitBumpPosition(List<Integer> code, int handleSlot, Runnable pushDelta) {
+	private void emitBumpPosition(MethodCode code, int handleSlot, Runnable pushDelta) {
 		if (!this.fileMeta.position()) {
 			return;
 		}
-		code.add(Opcode.ALOAD);
-		code.add(handleSlot);
+		code.aload(handleSlot);
 		pushDelta.run();
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, java.util.Objects.requireNonNull(this.bumpStreamPositionRef).index());
-		code.add(Opcode.POP);
+		code.invokestatic(java.util.Objects.requireNonNull(this.bumpStreamPositionRef));
+		code.pop();
 	}
 
 	/**
@@ -3973,7 +3362,7 @@ final class JvmIoRuntimeBuilder {
 	 * range outside the buffer declines rather than throwing, so the loop signals exactly
 	 * as it did.
 	 */
-	private List<Integer> buildReadSeqChars() {
+	private MethodCode buildReadSeqChars() {
 		CharSequenceIo io = java.util.Objects.requireNonNull(this.charSequenceIo);
 		MethodCode a = new MethodCode();
 		// Slots: 0=seq, 1=handle, 2=start, 3=end, 4=list, 5=header, 6=len, 7=s, 8=e,
@@ -3985,20 +3374,20 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label declined = a.newLabel();
 		// --- the buffer: the length-4 header is the character-vector marker ----------
 		a.aload(SEQ);
-		a.instanceOf(io.arrayListClass().entry());
+		a.instanceOf(io.arrayListClass());
 		a.ifeq(declined);
 		a.aload(SEQ);
-		a.checkcast(io.arrayListClass().entry());
+		a.checkcast(io.arrayListClass());
 		a.astore(LIST);
 		a.aload(LIST);
 		a.loadConstant(0);
-		a.invokevirtual(io.listGet().methodRefEntry());
-		a.instanceOf(io.objectArrayClass().entry());
+		a.invokevirtual(io.listGet());
+		a.instanceOf(io.objectArrayClass());
 		a.ifeq(declined);
 		a.aload(LIST);
 		a.loadConstant(0);
-		a.invokevirtual(io.listGet().methodRefEntry());
-		a.checkcast(io.objectArrayClass().entry());
+		a.invokevirtual(io.listGet());
+		a.checkcast(io.objectArrayClass());
 		a.astore(HEADER);
 		a.aload(HEADER);
 		a.arraylength();
@@ -4015,8 +3404,8 @@ final class JvmIoRuntimeBuilder {
 		a.aload(HEADER);
 		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(LEN);
 		a.goto_(haveLen);
@@ -4024,11 +3413,11 @@ final class JvmIoRuntimeBuilder {
 		a.aload(HEADER);
 		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(io.objectArrayClass().entry());
+		a.checkcast(io.objectArrayClass());
 		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(LEN);
 		a.labelBinding(haveLen);
@@ -4047,36 +3436,36 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label stdin = a.newLabel();
 		MethodCode.Label haveReader = a.newLabel();
 		a.aload(HANDLE);
-		a.instanceOf(this.longClass.entry());
+		a.instanceOf(this.longClass);
 		a.ifeq(stdin);
-		a.getstatic(this.streamsField.entry());
+		a.getstatic(this.streamsField);
 		a.aload(HANDLE);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.aaload();
 		a.astore(ENTRY);
 		a.aload(ENTRY);
-		a.instanceOf(this.bufferedReaderClass.entry());
+		a.instanceOf(this.bufferedReaderClass);
 		a.ifeq(declined);
 		a.aload(ENTRY);
-		a.checkcast(this.bufferedReaderClass.entry());
+		a.checkcast(this.bufferedReaderClass);
 		a.astore(R);
 		a.goto_(haveReader);
 		a.labelBinding(stdin);
 		MethodCode.Label haveStdin = a.newLabel();
-		a.getstatic(this.stdinReaderField.entry());
+		a.getstatic(this.stdinReaderField);
 		a.ifnonnull(haveStdin);
-		a.new_(this.bufferedReaderClass.entry());
+		a.new_(this.bufferedReaderClass);
 		a.dup();
-		a.new_(this.inputStreamReaderClass.entry());
+		a.new_(this.inputStreamReaderClass);
 		a.dup();
-		a.getstatic(this.systemIn.entry());
-		a.invokespecial(this.inputStreamReaderInit.entry());
-		a.invokespecial(this.bufferedReaderInit.entry());
-		a.putstatic(this.stdinReaderField.entry());
+		a.getstatic(this.systemIn);
+		a.invokespecial(this.inputStreamReaderInit);
+		a.invokespecial(this.bufferedReaderInit);
+		a.putstatic(this.stdinReaderField);
 		a.labelBinding(haveStdin);
-		a.getstatic(this.stdinReaderField.entry());
+		a.getstatic(this.stdinReaderField);
 		a.astore(R);
 		a.labelBinding(haveReader);
 		// --- the transfer: block by block, at walks the code points from s to e ------
@@ -4122,7 +3511,7 @@ final class JvmIoRuntimeBuilder {
 		a.aload(BLOCK);
 		a.loadConstant(0);
 		a.iload(N);
-		a.invokevirtual(io.readBlock().methodRefEntry());
+		a.invokevirtual(io.readBlock());
 		a.istore(N);
 		a.iload(N);
 		a.iflt(done);
@@ -4143,7 +3532,7 @@ final class JvmIoRuntimeBuilder {
 		MethodCode.Label store = a.newLabel();
 		a.iload(C);
 		a.i2c();
-		a.invokestatic(this.characterIsHighSurrogate.entry());
+		a.invokestatic(this.characterIsHighSurrogate);
 		a.ifeq(store);
 		MethodCode.Label fromBlock = a.newLabel();
 		a.iload(K);
@@ -4152,22 +3541,22 @@ final class JvmIoRuntimeBuilder {
 		// the block ended on the high half: read one more behind a mark
 		a.aload(R);
 		a.loadConstant(1);
-		a.invokevirtual(this.bufferedReaderMark.methodRefEntry());
+		a.invokevirtual(this.bufferedReaderMark);
 		a.aload(R);
-		a.invokevirtual(this.bufferedReaderRead.methodRefEntry());
+		a.invokevirtual(this.bufferedReaderRead);
 		a.istore(LOW);
 		a.iload(LOW);
 		a.iflt(store);
 		a.iload(LOW);
 		a.i2c();
-		a.invokestatic(this.characterIsLowSurrogate.entry());
+		a.invokestatic(this.characterIsLowSurrogate);
 		MethodCode.Label putBack = a.newLabel();
 		a.ifeq(putBack);
 		emitCombinePair(a, C, LOW);
 		a.goto_(store);
 		a.labelBinding(putBack);
 		a.aload(R);
-		a.invokevirtual(this.bufferedReaderReset.methodRefEntry());
+		a.invokevirtual(this.bufferedReaderReset);
 		a.goto_(store);
 		// the low half is the next unit of the block, when it is one
 		a.labelBinding(fromBlock);
@@ -4177,7 +3566,7 @@ final class JvmIoRuntimeBuilder {
 		a.istore(LOW);
 		a.iload(LOW);
 		a.i2c();
-		a.invokestatic(this.characterIsLowSurrogate.entry());
+		a.invokestatic(this.characterIsLowSurrogate);
 		a.ifeq(store);
 		a.iinc(K, 1);
 		emitCombinePair(a, C, LOW);
@@ -4193,19 +3582,19 @@ final class JvmIoRuntimeBuilder {
 		a.loadConstant(0);
 		a.iload(C);
 		a.iastore();
-		a.invokevirtual(io.listSet().methodRefEntry());
+		a.invokevirtual(io.listSet());
 		a.pop();
 		a.iinc(AT, 1);
 		a.goto_(unit);
 		a.labelBinding(done);
 		a.iload(AT);
 		a.i2l();
-		a.invokestatic(this.longValueOf.entry());
+		a.invokestatic(this.longValueOf);
 		a.areturn();
 		a.labelBinding(declined);
 		a.aconst_null();
 		a.areturn();
-		return JvmRuntimeBuilder.codeBytes(a);
+		return a;
 	}
 
 	// c = Character.toCodePoint((char) c, (char) low)
@@ -4214,7 +3603,7 @@ final class JvmIoRuntimeBuilder {
 		a.i2c();
 		a.iload(lowSlot);
 		a.i2c();
-		a.invokestatic(this.characterToCodePoint.entry());
+		a.invokestatic(this.characterToCodePoint);
 		a.istore(cSlot);
 	}
 
@@ -4229,8 +3618,8 @@ final class JvmIoRuntimeBuilder {
 		a.goto_(have);
 		a.labelBinding(fromArg);
 		a.aload(argSlot);
-		a.checkcast(this.longClass.entry());
-		a.invokevirtual(this.longValue.methodRefEntry());
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(targetSlot);
 		a.labelBinding(have);
@@ -4253,81 +3642,61 @@ final class JvmIoRuntimeBuilder {
 	 * size); a range outside the buffer throws. Read answers the boxed fill position,
 	 * write answers {@code seq}.
 	 */
-	private List<Integer> buildSeqPacked(boolean read) {
+	private MethodCode buildSeqPacked(boolean read) {
 		PackedSequenceIo io = java.util.Objects.requireNonNull(this.packedSequenceIo);
 		// Slots: 0=seq, 1=handle, 2=start, 3=end, 4=width, 5=size, 6=base (the data
 		// offset), 7=stream, 8=s, 9=e, 10=bytes, 11=n, 12=bb, 13=k
 		final int WIDTH = 4, SIZE = 5, BASE = 6, STREAM = 7, S = 8, E = 9, BYTES = 10, N = 11, BB = 12, K = 13;
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// --- the buffer shape ---------------------------------------------------
 		// if (seq instanceof float[]) { base = 1 + (int) seq[0]; width = 4; size = len -
 		// base }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.floatArrayClass().index());
-		int ifNotFloat = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.floatArrayClass().index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.FALOAD);
-		code.add(Opcode.F2I);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.ISTORE);
-		code.add(BASE);
-		code.add(Opcode.ICONST_4);
-		code.add(Opcode.ISTORE);
-		code.add(WIDTH);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.floatArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ILOAD);
-		code.add(BASE);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(SIZE);
-		int gotoShaped1 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotFloat, code.size());
+		code.aload(0);
+		code.instanceOf(io.floatArrayClass());
+		MethodCode.Label ifNotFloat = code.newLabel();
+		code.ifeq(ifNotFloat);
+		code.aload(0);
+		code.checkcast(io.floatArrayClass());
+		code.iconst_0();
+		code.faload();
+		code.f2i();
+		code.iconst_1();
+		code.iadd();
+		code.istore(BASE);
+		code.iconst_4();
+		code.istore(WIDTH);
+		code.aload(0);
+		code.checkcast(io.floatArrayClass());
+		code.arraylength();
+		code.iload(BASE);
+		code.isub();
+		code.istore(SIZE);
+		MethodCode.Label shaped = code.newLabel();
+		code.goto_(shaped);
+		code.labelBinding(ifNotFloat);
 		// else if (seq instanceof double[]) { base = 1 + (int) seq[0]; width = 8; ... }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.doubleArrayClass().index());
-		int ifNotDouble = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.doubleArrayClass().index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.DALOAD);
-		code.add(Opcode.D2I);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.ISTORE);
-		code.add(BASE);
-		code.add(Opcode.BIPUSH);
-		code.add(8);
-		code.add(Opcode.ISTORE);
-		code.add(WIDTH);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.doubleArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ILOAD);
-		code.add(BASE);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(SIZE);
-		int gotoShaped2 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotDouble, code.size());
+		code.aload(0);
+		code.instanceOf(io.doubleArrayClass());
+		MethodCode.Label ifNotDouble = code.newLabel();
+		code.ifeq(ifNotDouble);
+		code.aload(0);
+		code.checkcast(io.doubleArrayClass());
+		code.iconst_0();
+		code.daload();
+		code.d2i();
+		code.iconst_1();
+		code.iadd();
+		code.istore(BASE);
+		code.loadConstant(8);
+		code.istore(WIDTH);
+		code.aload(0);
+		code.checkcast(io.doubleArrayClass());
+		code.arraylength();
+		code.iload(BASE);
+		code.isub();
+		code.istore(SIZE);
+		code.goto_(shaped);
+		code.labelBinding(ifNotDouble);
 		// else if (seq instanceof short[]) { base = 1 + 2 * (int) seq[0]; width = 2; ...
 		// }
 		// The bfloat16 width's header takes TWO slots per dimension, because a dimension
@@ -4343,635 +3712,437 @@ final class JvmIoRuntimeBuilder {
 		// JvmLispCompiler describes, where the author forced the gate on for the same
 		// reason. A gate that guessed wrong would not signal: it would decline into the
 		// element loop and read a whole tensor one boxed element at a time.
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.shortArrayClass().index());
-		int ifNotShort = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.shortArrayClass().index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.SALOAD);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.IMUL);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.ISTORE);
-		code.add(BASE);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.ISTORE);
-		code.add(WIDTH);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.shortArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ILOAD);
-		code.add(BASE);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(SIZE);
-		int gotoShaped2b = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotShort, code.size());
+		code.aload(0);
+		code.instanceOf(io.shortArrayClass());
+		MethodCode.Label ifNotShort = code.newLabel();
+		code.ifeq(ifNotShort);
+		code.aload(0);
+		code.checkcast(io.shortArrayClass());
+		code.iconst_0();
+		code.saload();
+		code.iconst_2();
+		code.imul();
+		code.iconst_1();
+		code.iadd();
+		code.istore(BASE);
+		code.iconst_2();
+		code.istore(WIDTH);
+		code.aload(0);
+		code.checkcast(io.shortArrayClass());
+		code.arraylength();
+		code.iload(BASE);
+		code.isub();
+		code.istore(SIZE);
+		code.goto_(shaped);
+		code.labelBinding(ifNotShort);
 		// else if (seq instanceof long[]) { base = 1; width = (int) seq[0] / 8; size =
 		// len - 1 }
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.longArrayClass().index());
-		int ifNotLong = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISTORE);
-		code.add(BASE);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.longArrayClass().index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.LALOAD);
-		code.add(Opcode.L2I);
-		code.add(Opcode.ICONST_3);
-		code.add(Opcode.ISHR);
-		code.add(Opcode.ISTORE);
-		code.add(WIDTH);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.longArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(SIZE);
-		int gotoShaped3 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotLong, code.size());
+		code.aload(0);
+		code.instanceOf(io.longArrayClass());
+		MethodCode.Label ifNotLong = code.newLabel();
+		code.ifeq(ifNotLong);
+		code.iconst_1();
+		code.istore(BASE);
+		code.aload(0);
+		code.checkcast(io.longArrayClass());
+		code.iconst_0();
+		code.laload();
+		code.l2i();
+		code.iconst_3();
+		code.ishr();
+		code.istore(WIDTH);
+		code.aload(0);
+		code.checkcast(io.longArrayClass());
+		code.arraylength();
+		code.iconst_1();
+		code.isub();
+		code.istore(SIZE);
+		code.goto_(shaped);
+		code.labelBinding(ifNotLong);
 		// else if (seq instanceof byte[]) -- an (unsigned-byte 8) vector
 		// byte[]{8, e0, ...}: { base = 1; width = 1; size = len - 1 }, or, where one can
 		// exist, a quantized matrix (told apart by the tag in slot 0).
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.byteArrayClass().index());
-		int ifNotByte = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		int ifQuantized = -1;
+		code.aload(0);
+		code.instanceOf(io.byteArrayClass());
+		MethodCode.Label ifNotByte = code.newLabel();
+		code.ifeq(ifNotByte);
+		MethodCode.@Nullable Label ifQuantized = null;
 		if (this.quantizedBuffer) {
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.byteArrayClass().index());
-			code.add(Opcode.ICONST_0);
-			code.add(Opcode.BALOAD);
-			code.add(Opcode.BIPUSH);
-			code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-			ifQuantized = code.size();
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
+			code.aload(0);
+			code.checkcast(io.byteArrayClass());
+			code.iconst_0();
+			code.baload();
+			code.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			ifQuantized = code.newLabel();
+			code.if_icmpne(ifQuantized);
 		}
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISTORE);
-		code.add(BASE);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISTORE);
-		code.add(WIDTH);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.byteArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE);
-		code.add(SIZE);
-		int gotoShapedOctets = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		int gotoShaped4 = -1;
+		code.iconst_1();
+		code.istore(BASE);
+		code.iconst_1();
+		code.istore(WIDTH);
+		code.aload(0);
+		code.checkcast(io.byteArrayClass());
+		code.arraylength();
+		code.iconst_1();
+		code.isub();
+		code.istore(SIZE);
+		code.goto_(shaped);
 		if (this.quantizedBuffer) {
 			// the quantized matrix: { base = 8 + 4 * _qmInt(seq, 4); width = 1; size =
 			// len - base } -- its ggml blocks, one byte an element, so a GGUF tensor is
 			// one transfer (.kb/quantized-matrix.md).
-			patchBranch(code, ifQuantized, code.size());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.byteArrayClass().index());
-			code.add(Opcode.ICONST_4);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, io.qmInt().index());
-			code.add(Opcode.ICONST_4);
-			code.add(Opcode.IMUL);
-			code.add(Opcode.BIPUSH);
-			code.add(8);
-			code.add(Opcode.IADD);
-			code.add(Opcode.ISTORE);
-			code.add(BASE);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.ISTORE);
-			code.add(WIDTH);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.byteArrayClass().index());
-			code.add(Opcode.ARRAYLENGTH);
-			code.add(Opcode.ILOAD);
-			code.add(BASE);
-			code.add(Opcode.ISUB);
-			code.add(Opcode.ISTORE);
-			code.add(SIZE);
-			gotoShaped4 = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
+			code.labelBinding(Objects.requireNonNull(ifQuantized));
+			code.aload(0);
+			code.checkcast(io.byteArrayClass());
+			code.iconst_4();
+			code.invokestatic(io.qmInt());
+			code.iconst_4();
+			code.imul();
+			code.loadConstant(8);
+			code.iadd();
+			code.istore(BASE);
+			code.iconst_1();
+			code.istore(WIDTH);
+			code.aload(0);
+			code.checkcast(io.byteArrayClass());
+			code.arraylength();
+			code.iload(BASE);
+			code.isub();
+			code.istore(SIZE);
+			code.goto_(shaped);
 		}
-		patchBranch(code, ifNotByte, code.size());
+		code.labelBinding(ifNotByte);
 		// else return null (not a packed buffer -- declined)
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, gotoShaped1, code.size());
-		patchBranch(code, gotoShaped2, code.size());
-		patchBranch(code, gotoShaped2b, code.size());
-		patchBranch(code, gotoShaped3, code.size());
-		patchBranch(code, gotoShapedOctets, code.size());
-		if (gotoShaped4 >= 0) {
-			patchBranch(code, gotoShaped4, code.size());
-		}
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(shaped);
 		// --- the stream --------------------------------------------------------
 		// if (handle instanceof Long) { entry = _streams[idx]; if (!(entry instanceof
 		// InputStream/OutputStream)) return null; stream = entry } else stream =
 		// System.in/out
-		ClassConstant streamClass = read ? this.inputStreamClass : this.outputStreamClass;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifNotHandle = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE);
-		code.add(STREAM);
-		code.add(Opcode.ALOAD);
-		code.add(STREAM);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, streamClass.index());
-		int ifStreamOk = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifStreamOk, code.size());
-		code.add(Opcode.ALOAD);
-		code.add(STREAM);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, streamClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(STREAM);
-		int gotoStreamed = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotHandle, code.size());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, read ? this.systemIn.index() : this.systemOut.index());
+		ClassEntry streamClass = read ? this.inputStreamClass : this.outputStreamClass;
+		code.aload(1);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifNotHandle = code.newLabel();
+		code.ifeq(ifNotHandle);
+		code.getstatic(this.streamsField);
+		code.aload(1);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.astore(STREAM);
+		code.aload(STREAM);
+		code.instanceOf(streamClass);
+		MethodCode.Label ifStreamOk = code.newLabel();
+		code.ifne(ifStreamOk);
+		code.aconst_null();
+		code.areturn();
+		code.labelBinding(ifStreamOk);
+		code.aload(STREAM);
+		code.checkcast(streamClass);
+		code.astore(STREAM);
+		MethodCode.Label gotoStreamed = code.newLabel();
+		code.goto_(gotoStreamed);
+		code.labelBinding(ifNotHandle);
+		code.getstatic(read ? this.systemIn : this.systemOut);
 		// The cast is what makes the two paths MERGE as the stream class (a PrintStream
 		// joined with an OutputStream would meet at Object and fail the verifier).
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, streamClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(STREAM);
-		patchBranch(code, gotoStreamed, code.size());
+		code.checkcast(streamClass);
+		code.astore(STREAM);
+		code.labelBinding(gotoStreamed);
 		// --- the bounds ---------------------------------------------------------
 		// s = start == null ? 0 : (int) start ; e = end == null ? size : (int) end
-		emitBoundOrDefault(code, 2, () -> code.add(Opcode.ICONST_0), S);
+		emitBoundOrDefault(code, 2, () -> code.iconst_0(), S);
 		emitBoundOrDefault(code, 3, () -> {
-			code.add(Opcode.ILOAD);
-			code.add(SIZE);
+			code.iload(SIZE);
 		}, E);
 		// if (s < 0 || e > size || s > e) throw new RuntimeException(bounds message)
-		code.add(Opcode.ILOAD);
-		code.add(S);
-		int ifSNeg = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD);
-		code.add(E);
-		code.add(Opcode.ILOAD);
-		code.add(SIZE);
-		int ifEBig = code.size();
-		code.add(Opcode.IF_ICMPGT);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD);
-		code.add(S);
-		code.add(Opcode.ILOAD);
-		code.add(E);
-		int ifBoundsOk = code.size();
-		code.add(Opcode.IF_ICMPLE);
-		emitU2(code, 0);
-		patchBranch(code, ifSNeg, code.size());
-		patchBranch(code, ifEBig, code.size());
-		code.add(Opcode.NEW);
-		emitU2(code, this.runtimeExceptionClass.index());
-		code.add(Opcode.DUP);
-		emitLdc(code, io.boundsMessage().index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.runtimeExceptionInit.index());
-		code.add(Opcode.ATHROW);
-		patchBranch(code, ifBoundsOk, code.size());
+		code.iload(S);
+		MethodCode.Label ifSNeg = code.newLabel();
+		code.iflt(ifSNeg);
+		code.iload(E);
+		code.iload(SIZE);
+		MethodCode.Label ifEBig = code.newLabel();
+		code.if_icmpgt(ifEBig);
+		code.iload(S);
+		code.iload(E);
+		MethodCode.Label ifBoundsOk = code.newLabel();
+		code.if_icmple(ifBoundsOk);
+		code.labelBinding(ifSNeg);
+		code.labelBinding(ifEBig);
+		code.new_(this.runtimeExceptionClass);
+		code.dup();
+		code.ldc(io.boundsMessage());
+		code.invokespecial(this.runtimeExceptionInit);
+		code.athrow();
+		code.labelBinding(ifBoundsOk);
 		// --- the byte buffer ----------------------------------------------------
 		if (read) {
 			// bytes = in.readNBytes((e - s) * width); n = bytes.length / width
-			code.add(Opcode.ALOAD);
-			code.add(STREAM);
-			code.add(Opcode.ILOAD);
-			code.add(E);
-			code.add(Opcode.ILOAD);
-			code.add(S);
-			code.add(Opcode.ISUB);
-			code.add(Opcode.ILOAD);
-			code.add(WIDTH);
-			code.add(Opcode.IMUL);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, io.readNBytes().index());
-			code.add(Opcode.ASTORE);
-			code.add(BYTES);
-			code.add(Opcode.ALOAD);
-			code.add(BYTES);
-			code.add(Opcode.ARRAYLENGTH);
-			code.add(Opcode.ILOAD);
-			code.add(WIDTH);
-			code.add(Opcode.IDIV);
-			code.add(Opcode.ISTORE);
-			code.add(N);
+			code.aload(STREAM);
+			code.iload(E);
+			code.iload(S);
+			code.isub();
+			code.iload(WIDTH);
+			code.imul();
+			code.invokevirtual(io.readNBytes());
+			code.astore(BYTES);
+			code.aload(BYTES);
+			code.arraylength();
+			code.iload(WIDTH);
+			code.idiv();
+			code.istore(N);
 		}
 		else {
 			// n = e - s; bytes = new byte[n * width]
-			code.add(Opcode.ILOAD);
-			code.add(E);
-			code.add(Opcode.ILOAD);
-			code.add(S);
-			code.add(Opcode.ISUB);
-			code.add(Opcode.ISTORE);
-			code.add(N);
-			code.add(Opcode.ILOAD);
-			code.add(N);
-			code.add(Opcode.ILOAD);
-			code.add(WIDTH);
-			code.add(Opcode.IMUL);
-			code.add(Opcode.NEWARRAY);
-			code.add(8); // T_BYTE
-			code.add(Opcode.ASTORE);
-			code.add(BYTES);
+			code.iload(E);
+			code.iload(S);
+			code.isub();
+			code.istore(N);
+			code.iload(N);
+			code.iload(WIDTH);
+			code.imul();
+			code.newarray(TypeKind.BYTE);
+			code.astore(BYTES);
 		}
 		// bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-		code.add(Opcode.ALOAD);
-		code.add(BYTES);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, io.byteBufferWrap().index());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, io.littleEndian().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, io.byteBufferOrder().index());
-		code.add(Opcode.ASTORE);
-		code.add(BB);
+		code.aload(BYTES);
+		code.invokestatic(io.byteBufferWrap());
+		code.getstatic(io.littleEndian());
+		code.invokevirtual(io.byteBufferOrder());
+		code.astore(BB);
 		// --- the transfer, by buffer shape --------------------------------------
 		// if (seq instanceof float[]) bb.asFloatBuffer().get/put((float[]) seq, base + s,
 		// n)
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.floatArrayClass().index());
-		int ifNotFloat2 = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(BB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, io.asFloatBuffer().index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.floatArrayClass().index());
+		code.aload(0);
+		code.instanceOf(io.floatArrayClass());
+		MethodCode.Label ifNotFloat2 = code.newLabel();
+		code.ifeq(ifNotFloat2);
+		code.aload(BB);
+		code.invokevirtual(io.asFloatBuffer());
+		code.aload(0);
+		code.checkcast(io.floatArrayClass());
 		emitBasePlusS(code, BASE, S);
-		code.add(Opcode.ILOAD);
-		code.add(N);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, (read ? io.floatBufferGet() : io.floatBufferPut()).index());
-		code.add(Opcode.POP);
-		int gotoMoved1 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotFloat2, code.size());
+		code.iload(N);
+		code.invokevirtual((read ? io.floatBufferGet() : io.floatBufferPut()));
+		code.pop();
+		MethodCode.Label moved = code.newLabel();
+		code.goto_(moved);
+		code.labelBinding(ifNotFloat2);
 		// else if (seq instanceof double[]) bb.asDoubleBuffer().get/put(...)
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.doubleArrayClass().index());
-		int ifNotDouble2 = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(BB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, io.asDoubleBuffer().index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.doubleArrayClass().index());
+		code.aload(0);
+		code.instanceOf(io.doubleArrayClass());
+		MethodCode.Label ifNotDouble2 = code.newLabel();
+		code.ifeq(ifNotDouble2);
+		code.aload(BB);
+		code.invokevirtual(io.asDoubleBuffer());
+		code.aload(0);
+		code.checkcast(io.doubleArrayClass());
 		emitBasePlusS(code, BASE, S);
-		code.add(Opcode.ILOAD);
-		code.add(N);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, (read ? io.doubleBufferGet() : io.doubleBufferPut()).index());
-		code.add(Opcode.POP);
-		int gotoMoved2 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotDouble2, code.size());
+		code.iload(N);
+		code.invokevirtual((read ? io.doubleBufferGet() : io.doubleBufferPut()));
+		code.pop();
+		code.goto_(moved);
+		code.labelBinding(ifNotDouble2);
 		// else if (seq instanceof byte[]) bb.get/put((byte[]) seq, base + s, n) -- an
 		// octet vector or a quantized matrix, whose base the shape arm above already
 		// told apart.
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.byteArrayClass().index());
-		int ifNotByte2 = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(BB);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.byteArrayClass().index());
+		code.aload(0);
+		code.instanceOf(io.byteArrayClass());
+		MethodCode.Label ifNotByte2 = code.newLabel();
+		code.ifeq(ifNotByte2);
+		code.aload(BB);
+		code.aload(0);
+		code.checkcast(io.byteArrayClass());
 		emitBasePlusS(code, BASE, S);
-		code.add(Opcode.ILOAD);
-		code.add(N);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, (read ? io.bbGetBytes() : io.bbPutBytes()).index());
-		code.add(Opcode.POP);
-		int gotoMoved3 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotByte2, code.size());
+		code.iload(N);
+		code.invokevirtual((read ? io.bbGetBytes() : io.bbPutBytes()));
+		code.pop();
+		code.goto_(moved);
+		code.labelBinding(ifNotByte2);
 		// else if (seq instanceof short[]) bb.asShortBuffer().get/put((short[]) seq,
 		// base + s, n) -- the bfloat16 width moves as its stored patterns, in one bulk
 		// transfer like the two f32/f64 arms above and unlike the long[] element loop.
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, io.shortArrayClass().index());
-		int ifNotShort2 = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(BB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, io.asShortBuffer().index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, io.shortArrayClass().index());
+		code.aload(0);
+		code.instanceOf(io.shortArrayClass());
+		MethodCode.Label ifNotShort2 = code.newLabel();
+		code.ifeq(ifNotShort2);
+		code.aload(BB);
+		code.invokevirtual(io.asShortBuffer());
+		code.aload(0);
+		code.checkcast(io.shortArrayClass());
 		emitBasePlusS(code, BASE, S);
-		code.add(Opcode.ILOAD);
-		code.add(N);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, (read ? io.shortBufferGet() : io.shortBufferPut()).index());
-		code.add(Opcode.POP);
-		int gotoMoved2b = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotShort2, code.size());
+		code.iload(N);
+		code.invokevirtual((read ? io.shortBufferGet() : io.shortBufferPut()));
+		code.pop();
+		code.goto_(moved);
+		code.labelBinding(ifNotShort2);
 		// else (long[]): for (k = 0; k < n; k++) one element of the width
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE);
-		code.add(K);
-		int loopTop = code.size();
-		code.add(Opcode.ILOAD);
-		code.add(K);
-		code.add(Opcode.ILOAD);
-		code.add(N);
-		int ifLoopDone = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.iconst_0();
+		code.istore(K);
+		MethodCode.Label loopTop = code.newBoundLabel();
+		code.iload(K);
+		code.iload(N);
+		MethodCode.Label ifLoopDone = code.newLabel();
+		code.if_icmpge(ifLoopDone);
 		if (read) {
 			// seq[base + s + k] = (width == 1 ? bb.get() & 0xFF : width == 2 ?
 			// bb.getShort() &
 			// 0xFFFF : bb.getInt() & 0xFFFFFFFFL)
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.longArrayClass().index());
+			code.aload(0);
+			code.checkcast(io.longArrayClass());
 			emitBasePlusS(code, BASE, S);
-			code.add(Opcode.ILOAD);
-			code.add(K);
-			code.add(Opcode.IADD);
+			code.iload(K);
+			code.iadd();
 			emitWidthSwitch(code, WIDTH, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbGet().index());
-				code.add(Opcode.SIPUSH);
-				emitU2(code, 0xFF);
-				code.add(Opcode.IAND);
-				code.add(Opcode.I2L);
+				code.aload(BB);
+				code.invokevirtual(io.bbGet());
+				code.loadConstant(0xFF);
+				code.iand();
+				code.i2l();
 			}, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbGetShort().index());
-				emitLdc(code, this.cp.addInteger(0xFFFF).index());
-				code.add(Opcode.IAND);
-				code.add(Opcode.I2L);
+				code.aload(BB);
+				code.invokevirtual(io.bbGetShort());
+				code.ldc(this.cp.entries().intEntry(0xFFFF));
+				code.iand();
+				code.i2l();
 			}, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbGetInt().index());
-				code.add(Opcode.I2L);
-				code.add(Opcode.LDC2_W);
-				emitU2(code, this.cp.addLong(0xFFFF_FFFFL).index());
-				code.add(Opcode.LAND);
+				code.aload(BB);
+				code.invokevirtual(io.bbGetInt());
+				code.i2l();
+				code.ldc(this.cp.entries().longEntry(0xFFFF_FFFFL));
+				code.land();
 			});
-			code.add(Opcode.LASTORE);
+			code.lastore();
 		}
 		else {
 			// e = seq[base + s + k]; width == 1 ? bb.put((byte) e) : width == 2 ?
 			// bb.putShort((short) e) : bb.putInt((int) e)
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, io.longArrayClass().index());
+			code.aload(0);
+			code.checkcast(io.longArrayClass());
 			emitBasePlusS(code, BASE, S);
-			code.add(Opcode.ILOAD);
-			code.add(K);
-			code.add(Opcode.IADD);
-			code.add(Opcode.LALOAD);
-			code.add(Opcode.L2I);
-			code.add(Opcode.ISTORE);
-			code.add(SIZE); // scratch: size is not read past the bounds check
+			code.iload(K);
+			code.iadd();
+			code.laload();
+			code.l2i();
+			code.istore(SIZE); // scratch: size is not read past the bounds check
 			emitWidthSwitch(code, WIDTH, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.ILOAD);
-				code.add(SIZE);
-				code.add(Opcode.I2B);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbPut().index());
-				code.add(Opcode.POP);
+				code.aload(BB);
+				code.iload(SIZE);
+				code.i2b();
+				code.invokevirtual(io.bbPut());
+				code.pop();
 			}, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.ILOAD);
-				code.add(SIZE);
-				code.add(Opcode.I2S);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbPutShort().index());
-				code.add(Opcode.POP);
+				code.aload(BB);
+				code.iload(SIZE);
+				code.i2s();
+				code.invokevirtual(io.bbPutShort());
+				code.pop();
 			}, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BB);
-				code.add(Opcode.ILOAD);
-				code.add(SIZE);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, io.bbPutInt().index());
-				code.add(Opcode.POP);
+				code.aload(BB);
+				code.iload(SIZE);
+				code.invokevirtual(io.bbPutInt());
+				code.pop();
 			});
 		}
-		code.add(Opcode.IINC);
-		code.add(K);
-		code.add(1);
-		int gotoLoop = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoLoop, loopTop);
-		patchBranch(code, ifLoopDone, code.size());
-		patchBranch(code, gotoMoved1, code.size());
-		patchBranch(code, gotoMoved2, code.size());
-		patchBranch(code, gotoMoved2b, code.size());
-		patchBranch(code, gotoMoved3, code.size());
+		code.iinc(K, 1);
+		code.goto_(loopTop);
+		code.labelBinding(ifLoopDone);
+		code.labelBinding(moved);
 		if (read) {
 			// advance a file stream's position by the bytes just read; return
 			// Long.valueOf(s + n)
 			emitBumpPosition(code, 1, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BYTES);
-				code.add(Opcode.ARRAYLENGTH);
+				code.aload(BYTES);
+				code.arraylength();
 			});
-			code.add(Opcode.ILOAD);
-			code.add(S);
-			code.add(Opcode.ILOAD);
-			code.add(N);
-			code.add(Opcode.IADD);
-			code.add(Opcode.I2L);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.longValueOf.index());
-			code.add(Opcode.ARETURN);
+			code.iload(S);
+			code.iload(N);
+			code.iadd();
+			code.i2l();
+			code.invokestatic(this.longValueOf);
+			code.areturn();
 		}
 		else {
 			// out.write(bytes); standard output tracks the fresh-line column off the
 			// last byte (_col = b ^ '\n', as _writeByte does); return seq
-			code.add(Opcode.ALOAD);
-			code.add(STREAM);
-			code.add(Opcode.ALOAD);
-			code.add(BYTES);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, io.outputStreamWriteBytes().index());
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.longClass.index());
-			int ifHandleOut = code.size();
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
-			code.add(Opcode.ILOAD);
-			code.add(N);
-			int ifEmpty = code.size();
-			code.add(Opcode.IFLE);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD);
-			code.add(BYTES);
-			code.add(Opcode.ALOAD);
-			code.add(BYTES);
-			code.add(Opcode.ARRAYLENGTH);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.ISUB);
-			code.add(Opcode.BALOAD);
-			code.add(Opcode.BIPUSH);
-			code.add(10);
-			code.add(Opcode.IXOR);
-			code.add(Opcode.PUTSTATIC);
-			emitU2(code, this.colField.index());
-			patchBranch(code, ifHandleOut, code.size());
-			patchBranch(code, ifEmpty, code.size());
+			code.aload(STREAM);
+			code.aload(BYTES);
+			code.invokevirtual(io.outputStreamWriteBytes());
+			code.aload(1);
+			code.instanceOf(this.longClass);
+			MethodCode.Label ifHandleOut = code.newLabel();
+			code.ifne(ifHandleOut);
+			code.iload(N);
+			MethodCode.Label ifEmpty = code.newLabel();
+			code.ifle(ifEmpty);
+			code.aload(BYTES);
+			code.aload(BYTES);
+			code.arraylength();
+			code.iconst_1();
+			code.isub();
+			code.baload();
+			code.loadConstant(10);
+			code.ixor();
+			code.putstatic(this.colField);
+			code.labelBinding(ifHandleOut);
+			code.labelBinding(ifEmpty);
 			// advance a file stream's position; return seq
 			emitBumpPosition(code, 1, () -> {
-				code.add(Opcode.ALOAD);
-				code.add(BYTES);
-				code.add(Opcode.ARRAYLENGTH);
+				code.aload(BYTES);
+				code.arraylength();
 			});
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ARETURN);
+			code.aload(0);
+			code.areturn();
 		}
 		return code;
 	}
 
 	// slot[target] = (arg == null ? <dflt> : (int) ((Long) arg).longValue())
-	private void emitBoundOrDefault(List<Integer> code, int argSlot, Runnable dflt, int target) {
-		code.add(Opcode.ALOAD);
-		code.add(argSlot);
-		int ifGiven = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
+	private void emitBoundOrDefault(MethodCode code, int argSlot, Runnable dflt, int target) {
+		code.aload(argSlot);
+		MethodCode.Label ifGiven = code.newLabel();
+		code.ifnonnull(ifGiven);
 		dflt.run();
-		code.add(Opcode.ISTORE);
-		code.add(target);
-		int gotoDone = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifGiven, code.size());
-		code.add(Opcode.ALOAD);
-		code.add(argSlot);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.ISTORE);
-		code.add(target);
-		patchBranch(code, gotoDone, code.size());
+		code.istore(target);
+		MethodCode.Label gotoDone = code.newLabel();
+		code.goto_(gotoDone);
+		code.labelBinding(ifGiven);
+		code.aload(argSlot);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.istore(target);
+		code.labelBinding(gotoDone);
 	}
 
 	// Pushes base + s.
-	private static void emitBasePlusS(List<Integer> code, int base, int s) {
-		code.add(Opcode.ILOAD);
-		code.add(base);
-		code.add(Opcode.ILOAD);
-		code.add(s);
-		code.add(Opcode.IADD);
+	private static void emitBasePlusS(MethodCode code, int base, int s) {
+		code.iload(base);
+		code.iload(s);
+		code.iadd();
 	}
 
 	// if (width == 1) one() else if (width == 2) two() else four()
-	private static void emitWidthSwitch(List<Integer> code, int widthSlot, Runnable one, Runnable two, Runnable four) {
-		code.add(Opcode.ILOAD);
-		code.add(widthSlot);
-		code.add(Opcode.ICONST_1);
-		int ifNotOne = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
+	private static void emitWidthSwitch(MethodCode code, int widthSlot, Runnable one, Runnable two, Runnable four) {
+		code.iload(widthSlot);
+		code.iconst_1();
+		MethodCode.Label ifNotOne = code.newLabel();
+		code.if_icmpne(ifNotOne);
 		one.run();
-		int gotoDone1 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotOne, code.size());
-		code.add(Opcode.ILOAD);
-		code.add(widthSlot);
-		code.add(Opcode.ICONST_2);
-		int ifNotTwo = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
+		MethodCode.Label done = code.newLabel();
+		code.goto_(done);
+		code.labelBinding(ifNotOne);
+		code.iload(widthSlot);
+		code.iconst_2();
+		MethodCode.Label ifNotTwo = code.newLabel();
+		code.if_icmpne(ifNotTwo);
 		two.run();
-		int gotoDone2 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotTwo, code.size());
+		code.goto_(done);
+		code.labelBinding(ifNotTwo);
 		four.run();
-		patchBranch(code, gotoDone1, code.size());
-		patchBranch(code, gotoDone2, code.size());
+		code.labelBinding(done);
 	}
 
 	/**
@@ -4981,79 +4152,60 @@ final class JvmIoRuntimeBuilder {
 	 * not a stream handle ({@code null} = nil, {@code "t"} = t). The routing sink of the
 	 * print-family optional stream argument and the write-string built-in.
 	 */
-	private List<Integer> buildWriteStr() {
+	private MethodCode buildWriteStr() {
 		// Slots: 0=content (String), 1=handle
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The *error-output* designator: System.err.print(content); return;
-		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.printStr.index());
-			code.add(Opcode.RETURN);
+		emitStderrBranch(code, 1, () -> {
+			code.getstatic(java.util.Objects.requireNonNull(this.systemErr));
+			code.aload(0);
+			code.invokevirtual(this.printStr);
+			code.return_();
 		});
 		// if (handle instanceof Long) { ((Writer) _streams[idx]).write(content); return;
 		// }
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, this.longClass.index());
-		int ifStdoutPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.writerClass.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.writerWrite.index());
-		code.add(Opcode.RETURN);
-		patchBranch(code, ifStdoutPos, code.size());
+		code.aload(1);
+		code.instanceOf(this.longClass);
+		MethodCode.Label ifStdout = code.newLabel();
+		code.ifeq(ifStdout);
+		code.getstatic(this.streamsField);
+		code.aload(1);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.checkcast(this.writerClass);
+		code.aload(0);
+		code.invokevirtual(this.writerWrite);
+		code.return_();
+		code.labelBinding(ifStdout);
 		// System.out.print(content);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.systemOut.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.printStr.index());
+		code.getstatic(this.systemOut);
+		code.aload(0);
+		code.invokevirtual(this.printStr);
 		// if (content.length() != 0) _col = content.charAt(len - 1) == '\n' ? 0 : 1;
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		int ifEmptyPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringCharAt.index());
-		code.add(Opcode.BIPUSH);
-		code.add(10);
-		int ifNotNewlinePos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ICONST_0);
-		int gotoStorePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifNotNewlinePos, code.size());
-		code.add(Opcode.ICONST_1);
-		patchBranch(code, gotoStorePos, code.size());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.colField.index());
-		patchBranch(code, ifEmptyPos, code.size());
-		code.add(Opcode.RETURN);
+		code.aload(0);
+		code.invokevirtual(this.stringLength);
+		MethodCode.Label ifEmpty = code.newLabel();
+		code.ifeq(ifEmpty);
+		code.aload(0);
+		code.aload(0);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringCharAt);
+		code.loadConstant(10);
+		MethodCode.Label ifNotNewline = code.newLabel();
+		code.if_icmpne(ifNotNewline);
+		code.iconst_0();
+		MethodCode.Label gotoStore = code.newLabel();
+		code.goto_(gotoStore);
+		code.labelBinding(ifNotNewline);
+		code.iconst_1();
+		code.labelBinding(gotoStore);
+		code.putstatic(this.colField);
+		code.labelBinding(ifEmpty);
+		code.return_();
 		return code;
 	}
 
@@ -5062,9 +4214,9 @@ final class JvmIoRuntimeBuilder {
 	 * (without the surrounding quotes) to the stream via {@code _writeStr} -- write-line
 	 * minus the newline.
 	 */
-	private List<Integer> buildWriteString() {
+	private MethodCode buildWriteString() {
 		// Slots: 0=str, 1=handle, 2=content (String), 3=entry (socket programs only)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		if (this.sockets != null) {
 			// if (handle instanceof Long && _streams[idx] instanceof Socket)
 			// return _sockWriteString(str, entry);
@@ -5072,57 +4224,45 @@ final class JvmIoRuntimeBuilder {
 			// print/princ to a socket has no dispatch on the --component backend, so
 			// widening it here only would ship a program that works on two backends and
 			// traps on the third (see .kb/tcp-sockets.md).
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.longClass.index());
-			int ifNotHandlePos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.GETSTATIC);
-			emitU2(code, this.streamsField.index());
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, this.longClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, this.longValue.index());
-			code.add(Opcode.L2I);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.ASTORE_3);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, this.sockets.socketClass().index());
-			int ifNotSocketPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ALOAD_3);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.sockets.sockWriteString().index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotHandlePos, code.size());
-			patchBranch(code, ifNotSocketPos, code.size());
+			code.aload(1);
+			code.instanceOf(this.longClass);
+			MethodCode.Label ifNotHandle = code.newLabel();
+			code.ifeq(ifNotHandle);
+			code.getstatic(this.streamsField);
+			code.aload(1);
+			code.checkcast(this.longClass);
+			code.invokevirtual(this.longValue);
+			code.l2i();
+			code.aaload();
+			code.astore(3);
+			code.aload(3);
+			code.instanceOf(this.sockets.socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(0);
+			code.aload(3);
+			code.invokestatic(this.sockets.sockWriteString());
+			code.areturn();
+			code.labelBinding(ifNotHandle);
+			code.labelBinding(ifNotSocket);
 		}
 		// content = ((String) str).substring(1, length - 1);
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
+		code.checkcast(this.stringClass);
+		code.astore(2);
+		code.aload(2);
+		code.iconst_1();
+		code.aload(2);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
 		// _writeStr(content, handle); return str;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.writeStrMethod.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.invokestatic(this.writeStrMethod);
+		code.aload(0);
+		code.areturn();
 		return code;
 	}
 
@@ -5135,71 +4275,58 @@ final class JvmIoRuntimeBuilder {
 	 * is volatile: that store is what publishes the new element to a reader thread, which
 	 * reaches the table through the same volatile field.
 	 */
-	private List<Integer> buildAddStream() {
+	private MethodCode buildAddStream() {
 		// Slots: 0=stream, 1=arr, 2=count
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (_streams == null) _streams = new Object[16];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		int ifInitPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.BIPUSH);
-		code.add(16);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, this.objectClass.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
+		code.getstatic(this.streamsField);
+		MethodCode.Label ifInit = code.newLabel();
+		code.ifnonnull(ifInit);
+		code.loadConstant(16);
+		code.anewarray(this.objectClass);
+		code.putstatic(this.streamsField);
 		if (this.errorOutput) {
 			// Reserve the standard-stream handles (0/1/2, the WASI file descriptors the
 			// wasm backends use), so no user stream can be handed the *error-output*
 			// designator's handle 2 and be diverted to stderr by the branches above.
-			code.add(Opcode.ICONST_3);
-			code.add(Opcode.PUTSTATIC);
-			emitU2(code, this.streamCountField.index());
+			code.iconst_3();
+			code.putstatic(this.streamCountField);
 		}
-		patchBranch(code, ifInitPos, code.size());
+		code.labelBinding(ifInit);
 		// arr = _streams; count = _streamCount;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ISTORE_2);
+		code.getstatic(this.streamsField);
+		code.astore(1);
+		code.getstatic(this.streamCountField);
+		code.istore(2);
 		// if (count >= arr.length) arr = Arrays.copyOf(arr, count * 2);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifGrowPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.IMUL);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.arraysCopyOf.index());
-		code.add(Opcode.ASTORE_1);
-		patchBranch(code, ifGrowPos, code.size());
+		code.iload(2);
+		code.aload(1);
+		code.arraylength();
+		MethodCode.Label ifGrow = code.newLabel();
+		code.if_icmplt(ifGrow);
+		code.aload(1);
+		code.iload(2);
+		code.iconst_2();
+		code.imul();
+		code.invokestatic(this.arraysCopyOf);
+		code.astore(1);
+		code.labelBinding(ifGrow);
 		// arr[count] = stream; _streamCount = count + 1; _streams = arr;
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamCountField.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, this.streamsField.index());
+		code.aload(1);
+		code.iload(2);
+		code.aload(0);
+		code.aastore();
+		code.iload(2);
+		code.iconst_1();
+		code.iadd();
+		code.putstatic(this.streamCountField);
+		code.aload(1);
+		code.putstatic(this.streamsField);
 		// return Long.valueOf((long) count);
-		code.add(Opcode.ILOAD_2);
-		code.add(Opcode.I2L);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.longValueOf.index());
-		code.add(Opcode.ARETURN);
+		code.iload(2);
+		code.i2l();
+		code.invokestatic(this.longValueOf);
+		code.areturn();
 		return code;
 	}
 
@@ -5208,18 +4335,15 @@ final class JvmIoRuntimeBuilder {
 	 * {@code StringWriter} in the stream table -- the string-builder stream behind
 	 * with-output-to-string.
 	 */
-	private List<Integer> buildMakeStringOutputStream() {
+	private MethodCode buildMakeStringOutputStream() {
 		// No slots: the entry is built on the stack and handed to _addStream.
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// return _addStream(new StringWriter());
-		code.add(Opcode.NEW);
-		emitU2(code, this.stringWriterClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.stringWriterInit.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.new_(this.stringWriterClass);
+		code.dup();
+		code.invokespecial(this.stringWriterInit);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -5229,55 +4353,44 @@ final class JvmIoRuntimeBuilder {
 	 * the stream table, so read-line/read consume it like any input stream -- the
 	 * string-backed stream behind with-input-from-string.
 	 */
-	private List<Integer> buildMakeStringInputStream() {
+	private MethodCode buildMakeStringInputStream() {
 		// Slots: 0=str, 1=content (String)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// content = ((String) str).substring(1, length - 1);
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		emitStrvOnStack(code);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringClass.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringSubstring.index());
-		code.add(Opcode.ASTORE_1);
+		code.checkcast(this.stringClass);
+		code.astore(1);
+		code.aload(1);
+		code.iconst_1();
+		code.aload(1);
+		code.invokevirtual(this.stringLength);
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(this.stringSubstring);
+		code.astore(1);
 		if (this.stringInputStreamInit != null) {
 			// return _addStream(new RontoStringInputStream(content)) -- the reader
 			// that knows its position and its remainder, which file-position and
 			// listen ask for.
-			code.add(Opcode.NEW);
-			emitU2(code, Objects.requireNonNull(this.stringInputStreamClass).index());
-			code.add(Opcode.DUP);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INVOKESPECIAL);
-			emitU2(code, this.stringInputStreamInit.index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, this.addStreamRef.index());
-			code.add(Opcode.ARETURN);
+			code.new_(Objects.requireNonNull(this.stringInputStreamClass));
+			code.dup();
+			code.aload(1);
+			code.invokespecial(this.stringInputStreamInit);
+			code.invokestatic(this.addStreamRef);
+			code.areturn();
 			return code;
 		}
 		// return _addStream(new BufferedReader(new StringReader(content)));
-		code.add(Opcode.NEW);
-		emitU2(code, this.bufferedReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, this.stringReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.stringReaderInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, this.bufferedReaderInit.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, this.addStreamRef.index());
-		code.add(Opcode.ARETURN);
+		code.new_(this.bufferedReaderClass);
+		code.dup();
+		code.new_(this.stringReaderClass);
+		code.dup();
+		code.aload(1);
+		code.invokespecial(this.stringReaderInit);
+		code.invokespecial(this.bufferedReaderInit);
+		code.invokestatic(this.addStreamRef);
+		code.areturn();
 		return code;
 	}
 
@@ -5288,60 +4401,35 @@ final class JvmIoRuntimeBuilder {
 	 * {@code get-output-stream-string} contract, which {@code with-output-to-string}
 	 * cannot tell apart because it fetches once and then closes.
 	 */
-	private List<Integer> buildStringStreamContents() {
+	private MethodCode buildStringStreamContents() {
 		// Slots: 0=handle, 1=content (String), 2=writer (StringWriter)
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// writer = (StringWriter) _streams[idx];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, this.streamsField.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.longValue.index());
-		code.add(Opcode.L2I);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, this.stringWriterClass.index());
-		code.add(Opcode.ASTORE_2);
+		code.getstatic(this.streamsField);
+		code.aload(0);
+		code.checkcast(this.longClass);
+		code.invokevirtual(this.longValue);
+		code.l2i();
+		code.aaload();
+		code.checkcast(this.stringWriterClass);
+		code.astore(2);
 		// content = writer.toString();
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringWriterToString.index());
-		code.add(Opcode.ASTORE_1);
+		code.aload(2);
+		code.invokevirtual(this.stringWriterToString);
+		code.astore(1);
 		// writer.getBuffer().setLength(0);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringWriterGetBuffer.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringBufferSetLength.index());
+		code.aload(2);
+		code.invokevirtual(this.stringWriterGetBuffer);
+		code.iconst_0();
+		code.invokevirtual(this.stringBufferSetLength);
 		// return "\"".concat(content).concat("\"");
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		emitLdc(code, this.quoteStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.stringConcat.index());
-		code.add(Opcode.ARETURN);
+		code.ldc(this.quoteStr);
+		code.aload(1);
+		code.invokevirtual(this.stringConcat);
+		code.ldc(this.quoteStr);
+		code.invokevirtual(this.stringConcat);
+		code.areturn();
 		return code;
-	}
-
-	private static void emitU2(List<Integer> code, int value) {
-		JvmRuntimeBuilder.emitU2(code, value);
-	}
-
-	private static void emitLdc(List<Integer> code, int cpIndex) {
-		JvmRuntimeBuilder.emitLdc(code, cpIndex);
-	}
-
-	private static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
-		JvmRuntimeBuilder.patchBranch(code, branchPos, targetPos);
-	}
-
-	private static void emitIntConst(List<Integer> code, int value) {
-		JvmRuntimeBuilder.emitIntConstStatic(code, value);
 	}
 
 }
