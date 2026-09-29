@@ -3,9 +3,9 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the internal {@code %arrayp} predicate used by the {@code vector}/
@@ -40,55 +40,40 @@ final class JvmArraypCompiler {
 			packedClasses.add("[F");
 			packedClasses.add("[S");
 		}
-		List<Integer> gotoEnds = new ArrayList<>();
+		MethodCode.Label gotoEnds = ctx.body.newLabel();
 		if (ctx.usesIntArray) {
-			List<Integer> notOctets = JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx);
-			ctx.emit(Opcode.POP);
+			MethodCode.Label notOctets = ctx.body.newLabel();
+			JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx, notOctets);
+			ctx.body.pop();
 			JvmEmitHelper.compileTrue(ctx);
-			gotoEnds.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			for (int pos : notOctets) {
-				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-			}
+			ctx.body.goto_(gotoEnds);
+			ctx.body.labelBinding(notOctets);
 		}
 		for (String cls : packedClasses) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8(cls)).index());
-			int ifNotPackedPos = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.POP);
+			ctx.body.dup().instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(cls)).entry());
+			MethodCode.Label ifNotPackedPos = ctx.body.newLabel();
+			ctx.body.ifeq(ifNotPackedPos);
+			ctx.body.pop();
 			JvmEmitHelper.compileTrue(ctx);
-			gotoEnds.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotPackedPos, ctx.code.size());
+			ctx.body.goto_(gotoEnds);
+			ctx.body.labelBinding(ifNotPackedPos);
 		}
 		// fall through with the value still on the stack for the ArrayList check -- in a
 		// java: program the shared _jlarr, since a call can answer a host ArrayList
 		JvmJavaSites javaSites = ctx.javaSites;
 		if (javaSites != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(javaSites.direct().lispArray().index());
+			ctx.body.invokestatic(javaSites.direct().lispArray());
 		}
 		else {
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
+			ctx.body.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry());
 		}
-		int ifNotListPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		MethodCode.Label ifNotListPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotListPos);
 		JvmEmitHelper.compileTrue(ctx);
-		gotoEnds.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotListPos, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
-		for (int gotoEnd : gotoEnds) {
-			JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
-		}
+		ctx.body.goto_(gotoEnds);
+		ctx.body.labelBinding(ifNotListPos);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnds);
 	}
 
 }

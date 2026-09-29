@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code numberp} predicate.
@@ -18,17 +18,8 @@ final class JvmNumberpCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int temp = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(temp);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.numberClass.index());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.ratioArrayClass(ctx).index());
-		ctx.emit(Opcode.IOR);
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.numberClass.entry()).aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry()).ior();
 		if (ctx.usesComplex) {
 			// A complex value is a number too -- but the holder test names the
 			// travelling class, so it is emitted only for a complex-capable
@@ -36,13 +27,10 @@ final class JvmNumberpCompiler {
 			// class run without the file beside it must not resolve the holder
 			// class it then never touches (.todo/757) -- exact, since no holder
 			// can exist then.
-			int noHolderPos = JvmComplexCompiler.emitNoHolderJump(ctx, className);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(JvmComplexCompiler.complexClass(ctx).index());
-			ctx.emit(Opcode.IOR);
-			JvmEmitHelper.patchBranch(ctx, noHolderPos, ctx.code.size());
+			MethodCode.Label notHolder = ctx.body.newLabel();
+			JvmComplexCompiler.emitNoHolderJump(ctx, className, notHolder);
+			ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx).entry()).ior();
+			ctx.body.labelBinding(notHolder);
 		}
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}

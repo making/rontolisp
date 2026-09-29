@@ -102,11 +102,13 @@ has a typed, `CodeBuilder`-shaped layer, `am.ik.jvm.MethodCode` (`Ctx.body` for 
 context; a builder makes its own). On it: the hash-table slice, every builder that had an
 assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thread, fetch,
 HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
-`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone) -- and the I/O and socket
-runtimes with `_flushStreams`, the first raw lists. The rest still write code bytes
-(`Ctx.emit`/`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining
-slices are `.todo/a87`-`a91`: the core runtime builders, the small builders with
-`JvmLispCompiler`'s own code, the expression compilers in two halves, then `MethodCode` storing
+`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
+compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
+predicates sharing its exclusion helpers); and the I/O and socket runtimes with
+`_flushStreams`, the first raw lists (a86). The rest still write code bytes (`Ctx.emit`/
+`emitU2`, raw `List<Integer>` lists), which `CodeReplay` decodes. The remaining slices are
+`.todo/a87`, `a88`, `a90`, `a91`: the core runtime builders, the small builders with
+`JvmLispCompiler`'s own code, the rest of the expression compilers, then `MethodCode` storing
 instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
@@ -142,6 +144,12 @@ jose suite and 28 example compiles (`java:` interop, jvm-export with and without
 `--gpu`, served, clack/ningle, asdf systems); every difference is the build's
 commit id in a version string (`lisp-implementation-version`, `uiop/os:lisp-version-string`,
 the `rontolisp:fetch` user agent).
+
+**The large expression compilers** (a89, 2026-09-29): ~2,500 `ctx.emit`/`emitU2` sites in 25
+files, byte-identical by the same comparison (the 4,857 programs; corpus at three levels, mito
+with `$Part1`, jose, 28 examples) -- the build timestamp in the version string aside. Two
+emitted forms changed without changing a class: `emitIntConst(-1)` is `iconst_m1` (was
+`bipush -1`) and a helper body's `aload_0` is `aload 0`; the writer writes both shortest.
 
 **The first raw-list slice** (2026-09-29): `JvmIoRuntimeBuilder`, `JvmSocketRuntimeBuilder` and
 `JvmFlushStreamsBuilder`, byte-identical by the same comparisons (the 4,857 programs and every
@@ -187,6 +195,19 @@ handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions hel
   an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
   the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
   code already on the layer called on a field that became an entry.
+- An expression compiler (tools in `.todo/artefacts/a89-jvm-large-expression-compilers-move-onto-ctx-body/`):
+  `ctxmig.py` maps `ctx.emit(Opcode.X)` + operands one to one (a `bipush`/`sipush` becomes
+  `loadConstant` only where that is the same bytes) and turns a position into a label where it
+  is used only as `int v = ctx.code.size()` + placeholder branch + `patchBranch(ctx, v,
+  ctx.code.size())`, a list of such positions patched in one loop, a file's own
+  `branch(ctx, op)` helper, or a backward `goto` `(v - w) & 0xFFFF`; `listlabel.py` turns
+  named `List<Integer>` position lists (and parameters) into labels. The rest is by hand: a
+  helper answering positions takes the label to jump to instead (`emitNoHolderJump`,
+  `emitOctetTestOnStack`, `emitInstanceExclusion`), several branches patched at one place
+  share one label, an opcode chosen at run time goes through `JvmEmitHelper.branch(ctx, int,
+  label)` or an `if` over the typed calls. Handler ranges are labels, except where a range
+  is cut by `UnwindScope.holes` (still positions, recorded by the return/go compilers):
+  `handler-case`'s entries are still added from positions (`ctx.body.size()`).
 - Verify by bytes, not only by tests: `Cmp.java` compiles a directory of programs with both
   jars in process (`extract.py` pulls them out of the tests, `runchunks.sh` runs chunks in
   parallel, ~4 min for the 4,857), `cmpcli.sh` the CLI programs; `MethodDiff.java` names what

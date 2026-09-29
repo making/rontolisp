@@ -1,15 +1,14 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -50,17 +49,15 @@ final class JvmCharCompiler {
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		// An index that is no integer is CHAR's / SCHAR's type-error, named by the
 		// operator's wrapper (JvmOperandTypeRuntime).
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
 		JvmEmitHelper.unboxLong(ctx);
-		ctx.emit(Opcode.L2I);
+		ctx.body.l2i();
 		// A string that is no string is CHAR's / SCHAR's type-error too: _charRef throws
 		// the unnamed report, the operator's wrapper names it.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.wrapForOperator(JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
+		ctx.body.invokestatic(ctx.wrapForOperator(JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
 				JvmStringIndexRuntimeBuilder.CHARREF_DESC, JvmEmitHelper.selfMethod(ctx, className,
 						JvmStringIndexRuntimeBuilder.CHARREF_METHOD, JvmStringIndexRuntimeBuilder.CHARREF_DESC))
-			.index());
+			.entry());
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
@@ -71,7 +68,7 @@ final class JvmCharCompiler {
 	 */
 	static void compileCheckString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		ctx.emit(Opcode.DUP);
+		ctx.body.dup();
 		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1,
 				helper -> JvmStringpCompiler.emitStringpCheck(helper, 0));
 		emitSiteTypeError(cons, ctx, className, Opcode.IFNONNULL, OperandTypes.Kind.STRING);
@@ -84,9 +81,7 @@ final class JvmCharCompiler {
 	 */
 	static void compileCheckCharacter(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
+		ctx.body.dup().instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
 		emitSiteTypeError(cons, ctx, className, Opcode.IFNE, OperandTypes.Kind.CHARACTER);
 	}
 
@@ -105,30 +100,23 @@ final class JvmCharCompiler {
 		if (operatorForm != null) {
 			JvmExprCompiler.compileExpr(operatorForm, ctx, className);
 			tokenSlot = ctx.allocTemp();
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tokenSlot);
+			ctx.body.astore(tokenSlot);
 		}
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.named(form.kind()).typeName(), ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper
+		ctx.body.invokestatic(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-			.index());
+			.entry());
 		if (tokenSlot >= 0) {
 			// nil: the raw report, thrown as it is; a name: renamed, then thrown.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tokenSlot);
-			int named = ctx.code.size();
-			ctx.emit(Opcode.IFNONNULL);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ATHROW);
-			JvmEmitHelper.patchBranch(ctx, named, ctx.code.size());
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tokenSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.stringClass.index());
+			ctx.body.aload(tokenSlot);
+			MethodCode.Label named = ctx.body.newLabel();
+			ctx.body.ifnonnull(named);
+			ctx.body.athrow();
+			ctx.body.labelBinding(named);
+			ctx.body.aload(tokenSlot).checkcast(ctx.stringClass.entry());
 			emitOpTypeErr(ctx, className, OperandTypes.FUNNEL_TYPE);
-			ctx.emit(Opcode.ATHROW);
+			ctx.body.athrow();
 			return;
 		}
 		String operator = OperandTypes.reportedOperator(form.operator());
@@ -141,17 +129,16 @@ final class JvmCharCompiler {
 			boolean numberTyped = OperandTypes.Kind.NUMBER.name().equals(OperandTypes.operatorType(operator));
 			emitOpTypeErr(ctx, className, numberTyped ? OperandTypes.Kind.NUMBER.name() : OperandTypes.FUNNEL_TYPE);
 		}
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.athrow();
 	}
 
 	// With the raw report and the operator's name on the stack: the rename under the
 	// operator's type (FUNNEL_TYPE: the report's own kind).
 	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className, String type) {
 		JvmEmitHelper.compileUnspelledLiteral(type, ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper
+		ctx.body.invokestatic(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-			.index());
+			.entry());
 	}
 
 	/**
@@ -172,14 +159,13 @@ final class JvmCharCompiler {
 		JvmPhysicalArgs.emit(ctx, className, helper,
 				List.of(() -> JvmExprCompiler.compileExpr(value, ctx, className), () -> {
 					if (reported == null) {
-						ctx.emit(Opcode.ACONST_NULL);
+						ctx.body.aconst_null();
 					}
 					else {
 						JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 					}
 				}));
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(helper.methodref().index());
+		ctx.body.invokestatic(helper.methodref().entry());
 	}
 
 	/**
@@ -191,25 +177,22 @@ final class JvmCharCompiler {
 	 */
 	private static void emitSiteTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int ifPass,
 			OperandTypes.Kind kind) {
-		int pass = ctx.code.size();
-		ctx.emit(ifPass);
-		ctx.emitU2(0);
+		MethodCode.Label pass = ctx.body.newLabel();
+		JvmEmitHelper.branch(ctx, ifPass, pass);
 		JvmEmitHelper.compileUnspelledLiteral(kind.name(), ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper
+		ctx.body.invokestatic(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-			.index());
+			.entry());
 		String operator = LispMacroExpander.checkOperator(cons);
 		if (operator != null) {
 			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
 			JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmEmitHelper
+			ctx.body.invokestatic(JvmEmitHelper
 				.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-				.index());
+				.entry());
 		}
-		ctx.emit(Opcode.ATHROW);
-		JvmEmitHelper.patchBranch(ctx, pass, ctx.code.size());
+		ctx.body.athrow();
+		ctx.body.labelBinding(pass);
 	}
 
 	/**
@@ -221,8 +204,7 @@ final class JvmCharCompiler {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = LispMacroExpander.checkOperator(cons);
 		try {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
 		}
 		finally {
 			ctx.operator = outer;
@@ -232,7 +214,7 @@ final class JvmCharCompiler {
 	/** {@code (char-code ch)}: the code point as an integer. */
 	static void compileCharCode(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		pushCheckedCode(cons.toList().get(1), ctx, className, false);
-		ctx.emit(Opcode.I2L);
+		ctx.body.i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
@@ -242,7 +224,7 @@ final class JvmCharCompiler {
 	 */
 	static void compileCharInt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		pushCheckedCode(cons.toList().get(1), ctx, className, false);
-		ctx.emit(Opcode.I2L);
+		ctx.body.i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
@@ -251,7 +233,7 @@ final class JvmCharCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
-		ctx.emit(Opcode.L2I);
+		ctx.body.l2i();
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
@@ -275,8 +257,7 @@ final class JvmCharCompiler {
 		// Character.toUpperCase(int)/toLowerCase(int) take a code point and return a code
 		// point; a mapping that would expand to multiple code units lives on the String
 		// overload, so this is the right level for a single-character fold.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, method, "(I)I").index());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I").entry());
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
@@ -284,16 +265,14 @@ final class JvmCharCompiler {
 	static void compileCharacterp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
+		ctx.body.instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
 	/** {@code (alpha-char-p ch)}: {@code Character.isLetter(int)} on the code point. */
 	static void compileAlphaCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		pushCheckedCode(cons.toList().get(1), ctx, className, false);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z").index());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z").entry());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -320,10 +299,8 @@ final class JvmCharCompiler {
 			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
 		}
 		pushCheckedCode(args.get(1), ctx, className, false);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, method, "(I)I").index());
-		ctx.emit(Opcode.ISUB);
+		ctx.body.dup().invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I").entry());
+		ctx.body.isub();
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -335,31 +312,27 @@ final class JvmCharCompiler {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			if (!(args.get(2) instanceof LispInteger)) {
 				// A radix that is no integer is DIGIT-CHAR-P's INTEGER type-error.
-				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+				ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
 			}
 			JvmEmitHelper.unboxLong(ctx);
-			ctx.emit(Opcode.L2I);
+			ctx.body.l2i();
 		}
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 10);
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I").index());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I").entry());
 		// weight on stack: if weight < 0 return nil, else Long.valueOf(weight)
-		ctx.emit(Opcode.DUP);
-		int ifNotDigit = ctx.code.size();
-		ctx.emit(Opcode.IFLT);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.I2L);
+		ctx.body.dup();
+		MethodCode.Label ifNotDigit = ctx.body.newLabel();
+		ctx.body.iflt(ifNotDigit);
+		ctx.body.i2l();
 		JvmEmitHelper.boxLong(ctx);
-		int gotoEnd = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotDigit, ctx.code.size());
-		ctx.emit(Opcode.POP); // discard the -1
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(ifNotDigit);
+		ctx.body.pop(); // discard the -1
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd);
 	}
 
 	/** {@code (char= ...)} variadic equality. */
@@ -412,47 +385,36 @@ final class JvmCharCompiler {
 		}
 		if (n == 1) {
 			pushCheckedCode(args.get(1), ctx, className, fold);
-			ctx.emit(Opcode.POP);
+			ctx.body.pop();
 			JvmEmitHelper.compileTrue(ctx);
 			return;
 		}
-		List<Integer> failBranches = new ArrayList<>();
+		MethodCode.Label fail = ctx.body.newLabel();
 		if (n == 2) {
 			pushCheckedCode(args.get(1), ctx, className, fold);
 			pushCheckedCode(args.get(2), ctx, className, fold);
-			failBranches.add(ctx.code.size());
-			ctx.emit(failOpcode);
-			ctx.emitU2(0);
+			JvmEmitHelper.branch(ctx, failOpcode, fail);
 		}
 		else {
 			int[] codes = new int[n];
 			for (int i = 0; i < n; i++) {
 				pushCheckedCode(args.get(i + 1), ctx, className, fold);
 				codes[i] = ctx.allocTemp();
-				ctx.emit(Opcode.ISTORE);
-				ctx.emit(codes[i]);
+				ctx.body.istore(codes[i]);
 			}
 			for (int i = 0; i + 1 < n; i++) {
 				for (int j = i + 1; j < (allPairs ? n : i + 2); j++) {
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(codes[i]);
-					ctx.emit(Opcode.ILOAD);
-					ctx.emit(codes[j]);
-					failBranches.add(ctx.code.size());
-					ctx.emit(failOpcode);
-					ctx.emitU2(0);
+					ctx.body.iload(codes[i]).iload(codes[j]);
+					JvmEmitHelper.branch(ctx, failOpcode, fail);
 				}
 			}
 		}
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEnd = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int pos : failBranches) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(fail);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd);
 	}
 
 	// Pushes the int code point of a character built-in's argument -- downcased with
@@ -465,12 +427,10 @@ final class JvmCharCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(arg, ctx, className);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_CHR).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CHR).entry());
 		JvmEmitHelper.unboxCodePoint(ctx);
 		if (fold) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I").index());
+			ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I").entry());
 		}
 	}
 

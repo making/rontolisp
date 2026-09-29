@@ -3,11 +3,11 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code stringp} predicate. A value is a string when it is a quote-framed
@@ -39,32 +39,18 @@ final class JvmStringpCompiler {
 	 * @param tempSlot the local holding the value to test
 	 */
 	static void emitStringpCheck(JvmLispCompiler.Ctx ctx, int tempSlot) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int ifNotStringPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		MethodCode.Label ifNotStringPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotStringPos);
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
 		JvmEmitHelper.emitIntConst(ctx, 34);
-		int ifNotQuotePos = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPNE);
-		ctx.emitU2(0);
+		MethodCode.Label nil = ctx.body.newLabel();
+		ctx.body.if_icmpne(nil);
 		JvmEmitHelper.compileTrue(ctx);
-		List<Integer> gotoEnds = new ArrayList<>();
-		List<Integer> nilBranches = new ArrayList<>();
-		gotoEnds.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		nilBranches.add(ifNotQuotePos);
-		JvmEmitHelper.patchBranch(ctx, ifNotStringPos, ctx.code.size());
+		MethodCode.Label gotoEnds = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnds);
+		ctx.body.labelBinding(ifNotStringPos);
 		if (ctx.usesArrays) {
 			// A mutable character vector (an ArrayList whose slot-0 header Object[] has
 			// length 4) is a string too; the branch exists only when the array helpers
@@ -74,74 +60,35 @@ final class JvmStringpCompiler {
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")));
 			MethodrefConstant alGet = ctx.cp.addMethodref(arrayListClass,
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(arrayListClass.index());
-			nilBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alSize.index());
-			nilBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alGet.index());
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			nilBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(arrayListClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.INVOKEVIRTUAL);
-			ctx.emitU2(alGet.index());
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ARRAYLENGTH);
+			ctx.body.aload(tempSlot).instanceOf(arrayListClass.entry()).ifeq(nil);
+			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry());
+			ctx.body.invokevirtual(alSize.methodRefEntry()).ifeq(nil);
+			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry()).iconst_0();
+			ctx.body.invokevirtual(alGet.methodRefEntry()).instanceOf(ctx.objectArrayClass.entry());
+			ctx.body.ifeq(nil);
+			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry()).iconst_0();
+			ctx.body.invokevirtual(alGet.methodRefEntry()).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.arraylength();
 			// Header length 4 is a character vector; 7 is a displaced STRING VIEW (a
 			// view whose target is a string). Length 3 / 5 / 6 -- the ordinary, the
 			// bare array view and the packed shapes -- are not strings.
-			ctx.emit(Opcode.DUP);
+			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, 7);
-			int ifNotSeven = ctx.code.size();
-			ctx.emit(Opcode.IF_ICMPNE);
-			ctx.emitU2(0);
-			ctx.emit(Opcode.POP);
-			int gotoIsString = ctx.code.size();
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNotSeven, ctx.code.size());
+			MethodCode.Label ifNotSeven = ctx.body.newLabel();
+			ctx.body.if_icmpne(ifNotSeven);
+			ctx.body.pop();
+			MethodCode.Label gotoIsString = ctx.body.newLabel();
+			ctx.body.goto_(gotoIsString);
+			ctx.body.labelBinding(ifNotSeven);
 			JvmEmitHelper.emitIntConst(ctx, 4);
-			nilBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IF_ICMPNE);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, gotoIsString, ctx.code.size());
+			ctx.body.if_icmpne(nil);
+			ctx.body.labelBinding(gotoIsString);
 			JvmEmitHelper.compileTrue(ctx);
-			gotoEnds.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
+			ctx.body.goto_(gotoEnds);
 		}
-		for (int pos : nilBranches) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
-		ctx.emit(Opcode.ACONST_NULL);
-		for (int pos : gotoEnds) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
+		ctx.body.labelBinding(nil);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnds);
 	}
 
 }

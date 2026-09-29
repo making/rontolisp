@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code %remf-tail} built-in function. Walks a property list starting from
@@ -28,126 +28,73 @@ final class JvmRemfTailCompiler {
 		// Evaluate plist
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int currentSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(currentSlot);
+		ctx.body.astore(currentSlot);
 		// Evaluate indicator
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		int indicatorSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(indicatorSlot);
+		ctx.body.astore(indicatorSlot);
 
 		int valueCellSlot = ctx.allocTemp();
 		int nextKeyCellSlot = ctx.allocTemp();
 
 		// loop:
-		int loopPos = ctx.code.size();
+		MethodCode.Label loopPos = ctx.body.newBoundLabel();
 		// Check current instanceof Object[] (cons)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(currentSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		int ifNotConsPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.aload(currentSlot).instanceOf(ctx.objectArrayClass.entry());
+		MethodCode.Label ifNotConsPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotConsPos);
 
 		// valueCell = cdr(current) = ((Object[])current)[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(currentSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(valueCellSlot);
+		ctx.body.aload(currentSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.astore(valueCellSlot);
 
 		// Check valueCell instanceof Object[]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueCellSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		int ifValNotConsPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.aload(valueCellSlot).instanceOf(ctx.objectArrayClass.entry());
+		MethodCode.Label ifValNotConsPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifValNotConsPos);
 
 		// nextKeyCell = cdr(valueCell) = ((Object[])valueCell)[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueCellSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(nextKeyCellSlot);
+		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.astore(nextKeyCellSlot);
 
 		// Check nextKeyCell instanceof Object[]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nextKeyCellSlot);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		int ifNextNotConsPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.aload(nextKeyCellSlot).instanceOf(ctx.objectArrayClass.entry());
+		MethodCode.Label ifNextNotConsPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNextNotConsPos);
 
 		// Compare car(nextKeyCell) with indicator
 		// car(nextKeyCell) = ((Object[])nextKeyCell)[0]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nextKeyCellSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(indicatorSlot);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.objectEquals.index());
-		int ifNoMatchPos = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
+		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(indicatorSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		MethodCode.Label ifNoMatchPos = ctx.body.newLabel();
+		ctx.body.ifeq(ifNoMatchPos);
 
 		// Match! splice: rplacd(valueCell, cddr(nextKeyCell))
 		// ((Object[])valueCell)[1] = ((Object[])((Object[])nextKeyCell)[1])[1]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(valueCellSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
+		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
 		// Compute cddr(nextKeyCell)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nextKeyCellSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD); // cdr(nextKeyCell)
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.AALOAD); // cddr(nextKeyCell)
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aaload(); // cdr(nextKeyCell)
+		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aaload(); // cddr(nextKeyCell)
+		ctx.body.aastore();
 		// Return t = Long(1)
 		JvmEmitHelper.compileTrue(ctx);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
 
 		// No match: current = nextKeyCell, continue loop
-		JvmEmitHelper.patchBranch(ctx, ifNoMatchPos, ctx.code.size());
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(nextKeyCellSlot);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(currentSlot);
-		int gotoLoopPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		int offset = loopPos - gotoLoopPos;
-		ctx.emitU2(offset & 0xFFFF);
+		ctx.body.labelBinding(ifNoMatchPos);
+		ctx.body.aload(nextKeyCellSlot).astore(currentSlot).goto_(loopPos);
 
 		// return nil
-		JvmEmitHelper.patchBranch(ctx, ifNotConsPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, ifValNotConsPos, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, ifNextNotConsPos, ctx.code.size());
-		ctx.emit(Opcode.ACONST_NULL);
+		ctx.body.labelBinding(ifNotConsPos);
+		ctx.body.labelBinding(ifValNotConsPos);
+		ctx.body.labelBinding(ifNextNotConsPos);
+		ctx.body.aconst_null();
 
 		// end
-		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
 	}
 
 }

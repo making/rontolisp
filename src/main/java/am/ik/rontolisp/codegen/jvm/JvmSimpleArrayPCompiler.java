@@ -1,11 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the internal {@code %simple-array-p} predicate behind the {@code simple-array}
@@ -45,41 +46,27 @@ final class JvmSimpleArrayPCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		List<Integer> gotoTrue = new ArrayList<>();
-		List<Integer> gotoFalse = new ArrayList<>();
+		MethodCode.Label gotoTrue = ctx.body.newLabel();
+		MethodCode.Label gotoFalse = ctx.body.newLabel();
 		// The immutable runtime string: simple, no header to read -- but only when it is
 		// QUOTE-FRAMED, since a symbol shares java/lang/String without the frame (the
 		// same frame test stringp makes) and a symbol is no array at all.
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.stringClass.index());
-		int ifNotString = ctx.code.size();
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.stringClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.stringCharAt.index());
+		ctx.body.dup().instanceOf(ctx.stringClass.entry());
+		MethodCode.Label ifNotString = ctx.body.newLabel();
+		ctx.body.ifeq(ifNotString);
+		ctx.body.dup().checkcast(ctx.stringClass.entry()).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
 		JvmEmitHelper.emitIntConst(ctx, 34);
-		gotoFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IF_ICMPNE);
-		ctx.emitU2(0);
-		gotoTrue.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNotString, ctx.code.size());
+		ctx.body.if_icmpne(gotoFalse);
+		ctx.body.goto_(gotoTrue);
+		ctx.body.labelBinding(ifNotString);
 		// The packed vectors: simple by construction -- the octet vector first, whose
 		// test tells it from a quantized matrix (no array) where one can exist.
 		if (ctx.usesIntArray) {
-			List<Integer> notOctets = JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx);
-			gotoTrue.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			for (int pos : notOctets) {
-				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-			}
+			MethodCode.Label notOctets = ctx.body.newLabel();
+			JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx, notOctets);
+			ctx.body.goto_(gotoTrue);
+			ctx.body.labelBinding(notOctets);
 		}
 		List<String> simpleClasses = new ArrayList<>();
 		if (ctx.usesIntArray) {
@@ -91,102 +78,61 @@ final class JvmSimpleArrayPCompiler {
 			simpleClasses.add("[S");
 		}
 		for (String cls : simpleClasses) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8(cls)).index());
-			int ifNot = ctx.code.size();
-			ctx.emit(Opcode.IFEQ);
-			ctx.emitU2(0);
-			gotoTrue.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNot, ctx.code.size());
+			ctx.body.dup().instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(cls)).entry());
+			MethodCode.Label ifNot = ctx.body.newLabel();
+			ctx.body.ifeq(ifNot);
+			ctx.body.goto_(gotoTrue);
+			ctx.body.labelBinding(ifNot);
 		}
 		// Only the general ArrayList shape can still be an array.
-		int arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index();
-		int objectArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/lang/Object;")).index();
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(arrayListClass);
-		gotoFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(arrayListClass);
+		ClassEntry arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry();
+		ClassEntry objectArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/lang/Object;")).entry();
+		ctx.body.dup().instanceOf(arrayListClass).ifeq(gotoFalse);
+		ctx.body.checkcast(arrayListClass);
 		// An EMPTY list carries no header, so it is no array shape this predicate knows.
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.cp
-			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")))
-			.index());
-		gotoFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.cp
+		ctx.body.dup();
+		ctx.body.invokevirtual(
+				ctx.cp
+					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")))
+					.methodRefEntry());
+		ctx.body.ifeq(gotoFalse);
+		ctx.body.iconst_0();
+		ctx.body.invokevirtual(ctx.cp
 			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")))
-			.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(objectArrayClass);
-		gotoFalse.add(ctx.code.size());
-		ctx.emit(Opcode.IFEQ);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(objectArrayClass);
+			.methodRefEntry());
+		ctx.body.dup().instanceOf(objectArrayClass).ifeq(gotoFalse);
+		ctx.body.checkcast(objectArrayClass);
 		// header[1] (the fill pointer) and header[2] (the :adjustable argument): either
 		// one non-null means NOT simple.
 		for (int slot = 1; slot <= 2; slot++) {
-			ctx.emit(Opcode.DUP);
-			ctx.emit(slot == 1 ? Opcode.ICONST_1 : Opcode.ICONST_2);
-			ctx.emit(Opcode.AALOAD);
-			int ifNull = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
-			gotoFalse.add(ctx.code.size());
-			ctx.emit(Opcode.GOTO);
-			ctx.emitU2(0);
-			JvmEmitHelper.patchBranch(ctx, ifNull, ctx.code.size());
+			ctx.body.dup().loadConstant(slot).aaload();
+			MethodCode.Label ifNull = ctx.body.newLabel();
+			ctx.body.ifnull(ifNull);
+			ctx.body.goto_(gotoFalse);
+			ctx.body.labelBinding(ifNull);
 		}
 		// header.length > 4 with a non-null slot 3: displaced (length 5, or 7 for a
 		// string view), so NOT simple.
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.ICONST_4);
-		int ifShort = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPLE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_3);
-		ctx.emit(Opcode.AALOAD);
-		int ifNoTarget = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
-		gotoFalse.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		JvmEmitHelper.patchBranch(ctx, ifNoTarget, ctx.code.size());
-		JvmEmitHelper.patchBranch(ctx, ifShort, ctx.code.size());
-		gotoTrue.add(ctx.code.size());
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int pos : gotoFalse) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEnd = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		for (int pos : gotoTrue) {
-			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
-		}
-		ctx.emit(Opcode.POP);
+		ctx.body.dup().arraylength().iconst_4();
+		MethodCode.Label ifShort = ctx.body.newLabel();
+		ctx.body.if_icmple(ifShort);
+		ctx.body.dup().iconst_3().aaload();
+		MethodCode.Label ifNoTarget = ctx.body.newLabel();
+		ctx.body.ifnull(ifNoTarget);
+		ctx.body.goto_(gotoFalse);
+		ctx.body.labelBinding(ifNoTarget);
+		ctx.body.labelBinding(ifShort);
+		ctx.body.goto_(gotoTrue);
+		ctx.body.labelBinding(gotoFalse);
+		ctx.body.pop().aconst_null();
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(gotoTrue);
+		ctx.body.pop();
 		JvmEmitHelper.compileTrue(ctx);
-		JvmEmitHelper.patchBranch(ctx, gotoEnd, ctx.code.size());
+		ctx.body.labelBinding(gotoEnd);
 	}
 
 }

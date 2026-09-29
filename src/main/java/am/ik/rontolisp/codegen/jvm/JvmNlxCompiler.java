@@ -3,9 +3,8 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 import java.util.Objects;
 
-import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -58,11 +57,7 @@ final class JvmNlxCompiler {
 	static void compileTag(JvmLispCompiler.Ctx ctx) {
 		ConstantPool.MethodrefConstant objectCtor = ctx.cp.addMethodref(ctx.objectClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(objectCtor.index());
+		ctx.body.new_(ctx.objectClass.entry()).dup().invokespecial(objectCtor.entry());
 	}
 
 	/** {@code (%nlx-throw id value)} -- throw a non-local exit carrying (id, value). */
@@ -107,51 +102,27 @@ final class JvmNlxCompiler {
 		int savedNextLocal = ctx.nextLocal;
 		int exSlot = ctx.allocTemp();
 		// ex = new RuntimeException([message])
-		ctx.emit(Opcode.NEW);
-		ctx.emitU2(runtimeEx.index());
-		ctx.emit(Opcode.DUP);
+		ctx.body.new_(runtimeEx.entry()).dup();
 		if (message != null) {
 			JvmEmitHelper.compileStringLiteral(message, ctx);
 		}
-		ctx.emit(Opcode.INVOKESPECIAL);
-		ctx.emitU2(exCtor.index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(exSlot);
+		ctx.body.invokespecial(exCtor.entry()).astore(exSlot);
 		// _nleTl.set(new Object[]{ex, id, value, previous}) -- pushing onto the channel
 		// rather than overwriting it. The previous entry is read LAST, after the tag and
 		// value forms have run, so an exit those forms complete themselves is already
 		// popped by the time it is captured.
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.ICONST_4);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(exSlot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry()).iconst_4();
+		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(exSlot).aastore().dup();
+		ctx.body.iconst_1();
 		JvmExprCompiler.compileExpr(tagForm, ctx, className);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_2);
+		ctx.body.aastore().dup().iconst_2();
 		JvmExprCompiler.compileExpr(valueForm, ctx, className);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_3);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		ctx.body.aastore().dup().iconst_3();
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).aastore();
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
 		// throw ex
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(exSlot);
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.aload(exSlot).athrow();
 		ctx.nextLocal = savedNextLocal;
 	}
 
@@ -205,65 +176,46 @@ final class JvmNlxCompiler {
 		if (eqTags) {
 			tagSlot = ctx.allocTemp();
 			JvmExprCompiler.compileExpr(idForm, ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(tagSlot);
+			ctx.body.astore(tagSlot);
 		}
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
 		}
-		int start = ctx.code.size();
+		MethodCode.Label start = ctx.body.newBoundLabel();
 		// Body as an implicit progn.
 		if (parts.size() <= 2) {
-			ctx.emit(Opcode.ACONST_NULL);
+			ctx.body.aconst_null();
 		}
 		else {
 			for (int i = 2; i < parts.size(); i++) {
 				if (i > 2) {
-					ctx.emit(Opcode.POP);
+					ctx.body.pop();
 				}
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
 		}
-		int end = ctx.code.size();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(resultSlot);
-		int gotoDonePos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		MethodCode.Label end = ctx.body.newBoundLabel();
+		MethodCode.Label done = ctx.body.newLabel();
+		MethodCode.Label rethrow = ctx.body.newLabel();
+		ctx.body.astore(resultSlot).goto_(done);
 		// Handler: read the pending NLE; deliver on an id match, else rethrow.
-		int handler = ctx.code.size();
+		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(arrSlot);
+		ctx.body.astore(excSlot).getstatic(Objects.requireNonNull(channel.nleTlField).entry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).astore(arrSlot);
 		// if (_nleTl == null) rethrow
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(arrSlot);
-		int ifNullPos = ctx.code.size();
-		ctx.emit(Opcode.IFNULL);
-		ctx.emitU2(0);
+		ctx.body.aload(arrSlot).ifnull(rethrow);
 		// if (triple[0] != caught) rethrow -- identity guards against a stale channel
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		int ifNotSameExPos = ctx.code.size();
-		ctx.emit(Opcode.IF_ACMPNE);
-		ctx.emitU2(0);
+		ctx.body.aload(excSlot).if_acmpne(rethrow);
 		// if the carried tag is not ours, rethrow -- an outer catcher's exit. The
 		// internal
 		// form compares the block-instance id by identity; a user catch compares the tag
 		// with eq, through pseudo-locals so the nil-safe eq compiler is reused verbatim.
-		int ifNotSameIdPos;
 		if (eqTags) {
 			int thrownSlot = ctx.allocTemp();
 			emitArrayElement(ctx, arrSlot, objectArrayClass, 1);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(thrownSlot);
+			ctx.body.astore(thrownSlot);
 			String thrownVar = "__throw_tag$" + thrownSlot;
 			String wantVar = "__catch_tag$" + tagSlot;
 			ctx.locals.put(thrownVar, thrownSlot);
@@ -275,51 +227,32 @@ final class JvmNlxCompiler {
 				ctx.locals.remove(thrownVar);
 				ctx.locals.remove(wantVar);
 			}
-			ifNotSameIdPos = ctx.code.size();
-			ctx.emit(Opcode.IFNULL);
-			ctx.emitU2(0);
+			ctx.body.ifnull(rethrow);
 		}
 		else {
 			emitArrayElement(ctx, arrSlot, objectArrayClass, 1);
 			JvmExprCompiler.compileExpr(idForm, ctx, className);
-			ifNotSameIdPos = ctx.code.size();
-			ctx.emit(Opcode.IF_ACMPNE);
-			ctx.emitU2(0);
+			ctx.body.if_acmpne(rethrow);
 		}
 		// Matched: pop the channel back to the entry this one was pushed over (null at
 		// the bottom), deliver entry[2]. Popping rather than clearing is what keeps an
 		// exit that was already travelling -- this catch may be running inside an
 		// unwind-protect cleanup on ITS way out -- findable by its own landing pad.
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(Objects.requireNonNull(channel.nleTlField).index());
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 3);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 2);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(resultSlot);
-		int gotoDone2Pos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
+		ctx.body.astore(resultSlot).goto_(done);
 		// Rethrow: a real condition, a stale channel, or an outer block's exit.
-		int rethrow = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, ifNullPos, rethrow);
-		JvmEmitHelper.patchBranch(ctx, ifNotSameExPos, rethrow);
-		JvmEmitHelper.patchBranch(ctx, ifNotSameIdPos, rethrow);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(excSlot);
-		ctx.emit(Opcode.ATHROW);
+		ctx.body.labelBinding(rethrow);
+		ctx.body.aload(excSlot).athrow();
 		// Done.
-		int done = ctx.code.size();
-		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
-		JvmEmitHelper.patchBranch(ctx, gotoDone2Pos, done);
+		ctx.body.labelBinding(done);
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.pop();
 			spill.restore(ctx);
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(resultSlot);
-		ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
+		ctx.body.aload(resultSlot).exceptionCatch(start, end, handler, null);
 		ctx.nextLocal = savedNextLocal;
 	}
 
@@ -332,17 +265,7 @@ final class JvmNlxCompiler {
 	/** Loads {@code ((Object[]) arrSlot)[index]} onto the stack. */
 	private static void emitArrayElement(JvmLispCompiler.Ctx ctx, int arrSlot, ConstantPool.ClassConstant arrayClass,
 			int index) {
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(arrSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(arrayClass.index());
-		switch (index) {
-			case 0 -> ctx.emit(Opcode.ICONST_0);
-			case 1 -> ctx.emit(Opcode.ICONST_1);
-			case 2 -> ctx.emit(Opcode.ICONST_2);
-			default -> ctx.emit(Opcode.ICONST_3);
-		}
-		ctx.emit(Opcode.AALOAD);
+		ctx.body.aload(arrSlot).checkcast(arrayClass.entry()).loadConstant(index).aaload();
 	}
 
 }

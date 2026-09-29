@@ -1,7 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import am.ik.jvm.ArrayType;
+import java.lang.classfile.TypeKind;
+
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.MethodCode;
 import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
 
@@ -38,11 +40,9 @@ final class JvmEmitHelper {
 		}
 		// The loop's value has to end up back ON TOP of the reloaded operands.
 		int resultSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(resultSlot);
+		ctx.body.astore(resultSlot);
 		leaveLoopScope(ctx, spill);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(resultSlot);
+		ctx.body.aload(resultSlot);
 	}
 
 	/**
@@ -90,29 +90,26 @@ final class JvmEmitHelper {
 
 	static void compileLong(long value, JvmLispCompiler.Ctx ctx) {
 		emitRawLong(value, ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.longValueOf.index());
+		ctx.body.invokestatic(ctx.longValueOf.entry());
 	}
 
 	/** Pushes the primitive {@code long} (no boxing). */
 	static void emitRawLong(long value, JvmLispCompiler.Ctx ctx) {
 		if (value == 0) {
-			ctx.emit(Opcode.LCONST_0);
+			ctx.body.lconst_0();
 		}
 		else if (value == 1) {
-			ctx.emit(Opcode.LCONST_1);
+			ctx.body.lconst_1();
 		}
 		else {
 			ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-			ctx.emit(Opcode.LDC2_W);
-			ctx.emitU2(lc.index());
+			ctx.body.ldc(lc.entry());
 		}
 	}
 
 	static void compileDouble(double value, JvmLispCompiler.Ctx ctx) {
 		emitRawDouble(value, ctx);
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.doubleValueOf.index());
+		ctx.body.invokestatic(ctx.doubleValueOf.entry());
 	}
 
 	/** Pushes the primitive {@code double} (no boxing). */
@@ -120,15 +117,14 @@ final class JvmEmitHelper {
 		// The raw-bits guard keeps -0.0 out of the DCONST_0 peephole (-0.0 == 0.0
 		// in Java), mirroring JvmQuoteCompiler.emitRawDouble.
 		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
-			ctx.emit(Opcode.DCONST_0);
+			ctx.body.dconst_0();
 		}
 		else if (value == 1.0) {
-			ctx.emit(Opcode.DCONST_1);
+			ctx.body.dconst_1();
 		}
 		else {
 			ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
-			ctx.emit(Opcode.LDC2_W);
-			ctx.emitU2(dc.index());
+			ctx.body.ldc(dc.entry());
 		}
 	}
 
@@ -144,8 +140,7 @@ final class JvmEmitHelper {
 	 */
 	static void compileBigInteger(java.math.BigInteger value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.FieldrefConstant ref = ctx.bigIntPool.intern(ctx.cp, ctx.className, value);
-		ctx.emit(Opcode.GETSTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.getstatic(ref.entry());
 	}
 
 	/**
@@ -153,17 +148,11 @@ final class JvmEmitHelper {
 	 * {@code BigInteger[2]} of numerator and denominator.
 	 */
 	static void compileRatio(am.ik.rontolisp.LispRatio value, JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.ICONST_2);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(bigIntegerClass(ctx).index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
+		ctx.body.iconst_2().anewarray(bigIntegerClass(ctx).entry()).dup().iconst_0();
 		compileBigInteger(value.numerator(), ctx);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_1);
+		ctx.body.aastore().dup().iconst_1();
 		compileBigInteger(value.denominator(), ctx);
-		ctx.emit(Opcode.AASTORE);
+		ctx.body.aastore();
 	}
 
 	/** The {@code BigInteger[]} (ratio runtime representation) class constant. */
@@ -180,25 +169,14 @@ final class JvmEmitHelper {
 	 * such a program compiles byte-identically to a build that never knew about them.
 	 * @param ctx the compilation context
 	 * @param tempSlot the local holding the value
-	 * @return the branch position to patch to the not-a-cons target, or -1 when no test
-	 * was emitted
+	 * @param notCons where an instance jumps
 	 */
-	static int emitInstanceExclusion(JvmLispCompiler.Ctx ctx, int tempSlot) {
+	static void emitInstanceExclusion(JvmLispCompiler.Ctx ctx, int tempSlot, MethodCode.Label notCons) {
 		if (!ctx.mayUseInstances) {
-			return -1;
+			return;
 		}
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.layoutPool.stringArrayClass(ctx.cp).index());
-		int pos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
-		return pos;
+		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp).entry()).ifne(notCons);
 	}
 
 	/**
@@ -215,40 +193,23 @@ final class JvmEmitHelper {
 	 * that never knew about them.
 	 * @param ctx the compilation context
 	 * @param tempSlot the local holding the value
-	 * @return the branch positions to patch to the not-a-cons target, empty when no test
-	 * was emitted
+	 * @param notCons where a stream or a stream-read token jumps
 	 */
-	static int[] emitAsyncValueExclusion(JvmLispCompiler.Ctx ctx, int tempSlot) {
+	static void emitAsyncValueExclusion(JvmLispCompiler.Ctx ctx, int tempSlot, MethodCode.Label notCons) {
 		if (!ctx.mayUseAsyncValues) {
-			return new int[0];
+			return;
 		}
 		// Length first, like the runtime's own marker test: it rejects every cons
 		// (Object[2]) before a string comparison is reached.
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(tempSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ARRAYLENGTH);
-		ctx.emit(Opcode.ICONST_3);
-		int ifNotTriplePos = ctx.code.size();
-		ctx.emit(Opcode.IF_ICMPNE);
-		ctx.emitU2(0);
-		int[] positions = new int[2];
-		String[] markers = { JvmAsyncRuntimeBuilder.SMARKER, JvmAsyncRuntimeBuilder.RMARKER };
-		for (int i = 0; i < markers.length; i++) {
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(tempSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
-			compileUnspelledLiteral(markers[i], ctx);
-			positions[i] = ctx.code.size();
-			ctx.emit(Opcode.IF_ACMPEQ);
-			ctx.emitU2(0);
+		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).arraylength().iconst_3();
+		MethodCode.Label ifNotTriplePos = ctx.body.newLabel();
+		ctx.body.if_icmpne(ifNotTriplePos);
+		for (String marker : new String[] { JvmAsyncRuntimeBuilder.SMARKER, JvmAsyncRuntimeBuilder.RMARKER }) {
+			ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			compileUnspelledLiteral(marker, ctx);
+			ctx.body.if_acmpeq(notCons);
 		}
-		patchBranch(ctx, ifNotTriplePos, ctx.code.size());
-		return positions;
+		ctx.body.labelBinding(ifNotTriplePos);
 	}
 
 	/**
@@ -277,12 +238,10 @@ final class JvmEmitHelper {
 	static void compileUnspelledLiteral(String value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.StringConstant sc = ctx.cp.addString(value);
 		if (sc.index() <= 255) {
-			ctx.emit(Opcode.LDC);
-			ctx.emit(sc.index());
+			ctx.body.ldc(sc.entry());
 		}
 		else {
-			ctx.emit(Opcode.LDC_W);
-			ctx.emitU2(sc.index());
+			ctx.body.ldc(sc.entry());
 		}
 	}
 
@@ -344,16 +303,8 @@ final class JvmEmitHelper {
 	 */
 	static void boxCodePoint(JvmLispCompiler.Ctx ctx) {
 		int tmp = ctx.allocTemp();
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(tmp);
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.NEWARRAY);
-		ctx.emit(ArrayType.T_INT);
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ILOAD);
-		ctx.emit(tmp);
-		ctx.emit(Opcode.IASTORE);
+		ctx.body.istore(tmp).iconst_1().newarray(TypeKind.INT).dup().iconst_0().iload(tmp);
+		ctx.body.iastore();
 	}
 
 	/**
@@ -363,10 +314,7 @@ final class JvmEmitHelper {
 	 * {@code [.., ref]}; on exit: {@code [.., cp:int]}.
 	 */
 	static void unboxCodePoint(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(charArrayClass(ctx).index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.IALOAD);
+		ctx.body.checkcast(charArrayClass(ctx).entry()).iconst_0().iaload();
 	}
 
 	/** A {@code java.math.BigInteger} instance-method reference. */
@@ -423,11 +371,10 @@ final class JvmEmitHelper {
 			helper.nextLocal = arity;
 			helper.maxLocals = arity;
 			body.accept(helper);
-			helper.emit(Opcode.ARETURN);
+			helper.body.areturn();
 			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(name, nameUtf8, descUtf8, helper));
 		}
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ref.index());
+		ctx.body.invokestatic(ref.entry());
 	}
 
 	/**
@@ -435,42 +382,31 @@ final class JvmEmitHelper {
 	 * {@code BigInteger}.
 	 */
 	static void toBigInteger(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.BIG_OP).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.BIG_OP).entry());
 	}
 
 	/** Normalizes the {@code BigInteger} on the stack to a {@code Long} when it fits. */
 	static void normalizeBigInteger(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.NORM_OP).index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NORM_OP).entry());
 	}
 
 	static void unboxLong(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.longClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.longValue.index());
+		ctx.body.checkcast(ctx.longClass.entry()).invokevirtual(ctx.longValue.methodRefEntry());
 	}
 
 	static void boxLong(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.longValueOf.index());
+		ctx.body.invokestatic(ctx.longValueOf.entry());
 	}
 
 	static void unboxDouble(JvmLispCompiler.Ctx ctx) {
 		// _dbl coerces Long/BigInteger/Double and ratios (BigInteger[]) to a Double, so
 		// float contagion also works when a ratio flows into a double-literal operation.
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.DBL).index());
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.numberClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.numberDoubleValue.index());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
+		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(ctx.numberDoubleValue.methodRefEntry());
 	}
 
 	static void boxDouble(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.doubleValueOf.index());
+		ctx.body.invokestatic(ctx.doubleValueOf.entry());
 	}
 
 	/**
@@ -482,10 +418,7 @@ final class JvmEmitHelper {
 	 * ({@code .kb/declarations-type-checks.md}).
 	 */
 	static void unboxDeclaredDouble(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.doubleClass.index());
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(ctx.numberDoubleValue.index());
+		ctx.body.checkcast(ctx.doubleClass.entry()).invokevirtual(ctx.numberDoubleValue.methodRefEntry());
 	}
 
 	/**
@@ -502,27 +435,11 @@ final class JvmEmitHelper {
 	 * program of absurd size to reach it, but they share the same fix.
 	 */
 	static void emitIntConst(JvmLispCompiler.Ctx ctx, int value) {
-		if (value >= 0 && value <= 5) {
-			ctx.emit(Opcode.ICONST_0 + value);
-		}
-		else if (value >= -128 && value <= 127) {
-			ctx.emit(Opcode.BIPUSH);
-			ctx.emit(value & 0xFF);
-		}
-		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			ctx.emit(Opcode.SIPUSH);
-			ctx.emitU2(value);
+		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			ctx.body.loadConstant(value);
 		}
 		else {
-			ConstantPool.IntegerConstant constant = ctx.cp.addInteger(value);
-			if (constant.index() <= 255) {
-				ctx.emit(Opcode.LDC);
-				ctx.emit(constant.index());
-			}
-			else {
-				ctx.emit(Opcode.LDC_W);
-				ctx.emitU2(constant.index());
-			}
+			ctx.body.ldc(ctx.cp.addInteger(value).entry());
 		}
 	}
 
@@ -531,16 +448,32 @@ final class JvmEmitHelper {
 	 * (null=nil or the symbol {@code t}).
 	 */
 	static void emitBoolFromInt(JvmLispCompiler.Ctx ctx) {
-		int ifPos = ctx.code.size();
-		ctx.emit(Opcode.IFNE);
-		ctx.emitU2(0);
-		ctx.emit(Opcode.ACONST_NULL);
-		int gotoEndPos = ctx.code.size();
-		ctx.emit(Opcode.GOTO);
-		ctx.emitU2(0);
-		patchBranch(ctx, ifPos, ctx.code.size());
+		MethodCode.Label ifPos = ctx.body.newLabel();
+		ctx.body.ifne(ifPos);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(ifPos);
 		compileTrue(ctx);
-		patchBranch(ctx, gotoEndPos, ctx.code.size());
+		ctx.body.labelBinding(gotoEndPos);
+	}
+
+	/**
+	 * A branch whose opcode is chosen at run time, named by its byte ({@link Opcode}):
+	 * the typed layer's short branch of that kind.
+	 * @param ctx the compile context
+	 * @param opcode a conditional branch or {@code goto}
+	 * @param target where it jumps
+	 */
+	static void branch(JvmLispCompiler.Ctx ctx, int opcode, MethodCode.Label target) {
+		for (java.lang.classfile.Opcode op : java.lang.classfile.Opcode.values()) {
+			if (op.bytecode() == opcode && op.kind() == java.lang.classfile.Opcode.Kind.BRANCH
+					&& op.sizeIfFixed() == 3) {
+				ctx.body.branch(op, target);
+				return;
+			}
+		}
+		throw new IllegalArgumentException("not a short branch: " + opcode);
 	}
 
 	/**
@@ -570,24 +503,15 @@ final class JvmEmitHelper {
 	 * @param ctx the compile context
 	 */
 	static void emitListCheck(JvmLispCompiler.Ctx ctx) {
-		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_LIST).index());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_LIST).entry());
 	}
 
 	/**
 	 * Boxes a local variable in an Object[1] cell for capture-by-reference.
 	 */
 	static void emitBoxLocal(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.emit(Opcode.ICONST_1);
-		ctx.emit(Opcode.ANEWARRAY);
-		ctx.emitU2(ctx.objectClass.index());
-		ctx.emit(Opcode.DUP);
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(slot);
-		ctx.emit(Opcode.AASTORE);
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(slot);
+		ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(slot);
+		ctx.body.aastore().astore(slot);
 	}
 
 }
