@@ -50,7 +50,7 @@ final class JvmArraypCompiler {
 			ctx.body.labelBinding(notOctets);
 		}
 		for (String cls : packedClasses) {
-			ctx.body.dup().instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(cls)).entry());
+			ctx.body.dup().instanceOf(ctx.cp.classEntry(cls));
 			MethodCode.Label ifNotPackedPos = ctx.body.newLabel();
 			ctx.body.ifeq(ifNotPackedPos);
 			ctx.body.pop();
@@ -65,7 +65,7 @@ final class JvmArraypCompiler {
 			ctx.body.invokestatic(javaSites.direct().lispArray());
 		}
 		else {
-			ctx.body.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry());
+			ctx.body.instanceOf(ctx.cp.classEntry("java/util/ArrayList"));
 		}
 		MethodCode.Label ifNotListPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotListPos);

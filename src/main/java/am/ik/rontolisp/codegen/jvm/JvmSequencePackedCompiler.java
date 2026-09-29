@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -47,22 +47,20 @@ final class JvmSequencePackedCompiler {
 		// site reports the sequence to _gpuWritten / _gpuMaterialize BEFORE the helper
 		// runs and hands the helper what the guard answers -- the array, or a result
 		// stub's backing (.kb/gpu.md, "Device residency"). The helper answers a position.
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
 			ctx.body.invokestatic(Objects
-				.requireNonNull(gpuOps.get(read ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
-				.entry());
+				.requireNonNull(gpuOps.get(read ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE)));
 		}
 		JvmExprCompiler.compileExpr(stream != null ? stream : parts.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 		JvmExprCompiler.compileExpr(parts.get(4), ctx, className);
-		Utf8Constant nameUtf8 = ctx.cp
-			.addUtf8(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_METHOD : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_METHOD);
-		Utf8Constant descUtf8 = ctx.cp
-			.addUtf8(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_DESC : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_DESC);
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(ref.entry());
+		Utf8Entry nameUtf8 = ctx.cp
+			.utf8Entry(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_METHOD : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_METHOD);
+		Utf8Entry descUtf8 = ctx.cp
+			.utf8Entry(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_DESC : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_DESC);
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(ref);
 	}
 
 }

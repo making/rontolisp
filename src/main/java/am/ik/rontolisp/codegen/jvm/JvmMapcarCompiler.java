@@ -47,7 +47,7 @@ final class JvmMapcarCompiler {
 		}
 
 		// Create sentinel cons: new Object[2] {null, null}
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry());
+		ctx.body.iconst_2().anewarray(ctx.objectClass);
 		int headSlot = ctx.allocTemp();
 		ctx.body.astore(headSlot);
 
@@ -61,7 +61,7 @@ final class JvmMapcarCompiler {
 		// if any list is no cons, goto exit (stop at the shortest list)
 		MethodCode.Label exit = ctx.body.newLabel();
 		for (int listSlot : listSlots) {
-			ctx.body.aload(listSlot).invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).entry());
+			ctx.body.aload(listSlot).invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS));
 			ctx.body.ifeq(exit);
 		}
 
@@ -74,14 +74,14 @@ final class JvmMapcarCompiler {
 
 		// Create new cons: new Object[2] {mapped, null}
 		int mappedSlot = ctx.allocTemp();
-		ctx.body.astore(mappedSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.astore(mappedSlot).iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 		ctx.body.aload(mappedSlot).aastore();
 
 		int newConsSlot = ctx.allocTemp();
 		ctx.body.astore(newConsSlot);
 
 		// tail[1] = newCons (rplacd tail)
-		ctx.body.aload(tailSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aload(tailSlot).checkcast(ctx.objectArrayClass).iconst_1();
 		ctx.body.aload(newConsSlot).aastore();
 
 		// tail = newCons
@@ -89,7 +89,7 @@ final class JvmMapcarCompiler {
 
 		// advance each list: list = cdr(list) = ((Object[]) list)[1]
 		for (int listSlot : listSlots) {
-			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 			ctx.body.astore(listSlot);
 		}
 
@@ -105,12 +105,12 @@ final class JvmMapcarCompiler {
 			JvmEmitHelper.emitListCheck(ctx);
 			ctx.body.pop();
 		}
-		ctx.body.aload(headSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(headSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 	}
 
 	// car(list) = ((Object[]) list)[0]
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 	}
 
 }

@@ -1,8 +1,10 @@
 package am.ik.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.DoubleEntry;
 import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import org.junit.jupiter.api.Test;
 
@@ -14,15 +16,15 @@ class ConstantPoolTest {
 	@Test
 	void deduplicatesIdenticalEntries() {
 		ConstantPool cp = new ConstantPool();
-		assertThat(cp.addUtf8("same").index()).isEqualTo(cp.addUtf8("same").index());
+		assertThat(cp.utf8Entry("same")).isSameAs(cp.utf8Entry("same"));
 		assertThat(cp.size()).isEqualTo(1);
 	}
 
 	@Test
 	void longAndDoubleTakeTwoSlots() {
 		ConstantPool cp = new ConstantPool();
-		int first = cp.addLong(1L).index();
-		int second = cp.addDouble(1.0).index();
+		int first = cp.entries().longEntry(1L).index();
+		int second = cp.entries().doubleEntry(1.0).index();
 		assertThat(second).isEqualTo(first + 2);
 		assertThat(cp.size()).isEqualTo(4);
 	}
@@ -32,48 +34,30 @@ class ConstantPoolTest {
 	@Test
 	void negativeZeroIsItsOwnDoubleConstant() {
 		ConstantPool cp = new ConstantPool();
-		ConstantPool.DoubleConstant zero = cp.addDouble(0.0);
-		ConstantPool.DoubleConstant negativeZero = cp.addDouble(-0.0);
+		DoubleEntry zero = cp.entries().doubleEntry(0.0);
+		DoubleEntry negativeZero = cp.entries().doubleEntry(-0.0);
 		assertThat(negativeZero.index()).isNotEqualTo(zero.index());
 		assertThat(Double.doubleToRawLongBits(((DoubleEntry) cp.entryAt(negativeZero.index())).doubleValue()))
 			.isEqualTo(Double.doubleToRawLongBits(-0.0));
 	}
 
 	// The master pool describes a program too large for one class: it keeps growing past
-	// the format limit, and an entry whose components sit past 65535 still names them.
+	// the format limit, and an entry past 65535 is still the entry its content names.
 	@Test
-	void aPoolKeepsFullWidthComponentIndexesPastTheFormatLimit() {
+	void aPoolGrowsPastTheFormatLimit() {
 		ConstantPool cp = new ConstantPool();
 		while (cp.size() < 70_000) {
-			cp.addInteger(cp.size());
+			cp.entries().intEntry(cp.size());
 		}
-		ConstantPool.Utf8Constant owner = cp.addUtf8("Owner");
-		ConstantPool.ClassConstant ownerClass = cp.addClass(owner);
-		ConstantPool.NameAndTypeConstant first = cp.addNameAndType(cp.addUtf8("a"), cp.addUtf8("()V"));
-		ConstantPool.NameAndTypeConstant second = cp.addNameAndType(cp.addUtf8("b"), cp.addUtf8("()V"));
-		ConstantPool.MethodrefConstant firstRef = cp.addMethodref(ownerClass, first);
-		ConstantPool.MethodrefConstant secondRef = cp.addMethodref(ownerClass, second);
-		assertThat(firstRef.index()).isNotEqualTo(secondRef.index()).isGreaterThan(0xFFFF);
-		assertThat(cp.typeAt(firstRef.index())).isEqualTo(ConstantType.METHODREF);
-		assertThat(cp.firstComponentAt(firstRef.index())).isEqualTo(ownerClass.index());
-		assertThat(cp.secondComponentAt(secondRef.index())).isEqualTo(second.index());
-		assertThat(cp.utf8At(cp.firstComponentAt(ownerClass.index()))).isEqualTo("Owner");
-		assertThat(cp.descriptorOf(secondRef.index())).isEqualTo("()V");
-		assertThat(cp.entryAt(firstRef.index())).isInstanceOf(MethodRefEntry.class);
-		// The same reference added again is still the same entry.
-		assertThat(cp.addMethodref(ownerClass, first).index()).isEqualTo(firstRef.index());
-	}
-
-	// The test instrument: every index an emitter is handed is one no class file can
-	// carry, and the ones before it are filler nothing references.
-	@Test
-	void aPoolStartedPastTheFormatLimitHandsOutOnlyIndexesPastIt() {
-		ConstantPool cp = ConstantPool.startingAt(70_000);
-		ConstantPool.StringConstant text = cp.addString("text");
-		assertThat(cp.addUtf8("first").index()).isGreaterThanOrEqualTo(70_000);
-		assertThat(text.index()).isGreaterThan(70_000);
-		assertThat(cp.size()).isGreaterThan(70_000);
-		assertThat(cp.typeAt(1)).as("a filler entry").isEqualTo(ConstantType.UTF8);
+		ClassEntry owner = cp.classEntry("Owner");
+		MethodRefEntry first = cp.methodRef(owner, "a", "()V");
+		MethodRefEntry second = cp.methodRef(owner, "b", "()V");
+		assertThat(first.index()).isNotEqualTo(second.index()).isGreaterThan(0xFFFF);
+		assertThat(first.owner().asInternalName()).isEqualTo("Owner");
+		assertThat(cp.entryAt(second.index())).isSameAs(second);
+		// The same reference minted again, from names or from entries, is the same entry.
+		assertThat(cp.methodRef("Owner", "a", "()V")).isSameAs(first);
+		assertThat(cp.methodRef(owner, cp.utf8Entry("a"), cp.utf8Entry("()V"))).isSameAs(first);
 	}
 
 	// A CONSTANT_Utf8 holds 65535 bytes of MODIFIED UTF-8: U+0000 takes two, a
@@ -83,27 +67,25 @@ class ConstantPoolTest {
 	void refusesAUtf8PastItsModifiedUtf8Length() {
 		ConstantPool cp = new ConstantPool();
 		String fits = "\u0000".repeat(32_767) + "a";
-		assertThat(cp.addUtf8(fits).entry().stringValue()).isEqualTo(fits);
-		assertThatIllegalArgumentException().isThrownBy(() -> cp.addUtf8("\u0000".repeat(32_768)))
+		assertThat(cp.utf8Entry(fits).stringValue()).isEqualTo(fits);
+		assertThatIllegalArgumentException().isThrownBy(() -> cp.utf8Entry("\u0000".repeat(32_768)))
 			.withMessageContaining("65536");
-		assertThatIllegalArgumentException().isThrownBy(() -> cp.addUtf8("💣".repeat(10_923)))
+		assertThatIllegalArgumentException().isThrownBy(() -> cp.stringEntry("💣".repeat(10_923)))
 			.withMessageContaining("65538");
 	}
 
-	// The typed entries an emitter on MethodCode names are the entries the byte emitters'
-	// wrappers name: one pool, one entry per content.
+	// The facades mint one entry per content, in the one pool: from names or from Utf8
+	// entries, a class, a string, a field and an interface method alike.
 	@Test
-	void typedEntriesAreTheWrappersEntries() {
+	void theFacadesMintOneEntryPerContent() {
 		ConstantPool cp = new ConstantPool();
-		ConstantPool.MethodrefConstant wrapped = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Map")),
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		assertThat(cp.methodRef("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;"))
-			.isSameAs(wrapped.entry());
-		assertThat(cp.stringEntry("s")).isSameAs(cp.addString("s").entry());
-		assertThat(cp.fieldRef(cp.classEntry("A"), "f", "I").index())
-			.isEqualTo(cp.addFieldref(cp.addClass(cp.addUtf8("A")), cp.addNameAndType(cp.addUtf8("f"), cp.addUtf8("I")))
-				.index());
-		assertThat(cp.interfaceMethodRef("java/util/List", "size", "()I")).isInstanceOf(InterfaceMethodRefEntry.class);
+		Utf8Entry map = cp.utf8Entry("java/util/Map");
+		assertThat(cp.classEntry(map)).isSameAs(cp.classEntry("java/util/Map"));
+		assertThat(cp.stringEntry(cp.utf8Entry("s"))).isSameAs(cp.stringEntry("s"));
+		assertThat(cp.fieldRef(cp.classEntry("A"), "f", "I")).isSameAs(cp.fieldRef("A", "f", "I"));
+		InterfaceMethodRefEntry size = cp.interfaceMethodRef("java/util/List", "size", "()I");
+		assertThat(cp.interfaceMethodRef(cp.classEntry("java/util/List"), cp.utf8Entry("size"), cp.utf8Entry("()I")))
+			.isSameAs(size);
 	}
 
 }

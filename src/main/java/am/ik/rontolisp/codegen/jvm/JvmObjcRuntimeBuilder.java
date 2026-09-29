@@ -3,16 +3,16 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -115,8 +115,8 @@ final class JvmObjcRuntimeBuilder {
 	 * program, and their native-image registration, are keyed by their paths within an
 	 * output tree.
 	 */
-	record ObjcRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
-			Utf8Constant initedFieldDesc, FieldrefConstant initedField, Map<String, MethodrefConstant> ops,
+	record ObjcRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
+			Utf8Entry initedFieldDesc, FieldRefEntry initedField, Map<String, MethodRefEntry> ops,
 			Map<String, byte[]> classFiles) {
 	}
 
@@ -201,7 +201,7 @@ final class JvmObjcRuntimeBuilder {
 	 * named after it and live in its package (their members are package-private)
 	 * @return the runtime pieces
 	 */
-	static ObjcRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+	static ObjcRuntime build(ConstantPool cp, ClassEntry thisClass, String programInternalName) {
 		String primitivesName = primitivesName(programInternalName);
 		String objcPrefix = objcPrefix(programInternalName);
 		Map<String, byte[]> classFiles = new LinkedHashMap<>();
@@ -219,39 +219,37 @@ final class JvmObjcRuntimeBuilder {
 		classFiles.put(nativeImageMetadataPath(NATIVE_IMAGE_BRIDGE, programInternalName),
 				bridgeReflection(programInternalName));
 
-		Utf8Constant initedFieldName = cp.addUtf8("_objcInited");
-		Utf8Constant initedFieldDesc = cp.addUtf8("I");
-		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
+		Utf8Entry initedFieldName = cp.utf8Entry("_objcInited");
+		Utf8Entry initedFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry initedField = cp.fieldRef(thisClass, initedFieldName, initedFieldDesc);
 
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
-		Utf8Constant initDesc = cp.addUtf8("()V");
-		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		Utf8Entry initName = cp.utf8Entry(INIT_METHOD);
+		Utf8Entry initDesc = cp.utf8Entry("()V");
+		ops.put("init", cp.methodRef(thisClass, initName, initDesc));
 		// The primitive layer, keyed by the qualified Lisp name it compiles.
-		ClassConstant primitivesClass = cp.addClass(cp.addUtf8(primitivesName));
-		MethodrefConstant bindPrimitives = cp.addMethodref(primitivesClass,
-				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
+		ClassEntry primitivesClass = cp.classEntry(primitivesName);
+		MethodRefEntry bindPrimitives = cp.methodRef(primitivesClass, "bind", "(Ljava/lang/Class;)V");
 		for (Map.Entry<String, Object[]> entry : JvmObjcPrimitivesCompiler.table().entrySet()) {
 			int arity = (Integer) entry.getValue()[0];
 			String method = (String) entry.getValue()[1];
 			String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
-			ops.put(entry.getKey(),
-					cp.addMethodref(primitivesClass, cp.addNameAndType(cp.addUtf8(method), cp.addUtf8(desc))));
+			ops.put(entry.getKey(), cp.methodRef(primitivesClass, method, desc));
 		}
 
 		// --- _objcInit body --------------------------------------------------------
 		// if (_objcInited != 0) return;
 		MethodCode code = new MethodCode();
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label guard = code.newLabel();
 		code.ifne(guard);
 		// <Program>$ObjcPrimitives.bind(<Program>.class) -- it loads from the program's
 		// own class loader like any other class beside it.
-		code.ldc(thisClass.entry());
-		code.invokestatic(bindPrimitives.entry());
+		code.ldc(thisClass);
+		code.invokestatic(bindPrimitives);
 		// _objcInited = 1
 		code.iconst_1();
-		code.putstatic(initedField.entry());
+		code.putstatic(initedField);
 		code.labelBinding(guard);
 		code.return_();
 

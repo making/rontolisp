@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
 
@@ -44,7 +44,7 @@ final class JvmAritySurplusRuntimeBuilder {
 	/**
 	 * An arity-surplus runtime method body ready to be emitted into the generated class.
 	 */
-	record AritySurplusMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record AritySurplusMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_aritySurplus";
@@ -54,7 +54,7 @@ final class JvmAritySurplusRuntimeBuilder {
 	/**
 	 * An arity-missing runtime method body ready to be emitted into the generated class.
 	 */
-	record ArityMissingMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record ArityMissingMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	static final String MISSING_METHOD = "_arityMissing";
@@ -125,7 +125,7 @@ final class JvmAritySurplusRuntimeBuilder {
 		a.invokevirtual(appendStr);
 		a.invokevirtual(toString);
 		a.areturn();
-		return new AritySurplusMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
+		return new AritySurplusMethod(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), a);
 	}
 
 	/**
@@ -174,7 +174,7 @@ final class JvmAritySurplusRuntimeBuilder {
 		a.invokevirtual(appendStr);
 		a.invokevirtual(toString);
 		a.areturn();
-		return new ArityMissingMethod(cp.addUtf8(MISSING_METHOD), cp.addUtf8(MISSING_DESC), a);
+		return new ArityMissingMethod(cp.utf8Entry(MISSING_METHOD), cp.utf8Entry(MISSING_DESC), a);
 	}
 
 }

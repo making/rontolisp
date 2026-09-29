@@ -2,9 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.OperandTypes;
@@ -32,7 +32,7 @@ import am.ik.rontolisp.compiler.OperandTypes;
 final class JvmEltCellRuntimeBuilder {
 
 	/** An elt-cell runtime method body ready to be emitted into the generated class. */
-	record EltCellMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record EltCellMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_eltCell";
@@ -118,7 +118,7 @@ final class JvmEltCellRuntimeBuilder {
 				JvmOperandTypeRuntime.TE_RAW_DESC));
 		emitNamedThrow(a, cp, thisClass);
 
-		return new EltCellMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
+		return new EltCellMethod(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), a);
 	}
 
 	private static void emitNamedThrow(MethodCode a, ConstantPool cp, ClassEntry thisClass) {

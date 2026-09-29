@@ -30,15 +30,14 @@ final class JvmTextControlCompiler {
 	private static void emitBody(JvmLispCompiler.Ctx ctx, String className, boolean undo) {
 		ctx.body.aload(0);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.astore(0).aload(0).instanceOf(ctx.stringClass.entry());
+		ctx.body.astore(0).aload(0).instanceOf(ctx.stringClass);
 		MethodCode.Label notString = ctx.body.newLabel();
 		ctx.body.ifeq(notString);
-		ctx.body.aload(0).checkcast(ctx.stringClass.entry());
+		ctx.body.aload(0).checkcast(ctx.stringClass);
 		JvmEmitHelper.compileUnspelledLiteral(undo ? "~~" : "~", ctx);
 		JvmEmitHelper.compileUnspelledLiteral(undo ? "~" : "~~", ctx);
-		ctx.body.invokevirtual(JvmEmitHelper
-			.stringMethod(ctx, "replace", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")
-			.methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "replace",
+				"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;"));
 		ctx.body.areturn();
 		ctx.body.labelBinding(notString);
 		ctx.body.aload(0);

@@ -37,7 +37,7 @@ final class JvmFetchCompiler {
 		if (ctx.fetchHelper == null) {
 			throw new IllegalStateException("http-get helper method was not emitted");
 		}
-		ctx.body.invokestatic(ctx.fetchHelper.entry());
+		ctx.body.invokestatic(ctx.fetchHelper);
 	}
 
 }

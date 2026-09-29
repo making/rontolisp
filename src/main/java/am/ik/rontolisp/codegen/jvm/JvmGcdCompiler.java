@@ -20,9 +20,8 @@ final class JvmGcdCompiler {
 		JvmEmitHelper.toBigInteger(ctx);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.body
-			.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;")
-				.methodRefEntry());
+		ctx.body.invokevirtual(
+				JvmEmitHelper.bigIntegerMethod(ctx, "gcd", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;"));
 		JvmEmitHelper.normalizeBigInteger(ctx);
 	}
 

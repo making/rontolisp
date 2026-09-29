@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -89,7 +89,7 @@ final class JvmObjcPrimitivesCompiler {
 	}
 
 	static void compile(String qualified, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> ops = ctx.objcOps;
+		Map<String, MethodRefEntry> ops = ctx.objcOps;
 		if (ops == null) {
 			throw new IllegalStateException("objc runtime was not emitted");
 		}
@@ -100,11 +100,11 @@ final class JvmObjcPrimitivesCompiler {
 			throw new UnsupportedOperationException(qualified.toLowerCase(java.util.Locale.ROOT) + " expects " + arity
 					+ " argument(s), got " + (args.size() - 1));
 		}
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 		for (int i = 1; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(qualified)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(qualified)));
 	}
 
 }

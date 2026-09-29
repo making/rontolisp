@@ -3,6 +3,11 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,10 +15,6 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -249,11 +250,10 @@ final class JvmGpuRuntimeBuilder {
 	 * program -- plus the library's native-image downcall registration -- keyed by their
 	 * paths within an output tree.
 	 */
-	record GpuRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
-			Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops, Utf8Constant writtenName,
-			Utf8Constant writtenDesc, MethodCode writtenCode, Utf8Constant materializeName,
-			Utf8Constant materializeDesc, MethodCode materializeCode, Utf8Constant unswapName, Utf8Constant unswapDesc,
-			MethodCode unswapCode, Map<String, byte[]> classFiles) {
+	record GpuRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
+			Utf8Entry initedFieldDesc, Map<String, MethodRefEntry> ops, Utf8Entry writtenName, Utf8Entry writtenDesc,
+			MethodCode writtenCode, Utf8Entry materializeName, Utf8Entry materializeDesc, MethodCode materializeCode,
+			Utf8Entry unswapName, Utf8Entry unswapDesc, MethodCode unswapCode, Map<String, byte[]> classFiles) {
 	}
 
 	/**
@@ -298,7 +298,7 @@ final class JvmGpuRuntimeBuilder {
 	 * named after it and live in its package (their members are package-private)
 	 * @return the runtime pieces
 	 */
-	static GpuRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
+	static GpuRuntime build(ConstantPool cp, ClassEntry thisClass, MethodRefEntry stringConcat,
 			String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
 		String gpuPrefix = gpuPrefix(programInternalName);
@@ -316,100 +316,94 @@ final class JvmGpuRuntimeBuilder {
 				loadResource(GPU_INTERNAL_PREFIX + NATIVE_IMAGE_METADATA));
 		// The PTX is text, not bytecode: it travels verbatim in the program's own
 		// constant pool and goes to Gpu.useKernels.
-		List<ConstantPool.StringConstant> ptx = chunks(cp,
+		List<StringEntry> ptx = chunks(cp,
 				new String(loadResource(GPU_INTERNAL_PREFIX + "gemm.ptx"), StandardCharsets.ISO_8859_1));
 		// ... and the MSL beside it, for the same reason: a class emitted on one machine
 		// has to accelerate on the other kind. Both texts travel in every --gpu class.
-		List<ConstantPool.StringConstant> msl = chunks(cp,
+		List<StringEntry> msl = chunks(cp,
 				new String(loadResource(GPU_INTERNAL_PREFIX + "gemm.metal"), StandardCharsets.ISO_8859_1));
 
-		Utf8Constant initedFieldName = cp.addUtf8("_gpuInited");
-		Utf8Constant initedFieldDesc = cp.addUtf8("I");
-		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
+		Utf8Entry initedFieldName = cp.utf8Entry("_gpuInited");
+		Utf8Entry initedFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry initedField = cp.fieldRef(thisClass, initedFieldName, initedFieldDesc);
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		MethodrefConstant kernels = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuKernels"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant metalKernels = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuMetalKernels"), cp.addUtf8("(Ljava/lang/String;)V")));
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
-		Utf8Constant initDesc = cp.addUtf8("()V");
-		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
-		Utf8Constant writtenName = cp.addUtf8(WRITTEN_METHOD);
-		Utf8Constant writtenDesc = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
-		ops.put(WRITTEN, cp.addMethodref(thisClass, cp.addNameAndType(writtenName, writtenDesc)));
-		MethodrefConstant bridgeWritten = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuWritten"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		Utf8Constant materializeName = cp.addUtf8(MATERIALIZE_METHOD);
-		Utf8Constant materializeDesc = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
-		ops.put(MATERIALIZE, cp.addMethodref(thisClass, cp.addNameAndType(materializeName, materializeDesc)));
-		MethodrefConstant bridgeMaterialize = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuMaterialize"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		Utf8Constant unswapName = cp.addUtf8(UNSWAP_METHOD);
-		Utf8Constant unswapDesc = cp
-			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		ops.put(UNSWAP, cp.addMethodref(thisClass, cp.addNameAndType(unswapName, unswapDesc)));
-		MethodrefConstant bridgeUnswap = cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuUnswap"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		ops.put(WHERE, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuWhere"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(ADAM_STEP, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuAdamStep"), cp.addUtf8(
-				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(GATHER_STRIDED, cp
-			.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuGatherStrided"), cp.addUtf8(
-					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(SCATTER_ROWS, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuScatterRows"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put("gpuTranspose", cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("gpuTranspose"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuDot"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATMUL_ND, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNd"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATMUL_ND_TA, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNdTa"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATMUL_ND_TB, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatmulNdTb"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(RNG_FILL, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuRngFill"), cp.addUtf8(
-				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATVEC, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("gpuMatvec"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ClassEntry bridgeClass = cp.classEntry(bridgeName);
+		MethodRefEntry kernels = cp.methodRef(bridgeClass, "gpuKernels", "(Ljava/lang/String;)V");
+		MethodRefEntry metalKernels = cp.methodRef(bridgeClass, "gpuMetalKernels", "(Ljava/lang/String;)V");
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		Utf8Entry initName = cp.utf8Entry(INIT_METHOD);
+		Utf8Entry initDesc = cp.utf8Entry("()V");
+		ops.put("init", cp.methodRef(thisClass, initName, initDesc));
+		Utf8Entry writtenName = cp.utf8Entry(WRITTEN_METHOD);
+		Utf8Entry writtenDesc = cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;");
+		ops.put(WRITTEN, cp.methodRef(thisClass, writtenName, writtenDesc));
+		MethodRefEntry bridgeWritten = cp.methodRef(bridgeClass, "gpuWritten",
+				"(Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Entry materializeName = cp.utf8Entry(MATERIALIZE_METHOD);
+		Utf8Entry materializeDesc = cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;");
+		ops.put(MATERIALIZE, cp.methodRef(thisClass, materializeName, materializeDesc));
+		MethodRefEntry bridgeMaterialize = cp.methodRef(bridgeClass, "gpuMaterialize",
+				"(Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Entry unswapName = cp.utf8Entry(UNSWAP_METHOD);
+		Utf8Entry unswapDesc = cp
+			.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		ops.put(UNSWAP, cp.methodRef(thisClass, unswapName, unswapDesc));
+		MethodRefEntry bridgeUnswap = cp.methodRef(bridgeClass, "gpuUnswap",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		ops.put(WHERE, cp.methodRef(bridgeClass, "gpuWhere",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(ADAM_STEP, cp.methodRef(bridgeClass, "gpuAdamStep",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(GATHER_STRIDED, cp.methodRef(bridgeClass, "gpuGatherStrided",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(SCATTER_ROWS, cp.methodRef(bridgeClass, "gpuScatterRows",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put("gpuTranspose", cp.methodRef(bridgeClass, "gpuTranspose", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(DOT, cp.methodRef(bridgeClass, "gpuDot", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATMUL_ND,
+				cp.methodRef(bridgeClass, "gpuMatmulNd", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATMUL_ND_TA,
+				cp.methodRef(bridgeClass, "gpuMatmulNdTa", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATMUL_ND_TB,
+				cp.methodRef(bridgeClass, "gpuMatmulNdTb", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(RNG_FILL, cp.methodRef(bridgeClass, "gpuRngFill",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATVEC,
+				cp.methodRef(bridgeClass, "gpuMatvec", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		for (String kernel : MAP_KERNELS) {
-			ops.put(kernel, cp.addMethodref(bridgeClass,
-					cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"))));
+			ops.put(kernel, cp.methodRef(bridgeClass, kernel, "(Ljava/lang/Object;)Ljava/lang/Object;"));
 		}
 		for (String kernel : BINARY_KERNELS) {
-			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel),
-					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+			ops.put(kernel,
+					cp.methodRef(bridgeClass, kernel, "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		}
 		for (String kernel : FOLD_KERNELS) {
-			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel),
-					cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+			ops.put(kernel, cp.methodRef(bridgeClass, kernel,
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		}
 		for (String kernel : FUSED4_KERNELS) {
-			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8(
-					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+			ops.put(kernel, cp.methodRef(bridgeClass, kernel,
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		}
 		for (String kernel : FUSED5_KERNELS) {
-			ops.put(kernel, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8(kernel), cp.addUtf8(
-					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+			ops.put(kernel, cp.methodRef(bridgeClass, kernel,
+					"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		}
 
 		// --- _gpuInit body ---------------------------------------------------------
 		// if (_gpuInited != 0) return;
 		MethodCode code = new MethodCode();
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label guard = code.newLabel();
 		code.ifne(guard);
 		// <Program>$GpuBridge.gpuKernels(<the PTX text>) -- the bridge loads from the
 		// program's own class loader like any other class beside it.
 		emitConcatenated(code, ptx, stringConcat);
-		code.invokestatic(kernels.entry());
+		code.invokestatic(kernels);
 		emitConcatenated(code, msl, stringConcat);
-		code.invokestatic(metalKernels.entry());
+		code.invokestatic(metalKernels);
 		code.iconst_1();
-		code.putstatic(initedField.entry());
+		code.putstatic(initedField);
 		code.labelBinding(guard);
 		code.return_();
 
@@ -437,15 +431,15 @@ final class JvmGpuRuntimeBuilder {
 	 * that the first argument is answered untouched, which is the right answer for all
 	 * three guards (nothing can be resident, so nothing is swapped).
 	 */
-	private static MethodCode guard(FieldrefConstant initedField, MethodrefConstant bridge, int arity) {
+	private static MethodCode guard(FieldRefEntry initedField, MethodRefEntry bridge, int arity) {
 		MethodCode code = new MethodCode();
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label skip = code.newLabel();
 		code.ifeq(skip);
 		for (int i = 0; i < arity; i++) {
 			code.aload(i);
 		}
-		code.invokestatic(bridge.entry());
+		code.invokestatic(bridge);
 		code.areturn();
 		code.labelBinding(skip);
 		code.aload(0);
@@ -454,20 +448,19 @@ final class JvmGpuRuntimeBuilder {
 	}
 
 	/** Loads one chunk sequence onto the stack, concatenated back into one string. */
-	private static void emitConcatenated(MethodCode code, List<ConstantPool.StringConstant> chunks,
-			MethodrefConstant stringConcat) {
-		code.ldc(chunks.get(0).entry());
+	private static void emitConcatenated(MethodCode code, List<StringEntry> chunks, MethodRefEntry stringConcat) {
+		code.ldc(chunks.get(0));
 		for (int i = 1; i < chunks.size(); i++) {
-			code.ldc(chunks.get(i).entry());
-			code.invokevirtual(stringConcat.methodRefEntry());
+			code.ldc(chunks.get(i));
+			code.invokevirtual(stringConcat);
 		}
 	}
 
 	/** A text split into Utf8-sized string constants. */
-	private static List<ConstantPool.StringConstant> chunks(ConstantPool cp, String text) {
-		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
+	private static List<StringEntry> chunks(ConstantPool cp, String text) {
+		List<StringEntry> chunks = new ArrayList<>();
 		for (int i = 0; i < text.length(); i += CHUNK_SIZE) {
-			chunks.add(cp.addString(text.substring(i, Math.min(text.length(), i + CHUNK_SIZE))));
+			chunks.add(cp.stringEntry(text.substring(i, Math.min(text.length(), i + CHUNK_SIZE))));
 		}
 		return chunks;
 	}

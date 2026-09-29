@@ -1,5 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -9,11 +16,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.LongConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
@@ -246,7 +248,7 @@ final class JvmNumericRuntimeBuilder {
 	 * @param descUtf8 the method descriptor constant
 	 * @param code the body, with any exception catch it needs
 	 */
-	record NumericMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
+	record NumericMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
 	}
 
 	/**
@@ -256,7 +258,7 @@ final class JvmNumericRuntimeBuilder {
 	 * @param methods the helper methods to emit into the class
 	 * @param ops the invokable helper references, keyed by operation
 	 */
-	record NumericRuntime(List<NumericMethod> methods, Map<String, MethodrefConstant> ops) {
+	record NumericRuntime(List<NumericMethod> methods, Map<String, MethodRefEntry> ops) {
 	}
 
 	/**
@@ -268,7 +270,7 @@ final class JvmNumericRuntimeBuilder {
 	 * @param rteInit its {@code (String)} constructor
 	 * @param throwRefs {@code _teRaw} and the kind names
 	 */
-	record TypeErrRefs(ClassConstant rte, MethodrefConstant rteInit, JvmOperandTypeRuntime.ThrowRefs throwRefs) {
+	record TypeErrRefs(ClassEntry rte, MethodRefEntry rteInit, JvmOperandTypeRuntime.ThrowRefs throwRefs) {
 	}
 
 	/**
@@ -298,136 +300,91 @@ final class JvmNumericRuntimeBuilder {
 	 * character vector is {@code equal} to the string with the same content
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
-	static NumericRuntime build(ConstantPool cp, ClassConstant thisClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod,
-			@org.jspecify.annotations.Nullable ClassConstant strArrClass, boolean usesComplex) {
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
-		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
-		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		ClassConstant ratArrClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		ClassConstant intArrClass = cp.addClass(cp.addUtf8("[I"));
-		ClassConstant objArrClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
-		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
-		ClassConstant bigDecClass = cp.addClass(cp.addUtf8("java/math/BigDecimal"));
+	static NumericRuntime build(ConstantPool cp, ClassEntry thisClass,
+			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod,
+			@org.jspecify.annotations.Nullable ClassEntry strArrClass, boolean usesComplex) {
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry bigClass = cp.classEntry("java/math/BigInteger");
+		ClassEntry arithEx = cp.classEntry("java/lang/ArithmeticException");
+		ClassEntry mathClass = cp.classEntry("java/lang/Math");
+		ClassEntry objectClass = cp.classEntry("java/lang/Object");
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		ClassEntry ratArrClass = cp.classEntry("[Ljava/math/BigInteger;");
+		ClassEntry intArrClass = cp.classEntry("[I");
+		ClassEntry objArrClass = cp.classEntry("[Ljava/lang/Object;");
+		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
+		ClassEntry bigDecClass = cp.classEntry("java/math/BigDecimal");
 
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant longValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry longValue = cp.methodRef(longClass, "longValue", "()J");
 
-		MethodrefConstant addExact = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("addExact"), cp.addUtf8("(JJ)J")));
-		MethodrefConstant subExact = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("subtractExact"), cp.addUtf8("(JJ)J")));
-		MethodrefConstant mulExact = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("multiplyExact"), cp.addUtf8("(JJ)J")));
-		MethodrefConstant negExact = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("negateExact"), cp.addUtf8("(J)J")));
-		MethodrefConstant absLong = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
-		MethodrefConstant absDouble = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
-		MethodrefConstant signumDouble = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D")));
-		MethodrefConstant intSignum = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(I)I")));
-		ClassConstant tlrClass = cp.addClass(cp.addUtf8("java/util/concurrent/ThreadLocalRandom"));
-		MethodrefConstant tlrCurrent = cp.addMethodref(tlrClass,
-				cp.addNameAndType(cp.addUtf8("current"), cp.addUtf8("()Ljava/util/concurrent/ThreadLocalRandom;")));
-		MethodrefConstant tlrNextDouble = cp.addMethodref(tlrClass,
-				cp.addNameAndType(cp.addUtf8("nextDouble"), cp.addUtf8("()D")));
-		MethodrefConstant floorModLong = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("floorMod"), cp.addUtf8("(JJ)J")));
+		MethodRefEntry addExact = cp.methodRef(mathClass, "addExact", "(JJ)J");
+		MethodRefEntry subExact = cp.methodRef(mathClass, "subtractExact", "(JJ)J");
+		MethodRefEntry mulExact = cp.methodRef(mathClass, "multiplyExact", "(JJ)J");
+		MethodRefEntry negExact = cp.methodRef(mathClass, "negateExact", "(J)J");
+		MethodRefEntry absLong = cp.methodRef(mathClass, "abs", "(J)J");
+		MethodRefEntry absDouble = cp.methodRef(mathClass, "abs", "(D)D");
+		MethodRefEntry signumDouble = cp.methodRef(mathClass, "signum", "(D)D");
+		MethodRefEntry intSignum = cp.methodRef(integerClass, "signum", "(I)I");
+		ClassEntry tlrClass = cp.classEntry("java/util/concurrent/ThreadLocalRandom");
+		MethodRefEntry tlrCurrent = cp.methodRef(tlrClass, "current", "()Ljava/util/concurrent/ThreadLocalRandom;");
+		MethodRefEntry tlrNextDouble = cp.methodRef(tlrClass, "nextDouble", "()D");
+		MethodRefEntry floorModLong = cp.methodRef(mathClass, "floorMod", "(JJ)J");
 
-		MethodrefConstant biValueOf = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)" + BIG)));
-		MethodrefConstant biAdd = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biSub = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("subtract"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biMul = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("multiply"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biDiv = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("divide"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biRem = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("remainder"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biNeg = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("negate"), cp.addUtf8("()" + BIG)));
-		MethodrefConstant biAbs = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("()" + BIG)));
-		MethodrefConstant biBitLength = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("bitLength"), cp.addUtf8("()I")));
-		MethodrefConstant biLongValue = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-		MethodrefConstant biCompareTo = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("compareTo"), cp.addUtf8("(" + BIG + ")I")));
-		MethodrefConstant biGcd = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("gcd"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biMod = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("mod"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biSignum = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("()I")));
-		MethodrefConstant biPow = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(I)" + BIG)));
+		MethodRefEntry biValueOf = cp.methodRef(bigClass, "valueOf", "(J)" + BIG);
+		MethodRefEntry biAdd = cp.methodRef(bigClass, "add", "(" + BIG + ")" + BIG);
+		MethodRefEntry biSub = cp.methodRef(bigClass, "subtract", "(" + BIG + ")" + BIG);
+		MethodRefEntry biMul = cp.methodRef(bigClass, "multiply", "(" + BIG + ")" + BIG);
+		MethodRefEntry biDiv = cp.methodRef(bigClass, "divide", "(" + BIG + ")" + BIG);
+		MethodRefEntry biRem = cp.methodRef(bigClass, "remainder", "(" + BIG + ")" + BIG);
+		MethodRefEntry biNeg = cp.methodRef(bigClass, "negate", "()" + BIG);
+		MethodRefEntry biAbs = cp.methodRef(bigClass, "abs", "()" + BIG);
+		MethodRefEntry biBitLength = cp.methodRef(bigClass, "bitLength", "()I");
+		MethodRefEntry biLongValue = cp.methodRef(bigClass, "longValue", "()J");
+		MethodRefEntry biCompareTo = cp.methodRef(bigClass, "compareTo", "(" + BIG + ")I");
+		MethodRefEntry biGcd = cp.methodRef(bigClass, "gcd", "(" + BIG + ")" + BIG);
+		MethodRefEntry biMod = cp.methodRef(bigClass, "mod", "(" + BIG + ")" + BIG);
+		MethodRefEntry biSignum = cp.methodRef(bigClass, "signum", "()I");
+		MethodRefEntry biPow = cp.methodRef(bigClass, "pow", "(I)" + BIG);
 		// StrictMath, like every transcendental on every backend
 		// (.kb/transcendentals.md).
-		MethodrefConstant mathPow = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StrictMath")),
-				cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D")));
+		MethodRefEntry mathPow = cp.methodRef(cp.classEntry("java/lang/StrictMath"), "pow", "(DD)D");
 		// The complex arms' shared references, created only when the program may
 		// observe a complex: merely creating them would put the travelling holder
 		// in every constant pool, and every arm that tests for it would resolve
 		// the class the first time it runs (`.kb/jvm-complex.md`). The throw-only
 		// helpers (_ccmpb, _cphase) live in the gated group instead, for the same
 		// reason.
-		ClassConstant rcClass = usesComplex ? cp.addClass(cp.addUtf8("am/ik/rontolisp/runtime/RontoComplex")) : null;
-		FieldrefConstant rcReal = usesComplex ? cp.addFieldref(Objects.requireNonNull(rcClass),
-				cp.addNameAndType(cp.addUtf8("real"), cp.addUtf8(OBJ))) : null;
-		FieldrefConstant rcImag = usesComplex ? cp.addFieldref(Objects.requireNonNull(rcClass),
-				cp.addNameAndType(cp.addUtf8("imag"), cp.addUtf8(OBJ))) : null;
-		MethodrefConstant mathHypot = usesComplex
-				? cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("hypot"), cp.addUtf8("(DD)D"))) : null;
+		ClassEntry rcClass = usesComplex ? cp.classEntry("am/ik/rontolisp/runtime/RontoComplex") : null;
+		FieldRefEntry rcReal = usesComplex ? cp.fieldRef(Objects.requireNonNull(rcClass), "real", OBJ) : null;
+		FieldRefEntry rcImag = usesComplex ? cp.fieldRef(Objects.requireNonNull(rcClass), "imag", OBJ) : null;
+		MethodRefEntry mathHypot = usesComplex ? cp.methodRef(mathClass, "hypot", "(DD)D") : null;
 		// The gated _csignum reference for _signum's holder arm: a self-methodref the
 		// complex group emits beside it (JvmComplexRuntimeBuilder.SIGNUM), created
 		// only with the gate on so no complex-free constant pool names it.
-		MethodrefConstant rCsignum = usesComplex
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmComplexRuntimeBuilder.SIGNUM),
-						cp.addUtf8(JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.SIGNUM))))
-				: null;
+		MethodRefEntry rCsignum = usesComplex ? cp.methodRef(thisClass, JvmComplexRuntimeBuilder.SIGNUM,
+				JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.SIGNUM)) : null;
 		// The holder-presence probe (.todo/757, minted in JvmLispCompiler): every
 		// holder arm below consults it before resolving the travelling class, so a
 		// lone class run without the file beside it takes the holder-less shape.
 		// Null exactly when the gate is off, like rcClass.
-		FieldrefConstant hasComplex = usesComplex
-				? cp.addFieldref(thisClass, cp.addNameAndType(cp.addUtf8("_hasComplex"), cp.addUtf8("Z"))) : null;
-		MethodrefConstant biShiftLeft = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("shiftLeft"), cp.addUtf8("(I)" + BIG)));
-		MethodrefConstant biTestBit = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("testBit"), cp.addUtf8("(I)Z")));
-		MethodrefConstant biAnd = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("and"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biOr = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("or"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biXor = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("xor"), cp.addUtf8("(" + BIG + ")" + BIG)));
-		MethodrefConstant biNot = cp.addMethodref(bigClass,
-				cp.addNameAndType(cp.addUtf8("not"), cp.addUtf8("()" + BIG)));
-		MethodrefConstant longNlz = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("numberOfLeadingZeros"), cp.addUtf8("(J)I")));
-		FieldrefConstant biOne = cp.addFieldref(bigClass, cp.addNameAndType(cp.addUtf8("ONE"), cp.addUtf8(BIG)));
+		FieldRefEntry hasComplex = usesComplex ? cp.fieldRef(thisClass, "_hasComplex", "Z") : null;
+		MethodRefEntry biShiftLeft = cp.methodRef(bigClass, "shiftLeft", "(I)" + BIG);
+		MethodRefEntry biTestBit = cp.methodRef(bigClass, "testBit", "(I)Z");
+		MethodRefEntry biAnd = cp.methodRef(bigClass, "and", "(" + BIG + ")" + BIG);
+		MethodRefEntry biOr = cp.methodRef(bigClass, "or", "(" + BIG + ")" + BIG);
+		MethodRefEntry biXor = cp.methodRef(bigClass, "xor", "(" + BIG + ")" + BIG);
+		MethodRefEntry biNot = cp.methodRef(bigClass, "not", "()" + BIG);
+		MethodRefEntry longNlz = cp.methodRef(longClass, "numberOfLeadingZeros", "(J)I");
+		FieldRefEntry biOne = cp.fieldRef(bigClass, "ONE", BIG);
 
-		MethodrefConstant objEquals = cp.addMethodref(objectClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(" + OBJ + ")Z")));
-		MethodrefConstant aeInit = cp.addMethodref(arithEx,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.StringConstant divZeroStr = cp.addString("Division by zero");
-		ConstantPool.StringConstant ashTooLargeStr = cp.addString("ash: shift count too large");
-		ConstantPool.StringConstant rationalNonFiniteStr = cp.addString("rational of a non-finite float is undefined");
-		ConstantPool.StringConstant roundingNonFiniteStr = cp
-			.addString(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
+		MethodRefEntry objEquals = cp.methodRef(objectClass, "equals", "(" + OBJ + ")Z");
+		MethodRefEntry aeInit = cp.methodRef(arithEx, "<init>", "(Ljava/lang/String;)V");
+		StringEntry divZeroStr = cp.stringEntry("Division by zero");
+		StringEntry ashTooLargeStr = cp.stringEntry("ash: shift count too large");
+		StringEntry rationalNonFiniteStr = cp.stringEntry("rational of a non-finite float is undefined");
+		StringEntry roundingNonFiniteStr = cp.stringEntry(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 
 		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
 		// RuntimeException carrying "The value <prin1> is not of type INTEGER|NUMBER" --
@@ -436,139 +393,128 @@ final class JvmNumericRuntimeBuilder {
 		// A checkcast cannot be the check here: null PASSES a checkcast and the failure
 		// then surfaces later as a Java NPE naming BigInteger internals. The landing-pad
 		// classification of the prefix as a type-error is JvmHandlerCaseCompiler's.
-		ClassConstant rteClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		TypeErrRefs typeErrRefs = new TypeErrRefs(rteClass,
-				cp.addMethodref(rteClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
+		ClassEntry rteClass = cp.classEntry("java/lang/RuntimeException");
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		TypeErrRefs typeErrRefs = new TypeErrRefs(rteClass, cp.methodRef(rteClass, "<init>", "(Ljava/lang/String;)V"),
 				JvmOperandTypeRuntime.ThrowRefs.of(cp, thisClass));
 
-		MethodrefConstant bdInitDouble = cp.addMethodref(bigDecClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(D)V")));
-		MethodrefConstant bdUnscaled = cp.addMethodref(bigDecClass,
-				cp.addNameAndType(cp.addUtf8("unscaledValue"), cp.addUtf8("()" + BIG)));
-		MethodrefConstant bdScale = cp.addMethodref(bigDecClass,
-				cp.addNameAndType(cp.addUtf8("scale"), cp.addUtf8("()I")));
-		FieldrefConstant biTen = cp.addFieldref(bigClass, cp.addNameAndType(cp.addUtf8("TEN"), cp.addUtf8(BIG)));
-		MethodrefConstant dblIsFinite = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("isFinite"), cp.addUtf8("(D)Z")));
-		MethodrefConstant dblIsInfinite = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("isInfinite"), cp.addUtf8("(D)Z")));
-		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
-		MethodrefConstant dblLongBits = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("longBitsToDouble"), cp.addUtf8("(J)D")));
-		FieldrefConstant dblNegInf = cp.addFieldref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("NEGATIVE_INFINITY"), cp.addUtf8("D")));
-		FieldrefConstant dblPosInf = cp.addFieldref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("POSITIVE_INFINITY"), cp.addUtf8("D")));
-		MethodrefConstant numDoubleValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
+		MethodRefEntry bdInitDouble = cp.methodRef(bigDecClass, "<init>", "(D)V");
+		MethodRefEntry bdUnscaled = cp.methodRef(bigDecClass, "unscaledValue", "()" + BIG);
+		MethodRefEntry bdScale = cp.methodRef(bigDecClass, "scale", "()I");
+		FieldRefEntry biTen = cp.fieldRef(bigClass, "TEN", BIG);
+		MethodRefEntry dblIsFinite = cp.methodRef(doubleClass, "isFinite", "(D)Z");
+		MethodRefEntry dblIsInfinite = cp.methodRef(doubleClass, "isInfinite", "(D)Z");
+		MethodRefEntry doubleValueOf = cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+		MethodRefEntry dblLongBits = cp.methodRef(doubleClass, "longBitsToDouble", "(J)D");
+		FieldRefEntry dblNegInf = cp.fieldRef(doubleClass, "NEGATIVE_INFINITY", "D");
+		FieldRefEntry dblPosInf = cp.fieldRef(doubleClass, "POSITIVE_INFINITY", "D");
+		MethodRefEntry numDoubleValue = cp.methodRef(numberClass, "doubleValue", "()D");
 
-		LongConstant cMin = cp.addLong(Long.MIN_VALUE);
-		LongConstant cRat3 = cp.addLong(3L);
-		LongConstant cRat4 = cp.addLong(4L);
-		LongConstant cRat2p53 = cp.addLong(1L << 53);
-		LongConstant cRatFracMask = cp.addLong(0xF_FFFF_FFFF_FFFFL);
+		LongEntry cMin = cp.entries().longEntry(Long.MIN_VALUE);
+		LongEntry cRat3 = cp.entries().longEntry(3L);
+		LongEntry cRat4 = cp.entries().longEntry(4L);
+		LongEntry cRat2p53 = cp.entries().longEntry(1L << 53);
+		LongEntry cRatFracMask = cp.entries().longEntry(0xF_FFFF_FFFF_FFFFL);
 
 		// Self method references (name+descriptor against the generated class).
-		Utf8Constant nBig = cp.addUtf8(BIG_OP);
-		Utf8Constant dBig = cp.addUtf8("(" + OBJ + ")" + BIG);
-		MethodrefConstant rBig = cp.addMethodref(thisClass, cp.addNameAndType(nBig, dBig));
-		Utf8Constant nNorm = cp.addUtf8(NORM_OP);
-		Utf8Constant dNorm = cp.addUtf8("(" + BIG + ")" + OBJ);
-		MethodrefConstant rNorm = cp.addMethodref(thisClass, cp.addNameAndType(nNorm, dNorm));
-		Utf8Constant nRatNum = cp.addUtf8(RAT_NUM);
-		MethodrefConstant rRatNum = cp.addMethodref(thisClass, cp.addNameAndType(nRatNum, dBig));
-		Utf8Constant nRatDen = cp.addUtf8(RAT_DEN);
-		MethodrefConstant rRatDen = cp.addMethodref(thisClass, cp.addNameAndType(nRatDen, dBig));
-		Utf8Constant nRat = cp.addUtf8(RAT);
-		Utf8Constant dRat = cp.addUtf8("(" + BIG + BIG + ")" + OBJ);
-		MethodrefConstant rRat = cp.addMethodref(thisClass, cp.addNameAndType(nRat, dRat));
+		Utf8Entry nBig = cp.utf8Entry(BIG_OP);
+		Utf8Entry dBig = cp.utf8Entry("(" + OBJ + ")" + BIG);
+		MethodRefEntry rBig = cp.methodRef(thisClass, nBig, dBig);
+		Utf8Entry nNorm = cp.utf8Entry(NORM_OP);
+		Utf8Entry dNorm = cp.utf8Entry("(" + BIG + ")" + OBJ);
+		MethodRefEntry rNorm = cp.methodRef(thisClass, nNorm, dNorm);
+		Utf8Entry nRatNum = cp.utf8Entry(RAT_NUM);
+		MethodRefEntry rRatNum = cp.methodRef(thisClass, nRatNum, dBig);
+		Utf8Entry nRatDen = cp.utf8Entry(RAT_DEN);
+		MethodRefEntry rRatDen = cp.methodRef(thisClass, nRatDen, dBig);
+		Utf8Entry nRat = cp.utf8Entry(RAT);
+		Utf8Entry dRat = cp.utf8Entry("(" + BIG + BIG + ")" + OBJ);
+		MethodRefEntry rRat = cp.methodRef(thisClass, nRat, dRat);
 
-		Utf8Constant nAdd = cp.addUtf8(ADD);
-		Utf8Constant nSub = cp.addUtf8(SUB);
-		Utf8Constant nMul = cp.addUtf8(MUL);
-		Utf8Constant nNeg = cp.addUtf8(NEG);
-		Utf8Constant nDiv = cp.addUtf8(DIV);
-		Utf8Constant nMod = cp.addUtf8(MOD);
-		Utf8Constant nRem = cp.addUtf8(REM);
-		Utf8Constant nFmod = cp.addUtf8(FMOD);
-		Utf8Constant nFrem = cp.addUtf8(FREM);
-		Utf8Constant nCmp = cp.addUtf8(CMP);
-		Utf8Constant nCmpb = cp.addUtf8(CMPB);
-		Utf8Constant nAbs = cp.addUtf8(ABS);
-		Utf8Constant nSignum = cp.addUtf8(SIGNUM);
-		Utf8Constant nRandom = cp.addUtf8(RANDOM);
-		Utf8Constant nMin = cp.addUtf8(MIN);
-		Utf8Constant nMax = cp.addUtf8(MAX);
-		Utf8Constant nFmin = cp.addUtf8(FMIN);
-		Utf8Constant nFmax = cp.addUtf8(FMAX);
-		Utf8Constant nDbl = cp.addUtf8(DBL);
-		Utf8Constant nPow = cp.addUtf8(POW);
-		Utf8Constant nEqv = cp.addUtf8(EQV);
-		Utf8Constant nEqual = cp.addUtf8(EQUAL);
-		Utf8Constant nRatTrunc = cp.addUtf8(RAT_TRUNC);
-		Utf8Constant nRatFloor = cp.addUtf8(RAT_FLOOR);
-		Utf8Constant nRatCeil = cp.addUtf8(RAT_CEIL);
-		Utf8Constant nRatRound = cp.addUtf8(RAT_ROUND);
-		Utf8Constant nFdiv = cp.addUtf8(FDIV);
-		Utf8Constant nFrat = cp.addUtf8(FRAT);
-		Utf8Constant nRational = cp.addUtf8(RATIONAL);
-		Utf8Constant nLogand = cp.addUtf8(LOGAND);
-		Utf8Constant nLogior = cp.addUtf8(LOGIOR);
-		Utf8Constant nLogxor = cp.addUtf8(LOGXOR);
-		Utf8Constant nLognot = cp.addUtf8(LOGNOT);
-		Utf8Constant nAsh = cp.addUtf8(ASH);
-		Utf8Constant nIntLen = cp.addUtf8(INTEGER_LENGTH);
-		Utf8Constant nLogbitp = cp.addUtf8(LOGBITP);
-		Utf8Constant nFixDec = cp.addUtf8(FIXED_DEC);
-		Utf8Constant dFixDec = cp.addUtf8("(" + OBJ + OBJ + OBJ + OBJ + ")Ljava/lang/String;");
-		Utf8Constant dBinary = cp.addUtf8(BINARY_DESC);
-		Utf8Constant dUnary = cp.addUtf8(UNARY_DESC);
-		Utf8Constant dCmp = cp.addUtf8("(" + OBJ + OBJ + ")I");
-		Utf8Constant dFmod = cp.addUtf8("(DD)D");
+		Utf8Entry nAdd = cp.utf8Entry(ADD);
+		Utf8Entry nSub = cp.utf8Entry(SUB);
+		Utf8Entry nMul = cp.utf8Entry(MUL);
+		Utf8Entry nNeg = cp.utf8Entry(NEG);
+		Utf8Entry nDiv = cp.utf8Entry(DIV);
+		Utf8Entry nMod = cp.utf8Entry(MOD);
+		Utf8Entry nRem = cp.utf8Entry(REM);
+		Utf8Entry nFmod = cp.utf8Entry(FMOD);
+		Utf8Entry nFrem = cp.utf8Entry(FREM);
+		Utf8Entry nCmp = cp.utf8Entry(CMP);
+		Utf8Entry nCmpb = cp.utf8Entry(CMPB);
+		Utf8Entry nAbs = cp.utf8Entry(ABS);
+		Utf8Entry nSignum = cp.utf8Entry(SIGNUM);
+		Utf8Entry nRandom = cp.utf8Entry(RANDOM);
+		Utf8Entry nMin = cp.utf8Entry(MIN);
+		Utf8Entry nMax = cp.utf8Entry(MAX);
+		Utf8Entry nFmin = cp.utf8Entry(FMIN);
+		Utf8Entry nFmax = cp.utf8Entry(FMAX);
+		Utf8Entry nDbl = cp.utf8Entry(DBL);
+		Utf8Entry nPow = cp.utf8Entry(POW);
+		Utf8Entry nEqv = cp.utf8Entry(EQV);
+		Utf8Entry nEqual = cp.utf8Entry(EQUAL);
+		Utf8Entry nRatTrunc = cp.utf8Entry(RAT_TRUNC);
+		Utf8Entry nRatFloor = cp.utf8Entry(RAT_FLOOR);
+		Utf8Entry nRatCeil = cp.utf8Entry(RAT_CEIL);
+		Utf8Entry nRatRound = cp.utf8Entry(RAT_ROUND);
+		Utf8Entry nFdiv = cp.utf8Entry(FDIV);
+		Utf8Entry nFrat = cp.utf8Entry(FRAT);
+		Utf8Entry nRational = cp.utf8Entry(RATIONAL);
+		Utf8Entry nLogand = cp.utf8Entry(LOGAND);
+		Utf8Entry nLogior = cp.utf8Entry(LOGIOR);
+		Utf8Entry nLogxor = cp.utf8Entry(LOGXOR);
+		Utf8Entry nLognot = cp.utf8Entry(LOGNOT);
+		Utf8Entry nAsh = cp.utf8Entry(ASH);
+		Utf8Entry nIntLen = cp.utf8Entry(INTEGER_LENGTH);
+		Utf8Entry nLogbitp = cp.utf8Entry(LOGBITP);
+		Utf8Entry nFixDec = cp.utf8Entry(FIXED_DEC);
+		Utf8Entry dFixDec = cp.utf8Entry("(" + OBJ + OBJ + OBJ + OBJ + ")Ljava/lang/String;");
+		Utf8Entry dBinary = cp.utf8Entry(BINARY_DESC);
+		Utf8Entry dUnary = cp.utf8Entry(UNARY_DESC);
+		Utf8Entry dCmp = cp.utf8Entry("(" + OBJ + OBJ + ")I");
+		Utf8Entry dFmod = cp.utf8Entry("(DD)D");
 
-		MethodrefConstant rAdd = cp.addMethodref(thisClass, cp.addNameAndType(nAdd, dBinary));
-		MethodrefConstant rSub = cp.addMethodref(thisClass, cp.addNameAndType(nSub, dBinary));
-		MethodrefConstant rMul = cp.addMethodref(thisClass, cp.addNameAndType(nMul, dBinary));
-		MethodrefConstant rNeg = cp.addMethodref(thisClass, cp.addNameAndType(nNeg, dUnary));
-		MethodrefConstant rDiv = cp.addMethodref(thisClass, cp.addNameAndType(nDiv, dBinary));
-		MethodrefConstant rMod = cp.addMethodref(thisClass, cp.addNameAndType(nMod, dBinary));
-		MethodrefConstant rRem = cp.addMethodref(thisClass, cp.addNameAndType(nRem, dBinary));
-		MethodrefConstant rFmod = cp.addMethodref(thisClass, cp.addNameAndType(nFmod, dFmod));
-		MethodrefConstant rFrem = cp.addMethodref(thisClass, cp.addNameAndType(nFrem, dFmod));
-		MethodrefConstant rCmp = cp.addMethodref(thisClass, cp.addNameAndType(nCmp, dCmp));
-		MethodrefConstant rCmpb = cp.addMethodref(thisClass, cp.addNameAndType(nCmpb, dCmp));
-		MethodrefConstant rAbs = cp.addMethodref(thisClass, cp.addNameAndType(nAbs, dUnary));
-		MethodrefConstant rSignum = cp.addMethodref(thisClass, cp.addNameAndType(nSignum, dUnary));
-		MethodrefConstant rRandom = cp.addMethodref(thisClass, cp.addNameAndType(nRandom, dUnary));
-		MethodrefConstant rMin = cp.addMethodref(thisClass, cp.addNameAndType(nMin, dBinary));
-		MethodrefConstant rMax = cp.addMethodref(thisClass, cp.addNameAndType(nMax, dBinary));
-		MethodrefConstant rFmin = cp.addMethodref(thisClass, cp.addNameAndType(nFmin, dFmod));
-		MethodrefConstant rFmax = cp.addMethodref(thisClass, cp.addNameAndType(nFmax, dFmod));
-		MethodrefConstant rDbl = cp.addMethodref(thisClass, cp.addNameAndType(nDbl, dUnary));
-		Utf8Constant nRatToDouble = cp.addUtf8(RAT_TO_DOUBLE);
-		Utf8Constant dRatToDouble = cp.addUtf8("(" + BIG + BIG + ")D");
-		MethodrefConstant rRatToDouble = cp.addMethodref(thisClass, cp.addNameAndType(nRatToDouble, dRatToDouble));
-		MethodrefConstant rPow = cp.addMethodref(thisClass, cp.addNameAndType(nPow, dBinary));
-		MethodrefConstant rEqv = cp.addMethodref(thisClass, cp.addNameAndType(nEqv, dCmp));
-		MethodrefConstant rEqual = cp.addMethodref(thisClass, cp.addNameAndType(nEqual, dCmp));
-		MethodrefConstant rRatTrunc = cp.addMethodref(thisClass, cp.addNameAndType(nRatTrunc, dUnary));
-		MethodrefConstant rRatFloor = cp.addMethodref(thisClass, cp.addNameAndType(nRatFloor, dUnary));
-		MethodrefConstant rRatCeil = cp.addMethodref(thisClass, cp.addNameAndType(nRatCeil, dUnary));
-		MethodrefConstant rRatRound = cp.addMethodref(thisClass, cp.addNameAndType(nRatRound, dUnary));
-		Utf8Constant dFdiv = cp.addUtf8("(" + OBJ + OBJ + "I)" + OBJ);
-		MethodrefConstant rFdiv = cp.addMethodref(thisClass, cp.addNameAndType(nFdiv, dFdiv));
-		MethodrefConstant rFrat = cp.addMethodref(thisClass, cp.addNameAndType(nFrat, dUnary));
-		MethodrefConstant rRational = cp.addMethodref(thisClass, cp.addNameAndType(nRational, dUnary));
-		MethodrefConstant rLogand = cp.addMethodref(thisClass, cp.addNameAndType(nLogand, dBinary));
-		MethodrefConstant rLogior = cp.addMethodref(thisClass, cp.addNameAndType(nLogior, dBinary));
-		MethodrefConstant rLogxor = cp.addMethodref(thisClass, cp.addNameAndType(nLogxor, dBinary));
-		MethodrefConstant rLognot = cp.addMethodref(thisClass, cp.addNameAndType(nLognot, dUnary));
-		MethodrefConstant rAsh = cp.addMethodref(thisClass, cp.addNameAndType(nAsh, dBinary));
-		MethodrefConstant rIntLen = cp.addMethodref(thisClass, cp.addNameAndType(nIntLen, dUnary));
-		MethodrefConstant rLogbitp = cp.addMethodref(thisClass, cp.addNameAndType(nLogbitp, dCmp));
-		MethodrefConstant rFixDec = cp.addMethodref(thisClass, cp.addNameAndType(nFixDec, dFixDec));
+		MethodRefEntry rAdd = cp.methodRef(thisClass, nAdd, dBinary);
+		MethodRefEntry rSub = cp.methodRef(thisClass, nSub, dBinary);
+		MethodRefEntry rMul = cp.methodRef(thisClass, nMul, dBinary);
+		MethodRefEntry rNeg = cp.methodRef(thisClass, nNeg, dUnary);
+		MethodRefEntry rDiv = cp.methodRef(thisClass, nDiv, dBinary);
+		MethodRefEntry rMod = cp.methodRef(thisClass, nMod, dBinary);
+		MethodRefEntry rRem = cp.methodRef(thisClass, nRem, dBinary);
+		MethodRefEntry rFmod = cp.methodRef(thisClass, nFmod, dFmod);
+		MethodRefEntry rFrem = cp.methodRef(thisClass, nFrem, dFmod);
+		MethodRefEntry rCmp = cp.methodRef(thisClass, nCmp, dCmp);
+		MethodRefEntry rCmpb = cp.methodRef(thisClass, nCmpb, dCmp);
+		MethodRefEntry rAbs = cp.methodRef(thisClass, nAbs, dUnary);
+		MethodRefEntry rSignum = cp.methodRef(thisClass, nSignum, dUnary);
+		MethodRefEntry rRandom = cp.methodRef(thisClass, nRandom, dUnary);
+		MethodRefEntry rMin = cp.methodRef(thisClass, nMin, dBinary);
+		MethodRefEntry rMax = cp.methodRef(thisClass, nMax, dBinary);
+		MethodRefEntry rFmin = cp.methodRef(thisClass, nFmin, dFmod);
+		MethodRefEntry rFmax = cp.methodRef(thisClass, nFmax, dFmod);
+		MethodRefEntry rDbl = cp.methodRef(thisClass, nDbl, dUnary);
+		Utf8Entry nRatToDouble = cp.utf8Entry(RAT_TO_DOUBLE);
+		Utf8Entry dRatToDouble = cp.utf8Entry("(" + BIG + BIG + ")D");
+		MethodRefEntry rRatToDouble = cp.methodRef(thisClass, nRatToDouble, dRatToDouble);
+		MethodRefEntry rPow = cp.methodRef(thisClass, nPow, dBinary);
+		MethodRefEntry rEqv = cp.methodRef(thisClass, nEqv, dCmp);
+		MethodRefEntry rEqual = cp.methodRef(thisClass, nEqual, dCmp);
+		MethodRefEntry rRatTrunc = cp.methodRef(thisClass, nRatTrunc, dUnary);
+		MethodRefEntry rRatFloor = cp.methodRef(thisClass, nRatFloor, dUnary);
+		MethodRefEntry rRatCeil = cp.methodRef(thisClass, nRatCeil, dUnary);
+		MethodRefEntry rRatRound = cp.methodRef(thisClass, nRatRound, dUnary);
+		Utf8Entry dFdiv = cp.utf8Entry("(" + OBJ + OBJ + "I)" + OBJ);
+		MethodRefEntry rFdiv = cp.methodRef(thisClass, nFdiv, dFdiv);
+		MethodRefEntry rFrat = cp.methodRef(thisClass, nFrat, dUnary);
+		MethodRefEntry rRational = cp.methodRef(thisClass, nRational, dUnary);
+		MethodRefEntry rLogand = cp.methodRef(thisClass, nLogand, dBinary);
+		MethodRefEntry rLogior = cp.methodRef(thisClass, nLogior, dBinary);
+		MethodRefEntry rLogxor = cp.methodRef(thisClass, nLogxor, dBinary);
+		MethodRefEntry rLognot = cp.methodRef(thisClass, nLognot, dUnary);
+		MethodRefEntry rAsh = cp.methodRef(thisClass, nAsh, dBinary);
+		MethodRefEntry rIntLen = cp.methodRef(thisClass, nIntLen, dUnary);
+		MethodRefEntry rLogbitp = cp.methodRef(thisClass, nLogbitp, dCmp);
+		MethodRefEntry rFixDec = cp.methodRef(thisClass, nFixDec, dFixDec);
 
 		List<NumericMethod> methods = new ArrayList<>();
 		methods.add(buildBig(nBig, dBig, longClass, bigClass, longValue, biValueOf, typeErrRefs));
@@ -618,14 +564,13 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildRatToDouble(nRatToDouble, dRatToDouble, biSignum, biNeg, biBitLength, biShiftLeft, biCompareTo,
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
-				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl, cp.addLong(Integer.MAX_VALUE),
-				cp.addLong(-(long) Integer.MAX_VALUE)));
-		ClassConstant listClass = cp.addClass(cp.addUtf8("java/util/List"));
-		StringRefs stringRefs = new StringRefs(stringClass, listClass,
-				cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
-				cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C"))));
-		methods.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.addClass(cp.addUtf8("java/util/Map")), objEquals,
-				stringRefs));
+				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl, cp.entries().longEntry(Integer.MAX_VALUE),
+				cp.entries().longEntry(-(long) Integer.MAX_VALUE)));
+		ClassEntry listClass = cp.classEntry("java/util/List");
+		StringRefs stringRefs = new StringRefs(stringClass, listClass, cp.methodRef(stringClass, "isEmpty", "()Z"),
+				cp.methodRef(stringClass, "charAt", "(I)C"));
+		methods
+			.add(buildEqv(nEqv, dCmp, ratArrClass, intArrClass, cp.classEntry("java/util/Map"), objEquals, stringRefs));
 		methods.add(buildEqual(nEqual, dCmp, objArrClass, ratArrClass, integerClass, rEqv, rEqual, strArrClass,
 				strvMethod, stringRefs, objEquals));
 		methods.add(buildRatTrunc(nRatTrunc, dUnary, rRatNum, rRatDen, rNorm, biDiv));
@@ -653,7 +598,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildLogbitp(nLogbitp, dCmp, longClass, longValue, rBig, biTestBit));
 		methods.add(buildFixedDec(cp, nFixDec, dFixDec, mathClass, longClass, numberClass, numDoubleValue, rDbl));
 
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
 		ops.put(ADD, rAdd);
 		ops.put(SUB, rSub);
 		ops.put(MUL, rMul);
@@ -701,17 +646,17 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _big(Object x): Long -> BigInteger.valueOf(x), otherwise (BigInteger) x.
-	private static NumericMethod buildBig(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			ClassConstant bigClass, MethodrefConstant longValue, MethodrefConstant biValueOf, TypeErrRefs typeErrRefs) {
+	private static NumericMethod buildBig(Utf8Entry name, Utf8Entry desc, ClassEntry longClass, ClassEntry bigClass,
+			MethodRefEntry longValue, MethodRefEntry biValueOf, TypeErrRefs typeErrRefs) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifNotLong = c.newLabel();
 		c.ifeq(ifNotLong);
 		c.aload(0);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
-		c.invokestatic(biValueOf.entry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
+		c.invokestatic(biValueOf);
 		c.areturn();
 		c.labelBinding(ifNotLong);
 		// Anything but a BigInteger throws the interpreter's INTEGER operand-type report
@@ -720,11 +665,11 @@ final class JvmNumericRuntimeBuilder {
 		// NPE naming BigInteger internals, and a cast failure's own text names Java
 		// classes). One instanceof on the widening (out-of-long) arm only.
 		c.aload(0);
-		c.instanceOf(bigClass.entry());
+		c.instanceOf(bigClass);
 		MethodCode.Label ifNotBig = c.newLabel();
 		c.ifeq(ifNotBig);
 		c.aload(0);
-		c.checkcast(bigClass.entry());
+		c.checkcast(bigClass);
 		c.areturn();
 		c.labelBinding(ifNotBig);
 		emitTypeErrThrow(c, typeErrRefs, false);
@@ -732,17 +677,17 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _norm(BigInteger b): demote to Long when it fits in a long, else keep BigInteger.
-	private static NumericMethod buildNorm(Utf8Constant name, Utf8Constant desc, MethodrefConstant longValueOf,
-			MethodrefConstant biBitLength, MethodrefConstant biLongValue) {
+	private static NumericMethod buildNorm(Utf8Entry name, Utf8Entry desc, MethodRefEntry longValueOf,
+			MethodRefEntry biBitLength, MethodRefEntry biLongValue) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.invokevirtual(biBitLength.methodRefEntry());
+		c.invokevirtual(biBitLength);
 		c.loadConstant(64);
 		MethodCode.Label ifGe = c.newLabel();
 		c.if_icmpge(ifGe);
 		c.aload(0);
-		c.invokevirtual(biLongValue.methodRefEntry());
-		c.invokestatic(longValueOf.entry());
+		c.invokevirtual(biLongValue);
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifGe);
 		c.aload(0);
@@ -751,40 +696,40 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _ratnum(Object x): ratio -> x[0], otherwise _big(x).
-	private static NumericMethod buildRatNum(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			MethodrefConstant rBig) {
+	private static NumericMethod buildRatNum(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
+			MethodRefEntry rBig) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRat = c.newLabel();
 		c.ifeq(ifNotRat);
 		c.aload(0);
-		c.checkcast(ratArrClass.entry());
+		c.checkcast(ratArrClass);
 		c.iconst_0();
 		c.aaload();
 		c.areturn();
 		c.labelBinding(ifNotRat);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _ratden(Object x): ratio -> x[1], otherwise BigInteger.ONE.
-	private static NumericMethod buildRatDen(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			FieldrefConstant biOne) {
+	private static NumericMethod buildRatDen(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
+			FieldRefEntry biOne) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRat = c.newLabel();
 		c.ifeq(ifNotRat);
 		c.aload(0);
-		c.checkcast(ratArrClass.entry());
+		c.checkcast(ratArrClass);
 		c.iconst_1();
 		c.aaload();
 		c.areturn();
 		c.labelBinding(ifNotRat);
-		c.getstatic(biOne.entry());
+		c.getstatic(biOne);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -792,60 +737,60 @@ final class JvmNumericRuntimeBuilder {
 	// _rat(BigInteger num, BigInteger den): builds a normalized rational value. Moves
 	// the sign to the numerator, reduces by the gcd, and demotes a denominator-one
 	// result to an integer via _norm. A zero denominator throws ArithmeticException.
-	private static NumericMethod buildRat(Utf8Constant name, Utf8Constant desc, ClassConstant bigClass,
-			ClassConstant arithEx, MethodrefConstant aeInit, ConstantPool.StringConstant divZeroStr,
-			MethodrefConstant biSignum, MethodrefConstant biNeg, MethodrefConstant biGcd, MethodrefConstant biDiv,
-			FieldrefConstant biOne, MethodrefConstant objEquals, MethodrefConstant rNorm) {
+	private static NumericMethod buildRat(Utf8Entry name, Utf8Entry desc, ClassEntry bigClass, ClassEntry arithEx,
+			MethodRefEntry aeInit, StringEntry divZeroStr, MethodRefEntry biSignum, MethodRefEntry biNeg,
+			MethodRefEntry biGcd, MethodRefEntry biDiv, FieldRefEntry biOne, MethodRefEntry objEquals,
+			MethodRefEntry rNorm) {
 		MethodCode c = new MethodCode();
 		// if (den.signum() == 0) throw new ArithmeticException("Division by zero");
 		c.aload(1);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifNonZero = c.newLabel();
 		c.ifne(ifNonZero);
-		c.new_(arithEx.entry());
+		c.new_(arithEx);
 		c.dup();
-		c.ldc(divZeroStr.entry());
-		c.invokespecial(aeInit.entry());
+		c.ldc(divZeroStr);
+		c.invokespecial(aeInit);
 		c.athrow();
 		// if (den.signum() < 0) { num = num.negate(); den = den.negate(); }
 		c.labelBinding(ifNonZero);
 		c.aload(1);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifPositive = c.newLabel();
 		c.ifge(ifPositive);
 		c.aload(0);
-		c.invokevirtual(biNeg.methodRefEntry());
+		c.invokevirtual(biNeg);
 		c.astore(0);
 		c.aload(1);
-		c.invokevirtual(biNeg.methodRefEntry());
+		c.invokevirtual(biNeg);
 		c.astore(1);
 		// BigInteger g = num.gcd(den); num = num.divide(g); den = den.divide(g);
 		c.labelBinding(ifPositive);
 		c.aload(0);
 		c.aload(1);
-		c.invokevirtual(biGcd.methodRefEntry());
+		c.invokevirtual(biGcd);
 		c.astore(2);
 		c.aload(0);
 		c.aload(2);
-		c.invokevirtual(biDiv.methodRefEntry());
+		c.invokevirtual(biDiv);
 		c.astore(0);
 		c.aload(1);
 		c.aload(2);
-		c.invokevirtual(biDiv.methodRefEntry());
+		c.invokevirtual(biDiv);
 		c.astore(1);
 		// if (den.equals(BigInteger.ONE)) return _norm(num);
 		c.aload(1);
-		c.getstatic(biOne.entry());
-		c.invokevirtual(objEquals.methodRefEntry());
+		c.getstatic(biOne);
+		c.invokevirtual(objEquals);
 		MethodCode.Label ifNotOne = c.newLabel();
 		c.ifeq(ifNotOne);
 		c.aload(0);
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rNorm);
 		c.areturn();
 		// return new BigInteger[] { num, den };
 		c.labelBinding(ifNotOne);
 		c.iconst_2();
-		c.anewarray(bigClass.entry());
+		c.anewarray(bigClass);
 		c.dup();
 		c.iconst_0();
 		c.aload(0);
@@ -861,30 +806,29 @@ final class JvmNumericRuntimeBuilder {
 	// _add/_sub/_mul(Object a, Object b): rational path when either operand is a ratio;
 	// otherwise long fast path via Math.*Exact, promoting to BigInteger on overflow
 	// (caught) or when an operand is already a BigInteger.
-	private static NumericMethod buildExactBinary(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant exact, MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig,
-			MethodrefConstant rNorm, MethodrefConstant biOp, ClassConstant arithEx, ClassConstant ratArrClass,
-			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul,
-			@Nullable MethodrefConstant ratioCross, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
-			Consumer<MethodCode> doubleOp) {
+	private static NumericMethod buildExactBinary(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry exact, MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig,
+			MethodRefEntry rNorm, MethodRefEntry biOp, ClassEntry arithEx, ClassEntry ratArrClass,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul,
+			@Nullable MethodRefEntry ratioCross, ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass,
+			MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf, Consumer<MethodCode> doubleOp) {
 		MethodCode c = new MethodCode();
 		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOp);
 		MethodCode.Label toRatio = c.newLabel();
 		emitRatioGuard(c, ratArrClass, toRatio);
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlow1 = c.newLabel();
 		c.ifeq(ifSlow1);
 		c.aload(1);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlow2 = c.newLabel();
 		c.ifeq(ifSlow2);
 		MethodCode.Label tryStart = c.newBoundLabel();
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
-		c.invokestatic(exact.entry());
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(exact);
+		c.invokestatic(longValueOf);
 		c.areturn();
 		MethodCode.Label handler = c.newBoundLabel();
 		c.pop();
@@ -893,73 +837,71 @@ final class JvmNumericRuntimeBuilder {
 		emitBigBinary(c, rBig, biOp, rNorm);
 		c.labelBinding(toRatio);
 		emitRatioBinary(c, rRatNum, rRatDen, rRat, biMul, ratioCross);
-		c.exceptionCatch(tryStart, handler, handler, arithEx.entry());
+		c.exceptionCatch(tryStart, handler, handler, arithEx);
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _neg(Object a): negate via Math.negateExact, promoting to BigInteger on overflow;
 	// a ratio negates its numerator.
-	private static NumericMethod buildNeg(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant negExact, MethodrefConstant longValue, MethodrefConstant longValueOf,
-			MethodrefConstant rBig, MethodrefConstant rNorm, MethodrefConstant biNeg, ClassConstant arithEx,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
-			ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf) {
+	private static NumericMethod buildNeg(Utf8Entry name, Utf8Entry desc, ClassEntry longClass, MethodRefEntry negExact,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biNeg, ClassEntry arithEx, ClassEntry ratArrClass, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rRat, ClassEntry doubleClass, MethodRefEntry rDbl,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf) {
 		MethodCode c = new MethodCode();
 		emitDoubleUnaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, MethodCode::dneg);
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifRat = c.newLabel();
 		c.ifne(ifRat);
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlow = c.newLabel();
 		c.ifeq(ifSlow);
 		MethodCode.Label tryStart = c.newBoundLabel();
 		emitUnboxLong(c, 0, longClass, longValue);
-		c.invokestatic(negExact.entry());
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(negExact);
+		c.invokestatic(longValueOf);
 		c.areturn();
 		MethodCode.Label handler = c.newBoundLabel();
 		c.pop();
 		c.labelBinding(ifSlow);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biNeg.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biNeg);
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(ifRat);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
-		c.invokevirtual(biNeg.methodRefEntry());
+		c.invokestatic(rRatNum);
+		c.invokevirtual(biNeg);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
-		c.invokestatic(rRat.entry());
+		c.invokestatic(rRatDen);
+		c.invokestatic(rRat);
 		c.areturn();
-		c.exceptionCatch(tryStart, handler, handler, arithEx.entry());
+		c.exceptionCatch(tryStart, handler, handler, arithEx);
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _div(Object a, Object b): Common Lisp exact rational division for any mix of
 	// integers and ratios: _rat(num(a)*den(b), den(a)*num(b)). The result demotes to an
 	// integer when the division is exact; division by zero throws inside _rat.
-	private static NumericMethod buildDiv(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biMul, ClassConstant doubleClass,
-			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
-			MethodrefConstant doubleValueOf) {
+	private static NumericMethod buildDiv(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf) {
 		MethodCode c = new MethodCode();
 		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, MethodCode::ddiv);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(1);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.aload(1);
-		c.invokestatic(rRatNum.entry());
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokestatic(rRat.entry());
+		c.invokestatic(rRatNum);
+		c.invokevirtual(biMul);
+		c.invokestatic(rRat);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -968,13 +910,12 @@ final class JvmNumericRuntimeBuilder {
 	// divisor. Long fast path via Math.floorMod; BigInteger path corrects the remainder
 	// by
 	// adding the divisor when the signs differ.
-	private static NumericMethod buildMod(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biRem, MethodrefConstant floorModLong, MethodrefConstant biSignum,
-			MethodrefConstant biAdd, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFmod,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
-			MethodrefConstant biMul) {
+	private static NumericMethod buildMod(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biRem, MethodRefEntry floorModLong, MethodRefEntry biSignum, MethodRefEntry biAdd,
+			ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue,
+			MethodRefEntry doubleValueOf, MethodRefEntry rFmod, ClassEntry ratArrClass, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul) {
 		MethodCode c = new MethodCode();
 		// A float operand takes CL's divisor-signed float modulo, the same _fmod the
 		// double-literal emission calls -- without this arm a Double reaching the
@@ -988,24 +929,24 @@ final class JvmNumericRuntimeBuilder {
 		emitLongLongGuard(c, longClass, toSlow);
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
-		c.invokestatic(floorModLong.entry());
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(floorModLong);
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(toSlow);
 		// BigInteger A = _big(a); BigInteger B = _big(b); BigInteger r = A.remainder(B);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.astore(2);
 		c.aload(1);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.astore(3);
 		c.aload(2);
 		c.aload(3);
-		c.invokevirtual(biRem.methodRefEntry());
+		c.invokevirtual(biRem);
 		c.astore(4);
 		emitDivisorSignCorrection(c, biSignum, biAdd);
 		c.aload(4);
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(toRatio);
 		emitRatioRemainderPrefix(c, rRatNum, rRatDen, biMul, biRem);
@@ -1017,12 +958,11 @@ final class JvmNumericRuntimeBuilder {
 
 	// _rem(Object a, Object b): remainder whose result takes the sign of the dividend
 	// (Java/BigInteger remainder). Long fast path, BigInteger.remainder otherwise.
-	private static NumericMethod buildRem(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biRem, ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant rFrem,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant rRat,
-			MethodrefConstant biMul) {
+	private static NumericMethod buildRem(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biRem, ClassEntry doubleClass, MethodRefEntry rDbl, ClassEntry numberClass,
+			MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf, MethodRefEntry rFrem, ClassEntry ratArrClass,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biMul) {
 		MethodCode c = new MethodCode();
 		// A float operand keeps the dividend's sign -- _frem, which is DREM plus CLHS's
 		// sign for a ZERO remainder, and is what the double-literal emission of
@@ -1036,7 +976,7 @@ final class JvmNumericRuntimeBuilder {
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
 		c.lrem();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(toSlow);
 		emitBigBinary(c, rBig, biRem, rNorm);
@@ -1060,11 +1000,11 @@ final class JvmNumericRuntimeBuilder {
 	//
 	// r = _frem(a, b); if (r == 0) return r;
 	// return dcmpg(r, 0) == dcmpg(b, 0) ? r : r + b;
-	private static NumericMethod buildFmod(Utf8Constant name, Utf8Constant desc, MethodrefConstant rFrem) {
+	private static NumericMethod buildFmod(Utf8Entry name, Utf8Entry desc, MethodRefEntry rFrem) {
 		MethodCode c = new MethodCode();
 		c.dload(0);
 		c.dload(2);
-		c.invokestatic(rFrem.entry());
+		c.invokestatic(rFrem);
 		c.dstore(4);
 		c.dload(4);
 		c.dconst_0();
@@ -1103,7 +1043,7 @@ final class JvmNumericRuntimeBuilder {
 	// r = a % b; if (r != 0) return r; // NaN too
 	// if (a != 0) return 0.0; // a - a
 	// return b < 0 ? a + 0.0 : a - 0.0; // a - copysign(0.0, b)
-	private static NumericMethod buildFrem(Utf8Constant name, Utf8Constant desc) {
+	private static NumericMethod buildFrem(Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.dload(0);
 		c.dload(2);
@@ -1155,13 +1095,13 @@ final class JvmNumericRuntimeBuilder {
 	// DCMPL collapse both callers already had). Locals 2/3 hold the double, local 4
 	// the _frat pair. Every path returns.
 	private static void emitExactFloatCompare(MethodCode c, int dblSlot, int othSlot, boolean dblIsA, boolean bitmask,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant rFrat,
-			ClassConstant ratArrClass, ClassConstant bigClass, ClassConstant longClass, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant biMul, MethodrefConstant biCompareTo,
-			MethodrefConstant intSignum, TypeErrRefs typeErrRefs, MethodCode.@Nullable Label nanFallback) {
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry rFrat, ClassEntry ratArrClass,
+			ClassEntry bigClass, ClassEntry longClass, MethodRefEntry rRatNum, MethodRefEntry rRatDen,
+			MethodRefEntry biMul, MethodRefEntry biCompareTo, MethodRefEntry intSignum, TypeErrRefs typeErrRefs,
+			MethodCode.@Nullable Label nanFallback) {
 		c.aload(dblSlot);
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 		c.dstore(2);
 		// NaN: DCMPL(d, d) falls out as -1, so IFEQ skips it.
 		c.dload(2);
@@ -1181,7 +1121,7 @@ final class JvmNumericRuntimeBuilder {
 		// the ratio's: buildRational casts the same way). Null past the NaN check
 		// above is an infinity.
 		c.aload(dblSlot);
-		c.invokestatic(rFrat.entry());
+		c.invokestatic(rFrat);
 		c.dup();
 		MethodCode.Label ifFinite = c.newLabel();
 		c.ifnonnull(ifFinite);
@@ -1196,20 +1136,20 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNegInf);
 		emitMixedInfinite(c, dblIsA, bitmask, false);
 		c.labelBinding(ifFinite);
-		c.checkcast(ratArrClass.entry());
+		c.checkcast(ratArrClass);
 		c.astore(4);
 		// The exact side's funnel: a non-number beside a float is "Expected
 		// number", the _dbl text the mixed pair used to see.
 		c.aload(othSlot);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifOthRat = c.newLabel();
 		c.ifne(ifOthRat);
 		c.aload(othSlot);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifOthLong = c.newLabel();
 		c.ifne(ifOthLong);
 		c.aload(othSlot);
-		c.instanceOf(bigClass.entry());
+		c.instanceOf(bigClass);
 		MethodCode.Label ifOthBig = c.newLabel();
 		c.ifne(ifOthBig);
 		c.aload(othSlot);
@@ -1225,12 +1165,12 @@ final class JvmNumericRuntimeBuilder {
 		}
 		emitMixedNumDen(c, dblIsA, 0, othSlot, rRatNum, ratArrClass, bigClass);
 		emitMixedNumDen(c, !dblIsA, 1, othSlot, rRatDen, ratArrClass, bigClass);
-		c.invokevirtual(biMul.methodRefEntry());
+		c.invokevirtual(biMul);
 		emitMixedNumDen(c, !dblIsA, 0, othSlot, rRatNum, ratArrClass, bigClass);
 		emitMixedNumDen(c, dblIsA, 1, othSlot, rRatDen, ratArrClass, bigClass);
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokevirtual(biCompareTo.methodRefEntry());
-		c.invokestatic(intSignum.entry());
+		c.invokevirtual(biMul);
+		c.invokevirtual(biCompareTo);
+		c.invokestatic(intSignum);
 		if (bitmask) {
 			c.iconst_1();
 			c.iadd();
@@ -1244,7 +1184,7 @@ final class JvmNumericRuntimeBuilder {
 	// funnel Long/BigInteger through _big and answer ONE for a non-ratio
 	// denominator, so the funnel check above is what rejects junk).
 	private static void emitMixedNumDen(MethodCode c, boolean pairSide, int pairIndex, int othSlot,
-			MethodrefConstant rRatPart, ClassConstant ratArrClass, ClassConstant bigClass) {
+			MethodRefEntry rRatPart, ClassEntry ratArrClass, ClassEntry bigClass) {
 		if (pairSide) {
 			c.aload(4);
 			if (pairIndex == 0) {
@@ -1254,11 +1194,11 @@ final class JvmNumericRuntimeBuilder {
 				c.iconst_1();
 			}
 			c.aaload();
-			c.checkcast(bigClass.entry());
+			c.checkcast(bigClass);
 		}
 		else {
 			c.aload(othSlot);
-			c.invokestatic(rRatPart.entry());
+			c.invokestatic(rRatPart);
 		}
 	}
 
@@ -1275,22 +1215,21 @@ final class JvmNumericRuntimeBuilder {
 
 	// _cmp(Object a, Object b): long comparison, BigInteger.compareTo, or rational
 	// cross-multiplication (denominators are positive), returning -1/0/1.
-	private static NumericMethod buildCmp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant rBig, MethodrefConstant biCompareTo,
-			ClassConstant ratArrClass, MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul,
-			ClassConstant doubleClass, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, ClassConstant bigClass, MethodrefConstant rFrat,
-			MethodrefConstant intSignum, TypeErrRefs typeErrRefs) {
+	private static NumericMethod buildCmp(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry rBig, MethodRefEntry biCompareTo, ClassEntry ratArrClass,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry biMul, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, ClassEntry bigClass,
+			MethodRefEntry rFrat, MethodRefEntry intSignum, TypeErrRefs typeErrRefs) {
 		MethodCode c = new MethodCode();
 		// Double dispatch: both doubles take the old double comparison; exactly one
 		// double takes the exact mixed comparison (a NaN jumps back to the old path,
 		// which collapses it to -1 as before); neither reaches the exact body below.
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifANotDouble = c.newLabel();
 		c.ifeq(ifANotDouble);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifMixedA = c.newLabel();
 		c.ifeq(ifMixedA);
 		MethodCode.Label oldPath = c.newBoundLabel();
@@ -1303,7 +1242,7 @@ final class JvmNumericRuntimeBuilder {
 				longClass, rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, oldPath);
 		c.labelBinding(ifANotDouble);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifExactRest = c.newLabel();
 		c.ifeq(ifExactRest);
 		emitExactFloatCompare(c, 1, 0, false, false, numberClass, numDoubleValue, rFrat, ratArrClass, bigClass,
@@ -1319,23 +1258,23 @@ final class JvmNumericRuntimeBuilder {
 		c.ireturn();
 		c.labelBinding(toSlow);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.aload(1);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biCompareTo);
 		c.ireturn();
 		c.labelBinding(toRatio);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(1);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
 		c.aload(1);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
+		c.invokevirtual(biCompareTo);
 		c.ireturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -1346,13 +1285,13 @@ final class JvmNumericRuntimeBuilder {
 	// which a -1/0/1 signum cannot express. Two doubles compare in f64; a double
 	// beside an exact number compares exact values through emitExactFloatCompare;
 	// exact pairs delegate to _cmp (exact, never unordered).
-	private static NumericMethod buildCmpBits(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
-			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant rCmp,
-			MethodrefConstant intSignum, @Nullable ClassConstant rcClass, @Nullable FieldrefConstant rcReal,
-			@Nullable FieldrefConstant rcImag, MethodrefConstant longValueOf, @Nullable FieldrefConstant hasComplex,
-			MethodrefConstant rFrat, ClassConstant ratArrClass, ClassConstant longClass, ClassConstant bigClass,
-			MethodrefConstant rRatNum, MethodrefConstant rRatDen, MethodrefConstant biMul,
-			MethodrefConstant biCompareTo, TypeErrRefs typeErrRefs) {
+	private static NumericMethod buildCmpBits(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry rCmp,
+			MethodRefEntry intSignum, @Nullable ClassEntry rcClass, @Nullable FieldRefEntry rcReal,
+			@Nullable FieldRefEntry rcImag, MethodRefEntry longValueOf, @Nullable FieldRefEntry hasComplex,
+			MethodRefEntry rFrat, ClassEntry ratArrClass, ClassEntry longClass, ClassEntry bigClass,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry biMul, MethodRefEntry biCompareTo,
+			TypeErrRefs typeErrRefs) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			// A complex operand compares part-wise: equal exactly when both part
@@ -1364,18 +1303,18 @@ final class JvmNumericRuntimeBuilder {
 			// a lone class run without the travelling file must not resolve the
 			// holder class it then never touches (.todo/757).
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
-			ClassConstant complexClass = Objects.requireNonNull(rcClass);
-			FieldrefConstant complexReal = Objects.requireNonNull(rcReal);
-			FieldrefConstant complexImag = Objects.requireNonNull(rcImag);
+			ClassEntry complexClass = Objects.requireNonNull(rcClass);
+			FieldRefEntry complexReal = Objects.requireNonNull(rcReal);
+			FieldRefEntry complexImag = Objects.requireNonNull(rcImag);
 			c.aload(0);
-			c.instanceOf(complexClass.entry());
+			c.instanceOf(complexClass);
 			MethodCode.Label ifAReal = c.newLabel();
 			c.ifeq(ifAReal);
 			MethodCode.Label toComplex = c.newLabel();
 			c.goto_(toComplex);
 			c.labelBinding(ifAReal);
 			c.aload(1);
-			c.instanceOf(complexClass.entry());
+			c.instanceOf(complexClass);
 			MethodCode.Label ifNotComplex = c.newLabel();
 			c.ifeq(ifNotComplex);
 			c.labelBinding(toComplex);
@@ -1389,12 +1328,12 @@ final class JvmNumericRuntimeBuilder {
 			c.astore(5);
 			c.aload(2);
 			c.aload(4);
-			c.invokestatic(rCmp.entry());
+			c.invokestatic(rCmp);
 			MethodCode.Label ifReNe = c.newLabel();
 			c.ifne(ifReNe);
 			c.aload(3);
 			c.aload(5);
-			c.invokestatic(rCmp.entry());
+			c.invokestatic(rCmp);
 			MethodCode.Label ifImNe = c.newLabel();
 			c.ifne(ifImNe);
 			c.iconst_2();
@@ -1407,11 +1346,11 @@ final class JvmNumericRuntimeBuilder {
 			c.labelBinding(noHolder);
 		}
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifANotDouble = c.newLabel();
 		c.ifeq(ifANotDouble);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifMixedA = c.newLabel();
 		c.ifeq(ifMixedA);
 		// x -> locals 2/3, y -> locals 4/5
@@ -1454,7 +1393,7 @@ final class JvmNumericRuntimeBuilder {
 				rRatNum, rRatDen, biMul, biCompareTo, intSignum, typeErrRefs, null);
 		c.labelBinding(ifANotDouble);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifExactTail = c.newLabel();
 		c.ifeq(ifExactTail);
 		emitExactFloatCompare(c, 1, 0, false, true, numberClass, numDoubleValue, rFrat, ratArrClass, bigClass,
@@ -1464,8 +1403,8 @@ final class JvmNumericRuntimeBuilder {
 		c.iconst_1();
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(rCmp.entry());
-		c.invokestatic(intSignum.entry());
+		c.invokestatic(rCmp);
+		c.invokestatic(intSignum);
 		c.iconst_1();
 		c.iadd();
 		c.ishl();
@@ -1491,14 +1430,14 @@ final class JvmNumericRuntimeBuilder {
 	 * Emits the real part of the value in local {@code slot}: the holder's field, or the
 	 * value itself.
 	 */
-	private static void emitComplexPart(MethodCode c, int slot, ClassConstant rcClass, FieldrefConstant rcReal) {
+	private static void emitComplexPart(MethodCode c, int slot, ClassEntry rcClass, FieldRefEntry rcReal) {
 		c.aload(slot);
-		c.instanceOf(rcClass.entry());
+		c.instanceOf(rcClass);
 		MethodCode.Label ifReal = c.newLabel();
 		c.ifeq(ifReal);
 		c.aload(slot);
-		c.checkcast(rcClass.entry());
-		c.getfield(rcReal.entry());
+		c.checkcast(rcClass);
+		c.getfield(rcReal);
 		MethodCode.Label done = c.newLabel();
 		c.goto_(done);
 		c.labelBinding(ifReal);
@@ -1512,8 +1451,8 @@ final class JvmNumericRuntimeBuilder {
 	 * the arm's end, where it jumps otherwise -- then the holder-less shape that follows
 	 * is exact, because no holder instance can exist without its class (.todo/757).
 	 */
-	private static MethodCode.Label emitNoHolderJump(MethodCode c, @Nullable FieldrefConstant hasComplex) {
-		c.getstatic(Objects.requireNonNull(hasComplex).entry());
+	private static MethodCode.Label emitNoHolderJump(MethodCode c, @Nullable FieldRefEntry hasComplex) {
+		c.getstatic(Objects.requireNonNull(hasComplex));
 		MethodCode.Label noHolder = c.newLabel();
 		c.ifeq(noHolder);
 		return noHolder;
@@ -1524,20 +1463,20 @@ final class JvmNumericRuntimeBuilder {
 	 * an integer zero (float contagion is decided by the real parts in every caller, so
 	 * the zero's own kind never matters).
 	 */
-	private static void emitComplexImag(MethodCode c, int slot, ClassConstant rcClass, FieldrefConstant rcImag,
-			MethodrefConstant longValueOf) {
+	private static void emitComplexImag(MethodCode c, int slot, ClassEntry rcClass, FieldRefEntry rcImag,
+			MethodRefEntry longValueOf) {
 		c.aload(slot);
-		c.instanceOf(rcClass.entry());
+		c.instanceOf(rcClass);
 		MethodCode.Label ifReal = c.newLabel();
 		c.ifeq(ifReal);
 		c.aload(slot);
-		c.checkcast(rcClass.entry());
-		c.getfield(rcImag.entry());
+		c.checkcast(rcClass);
+		c.getfield(rcImag);
 		MethodCode.Label done = c.newLabel();
 		c.goto_(done);
 		c.labelBinding(ifReal);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.labelBinding(done);
 	}
 
@@ -1546,15 +1485,13 @@ final class JvmNumericRuntimeBuilder {
 	// branch handles a float reaching abs through a variable (no compile-time literal),
 	// the
 	// way the binary ops' double prologue does.
-	private static NumericMethod buildAbs(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			ClassConstant bigClass, MethodrefConstant longValue, MethodrefConstant longValueOf,
-			MethodrefConstant absLong, MethodrefConstant biValueOf, MethodrefConstant biNeg, MethodrefConstant biAbs,
-			MethodrefConstant rNorm, LongConstant cMin, ClassConstant ratArrClass, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rRat, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant absDouble, MethodrefConstant rBig, @Nullable ClassConstant rcClass,
-			@Nullable FieldrefConstant rcReal, @Nullable FieldrefConstant rcImag, @Nullable MethodrefConstant mathHypot,
-			@Nullable FieldrefConstant hasComplex) {
+	private static NumericMethod buildAbs(Utf8Entry name, Utf8Entry desc, ClassEntry longClass, ClassEntry bigClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry absLong, MethodRefEntry biValueOf,
+			MethodRefEntry biNeg, MethodRefEntry biAbs, MethodRefEntry rNorm, LongEntry cMin, ClassEntry ratArrClass,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRat, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry absDouble, MethodRefEntry rBig, @Nullable ClassEntry rcClass, @Nullable FieldRefEntry rcReal,
+			@Nullable FieldRefEntry rcImag, @Nullable MethodRefEntry mathHypot, @Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			// A complex operand answers its float modulus -- hypot over the double
@@ -1564,67 +1501,67 @@ final class JvmNumericRuntimeBuilder {
 			// first, so a lone class without the file never resolves it
 			// (.todo/757).
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
-			ClassConstant complexClass = Objects.requireNonNull(rcClass);
-			FieldrefConstant complexReal = Objects.requireNonNull(rcReal);
-			FieldrefConstant complexImag = Objects.requireNonNull(rcImag);
-			MethodrefConstant hypot = Objects.requireNonNull(mathHypot);
+			ClassEntry complexClass = Objects.requireNonNull(rcClass);
+			FieldRefEntry complexReal = Objects.requireNonNull(rcReal);
+			FieldRefEntry complexImag = Objects.requireNonNull(rcImag);
+			MethodRefEntry hypot = Objects.requireNonNull(mathHypot);
 			c.aload(0);
-			c.instanceOf(complexClass.entry());
+			c.instanceOf(complexClass);
 			MethodCode.Label ifNotComplex = c.newLabel();
 			c.ifeq(ifNotComplex);
 			c.aload(0);
-			c.checkcast(complexClass.entry());
-			c.getfield(complexReal.entry());
-			c.invokestatic(rDbl.entry());
-			c.checkcast(numberClass.entry());
-			c.invokevirtual(numDoubleValue.methodRefEntry());
+			c.checkcast(complexClass);
+			c.getfield(complexReal);
+			c.invokestatic(rDbl);
+			c.checkcast(numberClass);
+			c.invokevirtual(numDoubleValue);
 			c.aload(0);
-			c.checkcast(complexClass.entry());
-			c.getfield(complexImag.entry());
-			c.invokestatic(rDbl.entry());
-			c.checkcast(numberClass.entry());
-			c.invokevirtual(numDoubleValue.methodRefEntry());
-			c.invokestatic(hypot.entry());
-			c.invokestatic(doubleValueOf.entry());
+			c.checkcast(complexClass);
+			c.getfield(complexImag);
+			c.invokestatic(rDbl);
+			c.checkcast(numberClass);
+			c.invokevirtual(numDoubleValue);
+			c.invokestatic(hypot);
+			c.invokestatic(doubleValueOf);
 			c.areturn();
 			c.labelBinding(ifNotComplex);
 			c.labelBinding(noHolder);
 		}
 		// Double fast path: Math.abs((double) a) when a is a Double.
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
-		c.invokestatic(absDouble.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(absDouble);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifRat = c.newLabel();
 		c.ifne(ifRat);
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifBig = c.newLabel();
 		c.ifeq(ifBig);
 		emitUnboxLong(c, 0, longClass, longValue);
 		c.lstore(2);
 		c.lload(2);
-		c.ldc(cMin.entry());
+		c.ldc(cMin);
 		c.lcmp();
 		MethodCode.Label ifNeMin = c.newLabel();
 		c.ifne(ifNeMin);
 		// Overflow: BigInteger.valueOf(Long.MIN_VALUE).negate().
 		c.lload(2);
-		c.invokestatic(biValueOf.entry());
-		c.invokevirtual(biNeg.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(biValueOf);
+		c.invokevirtual(biNeg);
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(ifNeMin);
 		c.lload(2);
-		c.invokestatic(absLong.entry());
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(absLong);
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifBig);
 		// Through _big rather than a bare checkcast, so a non-number (which null-passes
@@ -1632,17 +1569,17 @@ final class JvmNumericRuntimeBuilder {
 		// report
 		// text at the coercion like every other operator.
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biAbs.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biAbs);
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(ifRat);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
-		c.invokevirtual(biAbs.methodRefEntry());
+		c.invokestatic(rRatNum);
+		c.invokevirtual(biAbs);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
-		c.invokestatic(rRat.entry());
+		c.invokestatic(rRatDen);
+		c.invokestatic(rRat);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -1651,11 +1588,10 @@ final class JvmNumericRuntimeBuilder {
 	// integer sign as a Long (the numerator's sign for a ratio). The Double branch
 	// handles
 	// a float reaching signum through a variable, mirroring _abs.
-	private static NumericMethod buildSignum(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
-			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant signumDouble, MethodrefConstant rRatNum,
-			MethodrefConstant biSignum, MethodrefConstant longValueOf, @Nullable ClassConstant rcClass,
-			@Nullable MethodrefConstant rCsignum, @Nullable FieldrefConstant hasComplex) {
+	private static NumericMethod buildSignum(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry signumDouble, MethodRefEntry rRatNum, MethodRefEntry biSignum, MethodRefEntry longValueOf,
+			@Nullable ClassEntry rcClass, @Nullable MethodRefEntry rCsignum, @Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			// A complex operand answers the gated _csignum unit vector, like the
@@ -1665,31 +1601,31 @@ final class JvmNumericRuntimeBuilder {
 			// class without the file never resolves it (.todo/757).
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			c.aload(0);
-			c.instanceOf(rcClass.entry());
+			c.instanceOf(rcClass);
 			MethodCode.Label ifNotComplex = c.newLabel();
 			c.ifeq(ifNotComplex);
 			c.aload(0);
-			c.invokestatic(java.util.Objects.requireNonNull(rCsignum).entry());
+			c.invokestatic(java.util.Objects.requireNonNull(rCsignum));
 			c.areturn();
 			c.labelBinding(ifNotComplex);
 			c.labelBinding(noHolder);
 		}
 		// Double fast path: Math.signum((double) a).
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
-		c.invokestatic(signumDouble.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(signumDouble);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		// Integer/ratio path: (long) _ratnum(a).signum().
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokestatic(rRatNum);
+		c.invokevirtual(biSignum);
 		c.i2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -1708,13 +1644,13 @@ final class JvmNumericRuntimeBuilder {
 	// `.kb/error-handling.md` "A wrong-type argument names its operator") rather than
 	// teaching the shared operand-type table a compound type for this one operator
 	// (.todo/981).
-	private static NumericMethod buildRandom(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
-			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant longValueOf, MethodrefConstant tlrCurrent,
-			MethodrefConstant tlrNextDouble, ClassConstant ratArrClass, TypeErrRefs typeErrRefs) {
+	private static NumericMethod buildRandom(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+			MethodRefEntry rDbl, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry longValueOf, MethodRefEntry tlrCurrent, MethodRefEntry tlrNextDouble, ClassEntry ratArrClass,
+			TypeErrRefs typeErrRefs) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRatio = c.newLabel();
 		c.ifeq(ifNotRatio);
 		emitRealErrThrow(c, typeErrRefs);
@@ -1731,19 +1667,19 @@ final class JvmNumericRuntimeBuilder {
 		// d = ThreadLocalRandom.current().nextDouble() * limitD. The per-thread
 		// generator, not Math.random()'s single shared java.util.Random -- see
 		// .kb/random.md.
-		c.invokestatic(tlrCurrent.entry());
-		c.invokevirtual(tlrNextDouble.methodRefEntry());
+		c.invokestatic(tlrCurrent);
+		c.invokevirtual(tlrNextDouble);
 		c.dmul();
 		// limit instanceof Double ? Double.valueOf(d) : Long.valueOf((long) d)
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		c.d2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -1761,9 +1697,8 @@ final class JvmNumericRuntimeBuilder {
 	// masks, so the ACCUMULATOR survives it and the leftmost argument wins; unordered is
 	// in neither, so a NaN operand always yields b. Both match upstream Common Lisp,
 	// checked against SBCL over every ordered pair of {-0.0, 0.0, +/-1.0, NaN, +/-inf}.
-	private static NumericMethod buildSelect(Utf8Constant name, Utf8Constant desc, MethodrefConstant rCmpb,
-			int acceptMask, @Nullable ClassConstant rcClass, TypeErrRefs typeErrRefs,
-			@Nullable FieldrefConstant hasComplex) {
+	private static NumericMethod buildSelect(Utf8Entry name, Utf8Entry desc, MethodRefEntry rCmpb, int acceptMask,
+			@Nullable ClassEntry rcClass, TypeErrRefs typeErrRefs, @Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			// Ordering over a complex signals a REAL operand-type report, like the
@@ -1773,15 +1708,15 @@ final class JvmNumericRuntimeBuilder {
 			// first, so a lone class without the file never resolves it
 			// (.todo/757).
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
-			ClassConstant complexClass = Objects.requireNonNull(rcClass);
+			ClassEntry complexClass = Objects.requireNonNull(rcClass);
 			c.aload(0);
-			c.instanceOf(complexClass.entry());
+			c.instanceOf(complexClass);
 			MethodCode.Label ifAReal = c.newLabel();
 			c.ifeq(ifAReal);
 			emitRealErrThrow(c, typeErrRefs, 0);
 			c.labelBinding(ifAReal);
 			c.aload(1);
-			c.instanceOf(complexClass.entry());
+			c.instanceOf(complexClass);
 			MethodCode.Label ifBReal = c.newLabel();
 			c.ifeq(ifBReal);
 			emitRealErrThrow(c, typeErrRefs, 1);
@@ -1790,7 +1725,7 @@ final class JvmNumericRuntimeBuilder {
 		}
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(rCmpb.entry());
+		c.invokestatic(rCmpb);
 		c.loadConstant(acceptMask);
 		c.iand();
 		MethodCode.Label ifB = c.newLabel();
@@ -1814,7 +1749,7 @@ final class JvmNumericRuntimeBuilder {
 	//
 	// DCMPG for min and DCMPL for max are what make NaN fall to b: each pushes the value
 	// that fails its branch when an operand is unordered.
-	private static NumericMethod buildFloatSelect(Utf8Constant name, Utf8Constant desc, Consumer<MethodCode> compare,
+	private static NumericMethod buildFloatSelect(Utf8Entry name, Utf8Entry desc, Consumer<MethodCode> compare,
 			BiConsumer<MethodCode, MethodCode.Label> keepA) {
 		MethodCode c = new MethodCode();
 		c.dload(0);
@@ -1840,11 +1775,10 @@ final class JvmNumericRuntimeBuilder {
 	// unboxes the result immediately, so the identity of the box is unobservable -- and
 	// the re-box was an allocation on the hot path of every float program, one per
 	// operand of every double-path operation.
-	private static NumericMethod buildDbl(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant doubleClass, ClassConstant numberClass, MethodrefConstant doubleValueOf,
-			MethodrefConstant numDoubleValue, MethodrefConstant rRatNum, MethodrefConstant rRatDen,
-			MethodrefConstant rRatToDouble, TypeErrRefs typeErrRefs, @Nullable ClassConstant rcClass,
-			@Nullable FieldrefConstant hasComplex) {
+	private static NumericMethod buildDbl(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
+			ClassEntry doubleClass, ClassEntry numberClass, MethodRefEntry doubleValueOf, MethodRefEntry numDoubleValue,
+			MethodRefEntry rRatNum, MethodRefEntry rRatDen, MethodRefEntry rRatToDouble, TypeErrRefs typeErrRefs,
+			@Nullable ClassEntry rcClass, @Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			// A complex reaching the f64 coercion is not silently reduced to its
@@ -1855,7 +1789,7 @@ final class JvmNumericRuntimeBuilder {
 			// (.todo/757).
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			c.aload(0);
-			c.instanceOf(rcClass.entry());
+			c.instanceOf(rcClass);
 			MethodCode.Label ifNotComplex = c.newLabel();
 			c.ifeq(ifNotComplex);
 			emitRealErrThrow(c, typeErrRefs);
@@ -1863,22 +1797,22 @@ final class JvmNumericRuntimeBuilder {
 			c.labelBinding(noHolder);
 		}
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		c.aload(0);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRat = c.newLabel();
 		c.ifeq(ifNotRat);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
-		c.invokestatic(rRatToDouble.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(rRatDen);
+		c.invokestatic(rRatToDouble);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotRat);
 		// A Long or BigInteger widens through Number.doubleValue(); anything else throws
@@ -1887,13 +1821,13 @@ final class JvmNumericRuntimeBuilder {
 		// to an NPE naming Number internals). One instanceof on the non-double slow arm
 		// only -- the Double fast arm above is byte-identical.
 		c.aload(0);
-		c.instanceOf(numberClass.entry());
+		c.instanceOf(numberClass);
 		MethodCode.Label ifNotNumber = c.newLabel();
 		c.ifeq(ifNotNumber);
 		c.aload(0);
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
-		c.invokestatic(doubleValueOf.entry());
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotNumber);
 		emitTypeErrThrow(c, typeErrRefs, true);
@@ -1911,19 +1845,19 @@ final class JvmNumericRuntimeBuilder {
 	// Locals: 0=num, 1=den (params), 2=n, 3=d (magnitudes), 4=exp, 5=neg, 6=scratch
 	// reference, 7=q (long), 9=aux int, 10=e. Every branch target starts with an empty
 	// operand stack.
-	private static NumericMethod buildRatToDouble(Utf8Constant name, Utf8Constant desc, MethodrefConstant biSignum,
-			MethodrefConstant biNeg, MethodrefConstant biBitLength, MethodrefConstant biShiftLeft,
-			MethodrefConstant biCompareTo, MethodrefConstant biDiv, MethodrefConstant biRem,
-			MethodrefConstant biLongValue, MethodrefConstant longBitsToDouble, FieldrefConstant dblNegInf,
-			FieldrefConstant dblPosInf, LongConstant c3, LongConstant c4, LongConstant c2p53, LongConstant cFracMask) {
+	private static NumericMethod buildRatToDouble(Utf8Entry name, Utf8Entry desc, MethodRefEntry biSignum,
+			MethodRefEntry biNeg, MethodRefEntry biBitLength, MethodRefEntry biShiftLeft, MethodRefEntry biCompareTo,
+			MethodRefEntry biDiv, MethodRefEntry biRem, MethodRefEntry biLongValue, MethodRefEntry longBitsToDouble,
+			FieldRefEntry dblNegInf, FieldRefEntry dblPosInf, LongEntry c3, LongEntry c4, LongEntry c2p53,
+			LongEntry cFracMask) {
 		MethodCode c = new MethodCode();
 		// n = num.signum() < 0 ? num.negate() : num
 		c.aload(0);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifNumNonNeg = c.newLabel();
 		c.ifge(ifNumNonNeg);
 		c.aload(0);
-		c.invokevirtual(biNeg.methodRefEntry());
+		c.invokevirtual(biNeg);
 		c.astore(2);
 		MethodCode.Label toNAbs = c.newLabel();
 		c.goto_(toNAbs);
@@ -1933,11 +1867,11 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(toNAbs);
 		// d = den.signum() < 0 ? den.negate() : den
 		c.aload(1);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifDenNonNeg = c.newLabel();
 		c.ifge(ifDenNonNeg);
 		c.aload(1);
-		c.invokevirtual(biNeg.methodRefEntry());
+		c.invokevirtual(biNeg);
 		c.astore(3);
 		MethodCode.Label toDAbs = c.newLabel();
 		c.goto_(toDAbs);
@@ -1947,7 +1881,7 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(toDAbs);
 		// neg = num.signum() < 0 ? 1 : 0
 		c.aload(0);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifNegFalse = c.newLabel();
 		c.ifge(ifNegFalse);
 		c.iconst_1();
@@ -1960,9 +1894,9 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(toNegEnd);
 		// exp = n.bitLength() - d.bitLength()
 		c.aload(2);
-		c.invokevirtual(biBitLength.methodRefEntry());
+		c.invokevirtual(biBitLength);
 		c.aload(3);
-		c.invokevirtual(biBitLength.methodRefEntry());
+		c.invokevirtual(biBitLength);
 		c.isub();
 		c.istore(4);
 		// exp = floor(log2(n/d)): decrement when the shifted denominator overshoots.
@@ -1972,8 +1906,8 @@ final class JvmNumericRuntimeBuilder {
 		c.aload(2);
 		c.aload(3);
 		c.iload(4);
-		c.invokevirtual(biShiftLeft.methodRefEntry());
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
+		c.invokevirtual(biCompareTo);
 		MethodCode.Label ifNoDec = c.newLabel();
 		c.ifge(ifNoDec);
 		c.iload(4);
@@ -1986,9 +1920,9 @@ final class JvmNumericRuntimeBuilder {
 		c.aload(2);
 		c.iload(4);
 		c.ineg();
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.aload(3);
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokevirtual(biCompareTo);
 		MethodCode.Label ifNoDecNeg = c.newLabel();
 		c.ifge(ifNoDecNeg);
 		c.iload(4);
@@ -2020,16 +1954,16 @@ final class JvmNumericRuntimeBuilder {
 		c.iflt(ifShiftNeg);
 		c.aload(2);
 		c.iload(9);
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.astore(6);
 		c.aload(6);
 		c.aload(3);
-		c.invokevirtual(biDiv.methodRefEntry());
-		c.invokevirtual(biLongValue.methodRefEntry());
+		c.invokevirtual(biDiv);
+		c.invokevirtual(biLongValue);
 		c.lstore(7);
 		c.aload(6);
 		c.aload(3);
-		c.invokevirtual(biRem.methodRefEntry());
+		c.invokevirtual(biRem);
 		c.astore(6);
 		MethodCode.Label toDivDone = c.newLabel();
 		c.goto_(toDivDone);
@@ -2037,35 +1971,35 @@ final class JvmNumericRuntimeBuilder {
 		c.aload(3);
 		c.iload(9);
 		c.ineg();
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.astore(6);
 		c.aload(2);
 		c.aload(6);
-		c.invokevirtual(biDiv.methodRefEntry());
-		c.invokevirtual(biLongValue.methodRefEntry());
+		c.invokevirtual(biDiv);
+		c.invokevirtual(biLongValue);
 		c.lstore(7);
 		c.aload(2);
 		c.aload(6);
-		c.invokevirtual(biRem.methodRefEntry());
+		c.invokevirtual(biRem);
 		c.astore(6);
 		c.labelBinding(toDivDone);
 		// round = (q & 4) != 0; round up when set and (sticky || the mantissa is odd).
 		c.lload(7);
-		c.ldc(c4.entry());
+		c.ldc(c4);
 		c.land();
 		c.lconst_0();
 		c.lcmp();
 		MethodCode.Label ifNoRound = c.newLabel();
 		c.ifeq(ifNoRound);
 		c.lload(7);
-		c.ldc(c3.entry());
+		c.ldc(c3);
 		c.land();
 		c.lconst_0();
 		c.lcmp();
 		MethodCode.Label ifLowStickyRound = c.newLabel();
 		c.ifne(ifLowStickyRound);
 		c.aload(6);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifRemStickyRound = c.newLabel();
 		c.ifne(ifRemStickyRound);
 		c.lload(7);
@@ -2100,7 +2034,7 @@ final class JvmNumericRuntimeBuilder {
 		c.iload(4);
 		c.istore(10);
 		c.lload(7);
-		c.ldc(c2p53.entry());
+		c.ldc(c2p53);
 		c.lcmp();
 		MethodCode.Label ifNoNorm = c.newLabel();
 		c.ifne(ifNoNorm);
@@ -2128,32 +2062,32 @@ final class JvmNumericRuntimeBuilder {
 		c.loadConstant(52);
 		c.lshl();
 		c.lload(7);
-		c.ldc(cFracMask.entry());
+		c.ldc(cFracMask);
 		c.land();
 		c.lor();
-		c.invokestatic(longBitsToDouble.entry());
+		c.invokestatic(longBitsToDouble);
 		MethodCode.Label toSignTail = c.newLabel();
 		c.goto_(toSignTail);
 		// Subnormal path: k = round-half-even(n * 2^1074 / d), the mantissa directly.
 		c.labelBinding(ifSubnormal);
 		c.aload(2);
 		c.loadConstant(0x432);
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.astore(6);
 		c.aload(6);
 		c.aload(3);
-		c.invokevirtual(biDiv.methodRefEntry());
-		c.invokevirtual(biLongValue.methodRefEntry());
+		c.invokevirtual(biDiv);
+		c.invokevirtual(biLongValue);
 		c.lstore(7);
 		c.aload(6);
 		c.aload(3);
-		c.invokevirtual(biRem.methodRefEntry());
+		c.invokevirtual(biRem);
 		c.astore(6);
 		c.aload(6);
 		c.iconst_1();
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.aload(3);
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokevirtual(biCompareTo);
 		c.istore(9);
 		c.iload(9);
 		MethodCode.Label ifSubUp = c.newLabel();
@@ -2176,7 +2110,7 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifSubDone);
 		c.labelBinding(ifSubDoneTie);
 		c.lload(7);
-		c.invokestatic(longBitsToDouble.entry());
+		c.invokestatic(longBitsToDouble);
 		c.labelBinding(toSignTail);
 		// return neg ? -mag : mag
 		c.iload(5);
@@ -2189,15 +2123,15 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// return neg != 0 ? -Infinity : +Infinity for _ratToDouble's overflow arms.
-	private static void emitSignedInfinity(MethodCode c, int negSlot, FieldrefConstant dblNegInf,
-			FieldrefConstant dblPosInf) {
+	private static void emitSignedInfinity(MethodCode c, int negSlot, FieldRefEntry dblNegInf,
+			FieldRefEntry dblPosInf) {
 		c.iload(negSlot);
 		MethodCode.Label ifPos = c.newLabel();
 		c.ifeq(ifPos);
-		c.getstatic(dblNegInf.entry());
+		c.getstatic(dblNegInf);
 		c.dreturn();
 		c.labelBinding(ifPos);
-		c.getstatic(dblPosInf.entry());
+		c.getstatic(dblPosInf);
 		c.dreturn();
 	}
 
@@ -2212,105 +2146,105 @@ final class JvmNumericRuntimeBuilder {
 	// Long exponent beyond [-Integer.MAX_VALUE, Integer.MAX_VALUE] takes the same
 	// Math.pow path: narrowing it with L2I would silently answer base^(e mod 2^32)
 	// ((expt 2 4294967297) is Infinity, not 2), the interpreter's rule (.todo/849).
-	private static NumericMethod buildPow(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biPow, ClassConstant doubleClass,
-			ClassConstant longClass, MethodrefConstant longValue, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant mathPow,
-			MethodrefConstant rDbl, LongConstant cPowMax, LongConstant cPowMin) {
+	private static NumericMethod buildPow(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rRat, MethodRefEntry biPow, ClassEntry doubleClass,
+			ClassEntry longClass, MethodRefEntry longValue, ClassEntry numberClass, MethodRefEntry numDoubleValue,
+			MethodRefEntry doubleValueOf, MethodRefEntry mathPow, MethodRefEntry rDbl, LongEntry cPowMax,
+			LongEntry cPowMin) {
 		MethodCode c = new MethodCode();
 		// if (!(e instanceof Long)) return Double.valueOf(Math.pow(_dbl(base), _dbl(e)))
 		c.aload(1);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifLongExp = c.newLabel();
 		c.ifne(ifLongExp);
 		c.aload(0);
-		c.invokestatic(rDbl.entry());
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 		c.aload(1);
-		c.invokestatic(rDbl.entry());
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
-		c.invokestatic(mathPow.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		c.invokestatic(mathPow);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifLongExp);
 		// if (e > Integer.MAX_VALUE || e < -Integer.MAX_VALUE) return
 		// Double.valueOf(Math.pow(_dbl(base), _dbl(e)))
 		c.aload(1);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
-		c.ldc(cPowMax.entry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
+		c.ldc(cPowMax);
 		c.lcmp();
 		MethodCode.Label ifTooBig = c.newLabel();
 		c.ifgt(ifTooBig);
 		c.aload(1);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
-		c.ldc(cPowMin.entry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
+		c.ldc(cPowMin);
 		c.lcmp();
 		MethodCode.Label ifTooSmall = c.newLabel();
 		c.iflt(ifTooSmall);
 		// local 2 = (int) e
 		c.aload(1);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
 		c.l2i();
 		c.istore(2);
 		// if (base instanceof Double) return Double.valueOf(Math.pow(base, (double) e))
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifExact = c.newLabel();
 		c.ifeq(ifExact);
 		c.aload(0);
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 		c.iload(2);
 		c.i2d();
-		c.invokestatic(mathPow.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(mathPow);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifExact);
 		c.iload(2);
 		MethodCode.Label ifNeg = c.newLabel();
 		c.iflt(ifNeg);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.iload(2);
-		c.invokevirtual(biPow.methodRefEntry());
+		c.invokevirtual(biPow);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.iload(2);
-		c.invokevirtual(biPow.methodRefEntry());
-		c.invokestatic(rRat.entry());
+		c.invokevirtual(biPow);
+		c.invokestatic(rRat);
 		c.areturn();
 		c.labelBinding(ifNeg);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.iload(2);
 		c.ineg();
-		c.invokevirtual(biPow.methodRefEntry());
+		c.invokevirtual(biPow);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.iload(2);
 		c.ineg();
-		c.invokevirtual(biPow.methodRefEntry());
-		c.invokestatic(rRat.entry());
+		c.invokevirtual(biPow);
+		c.invokestatic(rRat);
 		c.areturn();
 		// A Long exponent beyond the int range: Math.pow over the widened doubles,
 		// the same shape as the non-Long arm above.
 		c.labelBinding(ifTooBig);
 		c.labelBinding(ifTooSmall);
 		c.aload(0);
-		c.invokestatic(rDbl.entry());
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 		c.aload(1);
-		c.invokestatic(rDbl.entry());
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
-		c.invokestatic(mathPow.entry());
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
+		c.invokestatic(mathPow);
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -2326,26 +2260,26 @@ final class JvmNumericRuntimeBuilder {
 	// equal contents are not eql. Equal string LITERALS are still one object, because
 	// ldc interns them -- the coalescing the interpreter and WASM reproduce. A SYMBOL is
 	// a bare String and keeps comparing by name.
-	private static NumericMethod buildEqv(Utf8Constant name, Utf8Constant desc, ClassConstant ratArrClass,
-			ClassConstant intArrClass, ClassConstant mapClass, MethodrefConstant objEquals, StringRefs strings) {
+	private static NumericMethod buildEqv(Utf8Entry name, Utf8Entry desc, ClassEntry ratArrClass,
+			ClassEntry intArrClass, ClassEntry mapClass, MethodRefEntry objEquals, StringRefs strings) {
 		MethodCode c = new MethodCode();
 		// CHARACTER compare (int[]{cp}): if both operands are length-1 int[], value
 		// equality is (a[0] == b[0]). Emitted BEFORE the ratio and equals paths so a
 		// character never falls through to Object.equals.
 		c.aload(0);
-		c.instanceOf(intArrClass.entry());
+		c.instanceOf(intArrClass);
 		MethodCode.Label ifNotChar1 = c.newLabel();
 		c.ifeq(ifNotChar1);
 		c.aload(1);
-		c.instanceOf(intArrClass.entry());
+		c.instanceOf(intArrClass);
 		MethodCode.Label ifNotChar2 = c.newLabel();
 		c.ifeq(ifNotChar2);
 		c.aload(0);
-		c.checkcast(intArrClass.entry());
+		c.checkcast(intArrClass);
 		c.iconst_0();
 		c.iaload();
 		c.aload(1);
-		c.checkcast(intArrClass.entry());
+		c.checkcast(intArrClass);
 		c.iconst_0();
 		c.iaload();
 		MethodCode.Label ifCpNe = c.newLabel();
@@ -2358,21 +2292,21 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNotChar1);
 		c.labelBinding(ifNotChar2);
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifObj1 = c.newLabel();
 		c.ifeq(ifObj1);
 		c.aload(1);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifObj2 = c.newLabel();
 		c.ifeq(ifObj2);
 		emitRatioElement(c, 0, ratArrClass, 0);
 		emitRatioElement(c, 1, ratArrClass, 0);
-		c.invokevirtual(objEquals.methodRefEntry());
+		c.invokevirtual(objEquals);
 		MethodCode.Label ifFalse1 = c.newLabel();
 		c.ifeq(ifFalse1);
 		emitRatioElement(c, 0, ratArrClass, 1);
 		emitRatioElement(c, 1, ratArrClass, 1);
-		c.invokevirtual(objEquals.methodRefEntry());
+		c.invokevirtual(objEquals);
 		MethodCode.Label ifFalse2 = c.newLabel();
 		c.ifeq(ifFalse2);
 		c.iconst_1();
@@ -2385,7 +2319,7 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifObj2);
 		// if (a instanceof Map) return a == b
 		c.aload(0);
-		c.instanceOf(mapClass.entry());
+		c.instanceOf(mapClass);
 		MethodCode.Label ifNotMap = c.newLabel();
 		c.ifeq(ifNotMap);
 		c.aload(0);
@@ -2401,10 +2335,10 @@ final class JvmNumericRuntimeBuilder {
 		// if (a instanceof List || b instanceof List || isString(a)) return a == b
 		MethodCode.Label toIdentity = c.newLabel();
 		c.aload(0);
-		c.instanceOf(strings.listClass().entry());
+		c.instanceOf(strings.listClass());
 		c.ifne(toIdentity);
 		c.aload(1);
-		c.instanceOf(strings.listClass().entry());
+		c.instanceOf(strings.listClass());
 		c.ifne(toIdentity);
 		MethodCode.Label toEquals = c.newLabel();
 		emitIsStringGuard(c, 0, strings, toEquals);
@@ -2421,7 +2355,7 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(toEquals);
 		c.aload(0);
 		c.aload(1);
-		c.invokevirtual(objEquals.methodRefEntry());
+		c.invokevirtual(objEquals);
 		c.ireturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -2434,24 +2368,24 @@ final class JvmNumericRuntimeBuilder {
 	 * @param isEmpty {@code String.isEmpty()}
 	 * @param charAt {@code String.charAt(int)}
 	 */
-	private record StringRefs(ClassConstant stringClass, ClassConstant listClass, MethodrefConstant isEmpty,
-			MethodrefConstant charAt) {
+	private record StringRefs(ClassEntry stringClass, ClassEntry listClass, MethodRefEntry isEmpty,
+			MethodRefEntry charAt) {
 	}
 
 	// Falls through when the value in local slot is a STRING (a quote-framed
 	// java.lang.String); otherwise branches to notString.
 	private static void emitIsStringGuard(MethodCode c, int slot, StringRefs strings, MethodCode.Label notString) {
 		c.aload(slot);
-		c.instanceOf(strings.stringClass().entry());
+		c.instanceOf(strings.stringClass());
 		c.ifeq(notString);
 		c.aload(slot);
-		c.checkcast(strings.stringClass().entry());
-		c.invokevirtual(strings.isEmpty().methodRefEntry());
+		c.checkcast(strings.stringClass());
+		c.invokevirtual(strings.isEmpty());
 		c.ifne(notString);
 		c.aload(slot);
-		c.checkcast(strings.stringClass().entry());
+		c.checkcast(strings.stringClass());
 		c.iconst_0();
-		c.invokevirtual(strings.charAt().methodRefEntry());
+		c.invokevirtual(strings.charAt());
 		c.loadConstant('"');
 		c.if_icmpne(notString);
 	}
@@ -2463,11 +2397,11 @@ final class JvmNumericRuntimeBuilder {
 	// array helpers exist), which _eqv no longer answers; everything else (including
 	// nil/null) delegates to _eqv, so numbers, symbols and nil compare by value. Returns
 	// 1 for equal, 0 otherwise.
-	private static NumericMethod buildEqual(Utf8Constant name, Utf8Constant desc, ClassConstant objArrClass,
-			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant eqv, MethodrefConstant equal,
-			@org.jspecify.annotations.Nullable ClassConstant strArrClass,
-			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, StringRefs strings,
-			MethodrefConstant objEquals) {
+	private static NumericMethod buildEqual(Utf8Entry name, Utf8Entry desc, ClassEntry objArrClass,
+			ClassEntry ratArrClass, ClassEntry integerClass, MethodRefEntry eqv, MethodRefEntry equal,
+			@org.jspecify.annotations.Nullable ClassEntry strArrClass,
+			@org.jspecify.annotations.Nullable MethodRefEntry strvMethod, StringRefs strings,
+			MethodRefEntry objEquals) {
 		MethodCode c = new MethodCode();
 		// if (a == b) return 1 -- identity BEFORE any recursion, which is what makes a
 		// cyclic value comparable to itself (a hash table storing and retrieving under
@@ -2511,12 +2445,12 @@ final class JvmNumericRuntimeBuilder {
 		// both cons: return _equal(a[0], b[0]) && _equal(a[1], b[1])
 		emitArrayElement(c, 0, objArrClass, 0);
 		emitArrayElement(c, 1, objArrClass, 0);
-		c.invokestatic(equal.entry());
+		c.invokestatic(equal);
 		MethodCode.Label ifCarFalse = c.newLabel();
 		c.ifeq(ifCarFalse);
 		emitArrayElement(c, 0, objArrClass, 1);
 		emitArrayElement(c, 1, objArrClass, 1);
-		c.invokestatic(equal.entry());
+		c.invokestatic(equal);
 		c.ireturn();
 		c.labelBinding(ifCarFalse);
 		c.iconst_0();
@@ -2525,10 +2459,10 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(notBothCons);
 		if (strvMethod != null) {
 			c.aload(0);
-			c.invokestatic(strvMethod.entry());
+			c.invokestatic(strvMethod);
 			c.astore(0);
 			c.aload(1);
-			c.invokestatic(strvMethod.entry());
+			c.invokestatic(strvMethod);
 			c.astore(1);
 		}
 		MethodCode.Label notStrings = c.newLabel();
@@ -2536,12 +2470,12 @@ final class JvmNumericRuntimeBuilder {
 		emitIsStringGuard(c, 1, strings, notStrings);
 		c.aload(0);
 		c.aload(1);
-		c.invokevirtual(objEquals.methodRefEntry());
+		c.invokevirtual(objEquals);
 		c.ireturn();
 		c.labelBinding(notStrings);
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(eqv.entry());
+		c.invokestatic(eqv);
 		c.ireturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -2550,8 +2484,8 @@ final class JvmNumericRuntimeBuilder {
 	// decided here (t only when both are, over the same layout, with every slot equal),
 	// so control falls through to the cons/eqv code only for two non-instances. Local 2
 	// is the slot cursor.
-	private static void emitInstanceEqual(MethodCode c, ClassConstant objArrClass, ClassConstant strArrClass,
-			MethodrefConstant equal) {
+	private static void emitInstanceEqual(MethodCode c, ClassEntry objArrClass, ClassEntry strArrClass,
+			MethodRefEntry equal) {
 		MethodCode.Label aNotInstance = c.newLabel();
 		emitInstanceGuard(c, 0, objArrClass, strArrClass, aNotInstance);
 		// a IS an instance: b must be one too, or they differ.
@@ -2568,19 +2502,19 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label loopTop = c.newBoundLabel();
 		c.iload(2);
 		c.aload(0);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.arraylength();
 		MethodCode.Label exitLoop = c.newLabel();
 		c.if_icmpge(exitLoop);
 		c.aload(0);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.iload(2);
 		c.aaload();
 		c.aload(1);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.iload(2);
 		c.aaload();
-		c.invokestatic(equal.entry());
+		c.invokestatic(equal);
 		c.ifeq(toFalse);
 		c.iinc(2, 1);
 		c.goto_(loopTop);
@@ -2601,57 +2535,57 @@ final class JvmNumericRuntimeBuilder {
 
 	// Branches to escape unless the value in local slot is an instance: a non-empty
 	// Object[] carrying a String[] layout in slot 0.
-	private static void emitInstanceGuard(MethodCode c, int slot, ClassConstant objArrClass, ClassConstant strArrClass,
+	private static void emitInstanceGuard(MethodCode c, int slot, ClassEntry objArrClass, ClassEntry strArrClass,
 			MethodCode.Label escape) {
 		c.aload(slot);
-		c.instanceOf(objArrClass.entry());
+		c.instanceOf(objArrClass);
 		c.ifeq(escape);
 		c.aload(slot);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.arraylength();
 		c.ifeq(escape);
 		emitArrayElement(c, slot, objArrClass, 0);
-		c.instanceOf(strArrClass.entry());
+		c.instanceOf(strArrClass);
 		c.ifeq(escape);
 	}
 
 	// Emits a cons-cell guard for the value in local slot: if it is not a cons cell (not
 	// an Object[], or a BigInteger[] ratio, or an Object[] whose head is an Integer
 	// function reference), branch to notCons.
-	private static void emitConsGuard(MethodCode c, int slot, ClassConstant objArrClass, ClassConstant ratArrClass,
-			ClassConstant integerClass, MethodCode.Label notCons) {
+	private static void emitConsGuard(MethodCode c, int slot, ClassEntry objArrClass, ClassEntry ratArrClass,
+			ClassEntry integerClass, MethodCode.Label notCons) {
 		c.aload(slot);
-		c.instanceOf(objArrClass.entry());
+		c.instanceOf(objArrClass);
 		c.ifeq(notCons);
 		c.aload(slot);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		c.ifne(notCons);
 		c.aload(slot);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.iconst_0();
 		c.aaload();
-		c.instanceOf(integerClass.entry());
+		c.instanceOf(integerClass);
 		c.ifne(notCons);
 	}
 
 	// Loads element 0 or 1 of the Object[] in local slot.
-	private static void emitArrayElement(MethodCode c, int slot, ClassConstant objArrClass, int index) {
+	private static void emitArrayElement(MethodCode c, int slot, ClassEntry objArrClass, int index) {
 		c.aload(slot);
-		c.checkcast(objArrClass.entry());
+		c.checkcast(objArrClass);
 		c.loadConstant(index);
 		c.aaload();
 	}
 
 	// _rtrunc(Object x): num/den truncating toward zero (BigInteger.divide).
-	private static NumericMethod buildRatTrunc(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rNorm, MethodrefConstant biDiv) {
+	private static NumericMethod buildRatTrunc(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rNorm, MethodRefEntry biDiv) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biDiv.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biDiv);
+		c.invokestatic(rNorm);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -2659,73 +2593,72 @@ final class JvmNumericRuntimeBuilder {
 	// _rfloor(Object x): (num - num.mod(den)) / den (the denominator is positive, so
 	// mod() is non-negative). When ceilStep/ceilOp are given the result is floor + 1,
 	// which is the ceiling of a (never-integer) normalized ratio.
-	private static NumericMethod buildRatFloor(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rNorm, MethodrefConstant biMod, MethodrefConstant biSub,
-			MethodrefConstant biDiv, @Nullable FieldrefConstant ceilOne, @Nullable MethodrefConstant ceilAdd) {
+	private static NumericMethod buildRatFloor(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rNorm, MethodRefEntry biMod, MethodRefEntry biSub,
+			MethodRefEntry biDiv, @Nullable FieldRefEntry ceilOne, @Nullable MethodRefEntry ceilAdd) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.astore(1);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.astore(2);
 		c.aload(1);
 		c.aload(1);
 		c.aload(2);
-		c.invokevirtual(biMod.methodRefEntry());
-		c.invokevirtual(biSub.methodRefEntry());
+		c.invokevirtual(biMod);
+		c.invokevirtual(biSub);
 		c.aload(2);
-		c.invokevirtual(biDiv.methodRefEntry());
+		c.invokevirtual(biDiv);
 		if (ceilOne != null && ceilAdd != null) {
-			c.getstatic(ceilOne.entry());
-			c.invokevirtual(ceilAdd.methodRefEntry());
+			c.getstatic(ceilOne);
+			c.invokevirtual(ceilAdd);
 		}
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rNorm);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
 
 	// _rround(Object x): nearest integer, ties to even (Common Lisp round semantics).
-	private static NumericMethod buildRatRound(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
-			MethodrefConstant rRatDen, MethodrefConstant rNorm, MethodrefConstant biMod, MethodrefConstant biSub,
-			MethodrefConstant biDiv, MethodrefConstant biMul, MethodrefConstant biShiftLeft,
-			MethodrefConstant biCompareTo, MethodrefConstant biTestBit, FieldrefConstant biOne,
-			MethodrefConstant biAdd) {
+	private static NumericMethod buildRatRound(Utf8Entry name, Utf8Entry desc, MethodRefEntry rRatNum,
+			MethodRefEntry rRatDen, MethodRefEntry rNorm, MethodRefEntry biMod, MethodRefEntry biSub,
+			MethodRefEntry biDiv, MethodRefEntry biMul, MethodRefEntry biShiftLeft, MethodRefEntry biCompareTo,
+			MethodRefEntry biTestBit, FieldRefEntry biOne, MethodRefEntry biAdd) {
 		MethodCode c = new MethodCode();
 		// num=1, den=2, floor=3, remainder=4, cmp(int)=5
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.astore(1);
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.astore(2);
 		c.aload(1);
 		c.aload(1);
 		c.aload(2);
-		c.invokevirtual(biMod.methodRefEntry());
-		c.invokevirtual(biSub.methodRefEntry());
+		c.invokevirtual(biMod);
+		c.invokevirtual(biSub);
 		c.aload(2);
-		c.invokevirtual(biDiv.methodRefEntry());
+		c.invokevirtual(biDiv);
 		c.astore(3);
 		// remainder = num - floor * den (0 <= remainder < den)
 		c.aload(1);
 		c.aload(3);
 		c.aload(2);
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokevirtual(biSub.methodRefEntry());
+		c.invokevirtual(biMul);
+		c.invokevirtual(biSub);
 		c.astore(4);
 		// cmp = (remainder << 1).compareTo(den)
 		c.aload(4);
 		c.iconst_1();
-		c.invokevirtual(biShiftLeft.methodRefEntry());
+		c.invokevirtual(biShiftLeft);
 		c.aload(2);
-		c.invokevirtual(biCompareTo.methodRefEntry());
+		c.invokevirtual(biCompareTo);
 		c.istore(5);
 		c.iload(5);
 		MethodCode.Label ifUpOrTie = c.newLabel();
 		c.ifge(ifUpOrTie);
 		c.aload(3);
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(ifUpOrTie);
 		c.iload(5);
@@ -2734,18 +2667,18 @@ final class JvmNumericRuntimeBuilder {
 		// Tie: round to even (an odd floor rounds up).
 		c.aload(3);
 		c.iconst_0();
-		c.invokevirtual(biTestBit.methodRefEntry());
+		c.invokevirtual(biTestBit);
 		MethodCode.Label ifUp2 = c.newLabel();
 		c.ifne(ifUp2);
 		c.aload(3);
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rNorm);
 		c.areturn();
 		c.labelBinding(ifUp1);
 		c.labelBinding(ifUp2);
 		c.aload(3);
-		c.getstatic(biOne.entry());
-		c.invokevirtual(biAdd.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.getstatic(biOne);
+		c.invokevirtual(biAdd);
+		c.invokestatic(rNorm);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -2757,53 +2690,52 @@ final class JvmNumericRuntimeBuilder {
 	// route. Feeding the pair through _div is what makes the float floor family exact:
 	// the quotient is then the mathematical one at any magnitude rather than the
 	// rounded double a/b narrowed into a long.
-	private static NumericMethod buildFrat(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
-			ClassConstant longClass, ClassConstant bigClass, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant dblIsFinite, ClassConstant bigDecClass,
-			MethodrefConstant bdInitDouble, MethodrefConstant bdUnscaled, MethodrefConstant bdScale,
-			FieldrefConstant biTen, MethodrefConstant biPow) {
+	private static NumericMethod buildFrat(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass, ClassEntry longClass,
+			ClassEntry bigClass, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry dblIsFinite,
+			ClassEntry bigDecClass, MethodRefEntry bdInitDouble, MethodRefEntry bdUnscaled, MethodRefEntry bdScale,
+			FieldRefEntry biTen, MethodRefEntry biPow) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		emitDoubleOfArg0(c, numberClass, numDoubleValue);
-		c.invokestatic(dblIsFinite.entry());
+		c.invokestatic(dblIsFinite);
 		MethodCode.Label ifFinite = c.newLabel();
 		c.ifne(ifFinite);
 		c.aconst_null();
 		c.areturn();
 		c.labelBinding(ifFinite);
 		// bd = new BigDecimal(d) in local 1, the pair in local 2.
-		c.new_(bigDecClass.entry());
+		c.new_(bigDecClass);
 		c.dup();
 		emitDoubleOfArg0(c, numberClass, numDoubleValue);
-		c.invokespecial(bdInitDouble.entry());
+		c.invokespecial(bdInitDouble);
 		c.astore(1);
 		c.iconst_2();
-		c.anewarray(bigClass.entry());
+		c.anewarray(bigClass);
 		c.astore(2);
 		c.aload(2);
 		c.iconst_0();
 		c.aload(1);
-		c.invokevirtual(bdUnscaled.methodRefEntry());
+		c.invokevirtual(bdUnscaled);
 		c.aastore();
 		c.aload(2);
 		c.iconst_1();
-		c.getstatic(biTen.entry());
+		c.getstatic(biTen);
 		c.aload(1);
-		c.invokevirtual(bdScale.methodRefEntry());
-		c.invokevirtual(biPow.methodRefEntry());
+		c.invokevirtual(bdScale);
+		c.invokevirtual(biPow);
 		c.aastore();
 		c.aload(2);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifLong = c.newLabel();
 		c.ifne(ifLong);
 		c.aload(0);
-		c.instanceOf(bigClass.entry());
+		c.instanceOf(bigClass);
 		MethodCode.Label ifBig = c.newLabel();
 		c.ifne(ifBig);
 		c.aconst_null();
@@ -2822,15 +2754,15 @@ final class JvmNumericRuntimeBuilder {
 	// report, a type-error like the interpreter's throw); a NaN or an infinity throws the
 	// interpreter's
 	// non-finite text instead.
-	private static NumericMethod buildRational(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			ClassConstant bigClass, ClassConstant doubleClass, ClassConstant ratArrClass, MethodrefConstant rFrat,
-			MethodrefConstant rRat, TypeErrRefs typeErrRefs, ConstantPool.StringConstant nonFiniteStr,
-			@Nullable ClassConstant rcClass, @Nullable FieldrefConstant hasComplex) {
+	private static NumericMethod buildRational(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			ClassEntry bigClass, ClassEntry doubleClass, ClassEntry ratArrClass, MethodRefEntry rFrat,
+			MethodRefEntry rRat, TypeErrRefs typeErrRefs, StringEntry nonFiniteStr, @Nullable ClassEntry rcClass,
+			@Nullable FieldRefEntry hasComplex) {
 		MethodCode c = new MethodCode();
 		if (rcClass != null) {
 			MethodCode.Label noHolder = emitNoHolderJump(c, hasComplex);
 			c.aload(0);
-			c.instanceOf(rcClass.entry());
+			c.instanceOf(rcClass);
 			MethodCode.Label ifNotComplex = c.newLabel();
 			c.ifeq(ifNotComplex);
 			emitRealErrThrow(c, typeErrRefs);
@@ -2839,7 +2771,7 @@ final class JvmNumericRuntimeBuilder {
 		}
 		// A ratio is already exact.
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifNotRat = c.newLabel();
 		c.ifeq(ifNotRat);
 		c.aload(0);
@@ -2847,11 +2779,11 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNotRat);
 		// So is an integer.
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifLong = c.newLabel();
 		c.ifne(ifLong);
 		c.aload(0);
-		c.instanceOf(bigClass.entry());
+		c.instanceOf(bigClass);
 		MethodCode.Label ifNotInt = c.newLabel();
 		c.ifeq(ifNotInt);
 		c.labelBinding(ifLong);
@@ -2860,35 +2792,35 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNotInt);
 		// A Double goes through _frat, which answers null for a NaN or an infinity.
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		c.aload(0);
-		c.invokestatic(rFrat.entry());
+		c.invokestatic(rFrat);
 		c.dup();
 		MethodCode.Label ifFinite = c.newLabel();
 		c.ifnonnull(ifFinite);
 		c.pop();
-		c.new_(typeErrRefs.rte().entry());
+		c.new_(typeErrRefs.rte());
 		c.dup();
-		c.ldc(nonFiniteStr.entry());
-		c.invokespecial(typeErrRefs.rteInit().entry());
+		c.ldc(nonFiniteStr);
+		c.invokespecial(typeErrRefs.rteInit());
 		c.athrow();
 		c.labelBinding(ifFinite);
 		// The verifier only sees _frat's Object descriptor, so the pair is cast
 		// to its array class before the elements load (a bare aaload on the
 		// merged Object is too lossy for the verifier).
-		c.checkcast(ratArrClass.entry());
+		c.checkcast(ratArrClass);
 		c.astore(1);
 		c.aload(1);
 		c.iconst_0();
 		c.aaload();
-		c.checkcast(bigClass.entry());
+		c.checkcast(bigClass);
 		c.aload(1);
 		c.iconst_1();
 		c.aaload();
-		c.checkcast(bigClass.entry());
-		c.invokestatic(rRat.entry());
+		c.checkcast(bigClass);
+		c.invokestatic(rRat);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 		emitRealErrThrow(c, typeErrRefs);
@@ -2896,10 +2828,10 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	/** Pushes {@code ((Number) arg0).doubleValue()}. */
-	private static void emitDoubleOfArg0(MethodCode c, ClassConstant numberClass, MethodrefConstant numDoubleValue) {
+	private static void emitDoubleOfArg0(MethodCode c, ClassEntry numberClass, MethodRefEntry numDoubleValue) {
 		c.aload(0);
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 	}
 
 	// _fdiv(Object a, Object b, int mode): the floor family's quotient when a float is
@@ -2924,18 +2856,17 @@ final class JvmNumericRuntimeBuilder {
 	// non-finite dividend, or a ratio operand, still declines to the old f64 route, which
 	// already answers correctly there (0/infinity is exactly zero, not an infinitesimal).
 	// See .kb/linalg-simd.md, "mod/rem".
-	private static NumericMethod buildFdiv(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, ClassConstant ratArrClass,
-			MethodrefConstant rFrat, MethodrefConstant rDiv, MethodrefConstant rRatTrunc, MethodrefConstant rRatFloor,
-			MethodrefConstant rRatCeil, MethodrefConstant rRatRound, MethodrefConstant dblIsInfinite,
-			MethodrefConstant dblIsFinite, ClassConstant longClass, MethodrefConstant longValue, ClassConstant bigClass,
-			MethodrefConstant biSignum, MethodrefConstant longValueOf, TypeErrRefs typeErrRefs,
-			ConstantPool.StringConstant nonFiniteStr) {
+	private static NumericMethod buildFdiv(Utf8Entry name, Utf8Entry desc, ClassEntry doubleClass,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, ClassEntry ratArrClass, MethodRefEntry rFrat,
+			MethodRefEntry rDiv, MethodRefEntry rRatTrunc, MethodRefEntry rRatFloor, MethodRefEntry rRatCeil,
+			MethodRefEntry rRatRound, MethodRefEntry dblIsInfinite, MethodRefEntry dblIsFinite, ClassEntry longClass,
+			MethodRefEntry longValue, ClassEntry bigClass, MethodRefEntry biSignum, MethodRefEntry longValueOf,
+			TypeErrRefs typeErrRefs, StringEntry nonFiniteStr) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		c.ior();
 		MethodCode.Label ifFloat = c.newLabel();
 		c.ifne(ifFloat);
@@ -2944,17 +2875,17 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifFloat);
 		// A zero float divisor declines: (/ x 0.0) is an infinity here, not a signal.
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotFloatDivisor = c.newLabel();
 		c.ifeq(ifNotFloatDivisor);
 		c.aload(1);
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 		// An infinite divisor: settle the quotient by sign (local 6/7 hold the two
 		// signs) rather than falling through to _frat, which declines on a non-finite
 		// operand. Every sub-path below returns, so control never merges back here.
 		c.dup2();
-		c.invokestatic(dblIsInfinite.entry());
+		c.invokestatic(dblIsInfinite);
 		MethodCode.Label ifNotInfiniteDivisor = c.newLabel();
 		c.ifeq(ifNotInfiniteDivisor);
 		emitInfiniteDivisorQuotient(c, doubleClass, numDoubleValue, dblIsFinite, longClass, longValue, bigClass,
@@ -2969,7 +2900,7 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNotFloatDivisor);
 		c.labelBinding(ifNonZeroDivisor);
 		c.aload(0);
-		c.invokestatic(rFrat.entry());
+		c.invokestatic(rFrat);
 		c.astore(3);
 		c.aload(3);
 		MethodCode.Label ifDividendOk = c.newLabel();
@@ -2980,20 +2911,20 @@ final class JvmNumericRuntimeBuilder {
 		// this: its out-of-long-range arm calls here over a divisor of one and never
 		// sees a null.
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifRatioDividend = c.newLabel();
 		c.ifeq(ifRatioDividend);
-		c.new_(typeErrRefs.rte().entry());
+		c.new_(typeErrRefs.rte());
 		c.dup();
-		c.ldc(nonFiniteStr.entry());
-		c.invokespecial(typeErrRefs.rteInit().entry());
+		c.ldc(nonFiniteStr);
+		c.invokespecial(typeErrRefs.rteInit());
 		c.athrow();
 		c.labelBinding(ifRatioDividend);
 		c.aconst_null();
 		c.areturn();
 		c.labelBinding(ifDividendOk);
 		c.aload(1);
-		c.invokestatic(rFrat.entry());
+		c.invokestatic(rFrat);
 		c.astore(4);
 		c.aload(4);
 		MethodCode.Label ifDivisorOk = c.newLabel();
@@ -3003,10 +2934,10 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifDivisorOk);
 		c.aload(3);
 		c.aload(4);
-		c.invokestatic(rDiv.entry());
+		c.invokestatic(rDiv);
 		c.astore(5);
 		c.aload(5);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		MethodCode.Label ifRatio = c.newLabel();
 		c.ifne(ifRatio);
 		c.aload(5);
@@ -3016,7 +2947,7 @@ final class JvmNumericRuntimeBuilder {
 		emitModeArm(c, 2, rRatCeil);
 		emitModeArm(c, 3, rRatRound);
 		c.aload(5);
-		c.invokestatic(rRatTrunc.entry());
+		c.invokestatic(rRatTrunc);
 		c.areturn();
 		// Locals 6 (dividend sign) and 7 (divisor sign) belong to the infinite-divisor
 		// arm above; nothing past it uses a local higher than 5.
@@ -3035,10 +2966,9 @@ final class JvmNumericRuntimeBuilder {
 	 * (same) or 0 (different) for {@code CEILING} (mode 2). Every path returns, so the
 	 * caller needs no goto back to its own flow.
 	 */
-	private static void emitInfiniteDivisorQuotient(MethodCode c, ClassConstant doubleClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant dblIsFinite, ClassConstant longClass,
-			MethodrefConstant longValue, ClassConstant bigClass, MethodrefConstant biSignum,
-			MethodrefConstant longValueOf) {
+	private static void emitInfiniteDivisorQuotient(MethodCode c, ClassEntry doubleClass, MethodRefEntry numDoubleValue,
+			MethodRefEntry dblIsFinite, ClassEntry longClass, MethodRefEntry longValue, ClassEntry bigClass,
+			MethodRefEntry biSignum, MethodRefEntry longValueOf) {
 		// local 6 = signum(b), from the divisor double already on the stack.
 		c.dconst_0();
 		c.dcmpl();
@@ -3049,12 +2979,12 @@ final class JvmNumericRuntimeBuilder {
 
 		// Long.
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifNotLong = c.newLabel();
 		c.ifeq(ifNotLong);
 		c.aload(0);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
 		c.lconst_0();
 		c.lcmp();
 		c.istore(7);
@@ -3063,26 +2993,26 @@ final class JvmNumericRuntimeBuilder {
 
 		// BigInteger.
 		c.aload(0);
-		c.instanceOf(bigClass.entry());
+		c.instanceOf(bigClass);
 		MethodCode.Label ifNotBig = c.newLabel();
 		c.ifeq(ifNotBig);
 		c.aload(0);
-		c.checkcast(bigClass.entry());
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.checkcast(bigClass);
+		c.invokevirtual(biSignum);
 		c.istore(7);
 		c.goto_(afterSignA);
 		c.labelBinding(ifNotBig);
 
 		// Double: finite required, else decline.
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		c.aload(0);
-		c.checkcast(doubleClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.checkcast(doubleClass);
+		c.invokevirtual(numDoubleValue);
 		c.dup2();
-		c.invokestatic(dblIsFinite.entry());
+		c.invokestatic(dblIsFinite);
 		MethodCode.Label ifFiniteA = c.newLabel();
 		c.ifne(ifFiniteA);
 		c.pop2();
@@ -3121,11 +3051,11 @@ final class JvmNumericRuntimeBuilder {
 		c.if_icmpne(diffElse);
 		c.lconst_1();
 		c.lneg();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(diffElse);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 
 		c.labelBinding(ifSameSign);
@@ -3135,33 +3065,33 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label sameElse = c.newLabel();
 		c.if_icmpne(sameElse);
 		c.lconst_1();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(sameElse);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 	}
 
 	/** {@code if (mode == n) return rounder(local 5);} inside {@code _fdiv}. */
-	private static void emitModeArm(MethodCode c, int mode, MethodrefConstant rounder) {
+	private static void emitModeArm(MethodCode c, int mode, MethodRefEntry rounder) {
 		c.iload(2);
 		c.loadConstant(mode);
 		MethodCode.Label skip = c.newLabel();
 		c.if_icmpne(skip);
 		c.aload(5);
-		c.invokestatic(rounder.entry());
+		c.invokestatic(rounder);
 		c.areturn();
 		c.labelBinding(skip);
 	}
 
 	// Emits the two `instanceof BigInteger[]` guards that jump to the rational path.
-	private static void emitRatioGuard(MethodCode c, ClassConstant ratArrClass, MethodCode.Label ratio) {
+	private static void emitRatioGuard(MethodCode c, ClassEntry ratArrClass, MethodCode.Label ratio) {
 		c.aload(0);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		c.ifne(ratio);
 		c.aload(1);
-		c.instanceOf(ratArrClass.entry());
+		c.instanceOf(ratArrClass);
 		c.ifne(ratio);
 	}
 
@@ -3170,16 +3100,16 @@ final class JvmNumericRuntimeBuilder {
 	// BigInteger's infinite two's complement on every value a long can hold -- so a
 	// (unsigned-byte 32) mask costs no BigInteger allocation. Any other operand mix
 	// falls back to the exact BigInteger operation.
-	private static NumericMethod buildLogOp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biOp, Consumer<MethodCode> longOp) {
+	private static NumericMethod buildLogOp(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biOp, Consumer<MethodCode> longOp) {
 		MethodCode c = new MethodCode();
 		MethodCode.Label toSlow = c.newLabel();
 		emitLongLongGuard(c, longClass, toSlow);
 		emitUnboxLong(c, 0, longClass, longValue);
 		emitUnboxLong(c, 1, longClass, longValue);
 		longOp.accept(c);
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(toSlow);
 		emitBigBinary(c, rBig, biOp, rNorm);
@@ -3187,25 +3117,25 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _lognot(Object a): ~a for a Long (emitted as `a xor -1`), BigInteger.not otherwise.
-	private static NumericMethod buildLogNot(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biNot) {
+	private static NumericMethod buildLogNot(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biNot) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlow = c.newLabel();
 		c.ifeq(ifSlow);
 		emitUnboxLong(c, 0, longClass, longValue);
 		c.iconst_m1();
 		c.i2l();
 		c.lxor();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifSlow);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biNot.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biNot);
+		c.invokestatic(rNorm);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -3221,10 +3151,10 @@ final class JvmNumericRuntimeBuilder {
 	//
 	// Locals: 0=a, 1=count, 2/3=long a, 4=int count, 6/7=long result, 8/9=long count.
 	// All are pre-initialized so every path reaching a slow tail carries the same frame.
-	private static NumericMethod buildAsh(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig, MethodrefConstant rNorm,
-			MethodrefConstant biShiftLeft, MethodrefConstant biSignum, ClassConstant arithEx, MethodrefConstant aeInit,
-			ConstantPool.StringConstant tooLargeStr) {
+	private static NumericMethod buildAsh(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry rNorm,
+			MethodRefEntry biShiftLeft, MethodRefEntry biSignum, ClassEntry arithEx, MethodRefEntry aeInit,
+			StringEntry tooLargeStr) {
 		MethodCode c = new MethodCode();
 		c.lconst_0();
 		c.lstore(2);
@@ -3236,7 +3166,7 @@ final class JvmNumericRuntimeBuilder {
 		c.lstore(8);
 		// the count takes the ranged path only when it is a Long
 		c.aload(1);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlowCount = c.newLabel();
 		c.ifeq(ifSlowCount);
 		emitUnboxLong(c, 1, longClass, longValue);
@@ -3263,7 +3193,7 @@ final class JvmNumericRuntimeBuilder {
 		c.istore(4);
 		// the value takes the fast path only when it is a Long
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlowValue = c.newLabel();
 		c.ifeq(ifSlowValue);
 		emitUnboxLong(c, 0, longClass, longValue);
@@ -3283,12 +3213,12 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label ifNegative = c.newLabel();
 		c.iflt(ifNegative);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifNegative);
 		c.iconst_m1();
 		c.i2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		// -64 < count <= 0: a >> -count
 		c.labelBinding(ifRightShift);
@@ -3297,7 +3227,7 @@ final class JvmNumericRuntimeBuilder {
 		c.iload(4);
 		c.isub();
 		c.lshr();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		// count > 0: shift left when the result round-trips (i.e. did not overflow)
 		c.labelBinding(ifLeft);
@@ -3317,16 +3247,16 @@ final class JvmNumericRuntimeBuilder {
 		MethodCode.Label ifOverflow = c.newLabel();
 		c.ifne(ifOverflow);
 		c.lload(6);
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifSlowValue);
 		c.labelBinding(ifWide);
 		c.labelBinding(ifOverflow);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.iload(4);
-		c.invokevirtual(biShiftLeft.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokevirtual(biShiftLeft);
+		c.invokestatic(rNorm);
 		c.areturn();
 		// a non-Long count: a bignum count is always past the saturation width, so
 		// its sign routes to the huge arms (ASH.5 reaches (ash j j) with
@@ -3334,8 +3264,8 @@ final class JvmNumericRuntimeBuilder {
 		// error
 		c.labelBinding(ifSlowCount);
 		c.aload(1);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifBigNegCount = c.newLabel();
 		c.iflt(ifBigNegCount);
 		MethodCode.Label goBigPosCount = c.newLabel();
@@ -3344,35 +3274,35 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifHugeNeg);
 		c.labelBinding(ifBigNegCount);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifNegOne = c.newLabel();
 		c.iflt(ifNegOne);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifNegOne);
 		c.iconst_m1();
 		c.i2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		// a huge positive count: zero stays zero, anything else is a runaway
 		// allocation and signals
 		c.labelBinding(goHuge);
 		c.labelBinding(goBigPosCount);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifZero = c.newLabel();
 		c.ifeq(ifZero);
-		c.new_(arithEx.entry());
+		c.new_(arithEx);
 		c.dup();
-		c.ldc(tooLargeStr.entry());
-		c.invokespecial(aeInit.entry());
+		c.ldc(tooLargeStr);
+		c.invokespecial(aeInit);
 		c.athrow();
 		c.labelBinding(ifZero);
 		c.lconst_0();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -3381,14 +3311,14 @@ final class JvmNumericRuntimeBuilder {
 	// the minimal two's-complement representation, sign bit excluded. For a Long that is
 	// 64 - numberOfLeadingZeros of the value (of its complement when negative).
 	// Locals: 0=a, 1/2=long a (pre-initialized so both paths share a frame).
-	private static NumericMethod buildIntegerLength(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant longValueOf, MethodrefConstant rBig,
-			MethodrefConstant biBitLength, MethodrefConstant longNlz) {
+	private static NumericMethod buildIntegerLength(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry rBig, MethodRefEntry biBitLength,
+			MethodRefEntry longNlz) {
 		MethodCode c = new MethodCode();
 		c.lconst_0();
 		c.lstore(1);
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		MethodCode.Label ifSlow = c.newLabel();
 		c.ifeq(ifSlow);
 		emitUnboxLong(c, 0, longClass, longValue);
@@ -3406,17 +3336,17 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(ifNonNegative);
 		c.loadConstant(64);
 		c.lload(1);
-		c.invokestatic(longNlz.entry());
+		c.invokestatic(longNlz);
 		c.isub();
 		c.i2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		c.labelBinding(ifSlow);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biBitLength.methodRefEntry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biBitLength);
 		c.i2l();
-		c.invokestatic(longValueOf.entry());
+		c.invokestatic(longValueOf);
 		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -3426,8 +3356,8 @@ final class JvmNumericRuntimeBuilder {
 	// the bit. A negative index (which BigInteger.testBit signals on) and every other
 	// operand mix keep the BigInteger path, so the signalling behavior is unchanged.
 	// Locals: 0=n, 1=index, 2=int index, 3/4=long n (pre-initialized to share a frame).
-	private static NumericMethod buildLogbitp(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant rBig, MethodrefConstant biTestBit) {
+	private static NumericMethod buildLogbitp(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry rBig, MethodRefEntry biTestBit) {
 		MethodCode c = new MethodCode();
 		c.iconst_0();
 		c.istore(2);
@@ -3461,10 +3391,10 @@ final class JvmNumericRuntimeBuilder {
 		c.labelBinding(toSlow);
 		c.labelBinding(ifNegativeIndex);
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		emitUnboxLong(c, 1, longClass, longValue);
 		c.l2i();
-		c.invokevirtual(biTestBit.methodRefEntry());
+		c.invokevirtual(biTestBit);
 		c.ireturn();
 		return new NumericMethod(name, desc, c);
 	}
@@ -3482,39 +3412,28 @@ final class JvmNumericRuntimeBuilder {
 	 * half-to-even {@link Math#rint}, and the {@code double}-to-{@code long} conversion
 	 * the same saturating one, or the four backends stop printing the same digits.
 	 */
-	private static NumericMethod buildFixedDec(ConstantPool cp, Utf8Constant name, Utf8Constant desc,
-			ClassConstant mathClass, ClassConstant longClass, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue, MethodrefConstant rDbl) {
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant mathRint = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathAbsD = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathMaxI = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(II)I")));
-		MethodrefConstant mathMinI = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(II)I")));
-		MethodrefConstant longToString = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(J)Ljava/lang/String;")));
-		MethodrefConstant numIntValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant strLength = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		MethodrefConstant strConcat = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		MethodrefConstant strSub2 = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
-		MethodrefConstant strSub1 = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")));
-		ConstantPool.DoubleConstant ten = cp.addDouble(10.0);
+	private static NumericMethod buildFixedDec(ConstantPool cp, Utf8Entry name, Utf8Entry desc, ClassEntry mathClass,
+			ClassEntry longClass, ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry rDbl) {
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry mathRint = cp.methodRef(mathClass, "rint", "(D)D");
+		MethodRefEntry mathAbsD = cp.methodRef(mathClass, "abs", "(D)D");
+		MethodRefEntry mathMaxI = cp.methodRef(mathClass, "max", "(II)I");
+		MethodRefEntry mathMinI = cp.methodRef(mathClass, "min", "(II)I");
+		MethodRefEntry longToString = cp.methodRef(longClass, "toString", "(J)Ljava/lang/String;");
+		MethodRefEntry numIntValue = cp.methodRef(numberClass, "intValue", "()I");
+		MethodRefEntry strLength = cp.methodRef(stringClass, "length", "()I");
+		MethodRefEntry strConcat = cp.methodRef(stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry strSub2 = cp.methodRef(stringClass, "substring", "(II)Ljava/lang/String;");
+		MethodRefEntry strSub1 = cp.methodRef(stringClass, "substring", "(I)Ljava/lang/String;");
+		DoubleEntry ten = cp.entries().doubleEntry(10.0);
 
 		final int x = 4, d = 6, n = 7, scale = 8, i = 10, s = 11, min = 12, out = 13, split = 14;
 		MethodCode a = new MethodCode();
 		// x = ((Number) _dbl(value)).doubleValue()
 		a.aload(0);
-		a.invokestatic(rDbl.entry());
-		a.checkcast(numberClass.entry());
-		a.invokevirtual(numDoubleValue.methodRefEntry());
+		a.invokestatic(rDbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numDoubleValue);
 		a.dstore(x);
 		// d = min(max(places, 0), MAX_DIGITS); n likewise
 		emitClampedIntArg(a, 1, d, numberClass, numIntValue, mathMaxI, mathMinI);
@@ -3530,7 +3449,7 @@ final class JvmNumericRuntimeBuilder {
 		a.iload(d);
 		a.if_icmpge(scaleEnd);
 		a.dload(scale);
-		a.ldc(ten.entry());
+		a.ldc(ten);
 		a.dmul();
 		a.dstore(scale);
 		a.iinc(i, 1);
@@ -3540,10 +3459,10 @@ final class JvmNumericRuntimeBuilder {
 		a.dload(x);
 		a.dload(scale);
 		a.dmul();
-		a.invokestatic(mathRint.entry());
-		a.invokestatic(mathAbsD.entry());
+		a.invokestatic(mathRint);
+		a.invokestatic(mathAbsD);
 		a.d2l();
-		a.invokestatic(longToString.entry());
+		a.invokestatic(longToString);
 		a.astore(s);
 		// min = max(d + 1, n + d); while (s.length() < min) s = "0".concat(s)
 		a.iload(d);
@@ -3552,23 +3471,23 @@ final class JvmNumericRuntimeBuilder {
 		a.iload(n);
 		a.iload(d);
 		a.iadd();
-		a.invokestatic(mathMaxI.entry());
+		a.invokestatic(mathMaxI);
 		a.istore(min);
 		MethodCode.Label padTop = a.newLabel(), padEnd = a.newLabel();
 		a.labelBinding(padTop);
 		a.aload(s);
-		a.invokevirtual(strLength.methodRefEntry());
+		a.invokevirtual(strLength);
 		a.iload(min);
 		a.if_icmpge(padEnd);
-		a.ldc(cp.addString("0").entry());
+		a.ldc(cp.stringEntry("0"));
 		a.aload(s);
-		a.invokevirtual(strConcat.methodRefEntry());
+		a.invokevirtual(strConcat);
 		a.astore(s);
 		a.goto_(padTop);
 		a.labelBinding(padEnd);
 		// split = s.length() - d
 		a.aload(s);
-		a.invokevirtual(strLength.methodRefEntry());
+		a.invokevirtual(strLength);
 		a.iload(d);
 		a.isub();
 		a.istore(split);
@@ -3582,13 +3501,13 @@ final class JvmNumericRuntimeBuilder {
 		a.iflt(negative);
 		a.aload(3);
 		a.ifnull(plain);
-		a.ldc(cp.addString("\"+").entry());
+		a.ldc(cp.stringEntry("\"+"));
 		a.goto_(haveSign);
 		a.labelBinding(plain);
-		a.ldc(cp.addString("\"").entry());
+		a.ldc(cp.stringEntry("\""));
 		a.goto_(haveSign);
 		a.labelBinding(negative);
-		a.ldc(cp.addString("\"-").entry());
+		a.ldc(cp.stringEntry("\"-"));
 		a.labelBinding(haveSign);
 		a.astore(out);
 		// out = out.concat(s.substring(0, split))
@@ -3596,69 +3515,69 @@ final class JvmNumericRuntimeBuilder {
 		a.aload(s);
 		a.loadConstant(0);
 		a.iload(split);
-		a.invokevirtual(strSub2.methodRefEntry());
-		a.invokevirtual(strConcat.methodRefEntry());
+		a.invokevirtual(strSub2);
+		a.invokevirtual(strConcat);
 		a.astore(out);
 		// if (d > 0) out = out.concat(".").concat(s.substring(split))
 		MethodCode.Label noPoint = a.newLabel();
 		a.iload(d);
 		a.ifle(noPoint);
 		a.aload(out);
-		a.ldc(cp.addString(".").entry());
-		a.invokevirtual(strConcat.methodRefEntry());
+		a.ldc(cp.stringEntry("."));
+		a.invokevirtual(strConcat);
 		a.aload(s);
 		a.iload(split);
-		a.invokevirtual(strSub1.methodRefEntry());
-		a.invokevirtual(strConcat.methodRefEntry());
+		a.invokevirtual(strSub1);
+		a.invokevirtual(strConcat);
 		a.astore(out);
 		a.labelBinding(noPoint);
 		// return out.concat("\"") -- the closing frame quote
 		a.aload(out);
-		a.ldc(cp.addString("\"").entry());
-		a.invokevirtual(strConcat.methodRefEntry());
+		a.ldc(cp.stringEntry("\""));
+		a.invokevirtual(strConcat);
 		a.areturn();
 		return new NumericMethod(name, desc, a);
 	}
 
 	// Loads argument slot `arg` as an int and stores it clamped into [0, MAX_DIGITS].
-	private static void emitClampedIntArg(MethodCode a, int arg, int slot, ClassConstant numberClass,
-			MethodrefConstant numIntValue, MethodrefConstant mathMaxI, MethodrefConstant mathMinI) {
+	private static void emitClampedIntArg(MethodCode a, int arg, int slot, ClassEntry numberClass,
+			MethodRefEntry numIntValue, MethodRefEntry mathMaxI, MethodRefEntry mathMinI) {
 		a.aload(arg);
-		a.checkcast(numberClass.entry());
-		a.invokevirtual(numIntValue.methodRefEntry());
+		a.checkcast(numberClass);
+		a.invokevirtual(numIntValue);
 		a.loadConstant(0);
-		a.invokestatic(mathMaxI.entry());
+		a.invokestatic(mathMaxI);
 		a.loadConstant(am.ik.rontolisp.compiler.FixedDecimal.MAX_DIGITS);
-		a.invokestatic(mathMinI.entry());
+		a.invokestatic(mathMinI);
 		a.istore(slot);
 	}
 
 	// Emits the two `instanceof Long` guards shared by _mod and _cmp, which jump to the
 	// slow (BigInteger) path.
-	private static void emitLongLongGuard(MethodCode c, ClassConstant longClass, MethodCode.Label slow) {
+	private static void emitLongLongGuard(MethodCode c, ClassEntry longClass, MethodCode.Label slow) {
 		c.aload(0);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		c.ifeq(slow);
 		c.aload(1);
-		c.instanceOf(longClass.entry());
+		c.instanceOf(longClass);
 		c.ifeq(slow);
 	}
 
 	// Emits: load slot, checkcast Long, Long.longValue() -> long on stack.
-	private static void emitUnboxLong(MethodCode c, int slot, ClassConstant longClass, MethodrefConstant longValue) {
+	private static void emitUnboxLong(MethodCode c, int slot, ClassEntry longClass, MethodRefEntry longValue) {
 		c.aload(slot);
-		c.checkcast(longClass.entry());
-		c.invokevirtual(longValue.methodRefEntry());
+		c.checkcast(longClass);
+		c.invokevirtual(longValue);
 	}
 
 	// Emits: load slot, _dbl(x) (boxed Double), checkcast Number, Number.doubleValue() ->
 	// double on stack. _dbl coerces Long/BigInteger/ratio/Double to a Double.
-	private static void emitToDouble(MethodCode c, int slot, MethodrefConstant rDbl, ClassConstant numberClass,
-			MethodrefConstant numDoubleValue) {
+	private static void emitToDouble(MethodCode c, int slot, MethodRefEntry rDbl, ClassEntry numberClass,
+			MethodRefEntry numDoubleValue) {
 		c.aload(slot);
-		c.invokestatic(rDbl.entry());
-		c.checkcast(numberClass.entry());
-		c.invokevirtual(numDoubleValue.methodRefEntry());
+		c.invokestatic(rDbl);
+		c.checkcast(numberClass);
+		c.invokevirtual(numDoubleValue);
 	}
 
 	// Emits a Double fast path at the top of a binary numeric op: when either operand is
@@ -3669,64 +3588,63 @@ final class JvmNumericRuntimeBuilder {
 	// contagion for non-literal operands (variables, parameters, #'+/#'* as values),
 	// which
 	// the compile-site double-literal fast path cannot detect.
-	private static void emitDoubleBinaryPrologue(MethodCode c, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+	private static void emitDoubleBinaryPrologue(MethodCode c, ClassEntry doubleClass, MethodRefEntry rDbl,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
 			Consumer<MethodCode> doubleOp) {
 		emitDoubleBinaryPrologue(c, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf, doubleOp, null);
 	}
 
 	// The same, with an optional (DD)D HELPER standing in for the single opcode -- what
 	// _mod needs, whose float case is CL's divisor-signed modulo (_fmod), not DREM.
-	private static void emitDoubleBinaryPrologue(MethodCode c, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
-			Consumer<MethodCode> doubleOp, @Nullable MethodrefConstant doubleHelper) {
+	private static void emitDoubleBinaryPrologue(MethodCode c, ClassEntry doubleClass, MethodRefEntry rDbl,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
+			Consumer<MethodCode> doubleOp, @Nullable MethodRefEntry doubleHelper) {
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifADouble = c.newLabel();
 		c.ifne(ifADouble);
 		c.aload(1);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifBNotDouble = c.newLabel();
 		c.ifeq(ifBNotDouble);
 		c.labelBinding(ifADouble);
 		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
 		emitToDouble(c, 1, rDbl, numberClass, numDoubleValue);
 		if (doubleHelper != null) {
-			c.invokestatic(doubleHelper.entry());
+			c.invokestatic(doubleHelper);
 		}
 		else {
 			doubleOp.accept(c);
 		}
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifBNotDouble);
 	}
 
 	// Like emitDoubleBinaryPrologue, but for the unary _neg: negates _dbl(a) when a is a
 	// Double.
-	private static void emitDoubleUnaryPrologue(MethodCode c, ClassConstant doubleClass, MethodrefConstant rDbl,
-			ClassConstant numberClass, MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf,
+	private static void emitDoubleUnaryPrologue(MethodCode c, ClassEntry doubleClass, MethodRefEntry rDbl,
+			ClassEntry numberClass, MethodRefEntry numDoubleValue, MethodRefEntry doubleValueOf,
 			Consumer<MethodCode> doubleOp) {
 		c.aload(0);
-		c.instanceOf(doubleClass.entry());
+		c.instanceOf(doubleClass);
 		MethodCode.Label ifNotDouble = c.newLabel();
 		c.ifeq(ifNotDouble);
 		emitToDouble(c, 0, rDbl, numberClass, numDoubleValue);
 		doubleOp.accept(c);
-		c.invokestatic(doubleValueOf.entry());
+		c.invokestatic(doubleValueOf);
 		c.areturn();
 		c.labelBinding(ifNotDouble);
 	}
 
 	// Emits: _norm(_big(a).<biOp>(_big(b))) followed by areturn.
-	private static void emitBigBinary(MethodCode c, MethodrefConstant rBig, MethodrefConstant biOp,
-			MethodrefConstant rNorm) {
+	private static void emitBigBinary(MethodCode c, MethodRefEntry rBig, MethodRefEntry biOp, MethodRefEntry rNorm) {
 		c.aload(0);
-		c.invokestatic(rBig.entry());
+		c.invokestatic(rBig);
 		c.aload(1);
-		c.invokestatic(rBig.entry());
-		c.invokevirtual(biOp.methodRefEntry());
-		c.invokestatic(rNorm.entry());
+		c.invokestatic(rBig);
+		c.invokevirtual(biOp);
+		c.invokestatic(rNorm);
 		c.areturn();
 	}
 
@@ -3734,34 +3652,34 @@ final class JvmNumericRuntimeBuilder {
 	// operation (add/subtract) the result is
 	// _rat(num(a)*den(b) <crossOp> num(b)*den(a), den(a)*den(b)); without one it is the
 	// multiplication _rat(num(a)*num(b), den(a)*den(b)).
-	private static void emitRatioBinary(MethodCode c, MethodrefConstant rRatNum, MethodrefConstant rRatDen,
-			MethodrefConstant rRat, MethodrefConstant biMul, @Nullable MethodrefConstant crossOp) {
+	private static void emitRatioBinary(MethodCode c, MethodRefEntry rRatNum, MethodRefEntry rRatDen,
+			MethodRefEntry rRat, MethodRefEntry biMul, @Nullable MethodRefEntry crossOp) {
 		if (crossOp != null) {
 			c.aload(0);
-			c.invokestatic(rRatNum.entry());
+			c.invokestatic(rRatNum);
 			c.aload(1);
-			c.invokestatic(rRatDen.entry());
-			c.invokevirtual(biMul.methodRefEntry());
+			c.invokestatic(rRatDen);
+			c.invokevirtual(biMul);
 			c.aload(1);
-			c.invokestatic(rRatNum.entry());
+			c.invokestatic(rRatNum);
 			c.aload(0);
-			c.invokestatic(rRatDen.entry());
-			c.invokevirtual(biMul.methodRefEntry());
-			c.invokevirtual(crossOp.methodRefEntry());
+			c.invokestatic(rRatDen);
+			c.invokevirtual(biMul);
+			c.invokevirtual(crossOp);
 		}
 		else {
 			c.aload(0);
-			c.invokestatic(rRatNum.entry());
+			c.invokestatic(rRatNum);
 			c.aload(1);
-			c.invokestatic(rRatNum.entry());
-			c.invokevirtual(biMul.methodRefEntry());
+			c.invokestatic(rRatNum);
+			c.invokevirtual(biMul);
 		}
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.aload(1);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokestatic(rRat.entry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
+		c.invokestatic(rRat);
 		c.areturn();
 	}
 
@@ -3769,23 +3687,23 @@ final class JvmNumericRuntimeBuilder {
 	// what turns a remainder into CL's mod: when the remainder is non-zero and its sign
 	// differs from the divisor's, the divisor is added. Shared by _mod's BigInteger and
 	// rational paths.
-	private static void emitDivisorSignCorrection(MethodCode c, MethodrefConstant biSignum, MethodrefConstant biAdd) {
+	private static void emitDivisorSignCorrection(MethodCode c, MethodRefEntry biSignum, MethodRefEntry biAdd) {
 		// if (r.signum() == 0) goto done
 		c.aload(4);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifZero = c.newLabel();
 		c.ifeq(ifZero);
 		// if (r.signum() == B.signum()) goto done
 		c.aload(4);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		c.aload(3);
-		c.invokevirtual(biSignum.methodRefEntry());
+		c.invokevirtual(biSignum);
 		MethodCode.Label ifSameSign = c.newLabel();
 		c.if_icmpeq(ifSameSign);
 		// r = r.add(B)
 		c.aload(4);
 		c.aload(3);
-		c.invokevirtual(biAdd.methodRefEntry());
+		c.invokevirtual(biAdd);
 		c.astore(4);
 		c.labelBinding(ifZero);
 		c.labelBinding(ifSameSign);
@@ -3798,43 +3716,43 @@ final class JvmNumericRuntimeBuilder {
 	// the divisor's sign, denominators being positive) in local 3 and the remainder in
 	// local 4, the same slots the BigInteger path uses, so _mod's sign correction is
 	// shared.
-	private static void emitRatioRemainderPrefix(MethodCode c, MethodrefConstant rRatNum, MethodrefConstant rRatDen,
-			MethodrefConstant biMul, MethodrefConstant biRem) {
+	private static void emitRatioRemainderPrefix(MethodCode c, MethodRefEntry rRatNum, MethodRefEntry rRatDen,
+			MethodRefEntry biMul, MethodRefEntry biRem) {
 		// BigInteger d = _ratden(a).multiply(_ratnum(b));
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.aload(1);
-		c.invokestatic(rRatNum.entry());
-		c.invokevirtual(biMul.methodRefEntry());
+		c.invokestatic(rRatNum);
+		c.invokevirtual(biMul);
 		c.astore(3);
 		// BigInteger r = _ratnum(a).multiply(_ratden(b)).remainder(d);
 		c.aload(0);
-		c.invokestatic(rRatNum.entry());
+		c.invokestatic(rRatNum);
 		c.aload(1);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
 		c.aload(3);
-		c.invokevirtual(biRem.methodRefEntry());
+		c.invokevirtual(biRem);
 		c.astore(4);
 	}
 
 	// Emits the tail of _mod/_rem's rational path: consumes the numerator on the stack,
 	// pushes the common denominator ad*bd, and returns the normalized _rat.
-	private static void emitRatioRemainderDenominator(MethodCode c, MethodrefConstant rRatDen, MethodrefConstant biMul,
-			MethodrefConstant rRat) {
+	private static void emitRatioRemainderDenominator(MethodCode c, MethodRefEntry rRatDen, MethodRefEntry biMul,
+			MethodRefEntry rRat) {
 		c.aload(0);
-		c.invokestatic(rRatDen.entry());
+		c.invokestatic(rRatDen);
 		c.aload(1);
-		c.invokestatic(rRatDen.entry());
-		c.invokevirtual(biMul.methodRefEntry());
-		c.invokestatic(rRat.entry());
+		c.invokestatic(rRatDen);
+		c.invokevirtual(biMul);
+		c.invokestatic(rRat);
 		c.areturn();
 	}
 
 	// Emits: load slot, checkcast BigInteger[], push index, aaload.
-	private static void emitRatioElement(MethodCode c, int slot, ClassConstant ratArrClass, int index) {
+	private static void emitRatioElement(MethodCode c, int slot, ClassEntry ratArrClass, int index) {
 		c.aload(slot);
-		c.checkcast(ratArrClass.entry());
+		c.checkcast(ratArrClass);
 		c.loadConstant(index);
 		c.aaload();
 	}

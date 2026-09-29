@@ -348,13 +348,12 @@ class MethodCodeTest {
 		Fixture(String name) {
 			this.name = name;
 			this.definition = ClassDefinition.builder(this.cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
-					this.cp.addClass(this.cp.addUtf8(name)), this.cp.addClass(this.cp.addUtf8("java/lang/Object")),
-					this.cp.addUtf8("Code"));
+					this.cp.classEntry(name), this.cp.classEntry("java/lang/Object"), this.cp.utf8Entry("Code"));
 		}
 
 		void add(String method, String descriptor, MethodCode code) {
-			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(method),
-					this.cp.addUtf8(descriptor), code);
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.utf8Entry(method),
+					this.cp.utf8Entry(descriptor), code);
 		}
 
 		byte[] write() {

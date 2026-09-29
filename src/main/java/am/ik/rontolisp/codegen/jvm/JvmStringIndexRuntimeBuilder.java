@@ -4,10 +4,10 @@ import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.OperandTypes;
 
@@ -75,7 +75,7 @@ final class JvmStringIndexRuntimeBuilder {
 	/**
 	 * A string-index runtime method body ready to be emitted into the generated class.
 	 */
-	record StringIndexMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record StringIndexMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/** {@code _cpoff(String, int) -> int}: the UTF-16 offset of character {@code i}. */
@@ -243,7 +243,7 @@ final class JvmStringIndexRuntimeBuilder {
 		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
 				JvmOperandTypeRuntime.TE_RAW_DESC));
 		a.athrow();
-		return new StringIndexMethod(cp.addUtf8(CHARREF_METHOD), cp.addUtf8(CHARREF_DESC), a);
+		return new StringIndexMethod(cp.utf8Entry(CHARREF_METHOD), cp.utf8Entry(CHARREF_DESC), a);
 	}
 
 	// _cpoff(s, i): 1 + i for a flat string, else the nearest breakpoint plus a walk of
@@ -282,7 +282,7 @@ final class JvmStringIndexRuntimeBuilder {
 		a.iload(1);
 		a.iadd();
 		a.ireturn();
-		return new StringIndexMethod(cp.addUtf8(OFFSET_METHOD), cp.addUtf8(OFFSET_DESC), a);
+		return new StringIndexMethod(cp.utf8Entry(OFFSET_METHOD), cp.utf8Entry(OFFSET_DESC), a);
 	}
 
 	// _scount(s): length - 2 for a flat string -- the same fact, so the same memory
@@ -308,7 +308,7 @@ final class JvmStringIndexRuntimeBuilder {
 		a.loadConstant(2);
 		a.isub();
 		a.ireturn();
-		return new StringIndexMethod(cp.addUtf8(COUNT_METHOD), cp.addUtf8(COUNT_DESC), a);
+		return new StringIndexMethod(cp.utf8Entry(COUNT_METHOD), cp.utf8Entry(COUNT_DESC), a);
 	}
 
 	// _cpidx(s): the remembered breakpoint table, or null once s is proven flat. The
@@ -409,7 +409,7 @@ final class JvmStringIndexRuntimeBuilder {
 		emitRememberWide(a, stringLength, stringClass, wide0, wide1);
 		a.aload(4);
 		a.areturn();
-		return new StringIndexMethod(cp.addUtf8(INDEX_METHOD), cp.addUtf8(INDEX_DESC), a);
+		return new StringIndexMethod(cp.utf8Entry(INDEX_METHOD), cp.utf8Entry(INDEX_DESC), a);
 	}
 
 	// Stores s into whichever flat slot holds the SHORTER string (an empty slot first).

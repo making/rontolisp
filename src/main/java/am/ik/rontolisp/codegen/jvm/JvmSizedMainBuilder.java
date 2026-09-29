@@ -1,10 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 import org.jspecify.annotations.Nullable;
@@ -88,7 +91,7 @@ final class JvmSizedMainBuilder {
 	static final int DEFAULT_STACK_MIB = 16;
 
 	/** A method body ready to emit. */
-	record Method(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record Method(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -107,9 +110,9 @@ final class JvmSizedMainBuilder {
 	 * {@code null} when the launcher never hands thread 0 over
 	 * @param exitDesc its descriptor, or {@code null} with it
 	 */
-	record SizedMain(Utf8Constant bodyName, Method main, Method run, MethodrefConstant runRef, Utf8Constant argsName,
-			Utf8Constant argsDesc, Utf8Constant thrownName, Utf8Constant thrownDesc, ClassConstant runnableClass,
-			@Nullable Utf8Constant exitName, @Nullable Utf8Constant exitDesc) {
+	record SizedMain(Utf8Entry bodyName, Method main, Method run, MethodRefEntry runRef, Utf8Entry argsName,
+			Utf8Entry argsDesc, Utf8Entry thrownName, Utf8Entry thrownDesc, ClassEntry runnableClass,
+			@Nullable Utf8Entry exitName, @Nullable Utf8Entry exitDesc) {
 
 		/**
 		 * The instance {@code run()} of a class with no other {@code Runnable} use:
@@ -120,9 +123,9 @@ final class JvmSizedMainBuilder {
 		Method instanceRun(ConstantPool cp) {
 			MethodCode a = new MethodCode();
 			a.aload(0);
-			a.invokestatic(this.runRef.entry());
+			a.invokestatic(this.runRef);
 			a.return_();
-			return new Method(cp.addUtf8("run"), cp.addUtf8("()V"), a);
+			return new Method(cp.utf8Entry("run"), cp.utf8Entry("()V"), a);
 		}
 
 	}
@@ -143,85 +146,80 @@ final class JvmSizedMainBuilder {
 	 * {@code null} -- and then no constant or instruction of the hand-over exists
 	 * @return the launcher's pieces
 	 */
-	static SizedMain build(ConstantPool cp, ClassConstant thisClass, String className,
-			MethodrefConstant instanceInitRef, Utf8Constant mainDesc, @Nullable String mainThreadClass) {
-		Utf8Constant bodyName = cp.addUtf8(BODY_METHOD);
-		MethodrefConstant bodyRef = cp.addMethodref(thisClass, cp.addNameAndType(bodyName, mainDesc));
-		Utf8Constant argsName = cp.addUtf8(ARGS_FIELD);
-		Utf8Constant argsDesc = cp.addUtf8("[Ljava/lang/String;");
-		Utf8Constant thrownName = cp.addUtf8(THROWN_FIELD);
-		Utf8Constant thrownDesc = cp.addUtf8("Ljava/lang/Throwable;");
-		FieldrefConstant argsField = cp.addFieldref(thisClass, cp.addNameAndType(argsName, argsDesc));
-		FieldrefConstant thrownField = cp.addFieldref(thisClass, cp.addNameAndType(thrownName, thrownDesc));
-		Utf8Constant runName = cp.addUtf8(RUN_METHOD);
-		Utf8Constant runDesc = cp.addUtf8("(L" + className + ";)V");
-		MethodrefConstant runRef = cp.addMethodref(thisClass, cp.addNameAndType(runName, runDesc));
-		ClassConstant runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
-		ClassConstant threadClass = cp.addClass(cp.addUtf8("java/lang/Thread"));
-		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
-		ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
-		ClassConstant interruptedClass = cp.addClass(cp.addUtf8("java/lang/InterruptedException"));
-		MethodrefConstant threadInit = cp.addMethodref(threadClass, cp.addNameAndType(cp.addUtf8("<init>"),
-				cp.addUtf8("(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V")));
-		MethodrefConstant getInteger = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("getInteger"), cp.addUtf8("(Ljava/lang/String;I)Ljava/lang/Integer;")));
-		MethodrefConstant intValue = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
-		MethodrefConstant threadStart = cp.addMethodref(threadClass,
-				cp.addNameAndType(cp.addUtf8("start"), cp.addUtf8("()V")));
-		MethodrefConstant threadJoin = cp.addMethodref(threadClass,
-				cp.addNameAndType(cp.addUtf8("join"), cp.addUtf8("()V")));
-		MethodrefConstant currentThread = cp.addMethodref(threadClass,
-				cp.addNameAndType(cp.addUtf8("currentThread"), cp.addUtf8("()Ljava/lang/Thread;")));
-		MethodrefConstant threadInterrupt = cp.addMethodref(threadClass,
-				cp.addNameAndType(cp.addUtf8("interrupt"), cp.addUtf8("()V")));
-		ConstantPool.StringConstant threadName = cp.addString("main");
-		ConstantPool.StringConstant property = cp.addString(STACK_PROPERTY);
+	static SizedMain build(ConstantPool cp, ClassEntry thisClass, String className, MethodRefEntry instanceInitRef,
+			Utf8Entry mainDesc, @Nullable String mainThreadClass) {
+		Utf8Entry bodyName = cp.utf8Entry(BODY_METHOD);
+		MethodRefEntry bodyRef = cp.methodRef(thisClass, bodyName, mainDesc);
+		Utf8Entry argsName = cp.utf8Entry(ARGS_FIELD);
+		Utf8Entry argsDesc = cp.utf8Entry("[Ljava/lang/String;");
+		Utf8Entry thrownName = cp.utf8Entry(THROWN_FIELD);
+		Utf8Entry thrownDesc = cp.utf8Entry("Ljava/lang/Throwable;");
+		FieldRefEntry argsField = cp.fieldRef(thisClass, argsName, argsDesc);
+		FieldRefEntry thrownField = cp.fieldRef(thisClass, thrownName, thrownDesc);
+		Utf8Entry runName = cp.utf8Entry(RUN_METHOD);
+		Utf8Entry runDesc = cp.utf8Entry("(L" + className + ";)V");
+		MethodRefEntry runRef = cp.methodRef(thisClass, runName, runDesc);
+		ClassEntry runnableClass = cp.classEntry("java/lang/Runnable");
+		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
+		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
+		ClassEntry interruptedClass = cp.classEntry("java/lang/InterruptedException");
+		MethodRefEntry threadInit = cp.methodRef(threadClass, "<init>",
+				"(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V");
+		MethodRefEntry getInteger = cp.methodRef(integerClass, "getInteger",
+				"(Ljava/lang/String;I)Ljava/lang/Integer;");
+		MethodRefEntry intValue = cp.methodRef(integerClass, "intValue", "()I");
+		MethodRefEntry threadStart = cp.methodRef(threadClass, "start", "()V");
+		MethodRefEntry threadJoin = cp.methodRef(threadClass, "join", "()V");
+		MethodRefEntry currentThread = cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;");
+		MethodRefEntry threadInterrupt = cp.methodRef(threadClass, "interrupt", "()V");
+		StringEntry threadName = cp.stringEntry("main");
+		StringEntry property = cp.stringEntry(STACK_PROPERTY);
 		// The hand-over's constants come last, so a program without objc: mints
 		// exactly the pool it always did.
 		@Nullable HandOver handOver = mainThreadClass != null ? HandOver.mint(cp, thisClass, mainThreadClass) : null;
 
 		// --- main(String[] args): locals 0 args, 1 runner, 2 thread, 3 interrupted
 		MethodCode m = new MethodCode();
-		m.new_(thisClass.entry());
+		m.new_(thisClass);
 		m.dup();
-		m.invokespecial(instanceInitRef.entry());
+		m.invokespecial(instanceInitRef);
 		m.astore(1);
 		m.aload(1);
 		m.aload(0);
-		m.putfield(argsField.entry());
-		m.new_(threadClass.entry());
+		m.putfield(argsField);
+		m.new_(threadClass);
 		m.dup();
 		m.aconst_null();
 		m.aload(1);
-		m.ldc(threadName.entry());
-		m.ldc(property.entry());
+		m.ldc(threadName);
+		m.ldc(property);
 		m.loadConstant(DEFAULT_STACK_MIB);
-		m.invokestatic(getInteger.entry());
-		m.invokevirtual(intValue.methodRefEntry());
+		m.invokestatic(getInteger);
+		m.invokevirtual(intValue);
 		m.i2l();
 		m.loadConstant(20);
 		m.lshl();
-		m.invokespecial(threadInit.entry());
+		m.invokespecial(threadInit);
 		m.astore(2);
 		if (handOver != null) {
 			// Thread 0 is the one AppKit needs: the worker takes the program and
 			// thread 0 parks in the run loop for good.
 			MethodCode.Label keep = m.newLabel();
-			m.invokestatic(handOver.required().entry());
+			m.invokestatic(handOver.required());
 			m.ifeq(keep);
 			m.aload(1);
 			m.loadConstant(1);
-			m.putfield(handOver.exitField().entry());
+			m.putfield(handOver.exitField());
 			m.aload(2);
-			m.invokevirtual(threadStart.methodRefEntry());
-			m.invokestatic(handOver.get().entry());
-			m.invokevirtual(handOver.runLoop().methodRefEntry());
+			m.invokevirtual(threadStart);
+			m.invokestatic(handOver.get());
+			m.invokevirtual(handOver.runLoop());
 			m.return_();
 			m.labelBinding(keep);
 		}
 		m.aload(2);
-		m.invokevirtual(threadStart.methodRefEntry());
+		m.invokevirtual(threadStart);
 		m.loadConstant(0);
 		m.istore(3);
 		MethodCode.Label join = m.newLabel();
@@ -229,7 +227,7 @@ final class JvmSizedMainBuilder {
 		m.labelBinding(join);
 		MethodCode.Label tryStart = m.newBoundLabel();
 		m.aload(2);
-		m.invokevirtual(threadJoin.methodRefEntry());
+		m.invokevirtual(threadJoin);
 		MethodCode.Label tryEnd = m.newBoundLabel();
 		m.goto_(joined);
 		// An interrupt aimed at thread 0 is remembered, never a reason to stop waiting:
@@ -243,28 +241,28 @@ final class JvmSizedMainBuilder {
 		MethodCode.Label notInterrupted = m.newLabel();
 		m.iload(3);
 		m.ifeq(notInterrupted);
-		m.invokestatic(currentThread.entry());
-		m.invokevirtual(threadInterrupt.methodRefEntry());
+		m.invokestatic(currentThread);
+		m.invokevirtual(threadInterrupt);
 		m.labelBinding(notInterrupted);
 		MethodCode.Label clean = m.newLabel();
 		m.aload(1);
-		m.getfield(thrownField.entry());
+		m.getfield(thrownField);
 		m.dup();
 		m.ifnull(clean);
 		m.athrow();
 		m.labelBinding(clean);
 		m.pop();
 		m.return_();
-		m.exceptionCatch(tryStart, tryEnd, handler, interruptedClass.entry());
-		Method main = new Method(cp.addUtf8("main"), mainDesc, m);
+		m.exceptionCatch(tryStart, tryEnd, handler, interruptedClass);
+		Method main = new Method(cp.utf8Entry("main"), mainDesc, m);
 
 		// --- _main$run(Prog r): try { _main$body(r._main$args) } catch (Throwable t) {
 		// r._main$thrown = t }
 		MethodCode r = new MethodCode();
 		MethodCode.Label bodyStart = r.newBoundLabel();
 		r.aload(0);
-		r.getfield(argsField.entry());
-		r.invokestatic(bodyRef.entry());
+		r.getfield(argsField);
+		r.invokestatic(bodyRef);
 		MethodCode.Label bodyEnd = r.newBoundLabel();
 		MethodCode.Label after = r.newLabel();
 		if (handOver != null) {
@@ -277,7 +275,7 @@ final class JvmSizedMainBuilder {
 		r.astore(1);
 		r.aload(0);
 		r.aload(1);
-		r.putfield(thrownField.entry());
+		r.putfield(thrownField);
 		if (handOver == null) {
 			r.return_();
 		}
@@ -287,7 +285,7 @@ final class JvmSizedMainBuilder {
 			r.labelBinding(after);
 			handOver.emitExit(r, thrownField);
 		}
-		r.exceptionCatch(bodyStart, bodyEnd, caught, throwableClass.entry());
+		r.exceptionCatch(bodyStart, bodyEnd, caught, throwableClass);
 		Method run = new Method(runName, runDesc, r);
 
 		return new SizedMain(bodyName, main, run, runRef, argsName, argsDesc, thrownName, thrownDesc, runnableClass,
@@ -309,32 +307,26 @@ final class JvmSizedMainBuilder {
 	 * {@code UncaughtExceptionHandler.uncaughtException(Thread, Throwable)}
 	 * @param exit {@code System.exit(I)V}
 	 */
-	private record HandOver(MethodrefConstant required, MethodrefConstant get, MethodrefConstant runLoop,
-			Utf8Constant exitName, Utf8Constant exitDesc, FieldrefConstant exitField, MethodrefConstant currentThread,
-			MethodrefConstant handlerOf, MethodrefConstant uncaught, MethodrefConstant exit) {
+	private record HandOver(MethodRefEntry required, MethodRefEntry get, MethodRefEntry runLoop, Utf8Entry exitName,
+			Utf8Entry exitDesc, FieldRefEntry exitField, MethodRefEntry currentThread, MethodRefEntry handlerOf,
+			InterfaceMethodRefEntry uncaught, MethodRefEntry exit) {
 
-		static HandOver mint(ConstantPool cp, ClassConstant thisClass, String mainThreadClass) {
-			ClassConstant mainThread = cp.addClass(cp.addUtf8(mainThreadClass));
-			MethodrefConstant required = cp.addMethodref(mainThread,
-					cp.addNameAndType(cp.addUtf8("handOverRequired"), cp.addUtf8("()Z")));
-			MethodrefConstant get = cp.addMethodref(mainThread,
-					cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()L" + mainThreadClass + ";")));
-			MethodrefConstant runLoop = cp.addMethodref(mainThread,
-					cp.addNameAndType(cp.addUtf8("runLoop"), cp.addUtf8("()V")));
-			Utf8Constant exitName = cp.addUtf8(EXIT_FIELD);
-			Utf8Constant exitDesc = cp.addUtf8("Z");
-			FieldrefConstant exitField = cp.addFieldref(thisClass, cp.addNameAndType(exitName, exitDesc));
-			ClassConstant threadClass = cp.addClass(cp.addUtf8("java/lang/Thread"));
-			ClassConstant handlerClass = cp.addClass(cp.addUtf8("java/lang/Thread$UncaughtExceptionHandler"));
-			MethodrefConstant currentThread = cp.addMethodref(threadClass,
-					cp.addNameAndType(cp.addUtf8("currentThread"), cp.addUtf8("()Ljava/lang/Thread;")));
-			MethodrefConstant handlerOf = cp.addMethodref(threadClass,
-					cp.addNameAndType(cp.addUtf8("getUncaughtExceptionHandler"),
-							cp.addUtf8("()Ljava/lang/Thread$UncaughtExceptionHandler;")));
-			MethodrefConstant uncaught = cp.addInterfaceMethodref(handlerClass, cp.addNameAndType(
-					cp.addUtf8("uncaughtException"), cp.addUtf8("(Ljava/lang/Thread;Ljava/lang/Throwable;)V")));
-			MethodrefConstant exit = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
-					cp.addNameAndType(cp.addUtf8("exit"), cp.addUtf8("(I)V")));
+		static HandOver mint(ConstantPool cp, ClassEntry thisClass, String mainThreadClass) {
+			ClassEntry mainThread = cp.classEntry(mainThreadClass);
+			MethodRefEntry required = cp.methodRef(mainThread, "handOverRequired", "()Z");
+			MethodRefEntry get = cp.methodRef(mainThread, "get", "()L" + mainThreadClass + ";");
+			MethodRefEntry runLoop = cp.methodRef(mainThread, "runLoop", "()V");
+			Utf8Entry exitName = cp.utf8Entry(EXIT_FIELD);
+			Utf8Entry exitDesc = cp.utf8Entry("Z");
+			FieldRefEntry exitField = cp.fieldRef(thisClass, exitName, exitDesc);
+			ClassEntry threadClass = cp.classEntry("java/lang/Thread");
+			ClassEntry handlerClass = cp.classEntry("java/lang/Thread$UncaughtExceptionHandler");
+			MethodRefEntry currentThread = cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;");
+			MethodRefEntry handlerOf = cp.methodRef(threadClass, "getUncaughtExceptionHandler",
+					"()Ljava/lang/Thread$UncaughtExceptionHandler;");
+			InterfaceMethodRefEntry uncaught = cp.interfaceMethodRef(handlerClass, "uncaughtException",
+					"(Ljava/lang/Thread;Ljava/lang/Throwable;)V");
+			MethodRefEntry exit = cp.methodRef(cp.classEntry("java/lang/System"), "exit", "(I)V");
 			return new HandOver(required, get, runLoop, exitName, exitDesc, exitField, currentThread, handlerOf,
 					uncaught, exit);
 		}
@@ -352,30 +344,30 @@ final class JvmSizedMainBuilder {
 		 * }
 		 * </pre>
 		 */
-		void emitExit(MethodCode r, FieldrefConstant thrownField) {
+		void emitExit(MethodCode r, FieldRefEntry thrownField) {
 			MethodCode.Label done = r.newLabel();
 			MethodCode.Label clean = r.newLabel();
 			r.aload(0);
-			r.getfield(this.exitField.entry());
+			r.getfield(this.exitField);
 			r.ifeq(done);
 			r.aload(0);
-			r.getfield(thrownField.entry());
+			r.getfield(thrownField);
 			r.astore(1);
 			r.aload(1);
 			r.ifnull(clean);
-			r.invokestatic(this.currentThread.entry());
+			r.invokestatic(this.currentThread);
 			r.astore(2);
 			r.aload(2);
-			r.invokevirtual(this.handlerOf.methodRefEntry());
+			r.invokevirtual(this.handlerOf);
 			r.aload(2);
 			r.aload(1);
-			r.invokeinterface(this.uncaught.interfaceMethodRefEntry());
+			r.invokeinterface(this.uncaught);
 			r.loadConstant(1);
-			r.invokestatic(this.exit.entry());
+			r.invokestatic(this.exit);
 			r.return_();
 			r.labelBinding(clean);
 			r.loadConstant(0);
-			r.invokestatic(this.exit.entry());
+			r.invokestatic(this.exit);
 			r.labelBinding(done);
 			r.return_();
 		}

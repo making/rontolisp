@@ -15,7 +15,7 @@ final class JvmConsCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.body.aastore().dup().iconst_1();
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);

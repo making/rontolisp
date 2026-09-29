@@ -18,7 +18,7 @@ final class JvmCdrCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// nil answers nil, a cons its field, a non-list is CDR's type-error
 		// (JvmOperandTypeRuntime).
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CDR).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CDR));
 	}
 
 }

@@ -18,8 +18,7 @@ final class JvmIsqrtCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.body
-			.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "sqrt", "()Ljava/math/BigInteger;").methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "sqrt", "()Ljava/math/BigInteger;"));
 		JvmEmitHelper.normalizeBigInteger(ctx);
 	}
 

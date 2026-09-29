@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -27,9 +27,8 @@ final class JvmLengthCompiler {
 		// descriptors match, so the default build is unchanged.
 		String method = ctx.usesIntArray ? JvmIntArrayRuntimeBuilder.LENGTH
 				: ctx.usesFloatArray ? JvmFloatArrayRuntimeBuilder.LENGTH : JvmLengthRuntimeBuilder.METHOD;
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(JvmLengthRuntimeBuilder.DESC)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), method, JvmLengthRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 }

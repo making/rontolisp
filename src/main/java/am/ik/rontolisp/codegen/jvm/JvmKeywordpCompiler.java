@@ -18,11 +18,11 @@ final class JvmKeywordpCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int tempSlot = ctx.allocTemp();
-		ctx.body.astore(tempSlot).aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		ctx.body.astore(tempSlot).aload(tempSlot).instanceOf(ctx.stringClass);
 		MethodCode.Label ifNotStringPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotStringPos);
-		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, 58); // ':'
 		MethodCode.Label ifNotColonPos = ctx.body.newLabel();
 		ctx.body.if_icmpne(ifNotColonPos);

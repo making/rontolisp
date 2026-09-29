@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -34,13 +34,11 @@ final class JvmSleepCompiler {
 		// Number.longValue rather than Long.longValue: round answers a BigInteger for a
 		// duration past the fixnum range, and a ClassCastException is not the diagnostic
 		// anybody wants out of (sleep <huge>).
-		MethodrefConstant longValue = ctx.cp.addMethodref(ctx.numberClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("longValue"), ctx.cp.addUtf8("()J")));
-		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(longValue.methodRefEntry());
-		ClassConstant threadClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Thread"));
-		MethodrefConstant sleep = ctx.cp.addMethodref(threadClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("sleep"), ctx.cp.addUtf8("(J)V")));
-		ctx.body.invokestatic(sleep.entry()).aconst_null();
+		MethodRefEntry longValue = ctx.cp.methodRef(ctx.numberClass, "longValue", "()J");
+		ctx.body.checkcast(ctx.numberClass).invokevirtual(longValue);
+		ClassEntry threadClass = ctx.cp.classEntry("java/lang/Thread");
+		MethodRefEntry sleep = ctx.cp.methodRef(threadClass, "sleep", "(J)V");
+		ctx.body.invokestatic(sleep).aconst_null();
 	}
 
 }

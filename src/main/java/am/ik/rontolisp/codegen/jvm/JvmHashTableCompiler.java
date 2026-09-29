@@ -64,7 +64,7 @@ final class JvmHashTableCompiler {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = lispName;
 		try {
-			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_TAB).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_TAB));
 		}
 		finally {
 			ctx.operator = outer;
@@ -281,7 +281,7 @@ final class JvmHashTableCompiler {
 		c.iload(iSlot).iload(lenSlot).if_icmpge(end);
 
 		// pair = (Object[]) arr[i]
-		c.aload(arrSlot).iload(iSlot).aaload().checkcast(ctx.objectArrayClass.entry()).astore(pairSlot);
+		c.aload(arrSlot).iload(iSlot).aaload().checkcast(ctx.objectArrayClass).astore(pairSlot);
 
 		// _invoke_2(func, pair[0], pair[1]); pop
 		c.aload(funcSlot);

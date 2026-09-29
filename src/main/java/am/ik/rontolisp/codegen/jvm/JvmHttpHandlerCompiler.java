@@ -64,7 +64,7 @@ final class JvmHttpHandlerCompiler {
 		}
 		// _httpHandlerFn = #'name
 		JvmFunctionFormCompiler.compileNamed(nameSym.name(), ctx, className);
-		ctx.body.putstatic(runtime.handlerField().entry());
+		ctx.body.putstatic(runtime.handlerField());
 		if (ctx.servletMode) {
 			// Servlet mode (-o app.war): register and RETURN. The container owns the
 			// port and calls handle(Request) through the travelling RontoHttpServlet;
@@ -81,14 +81,14 @@ final class JvmHttpHandlerCompiler {
 		// port (int); default 8080
 		if (portExpr != null) {
 			JvmExprCompiler.compileExpr(portExpr, ctx, className);
-			ctx.body.checkcast(ctx.longClass.entry()).invokevirtual(ctx.longValue.methodRefEntry()).l2i();
+			ctx.body.checkcast(ctx.longClass).invokevirtual(ctx.longValue).l2i();
 		}
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 8080);
 		}
 		// RontoHttpServer.serve(port, new Prog())
-		ctx.body.new_(runtime.progClass().entry()).dup().invokespecial(runtime.progInit().entry());
-		ctx.body.invokestatic(runtime.serve().entry()).aconst_null();
+		ctx.body.new_(runtime.progClass()).dup().invokespecial(runtime.progInit());
+		ctx.body.invokestatic(runtime.serve()).aconst_null();
 	}
 
 }

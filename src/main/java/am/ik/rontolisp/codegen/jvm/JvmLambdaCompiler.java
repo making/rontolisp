@@ -61,9 +61,9 @@ final class JvmLambdaCompiler {
 				asyncHead == null ? ctx.writtenIn : null));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();
 		JvmEmitHelper.emitIntConst(ctx, funcId);
-		ctx.body.invokestatic(ctx.integerValueOf.entry()).aastore();
+		ctx.body.invokestatic(ctx.integerValueOf).aastore();
 		int captureIdx = 0;
 		for (String freeVar : freeVars) {
 			ctx.body.dup();
@@ -145,7 +145,7 @@ final class JvmLambdaCompiler {
 			// body's prologue tests (JvmPhysicalArgs).
 			boolean passed = i < supplied;
 			if (capturedParams.contains(name)) {
-				ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+				ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 				if (passed) {
 					JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
 				}
@@ -178,14 +178,14 @@ final class JvmLambdaCompiler {
 			int restSlot = ctx.allocLocal(restName);
 			ctx.body.aconst_null().astore(restSlot);
 			for (int k = extraSlots.size() - 1; k >= 0; k--) {
-				ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+				ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 				ctx.body.aload(extraSlots.get(k)).aastore().dup().iconst_1().aload(restSlot);
 				ctx.body.aastore().astore(restSlot);
 			}
 			if (capturedParams.contains(restName)) {
 				// The list is built in place, so the cell is wrapped around the
 				// finished value rather than around the build.
-				ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+				ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 				ctx.body.aload(restSlot).aastore().astore(restSlot);
 			}
 			bindName(restName, capturedParams.contains(restName), ctx);

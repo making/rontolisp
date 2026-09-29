@@ -18,8 +18,8 @@ final class JvmNumberpCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int temp = ctx.allocTemp();
-		ctx.body.astore(temp).aload(temp).instanceOf(ctx.numberClass.entry()).aload(temp);
-		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry()).ior();
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.numberClass).aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx)).ior();
 		if (ctx.usesComplex) {
 			// A complex value is a number too -- but the holder test names the
 			// travelling class, so it is emitted only for a complex-capable
@@ -29,7 +29,7 @@ final class JvmNumberpCompiler {
 			// can exist then.
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			JvmComplexCompiler.emitNoHolderJump(ctx, className, notHolder);
-			ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx).entry()).ior();
+			ctx.body.aload(temp).instanceOf(JvmComplexCompiler.complexClass(ctx)).ior();
 			ctx.body.labelBinding(notHolder);
 		}
 		JvmEmitHelper.emitBoolFromInt(ctx);

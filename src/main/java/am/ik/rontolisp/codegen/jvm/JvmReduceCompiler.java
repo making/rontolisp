@@ -51,11 +51,11 @@ final class JvmReduceCompiler {
 			ctx.body.astore(listSlot);
 
 			// acc = car(list)
-			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 			ctx.body.astore(accSlot);
 
 			// list = cdr(list)
-			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 			ctx.body.astore(listSlot);
 		}
 
@@ -71,12 +71,12 @@ final class JvmReduceCompiler {
 			ctx.body.aload(accSlot);
 		}, () -> {
 			// car(list) = ((Object[]) list)[0]
-			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 		}));
 		ctx.body.astore(accSlot);
 
 		// list = cdr(list) = ((Object[]) list)[1]
-		ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		ctx.body.astore(listSlot);
 
 		// goto loop

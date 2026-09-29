@@ -56,7 +56,7 @@ final class JvmDefvarCompiler {
 				}
 				JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 				ctx.body.dup();
-				ctx.body.putstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())).entry());
+				ctx.body.putstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name.name())));
 				// Mirror into the eval runtime's global env (no-op unless eval is used at
 				// top level); leaves the stack as it was (the DUP'd copy is consumed by
 				// the

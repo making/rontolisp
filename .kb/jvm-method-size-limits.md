@@ -88,12 +88,11 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
   pool (`the class's fixed part ... needs N`); one method's own references must fit one pool
   (`_funName`'s name table grows with the program, 2 entries per nameable function, but is cut
   into `_funName$k` segments, so no one method holds them all).
-- **Test instruments** (system properties, also `Builder` methods):
+- **Test instrument** (a system property, also a `Builder` method):
   `-Drontolisp.jvm.class-pool-limit=N` forces the split onto small programs;
-  `-Drontolisp.jvm.pool-index-origin=70000` starts every index past 65535
-  (`ConstantPool.startingAt`, the indexes before it filler entries), so an emitter that cuts one
-  names a filler Utf8 and the write fails -- every corpus program compiled under it
-  (2026-09-25), and `JvmLispCompilerTest`'s programs behave the same in classes of 1,200.
+  `JvmLispCompilerTest`'s programs behave the same in classes of 1,200. Its sibling
+  `-Drontolisp.jvm.pool-index-origin` (every index started past 65535, so an emitter cutting one
+  to 16 bits named a filler entry) went with the last index sink (a91): no index is encoded.
 
 ## Emission on `java.lang.classfile`
 **Where it stands (2026-09-29):** every class is WRITTEN by the API (above). Every method body
@@ -112,11 +111,12 @@ operand-type runtimes (a87); and the small builders with `JvmLispCompiler`'s own
 `patchBranch`), `codeBytes` and the `ClassDefinition.Builder.addMethod` overload taking a
 declared max_stack/max_locals are gone. Since a91 `MethodCode` stores instruction records, so no
 code bytes exist before the written class's own: the decoders and `am.ik.jvm.Opcode` are gone
-("The records" below).
+("The records" below), and every emitter holds `java.lang.classfile` entries ("The pool wrappers
+go").
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
-(`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
-`stringEntry` for an emitter building from names), `size()`, labels (a branch to an unbound
+(`ConstantPool.entries()`, plus `utf8Entry`/`classEntry`/`methodRef`/`interfaceMethodRef`/
+`fieldRef`/`stringEntry` for an emitter building from names or Utf8 entries), `size()`, labels (a branch to an unbound
 label waits for `labelBinding`; `checkComplete` refuses a branch left waiting), `exceptionCatch`
 over bound labels, `append` (a body built apart with every label bound: the dispatch tables' case
 bodies, `<clinit>`'s pieces; its records copied, the labels its branches name and its handlers
@@ -159,6 +159,31 @@ was past `HUGE_METHOD_LIMIT` but whose written size is not is no longer cut by `
 (mito: one lambda fewer); methods over 8,000 bytes 61 -> 58 corpus, 19 -> 18 mito. The corpus
 class is 8,012 B larger, all of it frames (1,908,453 -> 1,916,574 B; code +460 B): fewer, longer
 methods carry more locals in each frame, since a temporary's slot is never reused ("Local slots").
+
+**The pool wrappers go** (a91): `ConstantPool` is the master `ConstantPoolBuilder` and the entry
+facades (`utf8Entry` refusing a string past the Utf8 cap, `classEntry`, `methodRef`/
+`interfaceMethodRef`/`fieldRef` over names or Utf8 entries, `stringEntry`, `entryAt` for the
+`%dyn-restore` form's key); the wrapper types (`Utf8Constant` .. `DoubleConstant`), the `add*`
+facades, the index readers the scan used (`typeAt`, `firstComponentAt`, `secondComponentAt`,
+`utf8At`, `descriptorOf`) and `ConstantType` are gone, and `ClassDefinition` names its header,
+fields and methods by entries. Every emitter holds entries: 133 files by `pool2.py` (the add
+facades to the entry facades in the same minting order, the types renamed), `unentry2.py` over
+javac's errors and `refold.py` (`.todo/artefacts/a91-methodcode-stores-instructions-and-the-code-bytes-go/`);
+by hand, three interface references typed and a helper the renaming made a duplicate dropped.
+Byte-identical to the records alone by the same comparisons (the 4,857 programs, every CLI
+compile above, the gate programs).
+
+**Measured 2026-09-29** (cold CLI `-o P.class`, default `--optimize`; the jars made alike by
+a87's `mkjar.sh`; the machine's load varied, so the whole-compile ranges overlap):
+
+| program | write phase | whole compile | output |
+|---|---|---|---|
+| ci-spec corpus | 1,646-1,737 ms -> 1,448-1,531 ms | 15.3-15.6 s -> 14.7-15.4 s | 7,522,623 -> 7,530,635 B |
+| mito probe (split) | 1,718-2,165 ms -> 1,551-1,692 ms | 33.3-35.4 s -> 32.6-35.4 s | 9,045,792 + 2,758,018 -> 9,042,408 + 2,757,894 B |
+
+Against a84's (the table below): the write phase 1,632-1,639 -> 1,448-1,531 ms (corpus) and
+1,666-1,829 -> 1,551-1,692 ms (mito), the whole compile within its noise, the outputs smaller by
+the shortest forms (a91's own cut of them: "The records").
 
 **The first slice** (`JvmHashRuntimeBuilder` from `JvmAsm`, most of it by a regex pass, and
 `JvmHashTableCompiler` from `ctx.emit`/`patchBranch`) came out BYTE-IDENTICAL: the ci-spec
@@ -429,10 +454,11 @@ is never reused.
 - The writer: `am.ik.jvm.CodeReplayTest` (a long branch over wide locals, only the branch that
   does not reach widened, a widening cascade past the measure, handlers, `ldc` widened and
   narrowed by the class's pool, wide `iinc`, a body past the limit), `LineNumberTableTest` (lines
-  through the shake, a relaxed branch and a part), `ConstantPoolTest` (indexes past the limit,
-  `-0.0`, the Utf8 cap), and `JoseTestSuiteE2eTest` (the real 57,909-byte method)
-- The split: `am.ik.jvm.JvmClassSplitterTest` (parts run, what cannot move stays, indexes past
-  65535, the shake, unresolved own calls), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
+  through the shake, a relaxed branch and a part), `ConstantPoolTest` (a pool past the limit,
+  `-0.0`, the Utf8 cap, one entry per content through every facade), and
+  `JoseTestSuiteE2eTest` (the real 57,909-byte method)
+- The split: `am.ik.jvm.JvmClassSplitterTest` (parts run, what cannot move stays, entries past
+  65535 re-minted, the shake, unresolved own calls), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
   class for real, forced splits at both optimize levels, an export library),
   `RontoLispCliTest#aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape`, and the
   three JVM legs of `MitoE2eTest`

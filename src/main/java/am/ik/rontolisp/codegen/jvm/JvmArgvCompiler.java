@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -25,9 +25,9 @@ final class JvmArgvCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.HOST_ARGV + " expects no arguments, got " + (parts.size() - 1));
 		}
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp
-			.addNameAndType(ctx.cp.addUtf8(JvmArgvRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmArgvRuntimeBuilder.DESC)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmArgvRuntimeBuilder.METHOD,
+				JvmArgvRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 }

@@ -32,12 +32,12 @@ final class JvmRatioAccessorCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// _ckRat answers a rational and throws the operator's type-error for anything
 		// else -- a float, a complex, a non-number.
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_RAT).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_RAT));
 		int temp = ctx.allocTemp();
-		ctx.body.astore(temp).aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		ctx.body.astore(temp).aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx));
 		MethodCode.Label ifNotRatioPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotRatioPos);
-		ctx.body.aload(temp).checkcast(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		ctx.body.aload(temp).checkcast(JvmEmitHelper.ratioArrayClass(ctx));
 		ctx.body.loadConstant(index);
 		ctx.body.aaload();
 		JvmEmitHelper.normalizeBigInteger(ctx);

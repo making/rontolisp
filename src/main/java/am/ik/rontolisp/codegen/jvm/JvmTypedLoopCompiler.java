@@ -2,6 +2,8 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.Opcode;
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -11,8 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -1145,13 +1145,13 @@ final class JvmTypedLoopCompiler {
 		/** The array element kind of the variant being emitted. */
 		private boolean single;
 
-		private final ClassConstant floatArrayClass;
+		private final ClassEntry floatArrayClass;
 
-		private final ClassConstant doubleArrayClass;
+		private final ClassEntry doubleArrayClass;
 
-		private final @Nullable MethodrefConstant written;
+		private final @Nullable MethodRefEntry written;
 
-		private final @Nullable MethodrefConstant materialize;
+		private final @Nullable MethodRefEntry materialize;
 
 		/**
 		 * The source site current where the loop is compiled -- the {@code dotimes}
@@ -1165,9 +1165,9 @@ final class JvmTypedLoopCompiler {
 			this.ctx = ctx;
 			this.className = className;
 			this.loopSite = ctx.siteCurrent;
-			this.floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F"));
-			this.doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D"));
-			Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+			this.floatArrayClass = ctx.cp.classEntry("[F");
+			this.doubleArrayClass = ctx.cp.classEntry("[D");
+			Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 			this.written = gpuOps == null ? null : gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN);
 			this.materialize = gpuOps == null ? null : gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE);
 		}
@@ -1248,7 +1248,7 @@ final class JvmTypedLoopCompiler {
 				// double variant; anything else -> the boxed path
 				MethodCode.Label notSingle = this.ctx.body.newLabel();
 				for (Var v : arrays) {
-					this.ctx.body.aload(v.refSlot).instanceOf(this.floatArrayClass.entry());
+					this.ctx.body.aload(v.refSlot).instanceOf(this.floatArrayClass);
 					this.ctx.body.ifeq(notSingle);
 				}
 				this.single = true;
@@ -1256,7 +1256,7 @@ final class JvmTypedLoopCompiler {
 				variant(numbers, joins, excSlot);
 				this.ctx.body.labelBinding(notSingle);
 				for (Var v : arrays) {
-					this.ctx.body.aload(v.refSlot).instanceOf(this.doubleArrayClass.entry());
+					this.ctx.body.aload(v.refSlot).instanceOf(this.doubleArrayClass);
 					this.ctx.body.ifeq(bails);
 				}
 				this.single = false;
@@ -1279,35 +1279,35 @@ final class JvmTypedLoopCompiler {
 		}
 
 		private void guardLong(Var v, MethodCode.Label bails) {
-			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass.entry()).ifeq(bails);
-			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass.entry());
-			this.ctx.body.invokevirtual(this.ctx.longValue.methodRefEntry()).lstore(v.slot);
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass).ifeq(bails);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass);
+			this.ctx.body.invokevirtual(this.ctx.longValue).lstore(v.slot);
 			// the magnitude bound the typing relies on: the value fits an int
 			this.ctx.body.lload(v.slot).l2i().i2l().lload(v.slot).lcmp().ifne(bails);
 		}
 
 		private void guardDouble(Var v, MethodCode.Label bails) {
-			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass.entry()).ifeq(bails);
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass).ifeq(bails);
 			unboxDoubleInto(v);
 		}
 
 		private void guardDoubleOrLong(Var v, MethodCode.Label bails) {
-			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass.entry());
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.doubleClass);
 			MethodCode.Label notDouble = this.ctx.body.newLabel();
 			MethodCode.Label done = this.ctx.body.newLabel();
 			this.ctx.body.ifeq(notDouble);
 			unboxDoubleInto(v);
 			this.ctx.body.goto_(done);
 			this.ctx.body.labelBinding(notDouble);
-			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass.entry()).ifeq(bails);
-			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass.entry());
-			this.ctx.body.invokevirtual(this.ctx.longValue.methodRefEntry()).l2d().dstore(v.slot);
+			this.ctx.body.aload(v.refSlot).instanceOf(this.ctx.longClass).ifeq(bails);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.longClass);
+			this.ctx.body.invokevirtual(this.ctx.longValue).l2d().dstore(v.slot);
 			this.ctx.body.labelBinding(done);
 		}
 
 		private void unboxDoubleInto(Var v) {
-			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.doubleClass.entry());
-			this.ctx.body.invokevirtual(this.ctx.numberDoubleValue.methodRefEntry()).dstore(v.slot);
+			this.ctx.body.aload(v.refSlot).checkcast(this.ctx.doubleClass);
+			this.ctx.body.invokevirtual(this.ctx.numberDoubleValue).dstore(v.slot);
 		}
 
 		/**
@@ -1321,16 +1321,16 @@ final class JvmTypedLoopCompiler {
 		 * speed and nothing else.
 		 */
 		private void hoistArrays(List<Var> arrays) {
-			ClassConstant cls = this.single ? this.floatArrayClass : this.doubleArrayClass;
+			ClassEntry cls = this.single ? this.floatArrayClass : this.doubleArrayClass;
 			for (Var v : arrays) {
 				this.ctx.body.aload(v.refSlot);
 				if (this.materialize != null) {
 					// The typed slot takes what the guard answers: the array, or a
 					// result stub's backing. The variable's own slot keeps the program's
 					// object, which is what the body's aset reports as written.
-					this.ctx.body.invokestatic(this.materialize.entry());
+					this.ctx.body.invokestatic(this.materialize);
 				}
-				this.ctx.body.checkcast(cls.entry()).astore(v.slot);
+				this.ctx.body.checkcast(cls).astore(v.slot);
 				// base = 1 + rank, the data offset (_fvAref*'s `1 + rank`)
 				this.ctx.body.iconst_1().aload(v.slot).iconst_0();
 				loadHeaderInt();
@@ -1353,7 +1353,7 @@ final class JvmTypedLoopCompiler {
 			if (this.written != null) {
 				for (Var v : arrays) {
 					if (v.stored) {
-						this.ctx.body.aload(v.refSlot).invokestatic(this.written.entry()).pop();
+						this.ctx.body.aload(v.refSlot).invokestatic(this.written).pop();
 					}
 				}
 			}
@@ -1392,7 +1392,7 @@ final class JvmTypedLoopCompiler {
 				this.ctx.boxedVars = new HashSet<>(this.ctx.boxedVars);
 				int slot = this.ctx.allocLocal(this.an.ctr().name);
 				this.ctx.boxedVars.remove(this.an.ctr().name);
-				this.ctx.body.lload(this.an.ctr().slot).invokestatic(this.ctx.longValueOf.entry());
+				this.ctx.body.lload(this.an.ctr().slot).invokestatic(this.ctx.longValueOf);
 				this.ctx.body.astore(slot);
 				JvmExprCompiler.compileExpr(resultForm, this.ctx, this.className);
 				this.ctx.locals = savedLocals;
@@ -1414,10 +1414,10 @@ final class JvmTypedLoopCompiler {
 			for (Var v : assigned) {
 				int boxedSlot = java.util.Objects.requireNonNull(this.ctx.locals.get(v.name));
 				if (v.type == T.LONG) {
-					this.ctx.body.lload(v.slot).invokestatic(this.ctx.longValueOf.entry());
+					this.ctx.body.lload(v.slot).invokestatic(this.ctx.longValueOf);
 				}
 				else {
-					this.ctx.body.dload(v.slot).invokestatic(this.ctx.doubleValueOf.entry());
+					this.ctx.body.dload(v.slot).invokestatic(this.ctx.doubleValueOf);
 				}
 				this.ctx.body.astore(boxedSlot);
 			}
@@ -1535,7 +1535,7 @@ final class JvmTypedLoopCompiler {
 				}
 				case MathFn m -> {
 					exprAsDouble(m.a());
-					this.ctx.body.invokestatic(this.ctx.mathOp(m.name()).entry());
+					this.ctx.body.invokestatic(this.ctx.mathOp(m.name()));
 				}
 				case Aset a -> aset(a, true);
 				case Setq s -> {
@@ -1617,12 +1617,9 @@ final class JvmTypedLoopCompiler {
 			@Nullable String outer = this.ctx.operator;
 			this.ctx.operator = operator;
 			try {
-				this.ctx.body.invokestatic(
-						this.ctx
-							.wrapForOperator(JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC,
-									java.util.Objects
-										.requireNonNull(this.ctx.numOps.get(JvmOperandTypeRuntime.CK_BOUND_J)))
-							.entry());
+				this.ctx.body.invokestatic(this.ctx.wrapForOperator(JvmOperandTypeRuntime.CK_BOUND_J,
+						JvmOperandTypeRuntime.CK_BOUND_J_DESC,
+						java.util.Objects.requireNonNull(this.ctx.numOps.get(JvmOperandTypeRuntime.CK_BOUND_J))));
 			}
 			finally {
 				this.ctx.operator = outer;

@@ -82,7 +82,7 @@ final class JvmFlushStreamsBuilder {
 		code.labelBinding(ifDone);
 		code.return_();
 		code.exceptionCatch(tryStart, tryEnd, handler, ioException);
-		return new JvmIoRuntimeBuilder.IoMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), code);
+		return new JvmIoRuntimeBuilder.IoMethod(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), code);
 	}
 
 }

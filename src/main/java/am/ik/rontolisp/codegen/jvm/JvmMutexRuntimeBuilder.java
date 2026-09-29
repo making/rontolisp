@@ -2,11 +2,11 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -43,7 +43,7 @@ final class JvmMutexRuntimeBuilder {
 	static final String UNARY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/** One emitted helper: its name/descriptor plus the body. */
-	record MutexMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record MutexMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	private JvmMutexRuntimeBuilder() {
@@ -61,7 +61,7 @@ final class JvmMutexRuntimeBuilder {
 		newCode.dup();
 		newCode.invokespecial(init);
 		newCode.areturn();
-		methods.add(new MutexMethod(cp.addUtf8(NEW_METHOD), cp.addUtf8(NEW_DESC), newCode));
+		methods.add(new MutexMethod(cp.utf8Entry(NEW_METHOD), cp.utf8Entry(NEW_DESC), newCode));
 		// ((ReentrantLock) m).lock(); return m; -- and the unlock twin. unlock() throws
 		// IllegalMonitorStateException when this thread does not hold the lock, which is
 		// the JVM-side spelling of the interpreter's "not held by this thread" error.
@@ -77,7 +77,7 @@ final class JvmMutexRuntimeBuilder {
 		code.invokevirtual(call);
 		code.aload(0);
 		code.areturn();
-		return new MutexMethod(cp.addUtf8(name), cp.addUtf8(UNARY_DESC), code);
+		return new MutexMethod(cp.utf8Entry(name), cp.utf8Entry(UNARY_DESC), code);
 	}
 
 }

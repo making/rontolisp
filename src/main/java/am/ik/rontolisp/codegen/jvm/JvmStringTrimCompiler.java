@@ -1,12 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles {@code string-trim} / {@code string-left-trim} / {@code string-right-trim}.
@@ -41,12 +41,12 @@ final class JvmStringTrimCompiler {
 	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean left,
 			boolean right) {
 		List<LispVal> args = cons.toList();
-		ClassConstant strClass = ctx.stringClass;
-		MethodrefConstant lengthRef = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		MethodrefConstant length = lengthRef;
-		MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
-		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		MethodrefConstant indexOf = JvmEmitHelper.stringMethod(ctx, "indexOf", "(I)I");
+		ClassEntry strClass = ctx.stringClass;
+		MethodRefEntry lengthRef = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodRefEntry length = lengthRef;
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry indexOf = JvmEmitHelper.stringMethod(ctx, "indexOf", "(I)I");
 
 		int bagRawSlot = ctx.allocTemp();
 		int bagSlot = ctx.allocTemp();
@@ -57,18 +57,18 @@ final class JvmStringTrimCompiler {
 		// bagRaw = (String) char-bag
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(strClass.entry()).astore(bagRawSlot);
+		ctx.body.checkcast(strClass).astore(bagRawSlot);
 		// bag = bagRaw.substring(1, bagRaw.length() - 1)
-		ctx.body.aload(bagRawSlot).iconst_1().aload(bagRawSlot).invokevirtual(length.methodRefEntry());
-		ctx.body.iconst_1().isub().invokevirtual(substring.methodRefEntry()).astore(bagSlot);
+		ctx.body.aload(bagRawSlot).iconst_1().aload(bagRawSlot).invokevirtual(length);
+		ctx.body.iconst_1().isub().invokevirtual(substring).astore(bagSlot);
 		// s = (String) string
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(strClass.entry()).astore(sSlot);
+		ctx.body.checkcast(strClass).astore(sSlot);
 		// start = 1
 		ctx.body.iconst_1().istore(startSlot);
 		// end = s.length() - 1
-		ctx.body.aload(sSlot).invokevirtual(length.methodRefEntry()).iconst_1().isub().istore(endSlot);
+		ctx.body.aload(sSlot).invokevirtual(length).iconst_1().isub().istore(endSlot);
 
 		MethodCode asm = ctx.body;
 		if (left) {
@@ -81,8 +81,8 @@ final class JvmStringTrimCompiler {
 			asm.aload(bagSlot);
 			asm.aload(sSlot);
 			asm.iload(startSlot);
-			asm.invokevirtual(ctx.stringCharAt.methodRefEntry());
-			asm.invokevirtual(indexOf.methodRefEntry());
+			asm.invokevirtual(ctx.stringCharAt);
+			asm.invokevirtual(indexOf);
 			asm.iflt(done);
 			asm.iinc(startSlot, 1);
 			asm.goto_(loop);
@@ -100,8 +100,8 @@ final class JvmStringTrimCompiler {
 			asm.iload(endSlot);
 			asm.loadConstant(1);
 			asm.isub();
-			asm.invokevirtual(ctx.stringCharAt.methodRefEntry());
-			asm.invokevirtual(indexOf.methodRefEntry());
+			asm.invokevirtual(ctx.stringCharAt);
+			asm.invokevirtual(indexOf);
 			asm.iflt(done);
 			asm.iinc(endSlot, -1);
 			asm.goto_(loop);
@@ -110,10 +110,10 @@ final class JvmStringTrimCompiler {
 
 		// "\"" + s.substring(start, end) + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.body.aload(sSlot).iload(startSlot).iload(endSlot).invokevirtual(substring.methodRefEntry());
-		ctx.body.invokevirtual(concat.methodRefEntry());
+		ctx.body.aload(sSlot).iload(startSlot).iload(endSlot).invokevirtual(substring);
+		ctx.body.invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.body.invokevirtual(concat.methodRefEntry());
+		ctx.body.invokevirtual(concat);
 	}
 
 }

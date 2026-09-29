@@ -49,15 +49,14 @@ final class JvmCharCompiler {
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		// An index that is no integer is CHAR's / SCHAR's type-error, named by the
 		// operator's wrapper (JvmOperandTypeRuntime).
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.body.l2i();
 		// A string that is no string is CHAR's / SCHAR's type-error too: _charRef throws
 		// the unnamed report, the operator's wrapper names it.
 		ctx.body.invokestatic(ctx.wrapForOperator(JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
 				JvmStringIndexRuntimeBuilder.CHARREF_DESC, JvmEmitHelper.selfMethod(ctx, className,
-						JvmStringIndexRuntimeBuilder.CHARREF_METHOD, JvmStringIndexRuntimeBuilder.CHARREF_DESC))
-			.entry());
+						JvmStringIndexRuntimeBuilder.CHARREF_METHOD, JvmStringIndexRuntimeBuilder.CHARREF_DESC)));
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
@@ -81,7 +80,7 @@ final class JvmCharCompiler {
 	 */
 	static void compileCheckCharacter(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		ctx.body.dup().instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
+		ctx.body.dup().instanceOf(JvmEmitHelper.charArrayClass(ctx));
 		emitSiteTypeError(cons, ctx, className, Opcode.IFNE, OperandTypes.Kind.CHARACTER);
 	}
 
@@ -104,9 +103,8 @@ final class JvmCharCompiler {
 		}
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.named(form.kind()).typeName(), ctx);
-		ctx.body.invokestatic(JvmEmitHelper
-			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-			.entry());
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
 		if (tokenSlot >= 0) {
 			// nil: the raw report, thrown as it is; a name: renamed, then thrown.
 			ctx.body.aload(tokenSlot);
@@ -114,7 +112,7 @@ final class JvmCharCompiler {
 			ctx.body.ifnonnull(named);
 			ctx.body.athrow();
 			ctx.body.labelBinding(named);
-			ctx.body.aload(tokenSlot).checkcast(ctx.stringClass.entry());
+			ctx.body.aload(tokenSlot).checkcast(ctx.stringClass);
 			emitOpTypeErr(ctx, className, OperandTypes.FUNNEL_TYPE);
 			ctx.body.athrow();
 			return;
@@ -136,9 +134,8 @@ final class JvmCharCompiler {
 	// operator's type (FUNNEL_TYPE: the report's own kind).
 	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className, String type) {
 		JvmEmitHelper.compileUnspelledLiteral(type, ctx);
-		ctx.body.invokestatic(JvmEmitHelper
-			.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-			.entry());
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 	}
 
 	/**
@@ -165,7 +162,7 @@ final class JvmCharCompiler {
 						JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
 					}
 				}));
-		ctx.body.invokestatic(helper.methodref().entry());
+		ctx.body.invokestatic(helper.methodref());
 	}
 
 	/**
@@ -180,16 +177,14 @@ final class JvmCharCompiler {
 		MethodCode.Label pass = ctx.body.newLabel();
 		ctx.body.branch(ifPass, pass);
 		JvmEmitHelper.compileUnspelledLiteral(kind.name(), ctx);
-		ctx.body.invokestatic(JvmEmitHelper
-			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-			.entry());
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
 		String operator = LispMacroExpander.checkOperator(cons);
 		if (operator != null) {
 			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
 			JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
-			ctx.body.invokestatic(JvmEmitHelper
-				.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-				.entry());
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR,
+					JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		}
 		ctx.body.athrow();
 		ctx.body.labelBinding(pass);
@@ -204,7 +199,7 @@ final class JvmCharCompiler {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = LispMacroExpander.checkOperator(cons);
 		try {
-			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 		}
 		finally {
 			ctx.operator = outer;
@@ -257,7 +252,7 @@ final class JvmCharCompiler {
 		// Character.toUpperCase(int)/toLowerCase(int) take a code point and return a code
 		// point; a mapping that would expand to multiple code units lives on the String
 		// overload, so this is the right level for a single-character fold.
-		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I").entry());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I"));
 		JvmEmitHelper.boxCodePoint(ctx);
 	}
 
@@ -265,14 +260,14 @@ final class JvmCharCompiler {
 	static void compileCharacterp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
+		ctx.body.instanceOf(JvmEmitHelper.charArrayClass(ctx));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
 	/** {@code (alpha-char-p ch)}: {@code Character.isLetter(int)} on the code point. */
 	static void compileAlphaCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		pushCheckedCode(cons.toList().get(1), ctx, className, false);
-		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z").entry());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z"));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -299,7 +294,7 @@ final class JvmCharCompiler {
 			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
 		}
 		pushCheckedCode(args.get(1), ctx, className, false);
-		ctx.body.dup().invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I").entry());
+		ctx.body.dup().invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I"));
 		ctx.body.isub();
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
@@ -312,7 +307,7 @@ final class JvmCharCompiler {
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			if (!(args.get(2) instanceof LispInteger)) {
 				// A radix that is no integer is DIGIT-CHAR-P's INTEGER type-error.
-				ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
+				ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 			}
 			JvmEmitHelper.unboxLong(ctx);
 			ctx.body.l2i();
@@ -320,7 +315,7 @@ final class JvmCharCompiler {
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 10);
 		}
-		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I").entry());
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I"));
 		// weight on stack: if weight < 0 return nil, else Long.valueOf(weight)
 		ctx.body.dup();
 		MethodCode.Label ifNotDigit = ctx.body.newLabel();
@@ -427,10 +422,10 @@ final class JvmCharCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(arg, ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CHR).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CHR));
 		JvmEmitHelper.unboxCodePoint(ctx);
 		if (fold) {
-			ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I").entry());
+			ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I"));
 		}
 	}
 

@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
@@ -38,15 +38,14 @@ final class JvmReadLineCompiler {
 		// the hard-coded standard input.
 		LispVal stream = JvmStringStreamCompiler.inputStreamArg(ctx, parts.size() == 2 ? parts.get(1) : null);
 		if (stream == null) {
-			ctx.body.invokestatic(ctx.readLineHelper.entry());
+			ctx.body.invokestatic(ctx.readLineHelper);
 			return;
 		}
 		JvmExprCompiler.compileExpr(stream, ctx, className);
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_LINE_STREAM_METHOD);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.READ_LINE_STREAM_DESC);
-		MethodrefConstant readLineStreamRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(readLineStreamRef.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.READ_LINE_STREAM_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.READ_LINE_STREAM_DESC);
+		MethodRefEntry readLineStreamRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(readLineStreamRef);
 	}
 
 }

@@ -1,9 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the {@code fresh-line} built-in function and provides the column-tracking
@@ -22,19 +23,17 @@ final class JvmFreshLineCompiler {
 	private JvmFreshLineCompiler() {
 	}
 
-	static FieldrefConstant colField(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(COL_FIELD), ctx.cp.addUtf8(COL_DESC)));
+	static FieldRefEntry colField(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.fieldRef(ctx.cp.classEntry(className), COL_FIELD, COL_DESC);
 	}
 
-	private static MethodrefConstant stringLength(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addMethodref(ctx.stringClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("length"), ctx.cp.addUtf8("()I")));
+	private static MethodRefEntry stringLength(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.methodRef(ctx.stringClass, "length", "()I");
 	}
 
 	/** Emits {@code _col = 0} (the output ended at the start of a line). */
 	static void emitSetLineStart(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.body.iconst_0().putstatic(colField(ctx, className).entry());
+		ctx.body.iconst_0().putstatic(colField(ctx, className));
 	}
 
 	/**
@@ -43,13 +42,13 @@ final class JvmFreshLineCompiler {
 	 * empty.
 	 */
 	static void emitTrackLocal(JvmLispCompiler.Ctx ctx, String className, int slot) {
-		FieldrefConstant col = colField(ctx, className);
-		MethodrefConstant length = stringLength(ctx);
-		ctx.body.aload(slot).invokevirtual(length.methodRefEntry());
+		FieldRefEntry col = colField(ctx, className);
+		MethodRefEntry length = stringLength(ctx);
+		ctx.body.aload(slot).invokevirtual(length);
 		MethodCode.Label ifEmpty = ctx.body.newLabel();
 		ctx.body.ifeq(ifEmpty);
-		ctx.body.aload(slot).aload(slot).invokevirtual(length.methodRefEntry()).iconst_1().isub();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry()).loadConstant(10);
+		ctx.body.aload(slot).aload(slot).invokevirtual(length).iconst_1().isub();
+		ctx.body.invokevirtual(ctx.stringCharAt).loadConstant(10);
 		MethodCode.Label ifNotNewline = ctx.body.newLabel();
 		ctx.body.if_icmpne(ifNotNewline);
 		ctx.body.iconst_0();
@@ -58,7 +57,7 @@ final class JvmFreshLineCompiler {
 		ctx.body.labelBinding(ifNotNewline);
 		ctx.body.iconst_1();
 		ctx.body.labelBinding(gotoStore);
-		ctx.body.putstatic(col.entry());
+		ctx.body.putstatic(col);
 		ctx.body.labelBinding(ifEmpty);
 	}
 
@@ -71,17 +70,16 @@ final class JvmFreshLineCompiler {
 		am.ik.rontolisp.LispVal stream = JvmStringStreamCompiler.streamArg(ctx, args.size() > 1 ? args.get(1) : null);
 		if (stream != null) {
 			JvmExprCompiler.compileExpr(stream, ctx, className);
-			MethodrefConstant freshLineRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_METHOD),
-							ctx.cp.addUtf8(JvmIoRuntimeBuilder.FRESH_LINE_DESC)));
-			ctx.body.invokestatic(freshLineRef.entry());
+			MethodRefEntry freshLineRef = ctx.cp.methodRef(ctx.cp.classEntry(className),
+					JvmIoRuntimeBuilder.FRESH_LINE_METHOD, JvmIoRuntimeBuilder.FRESH_LINE_DESC);
+			ctx.body.invokestatic(freshLineRef);
 			return;
 		}
-		FieldrefConstant col = colField(ctx, className);
-		ctx.body.getstatic(col.entry());
+		FieldRefEntry col = colField(ctx, className);
+		ctx.body.getstatic(col);
 		MethodCode.Label ifAtStart = ctx.body.newLabel();
 		ctx.body.ifeq(ifAtStart);
-		ctx.body.getstatic(ctx.systemOut.entry()).invokevirtual(ctx.printlnVoid.methodRefEntry());
+		ctx.body.getstatic(ctx.systemOut).invokevirtual(ctx.printlnVoid);
 		emitSetLineStart(ctx, className);
 		ctx.body.labelBinding(ifAtStart);
 		ctx.body.aconst_null();

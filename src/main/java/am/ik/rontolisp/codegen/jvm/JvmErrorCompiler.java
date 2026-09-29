@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
@@ -66,13 +68,11 @@ final class JvmErrorCompiler {
 	 */
 	static void compileThrowRuntimeException(LispVal messageExpr, JvmLispCompiler.Ctx ctx, String className,
 			int conditionSlot, boolean handlersRan) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
 		boolean condition = conditionSlot >= 0;
-		ConstantPool.@Nullable MethodrefConstant length = condition ? null
-				: JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		ConstantPool.@Nullable MethodrefConstant substring = condition ? null
+		@Nullable MethodRefEntry length = condition ? null : JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		@Nullable MethodRefEntry substring = condition ? null
 				: JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
 		// The message is computed into a local BEFORE the allocation. The verifier tracks
 		// a half-constructed object apart from an ordinary reference and no local can
@@ -85,7 +85,7 @@ final class JvmErrorCompiler {
 		if (condition) {
 			// _lispToDisplayString: a string's text without its frame quotes, a mutable
 			// character vector's characters, NIL for nil.
-			ctx.body.invokestatic(ctx.lispToDisplayString.entry());
+			ctx.body.invokestatic(ctx.lispToDisplayString);
 		}
 		else {
 			// message: arg.substring(1, arg.length() - 1). A message built by a flipped
@@ -93,19 +93,19 @@ final class JvmErrorCompiler {
 			// capture) can be a mutable character vector: render it before the (String)
 			// cast (a no-op without the array runtime).
 			JvmArrayCompiler.emitStrvNormalize(ctx, className);
-			ctx.body.checkcast(ctx.stringClass.entry())
+			ctx.body.checkcast(ctx.stringClass)
 				.dup()
-				.invokevirtual(java.util.Objects.requireNonNull(length).methodRefEntry())
+				.invokevirtual(java.util.Objects.requireNonNull(length))
 				.iconst_1()
 				.isub()
 				.iconst_1()
 				.swap()
-				.invokevirtual(java.util.Objects.requireNonNull(substring).methodRefEntry());
+				.invokevirtual(java.util.Objects.requireNonNull(substring));
 		}
 		int messageSlot = ctx.errorMessageSlot();
 		ctx.body.astore(messageSlot);
 		// throw new RuntimeException(message)
-		ctx.body.new_(runtimeEx.entry()).dup().aload(messageSlot).invokespecial(ctor.entry());
+		ctx.body.new_(runtimeEx).dup().aload(messageSlot).invokespecial(ctor);
 		if (condition) {
 			ctx.body.aload(conditionSlot);
 			ctx.body.invokestatic(java.util.Objects

@@ -2,7 +2,9 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.util.ArrayList;
@@ -11,10 +13,6 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.runtime.RontoHashTable;
@@ -194,13 +192,12 @@ final class JvmOperandTypeRuntime {
 	 * @param numberKind the {@code "NUMBER"} constant
 	 * @param realKind the {@code "REAL"} constant
 	 */
-	record ThrowRefs(MethodrefConstant teRaw, StringConstant integerKind, StringConstant numberKind,
-			StringConstant realKind) {
+	record ThrowRefs(MethodRefEntry teRaw, StringEntry integerKind, StringEntry numberKind, StringEntry realKind) {
 
-		static ThrowRefs of(ConstantPool cp, ClassConstant thisClass) {
+		static ThrowRefs of(ConstantPool cp, ClassEntry thisClass) {
 			return new ThrowRefs(self(cp, thisClass, TE_RAW, TE_RAW_DESC),
-					cp.addString(OperandTypes.Kind.INTEGER.name()), cp.addString(OperandTypes.Kind.NUMBER.name()),
-					cp.addString(OperandTypes.Kind.REAL.name()));
+					cp.stringEntry(OperandTypes.Kind.INTEGER.name()), cp.stringEntry(OperandTypes.Kind.NUMBER.name()),
+					cp.stringEntry(OperandTypes.Kind.REAL.name()));
 		}
 
 		/**
@@ -209,7 +206,7 @@ final class JvmOperandTypeRuntime {
 		 * @param slot the local holding the rejected operand
 		 * @param kind the kind constant
 		 */
-		void emitThrow(MethodCode c, int slot, StringConstant kind) {
+		void emitThrow(MethodCode c, int slot, StringEntry kind) {
 			c.aload(slot);
 			emitThrowLoaded(c, kind);
 		}
@@ -219,16 +216,12 @@ final class JvmOperandTypeRuntime {
 		 * @param c the bytecode sink
 		 * @param kind the kind constant
 		 */
-		void emitThrowLoaded(MethodCode c, StringConstant kind) {
-			c.ldc(kind.entry());
-			c.invokestatic(this.teRaw.entry());
+		void emitThrowLoaded(MethodCode c, StringEntry kind) {
+			c.ldc(kind);
+			c.invokestatic(this.teRaw);
 			c.athrow();
 		}
 
-	}
-
-	static MethodrefConstant self(ConstantPool cp, ClassConstant thisClass, String name, String desc) {
-		return cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
 	}
 
 	static MethodRefEntry self(ConstantPool cp, ClassEntry thisClass, String name, String desc) {
@@ -244,141 +237,136 @@ final class JvmOperandTypeRuntime {
 	 * pad
 	 * @return the methods
 	 */
-	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassConstant thisClass,
-			@Nullable FieldrefConstant teTl, ConsShape shape) {
-		ClassConstant rte = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		ClassConstant string = cp.addClass(cp.addUtf8("java/lang/String"));
-		ClassConstant objArr = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
-		ClassConstant object = cp.addClass(cp.addUtf8("java/lang/Object"));
-		ClassConstant throwable = cp.addClass(cp.addUtf8("java/lang/Throwable"));
-		ClassConstant threadLocal = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
-		MethodrefConstant rteInit = cp.addMethodref(rte,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant concat = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		MethodrefConstant lispToString = self(cp, thisClass, "_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;");
-		MethodrefConstant tlGet = cp.addMethodref(threadLocal,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
+	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassEntry thisClass,
+			@Nullable FieldRefEntry teTl, ConsShape shape) {
+		ClassEntry rte = cp.classEntry("java/lang/RuntimeException");
+		ClassEntry string = cp.classEntry("java/lang/String");
+		ClassEntry objArr = cp.classEntry("[Ljava/lang/Object;");
+		ClassEntry object = cp.classEntry("java/lang/Object");
+		ClassEntry throwable = cp.classEntry("java/lang/Throwable");
+		ClassEntry threadLocal = cp.classEntry("java/lang/ThreadLocal");
+		MethodRefEntry rteInit = cp.methodRef(rte, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry concat = cp.methodRef(string, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry lispToString = self(cp, thisClass, "_lispToString", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry tlGet = cp.methodRef(threadLocal, "get", "()Ljava/lang/Object;");
 		// No record is set any more, but the entry keeps its place in the pool: the
 		// pool's
 		// order is part of every class's bytes, a class without a pad included.
-		cp.addMethodref(threadLocal, cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
+		cp.methodRef(threadLocal, "set", "(Ljava/lang/Object;)V");
 		if (teTl != null) {
 			// Minted now, while the pool is still open: <clinit> initializes the field
 			// through ConditionChannel's ThreadLocal constants, which resolve to these.
-			cp.addMethodref(threadLocal, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-			cp.addUtf8("<clinit>");
+			cp.methodRef(threadLocal, "<init>", "()V");
+			cp.utf8Entry("<clinit>");
 		}
 		Records records = teTl != null ? Records.of(cp, thisClass, teTl, tlGet, object, objArr) : null;
-		StringConstant valuePrefix = cp.addString(OperandTypes.VALUE_PREFIX);
-		StringConstant typeInfix = cp.addString(OperandTypes.TYPE_INFIX);
+		StringEntry valuePrefix = cp.stringEntry(OperandTypes.VALUE_PREFIX);
+		StringEntry typeInfix = cp.stringEntry(OperandTypes.TYPE_INFIX);
 
 		List<JvmNumericRuntimeBuilder.NumericMethod> methods = new ArrayList<>();
-		MethodrefConstant teRaw = self(cp, thisClass, TE_RAW, TE_RAW_DESC);
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-		ClassConstant ratioClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		MethodrefConstant opTypeErr = self(cp, thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC);
-		StringConstant listKind = cp.addString(OperandTypes.Kind.LIST.name());
-		StringConstant funnelType = cp.addString(OperandTypes.FUNNEL_TYPE);
+		MethodRefEntry teRaw = self(cp, thisClass, TE_RAW, TE_RAW_DESC);
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry bigClass = cp.classEntry("java/math/BigInteger");
+		ClassEntry ratioClass = cp.classEntry("[Ljava/math/BigInteger;");
+		MethodRefEntry opTypeErr = self(cp, thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC);
+		StringEntry listKind = cp.stringEntry(OperandTypes.Kind.LIST.name());
+		StringEntry funnelType = cp.stringEntry(OperandTypes.FUNNEL_TYPE);
 		methods.add(field(cp, CAR, 0, shape, teRaw, opTypeErr, listKind, funnelType));
 		methods.add(field(cp, CDR, 1, shape, teRaw, opTypeErr, listKind, funnelType));
 		methods.add(listCheck(cp, shape, teRaw, opTypeErr, listKind, funnelType));
 		methods.add(consTest(cp, shape));
 		methods.add(check(cp, CK_IDX, CK_IDX_DESC, List.of(longClass, bigClass), teRaw,
-				cp.addString(OperandTypes.Kind.INTEGER.name())));
+				cp.stringEntry(OperandTypes.Kind.INTEGER.name())));
 		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), teRaw,
-				cp.addString(OperandTypes.Kind.RATIONAL.name())));
-		methods.add(check(cp, CK_TAB, CK_IDX_DESC, List.of(cp.addClass(cp.addUtf8(RontoHashTable.MAP_CLASS))), teRaw,
-				cp.addString(OperandTypes.Kind.HASH_TABLE.typeName())));
-		methods.add(check(cp, CK_CHR, CK_IDX_DESC, List.of(cp.addClass(cp.addUtf8("[I"))), teRaw,
-				cp.addString(OperandTypes.Kind.CHARACTER.name())));
+				cp.stringEntry(OperandTypes.Kind.RATIONAL.name())));
+		methods.add(check(cp, CK_TAB, CK_IDX_DESC, List.of(cp.classEntry(RontoHashTable.MAP_CLASS)), teRaw,
+				cp.stringEntry(OperandTypes.Kind.HASH_TABLE.typeName())));
+		methods.add(check(cp, CK_CHR, CK_IDX_DESC, List.of(cp.classEntry("[I")), teRaw,
+				cp.stringEntry(OperandTypes.Kind.CHARACTER.name())));
 		methods.add(consCheck(cp, CK_LIST, FIELD_DESC, true, shape, teRaw, listKind));
-		methods.add(
-				consCheck(cp, CK_CONS, CK_CONS_DESC, false, shape, teRaw, cp.addString(OperandTypes.Kind.CONS.name())));
+		methods.add(consCheck(cp, CK_CONS, CK_CONS_DESC, false, shape, teRaw,
+				cp.stringEntry(OperandTypes.Kind.CONS.name())));
 
 		// _teRaw(Object x, String kind): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + kind), recorded under a pad.
 		MethodCode c = new MethodCode();
-		c.new_(rte.entry());
+		c.new_(rte);
 		c.dup();
-		c.ldc(valuePrefix.entry());
+		c.ldc(valuePrefix);
 		c.aload(0);
-		c.invokestatic(lispToString.entry());
-		c.invokevirtual(concat.methodRefEntry());
-		c.ldc(typeInfix.entry());
-		c.invokevirtual(concat.methodRefEntry());
+		c.invokestatic(lispToString);
+		c.invokevirtual(concat);
+		c.ldc(typeInfix);
+		c.invokevirtual(concat);
 		c.aload(1);
-		c.invokevirtual(concat.methodRefEntry());
-		c.invokespecial(rteInit.entry());
+		c.invokevirtual(concat);
+		c.invokespecial(rteInit);
 		if (records != null) {
 			c.astore(2);
 			records.emit(c, 2, () -> c.aload(0), () -> c.aload(1));
 			c.aload(2);
 		}
 		c.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_RAW), cp.addUtf8(TE_RAW_DESC), c));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(TE_RAW), cp.utf8Entry(TE_RAW_DESC), c));
 
 		// _teOf(Object x, Object type): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + prin1(type)), recorded under a pad with the type object.
 		MethodCode t = new MethodCode();
-		t.new_(rte.entry());
+		t.new_(rte);
 		t.dup();
-		t.ldc(valuePrefix.entry());
+		t.ldc(valuePrefix);
 		t.aload(0);
-		t.invokestatic(lispToString.entry());
-		t.invokevirtual(concat.methodRefEntry());
-		t.ldc(typeInfix.entry());
-		t.invokevirtual(concat.methodRefEntry());
+		t.invokestatic(lispToString);
+		t.invokevirtual(concat);
+		t.ldc(typeInfix);
+		t.invokevirtual(concat);
 		t.aload(1);
-		t.invokestatic(lispToString.entry());
-		t.invokevirtual(concat.methodRefEntry());
-		t.invokespecial(rteInit.entry());
+		t.invokestatic(lispToString);
+		t.invokevirtual(concat);
+		t.invokespecial(rteInit);
 		if (records != null) {
 			t.astore(2);
 			records.emit(t, 2, () -> t.aload(0), () -> t.aload(1));
 			t.aload(2);
 		}
 		t.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_OF), cp.addUtf8(TE_OF_DESC), t));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(TE_OF), cp.utf8Entry(TE_OF_DESC), t));
 
 		// _oob(Object datum, int dim): new RuntimeException("The value " + prin1(datum)
 		// + " is not of type (INTEGER 0 (" + dim + "))"), recorded under a pad with the
 		// type as the list (INTEGER 0 (dim)).
-		MethodrefConstant intToString = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		MethodRefEntry intToString = cp.methodRef(string, "valueOf", "(I)Ljava/lang/String;");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
 		MethodCode b = new MethodCode();
-		b.new_(rte.entry());
+		b.new_(rte);
 		b.dup();
-		b.ldc(valuePrefix.entry());
+		b.ldc(valuePrefix);
 		b.aload(0);
-		b.invokestatic(lispToString.entry());
-		b.invokevirtual(concat.methodRefEntry());
-		b.ldc(cp.addString(OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX).entry());
-		b.invokevirtual(concat.methodRefEntry());
+		b.invokestatic(lispToString);
+		b.invokevirtual(concat);
+		b.ldc(cp.stringEntry(OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX));
+		b.invokevirtual(concat);
 		b.iload(1);
-		b.invokestatic(intToString.entry());
-		b.invokevirtual(concat.methodRefEntry());
-		b.ldc(cp.addString(OperandTypes.INDEX_TYPE_SUFFIX).entry());
-		b.invokevirtual(concat.methodRefEntry());
-		b.invokespecial(rteInit.entry());
+		b.invokestatic(intToString);
+		b.invokevirtual(concat);
+		b.ldc(cp.stringEntry(OperandTypes.INDEX_TYPE_SUFFIX));
+		b.invokevirtual(concat);
+		b.invokespecial(rteInit);
 		if (records != null) {
 			b.astore(2);
-			StringConstant integerKind = cp.addString(OperandTypes.Kind.INTEGER.name());
+			StringEntry integerKind = cp.stringEntry(OperandTypes.Kind.INTEGER.name());
 			records.emit(b, 2, () -> b.aload(0), () -> {
 				// (INTEGER 0 (dim)): {"INTEGER", {0L, {{dimL, nil}, nil}}}
-				emitConsHead(b, object, () -> b.ldc(integerKind.entry()));
+				emitConsHead(b, object, () -> b.ldc(integerKind));
 				emitConsHead(b, object, () -> {
 					b.lconst_0();
-					b.invokestatic(longValueOf.entry());
+					b.invokestatic(longValueOf);
 				});
 				emitConsHead(b, object, () -> {
 					emitConsHead(b, object, () -> {
 						b.iload(1);
 						b.i2l();
-						b.invokestatic(longValueOf.entry());
+						b.invokestatic(longValueOf);
 					});
 					b.aconst_null();
 					emitConsTail(b);
@@ -391,20 +379,19 @@ final class JvmOperandTypeRuntime {
 			b.aload(2);
 		}
 		b.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OOB), cp.addUtf8(OOB_DESC), b));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(OOB), cp.utf8Entry(OOB_DESC), b));
 
 		// _ckBound(Object i, int dim): (int) i for a Long in [0, dim), else
 		// throw _oob(i, dim) -- a BigInteger, which no bound reaches, included.
-		MethodrefConstant longLongValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		MethodRefEntry longLongValue = cp.methodRef(longClass, "longValue", "()J");
 		MethodCode k = new MethodCode();
 		k.aload(0);
-		k.instanceOf(longClass.entry());
+		k.instanceOf(longClass);
 		MethodCode.Label ifNotLong = k.newLabel();
 		k.ifeq(ifNotLong);
 		k.aload(0);
-		k.checkcast(longClass.entry());
-		k.invokevirtual(longLongValue.methodRefEntry());
+		k.checkcast(longClass);
+		k.invokevirtual(longLongValue);
 		k.lstore(2);
 		k.lload(2);
 		k.lconst_0();
@@ -425,9 +412,9 @@ final class JvmOperandTypeRuntime {
 		k.labelBinding(ifPast);
 		k.aload(0);
 		k.iload(1);
-		k.invokestatic(self(cp, thisClass, OOB, OOB_DESC).entry());
+		k.invokestatic(self(cp, thisClass, OOB, OOB_DESC));
 		k.athrow();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND), cp.addUtf8(CK_BOUND_DESC), k));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(CK_BOUND), cp.utf8Entry(CK_BOUND_DESC), k));
 
 		// _ckBoundJ(long i, int dim): (int) i in [0, dim), else
 		// throw _oob(Long.valueOf(i), dim). The check is Objects.checkIndex, the JIT's
@@ -435,62 +422,57 @@ final class JvmOperandTypeRuntime {
 		// access's is (a hand-written compare cost a typed double loop 27%); its host
 		// exception becomes the access's report. The boxed _ckBound keeps the compare:
 		// the intrinsic's extra inline depth made a general-vector store 4x slower.
-		MethodrefConstant checkIndex = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Objects")),
-				cp.addNameAndType(cp.addUtf8("checkIndex"), cp.addUtf8("(JJ)J")));
-		ClassConstant ioobe = cp.addClass(cp.addUtf8("java/lang/IndexOutOfBoundsException"));
+		MethodRefEntry checkIndex = cp.methodRef(cp.classEntry("java/util/Objects"), "checkIndex", "(JJ)J");
+		ClassEntry ioobe = cp.classEntry("java/lang/IndexOutOfBoundsException");
 		MethodCode j = new MethodCode();
 		MethodCode.Label tryStart = j.newBoundLabel();
 		j.lload(0);
 		j.iload(2);
 		j.i2l();
-		j.invokestatic(checkIndex.entry());
+		j.invokestatic(checkIndex);
 		j.l2i();
 		MethodCode.Label tryEnd = j.newBoundLabel();
 		j.ireturn();
 		MethodCode.Label handler = j.newBoundLabel();
 		j.pop();
 		j.lload(0);
-		j.invokestatic(longValueOf.entry());
+		j.invokestatic(longValueOf);
 		j.iload(2);
-		j.invokestatic(self(cp, thisClass, OOB, OOB_DESC).entry());
+		j.invokestatic(self(cp, thisClass, OOB, OOB_DESC));
 		j.athrow();
-		j.exceptionCatch(tryStart, tryEnd, handler, ioobe.entry());
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND_J), cp.addUtf8(CK_BOUND_J_DESC), j));
+		j.exceptionCatch(tryStart, tryEnd, handler, ioobe);
+		methods.add(
+				new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(CK_BOUND_J), cp.utf8Entry(CK_BOUND_J_DESC), j));
 
 		// _opTypeErr(Throwable e, String op, String opType): an unnamed report renamed
 		// "OP: The value X is not of type T" (T = opType, narrowed NUMBER -> REAL when
 		// the funnel wanted a real); anything else is answered unchanged. A COMPOUND
 		// type -- an out-of-range subscript's (INTEGER 0 (d)) -- is the report's own,
 		// kept verbatim under any operator, and so is the record's type object.
-		MethodrefConstant getMessage = cp.addMethodref(throwable,
-				cp.addNameAndType(cp.addUtf8("getMessage"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant startsWith = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		MethodrefConstant endsWith = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("endsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
-		MethodrefConstant lastIndexOf = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(Ljava/lang/String;)I")));
-		MethodrefConstant substring = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
-		MethodrefConstant charAt = cp.addMethodref(string, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		MethodRefEntry getMessage = cp.methodRef(throwable, "getMessage", "()Ljava/lang/String;");
+		MethodRefEntry startsWith = cp.methodRef(string, "startsWith", "(Ljava/lang/String;)Z");
+		MethodRefEntry endsWith = cp.methodRef(string, "endsWith", "(Ljava/lang/String;)Z");
+		MethodRefEntry lastIndexOf = cp.methodRef(string, "lastIndexOf", "(Ljava/lang/String;)I");
+		MethodRefEntry substring = cp.methodRef(string, "substring", "(II)Ljava/lang/String;");
+		MethodRefEntry charAt = cp.methodRef(string, "charAt", "(I)C");
 		// Locals: 0=e, 1=op, 2=opType, 3=msg, 4=the type's start, 5=type, 6=the renamed
 		// exception, 7=e's record, 8=1 when the type is the report's own compound one,
 		// 9=the thread's record map.
 		MethodCode o = new MethodCode();
 		o.aload(0);
-		o.invokevirtual(getMessage.methodRefEntry());
+		o.invokevirtual(getMessage);
 		o.astore(3);
 		o.aload(3);
 		MethodCode.Label ifNull = o.newLabel();
 		o.ifnull(ifNull);
 		o.aload(3);
-		o.ldc(valuePrefix.entry());
-		o.invokevirtual(startsWith.methodRefEntry());
+		o.ldc(valuePrefix);
+		o.invokevirtual(startsWith);
 		MethodCode.Label ifNotRaw = o.newLabel();
 		o.ifeq(ifNotRaw);
 		o.aload(3);
-		o.ldc(typeInfix.entry());
-		o.invokevirtual(lastIndexOf.methodRefEntry());
+		o.ldc(typeInfix);
+		o.invokevirtual(lastIndexOf);
 		o.dup();
 		o.istore(4);
 		// A text that only opens like a report is some other error's.
@@ -502,7 +484,7 @@ final class JvmOperandTypeRuntime {
 		// compound = msg.charAt(start) == '('
 		o.aload(3);
 		o.iload(4);
-		o.invokevirtual(charAt.methodRefEntry());
+		o.invokevirtual(charAt);
 		o.loadConstant('(');
 		MethodCode.Label ifNotCompound = o.newLabel();
 		o.if_icmpne(ifNotCompound);
@@ -518,54 +500,52 @@ final class JvmOperandTypeRuntime {
 		// the funnel's own kind, the report's last word, a to-double funnel's NUMBER
 		// read as REAL.
 		o.aload(2);
-		o.ldc(cp.addString(OperandTypes.FUNNEL_TYPE).entry());
+		o.ldc(cp.stringEntry(OperandTypes.FUNNEL_TYPE));
 		MethodCode.Label ifNotFunnelTyped = o.newLabel();
 		o.if_acmpne(ifNotFunnelTyped);
 		o.labelBinding(toReportsOwn);
 		o.aload(3);
 		o.iload(4);
-		o.invokevirtual(
-				cp.addMethodref(string, cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")))
-					.methodRefEntry());
+		o.invokevirtual(cp.methodRef(string, "substring", "(I)Ljava/lang/String;"));
 		o.astore(5);
 		o.aload(3);
-		o.ldc(cp.addString(" " + OperandTypes.Kind.NUMBER.name()).entry());
-		o.invokevirtual(endsWith.methodRefEntry());
+		o.ldc(cp.stringEntry(" " + OperandTypes.Kind.NUMBER.name()));
+		o.invokevirtual(endsWith);
 		MethodCode.Label ifKindNotNumber = o.newLabel();
 		o.ifeq(ifKindNotNumber);
-		o.ldc(cp.addString(OperandTypes.Kind.REAL.name()).entry());
+		o.ldc(cp.stringEntry(OperandTypes.Kind.REAL.name()));
 		o.astore(5);
 		MethodCode.Label toBuild = o.newLabel();
 		o.goto_(toBuild);
 		o.labelBinding(ifNotFunnelTyped);
 		o.aload(2);
-		o.ldc(cp.addString(OperandTypes.Kind.NUMBER.name()).entry());
+		o.ldc(cp.stringEntry(OperandTypes.Kind.NUMBER.name()));
 		MethodCode.Label ifNotNumber = o.newLabel();
 		o.if_acmpne(ifNotNumber);
 		o.aload(3);
-		o.ldc(cp.addString(" " + OperandTypes.Kind.REAL.name()).entry());
-		o.invokevirtual(endsWith.methodRefEntry());
+		o.ldc(cp.stringEntry(" " + OperandTypes.Kind.REAL.name()));
+		o.invokevirtual(endsWith);
 		MethodCode.Label ifNotReal = o.newLabel();
 		o.ifeq(ifNotReal);
-		o.ldc(cp.addString(OperandTypes.Kind.REAL.name()).entry());
+		o.ldc(cp.stringEntry(OperandTypes.Kind.REAL.name()));
 		o.astore(5);
 		o.labelBinding(ifNotNumber);
 		o.labelBinding(ifNotReal);
 		o.labelBinding(ifKindNotNumber);
 		o.labelBinding(toBuild);
-		o.new_(rte.entry());
+		o.new_(rte);
 		o.dup();
 		o.aload(1);
-		o.ldc(cp.addString(OperandTypes.OPERATOR_SEPARATOR).entry());
-		o.invokevirtual(concat.methodRefEntry());
+		o.ldc(cp.stringEntry(OperandTypes.OPERATOR_SEPARATOR));
+		o.invokevirtual(concat);
 		o.aload(3);
 		o.iconst_0();
 		o.iload(4);
-		o.invokevirtual(substring.methodRefEntry());
-		o.invokevirtual(concat.methodRefEntry());
+		o.invokevirtual(substring);
+		o.invokevirtual(concat);
 		o.aload(5);
-		o.invokevirtual(concat.methodRefEntry());
-		o.invokespecial(rteInit.entry());
+		o.invokevirtual(concat);
+		o.invokespecial(rteInit);
 		o.astore(6);
 		if (records != null) {
 			// The datum travels from the funnel's record of e, and so does a compound
@@ -598,8 +578,8 @@ final class JvmOperandTypeRuntime {
 		o.labelBinding(ifNoType);
 		o.aload(0);
 		o.areturn();
-		methods
-			.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OP_TYPE_ERR), cp.addUtf8(OP_TYPE_ERR_DESC), o));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(OP_TYPE_ERR),
+				cp.utf8Entry(OP_TYPE_ERR_DESC), o));
 
 		if (records != null) {
 			// _teSlot(Throwable e, int i): e's record for 0 (null when it has none), its
@@ -624,7 +604,8 @@ final class JvmOperandTypeRuntime {
 			s.labelBinding(ifNoRecord);
 			s.aconst_null();
 			s.areturn();
-			methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_SLOT), cp.addUtf8(TE_SLOT_DESC), s));
+			methods
+				.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(TE_SLOT), cp.utf8Entry(TE_SLOT_DESC), s));
 		}
 		return methods;
 	}
@@ -646,8 +627,8 @@ final class JvmOperandTypeRuntime {
 	 * @param asyncMarkers the async values' marker strings, empty when the program builds
 	 * none
 	 */
-	record ConsShape(ClassConstant objArr, ClassConstant ratio, ClassConstant funcRefHead,
-			@Nullable ClassConstant instanceLayout, List<StringConstant> asyncMarkers) {
+	record ConsShape(ClassEntry objArr, ClassEntry ratio, ClassEntry funcRefHead, @Nullable ClassEntry instanceLayout,
+			List<StringEntry> asyncMarkers) {
 
 		/**
 		 * The shape of one program's conses.
@@ -657,11 +638,11 @@ final class JvmOperandTypeRuntime {
 		 * @param asyncValues whether the program carries the async runtime
 		 * @return the shape
 		 */
-		static ConsShape of(ConstantPool cp, @Nullable ClassConstant instanceLayout, boolean asyncValues) {
-			return new ConsShape(cp.addClass(cp.addUtf8("[Ljava/lang/Object;")),
-					cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;")), cp.addClass(cp.addUtf8("java/lang/Integer")),
-					instanceLayout, asyncValues ? List.of(cp.addString(JvmAsyncRuntimeBuilder.SMARKER),
-							cp.addString(JvmAsyncRuntimeBuilder.RMARKER)) : List.of());
+		static ConsShape of(ConstantPool cp, @Nullable ClassEntry instanceLayout, boolean asyncValues) {
+			return new ConsShape(cp.classEntry("[Ljava/lang/Object;"), cp.classEntry("[Ljava/math/BigInteger;"),
+					cp.classEntry("java/lang/Integer"), instanceLayout,
+					asyncValues ? List.of(cp.stringEntry(JvmAsyncRuntimeBuilder.SMARKER),
+							cp.stringEntry(JvmAsyncRuntimeBuilder.RMARKER)) : List.of());
 		}
 
 		/**
@@ -677,24 +658,24 @@ final class JvmOperandTypeRuntime {
 		 */
 		void emitTest(MethodCode a, int value, int arr, int head, MethodCode.Label miss) {
 			a.aload(value);
-			a.instanceOf(this.objArr.entry());
+			a.instanceOf(this.objArr);
 			a.ifeq(miss);
 			a.aload(value);
-			a.instanceOf(this.ratio.entry());
+			a.instanceOf(this.ratio);
 			a.ifne(miss);
 			a.aload(value);
-			a.checkcast(this.objArr.entry());
+			a.checkcast(this.objArr);
 			a.astore(arr);
 			a.aload(arr);
 			a.loadConstant(0);
 			a.aaload();
 			a.astore(head);
 			a.aload(head);
-			a.instanceOf(this.funcRefHead.entry());
+			a.instanceOf(this.funcRefHead);
 			a.ifne(miss);
 			if (this.instanceLayout != null) {
 				a.aload(head);
-				a.instanceOf(this.instanceLayout.entry());
+				a.instanceOf(this.instanceLayout);
 				a.ifne(miss);
 			}
 			if (!this.asyncMarkers.isEmpty()) {
@@ -705,9 +686,9 @@ final class JvmOperandTypeRuntime {
 				a.arraylength();
 				a.loadConstant(3);
 				a.if_icmpne(notTriple);
-				for (StringConstant marker : this.asyncMarkers) {
+				for (StringEntry marker : this.asyncMarkers) {
 					a.aload(head);
-					a.ldc(marker.entry());
+					a.ldc(marker);
 					a.if_acmpeq(miss);
 				}
 				a.labelBinding(notTriple);
@@ -721,8 +702,8 @@ final class JvmOperandTypeRuntime {
 	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)}.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod field(ConstantPool cp, String name, int index,
-			ConsShape shape, MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind,
-			StringConstant funnelType) {
+			ConsShape shape, MethodRefEntry teRaw, MethodRefEntry opTypeErr, StringEntry listKind,
+			StringEntry funnelType) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label notNull = a.newLabel();
 		MethodCode.Label miss = a.newLabel();
@@ -744,7 +725,7 @@ final class JvmOperandTypeRuntime {
 		a.labelBinding(miss);
 		emitNamedListThrow(a, cp, teRaw, opTypeErr, listKind, funnelType,
 				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(name), cp.utf8Entry(FIELD_DESC), a);
 	}
 
 	/**
@@ -752,7 +733,7 @@ final class JvmOperandTypeRuntime {
 	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "ENDP", FUNNEL_TYPE)}.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod listCheck(ConstantPool cp, ConsShape shape,
-			MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType) {
+			MethodRefEntry teRaw, MethodRefEntry opTypeErr, StringEntry listKind, StringEntry funnelType) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label answer = a.newLabel();
 		MethodCode.Label miss = a.newLabel();
@@ -764,7 +745,7 @@ final class JvmOperandTypeRuntime {
 		a.areturn();
 		a.labelBinding(miss);
 		emitNamedListThrow(a, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(ENDP), cp.utf8Entry(FIELD_DESC), a);
 	}
 
 	/**
@@ -781,7 +762,7 @@ final class JvmOperandTypeRuntime {
 		a.labelBinding(miss);
 		a.loadConstant(0);
 		a.ireturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(IS_CONS), cp.utf8Entry(IS_CONS_DESC), a);
 	}
 
 	/**
@@ -790,7 +771,7 @@ final class JvmOperandTypeRuntime {
 	 * {@code throw _teRaw(x, kind)}, for a wrapper to name.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod consCheck(ConstantPool cp, String name, String desc,
-			boolean nilOk, ConsShape shape, MethodrefConstant teRaw, StringConstant kind) {
+			boolean nilOk, ConsShape shape, MethodRefEntry teRaw, StringEntry kind) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label ifNull = a.newLabel();
 		MethodCode.Label miss = a.newLabel();
@@ -807,10 +788,10 @@ final class JvmOperandTypeRuntime {
 		a.areturn();
 		a.labelBinding(miss);
 		a.aload(0);
-		a.ldc(kind.entry());
-		a.invokestatic(teRaw.entry());
+		a.ldc(kind);
+		a.invokestatic(teRaw);
 		a.athrow();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(name), cp.utf8Entry(desc), a);
 	}
 
 	/**
@@ -824,14 +805,14 @@ final class JvmOperandTypeRuntime {
 	 * @param funnelType the {@link OperandTypes#FUNNEL_TYPE} constant
 	 * @param operator the operator the report names
 	 */
-	static void emitNamedListThrow(MethodCode c, ConstantPool cp, MethodrefConstant teRaw, MethodrefConstant opTypeErr,
-			StringConstant listKind, StringConstant funnelType, String operator) {
+	static void emitNamedListThrow(MethodCode c, ConstantPool cp, MethodRefEntry teRaw, MethodRefEntry opTypeErr,
+			StringEntry listKind, StringEntry funnelType, String operator) {
 		c.aload(0);
-		c.ldc(listKind.entry());
-		c.invokestatic(teRaw.entry());
-		c.ldc(cp.addString(operator).entry());
-		c.ldc(funnelType.entry());
-		c.invokestatic(opTypeErr.entry());
+		c.ldc(listKind);
+		c.invokestatic(teRaw);
+		c.ldc(cp.stringEntry(operator));
+		c.ldc(funnelType);
+		c.invokestatic(opTypeErr);
 		c.athrow();
 	}
 
@@ -840,22 +821,22 @@ final class JvmOperandTypeRuntime {
 	 * {@code accepted}, else {@code throw _teRaw(x, kind)}.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
-			List<ClassConstant> accepted, MethodrefConstant teRaw, StringConstant kind) {
+			List<ClassEntry> accepted, MethodRefEntry teRaw, StringEntry kind) {
 		MethodCode c = new MethodCode();
 		MethodCode.Label ok = c.newLabel();
-		for (ClassConstant type : accepted) {
+		for (ClassEntry type : accepted) {
 			c.aload(0);
-			c.instanceOf(type.entry());
+			c.instanceOf(type);
 			c.ifne(ok);
 		}
 		c.aload(0);
-		c.ldc(kind.entry());
-		c.invokestatic(teRaw.entry());
+		c.ldc(kind);
+		c.invokestatic(teRaw);
 		c.athrow();
 		c.labelBinding(ok);
 		c.aload(0);
 		c.areturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(name), cp.utf8Entry(desc), c);
 	}
 
 	/**
@@ -863,9 +844,9 @@ final class JvmOperandTypeRuntime {
 	 * the stack for {@link #emitConsTail} to store the cdr pushed after it. Peak operand
 	 * stack: 3 plus the car's.
 	 */
-	private static void emitConsHead(MethodCode c, ClassConstant object, Runnable car) {
+	private static void emitConsHead(MethodCode c, ClassEntry object, Runnable car) {
 		c.iconst_2();
-		c.anewarray(object.entry());
+		c.anewarray(object);
 		c.dup();
 		c.iconst_0();
 		car.run();
@@ -895,13 +876,13 @@ final class JvmOperandTypeRuntime {
 	 * @param object the {@code java/lang/Object} class
 	 * @param objArr the {@code Object[]} class
 	 */
-	private record Records(FieldrefConstant teTl, MethodrefConstant tlGet, MethodRefEntry tlMap, ClassConstant weakMap,
-			MethodRefEntry mapPut, MethodRefEntry mapGet, ClassConstant object, ClassConstant objArr) {
+	private record Records(FieldRefEntry teTl, MethodRefEntry tlGet, MethodRefEntry tlMap, ClassEntry weakMap,
+			MethodRefEntry mapPut, MethodRefEntry mapGet, ClassEntry object, ClassEntry objArr) {
 
-		static Records of(ConstantPool cp, ClassConstant thisClass, FieldrefConstant teTl, MethodrefConstant tlGet,
-				ClassConstant object, ClassConstant objArr) {
-			return new Records(teTl, tlGet, JvmThrowableRecords.tlMap(cp, thisClass.entry()),
-					cp.addClass(cp.addUtf8(JvmThrowableRecords.WEAK_MAP)), JvmThrowableRecords.mapPut(cp),
+		static Records of(ConstantPool cp, ClassEntry thisClass, FieldRefEntry teTl, MethodRefEntry tlGet,
+				ClassEntry object, ClassEntry objArr) {
+			return new Records(teTl, tlGet, JvmThrowableRecords.tlMap(cp, thisClass),
+					cp.classEntry(JvmThrowableRecords.WEAK_MAP), JvmThrowableRecords.mapPut(cp),
 					JvmThrowableRecords.mapGet(cp), object, objArr);
 		}
 
@@ -912,11 +893,11 @@ final class JvmOperandTypeRuntime {
 		 * {@code type} push.
 		 */
 		void emit(MethodCode c, int excSlot, Runnable datum, Runnable type) {
-			c.getstatic(this.teTl.entry());
+			c.getstatic(this.teTl);
 			c.invokestatic(this.tlMap);
 			c.aload(excSlot);
 			c.iconst_2();
-			c.anewarray(this.object.entry());
+			c.anewarray(this.object);
 			c.dup();
 			c.iconst_0();
 			datum.run();
@@ -935,9 +916,9 @@ final class JvmOperandTypeRuntime {
 		 * for it), the map passing through local {@code mapSlot}. Peak operand stack: 2.
 		 */
 		void emitRead(MethodCode c, int excSlot, int mapSlot, int recordSlot) {
-			c.getstatic(this.teTl.entry());
-			c.invokevirtual(this.tlGet.methodRefEntry());
-			c.checkcast(this.weakMap.entry());
+			c.getstatic(this.teTl);
+			c.invokevirtual(this.tlGet);
+			c.checkcast(this.weakMap);
 			c.dup();
 			c.astore(mapSlot);
 			MethodCode.Label ifNoMap = c.newLabel();
@@ -950,7 +931,7 @@ final class JvmOperandTypeRuntime {
 			c.labelBinding(ifNoMap);
 			c.aconst_null();
 			c.labelBinding(toCast);
-			c.checkcast(this.objArr.entry());
+			c.checkcast(this.objArr);
 			c.astore(recordSlot);
 		}
 
@@ -965,13 +946,13 @@ final class JvmOperandTypeRuntime {
 
 		private final ConstantPool cp;
 
-		private final ClassConstant thisClass;
+		private final ClassEntry thisClass;
 
 		private final List<JvmNumericRuntimeBuilder.NumericMethod> sink;
 
-		private final Map<String, MethodrefConstant> made = new HashMap<>();
+		private final Map<String, MethodRefEntry> made = new HashMap<>();
 
-		Wrappers(ConstantPool cp, ClassConstant thisClass, List<JvmNumericRuntimeBuilder.NumericMethod> sink) {
+		Wrappers(ConstantPool cp, ClassEntry thisClass, List<JvmNumericRuntimeBuilder.NumericMethod> sink) {
 			this.cp = cp;
 			this.thisClass = thisClass;
 			this.sink = sink;
@@ -986,13 +967,13 @@ final class JvmOperandTypeRuntime {
 		 * @param target the helper's reference
 		 * @return the reference to invoke
 		 */
-		MethodrefConstant wrap(@Nullable String operator, String helper, String desc, MethodrefConstant target) {
+		MethodRefEntry wrap(@Nullable String operator, String helper, String desc, MethodRefEntry target) {
 			String op = OperandTypes.reportedOperator(operator);
 			if (op == null) {
 				return target;
 			}
 			String name = helper + "$op" + OperandTypes.operators().indexOf(op);
-			MethodrefConstant ref = this.made.get(name);
+			MethodRefEntry ref = this.made.get(name);
 			if (ref != null) {
 				return ref;
 			}
@@ -1007,16 +988,17 @@ final class JvmOperandTypeRuntime {
 				c.loadLocal(kind, slot);
 				slot += kind.slotSize();
 			}
-			c.invokestatic(target.entry());
+			c.invokestatic(target);
 			MethodCode.Label end = c.newBoundLabel();
 			c.return_(TypeKind.from(type.returnType()));
 			MethodCode.Label handler = c.newBoundLabel();
-			c.ldc(this.cp.addString(op).entry());
-			c.ldc(this.cp.addString(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))).entry());
-			c.invokestatic(self(this.cp, this.thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC).entry());
+			c.ldc(this.cp.stringEntry(op));
+			c.ldc(this.cp.stringEntry(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))));
+			c.invokestatic(self(this.cp, this.thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC));
 			c.athrow();
 			c.exceptionCatch(start, end, handler, null);
-			this.sink.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.addUtf8(name), this.cp.addUtf8(desc), c));
+			this.sink
+				.add(new JvmNumericRuntimeBuilder.NumericMethod(this.cp.utf8Entry(name), this.cp.utf8Entry(desc), c));
 			return ref;
 		}
 

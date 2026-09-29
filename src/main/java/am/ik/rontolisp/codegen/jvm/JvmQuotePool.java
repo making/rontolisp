@@ -3,12 +3,12 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.IdentityHashMap;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispVal;
 
@@ -150,11 +150,11 @@ final class JvmQuotePool {
 	Members members() {
 		ConstantPool pool = java.util.Objects.requireNonNull(this.cp);
 		ClassEntry thisClass = java.util.Objects.requireNonNull(this.owner);
-		Utf8Constant fieldName = pool.addUtf8(FIELD_NAME);
+		Utf8Entry fieldName = pool.utf8Entry(FIELD_NAME);
 		ClassEntry tableClass = pool.classEntry(TABLE_DESC);
 		// The table's class name IS its descriptor: an array type costs no second Utf8.
-		Utf8Constant fieldDesc = pool.addUtf8(TABLE_DESC);
-		FieldRefEntry field = pool.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
+		Utf8Entry fieldDesc = pool.utf8Entry(TABLE_DESC);
+		FieldRefEntry field = pool.fieldRef(thisClass, fieldName, fieldDesc);
 		ClassEntry objectClass = pool.classEntry("java/lang/Object");
 		ClassEntry boxClass = pool.classEntry(BOX_CLASS);
 		MethodRefEntry boxGet = pool.methodRef(boxClass, "get", "()Ljava/lang/Object;");
@@ -217,8 +217,8 @@ final class JvmQuotePool {
 		setCode.aload(0);
 		setCode.areturn();
 
-		return new Members(fieldName, fieldDesc, pool.addUtf8(GET_NAME), pool.addUtf8(GET_DESC), getCode,
-				pool.addUtf8(SET_NAME), pool.addUtf8(SET_DESC), setCode);
+		return new Members(fieldName, fieldDesc, pool.utf8Entry(GET_NAME), pool.utf8Entry(GET_DESC), getCode,
+				pool.utf8Entry(SET_NAME), pool.utf8Entry(SET_DESC), setCode);
 	}
 
 	/**
@@ -243,8 +243,8 @@ final class JvmQuotePool {
 	 * @param setDesc its descriptor
 	 * @param setCode its body ({@code synchronized})
 	 */
-	record Members(Utf8Constant fieldName, Utf8Constant fieldDesc, Utf8Constant getName, Utf8Constant getDesc,
-			MethodCode getCode, Utf8Constant setName, Utf8Constant setDesc, MethodCode setCode) {
+	record Members(Utf8Entry fieldName, Utf8Entry fieldDesc, Utf8Entry getName, Utf8Entry getDesc, MethodCode getCode,
+			Utf8Entry setName, Utf8Entry setDesc, MethodCode setCode) {
 	}
 
 }

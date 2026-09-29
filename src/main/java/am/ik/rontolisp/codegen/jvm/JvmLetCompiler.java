@@ -150,7 +150,7 @@ final class JvmLetCompiler {
 					dynamicRestores.add(new int[] { tlField.index(), saveSlot });
 					if (capturedInLet.contains(name)) {
 						int tmpSlot = ctx.allocTemp();
-						ctx.body.astore(tmpSlot).iconst_1().anewarray(ctx.objectClass.entry());
+						ctx.body.astore(tmpSlot).iconst_1().anewarray(ctx.objectClass);
 						ctx.body.dup().iconst_0().aload(tmpSlot).aastore();
 					}
 					int lexSlot = ctx.allocLocal(name);
@@ -218,7 +218,7 @@ final class JvmLetCompiler {
 				}
 				boundInThisLet.add(name);
 				if (capturedInLet.contains(name)) {
-					ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+					ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 					JvmExprCompiler.compileExpr(pairList.get(1), ctx, className);
 					ctx.body.aastore();
 				}

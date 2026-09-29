@@ -1,12 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 
 /**
  * Compiles the {@code load} built-in. The path argument is compiled to a runtime string
@@ -35,11 +35,10 @@ final class JvmLoadCompiler {
 		// character vector: render it before _load's (String) cast (a no-op without
 		// the array runtime).
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8("_load");
-		Utf8Constant descUtf8 = ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;");
-		MethodrefConstant loadRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(loadRef.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_load");
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry loadRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(loadRef);
 	}
 
 }

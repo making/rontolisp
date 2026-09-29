@@ -6,6 +6,9 @@ import java.lang.classfile.FieldModel;
 import java.lang.classfile.Instruction;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -41,7 +44,7 @@ class JvmClassSplitterTest {
 	@Test
 	void aChainTooLargeForOneClassRunsAcrossParts() throws Exception {
 		ClassDefinition definition = chain(new ConstantPool());
-		JvmClassSplitter.Split split = split(definition, null, named(definition, "result"), TINY_BUDGET);
+		JvmClassSplitter.Split split = split(definition, null, named("result"), TINY_BUDGET);
 		assertThat(split.parts()).as("the chain needs several classes").hasSizeGreaterThan(2);
 		assertThat(split.parts().keySet()).allSatisfy(name -> assertThat(name).startsWith("SplitMe$Part"));
 
@@ -71,12 +74,17 @@ class JvmClassSplitterTest {
 		assertThat(steps).hasSize(CHAIN).doesNotHaveDuplicates();
 	}
 
-	// Started past 65535, every index is one a class file cannot carry: the writer
-	// re-mints each entry in its class's own pool.
+	// A master pool past 65535 -- a program too large for one class -- names entries no
+	// class file can carry at their master index: the writer re-mints each in its class's
+	// own pool.
 	@Test
-	void indexesPastTheFormatLimitAreRepointedIntoEachClassesPool() throws Exception {
-		ClassDefinition definition = chain(ConstantPool.startingAt(70_000));
-		JvmClassSplitter.Split split = split(definition, null, named(definition, "result"), TINY_BUDGET);
+	void entriesPastTheFormatLimitAreRemintedInEachClassesPool() throws Exception {
+		ConstantPool cp = new ConstantPool();
+		while (cp.size() < 70_000) {
+			cp.entries().intEntry(cp.size());
+		}
+		ClassDefinition definition = chain(cp);
+		JvmClassSplitter.Split split = split(definition, null, named("result"), TINY_BUDGET);
 		Class<?> main = new Loader(classes(split)).loadClass("SplitMe");
 		main.getMethod("main", String[].class).invoke(null, (Object) new String[0]);
 		assertThat(main.getMethod("result").invoke(null)).isEqualTo(CHAIN);
@@ -89,15 +97,14 @@ class JvmClassSplitterTest {
 	void whatCannotMoveStaysInTheMainClass() throws Exception {
 		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
-		ConstantPool.MethodrefConstant lookup = cp.addMethodref(
-				cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles")),
-				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
+		MethodRefEntry lookup = cp.methodRef(cp.classEntry("java/lang/invoke/MethodHandles"), "lookup",
+				"()Ljava/lang/invoke/MethodHandles$Lookup;");
 		b.method(AccessFlag.ACC_STATIC, "<clinit>", "()V", new MethodCode().return_());
 		b.method(AccessFlag.ACC_PUBLIC, "instance", "()V", new MethodCode().return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED, "locked", "()V",
 				new MethodCode().return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "looksUp", "()V",
-				new MethodCode().invokestatic(lookup.entry()).pop().return_());
+				new MethodCode().invokestatic(lookup).pop().return_());
 		for (int i = 0; i < 20; i++) {
 			b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "free" + i, "()V",
 					new MethodCode().ldc(cp.stringEntry("filler-" + i)).pop().return_());
@@ -117,9 +124,9 @@ class JvmClassSplitterTest {
 	void aShakenDefinitionWritesOnlyWhatItsRootsReach() {
 		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
-		ConstantPool.MethodrefConstant used = b.ref("used", "()V");
+		MethodRefEntry used = b.ref("used", "()V");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new MethodCode().invokestatic(used.entry()).return_());
+				new MethodCode().invokestatic(used).return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "used", "()V",
 				new MethodCode().ldc(cp.stringEntry("kept")).pop().return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "unused", "()V",
@@ -139,9 +146,9 @@ class JvmClassSplitterTest {
 	void unresolvedOwnCallsAreReportedWithTheirCallers() {
 		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
-		ConstantPool.MethodrefConstant missing = b.ref("missing", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry missing = b.ref("missing", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new MethodCode().aconst_null().invokestatic(missing.entry()).pop().return_());
+				new MethodCode().aconst_null().invokestatic(missing).pop().return_());
 		assertThat(JvmClassSplitter.unresolvedSelfMethods(b.build())).singleElement().satisfies(unresolved -> {
 			assertThat(unresolved.name()).isEqualTo("missing");
 			assertThat(unresolved.descriptor()).isEqualTo("(Ljava/lang/Object;)Ljava/lang/Object;");
@@ -154,31 +161,31 @@ class JvmClassSplitterTest {
 	// every field access from a part resolves.
 	private static ClassDefinition chain(ConstantPool cp) {
 		Builder b = new Builder(cp);
-		ConstantPool.Utf8Constant counterName = cp.addUtf8("counter");
-		ConstantPool.Utf8Constant intDesc = cp.addUtf8("I");
+		Utf8Entry counterName = cp.utf8Entry("counter");
+		Utf8Entry intDesc = cp.utf8Entry("I");
 		b.definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, counterName, intDesc);
-		ConstantPool.FieldrefConstant counter = cp.addFieldref(b.thisClass, cp.addNameAndType(counterName, intDesc));
+		FieldRefEntry counter = cp.fieldRef(b.thisClass, counterName, intDesc);
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new MethodCode().invokestatic(b.ref("step0", "()V").entry()).return_());
+				new MethodCode().invokestatic(b.ref("step0", "()V")).return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "result", "()I",
-				new MethodCode().getstatic(counter.entry()).ireturn());
+				new MethodCode().getstatic(counter).ireturn());
 		for (int k = 0; k < CHAIN; k++) {
 			MethodCode code = new MethodCode().ldc(cp.stringEntry("text-" + k))
 				.pop()
-				.getstatic(counter.entry())
+				.getstatic(counter)
 				.iconst_1()
 				.iadd()
-				.putstatic(counter.entry());
+				.putstatic(counter);
 			if (k + 1 < CHAIN) {
-				code.invokestatic(b.ref("step" + (k + 1), "()V").entry());
+				code.invokestatic(b.ref("step" + (k + 1), "()V"));
 			}
 			b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "step" + k, "()V", code.return_());
 		}
 		return b.build();
 	}
 
-	private static Predicate<ClassDefinition.Method> named(ClassDefinition definition, String name) {
-		return method -> definition.cp().utf8At(method.name().index()).equals(name);
+	private static Predicate<ClassDefinition.Method> named(String name) {
+		return method -> method.name().equalsString(name);
 	}
 
 	private static JvmClassSplitter.Split split(ClassDefinition definition, @Nullable Set<String> roots,
@@ -231,21 +238,21 @@ class JvmClassSplitterTest {
 
 		final ConstantPool cp;
 
-		final ConstantPool.ClassConstant thisClass;
+		final ClassEntry thisClass;
 
 		final ClassDefinition.Builder definition;
 
-		private final Map<String, ConstantPool.Utf8Constant> utf8 = new HashMap<>();
+		private final Map<String, Utf8Entry> utf8 = new HashMap<>();
 
 		Builder(ConstantPool cp) {
 			this.cp = cp;
-			this.thisClass = cp.addClass(cp.addUtf8("SplitMe"));
+			this.thisClass = cp.classEntry("SplitMe");
 			this.definition = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, this.thisClass,
-					cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
+					cp.classEntry("java/lang/Object"), cp.utf8Entry("Code"));
 		}
 
-		ConstantPool.MethodrefConstant ref(String name, String desc) {
-			return this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(this.utf8(name), this.utf8(desc)));
+		MethodRefEntry ref(String name, String desc) {
+			return this.cp.methodRef(this.thisClass, this.utf8(name), this.utf8(desc));
 		}
 
 		void method(int access, String name, String desc, MethodCode code) {
@@ -256,8 +263,8 @@ class JvmClassSplitterTest {
 			return this.definition.build();
 		}
 
-		private ConstantPool.Utf8Constant utf8(String s) {
-			return this.utf8.computeIfAbsent(s, this.cp::addUtf8);
+		private Utf8Entry utf8(String s) {
+			return this.utf8.computeIfAbsent(s, this.cp::utf8Entry);
 		}
 
 	}

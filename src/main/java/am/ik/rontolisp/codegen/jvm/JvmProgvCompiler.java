@@ -71,19 +71,18 @@ final class JvmProgvCompiler {
 
 	/** {@code (%progv-genv)}: the eval runtime's global env mirror, as a Lisp alist. */
 	static void compileGenvRead(JvmLispCompiler.Ctx ctx, String className) {
-		ctx.body.getstatic(genvField(ctx, className).entry());
+		ctx.body.getstatic(genvField(ctx, className));
 	}
 
 	/** {@code (%progv-genv-set x)}: replace the mirror alist; answers nil. */
 	static void compileGenvWrite(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		ctx.body.putstatic(genvField(ctx, className).entry()).aconst_null();
+		ctx.body.putstatic(genvField(ctx, className)).aconst_null();
 	}
 
-	private static ConstantPool.FieldrefConstant genvField(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_genv"), ctx.cp.addUtf8("Ljava/lang/Object;")));
+	private static FieldRefEntry genvField(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.fieldRef(ctx.cp.classEntry(className), "_genv", "Ljava/lang/Object;");
 	}
 
 }

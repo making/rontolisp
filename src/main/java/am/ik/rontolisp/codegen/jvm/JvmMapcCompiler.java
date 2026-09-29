@@ -61,7 +61,7 @@ final class JvmMapcCompiler {
 		MethodCode.Label exit = ctx.body.newLabel();
 		for (int cursorSlot : cursorSlots) {
 			ctx.body.aload(cursorSlot);
-			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS));
 			ctx.body.ifeq(exit);
 		}
 
@@ -76,7 +76,7 @@ final class JvmMapcCompiler {
 
 		// advance each cursor: cursor = cdr(cursor) = ((Object[]) cursor)[1]
 		for (int cursorSlot : cursorSlots) {
-			ctx.body.aload(cursorSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.aload(cursorSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 			ctx.body.astore(cursorSlot);
 		}
 
@@ -97,7 +97,7 @@ final class JvmMapcCompiler {
 
 	// car(cursor) = ((Object[]) cursor)[0]
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 	}
 
 }

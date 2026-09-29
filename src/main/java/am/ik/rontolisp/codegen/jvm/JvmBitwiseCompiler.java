@@ -36,26 +36,26 @@ final class JvmBitwiseCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(op).entry());
+		ctx.body.invokestatic(ctx.numOp(op));
 	}
 
 	static void compileLognot(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGNOT).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGNOT));
 	}
 
 	static void compileAsh(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.ASH).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.ASH));
 	}
 
 	static void compileIntegerLength(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.INTEGER_LENGTH).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.INTEGER_LENGTH));
 	}
 
 	static void compileLogbitp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -63,7 +63,7 @@ final class JvmBitwiseCompiler {
 		// (logbitp index integer): the helper takes the integer first, the index second.
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGBITP).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.LOGBITP));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

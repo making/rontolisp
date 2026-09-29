@@ -26,8 +26,7 @@ final class JvmComparisonCompiler {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 			ctx.body.invokestatic((branchOpcode == Opcode.IFEQ ? ctx.numOp(JvmNumericRuntimeBuilder.CMPB)
-					: JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB))
-				.entry());
+					: JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB)));
 			JvmEmitHelper.emitIntConst(ctx, maskFor(branchOpcode));
 			ctx.body.iand();
 			branch = Opcode.IFNE;
@@ -59,7 +58,7 @@ final class JvmComparisonCompiler {
 			// signum compared against zero cannot express "unordered".
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.CMPB).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.CMPB));
 			JvmEmitHelper.emitIntConst(ctx, maskFor(branchOpcode));
 			ctx.body.iand();
 			branch = Opcode.IFNE;

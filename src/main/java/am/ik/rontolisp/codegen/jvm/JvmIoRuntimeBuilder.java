@@ -5,13 +5,13 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
@@ -41,9 +41,9 @@ final class JvmIoRuntimeBuilder {
 	 * {@code ACC_SYNCHRONIZED} for the methods that mutate the stream table (see
 	 * {@link #ADD_STREAM_METHOD}).
 	 */
-	record IoMethod(Utf8Constant name, Utf8Constant desc, MethodCode code, int extraFlags) {
+	record IoMethod(Utf8Entry name, Utf8Entry desc, MethodCode code, int extraFlags) {
 
-		IoMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+		IoMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 			this(name, desc, code, 0);
 		}
 
@@ -1018,83 +1018,87 @@ final class JvmIoRuntimeBuilder {
 	/** Returns all stream-runtime method bodies to emit. */
 	List<IoMethod> methods() {
 		List<IoMethod> ms = new ArrayList<>();
-		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), buildAddStream(),
+		ms.add(new IoMethod(this.cp.utf8Entry(ADD_STREAM_METHOD), this.cp.utf8Entry(ADD_STREAM_DESC), buildAddStream(),
 				AccessFlag.ACC_SYNCHRONIZED));
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), buildOpen()));
+		ms.add(new IoMethod(this.cp.utf8Entry(OPEN_METHOD), this.cp.utf8Entry(OPEN_DESC), buildOpen()));
 		// synchronized with _addStream: the entry is nulled out on the CURRENT table, so
 		// a close racing a table growth must not write into the array being replaced.
-		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), buildClose(),
+		ms.add(new IoMethod(this.cp.utf8Entry(CLOSE_METHOD), this.cp.utf8Entry(CLOSE_DESC), buildClose(),
 				AccessFlag.ACC_SYNCHRONIZED));
-		ms.add(new IoMethod(this.cp.addUtf8(PROBE_FILE_METHOD), this.cp.addUtf8(PROBE_FILE_DESC), buildProbeFile()));
+		ms.add(new IoMethod(this.cp.utf8Entry(PROBE_FILE_METHOD), this.cp.utf8Entry(PROBE_FILE_DESC),
+				buildProbeFile()));
 		if (this.listDirectory) {
-			ms.add(new IoMethod(this.cp.addUtf8(LIST_DIRECTORY_METHOD), this.cp.addUtf8(LIST_DIRECTORY_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(LIST_DIRECTORY_METHOD), this.cp.utf8Entry(LIST_DIRECTORY_DESC),
 					buildListDirectory()));
 		}
 		if (this.fileMeta.writeDate()) {
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_WRITE_DATE_METHOD), this.cp.addUtf8(FILE_WRITE_DATE_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(FILE_WRITE_DATE_METHOD), this.cp.utf8Entry(FILE_WRITE_DATE_DESC),
 					buildFileWriteDate()));
 		}
 		if (this.fileMeta.makeDirectories()) {
-			ms.add(new IoMethod(this.cp.addUtf8(MAKE_DIRECTORIES_METHOD), this.cp.addUtf8(MAKE_DIRECTORIES_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(MAKE_DIRECTORIES_METHOD), this.cp.utf8Entry(MAKE_DIRECTORIES_DESC),
 					buildMakeDirectories()));
 		}
 		if (this.fileMeta.deleteFile()) {
-			ms.add(new IoMethod(this.cp.addUtf8(DELETE_FILE_METHOD), this.cp.addUtf8(DELETE_FILE_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(DELETE_FILE_METHOD), this.cp.utf8Entry(DELETE_FILE_DESC),
 					buildDeleteFile()));
 		}
 		if (this.fileMeta.renameFile()) {
-			ms.add(new IoMethod(this.cp.addUtf8(RENAME_FILE_METHOD), this.cp.addUtf8(RENAME_FILE_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(RENAME_FILE_METHOD), this.cp.utf8Entry(RENAME_FILE_DESC),
 					buildRenameFile()));
 		}
 		if (this.fileMeta.streamPaths()) {
-			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(SET_STREAM_PATH_METHOD), this.cp.utf8Entry(SET_STREAM_PATH_DESC),
 					buildSetStreamPath(), AccessFlag.ACC_SYNCHRONIZED));
 		}
 		if (this.fileMeta.fileLength()) {
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_LENGTH_METHOD), this.cp.addUtf8(FILE_LENGTH_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(FILE_LENGTH_METHOD), this.cp.utf8Entry(FILE_LENGTH_DESC),
 					buildFileLength()));
 		}
 		if (this.fileMeta.position()) {
-			ms.add(new IoMethod(this.cp.addUtf8(STORE_STREAM_POSITION_METHOD),
-					this.cp.addUtf8(STORE_STREAM_POSITION_DESC), buildStoreStreamPosition(),
+			ms.add(new IoMethod(this.cp.utf8Entry(STORE_STREAM_POSITION_METHOD),
+					this.cp.utf8Entry(STORE_STREAM_POSITION_DESC), buildStoreStreamPosition(),
 					AccessFlag.ACC_SYNCHRONIZED));
-			ms.add(new IoMethod(this.cp.addUtf8(BUMP_STREAM_POSITION_METHOD),
-					this.cp.addUtf8(BUMP_STREAM_POSITION_DESC), buildBumpStreamPosition(),
+			ms.add(new IoMethod(this.cp.utf8Entry(BUMP_STREAM_POSITION_METHOD),
+					this.cp.utf8Entry(BUMP_STREAM_POSITION_DESC), buildBumpStreamPosition(),
 					AccessFlag.ACC_SYNCHRONIZED));
-			ms.add(new IoMethod(this.cp.addUtf8(FILE_POSITION_METHOD), this.cp.addUtf8(FILE_POSITION_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(FILE_POSITION_METHOD), this.cp.utf8Entry(FILE_POSITION_DESC),
 					buildFilePosition()));
 		}
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), buildWriteLine()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC),
+		ms.add(new IoMethod(this.cp.utf8Entry(WRITE_LINE_METHOD), this.cp.utf8Entry(WRITE_LINE_DESC),
+				buildWriteLine()));
+		ms.add(new IoMethod(this.cp.utf8Entry(READ_LINE_STREAM_METHOD), this.cp.utf8Entry(READ_LINE_STREAM_DESC),
 				buildReadLineStream()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), buildReadByte()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), buildReadChar()));
-		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), buildPeekChar()));
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), buildWriteByte()));
+		ms.add(new IoMethod(this.cp.utf8Entry(READ_BYTE_METHOD), this.cp.utf8Entry(READ_BYTE_DESC), buildReadByte()));
+		ms.add(new IoMethod(this.cp.utf8Entry(READ_CHAR_METHOD), this.cp.utf8Entry(READ_CHAR_DESC), buildReadChar()));
+		ms.add(new IoMethod(this.cp.utf8Entry(PEEK_CHAR_METHOD), this.cp.utf8Entry(PEEK_CHAR_DESC), buildPeekChar()));
+		ms.add(new IoMethod(this.cp.utf8Entry(WRITE_BYTE_METHOD), this.cp.utf8Entry(WRITE_BYTE_DESC),
+				buildWriteByte()));
 		if (this.packedSequenceIo != null) {
-			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_PACKED_METHOD), this.cp.addUtf8(READ_SEQ_PACKED_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(READ_SEQ_PACKED_METHOD), this.cp.utf8Entry(READ_SEQ_PACKED_DESC),
 					buildSeqPacked(true)));
-			ms.add(new IoMethod(this.cp.addUtf8(WRITE_SEQ_PACKED_METHOD), this.cp.addUtf8(WRITE_SEQ_PACKED_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(WRITE_SEQ_PACKED_METHOD), this.cp.utf8Entry(WRITE_SEQ_PACKED_DESC),
 					buildSeqPacked(false)));
 		}
 		if (this.charSequenceIo != null) {
-			ms.add(new IoMethod(this.cp.addUtf8(READ_SEQ_CHARS_METHOD), this.cp.addUtf8(READ_SEQ_CHARS_DESC),
+			ms.add(new IoMethod(this.cp.utf8Entry(READ_SEQ_CHARS_METHOD), this.cp.utf8Entry(READ_SEQ_CHARS_DESC),
 					buildReadSeqChars()));
 		}
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), buildWriteStr()));
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC),
+		ms.add(new IoMethod(this.cp.utf8Entry(WRITE_STR_METHOD), this.cp.utf8Entry(WRITE_STR_DESC), buildWriteStr()));
+		ms.add(new IoMethod(this.cp.utf8Entry(WRITE_STRING_METHOD), this.cp.utf8Entry(WRITE_STRING_DESC),
 				buildWriteString()));
-		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), buildMakeStringOutputStream()));
-		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
-				this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_DESC), buildMakeStringInputStream()));
-		ms.add(new IoMethod(this.cp.addUtf8(STRING_STREAM_CONTENTS_METHOD),
-				this.cp.addUtf8(STRING_STREAM_CONTENTS_DESC), buildStringStreamContents()));
-		ms.add(new IoMethod(this.cp.addUtf8(FRESH_LINE_METHOD), this.cp.addUtf8(FRESH_LINE_DESC), buildFreshLine()));
-		ms.add(new IoMethod(this.cp.addUtf8(FORCE_OUTPUT_METHOD), this.cp.addUtf8(FORCE_OUTPUT_DESC),
+		ms.add(new IoMethod(this.cp.utf8Entry(MAKE_STRING_OUTPUT_STREAM_METHOD),
+				this.cp.utf8Entry(MAKE_STRING_OUTPUT_STREAM_DESC), buildMakeStringOutputStream()));
+		ms.add(new IoMethod(this.cp.utf8Entry(MAKE_STRING_INPUT_STREAM_METHOD),
+				this.cp.utf8Entry(MAKE_STRING_INPUT_STREAM_DESC), buildMakeStringInputStream()));
+		ms.add(new IoMethod(this.cp.utf8Entry(STRING_STREAM_CONTENTS_METHOD),
+				this.cp.utf8Entry(STRING_STREAM_CONTENTS_DESC), buildStringStreamContents()));
+		ms.add(new IoMethod(this.cp.utf8Entry(FRESH_LINE_METHOD), this.cp.utf8Entry(FRESH_LINE_DESC),
+				buildFreshLine()));
+		ms.add(new IoMethod(this.cp.utf8Entry(FORCE_OUTPUT_METHOD), this.cp.utf8Entry(FORCE_OUTPUT_DESC),
 				buildForceOutput()));
-		ms.add(new IoMethod(this.cp.addUtf8(LISTEN_METHOD), this.cp.addUtf8(LISTEN_DESC), buildListen()));
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_STREAM_P_METHOD), this.cp.addUtf8(OPEN_STREAM_P_DESC),
+		ms.add(new IoMethod(this.cp.utf8Entry(LISTEN_METHOD), this.cp.utf8Entry(LISTEN_DESC), buildListen()));
+		ms.add(new IoMethod(this.cp.utf8Entry(OPEN_STREAM_P_METHOD), this.cp.utf8Entry(OPEN_STREAM_P_DESC),
 				buildOpenStreamP()));
 		return ms;
 	}

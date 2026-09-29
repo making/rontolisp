@@ -13,8 +13,6 @@ import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaSite;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-
 /**
  * Compiles the six {@code java:} interop functions ({@code java:new}, {@code java:call},
  * {@code java:static}, {@code java:field}, {@code java:proxy}, {@code java:reify}). A
@@ -94,20 +92,18 @@ final class JvmJavaInteropCompiler {
 				return;
 			}
 		}
-		Map<String, MethodrefConstant> ops = ctx.javaOps;
+		Map<String, MethodRefEntry> ops = ctx.javaOps;
 		if (ops == null) {
 			// This attempt carries no bridge (every site it predicted was direct): a call
 			// to
 			// the absent _javaInit makes the helper-gate check retry with the bridge.
-			ctx.body.invokestatic(ctx.cp
-				.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-						ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD), ctx.cp.addUtf8("()V")))
-				.entry());
+			ctx.body
+				.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), JvmJavaRuntimeBuilder.INIT_METHOD, "()V"));
 			ctx.body.aconst_null();
 			return;
 		}
 		// Make sure the bridge class is defined before its method reference resolves.
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 		switch (member) {
 			case LispNames.JAVA_NEW -> {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -167,7 +163,7 @@ final class JvmJavaInteropCompiler {
 		}
 		MethodRefEntry factory = sites.implementations().factory(implementation);
 		JvmEmitHelper.emitIntConst(ctx, functions.size());
-		ctx.body.anewarray(ctx.objectClass.entry());
+		ctx.body.anewarray(ctx.objectClass);
 		for (int i = 0; i < functions.size(); i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i);
@@ -214,7 +210,7 @@ final class JvmJavaInteropCompiler {
 		boolean packed = values.size() > JvmJavaDirectSites.MAX_SPREAD;
 		if (packed) {
 			JvmEmitHelper.emitIntConst(ctx, values.size());
-			ctx.body.anewarray(ctx.objectClass.entry());
+			ctx.body.anewarray(ctx.objectClass);
 		}
 		for (int i = 0; i < values.size(); i++) {
 			if (packed) {
@@ -251,16 +247,16 @@ final class JvmJavaInteropCompiler {
 	 * the kb names.
 	 */
 	private static void emitMaterialize(JvmLispCompiler.Ctx ctx) {
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
-			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).entry());
+			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)));
 		}
 	}
 
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
-		ctx.body.anewarray(ctx.objectClass.entry());
+		ctx.body.anewarray(ctx.objectClass);
 		for (int i = from; i < args.size(); i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - from);
@@ -270,8 +266,8 @@ final class JvmJavaInteropCompiler {
 		}
 	}
 
-	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String key) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)).entry());
+	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String key) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)));
 	}
 
 }

@@ -36,7 +36,7 @@ final class JvmAwaitCompiler {
 		if (ctx.awaitHelper == null) {
 			throw new IllegalStateException("await helper method was not emitted");
 		}
-		ctx.body.invokestatic(ctx.awaitHelper.entry());
+		ctx.body.invokestatic(ctx.awaitHelper);
 	}
 
 }

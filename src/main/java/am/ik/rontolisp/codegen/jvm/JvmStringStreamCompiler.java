@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -23,9 +23,8 @@ final class JvmStringStreamCompiler {
 	private JvmStringStreamCompiler() {
 	}
 
-	private static MethodrefConstant methodRef(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	private static MethodRefEntry methodRef(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
 	}
 
 	/**
@@ -98,8 +97,7 @@ final class JvmStringStreamCompiler {
 	 */
 	static void emitWriteStr(JvmLispCompiler.Ctx ctx, String className) {
 		ctx.body.invokestatic(
-				methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STR_METHOD, JvmIoRuntimeBuilder.WRITE_STR_DESC)
-					.entry());
+				methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STR_METHOD, JvmIoRuntimeBuilder.WRITE_STR_DESC));
 	}
 
 	/**
@@ -110,8 +108,7 @@ final class JvmStringStreamCompiler {
 	 */
 	static void emitWriteString(JvmLispCompiler.Ctx ctx, String className) {
 		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STRING_METHOD,
-				JvmIoRuntimeBuilder.WRITE_STRING_DESC)
-			.entry());
+				JvmIoRuntimeBuilder.WRITE_STRING_DESC));
 	}
 
 	/**
@@ -136,15 +133,13 @@ final class JvmStringStreamCompiler {
 			ctx.body.aconst_null();
 		}
 		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STRING_METHOD,
-				JvmIoRuntimeBuilder.WRITE_STRING_DESC)
-			.entry());
+				JvmIoRuntimeBuilder.WRITE_STRING_DESC));
 	}
 
 	/** Compiles {@code (%make-string-output-stream)}. */
 	static void compileMakeOutputStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_METHOD,
-				JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_DESC)
-			.entry());
+				JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_DESC));
 		if (ctx.usesStreamValues) {
 			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_OUTPUT);
 		}
@@ -162,8 +157,7 @@ final class JvmStringStreamCompiler {
 			JvmArrayCompiler.emitStrvNormalize(ctx, className);
 		}
 		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_METHOD,
-				JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_DESC)
-			.entry());
+				JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_DESC));
 		if (ctx.usesStreamValues) {
 			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_INPUT);
 		}
@@ -175,8 +169,7 @@ final class JvmStringStreamCompiler {
 		JvmExprCompiler.compileExpr(java.util.Objects.requireNonNull(streamDesignator(ctx, parts.get(1))), ctx,
 				className);
 		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_METHOD,
-				JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_DESC)
-			.entry());
+				JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_DESC));
 	}
 
 }

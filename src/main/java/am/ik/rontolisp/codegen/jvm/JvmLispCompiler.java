@@ -1,8 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -62,10 +65,6 @@ import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.JvmClassSplitter;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.jvm.OperandStack;
 import org.jspecify.annotations.Nullable;
@@ -208,12 +207,6 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * that forces the split onto a small program.
 	 */
 	private final int classPoolLimit;
-
-	/**
-	 * The index the constant pool's first entry takes ({@link Builder#poolIndexOrigin}):
-	 * 1, except in a test that starts it past 65535 to prove no writer cuts an index.
-	 */
-	private final int poolIndexOrigin;
 
 	/**
 	 * The Java release {@code java:} sites resolve against ({@code --java-release}), or
@@ -431,7 +424,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		// a
 		// pool no class can carry down the single-class path.
 		this.classPoolLimit = Math.clamp(builder.classPoolLimit, 1, ConstantPool.MAX_INDEX);
-		this.poolIndexOrigin = builder.poolIndexOrigin;
 		this.javaRelease = builder.javaRelease;
 		this.javaClasspath = builder.javaClasspath;
 		this.warnJavaReflection = builder.warnJavaReflection;
@@ -475,8 +467,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		private boolean servlet;
 
 		private int classPoolLimit = Integer.getInteger("rontolisp.jvm.class-pool-limit", ConstantPool.MAX_INDEX);
-
-		private int poolIndexOrigin = Integer.getInteger("rontolisp.jvm.pool-index-origin", 1);
 
 		private @Nullable Integer javaRelease;
 
@@ -677,20 +667,6 @@ public final class JvmLispCompiler implements LispCompiler {
 				throw new IllegalArgumentException("a class pool limit is 1.." + ConstantPool.MAX_INDEX);
 			}
 			this.classPoolLimit = classPoolLimit;
-			return this;
-		}
-
-		/**
-		 * Sets the index the constant pool's first entry takes -- a test instrument (also
-		 * read from {@code -Drontolisp.jvm.pool-index-origin}): started past 65535, every
-		 * index is one no class file can carry, so an emitter that cuts an operand to 16
-		 * bits names a filler entry and the write fails
-		 * ({@link ConstantPool#startingAt}).
-		 * @param poolIndexOrigin the first entry's index, 1 by default
-		 * @return this builder
-		 */
-		Builder poolIndexOrigin(int poolIndexOrigin) {
-			this.poolIndexOrigin = poolIndexOrigin;
 			return this;
 		}
 
@@ -1060,75 +1036,56 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
-		ConstantPool cp = this.poolIndexOrigin == 1 ? new ConstantPool()
-				: ConstantPool.startingAt(this.poolIndexOrigin);
-		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
-		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
+		ConstantPool cp = new ConstantPool();
+		ClassEntry thisClass = cp.classEntry(this.className);
+		ClassEntry objectClass = cp.classEntry("java/lang/Object");
 
-		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
-		FieldrefConstant systemOut = cp.addFieldref(systemClass,
-				cp.addNameAndType(cp.addUtf8("out"), cp.addUtf8("Ljava/io/PrintStream;")));
-		ClassConstant printStreamClass = cp.addClass(cp.addUtf8("java/io/PrintStream"));
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		FieldRefEntry systemOut = cp.fieldRef(systemClass, "out", "Ljava/io/PrintStream;");
+		ClassEntry printStreamClass = cp.classEntry("java/io/PrintStream");
 
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		MethodrefConstant longValueOf = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
-		MethodrefConstant longValue = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		MethodRefEntry longValueOf = cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry longValue = cp.methodRef(longClass, "longValue", "()J");
 
-		MethodrefConstant printlnStr = cp.addMethodref(printStreamClass,
-				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant printStr = cp.addMethodref(printStreamClass,
-				cp.addNameAndType(cp.addUtf8("print"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant printlnVoid = cp.addMethodref(printStreamClass,
-				cp.addNameAndType(cp.addUtf8("println"), cp.addUtf8("()V")));
+		MethodRefEntry printlnStr = cp.methodRef(printStreamClass, "println", "(Ljava/lang/String;)V");
+		MethodRefEntry printStr = cp.methodRef(printStreamClass, "print", "(Ljava/lang/String;)V");
+		MethodRefEntry printlnVoid = cp.methodRef(printStreamClass, "println", "()V");
 
-		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
-		MethodrefConstant integerValueOf = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/Integer;")));
-		MethodrefConstant integerValue = cp.addMethodref(integerClass,
-				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+		ClassEntry integerClass = cp.classEntry("java/lang/Integer");
+		MethodRefEntry integerValueOf = cp.methodRef(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+		MethodRefEntry integerValue = cp.methodRef(integerClass, "intValue", "()I");
 
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		MethodrefConstant doubleValueOf = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;")));
-		MethodrefConstant doubleToString = cp.addMethodref(doubleClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		MethodRefEntry doubleValueOf = cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;");
+		MethodRefEntry doubleToString = cp.methodRef(doubleClass, "toString", "()Ljava/lang/String;");
 
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		MethodrefConstant numberDoubleValue = cp.addMethodref(numberClass,
-				cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D")));
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		MethodRefEntry numberDoubleValue = cp.methodRef(numberClass, "doubleValue", "()D");
 
-		Utf8Constant lispToStringName = cp.addUtf8("_lispToString");
-		Utf8Constant lispToStringDescUtf = cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;");
-		MethodrefConstant lispToStringMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(lispToStringName, lispToStringDescUtf));
-		Utf8Constant consToStringName = cp.addUtf8("_consToString");
-		Utf8Constant consToStringDescUtf = cp.addUtf8("([Ljava/lang/Object;)Ljava/lang/String;");
-		MethodrefConstant consToStringMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(consToStringName, consToStringDescUtf));
-		Utf8Constant lispToDisplayStringName = cp.addUtf8("_lispToDisplayString");
-		MethodrefConstant lispToDisplayStringMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(lispToDisplayStringName, lispToStringDescUtf));
-		Utf8Constant consToDisplayStringName = cp.addUtf8("_consToDisplayString");
-		MethodrefConstant consToDisplayStringMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(consToDisplayStringName, consToStringDescUtf));
-		Utf8Constant appendName = cp.addUtf8("_append");
-		Utf8Constant appendDescUtf = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		MethodrefConstant appendMethod = cp.addMethodref(thisClass, cp.addNameAndType(appendName, appendDescUtf));
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant stringCharAt = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
-		MethodrefConstant stringLength = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		MethodrefConstant stringSubstring = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
+		Utf8Entry lispToStringName = cp.utf8Entry("_lispToString");
+		Utf8Entry lispToStringDescUtf = cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry lispToStringMethod = cp.methodRef(thisClass, lispToStringName, lispToStringDescUtf);
+		Utf8Entry consToStringName = cp.utf8Entry("_consToString");
+		Utf8Entry consToStringDescUtf = cp.utf8Entry("([Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry consToStringMethod = cp.methodRef(thisClass, consToStringName, consToStringDescUtf);
+		Utf8Entry lispToDisplayStringName = cp.utf8Entry("_lispToDisplayString");
+		MethodRefEntry lispToDisplayStringMethod = cp.methodRef(thisClass, lispToDisplayStringName,
+				lispToStringDescUtf);
+		Utf8Entry consToDisplayStringName = cp.utf8Entry("_consToDisplayString");
+		MethodRefEntry consToDisplayStringMethod = cp.methodRef(thisClass, consToDisplayStringName,
+				consToStringDescUtf);
+		Utf8Entry appendName = cp.utf8Entry("_append");
+		Utf8Entry appendDescUtf = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry appendMethod = cp.methodRef(thisClass, appendName, appendDescUtf);
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry stringCharAt = cp.methodRef(stringClass, "charAt", "(I)C");
+		MethodRefEntry stringLength = cp.methodRef(stringClass, "length", "()I");
+		MethodRefEntry stringSubstring = cp.methodRef(stringClass, "substring", "(II)Ljava/lang/String;");
 		// Used by _lispToDisplayString to cut a symbol's package qualifier / marker: the
 		// princ spelling is everything after the last colon.
-		MethodrefConstant stringLastIndexOf = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(I)I")));
-		MethodrefConstant objectEquals = cp.addMethodref(objectClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		MethodRefEntry stringLastIndexOf = cp.methodRef(stringClass, "lastIndexOf", "(I)I");
+		MethodRefEntry objectEquals = cp.methodRef(objectClass, "equals", "(Ljava/lang/Object;)Z");
 		// CHARACTER runtime representation references (used by _lispToString /
 		// _lispToDisplayString to print the #\name form and the bare glyph,
 		// respectively). A CHARACTER is a length-1 int[]{codePoint} (see
@@ -1136,58 +1093,42 @@ public final class JvmLispCompiler implements LispCompiler {
 		// java/lang/Character is still cached below because the char builtins delegate
 		// to Character.toUpperCase(int) / Character.isLetter(int) / Character.digit(int,
 		// int) / Character.toString(int) for JDK-provided semantics.
-		ClassConstant charBoxClass = cp.addClass(cp.addUtf8("[I"));
-		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		MethodrefConstant characterToString = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
-		Utf8Constant charPrin1Name = cp.addUtf8("_charPrin1");
-		Utf8Constant charPrin1Desc = cp.addUtf8("(I)Ljava/lang/String;");
-		MethodrefConstant charPrin1Method = cp.addMethodref(thisClass, cp.addNameAndType(charPrin1Name, charPrin1Desc));
-		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
-		MethodrefConstant mathAbsLong = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(J)J")));
-		MethodrefConstant mathAbsDouble = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathFloor = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("floor"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathCeil = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("ceil"), cp.addUtf8("(D)D")));
-		MethodrefConstant mathRint = cp.addMethodref(mathClass,
-				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
+		ClassEntry charBoxClass = cp.classEntry("[I");
+		ClassEntry characterClass = cp.classEntry("java/lang/Character");
+		MethodRefEntry characterToString = cp.methodRef(characterClass, "toString", "(I)Ljava/lang/String;");
+		Utf8Entry charPrin1Name = cp.utf8Entry("_charPrin1");
+		Utf8Entry charPrin1Desc = cp.utf8Entry("(I)Ljava/lang/String;");
+		MethodRefEntry charPrin1Method = cp.methodRef(thisClass, charPrin1Name, charPrin1Desc);
+		ClassEntry mathClass = cp.classEntry("java/lang/Math");
+		MethodRefEntry mathAbsLong = cp.methodRef(mathClass, "abs", "(J)J");
+		MethodRefEntry mathAbsDouble = cp.methodRef(mathClass, "abs", "(D)D");
+		MethodRefEntry mathFloor = cp.methodRef(mathClass, "floor", "(D)D");
+		MethodRefEntry mathCeil = cp.methodRef(mathClass, "ceil", "(D)D");
+		MethodRefEntry mathRint = cp.methodRef(mathClass, "rint", "(D)D");
 
 		// Math helper references for sqrt/exp/log/trig/expt/signum compilers.
-		Map<String, MethodrefConstant> mathOps = JvmMathFnCompiler.buildOps(cp, mathClass);
+		Map<String, MethodRefEntry> mathOps = JvmMathFnCompiler.buildOps(cp, mathClass);
 
 		// System helper references for the time / getenv compilers.
-		Map<String, MethodrefConstant> systemOps = new java.util.LinkedHashMap<>();
-		systemOps.put("currentTimeMillis",
-				cp.addMethodref(systemClass, cp.addNameAndType(cp.addUtf8("currentTimeMillis"), cp.addUtf8("()J"))));
-		systemOps.put("nanoTime",
-				cp.addMethodref(systemClass, cp.addNameAndType(cp.addUtf8("nanoTime"), cp.addUtf8("()J"))));
-		systemOps.put("getenv", cp.addMethodref(systemClass,
-				cp.addNameAndType(cp.addUtf8("getenv"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"))));
+		Map<String, MethodRefEntry> systemOps = new java.util.LinkedHashMap<>();
+		systemOps.put("currentTimeMillis", cp.methodRef(systemClass, "currentTimeMillis", "()J"));
+		systemOps.put("nanoTime", cp.methodRef(systemClass, "nanoTime", "()J"));
+		systemOps.put("getenv", cp.methodRef(systemClass, "getenv", "(Ljava/lang/String;)Ljava/lang/String;"));
 
 		// read-line helper
-		ClassConstant bufferedReaderClass = cp.addClass(cp.addUtf8("java/io/BufferedReader"));
-		ClassConstant inputStreamReaderClass = cp.addClass(cp.addUtf8("java/io/InputStreamReader"));
-		MethodrefConstant brInit = cp.addMethodref(bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/Reader;)V")));
-		MethodrefConstant brReadLine = cp.addMethodref(bufferedReaderClass,
-				cp.addNameAndType(cp.addUtf8("readLine"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant isrInit = cp.addMethodref(inputStreamReaderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/InputStream;)V")));
-		FieldrefConstant systemIn = cp.addFieldref(systemClass,
-				cp.addNameAndType(cp.addUtf8("in"), cp.addUtf8("Ljava/io/InputStream;")));
-		MethodrefConstant stringConcat = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		Utf8Constant stdinReaderFieldName = cp.addUtf8("_stdinReader");
-		Utf8Constant stdinReaderFieldDesc = cp.addUtf8("Ljava/io/BufferedReader;");
-		FieldrefConstant stdinReaderField = cp.addFieldref(thisClass,
-				cp.addNameAndType(stdinReaderFieldName, stdinReaderFieldDesc));
-		Utf8Constant readLineHelperName = cp.addUtf8("_readLine");
-		Utf8Constant readLineHelperDesc = cp.addUtf8("()Ljava/lang/Object;");
-		MethodrefConstant readLineHelperMethod = cp.addMethodref(thisClass,
-				cp.addNameAndType(readLineHelperName, readLineHelperDesc));
+		ClassEntry bufferedReaderClass = cp.classEntry("java/io/BufferedReader");
+		ClassEntry inputStreamReaderClass = cp.classEntry("java/io/InputStreamReader");
+		MethodRefEntry brInit = cp.methodRef(bufferedReaderClass, "<init>", "(Ljava/io/Reader;)V");
+		MethodRefEntry brReadLine = cp.methodRef(bufferedReaderClass, "readLine", "()Ljava/lang/String;");
+		MethodRefEntry isrInit = cp.methodRef(inputStreamReaderClass, "<init>", "(Ljava/io/InputStream;)V");
+		FieldRefEntry systemIn = cp.fieldRef(systemClass, "in", "Ljava/io/InputStream;");
+		MethodRefEntry stringConcat = cp.methodRef(stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		Utf8Entry stdinReaderFieldName = cp.utf8Entry("_stdinReader");
+		Utf8Entry stdinReaderFieldDesc = cp.utf8Entry("Ljava/io/BufferedReader;");
+		FieldRefEntry stdinReaderField = cp.fieldRef(thisClass, stdinReaderFieldName, stdinReaderFieldDesc);
+		Utf8Entry readLineHelperName = cp.utf8Entry("_readLine");
+		Utf8Entry readLineHelperDesc = cp.utf8Entry("()Ljava/lang/Object;");
+		MethodRefEntry readLineHelperMethod = cp.methodRef(thisClass, readLineHelperName, readLineHelperDesc);
 
 		// The async/await runtime (JvmAsyncRuntimeBuilder): %async-run (the lowered
 		// async-defun/async-lambda), the generic _await resolver, the first-class stream
@@ -1231,63 +1172,45 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.FUTURE_FORCE_QUALIFIED)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
-		MethodrefConstant fetchHelperMethod = usesFetch
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_NAME),
-						cp.addUtf8(JvmFetchRuntimeBuilder.METHOD_DESC)))
+		MethodRefEntry fetchHelperMethod = usesFetch
+				? cp.methodRef(thisClass, JvmFetchRuntimeBuilder.METHOD_NAME, JvmFetchRuntimeBuilder.METHOD_DESC)
 				: null;
-		MethodrefConstant awaitHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_DESC)))
+		MethodRefEntry awaitHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.AWAIT_METHOD, JvmAsyncRuntimeBuilder.AWAIT_DESC)
 				: null;
-		MethodrefConstant asyncRunHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.ASYNC_RUN_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.ASYNC_RUN_DESC)))
+		MethodRefEntry asyncRunHelperMethod = usesAsyncRuntime ? cp.methodRef(thisClass,
+				JvmAsyncRuntimeBuilder.ASYNC_RUN_METHOD, JvmAsyncRuntimeBuilder.ASYNC_RUN_DESC) : null;
+		MethodRefEntry futurepHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.FUTUREP_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
-		MethodrefConstant futurepHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.FUTUREP_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+		MethodRefEntry streampHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAMP_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
-		MethodrefConstant streampHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAMP_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+		MethodRefEntry makeStreamHelperMethod = usesAsyncRuntime ? cp.methodRef(thisClass,
+				JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD, JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC) : null;
+		MethodRefEntry streamNewHelperMethod = usesAsyncRuntime ? cp.methodRef(thisClass,
+				JvmAsyncRuntimeBuilder.STREAM_NEW_METHOD, JvmAsyncRuntimeBuilder.STREAM_NEW_DESC) : null;
+		MethodRefEntry streamReadHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAM_READ_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
-		MethodrefConstant makeStreamHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)))
+		MethodRefEntry streamWriteHelperMethod = usesAsyncRuntime ? cp.methodRef(thisClass,
+				JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD, JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC) : null;
+		MethodRefEntry streamCloseHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
-		MethodrefConstant streamNewHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_NEW_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_NEW_DESC)))
-				: null;
-		MethodrefConstant streamReadHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_READ_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
-				: null;
-		MethodrefConstant streamWriteHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC)))
-				: null;
-		MethodrefConstant streamCloseHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
-				: null;
-		MethodrefConstant drainBodyHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+		MethodRefEntry drainBodyHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
 		// An output file the program never closes is flushed on every way out of it, as
 		// C's exit flushes stdio and both wasm backends write through. Gated on the
 		// program naming one of the two file-stream producers (the program is not
 		// macro-expanded yet: with-open-file becomes open later, and a quit inside its
 		// body skips the close), so every other artifact keeps its exact bytes.
-		final @Nullable MethodrefConstant flushStreamsMethod = programUsesSymbol(program, LispNames.OPEN)
+		final @Nullable MethodRefEntry flushStreamsMethod = programUsesSymbol(program, LispNames.OPEN)
 				|| programUsesSymbol(program, LispNames.WITH_OPEN_FILE)
-						? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFlushStreamsBuilder.METHOD),
-								cp.addUtf8(JvmFlushStreamsBuilder.DESC)))
-						: null;
-		MethodrefConstant waitForHelperMethod = usesAsyncRuntime
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.WAIT_FOR_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
+						? cp.methodRef(thisClass, JvmFlushStreamsBuilder.METHOD, JvmFlushStreamsBuilder.DESC) : null;
+		MethodRefEntry waitForHelperMethod = usesAsyncRuntime
+				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.WAIT_FOR_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
 
 		// TCP/TLS socket helpers: emitted only when the program uses a rontolisp:tcp-*
@@ -1352,54 +1275,31 @@ public final class JvmLispCompiler implements LispCompiler {
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD));
-		MethodrefConstant tcpConnectHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
+		MethodRefEntry tcpConnectHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD, JvmSocketRuntimeBuilder.TCP_CONNECT_DESC) : null;
+		MethodRefEntry tcpListenHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_LISTEN_METHOD, JvmSocketRuntimeBuilder.TCP_LISTEN_DESC) : null;
+		MethodRefEntry tcpAcceptHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_ACCEPT_METHOD, JvmSocketRuntimeBuilder.TCP_ACCEPT_DESC) : null;
+		MethodRefEntry tcpLocalPortHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_METHOD, JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_DESC) : null;
+		MethodRefEntry tcpLocalAddressHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_METHOD, JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_DESC)
 				: null;
-		MethodrefConstant tcpListenHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LISTEN_DESC)))
-				: null;
-		MethodrefConstant tcpAcceptHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_ACCEPT_DESC)))
-				: null;
-		MethodrefConstant tcpLocalPortHelperMethod = usesSockets ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_PORT_DESC)))
-				: null;
-		MethodrefConstant tcpLocalAddressHelperMethod = usesSockets ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_LOCAL_ADDRESS_DESC)))
-				: null;
-		MethodrefConstant tcpPeerAddressHelperMethod = usesSockets ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_DESC)))
-				: null;
-		MethodrefConstant tcpPeerPortHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_PEER_PORT_DESC)))
-				: null;
-		MethodrefConstant tcpSetTimeoutHelperMethod = usesSockets ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_DESC)))
-				: null;
-		MethodrefConstant tlsConnectHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_CONNECT_DESC)))
-				: null;
-		MethodrefConstant tlsUpgradeHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_UPGRADE_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_UPGRADE_DESC)))
-				: null;
-		MethodrefConstant tlsListenHelperMethod = usesSockets
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_DESC)))
-				: null;
-		MethodrefConstant tlsListenP12HelperMethod = usesSockets ? cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_P12_METHOD),
-						cp.addUtf8(JvmSocketRuntimeBuilder.TLS_LISTEN_P12_DESC)))
-				: null;
+		MethodRefEntry tcpPeerAddressHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_METHOD, JvmSocketRuntimeBuilder.TCP_PEER_ADDRESS_DESC) : null;
+		MethodRefEntry tcpPeerPortHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_PEER_PORT_METHOD, JvmSocketRuntimeBuilder.TCP_PEER_PORT_DESC) : null;
+		MethodRefEntry tcpSetTimeoutHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_METHOD, JvmSocketRuntimeBuilder.TCP_SET_TIMEOUT_DESC) : null;
+		MethodRefEntry tlsConnectHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TLS_CONNECT_METHOD, JvmSocketRuntimeBuilder.TLS_CONNECT_DESC) : null;
+		MethodRefEntry tlsUpgradeHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TLS_UPGRADE_METHOD, JvmSocketRuntimeBuilder.TLS_UPGRADE_DESC) : null;
+		MethodRefEntry tlsListenHelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TLS_LISTEN_METHOD, JvmSocketRuntimeBuilder.TLS_LISTEN_DESC) : null;
+		MethodRefEntry tlsListenP12HelperMethod = usesSockets ? cp.methodRef(thisClass,
+				JvmSocketRuntimeBuilder.TLS_LISTEN_P12_METHOD, JvmSocketRuntimeBuilder.TLS_LISTEN_P12_DESC) : null;
 
 		// The :insecure opt-out of tls-connect AND tls-upgrade installs the generated
 		// class itself as a trust-all X509TrustManager (the JVM backend cannot emit an
@@ -1424,21 +1324,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// calls them from bytecode; JSSE does, and only a tls-connect/tls-upgrade call
 		// site can reach those helpers).
 		boolean needsInstanceCtor = usesSockets || usesHttpHandler || usesAsyncRuntime || usesThreads;
-		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
-				: null;
-		ClassConstant x509CertificateClass = usesTlsConnect
-				? cp.addClass(cp.addUtf8("java/security/cert/X509Certificate")) : null;
-		MethodrefConstant objectInitRef = needsInstanceCtor
-				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
-		Utf8Constant instanceInitName = needsInstanceCtor ? cp.addUtf8("<init>") : null;
-		Utf8Constant instanceInitDesc = needsInstanceCtor ? cp.addUtf8("()V") : null;
-		Utf8Constant checkClientName = usesTlsConnect ? cp.addUtf8("checkClientTrusted") : null;
-		Utf8Constant checkServerName = usesTlsConnect ? cp.addUtf8("checkServerTrusted") : null;
-		Utf8Constant checkTrustedDesc = usesTlsConnect
-				? cp.addUtf8("([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V") : null;
-		Utf8Constant acceptedIssuersName = usesTlsConnect ? cp.addUtf8("getAcceptedIssuers") : null;
-		Utf8Constant acceptedIssuersDesc = usesTlsConnect ? cp.addUtf8("()[Ljava/security/cert/X509Certificate;")
-				: null;
+		ClassEntry x509TrustManagerClass = usesTlsConnect ? cp.classEntry("javax/net/ssl/X509TrustManager") : null;
+		ClassEntry x509CertificateClass = usesTlsConnect ? cp.classEntry("java/security/cert/X509Certificate") : null;
+		MethodRefEntry objectInitRef = needsInstanceCtor ? cp.methodRef(objectClass, "<init>", "()V") : null;
+		Utf8Entry instanceInitName = needsInstanceCtor ? cp.utf8Entry("<init>") : null;
+		Utf8Entry instanceInitDesc = needsInstanceCtor ? cp.utf8Entry("()V") : null;
+		Utf8Entry checkClientName = usesTlsConnect ? cp.utf8Entry("checkClientTrusted") : null;
+		Utf8Entry checkServerName = usesTlsConnect ? cp.utf8Entry("checkServerTrusted") : null;
+		Utf8Entry checkTrustedDesc = usesTlsConnect
+				? cp.utf8Entry("([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V") : null;
+		Utf8Entry acceptedIssuersName = usesTlsConnect ? cp.utf8Entry("getAcceptedIssuers") : null;
+		Utf8Entry acceptedIssuersDesc = usesTlsConnect ? cp.utf8Entry("()[Ljava/security/cert/X509Certificate;") : null;
 
 		// java: interop. The sites resolve against class files, never the classes this
 		// compiler runs on (compiler/JavaSiteResolver, .kb/java-interop.md); a resolved
@@ -1500,29 +1396,25 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.bridgeClassFiles.putAll(ffiRuntime.classFiles());
 		}
 
-		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
+		ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
 				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
 						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program))
 				: null;
-		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant longToString = cp.addMethodref(longClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant objectToString = cp.addMethodref(objectClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		MethodrefConstant sbInitStr = cp.addMethodref(stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-		MethodrefConstant sbAppendStr = cp.addMethodref(stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = cp.addMethodref(stringBuilderClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		ClassConstant ratioArrayClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		ConstantPool.StringConstant nilStr = cp.addString("NIL");
-		ConstantPool.StringConstant slashStr = cp.addString("/");
-		ConstantPool.StringConstant openParenStr = cp.addString("(");
-		ConstantPool.StringConstant closeParenStr = cp.addString(")");
-		ConstantPool.StringConstant spaceStr = cp.addString(" ");
-		ConstantPool.StringConstant dotStr = cp.addString(" . ");
+		ClassEntry stringBuilderClass = cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry longToString = cp.methodRef(longClass, "toString", "()Ljava/lang/String;");
+		MethodRefEntry objectToString = cp.methodRef(objectClass, "toString", "()Ljava/lang/String;");
+		MethodRefEntry sbInitStr = cp.methodRef(stringBuilderClass, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry sbAppendStr = cp.methodRef(stringBuilderClass, "append",
+				"(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = cp.methodRef(stringBuilderClass, "toString", "()Ljava/lang/String;");
+		ClassEntry ratioArrayClass = cp.classEntry("[Ljava/math/BigInteger;");
+		StringEntry nilStr = cp.stringEntry("NIL");
+		StringEntry slashStr = cp.stringEntry("/");
+		StringEntry openParenStr = cp.stringEntry("(");
+		StringEntry closeParenStr = cp.stringEntry(")");
+		StringEntry spaceStr = cp.stringEntry(" ");
+		StringEntry dotStr = cp.stringEntry(" . ");
 
 		// Pass 1: Collect defun declarations and top-level expressions. Lisp-2: only a
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
@@ -1976,20 +1868,19 @@ public final class JvmLispCompiler implements LispCompiler {
 			specialVars.add(LispNames.ERROR_OUTPUT_VAR);
 		}
 		globals.addAll(specialVars);
-		Map<String, FieldrefConstant> globalFields = new HashMap<>();
-		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
-		Utf8Constant globalFieldDescUtf = cp.addUtf8("Ljava/lang/Object;");
+		Map<String, FieldRefEntry> globalFields = new HashMap<>();
+		List<Utf8Entry> globalFieldNameUtfs = new ArrayList<>();
+		Utf8Entry globalFieldDescUtf = cp.utf8Entry("Ljava/lang/Object;");
 		for (String g : globals) {
-			Utf8Constant fieldNameUtf = cp.addUtf8("_g$" + mangleMethodName(g));
+			Utf8Entry fieldNameUtf = cp.utf8Entry("_g$" + mangleMethodName(g));
 			globalFieldNameUtfs.add(fieldNameUtf);
-			globalFields.put(g, cp.addFieldref(thisClass, cp.addNameAndType(fieldNameUtf, globalFieldDescUtf)));
+			globalFields.put(g, cp.fieldRef(thisClass, fieldNameUtf, globalFieldDescUtf));
 		}
 		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
 		// more than one thread -- one register per thread (JvmMvChannel).
-		FieldrefConstant mvSpillField = globalFields.get(LispNames.MV_SPILL);
-		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null
-				: usesAsyncSpawn || usesThreads ? JvmMvChannel.perThread(cp, thisClass.entry(), mvSpillField.entry())
-						: new JvmMvChannel(mvSpillField.entry(), null);
+		FieldRefEntry mvSpillField = globalFields.get(LispNames.MV_SPILL);
+		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : usesAsyncSpawn || usesThreads
+				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
 		// A special that is DYNAMICALLY BOUND somewhere additionally gets a per-thread
 		// store (a _d$ ThreadLocal next to its _g$ global default), so concurrent
 		// http-handler requests binding the same special do not clobber each other --
@@ -2004,7 +1895,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			boundSpecialVars.addAll(specialVars);
 		}
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
-				: JvmDynVarRuntimeBuilder.build(cp, thisClass.entry(), objectArrayClass.entry(), boundSpecialVars);
+				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
 
 		// Assign funcIds and register in CP
 		int[] nextFuncId = { 0 };
@@ -2012,9 +1903,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			int funcId = nextFuncId[0]++;
 			String descriptor = "(" + "Ljava/lang/Object;".repeat(defun.paramNames.size()) + ")Ljava/lang/Object;";
-			Utf8Constant nameUtf8 = cp.addUtf8(mangleMethodName(defun.name));
-			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
-			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
+			Utf8Entry nameUtf8 = cp.utf8Entry(mangleMethodName(defun.name));
+			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
+			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			functions.put(defun.name, new FunctionInfo(funcId, defun.paramNames.size(), defun.variadic, defun.optionals,
 					false, methodref, nameUtf8, descUtf8));
 		}
@@ -2189,28 +2080,27 @@ public final class JvmLispCompiler implements LispCompiler {
 		// gate on array-element-type's general arm.
 		final boolean usesTypedArray = usesArrays
 				&& LispMacroExpander.makeArrayElementTypeCodes(program, closRegistry) != 0;
-		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
-			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
-				: null;
+		MethodRefEntry strvMethod = usesArrays
+				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null;
 		if (javaSites != null) {
 			// A dispatched java: site renders a mutable character vector, a sequence's
 			// elements too, before it costs and converts it -- as does the conversion
 			// of a value a java: interface implementation's function answers.
-			javaSites.direct().strv(strvMethod != null ? strvMethod.methodRefEntry() : null);
+			javaSites.direct().strv(strvMethod != null ? strvMethod : null);
 			// ... and reads a specialized vector's elements from the shapes the program
 			// can hold, a bfloat16 one's through the program's own widening.
 			javaSites.direct()
-				.packedVectors(usesFloatArray, usesIntArray, usesFloatArray
-						? cp.addMethodref(thisClass,
-								cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE),
-										cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)))
-							.methodRefEntry()
-						: null);
+				.packedVectors(usesFloatArray, usesIntArray,
+						usesFloatArray
+								? cp.methodRef(thisClass, JvmFloatArrayRuntimeBuilder.BF16_VALUE,
+										JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)
+
+								: null);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
 		// _equal and _hash arms share, minted once so both see the same constant.
-		ClassConstant instanceLayoutClass = mayUseInstances ? cp.addClass(cp.addUtf8("[Ljava/lang/String;")) : null;
+		ClassEntry instanceLayoutClass = mayUseInstances ? cp.classEntry("[Ljava/lang/String;") : null;
 		// Complex numbers (.kb/jvm-complex.md): the _c* helpers are emitted only
 		// when the program may create a complex -- a #C literal, a
 		// complex/conjugate call, or a sqrt, which can root a negative into the
@@ -2245,27 +2135,25 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (the _c* helpers) keep hard links -- building a complex without its
 		// class is a genuinely missing file. Minted here, ahead of the constant
 		// pool write, so every site below shares the deduplicated entries.
-		final Utf8Constant hasComplexName = usesComplex ? cp.addUtf8("_hasComplex") : null;
-		final Utf8Constant hasComplexDesc = usesComplex ? cp.addUtf8("Z") : null;
-		final ConstantPool.FieldrefConstant hasComplexField = usesComplex ? cp.addFieldref(thisClass,
-				cp.addNameAndType(Objects.requireNonNull(hasComplexName), Objects.requireNonNull(hasComplexDesc)))
+		final Utf8Entry hasComplexName = usesComplex ? cp.utf8Entry("_hasComplex") : null;
+		final Utf8Entry hasComplexDesc = usesComplex ? cp.utf8Entry("Z") : null;
+		final FieldRefEntry hasComplexField = usesComplex
+				? cp.fieldRef(thisClass, Objects.requireNonNull(hasComplexName), Objects.requireNonNull(hasComplexDesc))
 				: null;
-		final ConstantPool.MethodrefConstant hasComplexProbe = usesComplex
-				? cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Class")),
-						cp.addNameAndType(cp.addUtf8("forName"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Class;")))
+		final MethodRefEntry hasComplexProbe = usesComplex
+				? cp.methodRef(cp.classEntry("java/lang/Class"), "forName", "(Ljava/lang/String;)Ljava/lang/Class;")
 				: null;
-		final ConstantPool.StringConstant hasComplexTarget = usesComplex
-				? cp.addString("am.ik.rontolisp.runtime.RontoComplex") : null;
-		final ClassConstant hasComplexAbsent = usesComplex ? cp.addClass(cp.addUtf8("java/lang/ClassNotFoundException"))
+		final StringEntry hasComplexTarget = usesComplex ? cp.stringEntry("am.ik.rontolisp.runtime.RontoComplex")
 				: null;
+		final ClassEntry hasComplexAbsent = usesComplex ? cp.classEntry("java/lang/ClassNotFoundException") : null;
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
 				strvMethod, instanceLayoutClass, usesComplex);
 		// A wrong-type operand's report names the operator (JvmOperandTypeRuntime); the
 		// thread-local record a pad reads the datum from exists only when a pad does.
-		final Utf8Constant teTlName = hasLandingPad ? cp.addUtf8(JvmOperandTypeRuntime.TL_FIELD) : null;
-		final Utf8Constant teTlDesc = hasLandingPad ? cp.addUtf8(JvmOperandTypeRuntime.TL_DESC) : null;
-		final FieldrefConstant teTlField = teTlName != null && teTlDesc != null
-				? cp.addFieldref(thisClass, cp.addNameAndType(teTlName, teTlDesc)) : null;
+		final Utf8Entry teTlName = hasLandingPad ? cp.utf8Entry(JvmOperandTypeRuntime.TL_FIELD) : null;
+		final Utf8Entry teTlDesc = hasLandingPad ? cp.utf8Entry(JvmOperandTypeRuntime.TL_DESC) : null;
+		final FieldRefEntry teTlField = teTlName != null && teTlDesc != null
+				? cp.fieldRef(thisClass, teTlName, teTlDesc) : null;
 		// What tells a cons from the other Object[]-shaped values this program can build,
 		// shared by every cons-walking runtime helper.
 		final JvmOperandTypeRuntime.ConsShape consShape = JvmOperandTypeRuntime.ConsShape.of(cp, instanceLayoutClass,
@@ -2384,21 +2272,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> rawGlobalNames = JvmRawGlobals.collect(program, globals, boundSpecialVars, intFusion
 				&& !this.dynamic && !usesEval && !usesThreads && !usesHttpHandler && !usesAsyncRuntime && !usesSockets);
 		Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = new HashMap<>();
-		List<Utf8Constant> rawGlobalLongFieldNameUtfs = new ArrayList<>();
-		List<Utf8Constant> rawGlobalFlagFieldNameUtfs = new ArrayList<>();
-		Utf8Constant rawGlobalLongDescUtf = rawGlobalNames.isEmpty() ? null : cp.addUtf8("J");
-		Utf8Constant rawGlobalFlagDescUtf = rawGlobalNames.isEmpty() ? null : cp.addUtf8("I");
+		List<Utf8Entry> rawGlobalLongFieldNameUtfs = new ArrayList<>();
+		List<Utf8Entry> rawGlobalFlagFieldNameUtfs = new ArrayList<>();
+		Utf8Entry rawGlobalLongDescUtf = rawGlobalNames.isEmpty() ? null : cp.utf8Entry("J");
+		Utf8Entry rawGlobalFlagDescUtf = rawGlobalNames.isEmpty() ? null : cp.utf8Entry("I");
 		for (String g : rawGlobalNames) {
-			Utf8Constant longNameUtf = cp.addUtf8("_gr$" + mangleMethodName(g));
-			Utf8Constant flagNameUtf = cp.addUtf8("_gk$" + mangleMethodName(g));
+			Utf8Entry longNameUtf = cp.utf8Entry("_gr$" + mangleMethodName(g));
+			Utf8Entry flagNameUtf = cp.utf8Entry("_gk$" + mangleMethodName(g));
 			rawGlobalLongFieldNameUtfs.add(longNameUtf);
 			rawGlobalFlagFieldNameUtfs.add(flagNameUtf);
 			rawGlobals.put(g,
 					JvmIntFusionCompiler.RawLocal.fields(
-							cp.addFieldref(thisClass,
-									cp.addNameAndType(longNameUtf, Objects.requireNonNull(rawGlobalLongDescUtf))),
-							Objects.requireNonNull(globalFields.get(g)), cp.addFieldref(thisClass,
-									cp.addNameAndType(flagNameUtf, Objects.requireNonNull(rawGlobalFlagDescUtf)))));
+							cp.fieldRef(thisClass, longNameUtf, Objects.requireNonNull(rawGlobalLongDescUtf)),
+							Objects.requireNonNull(globalFields.get(g)),
+							cp.fieldRef(thisClass, flagNameUtf, Objects.requireNonNull(rawGlobalFlagDescUtf))));
 		}
 		JvmIntFusionCompiler.State fusedState = new JvmIntFusionCompiler.State(this.className);
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
@@ -2543,12 +2430,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expression can resolve it. Created before Pass 2a because EVERY context gets
 		// the ref: the progv lowering maintains that same mirror from any position
 		// (its own consumers stay top-level-gated).
-		MethodrefConstant evalStoreRef = usesEval
-				? cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_store"),
-								cp.addUtf8(
-										"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
-				: null;
+		MethodRefEntry evalStoreRef = usesEval ? cp.methodRef(thisClass, "_store",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;") : null;
 
 		// Pass 2a: Compile each defun body
 		List<Ctx> funcCtxs = new ArrayList<>();
@@ -2622,10 +2505,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// in definedGlobals; share one set across chunks so a defvar split into a later
 		// chunk still sees an earlier binding.
 		Set<String> sharedDefinedGlobals = new HashSet<>();
-		Utf8Constant topChunkDesc = cp.addUtf8("()V");
+		Utf8Entry topChunkDesc = cp.utf8Entry("()V");
 		List<Ctx> topChunks = new ArrayList<>();
-		List<Utf8Constant> topChunkNames = new ArrayList<>();
-		List<MethodrefConstant> topChunkRefs = new ArrayList<>();
+		List<Utf8Entry> topChunkNames = new ArrayList<>();
+		List<MethodRefEntry> topChunkRefs = new ArrayList<>();
 		// Budget well under 65535 to leave room for the final form pushed past the check
 		// plus the trailing RETURN; a single form larger than the difference still
 		// cannot be split (a pre-existing per-form limit: chunking happens BETWEEN
@@ -2657,10 +2540,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				chunkCtx.topLevel = true;
 				chunkCtx.evalStoreRef = evalStoreRef;
 				chunkCtx.shareDefinedGlobals(sharedDefinedGlobals);
-				Utf8Constant nameUtf8 = cp.addUtf8("_top$" + topChunks.size());
+				Utf8Entry nameUtf8 = cp.utf8Entry("_top$" + topChunks.size());
 				topChunks.add(chunkCtx);
 				topChunkNames.add(nameUtf8);
-				topChunkRefs.add(cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, topChunkDesc)));
+				topChunkRefs.add(cp.methodRef(thisClass, nameUtf8, topChunkDesc));
 			}
 			// Statement position: the chunk pops whatever the form returns, so a definer
 			// that returns nothing but the name it just bound is offered the chance to
@@ -2718,8 +2601,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The command line's static home, built HERE rather than beside the other
 		// runtime helpers because main's own prologue is what fills it: a defun that
 		// reads the arguments is an ordinary static method and cannot see main's locals.
-		final JvmArgvRuntimeBuilder.@Nullable ArgvRuntime argvRuntime = usesArgv ? JvmArgvRuntimeBuilder.build(cp,
-				thisClass.entry(), objectClass.entry(), stringConcat.methodRefEntry(), this.className) : null;
+		final JvmArgvRuntimeBuilder.@Nullable ArgvRuntime argvRuntime = usesArgv
+				? JvmArgvRuntimeBuilder.build(cp, thisClass, objectClass, stringConcat, this.className) : null;
 		if (argvRuntime != null) {
 			// _argv = args. In main and only in main -- with a jvm-export the top level
 			// has already run in <clinit>, before any main could store one, which is the
@@ -2734,8 +2617,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			topRunnerCtx.evalStoreRef = evalStoreRef;
 			entryCtx = topRunnerCtx;
 		}
-		for (MethodrefConstant ref : topChunkRefs) {
-			entryCtx.body.invokestatic(ref.entry());
+		for (MethodRefEntry ref : topChunkRefs) {
+			entryCtx.body.invokestatic(ref);
 		}
 		// A program that writes RAW OCTETS to standard output has to drain the
 		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
@@ -2748,13 +2631,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// operators that reach the helper, so every other artifact keeps its exact bytes:
 		// ANY new path to _writeByte's standard-output branch must join this gate.
 		if (programUsesSymbol(program, LispNames.WRITE_BYTE) || programUsesSymbol(program, LispNames.WRITE_SEQUENCE)) {
-			entryCtx.body.getstatic(systemOut.entry());
-			entryCtx.body.invokevirtual(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
-					cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")))
-				.methodRefEntry());
+			entryCtx.body.getstatic(systemOut);
+			entryCtx.body.invokevirtual(cp.methodRef(cp.classEntry("java/io/PrintStream"), "flush", "()V"));
 		}
 		if (flushStreamsMethod != null) {
-			entryCtx.body.invokestatic(flushStreamsMethod.entry());
+			entryCtx.body.invokestatic(flushStreamsMethod);
 		}
 		entryCtx.body.return_();
 		// A condition nobody caught reports itself on standard error instead of
@@ -2781,9 +2662,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			// Register lambda in CP: first param is Object[] env, rest are lambda params
 			String descriptor = "([Ljava/lang/Object;" + "Ljava/lang/Object;".repeat(lambda.paramNames.size())
 					+ ")Ljava/lang/Object;";
-			Utf8Constant nameUtf8 = cp.addUtf8(lambda.methodName);
-			Utf8Constant descUtf8 = cp.addUtf8(descriptor);
-			MethodrefConstant methodref = cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, descUtf8));
+			Utf8Entry nameUtf8 = cp.utf8Entry(lambda.methodName);
+			Utf8Entry descUtf8 = cp.utf8Entry(descriptor);
+			MethodRefEntry methodref = cp.methodRef(thisClass, nameUtf8, descUtf8);
 			FunctionInfo fi = new FunctionInfo(lambda.funcId, lambda.paramNames.size(), lambda.variadic,
 					lambda.optionals, true, methodref, nameUtf8, descUtf8);
 			lambdaFuncInfos.add(fi);
@@ -2850,17 +2731,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// hold a located form has been compiled, so the site table is complete. A class
 		// with nothing located gets neither the lines nor the async-boundary records.
 		final JvmSourceSites sourceSites = mainCtx.sites != null && !mainCtx.sites.isEmpty() ? mainCtx.sites : null;
-		final @Nullable MethodrefConstant whereRef = sourceSites == null ? null : cp.addMethodref(thisClass, cp
-			.addNameAndType(cp.addUtf8(JvmUncaughtHandler.WHERE_METHOD), cp.addUtf8(JvmUncaughtHandler.WHERE_DESC)));
-		@Nullable MethodrefConstant asyncCrossRef = null;
+		final @Nullable MethodRefEntry whereRef = sourceSites == null ? null
+				: cp.methodRef(thisClass, JvmUncaughtHandler.WHERE_METHOD, JvmUncaughtHandler.WHERE_DESC);
+		@Nullable MethodRefEntry asyncCrossRef = null;
 		if (sourceSites != null) {
 			for (int i = 0; i < lambdaDecls.size(); i++) {
 				String head = lambdaDecls.get(i).asyncHead();
 				if (head != null) {
 					if (asyncCrossRef == null) {
-						asyncCrossRef = cp.addMethodref(thisClass,
-								cp.addNameAndType(cp.addUtf8(JvmUncaughtHandler.ASYNC_CROSS_METHOD),
-										cp.addUtf8(JvmUncaughtHandler.ASYNC_CROSS_DESC)));
+						asyncCrossRef = cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_CROSS_METHOD,
+								JvmUncaughtHandler.ASYNC_CROSS_DESC);
 					}
 					JvmUncaughtHandler.appendAsyncCrossing(lambdaCtxs.get(i), head, asyncCrossRef);
 				}
@@ -2940,27 +2820,27 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Names of the eval runtime methods and the global-environment field (the
 		// constants are cheap; the method bodies are built only when used)
-		Utf8Constant evalName = cp.addUtf8("_eval");
-		Utf8Constant evalDesc = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		Utf8Constant applyName = cp.addUtf8("_apply");
-		Utf8Constant storeName = cp.addUtf8("_store");
-		Utf8Constant storeDesc = cp
-			.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		Utf8Constant envLookupName = cp.addUtf8("_envLookup");
-		Utf8Constant envLookupDesc = cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		Utf8Constant lookupName = cp.addUtf8("_lookup");
-		Utf8Constant lookupDesc = cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;");
-		Utf8Constant genvName = cp.addUtf8("_genv");
-		Utf8Constant genvDesc = cp.addUtf8("Ljava/lang/Object;");
-		FieldrefConstant genvField = cp.addFieldref(thisClass, cp.addNameAndType(genvName, genvDesc));
-		Utf8Constant fenvName = cp.addUtf8("_fenv");
-		FieldrefConstant fenvField = cp.addFieldref(thisClass, cp.addNameAndType(fenvName, genvDesc));
+		Utf8Entry evalName = cp.utf8Entry("_eval");
+		Utf8Entry evalDesc = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Entry applyName = cp.utf8Entry("_apply");
+		Utf8Entry storeName = cp.utf8Entry("_store");
+		Utf8Entry storeDesc = cp
+			.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Entry envLookupName = cp.utf8Entry("_envLookup");
+		Utf8Entry envLookupDesc = cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		Utf8Entry lookupName = cp.utf8Entry("_lookup");
+		Utf8Entry lookupDesc = cp.utf8Entry("(Ljava/lang/Object;)[Ljava/lang/Object;");
+		Utf8Entry genvName = cp.utf8Entry("_genv");
+		Utf8Entry genvDesc = cp.utf8Entry("Ljava/lang/Object;");
+		FieldRefEntry genvField = cp.fieldRef(thisClass, genvName, genvDesc);
+		Utf8Entry fenvName = cp.utf8Entry("_fenv");
+		FieldRefEntry fenvField = cp.fieldRef(thisClass, fenvName, genvDesc);
 		MethodCode evalCode = new MethodCode();
 		MethodCode applyCode = new MethodCode();
 		MethodCode storeCode = new MethodCode();
 		MethodCode envLookupCode = new MethodCode();
 		List<MethodCode> lookupSegments = List.of();
-		List<Utf8Constant> lookupSegmentNames = new ArrayList<>();
+		List<Utf8Entry> lookupSegmentNames = new ArrayList<>();
 		// _lookup (the name-to-funcId registry) is needed by the eval runtime AND by
 		// the indirect-call dispatchers: a funcall whose designator is a SYMBOL at run
 		// time (cl-postgres passes 'list-row-reader through exec-query) resolves
@@ -2991,59 +2871,56 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
 				nameResolvable, symbolBuilders);
 		if (needsLookup) {
-			MethodRefEntry evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc)).methodRefEntry();
-			MethodRefEntry applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc))
-				.methodRefEntry();
-			MethodRefEntry storeRef = cp.addMethodref(thisClass, cp.addNameAndType(storeName, storeDesc))
-				.methodRefEntry();
-			MethodRefEntry envLookupRef = cp.addMethodref(thisClass, cp.addNameAndType(envLookupName, envLookupDesc))
-				.methodRefEntry();
-			MethodRefEntry lookupRef = cp.addMethodref(thisClass, cp.addNameAndType(lookupName, lookupDesc))
-				.methodRefEntry();
+			MethodRefEntry evalRef = cp.methodRef(thisClass, evalName, evalDesc);
+			MethodRefEntry applyRef = cp.methodRef(thisClass, applyName, evalDesc);
+			MethodRefEntry storeRef = cp.methodRef(thisClass, storeName, storeDesc);
+			MethodRefEntry envLookupRef = cp.methodRef(thisClass, envLookupName, envLookupDesc);
+			MethodRefEntry lookupRef = cp.methodRef(thisClass, lookupName, lookupDesc);
 			MethodRefEntry[] invoke = new MethodRefEntry[JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY + 1];
 			for (int n = 0; n <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; n++) {
-				Utf8Constant invName = cp.addUtf8("_invoke_" + n);
-				Utf8Constant invDesc = cp.addUtf8("(" + "Ljava/lang/Object;".repeat(n + 1) + ")Ljava/lang/Object;");
-				invoke[n] = cp.addMethodref(thisClass, cp.addNameAndType(invName, invDesc)).methodRefEntry();
+				Utf8Entry invName = cp.utf8Entry("_invoke_" + n);
+				Utf8Entry invDesc = cp.utf8Entry("(" + "Ljava/lang/Object;".repeat(n + 1) + ")Ljava/lang/Object;");
+				invoke[n] = cp.methodRef(thisClass, invName, invDesc);
 			}
 			// _invoke_v(funcval, argList): the spread dispatcher _apply hands the whole
 			// argument list to (see JvmRuntimeBuilder.buildDispatchMethods).
-			MethodRefEntry invokeSpread = cp.methodRef(thisClass.entry(), JvmRuntimeBuilder.dispatcherName(0, true),
+			MethodRefEntry invokeSpread = cp.methodRef(thisClass, JvmRuntimeBuilder.dispatcherName(0, true),
 					"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-			MethodRefEntry stringLengthRef = cp.methodRef(stringClass.entry(), "length", "()I");
+			MethodRefEntry stringLengthRef = cp.methodRef(stringClass, "length", "()I");
 			JvmEvalRuntimeBuilder.EvalConstants ec = JvmEvalRuntimeBuilder.EvalConstants.builder()
 				.cp(cp)
-				.objectClass(objectClass.entry())
-				.objectArrayClass(objectArrayClass.entry())
-				.integerClass(integerClass.entry())
-				.longClass(longClass.entry())
-				.doubleClass(doubleClass.entry())
-				.stringClass(stringClass.entry())
-				.integerValueOf(integerValueOf.methodRefEntry())
-				.integerValue(integerValue.methodRefEntry())
-				.longValueOf(longValueOf.methodRefEntry())
-				.longValue(longValue.methodRefEntry())
-				.stringCharAt(stringCharAt.methodRefEntry())
+				.objectClass(objectClass)
+				.objectArrayClass(objectArrayClass)
+				.integerClass(integerClass)
+				.longClass(longClass)
+				.doubleClass(doubleClass)
+				.stringClass(stringClass)
+				.integerValueOf(integerValueOf)
+				.integerValue(integerValue)
+				.longValueOf(longValueOf)
+				.longValue(longValue)
+				.stringCharAt(stringCharAt)
 				.stringLength(stringLengthRef)
-				.objectEquals(objectEquals.methodRefEntry())
+				.objectEquals(objectEquals)
 				.evalRef(evalRef)
 				.applyRef(applyRef)
 				.storeRef(storeRef)
 				.envLookupRef(envLookupRef)
 				.lookupRef(lookupRef)
-				.notFnRef(cp.methodRef(thisClass.entry(), JvmRuntimeBuilder.NOT_FN_NAME, JvmRuntimeBuilder.NOT_FN_DESC))
-				.genvField(genvField.entry())
-				.fenvField(fenvField.entry())
+				.notFnRef(cp.methodRef(thisClass, JvmRuntimeBuilder.NOT_FN_NAME, JvmRuntimeBuilder.NOT_FN_DESC))
+				.genvField(genvField)
+				.fenvField(fenvField)
 				.invoke(invoke)
 				.invokeSpread(invokeSpread)
 				.functions(functions)
 				.complexValues(usesComplex)
-				.hasComplexField(hasComplexField != null ? hasComplexField.entry() : null)
+				.hasComplexField(hasComplexField != null ? hasComplexField : null)
 				// _arityChk comes with _apply (reportsCount below), and only then does
 				// the
 				// runtime reference it
-				.arityChkRef(usesApplyRuntime ? cp.methodRef(thisClass.entry(), JvmRuntimeBuilder.ARITY_CHK_NAME,
-						JvmRuntimeBuilder.ARITY_CHK_DESC) : null)
+				.arityChkRef(usesApplyRuntime
+						? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME, JvmRuntimeBuilder.ARITY_CHK_DESC)
+						: null)
 				.arityOperators(arityOperators)
 				.build();
 			if (usesEval) {
@@ -3054,10 +2931,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesApplyRuntime) {
 				applyCode = JvmEvalRuntimeBuilder.buildApply(ec, usesEval);
 			}
-			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass.entry(), dispatchableFuncIds,
+			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds,
 					this.dynamic || nameResolvable || symbolBuilders, spelledLiterals);
 			for (int g = 1; g < lookupSegments.size(); g++) {
-				lookupSegmentNames.add(cp.addUtf8("_lookup$" + g));
+				lookupSegmentNames.add(cp.utf8Entry("_lookup$" + g));
 			}
 		}
 
@@ -3065,12 +2942,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// present, the dispatcher falls back to _apply for interpreted closures
 		// (funcId == -1) created by the runtime's lambda; a String funcval (a symbol
 		// used as a function designator) resolves through _lookup.
-		MethodrefConstant applyRefForDispatch = usesEval
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_apply"),
-						cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")))
-				: null;
-		MethodrefConstant lookupRefForDispatch = needsLookup
-				? cp.addMethodref(thisClass, cp.addNameAndType(lookupName, lookupDesc)) : null;
+		MethodRefEntry applyRefForDispatch = usesEval
+				? cp.methodRef(thisClass, "_apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;") : null;
+		MethodRefEntry lookupRefForDispatch = needsLookup ? cp.methodRef(thisClass, lookupName, lookupDesc) : null;
 		List<DispatchMethod> dispatchMethods = new ArrayList<>();
 		// The arity reporters a wrong argument COUNT is signalled through, each emitted
 		// only for a program that has the site it serves: _arityErr for a per-arity
@@ -3082,14 +2956,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean reportsCount = usesApplyRuntime || !arityGuardShapes.isEmpty();
 		if (reportsMiss || reportsCount) {
 			arityReporting = new JvmRuntimeBuilder.ArityReporting(
-					reportsMiss ? cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_ERR_NAME),
-									cp.addUtf8(JvmRuntimeBuilder.ARITY_ERR_DESC)))
-							: null,
-					reportsCount ? cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
-									cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)))
-							: null,
+					reportsMiss ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_ERR_NAME,
+							JvmRuntimeBuilder.ARITY_ERR_DESC) : null,
+					reportsCount ? cp.methodRef(thisClass, JvmRuntimeBuilder.ARITY_CHK_NAME,
+							JvmRuntimeBuilder.ARITY_CHK_DESC) : null,
 					reportsCount ? arityOperators : null);
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
 					objectArrayClass, stringClass, dispatchableFuncIds, reportsMiss, reportsCount, arityOperators));
@@ -3097,8 +2967,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// What applying a non-function raises, shared by every dispatcher and by _apply
 		// (the eval runtime, which the spread dispatcher comes with).
 		if (!indirectCallArities.isEmpty() || usesApplyRuntime) {
-			dispatchMethods.add(new DispatchMethod(cp.addUtf8(JvmRuntimeBuilder.NOT_FN_NAME),
-					cp.addUtf8(JvmRuntimeBuilder.NOT_FN_DESC),
+			dispatchMethods.add(new DispatchMethod(cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_NAME),
+					cp.utf8Entry(JvmRuntimeBuilder.NOT_FN_DESC),
 					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod)));
 		}
 		for (int arity : indirectCallArities) {
@@ -3117,12 +2987,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		// Build the runtime reader methods (read/load), only when used
-		Utf8Constant readSrcName = cp.addUtf8("_readSrc");
-		Utf8Constant readSrcDesc = cp.addUtf8("Ljava/lang/String;");
-		Utf8Constant readPosName = cp.addUtf8("_readPos");
-		Utf8Constant readPosDesc = cp.addUtf8("I");
-		Utf8Constant rdStructsName = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
-		Utf8Constant rdStructsDesc = cp.addUtf8(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
+		Utf8Entry readSrcName = cp.utf8Entry("_readSrc");
+		Utf8Entry readSrcDesc = cp.utf8Entry("Ljava/lang/String;");
+		Utf8Entry readPosName = cp.utf8Entry("_readPos");
+		Utf8Entry readPosDesc = cp.utf8Entry("I");
+		Utf8Entry rdStructsName = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
+		Utf8Entry rdStructsDesc = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
 		@Nullable MethodCode structTableClinit = null;
 		if (usesRead) {
@@ -3132,7 +3002,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// tag, the fixed PATHNAME layout is interned for the #P arm, and the
 			// directory itself is baked into <clinit>.
 			boolean readerInstances = mayUseInstances;
-			am.ik.jvm.ConstantPool.FieldrefConstant pathnameLayoutField = null;
+			FieldRefEntry pathnameLayoutField = null;
 			if (readerInstances) {
 				for (am.ik.rontolisp.LispLayout layout : closRegistry.layouts().values()) {
 					if (layout.kind() == am.ik.rontolisp.LispLayout.Kind.STRUCT) {
@@ -3140,14 +3010,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 				}
 				pathnameLayoutField = mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.PATHNAME);
-				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass.entry(), mainCtx.layoutPool,
-						closRegistry, objectClass.entry(), objectArrayClass.entry(), stringClass.entry());
+				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
+						closRegistry, objectClass, objectArrayClass, stringClass);
 			}
 			readMethods = JvmReadRuntimeBuilder
-				.create(cp, thisClass.entry(), objectClass.entry(), objectArrayClass.entry(), stringClass.entry(),
-						longValueOf.methodRefEntry(), doubleValueOf.methodRefEntry(), stringCharAt.methodRefEntry(),
-						stringLength.methodRefEntry(), stringSubstring.methodRefEntry(), objectEquals.methodRefEntry(),
-						usesLoad, readerInstances, pathnameLayoutField != null ? pathnameLayoutField.entry() : null)
+				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
+						stringCharAt, stringLength, stringSubstring, objectEquals, usesLoad, readerInstances,
+						pathnameLayoutField != null ? pathnameLayoutField : null)
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
@@ -3155,12 +3024,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
-				thisClass.entry(), objectClass.entry(), objectArrayClass.entry(), longValueOf.entry(),
-				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)).entry(),
-				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)).entry(),
-				strvMethod != null ? strvMethod.entry() : null,
-				instanceLayoutClass != null ? instanceLayoutClass.entry() : null, usesEqualpHashTables,
-				usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable() : null) : List.of();
+				thisClass, objectClass, objectArrayClass, longValueOf,
+				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
+				Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)),
+				strvMethod != null ? strvMethod : null, instanceLayoutClass != null ? instanceLayoutClass : null,
+				usesEqualpHashTables, usesIdentityHashTables, javaSites != null ? javaSites.direct().lispTable() : null)
+				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
 		// the
@@ -3168,23 +3037,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		// two escape modes AND the three guarded arms (instance, cons, array): the cons
 		// renderer is unconditional, so the pair is declared in every class -- one
 		// path, one mechanism, the emitted twin of RenderCycleGuard.
-		final Utf8Constant renderPathFieldName = cp.addUtf8("_renderPath");
-		final Utf8Constant renderPathFieldDesc = cp.addUtf8("[Ljava/lang/Object;");
-		final Utf8Constant renderDepthFieldName = cp.addUtf8("_renderDepth");
-		final Utf8Constant renderDepthFieldDesc = cp.addUtf8("I");
+		final Utf8Entry renderPathFieldName = cp.utf8Entry("_renderPath");
+		final Utf8Entry renderPathFieldDesc = cp.utf8Entry("[Ljava/lang/Object;");
+		final Utf8Entry renderDepthFieldName = cp.utf8Entry("_renderDepth");
+		final Utf8Entry renderDepthFieldDesc = cp.utf8Entry("I");
 		final JvmRuntimeBuilder.RenderGuardRefs renderGuard = new JvmRuntimeBuilder.RenderGuardRefs(
-				cp.addFieldref(thisClass, cp.addNameAndType(renderPathFieldName, renderPathFieldDesc)),
-				cp.addFieldref(thisClass, cp.addNameAndType(renderDepthFieldName, renderDepthFieldDesc)),
-				cp.addClass(cp.addUtf8("java/lang/Object")), cp.addString("#"));
+				cp.fieldRef(thisClass, renderPathFieldName, renderPathFieldDesc),
+				cp.fieldRef(thisClass, renderDepthFieldName, renderDepthFieldDesc), cp.classEntry("java/lang/Object"),
+				cp.stringEntry("#"));
 		// two array-printing helpers (_arrayToString / _arrayToDisplayString) so a
 		// literal
 		// or make-array result prints as #(...) / #2A(...).
 		final List<JvmArrayRuntimeBuilder.ArrayMethod> arrayMethods;
 		if (usesArrays) {
-			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(JvmArrayRuntimeBuilder.build(cp,
-					objectClass.entry(), objectArrayClass.entry(), thisClass.entry(), usesFloatArray));
-			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod.methodRefEntry(),
-					lispToDisplayStringMethod.methodRefEntry(), thisClass.entry(), renderGuard));
+			List<JvmArrayRuntimeBuilder.ArrayMethod> built = new ArrayList<>(
+					JvmArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
+			built.addAll(JvmArrayRuntimeBuilder.buildToStringMethods(cp, lispToStringMethod, lispToDisplayStringMethod,
+					thisClass, renderGuard));
 			// The packed float-array helpers (_fv*) dispatch on instanceof double[] and
 			// delegate to the general _array* helpers above for a non-packed array, so
 			// they are emitted alongside (and depend on) them.
@@ -3194,19 +3063,18 @@ public final class JvmLispCompiler implements LispCompiler {
 				// the array comes home if it was the authoritative one and is dropped;
 				// and
 				// every packed READ materializes first (.kb/gpu.md, "Device residency").
-				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass.entry(), objectArrayClass.entry(),
-						thisClass.entry(),
+				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
 						gpuRuntime != null ? Objects.requireNonNull(gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN))
-							.methodRefEntry() : null,
+								: null,
 						gpuRuntime != null
 								? Objects.requireNonNull(gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE))
-									.methodRefEntry()
+
 								: null,
 						usesQuantized, usesIntArray));
 				if (usesQuantized) {
 					// The quantized matrix's own helpers; the _fv* byte[] arms above
 					// delegate to them.
-					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass.entry(), usesIntArray));
+					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass, usesIntArray));
 				}
 			}
 			// The packed integer-vector helpers (_iv*) dispatch on the representation
@@ -3214,8 +3082,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// down the chain (to the _fv* tier when it is emitted, else straight to the
 			// general helpers).
 			if (usesIntArray) {
-				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass.entry(), objectArrayClass.entry(),
-						thisClass.entry(), usesFloatArray, usesQuantized));
+				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
+						usesFloatArray, usesQuantized));
 			}
 			// widen-float-bits/narrow-float-bits (.todo/671): bulk f16/bf16 bit <->
 			// packed-float conversion, over the same bare double[]/float[]/short[]/long[]
@@ -3237,20 +3105,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// PackedPrint bundle is non-null only when the program uses packed float arrays.
 		JvmRuntimeBuilder.@Nullable PackedPrint packedPrint = null;
 		if (usesFloatArray) {
-			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.addClass(cp.addUtf8("[D")),
-					cp.addClass(cp.addUtf8("[F")), cp.addClass(cp.addUtf8("[S")),
-					cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_PRINT),
-									cp.addUtf8(JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC))),
-					cp.addMethodref(stringClass,
-							cp.addNameAndType(cp.addUtf8("replaceFirst"),
-									cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"))),
-					cp.addString("^#\\d*A?\\("), cp.addString("#d("), cp.addString("#f("), cp.addString("#bf16("),
-					usesQuantized ? cp.addClass(cp.addUtf8("[B")) : null,
-					usesQuantized ? cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING),
-									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC)))
-							: null);
+			packedPrint = new JvmRuntimeBuilder.PackedPrint(cp.classEntry("[D"), cp.classEntry("[F"),
+					cp.classEntry("[S"),
+					cp.methodRef(thisClass, JvmFloatArrayRuntimeBuilder.TO_GENERAL_PRINT,
+							JvmFloatArrayRuntimeBuilder.TO_GENERAL_DESC),
+					cp.methodRef(stringClass, "replaceFirst",
+							"(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+					cp.stringEntry("^#\\d*A?\\("), cp.stringEntry("#d("), cp.stringEntry("#f("),
+					cp.stringEntry("#bf16("), usesQuantized ? cp.classEntry("[B") : null,
+					usesQuantized ? cp.methodRef(thisClass, JvmQuantizedMatrixRuntimeBuilder.TO_STRING,
+							JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC) : null);
 		}
 		// The packed integer-vector print branch: a byte[]/long[] renders as a plain
 		// #(...) vector (CL prints specialized vectors this way) by converting to a
@@ -3258,35 +3122,29 @@ public final class JvmLispCompiler implements LispCompiler {
 		// rewrite, unlike the #d/#f float syntax.
 		JvmRuntimeBuilder.@Nullable PackedIntPrint packedIntPrint = null;
 		if (usesIntArray) {
-			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.addClass(cp.addUtf8("[J")),
-					cp.addClass(cp.addUtf8("[B")), usesQuantized,
-					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL),
-							cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC))));
+			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.classEntry("[J"), cp.classEntry("[B"),
+					usesQuantized, cp.methodRef(thisClass, JvmIntArrayRuntimeBuilder.TO_GENERAL,
+							JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC));
 		}
-		ClassConstant arrayListClassForPrint = usesArrays ? cp.addClass(cp.addUtf8("java/util/ArrayList")) : null;
-		MethodrefConstant arrayToStringMethod = usesArrays
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING),
-						cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING_DESC)))
+		ClassEntry arrayListClassForPrint = usesArrays ? cp.classEntry("java/util/ArrayList") : null;
+		MethodRefEntry arrayToStringMethod = usesArrays
+				? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.TO_STRING, JvmArrayRuntimeBuilder.TO_STRING_DESC)
 				: null;
-		MethodrefConstant arrayToDisplayStringMethod = usesArrays
-				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.TO_DISPLAY_STRING),
-						cp.addUtf8(JvmArrayRuntimeBuilder.TO_STRING_DESC)))
-				: null;
+		MethodRefEntry arrayToDisplayStringMethod = usesArrays ? cp.methodRef(thisClass,
+				JvmArrayRuntimeBuilder.TO_DISPLAY_STRING, JvmArrayRuntimeBuilder.TO_STRING_DESC) : null;
 
 		// Wrapped java: host objects print as #<java class.Name> (interpreter parity);
 		// the branch is emitted only when the program uses java: interop.
 		final JvmRuntimeBuilder.@Nullable JavaPrint javaPrint;
 		if (usesJava) {
-			ClassConstant bigIntegerClassForPrint = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-			MethodrefConstant objectGetClass = cp.addMethodref(objectClass,
-					cp.addNameAndType(cp.addUtf8("getClass"), cp.addUtf8("()Ljava/lang/Class;")));
-			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
-			MethodrefConstant classGetName = cp.addMethodref(classClass,
-					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
+			ClassEntry bigIntegerClassForPrint = cp.classEntry("java/math/BigInteger");
+			MethodRefEntry objectGetClass = cp.methodRef(objectClass, "getClass", "()Ljava/lang/Class;");
+			ClassEntry classClass = cp.classEntry("java/lang/Class");
+			MethodRefEntry classGetName = cp.methodRef(classClass, "getName", "()Ljava/lang/String;");
 			JvmJavaDirectSites direct = Objects.requireNonNull(javaSites).direct();
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"), usesArrays ? direct.lispArray() : null,
-					usesHashTables ? direct.lispTable() : null);
+					stringConcat, cp.stringEntry("#<java "), cp.stringEntry(">"),
+					usesArrays ? direct.lispArray() : null, usesHashTables ? direct.lispTable() : null);
 		}
 		else {
 			javaPrint = null;
@@ -3305,32 +3163,30 @@ public final class JvmLispCompiler implements LispCompiler {
 		// emitted only when the program uses hash tables.
 		final JvmRuntimeBuilder.@Nullable HashPrint hashPrint;
 		if (usesHashTables) {
-			ClassConstant mapClassForPrint = cp.addClass(cp.addUtf8(JvmHashRuntimeBuilder.MAP_CLASS));
+			ClassEntry mapClassForPrint = cp.classEntry(JvmHashRuntimeBuilder.MAP_CLASS);
 			// The live entry count comes from the same helper hash-table-count reads, so
 			// the printed :COUNT and the accessor cannot disagree (the map's own size()
 			// counts buckets, not entries).
-			MethodrefConstant mapSize = cp.addMethodref(thisClass, cp
-				.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.SIZE), cp.addUtf8(JvmHashRuntimeBuilder.SIZE_DESC)));
-			MethodrefConstant intToString = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Integer")),
-					cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
+			MethodRefEntry mapSize = cp.methodRef(thisClass, JvmHashRuntimeBuilder.SIZE,
+					JvmHashRuntimeBuilder.SIZE_DESC);
+			MethodRefEntry intToString = cp.methodRef(cp.classEntry("java/lang/Integer"), "toString",
+					"(I)Ljava/lang/String;");
 			// The :TEST field is the test lookup implements. Only a program that can
 			// build an equalp table interns the second tag and asks the table which one
 			// it is; only a program that can build an identity table interns the eql
 			// and eq tags and reads the test code. In every other program no table
 			// folds or keys by identity, so the EQUAL tag is a constant exactly as it
 			// was.
-			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint, cp.addString(LispHashTable.HASH_TABLE_PREFIX),
-					mapSize, intToString, stringConcat, cp.addString(">"),
-					usesEqualpHashTables ? cp.addString(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null,
-					usesEqualpHashTables ? cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P),
-									cp.addUtf8(JvmHashRuntimeBuilder.EQUALP_P_DESC)))
-							: null,
-					usesIdentityHashTables ? cp.addString(LispHashTable.HASH_TABLE_PREFIX_EQL) : null,
-					usesIdentityHashTables ? cp.addString(LispHashTable.HASH_TABLE_PREFIX_EQ) : null,
+			hashPrint = new JvmRuntimeBuilder.HashPrint(mapClassForPrint,
+					cp.stringEntry(LispHashTable.HASH_TABLE_PREFIX), mapSize, intToString, stringConcat,
+					cp.stringEntry(">"),
+					usesEqualpHashTables ? cp.stringEntry(LispHashTable.HASH_TABLE_PREFIX_EQUALP) : null,
+					usesEqualpHashTables ? cp.methodRef(thisClass, JvmHashRuntimeBuilder.EQUALP_P,
+							JvmHashRuntimeBuilder.EQUALP_P_DESC) : null,
+					usesIdentityHashTables ? cp.stringEntry(LispHashTable.HASH_TABLE_PREFIX_EQL) : null,
+					usesIdentityHashTables ? cp.stringEntry(LispHashTable.HASH_TABLE_PREFIX_EQ) : null,
 					usesIdentityHashTables
-							? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmHashRuntimeBuilder.TEST),
-									cp.addUtf8(JvmHashRuntimeBuilder.TEST_DESC)))
+							? cp.methodRef(thisClass, JvmHashRuntimeBuilder.TEST, JvmHashRuntimeBuilder.TEST_DESC)
 							: null);
 		}
 		else {
@@ -3341,9 +3197,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// #<FUTURE> and streams as #<STREAM> (interpreter parity); the branches are
 		// emitted only when the program can create them.
 		final JvmRuntimeBuilder.@Nullable FuturePrint futurePrint = usesAsyncRuntime
-				? new JvmRuntimeBuilder.FuturePrint(cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture")),
-						cp.addString("#<FUTURE>"), objectArrayClass, cp.addString(JvmAsyncRuntimeBuilder.SMARKER),
-						cp.addString(JvmAsyncRuntimeBuilder.RMARKER), cp.addString("#<STREAM>"))
+				? new JvmRuntimeBuilder.FuturePrint(cp.classEntry("java/util/concurrent/CompletableFuture"),
+						cp.stringEntry("#<FUTURE>"), objectArrayClass, cp.stringEntry(JvmAsyncRuntimeBuilder.SMARKER),
+						cp.stringEntry(JvmAsyncRuntimeBuilder.RMARKER), cp.stringEntry("#<STREAM>"))
 				: null;
 
 		// A function value prints as the interpreter's #<function NAME>, or #<lambda>
@@ -3354,21 +3210,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		// could have resolved that name to this funcId. A program that never lets a
 		// NAMED function become a value emits no table at all, and its closures print
 		// anonymous from a constant.
-		TreeMap<Integer, ConstantPool.StringConstant> funNameEntries = new TreeMap<>();
+		TreeMap<Integer, StringEntry> funNameEntries = new TreeMap<>();
 		for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
 			if (dispatchableFuncIds.contains(entry.getValue().funcId())) {
-				funNameEntries.put(entry.getValue().funcId(), cp.addString(entry.getKey()));
+				funNameEntries.put(entry.getValue().funcId(), cp.stringEntry(entry.getKey()));
 			}
 		}
-		Utf8Constant funNameName = funNameEntries.isEmpty() ? null : cp.addUtf8(JvmRuntimeBuilder.FUN_NAME_NAME);
-		Utf8Constant funNameDescUtf = funNameEntries.isEmpty() ? null : cp.addUtf8(JvmRuntimeBuilder.FUN_NAME_DESC);
+		Utf8Entry funNameName = funNameEntries.isEmpty() ? null : cp.utf8Entry(JvmRuntimeBuilder.FUN_NAME_NAME);
+		Utf8Entry funNameDescUtf = funNameEntries.isEmpty() ? null : cp.utf8Entry(JvmRuntimeBuilder.FUN_NAME_DESC);
 		final JvmRuntimeBuilder.FuncPrint funcPrint = new JvmRuntimeBuilder.FuncPrint(
 				funNameName == null ? null
-						: cp.addMethodref(thisClass,
-								cp.addNameAndType(Objects.requireNonNull(funNameName),
-										Objects.requireNonNull(funNameDescUtf))),
-				integerClass, integerValue, stringConcat, cp.addString("#<function "), cp.addString(">"),
-				cp.addString("#<lambda>"));
+						: cp.methodRef(thisClass, Objects.requireNonNull(funNameName),
+								Objects.requireNonNull(funNameDescUtf)),
+				integerClass, integerValue, stringConcat, cp.stringEntry("#<function "), cp.stringEntry(">"),
+				cp.stringEntry("#<lambda>"));
 		List<DispatchMethod> funNameMethods = funNameEntries.isEmpty() ? List.of()
 				: JvmRuntimeBuilder.buildFunNameMethods(funNameEntries, cp, thisClass);
 
@@ -3377,31 +3232,27 @@ public final class JvmLispCompiler implements LispCompiler {
 		// program references and BEFORE .writeConstantPool(cp) freezes the pool, so an
 		// instance-free program's pool -- and therefore its whole class -- is unchanged.
 		final boolean usesInstances = !mainCtx.layoutPool.isEmpty();
-		Utf8Constant instToStringName = usesInstances ? cp.addUtf8("_instToString") : null;
-		Utf8Constant instToDisplayStringName = usesInstances ? cp.addUtf8("_instToDisplayString") : null;
-		final JvmRuntimeBuilder.@Nullable InstPrint instPrint = usesInstances ? new JvmRuntimeBuilder.InstPrint(
-				mainCtx.layoutPool.stringArrayClass(cp),
-				cp.addMethodref(thisClass,
-						cp.addNameAndType(Objects.requireNonNull(instToStringName), consToStringDescUtf)),
-				cp.addMethodref(thisClass,
-						cp.addNameAndType(Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf)))
+		Utf8Entry instToStringName = usesInstances ? cp.utf8Entry("_instToString") : null;
+		Utf8Entry instToDisplayStringName = usesInstances ? cp.utf8Entry("_instToDisplayString") : null;
+		final JvmRuntimeBuilder.@Nullable InstPrint instPrint = usesInstances
+				? new JvmRuntimeBuilder.InstPrint(mainCtx.layoutPool.stringArrayClass(cp),
+						cp.methodRef(thisClass, Objects.requireNonNull(instToStringName), consToStringDescUtf),
+						cp.methodRef(thisClass, Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf))
 				: null;
 		// _strEsc: the *print-escape* escaping the readable renderer applies to a string
 		// value's content (todo 216). Always emitted -- _lispToString is unconditional.
-		Utf8Constant strEscName = cp.addUtf8("_strEsc");
-		Utf8Constant strEscDescUtf = cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;");
-		MethodrefConstant strEscMethod = cp.addMethodref(thisClass, cp.addNameAndType(strEscName, strEscDescUtf));
-		MethodrefConstant stringIndexOf = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(I)I")));
-		MethodrefConstant stringIndexOfFrom = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("indexOf"), cp.addUtf8("(II)I")));
-		MethodrefConstant stringReplace = cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("replace"),
-				cp.addUtf8("(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;")));
+		Utf8Entry strEscName = cp.utf8Entry("_strEsc");
+		Utf8Entry strEscDescUtf = cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry strEscMethod = cp.methodRef(thisClass, strEscName, strEscDescUtf);
+		MethodRefEntry stringIndexOf = cp.methodRef(stringClass, "indexOf", "(I)I");
+		MethodRefEntry stringIndexOfFrom = cp.methodRef(stringClass, "indexOf", "(II)I");
+		MethodRefEntry stringReplace = cp.methodRef(stringClass, "replace",
+				"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;");
 		// _symEsc: the |...|-escaping half of *print-escape* = t (todo 626), for a bare
 		// symbol name -- _strEsc's own "this value is a symbol" arm routes here instead
 		// of returning the name verbatim.
-		Utf8Constant symEscName = cp.addUtf8("_symEsc");
-		MethodrefConstant symEscMethod = cp.addMethodref(thisClass, cp.addNameAndType(symEscName, strEscDescUtf));
+		Utf8Entry symEscName = cp.utf8Entry("_symEsc");
+		MethodRefEntry symEscMethod = cp.methodRef(thisClass, symEscName, strEscDescUtf);
 		MethodCode symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringSubstring, stringReplace, stringConcat);
 		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
@@ -3412,34 +3263,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		// receiver's equals -- invokevirtual dispatches virtually regardless of the
 		// methodref's declaring class.
 		JvmRuntimeBuilder.QuoteAbbrevRefs quoteAbbrev = new JvmRuntimeBuilder.QuoteAbbrevRefs(stringClass, objectEquals,
-				stringConcat, cp.addString(LispNames.QUOTE), cp.addString(LispNames.FUNCTION), cp.addString("'"),
-				cp.addString("#'"));
+				stringConcat, cp.stringEntry(LispNames.QUOTE), cp.stringEntry(LispNames.FUNCTION), cp.stringEntry("'"),
+				cp.stringEntry("#'"));
 
 		// Float text: every double spelling gets the lowercase exponent marker (the
 		// FloatText contract), and a packed single-float array element prints through a
 		// transient Float box at its f32 width.
-		ClassConstant floatBoxClass = cp.addClass(cp.addUtf8("java/lang/Float"));
-		MethodrefConstant floatToString = cp.addMethodref(floatBoxClass,
-				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassEntry floatBoxClass = cp.classEntry("java/lang/Float");
+		MethodRefEntry floatToString = cp.methodRef(floatBoxClass, "toString", "()Ljava/lang/String;");
 		JvmRuntimeBuilder.FloatPrint floatPrint = new JvmRuntimeBuilder.FloatPrint(floatBoxClass, floatToString,
-				stringReplace, cp.addString("E"), cp.addString("e"));
+				stringReplace, cp.stringEntry("E"), cp.stringEntry("e"));
 
 		// Build _lispToString and _consToString helper method bodies
 		// The complex print branch names the travelling holder, so its
 		// references are created only for a complex-capable program (null
 		// otherwise, keeping the branch -- and the class -- out entirely).
-		ClassConstant rcClass = usesComplex ? cp.addClass(cp.addUtf8("am/ik/rontolisp/runtime/RontoComplex")) : null;
-		ConstantPool.FieldrefConstant rcReal = usesComplex ? cp.addFieldref(Objects.requireNonNull(rcClass),
-				cp.addNameAndType(cp.addUtf8("real"), cp.addUtf8("Ljava/lang/Object;"))) : null;
-		ConstantPool.FieldrefConstant rcImag = usesComplex ? cp.addFieldref(Objects.requireNonNull(rcClass),
-				cp.addNameAndType(cp.addUtf8("imag"), cp.addUtf8("Ljava/lang/Object;"))) : null;
+		ClassEntry rcClass = usesComplex ? cp.classEntry("am/ik/rontolisp/runtime/RontoComplex") : null;
+		FieldRefEntry rcReal = usesComplex ? cp.fieldRef(Objects.requireNonNull(rcClass), "real", "Ljava/lang/Object;")
+				: null;
+		FieldRefEntry rcImag = usesComplex ? cp.fieldRef(Objects.requireNonNull(rcClass), "imag", "Ljava/lang/Object;")
+				: null;
 		JvmRuntimeBuilder.@Nullable ComplexPrintRefs prin1Complex = usesComplex
 				? new JvmRuntimeBuilder.ComplexPrintRefs(rcClass, rcReal, rcImag, lispToStringMethod,
-						cp.addString("#C("), spaceStr, cp.addString(")"), hasComplexField)
+						cp.stringEntry("#C("), spaceStr, cp.stringEntry(")"), hasComplexField)
 				: null;
 		JvmRuntimeBuilder.@Nullable ComplexPrintRefs princComplex = usesComplex
 				? new JvmRuntimeBuilder.ComplexPrintRefs(rcClass, rcReal, rcImag, lispToDisplayStringMethod,
-						cp.addString("#C("), spaceStr, cp.addString(")"), hasComplexField)
+						cp.stringEntry("#C("), spaceStr, cp.stringEntry(")"), hasComplexField)
 				: null;
 		MethodCode ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
@@ -3457,40 +3307,37 @@ public final class JvmLispCompiler implements LispCompiler {
 				packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
 		@Nullable MethodCode instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
-				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"),
-				cp.addString("O"), renderGuard) : null;
-		@Nullable MethodCode instDisplayCode = usesInstances
-				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
-						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToDisplayStringMethod,
-						cp.addString("S"), cp.addString("#S("), cp.addString("#<"), closeParenStr, cp.addString(">"),
-						cp.addString(" :"), spaceStr, cp.addString("P"), null, cp.addString("O"), renderGuard)
-				: null;
+				objectEquals, lispToStringMethod, cp.stringEntry("S"), cp.stringEntry("#S("), cp.stringEntry("#<"),
+				closeParenStr, cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr, cp.stringEntry("P"),
+				cp.stringEntry("#P"), cp.stringEntry("O"), renderGuard) : null;
+		@Nullable MethodCode instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
+				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
+				objectEquals, lispToDisplayStringMethod, cp.stringEntry("S"), cp.stringEntry("#S("),
+				cp.stringEntry("#<"), closeParenStr, cp.stringEntry(">"), cp.stringEntry(" :"), spaceStr,
+				cp.stringEntry("P"), null, cp.stringEntry("O"), renderGuard) : null;
 		MethodCode charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		MethodCode ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass, renderGuard, quoteAbbrev);
 		MethodCode appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
-		ConstantPool.StringConstant quoteStr = cp.addString("\"");
+		StringEntry quoteStr = cp.stringEntry("\"");
 		MethodCode readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
 				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
 
 		// File-stream runtime (open/close/write-line/read-line with a stream)
-		MethodrefConstant stringLengthForIo = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		MethodRefEntry stringLengthForIo = cp.methodRef(stringClass, "length", "()I");
 		// TCP/TLS socket runtime (only when the program uses a rontolisp:tcp-* or
 		// rontolisp:tls-connect built-in); built before the IO runtime so the stream
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
-				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass.entry(), longValueOf.methodRefEntry()) : null;
+				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
 				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
-				? JvmSocketRuntimeBuilder.build(cp, thisClass.entry(), stringClass.entry(), longClass.entry(),
-						longValueOf.methodRefEntry(), longValue.methodRefEntry(), stringLengthForIo.methodRefEntry(),
-						stringSubstring.methodRefEntry(), stringConcat.methodRefEntry(), usesArrays)
+				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
+						stringLengthForIo, stringSubstring, stringConcat, usesArrays)
 				: null;
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
@@ -3539,45 +3386,40 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.needsIoStreamRuntime = LispMacroExpander.opensBidirectionally(program);
 		this.needsStringInputRuntime = fileMeta.stringInputs();
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
-			.create(cp, thisClass.entry(), objectClass.entry(), stringClass.entry(), longClass.entry(),
-					longValueOf.methodRefEntry(), longValue.methodRefEntry(), stringLengthForIo.methodRefEntry(),
-					stringSubstring.methodRefEntry(), stringConcat.methodRefEntry(), systemOut.entry(),
-					printlnStr.methodRefEntry(), readLineHelperMethod.methodRefEntry(), socketRuntime, usesErrorOutput,
-					usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays, usesQuantized,
-					this.needsIoStreamRuntime)
+			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
+					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
+					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
+					usesQuantized, this.needsIoStreamRuntime)
 			.methods();
 		if (flushStreamsMethod != null) {
-			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass.entry()));
+			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));
 		}
-		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
-		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
-		final @Nullable Utf8Constant streamPathsFieldName = fileMeta.streamPaths()
-				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_FIELD) : null;
-		final @Nullable Utf8Constant streamPathsFieldDesc = fileMeta.streamPaths()
-				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_DESC) : null;
-		final @Nullable Utf8Constant streamPositionsFieldName = fileMeta.position()
-				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_POSITIONS_FIELD) : null;
-		final @Nullable Utf8Constant streamPositionsFieldDesc = fileMeta.position()
-				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_POSITIONS_DESC) : null;
-		Utf8Constant streamCountFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
-		Utf8Constant streamCountFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
+		Utf8Entry streamsFieldName = cp.utf8Entry(JvmIoRuntimeBuilder.STREAMS_FIELD);
+		Utf8Entry streamsFieldDesc = cp.utf8Entry(JvmIoRuntimeBuilder.STREAMS_DESC);
+		final @Nullable Utf8Entry streamPathsFieldName = fileMeta.streamPaths()
+				? cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_PATHS_FIELD) : null;
+		final @Nullable Utf8Entry streamPathsFieldDesc = fileMeta.streamPaths()
+				? cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_PATHS_DESC) : null;
+		final @Nullable Utf8Entry streamPositionsFieldName = fileMeta.position()
+				? cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_POSITIONS_FIELD) : null;
+		final @Nullable Utf8Entry streamPositionsFieldDesc = fileMeta.position()
+				? cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_POSITIONS_DESC) : null;
+		Utf8Entry streamCountFieldName = cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
+		Utf8Entry streamCountFieldDesc = cp.utf8Entry(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
 		// Tracks whether stdout is at the start of a line (0 = at line start), so
 		// fresh-line
 		// can decide whether to emit a newline. A static int defaults to 0 (at line
 		// start).
-		Utf8Constant colFieldName = cp.addUtf8(JvmFreshLineCompiler.COL_FIELD);
-		Utf8Constant colFieldDesc = cp.addUtf8(JvmFreshLineCompiler.COL_DESC);
-		Utf8Constant gensymCtrFieldName = cp.addUtf8(JvmGensymCompiler.CTR_FIELD);
-		Utf8Constant gensymCtrFieldDesc = cp.addUtf8(JvmGensymCompiler.CTR_DESC);
+		Utf8Entry colFieldName = cp.utf8Entry(JvmFreshLineCompiler.COL_FIELD);
+		Utf8Entry colFieldDesc = cp.utf8Entry(JvmFreshLineCompiler.COL_DESC);
+		Utf8Entry gensymCtrFieldName = cp.utf8Entry(JvmGensymCompiler.CTR_FIELD);
+		Utf8Entry gensymCtrFieldDesc = cp.utf8Entry(JvmGensymCompiler.CTR_DESC);
 
 		// fetch runtime helper body (only when the program uses rontolisp:fetch; the
 		// generic _await lives in the async runtime).
-		final JvmFetchRuntimeBuilder.@Nullable FetchRuntime fetchRuntimeBodies = usesFetch
-				? JvmFetchRuntimeBuilder.build(cp, objectArrayClass, stringClass, stringLength, stringSubstring,
-						usesArrays
-								? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV),
-										cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
-								: null)
+		final JvmFetchRuntimeBuilder.@Nullable FetchRuntime fetchRuntimeBodies = usesFetch ? JvmFetchRuntimeBuilder
+			.build(cp, objectArrayClass, stringClass, stringLength, stringSubstring, usesArrays
+					? cp.methodRef(thisClass, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC) : null)
 				: null;
 
 		// The sized-stack launcher (.kb/interpreter-stack.md): main runs the program on a
@@ -3588,36 +3430,32 @@ public final class JvmLispCompiler implements LispCompiler {
 		// also hands thread 0 to the run loop when it is a native image's main
 		// (.kb/objc.md, "AppKit belongs to thread 0").
 		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit
-				? JvmSizedMainBuilder.build(cp, thisClass, this.className,
-						cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))),
-						cp.addUtf8("([Ljava/lang/String;)V"),
+				? JvmSizedMainBuilder.build(cp, thisClass, this.className, cp.methodRef(thisClass, "<init>", "()V"),
+						cp.utf8Entry("([Ljava/lang/String;)V"),
 						usesObjc ? JvmObjcRuntimeBuilder.mainThreadName(this.className) : null)
 				: null;
-		final MethodrefConstant ctorObjectInitRef = objectInitRef != null ? objectInitRef : sizedMain != null
-				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
-		final Utf8Constant ctorName = instanceInitName != null ? instanceInitName
-				: sizedMain != null ? cp.addUtf8("<init>") : null;
-		final Utf8Constant ctorDesc = instanceInitDesc != null ? instanceInitDesc
-				: sizedMain != null ? cp.addUtf8("()V") : null;
+		final MethodRefEntry ctorObjectInitRef = objectInitRef != null ? objectInitRef
+				: sizedMain != null ? cp.methodRef(objectClass, "<init>", "()V") : null;
+		final Utf8Entry ctorName = instanceInitName != null ? instanceInitName
+				: sizedMain != null ? cp.utf8Entry("<init>") : null;
+		final Utf8Entry ctorDesc = instanceInitDesc != null ? instanceInitDesc
+				: sizedMain != null ? cp.utf8Entry("()V") : null;
 
 		// The async/await runtime: %async-run + run() (the class implements Runnable),
 		// the generic _await, streams and predicates. It rides the condition channel
 		// (the error payload re-signals typed conditions across the await), so the
 		// channel is forced on.
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncRuntime asyncRuntimeBodies;
-		final @Nullable ClassConstant runnableClass;
+		final @Nullable ClassEntry runnableClass;
 		if (usesAsyncRuntime) {
 			mainCtx.conditionChannel.ensure(cp, this.className);
-			MethodrefConstant progInitForAsync = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			MethodRefEntry progInitForAsync = cp.methodRef(thisClass, "<init>", "()V");
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
 					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
-					recordsAsyncBoundaries ? cp.addMethodref(thisClass,
-							cp.addNameAndType(cp.addUtf8(JvmUncaughtHandler.ASYNC_AWAITED_METHOD),
-									cp.addUtf8(JvmUncaughtHandler.ASYNC_AWAITED_DESC)))
-							: null);
-			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
+					recordsAsyncBoundaries ? cp.methodRef(thisClass, JvmUncaughtHandler.ASYNC_AWAITED_METHOD,
+							JvmUncaughtHandler.ASYNC_AWAITED_DESC) : null);
+			runnableClass = cp.classEntry("java/lang/Runnable");
 		}
 		else {
 			asyncRuntimeBodies = null;
@@ -3632,24 +3470,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the condition channel (call()'s error payload re-signals typed conditions
 		// across the join, the _await pattern).
 		final JvmThreadRuntimeBuilder.@Nullable ThreadRuntime threadRuntimeBodies;
-		final @Nullable ClassConstant callableClass;
-		final ConstantPool.@Nullable FieldrefConstant curThreadTlFieldRef;
-		final @Nullable Utf8Constant curThreadTlFieldName;
-		final @Nullable Utf8Constant curThreadTlFieldDesc;
+		final @Nullable ClassEntry callableClass;
+		final @Nullable FieldRefEntry curThreadTlFieldRef;
+		final @Nullable Utf8Entry curThreadTlFieldName;
+		final @Nullable Utf8Entry curThreadTlFieldDesc;
 		if (usesThreads) {
 			mainCtx.conditionChannel.ensure(cp, this.className);
-			MethodrefConstant progInitForThread = cp.addMethodref(thisClass,
-					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			MethodRefEntry progInitForThread = cp.methodRef(thisClass, "<init>", "()V");
 			// The per-thread handle cache behind _thread_current (declared below,
 			// initialized in <clinit> next to the condition channel's ThreadLocals).
-			curThreadTlFieldName = cp.addUtf8(JvmThreadRuntimeBuilder.CURRENT_TL_FIELD);
-			curThreadTlFieldDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
-			curThreadTlFieldRef = cp.addFieldref(thisClass,
-					cp.addNameAndType(curThreadTlFieldName, curThreadTlFieldDesc));
+			curThreadTlFieldName = cp.utf8Entry(JvmThreadRuntimeBuilder.CURRENT_TL_FIELD);
+			curThreadTlFieldDesc = cp.utf8Entry("Ljava/lang/ThreadLocal;");
+			curThreadTlFieldRef = cp.fieldRef(thisClass, curThreadTlFieldName, curThreadTlFieldDesc);
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
 					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef);
-			callableClass = cp.addClass(cp.addUtf8("java/util/concurrent/Callable"));
+			callableClass = cp.classEntry("java/util/concurrent/Callable");
 		}
 		else {
 			threadRuntimeBodies = null;
@@ -3658,25 +3494,23 @@ public final class JvmLispCompiler implements LispCompiler {
 			curThreadTlFieldName = null;
 			curThreadTlFieldDesc = null;
 		}
-		final @Nullable Utf8Constant threadFnFieldName = usesThreads ? cp.addUtf8(JvmThreadRuntimeBuilder.FN_FIELD)
+		final @Nullable Utf8Entry threadFnFieldName = usesThreads ? cp.utf8Entry(JvmThreadRuntimeBuilder.FN_FIELD)
 				: null;
-		final @Nullable Utf8Constant threadBindingsFieldName = usesThreads
-				? cp.addUtf8(JvmThreadRuntimeBuilder.BINDINGS_FIELD) : null;
-		final @Nullable Utf8Constant threadInstanceFieldDesc = usesThreads ? cp.addUtf8("Ljava/lang/Object;") : null;
-		final @Nullable Utf8Constant handoffFieldName = usesAsyncRuntime
-				? cp.addUtf8(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
-		final @Nullable Utf8Constant handoffFieldDesc = usesAsyncRuntime ? cp.addUtf8("Ljava/lang/ThreadLocal;") : null;
-		final @Nullable Utf8Constant asyncFnFieldName = usesAsyncRuntime ? cp.addUtf8(JvmAsyncRuntimeBuilder.FN_FIELD)
+		final @Nullable Utf8Entry threadBindingsFieldName = usesThreads
+				? cp.utf8Entry(JvmThreadRuntimeBuilder.BINDINGS_FIELD) : null;
+		final @Nullable Utf8Entry threadInstanceFieldDesc = usesThreads ? cp.utf8Entry("Ljava/lang/Object;") : null;
+		final @Nullable Utf8Entry handoffFieldName = usesAsyncRuntime
+				? cp.utf8Entry(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
+		final @Nullable Utf8Entry handoffFieldDesc = usesAsyncRuntime ? cp.utf8Entry("Ljava/lang/ThreadLocal;") : null;
+		final @Nullable Utf8Entry asyncFnFieldName = usesAsyncRuntime ? cp.utf8Entry(JvmAsyncRuntimeBuilder.FN_FIELD)
 				: null;
-		final @Nullable Utf8Constant asyncFutureFieldName = usesAsyncRuntime
-				? cp.addUtf8(JvmAsyncRuntimeBuilder.FUTURE_FIELD) : null;
-		final @Nullable Utf8Constant asyncLatchFieldName = usesAsyncRuntime
-				? cp.addUtf8(JvmAsyncRuntimeBuilder.LATCH_FIELD) : null;
-		final @Nullable Utf8Constant asyncInstanceFieldDesc = usesAsyncRuntime ? cp.addUtf8("Ljava/lang/Object;")
-				: null;
-		final ConstantPool.@Nullable FieldrefConstant handoffFieldRef = usesAsyncRuntime
-				? cp.addFieldref(thisClass, cp.addNameAndType(java.util.Objects.requireNonNull(handoffFieldName),
-						java.util.Objects.requireNonNull(handoffFieldDesc)))
+		final @Nullable Utf8Entry asyncFutureFieldName = usesAsyncRuntime
+				? cp.utf8Entry(JvmAsyncRuntimeBuilder.FUTURE_FIELD) : null;
+		final @Nullable Utf8Entry asyncLatchFieldName = usesAsyncRuntime
+				? cp.utf8Entry(JvmAsyncRuntimeBuilder.LATCH_FIELD) : null;
+		final @Nullable Utf8Entry asyncInstanceFieldDesc = usesAsyncRuntime ? cp.utf8Entry("Ljava/lang/Object;") : null;
+		final @Nullable FieldRefEntry handoffFieldRef = usesAsyncRuntime ? cp.fieldRef(thisClass,
+				java.util.Objects.requireNonNull(handoffFieldName), java.util.Objects.requireNonNull(handoffFieldDesc))
 				: null;
 
 		// length runtime helper. Emitted unconditionally (it is small and lives in its
@@ -3686,7 +3520,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computation lives in one method so each call site is a single invokestatic,
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
-				objectArrayClass.entry(), stringClass.entry(), longValueOf.methodRefEntry(), thisClass.entry(),
+				objectArrayClass, stringClass, longValueOf, thisClass,
 				javaSites != null ? javaSites.direct().lispArray() : null);
 
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
@@ -3697,19 +3531,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		// at all so its loop's backedge sits at operand stack depth 0, the only shape
 		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
 		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp, consShape,
-				thisClass.entry());
+				thisClass);
 		// elt's list walk (%elt-cell), unconditional for the same reason: every elt and
 		// (setf elt) expansion reaches it, and so do the built-in wrappers and library
 		// bodies that read with (elt seq i). The class shaker drops it when unused.
 		final JvmEltCellRuntimeBuilder.EltCellMethod eltCellMethodBody = JvmEltCellRuntimeBuilder.build(cp, consShape,
-				thisClass.entry());
+				thisClass);
 
 		// The &optional surplus-argument message (%arity-surplus-message). Emitted
 		// unconditionally like _nthcdr: its sites are the lambda-list prologue, which the
 		// built-in wrappers and several expansions produce while this backend compiles,
 		// and the class shaker drops it from a program that never checks.
 		final JvmAritySurplusRuntimeBuilder.AritySurplusMethod aritySurplusMethodBody = JvmAritySurplusRuntimeBuilder
-			.build(cp, objectArrayClass.entry());
+			.build(cp, objectArrayClass);
 
 		// The destructuring missing-element message (%arity-missing-message). Emitted
 		// unconditionally beside _aritySurplus: its sites are the destructuring
@@ -3722,28 +3556,28 @@ public final class JvmLispCompiler implements LispCompiler {
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
 		final List<JvmStringIndexRuntimeBuilder.StringIndexMethod> stringIndexMethods = JvmStringIndexRuntimeBuilder
-			.build(cp, thisClass.entry(), stringClass.entry(), usesArrays);
-		final List<Utf8Constant> stringIndexFieldNames = java.util.Arrays.stream(JvmStringIndexRuntimeBuilder.FIELDS)
-			.map(cp::addUtf8)
+			.build(cp, thisClass, stringClass, usesArrays);
+		final List<Utf8Entry> stringIndexFieldNames = java.util.Arrays.stream(JvmStringIndexRuntimeBuilder.FIELDS)
+			.map(cp::utf8Entry)
 			.toList();
-		final Utf8Constant stringIndexFieldDesc = cp.addUtf8(JvmStringIndexRuntimeBuilder.FIELD_DESC);
-		final List<Utf8Constant> stringIndexWideFieldNames = java.util.Arrays
+		final Utf8Entry stringIndexFieldDesc = cp.utf8Entry(JvmStringIndexRuntimeBuilder.FIELD_DESC);
+		final List<Utf8Entry> stringIndexWideFieldNames = java.util.Arrays
 			.stream(JvmStringIndexRuntimeBuilder.WIDE_FIELDS)
-			.map(cp::addUtf8)
+			.map(cp::utf8Entry)
 			.toList();
-		final Utf8Constant stringIndexWideFieldDesc = cp.addUtf8(JvmStringIndexRuntimeBuilder.WIDE_FIELD_DESC);
+		final Utf8Entry stringIndexWideFieldDesc = cp.utf8Entry(JvmStringIndexRuntimeBuilder.WIDE_FIELD_DESC);
 
-		Utf8Constant mainUtf8 = cp.addUtf8("main");
-		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
-		Utf8Constant codeUtf8 = cp.addUtf8("Code");
+		Utf8Entry mainUtf8 = cp.utf8Entry("main");
+		Utf8Entry mainDesc = cp.utf8Entry("([Ljava/lang/String;)V");
+		Utf8Entry codeUtf8 = cp.utf8Entry("Code");
 		// The typed jvm-export wrapper methods (and their marshalling helpers), plus
 		// the _top$run method <clinit> calls to run the top level (see mainCtx above).
 		// Built here so every constant they mint precedes the pool serialization below.
-		final Utf8Constant topRunnerName = topLevelInClinit ? cp.addUtf8("_top$run") : null;
-		final MethodrefConstant topRunnerRef = topRunnerName == null ? null
-				: cp.addMethodref(thisClass, cp.addNameAndType(topRunnerName, topChunkDesc));
+		final Utf8Entry topRunnerName = topLevelInClinit ? cp.utf8Entry("_top$run") : null;
+		final MethodRefEntry topRunnerRef = topRunnerName == null ? null
+				: cp.methodRef(thisClass, topRunnerName, topChunkDesc);
 		final List<JvmExportRuntimeBuilder.BuiltMethod> exportMethods = exportDecls.isEmpty() ? List.of()
-				: JvmExportRuntimeBuilder.build(cp, thisClass.entry(), exportDecls, functions, usesArrays);
+				: JvmExportRuntimeBuilder.build(cp, thisClass, exportDecls, functions, usesArrays);
 
 		// Effectively-final aliases for capture in the writer lambda
 		final Ctx topRunnerCtxFinal = topRunnerCtx;
@@ -3758,7 +3592,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// t = stdout for the two stdio variables, a stream VALUE over handle 2 for
 		// *error-output*, which t cannot name; the constants are minted here for the
 		// same serialization-order reason as the layout half below.
-		final Map<String, FieldrefConstant> streamGlobalSeeds = new LinkedHashMap<>();
+		final Map<String, FieldRefEntry> streamGlobalSeeds = new LinkedHashMap<>();
 		// The eval runtime's global-environment mirror is the SECOND home of the same
 		// value, and symbol-value/boundp/eval read only that one -- so it seeds from the
 		// same table, or a variable the field seeding just bound reads back as unbound
@@ -3766,21 +3600,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		// which keeps a program that never mentions one byte-identical AND is the very
 		// scan the --component stderr narrowing uses, so the two cannot disagree about
 		// whether the reserved handle 2 is reachable.
-		final Map<String, ConstantPool.StringConstant> streamGenvSeeds = new LinkedHashMap<>();
+		final Map<String, StringEntry> streamGenvSeeds = new LinkedHashMap<>();
 		boolean seedsTDesignator = false;
 		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
-			FieldrefConstant globalField = globalFields.get(streamVar.getKey());
+			FieldRefEntry globalField = globalFields.get(streamVar.getKey());
 			if (globalField != null) {
 				streamGlobalSeeds.put(streamVar.getKey(), globalField);
 			}
 			if (usesEval && programUsesSymbol(program, streamVar.getKey())) {
-				streamGenvSeeds.put(streamVar.getKey(), cp.addString(streamVar.getKey()));
+				streamGenvSeeds.put(streamVar.getKey(), cp.stringEntry(streamVar.getKey()));
 			}
 			seedsTDesignator |= streamVar.getValue() instanceof LispTrue
 					&& (globalField != null || streamGenvSeeds.containsKey(streamVar.getKey()));
 		}
 		final boolean seedsStandardStream = !streamGlobalSeeds.isEmpty() || !streamGenvSeeds.isEmpty();
-		final ConstantPool.StringConstant standardOutputTStr = seedsTDesignator ? cp.addString("T") : null;
+		final StringEntry standardOutputTStr = seedsTDesignator ? cp.stringEntry("T") : null;
 		// *error-output*'s default is a stream VALUE, so its layout constant has to be
 		// interned BEFORE the layout half of <clinit> is assembled just below -- and
 		// emitted before the seed reads it, which is why the seed loop comes after
@@ -3791,10 +3625,10 @@ public final class JvmLispCompiler implements LispCompiler {
 					&& (streamGlobalSeeds.containsKey(streamVar.getKey())
 							|| streamGenvSeeds.containsKey(streamVar.getKey()));
 		}
-		final @Nullable FieldrefConstant streamLayoutField = seedsStreamValue
+		final @Nullable FieldRefEntry streamLayoutField = seedsStreamValue
 				? mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.STREAM) : null;
-		final ConstantPool.@Nullable StringConstant streamKindStandardStr = seedsStreamValue
-				? cp.addString(am.ik.rontolisp.LispLayout.Kinds.STANDARD) : null;
+		final @Nullable StringEntry streamKindStandardStr = seedsStreamValue
+				? cp.stringEntry(am.ik.rontolisp.LispLayout.Kinds.STANDARD) : null;
 		// The layout half of <clinit>, assembled HERE because it mints CONSTANT_String
 		// entries and the constant pool is serialized by .writeConstantPool(cp) below,
 		// before the writeFields/writeMethods lambdas run.
@@ -3813,13 +3647,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// stream designator in a program that opens nothing. A helper that indexes the
 		// table from a raw handle ahead of its stderr branch (the socket probes in
 		// _writeString) then reads an empty slot instead of a null table.
-		final @Nullable FieldrefConstant streamsFieldRef = usesErrorOutput
-				? cp.addFieldref(thisClass, cp.addNameAndType(streamsFieldName, streamsFieldDesc)) : null;
-		final @Nullable FieldrefConstant streamCountFieldRef = usesErrorOutput
-				? cp.addFieldref(thisClass, cp.addNameAndType(streamCountFieldName, streamCountFieldDesc)) : null;
+		final @Nullable FieldRefEntry streamsFieldRef = usesErrorOutput
+				? cp.fieldRef(thisClass, streamsFieldName, streamsFieldDesc) : null;
+		final @Nullable FieldRefEntry streamCountFieldRef = usesErrorOutput
+				? cp.fieldRef(thisClass, streamCountFieldName, streamCountFieldDesc) : null;
 		final boolean initsClinit = seedsStandardStream || usesErrorOutput || topLevelInClinit || usesComplex;
-		final Utf8Constant standardOutputClinitName = initsClinit ? cp.addUtf8("<clinit>") : null;
-		final Utf8Constant standardOutputClinitDesc = initsClinit ? cp.addUtf8("()V") : null;
+		final Utf8Entry standardOutputClinitName = initsClinit ? cp.utf8Entry("<clinit>") : null;
+		final Utf8Entry standardOutputClinitDesc = initsClinit ? cp.utf8Entry("()V") : null;
 
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
@@ -3912,7 +3746,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// index into one is 1 + i. Deliberately NOT volatile: a String is
 		// immutable and a reference field is written atomically, so a racing
 		// reader sees an older string (a re-probe) but never a torn pair.
-		for (Utf8Constant siName : stringIndexFieldNames) {
+		for (Utf8Entry siName : stringIndexFieldNames) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, siName, stringIndexFieldDesc);
 		}
 		// The two breakpoint tables, for the strings that DO hold a surrogate
@@ -3922,7 +3756,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// a racing reader could match the string and then read an unwritten
 		// offset, answering a position inside the framing quote. The release
 		// fence is the publication (.kb/string-index-cost.md).
-		for (Utf8Constant siName : stringIndexWideFieldNames) {
+		for (Utf8Entry siName : stringIndexWideFieldNames) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, siName,
 					stringIndexWideFieldDesc);
 		}
@@ -3952,7 +3786,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
 					java.util.Objects.requireNonNull(handoffFieldName),
 					java.util.Objects.requireNonNull(handoffFieldDesc));
-			for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
+			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
 					java.util.Objects.requireNonNull(asyncFutureFieldName),
 					java.util.Objects.requireNonNull(asyncLatchFieldName))) {
 				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
@@ -3967,7 +3801,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					mvPerThread.ownerDesc());
 		}
 		if (threadRuntimeBodies != null) {
-			for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
+			for (Utf8Entry instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
 					java.util.Objects.requireNonNull(threadBindingsFieldName))) {
 				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
 						Objects.requireNonNull(threadInstanceFieldDesc));
@@ -3978,18 +3812,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// One static Object field per top-level global variable (default null =
 		// nil); written by setq/defvar, read by getstatic from any method body.
-		for (Utf8Constant gfName : globalFieldNameUtfs) {
+		for (Utf8Entry gfName : globalFieldNameUtfs) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gfName, globalFieldDescUtf);
 		}
 		// The raw long half and the int flag of an unboxed global's triple; the
 		// _g$ field above is its boxed shadow. Both default to 0, so the flag
 		// starts clear and the shadow's null (nil) is authoritative -- exactly
 		// the state a plain global starts in.
-		for (Utf8Constant rgName : rawGlobalLongFieldNameUtfs) {
+		for (Utf8Entry rgName : rawGlobalLongFieldNameUtfs) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rgName,
 					Objects.requireNonNull(rawGlobalLongDescUtf));
 		}
-		for (Utf8Constant rkName : rawGlobalFlagFieldNameUtfs) {
+		for (Utf8Entry rkName : rawGlobalFlagFieldNameUtfs) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rkName,
 					Objects.requireNonNull(rawGlobalFlagDescUtf));
 		}
@@ -3997,7 +3831,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// One static ThreadLocal per dynamically-bound special: the thread's
 			// innermost dynamic binding as a one-element Object[] cell (see
 			// JvmDynVarRuntimeBuilder); created in <clinit>.
-			for (Utf8Constant dfName : dynVarRuntime.fieldNameUtfs()) {
+			for (Utf8Entry dfName : dynVarRuntime.fieldNameUtfs()) {
 				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dfName,
 						dynVarRuntime.fieldDescUtf());
 			}
@@ -4184,22 +4018,22 @@ public final class JvmLispCompiler implements LispCompiler {
 			ConditionChannel channel = mainCtx.conditionChannel;
 			List<FieldRefEntry> tlFields = new java.util.ArrayList<>();
 			if (channel.used) {
-				tlFields.add(java.util.Objects.requireNonNull(channel.condTlField).entry());
-				tlFields.add(java.util.Objects.requireNonNull(channel.depthTlField).entry());
+				tlFields.add(java.util.Objects.requireNonNull(channel.condTlField));
+				tlFields.add(java.util.Objects.requireNonNull(channel.depthTlField));
 				if (handoffFieldRef != null) {
-					tlFields.add(handoffFieldRef.entry());
+					tlFields.add(handoffFieldRef);
 				}
 			}
 			if (channel.nleUsed) {
-				tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField).entry());
+				tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
 			}
 			if (teTlField != null) {
-				tlFields.add(teTlField.entry());
+				tlFields.add(teTlField);
 				channel.ensureThreadLocalInfra(cp);
 			}
 			if (curThreadTlFieldRef != null) {
 				// The _thread_current handle cache joins the same initializer.
-				tlFields.add(curThreadTlFieldRef.entry());
+				tlFields.add(curThreadTlFieldRef);
 			}
 			if (mvChannel != null && mvChannel.perThread() != null) {
 				// The per-thread %mv-spill store joins the same initializer: every
@@ -4219,11 +4053,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			// <clinit> may run already sees the settled value.
 			if (usesComplex) {
 				MethodCode.Label tryStart = clinitCode.newBoundLabel();
-				clinitCode.ldc(java.util.Objects.requireNonNull(hasComplexTarget).entry());
-				clinitCode.invokestatic(java.util.Objects.requireNonNull(hasComplexProbe).methodRefEntry());
+				clinitCode.ldc(java.util.Objects.requireNonNull(hasComplexTarget));
+				clinitCode.invokestatic(java.util.Objects.requireNonNull(hasComplexProbe));
 				clinitCode.pop();
 				clinitCode.iconst_1();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField).entry());
+				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
 				MethodCode.Label tryEnd = clinitCode.newBoundLabel();
 				MethodCode.Label done = clinitCode.newLabel();
 				clinitCode.goto_(done);
@@ -4231,15 +4065,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				// The caught exception is on the stack on handler entry.
 				clinitCode.pop();
 				clinitCode.iconst_0();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField).entry());
+				clinitCode.putstatic(java.util.Objects.requireNonNull(hasComplexField));
 				clinitCode.labelBinding(done);
 				clinitCode.exceptionCatch(tryStart, tryEnd, handler,
-						java.util.Objects.requireNonNull(hasComplexAbsent).entry());
+						java.util.Objects.requireNonNull(hasComplexAbsent));
 			}
 			for (FieldRefEntry tlField : tlFields) {
-				clinitCode.new_(java.util.Objects.requireNonNull(channel.threadLocalClass).entry());
+				clinitCode.new_(java.util.Objects.requireNonNull(channel.threadLocalClass));
 				clinitCode.dup();
-				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor).methodRefEntry());
+				clinitCode.invokespecial(java.util.Objects.requireNonNull(channel.tlCtor));
 				clinitCode.putstatic(tlField);
 			}
 			if (dynVarRuntime != null) {
@@ -4254,10 +4088,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				// _streams = new Object[16]; _streamCount = 3 -- the reserved
 				// standard-stream handles as empty table slots (see above).
 				clinitCode.loadConstant(16);
-				clinitCode.anewarray(objectClass.entry());
-				clinitCode.putstatic(streamsFieldRef.entry());
+				clinitCode.anewarray(objectClass);
+				clinitCode.putstatic(streamsFieldRef);
 				clinitCode.iconst_3();
-				clinitCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef).entry());
+				clinitCode.putstatic(java.util.Objects.requireNonNull(streamCountFieldRef));
 			}
 			// The bignum literals go in before the layouts: they are plain
 			// values with no dependency of their own, and every later fragment
@@ -4269,26 +4103,26 @@ public final class JvmLispCompiler implements LispCompiler {
 			// a direct read uses, and the eval runtime's _genv mirror that
 			// symbol-value / boundp / eval probe.
 			for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
-				FieldrefConstant globalField = streamGlobalSeeds.get(streamVar.getKey());
+				FieldRefEntry globalField = streamGlobalSeeds.get(streamVar.getKey());
 				if (globalField != null) {
 					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
 							streamLayoutField, streamKindStandardStr);
-					clinitCode.putstatic(globalField.entry());
+					clinitCode.putstatic(globalField);
 				}
-				ConstantPool.StringConstant seedName = streamGenvSeeds.get(streamVar.getKey());
+				StringEntry seedName = streamGenvSeeds.get(streamVar.getKey());
 				if (seedName != null) {
 					// _genv = {{name, default}, _genv} -- the binding shape
 					// _store prepends, so a later top-level assignment MUTATES
 					// this cell rather than shadowing it.
 					clinitCode.iconst_2();
-					clinitCode.anewarray(objectClass.entry());
+					clinitCode.anewarray(objectClass);
 					clinitCode.dup();
 					clinitCode.iconst_0();
 					clinitCode.iconst_2();
-					clinitCode.anewarray(objectClass.entry());
+					clinitCode.anewarray(objectClass);
 					clinitCode.dup();
 					clinitCode.iconst_0();
-					clinitCode.ldc(seedName.entry());
+					clinitCode.ldc(seedName);
 					clinitCode.aastore();
 					clinitCode.dup();
 					clinitCode.iconst_1();
@@ -4298,9 +4132,9 @@ public final class JvmLispCompiler implements LispCompiler {
 					clinitCode.aastore();
 					clinitCode.dup();
 					clinitCode.iconst_1();
-					clinitCode.getstatic(genvField.entry());
+					clinitCode.getstatic(genvField);
 					clinitCode.aastore();
-					clinitCode.putstatic(genvField.entry());
+					clinitCode.putstatic(genvField);
 				}
 			}
 			if (structTableClinitFinal != null) {
@@ -4310,19 +4144,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				// Run the top level last, after every piece of runtime infra
 				// above is seeded — this is the export-carrying class's
 				// "top level at instantiation" (see mainCtx above).
-				clinitCode.invokestatic(topRunnerRef.methodRefEntry());
+				clinitCode.invokestatic(topRunnerRef);
 			}
 			clinitCode.return_();
 			// A layout-only program never runs ensureThreadLocalInfra, so the
 			// channel's <clinit> name constants are null there; a
 			// bound-special-only
 			// program has neither, so the dyn-var runtime carries its own.
-			Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
+			Utf8Entry clinitNameUtf = channel.clinitName != null ? channel.clinitName
 					: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
 							: dynVarRuntime != null ? dynVarRuntime.clinitName()
 									: standardOutputClinitName != null ? standardOutputClinitName
 											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
-			Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
+			Utf8Entry clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
 					: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
 							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
 									: standardOutputClinitDesc != null ? standardOutputClinitDesc
@@ -4340,9 +4174,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mainCtx.conditionChannel.used || teTlField != null) {
 			// _tlMap, and _condTake/_condPut: the records a throwable carries, keyed by
 			// it (JvmThrowableRecords).
-			for (JvmNumericRuntimeBuilder.NumericMethod rm : JvmThrowableRecords.build(
-					cp, thisClass.entry(), mainCtx.conditionChannel.used
-							? Objects.requireNonNull(mainCtx.conditionChannel.condTlField).entry() : null,
+			for (JvmNumericRuntimeBuilder.NumericMethod rm : JvmThrowableRecords.build(cp, thisClass,
+					mainCtx.conditionChannel.used ? Objects.requireNonNull(mainCtx.conditionChannel.condTlField) : null,
 					mainCtx.conditionChannel.condRan != null)) {
 				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
 						rm.code());
@@ -4405,7 +4238,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			JvmJavaImplementations implementations = javaSites.implementations();
 			Set<String> callbacks = implementations.callbackNames();
 			for (JvmJavaDirectSites.Method method : implementations.methods()) {
-				boolean callback = callbacks.contains(cp.utf8At(method.name().index()));
+				boolean callback = callbacks.contains(method.name().stringValue());
 				definition.addMethod(callback ? AccessFlag.ACC_STATIC : AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
 						method.name(), method.desc(), method.code());
 			}
@@ -4514,27 +4347,27 @@ public final class JvmLispCompiler implements LispCompiler {
 			// :insecure trust-all manager; the http-handler directive does the
 			// same for the RontoHttpServer.Handler instance.
 			// The sized-stack launcher does it for its Runnable.
-			Utf8Constant initName = ctorName;
-			Utf8Constant initDesc = java.util.Objects.requireNonNull(ctorDesc);
+			Utf8Entry initName = ctorName;
+			Utf8Entry initDesc = java.util.Objects.requireNonNull(ctorDesc);
 			MethodCode instanceInitCode = new MethodCode();
 			instanceInitCode.aload(0);
-			instanceInitCode.invokespecial(java.util.Objects.requireNonNull(ctorObjectInitRef).methodRefEntry());
+			instanceInitCode.invokespecial(java.util.Objects.requireNonNull(ctorObjectInitRef));
 			instanceInitCode.return_();
 			definition.addMethod(AccessFlag.ACC_PUBLIC, initName, initDesc, instanceInitCode);
 		}
 		if (usesTlsConnect) {
-			Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
-			Utf8Constant serverName = java.util.Objects.requireNonNull(checkServerName);
-			Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
-			Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
-			Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
+			Utf8Entry clientName = java.util.Objects.requireNonNull(checkClientName);
+			Utf8Entry serverName = java.util.Objects.requireNonNull(checkServerName);
+			Utf8Entry trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
+			Utf8Entry issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
+			Utf8Entry issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
 			// X509TrustManager: trust-all client/server checks (empty bodies) and
 			// an empty accepted-issuers array.
 			definition.addMethod(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, new MethodCode().return_());
 			definition.addMethod(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, new MethodCode().return_());
 			MethodCode acceptedIssuersCode = new MethodCode();
 			acceptedIssuersCode.iconst_0();
-			acceptedIssuersCode.anewarray(java.util.Objects.requireNonNull(x509CertificateClass).entry());
+			acceptedIssuersCode.anewarray(java.util.Objects.requireNonNull(x509CertificateClass));
 			acceptedIssuersCode.areturn();
 			definition.addMethod(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc, acceptedIssuersCode);
 		}
@@ -4609,7 +4442,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// hops are read from (JvmUncaughtHandler): only in a class something was
 		// located in.
 		if (sourceSites != null) {
-			definition.lineNumberTableName(cp.addUtf8("LineNumberTable"));
+			definition.lineNumberTableName(cp.utf8Entry("LineNumberTable"));
 			List<JvmUncaughtHandler.Built> reportMethods = new ArrayList<>();
 			reportMethods.add(JvmUncaughtHandler.buildWhere(cp, this.className, sourceSites, mainCtx.printlnStr));
 			if (recordsAsyncBoundaries) {
@@ -4632,7 +4465,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc,
 				charPrin1Code);
 		for (int g = 0; g < lookupBodies.size(); g++) {
-			Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
+			Utf8Entry segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc,
 					lookupBodies.get(g));
 		}
@@ -4792,8 +4625,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		ConstantPool cp = definition.cp();
 		JvmClassSplitter.Split split = JvmClassSplitter.write(definition, roots,
-				method -> pinnedNames.contains(cp.utf8At(method.name().index())), this.classPoolLimit,
-				this.writeTarget());
+				method -> pinnedNames.contains(method.name().stringValue()), this.classPoolLimit, this.writeTarget());
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
 			parts.put(part.getKey() + ".class", part.getValue());
@@ -4962,40 +4794,39 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * -- the variable's global field and the eval runtime's {@code _genv} mirror -- both
 	 * push it through here, so neither can drift from {@code StreamDesignators}' table.
 	 */
-	private static void emitStreamDefault(MethodCode code, LispVal value,
-			ConstantPool.@Nullable StringConstant tDesignator, MethodrefConstant longValueOf,
-			ConstantPool.ClassConstant objectClass, @Nullable FieldrefConstant streamLayoutField,
-			ConstantPool.@Nullable StringConstant streamKindStr) {
+	private static void emitStreamDefault(MethodCode code, LispVal value, @Nullable StringEntry tDesignator,
+			MethodRefEntry longValueOf, ClassEntry objectClass, @Nullable FieldRefEntry streamLayoutField,
+			@Nullable StringEntry streamKindStr) {
 		if (value instanceof LispCons) {
 			// *error-output*'s default is the stream VALUE over the reserved handle 2:
 			// Object[]{layout, Long(2), ":STANDARD"} -- the same shape
 			// JvmObjCompiler.emitWrapStream builds at a producer, written out here
 			// because <clinit> has no expression compiler.
 			code.loadConstant(1 + am.ik.rontolisp.LispLayout.STREAM.capacity());
-			code.anewarray(objectClass.entry());
+			code.anewarray(objectClass);
 			code.dup();
 			code.iconst_0();
-			code.getstatic(java.util.Objects.requireNonNull(streamLayoutField).entry());
+			code.getstatic(java.util.Objects.requireNonNull(streamLayoutField));
 			code.aastore();
 			code.dup();
 			code.iconst_1();
 			code.loadConstant((int) StreamDesignators.STANDARD_ERROR_HANDLE);
 			code.i2l();
-			code.invokestatic(longValueOf.methodRefEntry());
+			code.invokestatic(longValueOf);
 			code.aastore();
 			code.dup();
 			code.iconst_2();
-			code.ldc(java.util.Objects.requireNonNull(streamKindStr).entry());
+			code.ldc(java.util.Objects.requireNonNull(streamKindStr));
 			code.aastore();
 			return;
 		}
 		if (value instanceof LispInteger handle) {
 			code.loadConstant((int) handle.value());
 			code.i2l();
-			code.invokestatic(longValueOf.methodRefEntry());
+			code.invokestatic(longValueOf);
 			return;
 		}
-		code.ldc(java.util.Objects.requireNonNull(tDesignator).entry());
+		code.ldc(java.util.Objects.requireNonNull(tDesignator));
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
@@ -5622,7 +5453,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * arguments.
 	 */
 	record FunctionInfo(int funcId, int paramCount, boolean variadic, int optionals, boolean isClosure,
-			MethodrefConstant methodref, Utf8Constant nameUtf8, Utf8Constant descUtf8) {
+			MethodRefEntry methodref, Utf8Entry nameUtf8, Utf8Entry descUtf8) {
 
 		/**
 		 * {@return the arguments a call must pass at least}
@@ -5669,7 +5500,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			@Nullable String writtenIn) {
 	}
 
-	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
+	record DispatchMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
 	}
 
 	/**
@@ -5723,7 +5554,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		boolean used = false;
 
-		@Nullable FieldrefConstant condTlField;
+		@Nullable FieldRefEntry condTlField;
 
 		/** {@code _condTake(Throwable)Object}: a landing's read of what it caught. */
 		@Nullable MethodRefEntry condTake;
@@ -5748,21 +5579,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		@Nullable MethodRefEntry condOf;
 
-		@Nullable Utf8Constant fieldName;
+		@Nullable Utf8Entry fieldName;
 
-		@Nullable Utf8Constant fieldDesc;
+		@Nullable Utf8Entry fieldDesc;
 
-		@Nullable ClassConstant threadLocalClass;
+		@Nullable ClassEntry threadLocalClass;
 
-		@Nullable MethodrefConstant tlCtor;
+		@Nullable MethodRefEntry tlCtor;
 
-		@Nullable MethodrefConstant tlSet;
+		@Nullable MethodRefEntry tlSet;
 
-		@Nullable MethodrefConstant tlGet;
+		@Nullable MethodRefEntry tlGet;
 
-		@Nullable Utf8Constant clinitName;
+		@Nullable Utf8Entry clinitName;
 
-		@Nullable Utf8Constant clinitDesc;
+		@Nullable Utf8Entry clinitDesc;
 
 		/**
 		 * The per-thread {@code handler-case} handler-depth counter (a
@@ -5770,9 +5601,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code %signal-cond} -- {@code signal} raises only when a handler is
 		 * established.
 		 */
-		@Nullable FieldrefConstant depthTlField;
+		@Nullable FieldRefEntry depthTlField;
 
-		@Nullable Utf8Constant depthFieldName;
+		@Nullable Utf8Entry depthFieldName;
 
 		/**
 		 * True when the program lowers a cross-lambda {@code return-from}: the
@@ -5784,9 +5615,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		boolean nleUsed = false;
 
-		@Nullable FieldrefConstant nleTlField;
+		@Nullable FieldRefEntry nleTlField;
 
-		@Nullable Utf8Constant nleFieldName;
+		@Nullable Utf8Entry nleFieldName;
 
 		/**
 		 * The shared {@code %hb-guard} landing pad ({@code _hbGuard}), built on the first
@@ -5794,7 +5625,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * Held here rather than per method because the pad reads only the caught
 		 * throwable and the class-wide channel, so one copy serves the whole class.
 		 */
-		@Nullable MethodrefConstant hbGuardPad;
+		@Nullable MethodRefEntry hbGuardPad;
 
 		/**
 		 * The shared synthesis of a condition-less throw's instance ({@code _hcSynth}),
@@ -5802,7 +5633,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code handler-case} landing and the {@code _hbGuard} pad. Class-wide for the
 		 * same reason as {@link #hbGuardPad}: it reads only the caught throwable.
 		 */
-		@Nullable MethodrefConstant conditionSynthesizer;
+		@Nullable MethodRefEntry conditionSynthesizer;
 
 		/**
 		 * Lazily creates the constant-pool entries (idempotent adds) and marks the
@@ -5814,15 +5645,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				return;
 			}
 			this.used = true;
-			this.fieldName = cp.addUtf8("_condTl");
-			this.fieldDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			this.condTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.fieldName, this.fieldDesc));
-			this.depthFieldName = cp.addUtf8("_hcDepthTl");
-			this.depthTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.depthFieldName, this.fieldDesc));
-			this.condTake = JvmThrowableRecords.self(cp, thisClass.entry(), JvmThrowableRecords.COND_TAKE,
+			this.fieldName = cp.utf8Entry("_condTl");
+			this.fieldDesc = cp.utf8Entry("Ljava/lang/ThreadLocal;");
+			ClassEntry thisClass = cp.classEntry(className);
+			this.condTlField = cp.fieldRef(thisClass, this.fieldName, this.fieldDesc);
+			this.depthFieldName = cp.utf8Entry("_hcDepthTl");
+			this.depthTlField = cp.fieldRef(thisClass, this.depthFieldName, this.fieldDesc);
+			this.condTake = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_TAKE,
 					JvmThrowableRecords.COND_TAKE_DESC);
-			this.condPut = JvmThrowableRecords.self(cp, thisClass.entry(), JvmThrowableRecords.COND_PUT,
+			this.condPut = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_PUT,
 					JvmThrowableRecords.COND_PUT_DESC);
 			ensureThreadLocalInfra(cp);
 		}
@@ -5838,10 +5669,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (this.condRan != null) {
 				return;
 			}
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			this.condRan = JvmThrowableRecords.self(cp, thisClass.entry(), JvmThrowableRecords.COND_RAN,
+			ClassEntry thisClass = cp.classEntry(className);
+			this.condRan = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_RAN,
 					JvmThrowableRecords.COND_RAN_DESC);
-			this.condOf = JvmThrowableRecords.self(cp, thisClass.entry(), JvmThrowableRecords.COND_OF,
+			this.condOf = JvmThrowableRecords.self(cp, thisClass, JvmThrowableRecords.COND_OF,
 					JvmThrowableRecords.COND_OF_DESC);
 		}
 
@@ -5856,10 +5687,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				return;
 			}
 			this.nleUsed = true;
-			this.fieldDesc = this.fieldDesc != null ? this.fieldDesc : cp.addUtf8("Ljava/lang/ThreadLocal;");
-			this.nleFieldName = cp.addUtf8("_nleTl");
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			this.nleTlField = cp.addFieldref(thisClass, cp.addNameAndType(this.nleFieldName, this.fieldDesc));
+			this.fieldDesc = this.fieldDesc != null ? this.fieldDesc : cp.utf8Entry("Ljava/lang/ThreadLocal;");
+			this.nleFieldName = cp.utf8Entry("_nleTl");
+			ClassEntry thisClass = cp.classEntry(className);
+			this.nleTlField = cp.fieldRef(thisClass, this.nleFieldName, this.fieldDesc);
 			ensureThreadLocalInfra(cp);
 		}
 
@@ -5867,15 +5698,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (this.threadLocalClass != null) {
 				return;
 			}
-			this.threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
-			this.tlCtor = cp.addMethodref(this.threadLocalClass,
-					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-			this.tlSet = cp.addMethodref(this.threadLocalClass,
-					cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
-			this.tlGet = cp.addMethodref(this.threadLocalClass,
-					cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
-			this.clinitName = cp.addUtf8("<clinit>");
-			this.clinitDesc = cp.addUtf8("()V");
+			this.threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
+			this.tlCtor = cp.methodRef(this.threadLocalClass, "<init>", "()V");
+			this.tlSet = cp.methodRef(this.threadLocalClass, "set", "(Ljava/lang/Object;)V");
+			this.tlGet = cp.methodRef(this.threadLocalClass, "get", "()Ljava/lang/Object;");
+			this.clinitName = cp.utf8Entry("<clinit>");
+			this.clinitDesc = cp.utf8Entry("()V");
 		}
 
 	}
@@ -5907,22 +5735,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
 		 * @param layout the layout the field holds
 		 */
-		record LayoutField(Utf8Constant name, FieldrefConstant ref, am.ik.rontolisp.LispLayout layout) {
+		record LayoutField(Utf8Entry name, FieldRefEntry ref, am.ik.rontolisp.LispLayout layout) {
 		}
 
 		private final Map<String, LayoutField> byTag = new java.util.LinkedHashMap<>();
 
 		private final Set<String> usedFieldNames = new HashSet<>();
 
-		@Nullable Utf8Constant fieldDesc;
+		@Nullable Utf8Entry fieldDesc;
 
-		@Nullable ClassConstant stringArrayCls;
+		@Nullable ClassEntry stringArrayCls;
 
-		@Nullable ClassConstant stringCls;
+		@Nullable ClassEntry stringCls;
 
-		@Nullable Utf8Constant clinitName;
+		@Nullable Utf8Entry clinitName;
 
-		@Nullable Utf8Constant clinitDesc;
+		@Nullable Utf8Entry clinitDesc;
 
 		/**
 		 * Whether no layout field has been interned, i.e. the program builds no instance.
@@ -5946,9 +5774,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param cp the constant pool
 		 * @return the class constant
 		 */
-		ClassConstant stringArrayClass(ConstantPool cp) {
+		ClassEntry stringArrayClass(ConstantPool cp) {
 			if (this.stringArrayCls == null) {
-				this.stringArrayCls = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
+				this.stringArrayCls = cp.classEntry("[Ljava/lang/String;");
 			}
 			return this.stringArrayCls;
 		}
@@ -5960,21 +5788,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param layout the layout to intern
 		 * @return the fieldref of the layout constant
 		 */
-		FieldrefConstant intern(ConstantPool cp, String className, am.ik.rontolisp.LispLayout layout) {
+		FieldRefEntry intern(ConstantPool cp, String className, am.ik.rontolisp.LispLayout layout) {
 			LayoutField existing = this.byTag.get(layout.tag());
 			if (existing != null) {
 				return existing.ref();
 			}
 			stringArrayClass(cp);
 			if (this.stringCls == null) {
-				this.stringCls = cp.addClass(cp.addUtf8("java/lang/String"));
+				this.stringCls = cp.classEntry("java/lang/String");
 			}
 			if (this.fieldDesc == null) {
-				this.fieldDesc = cp.addUtf8("[Ljava/lang/String;");
+				this.fieldDesc = cp.utf8Entry("[Ljava/lang/String;");
 			}
 			if (this.clinitName == null) {
-				this.clinitName = cp.addUtf8("<clinit>");
-				this.clinitDesc = cp.addUtf8("()V");
+				this.clinitName = cp.utf8Entry("<clinit>");
+				this.clinitDesc = cp.utf8Entry("()V");
 			}
 			// The mangled tag can in principle collide with another mangled tag; the
 			// used-name set makes the field name deterministic and unique anyway.
@@ -5983,9 +5811,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (int n = 1; !this.usedFieldNames.add(name); n++) {
 				name = base + "$" + n;
 			}
-			Utf8Constant nameUtf = cp.addUtf8(name);
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			FieldrefConstant ref = cp.addFieldref(thisClass, cp.addNameAndType(nameUtf, this.fieldDesc));
+			Utf8Entry nameUtf = cp.utf8Entry(name);
+			ClassEntry thisClass = cp.classEntry(className);
+			FieldRefEntry ref = cp.fieldRef(thisClass, nameUtf, this.fieldDesc);
 			this.byTag.put(layout.tag(), new LayoutField(nameUtf, ref, layout));
 			return ref;
 		}
@@ -6008,14 +5836,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				});
 				parts.addAll(lf.layout().slotNames());
 				code.loadConstant(parts.size());
-				code.anewarray(Objects.requireNonNull(this.stringCls).entry());
+				code.anewarray(Objects.requireNonNull(this.stringCls));
 				for (int i = 0; i < parts.size(); i++) {
 					code.dup();
 					code.loadConstant(i);
-					code.ldc(cp.addString(parts.get(i)).entry());
+					code.ldc(cp.stringEntry(parts.get(i)));
 					code.aastore();
 				}
-				code.putstatic(lf.ref().entry());
+				code.putstatic(lf.ref());
 			}
 		}
 
@@ -6043,20 +5871,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param ref the fieldref used by {@code GETSTATIC}/{@code PUTSTATIC}
 		 * @param value the value the field holds
 		 */
-		record BigIntField(Utf8Constant name, FieldrefConstant ref, java.math.BigInteger value) {
+		record BigIntField(Utf8Entry name, FieldRefEntry ref, java.math.BigInteger value) {
 		}
 
 		private final Map<java.math.BigInteger, BigIntField> byValue = new java.util.LinkedHashMap<>();
 
-		@Nullable Utf8Constant fieldDesc;
+		@Nullable Utf8Entry fieldDesc;
 
-		@Nullable ClassConstant bigIntegerCls;
+		@Nullable ClassEntry bigIntegerCls;
 
-		@Nullable MethodrefConstant ctor;
+		@Nullable MethodRefEntry ctor;
 
-		@Nullable Utf8Constant clinitName;
+		@Nullable Utf8Entry clinitName;
 
-		@Nullable Utf8Constant clinitDesc;
+		@Nullable Utf8Entry clinitDesc;
 
 		/**
 		 * Whether no bignum literal has been interned, i.e. the program has none.
@@ -6081,23 +5909,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param value the literal to intern
 		 * @return the fieldref of the constant
 		 */
-		FieldrefConstant intern(ConstantPool cp, String className, java.math.BigInteger value) {
+		FieldRefEntry intern(ConstantPool cp, String className, java.math.BigInteger value) {
 			BigIntField existing = this.byValue.get(value);
 			if (existing != null) {
 				return existing.ref();
 			}
 			if (this.bigIntegerCls == null) {
-				this.bigIntegerCls = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-				this.ctor = cp.addMethodref(this.bigIntegerCls,
-						cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
-				this.fieldDesc = cp.addUtf8("Ljava/math/BigInteger;");
-				this.clinitName = cp.addUtf8("<clinit>");
-				this.clinitDesc = cp.addUtf8("()V");
+				this.bigIntegerCls = cp.classEntry("java/math/BigInteger");
+				this.ctor = cp.methodRef(this.bigIntegerCls, "<init>", "(Ljava/lang/String;)V");
+				this.fieldDesc = cp.utf8Entry("Ljava/math/BigInteger;");
+				this.clinitName = cp.utf8Entry("<clinit>");
+				this.clinitDesc = cp.utf8Entry("()V");
 			}
-			Utf8Constant nameUtf = cp.addUtf8("_bi$" + this.byValue.size());
-			ClassConstant thisClass = cp.addClass(cp.addUtf8(className));
-			FieldrefConstant ref = cp.addFieldref(thisClass,
-					cp.addNameAndType(nameUtf, Objects.requireNonNull(this.fieldDesc)));
+			Utf8Entry nameUtf = cp.utf8Entry("_bi$" + this.byValue.size());
+			ClassEntry thisClass = cp.classEntry(className);
+			FieldRefEntry ref = cp.fieldRef(thisClass, nameUtf, Objects.requireNonNull(this.fieldDesc));
 			this.byValue.put(value, new BigIntField(nameUtf, ref, value));
 			return ref;
 		}
@@ -6109,11 +5935,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		void emitClinitInit(MethodCode code, ConstantPool cp) {
 			for (BigIntField bf : this.byValue.values()) {
-				code.new_(Objects.requireNonNull(this.bigIntegerCls).entry());
+				code.new_(Objects.requireNonNull(this.bigIntegerCls));
 				code.dup();
-				code.ldc(cp.addString(bf.value().toString()).entry());
-				code.invokespecial(Objects.requireNonNull(this.ctor).methodRefEntry());
-				code.putstatic(bf.ref().entry());
+				code.ldc(cp.stringEntry(bf.value().toString()));
+				code.invokespecial(Objects.requireNonNull(this.ctor));
+				code.putstatic(bf.ref());
 			}
 		}
 
@@ -6204,85 +6030,85 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final ConstantPool cp;
 
-		final FieldrefConstant systemOut;
+		final FieldRefEntry systemOut;
 
-		final MethodrefConstant printlnStr;
+		final MethodRefEntry printlnStr;
 
-		final MethodrefConstant lispToString;
+		final MethodRefEntry lispToString;
 
-		final MethodrefConstant printStr;
+		final MethodRefEntry printStr;
 
-		final MethodrefConstant printlnVoid;
+		final MethodRefEntry printlnVoid;
 
-		final MethodrefConstant lispToDisplayString;
+		final MethodRefEntry lispToDisplayString;
 
-		final ClassConstant longClass;
+		final ClassEntry longClass;
 
-		final MethodrefConstant longValueOf;
+		final MethodRefEntry longValueOf;
 
-		final MethodrefConstant longValue;
+		final MethodRefEntry longValue;
 
-		final ClassConstant objectClass;
+		final ClassEntry objectClass;
 
-		final ClassConstant objectArrayClass;
+		final ClassEntry objectArrayClass;
 
-		final ClassConstant integerClass;
+		final ClassEntry integerClass;
 
-		final MethodrefConstant integerValueOf;
+		final MethodRefEntry integerValueOf;
 
-		final MethodrefConstant integerValue;
+		final MethodRefEntry integerValue;
 
-		final ClassConstant doubleClass;
+		final ClassEntry doubleClass;
 
-		final MethodrefConstant doubleValueOf;
+		final MethodRefEntry doubleValueOf;
 
-		final ClassConstant numberClass;
+		final ClassEntry numberClass;
 
-		final MethodrefConstant numberDoubleValue;
+		final MethodRefEntry numberDoubleValue;
 
-		final ClassConstant stringClass;
+		final ClassEntry stringClass;
 
-		final MethodrefConstant stringCharAt;
+		final MethodRefEntry stringCharAt;
 
-		final MethodrefConstant appendMethod;
+		final MethodRefEntry appendMethod;
 
-		final MethodrefConstant mathAbsLong;
+		final MethodRefEntry mathAbsLong;
 
-		final MethodrefConstant mathAbsDouble;
+		final MethodRefEntry mathAbsDouble;
 
-		final MethodrefConstant mathFloor;
+		final MethodRefEntry mathFloor;
 
-		final MethodrefConstant mathCeil;
+		final MethodRefEntry mathCeil;
 
-		final MethodrefConstant mathRint;
+		final MethodRefEntry mathRint;
 
-		final MethodrefConstant objectEquals;
+		final MethodRefEntry objectEquals;
 
-		final MethodrefConstant readLineHelper;
+		final MethodRefEntry readLineHelper;
 
-		final @Nullable MethodrefConstant fetchHelper;
+		final @Nullable MethodRefEntry fetchHelper;
 
-		final @Nullable MethodrefConstant awaitHelper;
+		final @Nullable MethodRefEntry awaitHelper;
 
-		final @Nullable MethodrefConstant asyncRunHelper;
+		final @Nullable MethodRefEntry asyncRunHelper;
 
-		final @Nullable MethodrefConstant futurepHelper;
+		final @Nullable MethodRefEntry futurepHelper;
 
-		final @Nullable MethodrefConstant streampHelper;
+		final @Nullable MethodRefEntry streampHelper;
 
-		final @Nullable MethodrefConstant makeStreamHelper;
+		final @Nullable MethodRefEntry makeStreamHelper;
 
-		final @Nullable MethodrefConstant streamNewHelper;
+		final @Nullable MethodRefEntry streamNewHelper;
 
-		final @Nullable MethodrefConstant streamReadHelper;
+		final @Nullable MethodRefEntry streamReadHelper;
 
-		final @Nullable MethodrefConstant streamWriteHelper;
+		final @Nullable MethodRefEntry streamWriteHelper;
 
-		final @Nullable MethodrefConstant streamCloseHelper;
+		final @Nullable MethodRefEntry streamCloseHelper;
 
-		final @Nullable MethodrefConstant drainBodyHelper;
+		final @Nullable MethodRefEntry drainBodyHelper;
 
-		final @Nullable MethodrefConstant waitForHelper;
+		final @Nullable MethodRefEntry waitForHelper;
 
 		/**
 		 * {@code _flushStreams}, for a program that opens a file stream (null otherwise):
@@ -6290,31 +6116,31 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * the uncaught-condition handler -- calls first, so an output file the program
 		 * never closed keeps what it still buffers ({@link JvmFlushStreamsBuilder}).
 		 */
-		final @Nullable MethodrefConstant flushStreams;
+		final @Nullable MethodRefEntry flushStreams;
 
-		final @Nullable MethodrefConstant tcpConnectHelper;
+		final @Nullable MethodRefEntry tcpConnectHelper;
 
-		final @Nullable MethodrefConstant tcpListenHelper;
+		final @Nullable MethodRefEntry tcpListenHelper;
 
-		final @Nullable MethodrefConstant tcpAcceptHelper;
+		final @Nullable MethodRefEntry tcpAcceptHelper;
 
-		final @Nullable MethodrefConstant tcpLocalPortHelper;
+		final @Nullable MethodRefEntry tcpLocalPortHelper;
 
-		final @Nullable MethodrefConstant tcpLocalAddressHelper;
+		final @Nullable MethodRefEntry tcpLocalAddressHelper;
 
-		final @Nullable MethodrefConstant tcpPeerAddressHelper;
+		final @Nullable MethodRefEntry tcpPeerAddressHelper;
 
-		final @Nullable MethodrefConstant tcpPeerPortHelper;
+		final @Nullable MethodRefEntry tcpPeerPortHelper;
 
-		final @Nullable MethodrefConstant tcpSetTimeoutHelper;
+		final @Nullable MethodRefEntry tcpSetTimeoutHelper;
 
-		final @Nullable MethodrefConstant tlsConnectHelper;
+		final @Nullable MethodRefEntry tlsConnectHelper;
 
-		final @Nullable MethodrefConstant tlsUpgradeHelper;
+		final @Nullable MethodRefEntry tlsUpgradeHelper;
 
-		final @Nullable MethodrefConstant tlsListenHelper;
+		final @Nullable MethodRefEntry tlsListenHelper;
 
-		final @Nullable MethodrefConstant tlsListenP12Helper;
+		final @Nullable MethodRefEntry tlsListenP12Helper;
 
 		/**
 		 * The {@code rontolisp:http-handler} runtime references (handler-funcref field,
@@ -6328,7 +6154,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code call}/{@code static}/{@code field}/{@code proxy}); null unless the
 		 * program uses a {@code java:} function.
 		 */
-		final @Nullable Map<String, MethodrefConstant> javaOps;
+		final @Nullable Map<String, MethodRefEntry> javaOps;
 
 		/** How each {@code java:} site resolves; null when the program has none. */
 		final @Nullable JvmJavaSites javaSites;
@@ -6337,13 +6163,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * The {@code objc:} bridge references ({@code init} plus one per verb); null
 		 * unless the program uses an {@code objc:} verb.
 		 */
-		final @Nullable Map<String, MethodrefConstant> objcOps;
+		final @Nullable Map<String, MethodRefEntry> objcOps;
 
 		/**
 		 * The {@code ffi:} bridge references ({@code init} plus one per verb); null
 		 * unless the program uses an {@code ffi:} verb.
 		 */
-		final @Nullable Map<String, MethodrefConstant> ffiOps;
+		final @Nullable Map<String, MethodRefEntry> ffiOps;
 
 		/**
 		 * The accelerated {@code vec:} bridge references ({@code init} plus one per
@@ -6352,33 +6178,33 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * acceleration runtime for a program that uses a vectorizable {@code vec:}
 		 * kernel.
 		 */
-		final @Nullable Map<String, MethodrefConstant> simdOps;
+		final @Nullable Map<String, MethodRefEntry> simdOps;
 
 		/**
 		 * The CBLAS bridge references ({@code init} and the one product kernel); null
 		 * unless {@code --blas} emitted the bridge for a program that reaches
 		 * {@code linalg:dot}.
 		 */
-		final @Nullable Map<String, MethodrefConstant> blasOps;
+		final @Nullable Map<String, MethodRefEntry> blasOps;
 
 		/**
 		 * The device bridge references ({@code init} and the one product kernel); null
 		 * unless {@code --gpu} emitted the bridge for a program that reaches
 		 * {@code linalg:dot}.
 		 */
-		final @Nullable Map<String, MethodrefConstant> gpuOps;
+		final @Nullable Map<String, MethodRefEntry> gpuOps;
 
 		/**
 		 * The {@code geom:} kernel bridge's references, or null when the program calls
 		 * none of the four accelerated members ({@link JvmGeomKernelCompiler}).
 		 */
-		final @Nullable Map<String, MethodrefConstant> geomOps;
+		final @Nullable Map<String, MethodRefEntry> geomOps;
 
-		Map<String, MethodrefConstant> numOps = Map.of();
+		Map<String, MethodRefEntry> numOps = Map.of();
 
-		Map<String, MethodrefConstant> mathOps = Map.of();
+		Map<String, MethodRefEntry> mathOps = Map.of();
 
-		Map<String, MethodrefConstant> systemOps = Map.of();
+		Map<String, MethodRefEntry> systemOps = Map.of();
 
 		/**
 		 * The operator of the innermost form being compiled (set by
@@ -6497,7 +6323,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * whole compilation, like {@link #outlinedBodies}, whose list the built bodies
 		 * join.
 		 */
-		final Map<String, MethodrefConstant> sharedHelpers;
+		final Map<String, MethodRefEntry> sharedHelpers;
 
 		/**
 		 * The tail spine this form belongs to, or null. Set by {@link JvmBodyOutliner}
@@ -6839,7 +6665,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code eval}. Used to mirror top-level global variable bindings into the eval
 		 * runtime's global environment; null otherwise.
 		 */
-		@Nullable MethodrefConstant evalStoreRef;
+		@Nullable MethodRefEntry evalStoreRef;
 
 		/**
 		 * The one top-level form whose returned NAME the emitter is dropping, or
@@ -6981,7 +6807,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		/**
 		 * Maps a global variable name to its backing {@code private static Object} field.
 		 */
-		Map<String, FieldrefConstant> globalFields = Map.of();
+		Map<String, FieldRefEntry> globalFields = Map.of();
 
 		/**
 		 * The {@code %mv-spill} channel's store ({@link JvmMvChannel}), or null when the
@@ -7367,7 +7193,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param name its name
 		 * @param descriptor its descriptor
 		 */
-		void addTo(ClassDefinition.Builder definition, int access, Utf8Constant name, Utf8Constant descriptor) {
+		void addTo(ClassDefinition.Builder definition, int access, Utf8Entry name, Utf8Entry descriptor) {
 			definition.addMethod(access, name, descriptor, this.body, this.lines());
 		}
 
@@ -7458,129 +7284,129 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private @Nullable ConstantPool cp;
 
-			private @Nullable FieldrefConstant systemOut;
+			private @Nullable FieldRefEntry systemOut;
 
-			private @Nullable MethodrefConstant printlnStr;
+			private @Nullable MethodRefEntry printlnStr;
 
-			private @Nullable MethodrefConstant lispToString;
+			private @Nullable MethodRefEntry lispToString;
 
-			private @Nullable MethodrefConstant printStr;
+			private @Nullable MethodRefEntry printStr;
 
-			private @Nullable MethodrefConstant printlnVoid;
+			private @Nullable MethodRefEntry printlnVoid;
 
-			private @Nullable MethodrefConstant lispToDisplayString;
+			private @Nullable MethodRefEntry lispToDisplayString;
 
-			private @Nullable ClassConstant longClass;
+			private @Nullable ClassEntry longClass;
 
-			private @Nullable MethodrefConstant longValueOf;
+			private @Nullable MethodRefEntry longValueOf;
 
-			private @Nullable MethodrefConstant longValue;
+			private @Nullable MethodRefEntry longValue;
 
-			private @Nullable ClassConstant objectClass;
+			private @Nullable ClassEntry objectClass;
 
-			private @Nullable ClassConstant objectArrayClass;
+			private @Nullable ClassEntry objectArrayClass;
 
-			private @Nullable ClassConstant integerClass;
+			private @Nullable ClassEntry integerClass;
 
-			private @Nullable MethodrefConstant integerValueOf;
+			private @Nullable MethodRefEntry integerValueOf;
 
-			private @Nullable MethodrefConstant integerValue;
+			private @Nullable MethodRefEntry integerValue;
 
-			private @Nullable ClassConstant doubleClass;
+			private @Nullable ClassEntry doubleClass;
 
-			private @Nullable MethodrefConstant doubleValueOf;
+			private @Nullable MethodRefEntry doubleValueOf;
 
-			private @Nullable ClassConstant numberClass;
+			private @Nullable ClassEntry numberClass;
 
-			private @Nullable MethodrefConstant numberDoubleValue;
+			private @Nullable MethodRefEntry numberDoubleValue;
 
-			private @Nullable ClassConstant stringClass;
+			private @Nullable ClassEntry stringClass;
 
-			private @Nullable MethodrefConstant stringCharAt;
+			private @Nullable MethodRefEntry stringCharAt;
 
-			private @Nullable MethodrefConstant appendMethod;
+			private @Nullable MethodRefEntry appendMethod;
 
-			private @Nullable MethodrefConstant mathAbsLong;
+			private @Nullable MethodRefEntry mathAbsLong;
 
-			private @Nullable MethodrefConstant mathAbsDouble;
+			private @Nullable MethodRefEntry mathAbsDouble;
 
-			private @Nullable MethodrefConstant mathFloor;
+			private @Nullable MethodRefEntry mathFloor;
 
-			private @Nullable MethodrefConstant mathCeil;
+			private @Nullable MethodRefEntry mathCeil;
 
-			private @Nullable MethodrefConstant mathRint;
+			private @Nullable MethodRefEntry mathRint;
 
-			private @Nullable MethodrefConstant objectEquals;
+			private @Nullable MethodRefEntry objectEquals;
 
-			private @Nullable MethodrefConstant readLineHelper;
+			private @Nullable MethodRefEntry readLineHelper;
 
-			private @Nullable MethodrefConstant fetchHelper;
+			private @Nullable MethodRefEntry fetchHelper;
 
-			private @Nullable MethodrefConstant awaitHelper;
+			private @Nullable MethodRefEntry awaitHelper;
 
-			private @Nullable MethodrefConstant asyncRunHelper;
+			private @Nullable MethodRefEntry asyncRunHelper;
 
-			private @Nullable MethodrefConstant futurepHelper;
+			private @Nullable MethodRefEntry futurepHelper;
 
-			private @Nullable MethodrefConstant streampHelper;
+			private @Nullable MethodRefEntry streampHelper;
 
-			private @Nullable MethodrefConstant makeStreamHelper;
+			private @Nullable MethodRefEntry makeStreamHelper;
 
-			private @Nullable MethodrefConstant streamNewHelper;
+			private @Nullable MethodRefEntry streamNewHelper;
 
-			private @Nullable MethodrefConstant streamReadHelper;
+			private @Nullable MethodRefEntry streamReadHelper;
 
-			private @Nullable MethodrefConstant streamWriteHelper;
+			private @Nullable MethodRefEntry streamWriteHelper;
 
-			private @Nullable MethodrefConstant streamCloseHelper;
+			private @Nullable MethodRefEntry streamCloseHelper;
 
-			private @Nullable MethodrefConstant drainBodyHelper;
+			private @Nullable MethodRefEntry drainBodyHelper;
 
-			private @Nullable MethodrefConstant waitForHelper;
+			private @Nullable MethodRefEntry waitForHelper;
 
-			private @Nullable MethodrefConstant flushStreams;
+			private @Nullable MethodRefEntry flushStreams;
 
-			private @Nullable MethodrefConstant tcpConnectHelper;
+			private @Nullable MethodRefEntry tcpConnectHelper;
 
-			private @Nullable MethodrefConstant tcpListenHelper;
+			private @Nullable MethodRefEntry tcpListenHelper;
 
-			private @Nullable MethodrefConstant tcpAcceptHelper;
+			private @Nullable MethodRefEntry tcpAcceptHelper;
 
-			private @Nullable MethodrefConstant tcpLocalPortHelper;
+			private @Nullable MethodRefEntry tcpLocalPortHelper;
 
-			private @Nullable MethodrefConstant tcpLocalAddressHelper;
+			private @Nullable MethodRefEntry tcpLocalAddressHelper;
 
-			private @Nullable MethodrefConstant tcpPeerAddressHelper;
+			private @Nullable MethodRefEntry tcpPeerAddressHelper;
 
-			private @Nullable MethodrefConstant tcpPeerPortHelper;
+			private @Nullable MethodRefEntry tcpPeerPortHelper;
 
-			private @Nullable MethodrefConstant tcpSetTimeoutHelper;
+			private @Nullable MethodRefEntry tcpSetTimeoutHelper;
 
-			private @Nullable MethodrefConstant tlsConnectHelper;
+			private @Nullable MethodRefEntry tlsConnectHelper;
 
-			private @Nullable MethodrefConstant tlsUpgradeHelper;
+			private @Nullable MethodRefEntry tlsUpgradeHelper;
 
-			private @Nullable MethodrefConstant tlsListenHelper;
+			private @Nullable MethodRefEntry tlsListenHelper;
 
-			private @Nullable MethodrefConstant tlsListenP12Helper;
+			private @Nullable MethodRefEntry tlsListenP12Helper;
 
 			private JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
 
-			private @Nullable Map<String, MethodrefConstant> javaOps;
+			private @Nullable Map<String, MethodRefEntry> javaOps;
 
 			private @Nullable JvmJavaSites javaSites;
 
-			private @Nullable Map<String, MethodrefConstant> objcOps;
+			private @Nullable Map<String, MethodRefEntry> objcOps;
 
-			private @Nullable Map<String, MethodrefConstant> ffiOps;
+			private @Nullable Map<String, MethodRefEntry> ffiOps;
 
-			private @Nullable Map<String, MethodrefConstant> simdOps;
+			private @Nullable Map<String, MethodRefEntry> simdOps;
 
-			private @Nullable Map<String, MethodrefConstant> blasOps;
+			private @Nullable Map<String, MethodRefEntry> blasOps;
 
-			private @Nullable Map<String, MethodrefConstant> gpuOps;
+			private @Nullable Map<String, MethodRefEntry> gpuOps;
 
-			private @Nullable Map<String, MethodrefConstant> geomOps;
+			private @Nullable Map<String, MethodRefEntry> geomOps;
 
 			private Map<String, FunctionInfo> functions = Map.of();
 
@@ -7602,7 +7428,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private final int[] nextOutlinedBodyId = new int[1];
 
-			private final Map<String, MethodrefConstant> sharedHelpers = new LinkedHashMap<>();
+			private final Map<String, MethodRefEntry> sharedHelpers = new LinkedHashMap<>();
 
 			private boolean dynamic = false;
 
@@ -7696,7 +7522,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private Set<String> specialVars = Set.of();
 
-			private Map<String, FieldrefConstant> globalFields = Map.of();
+			private Map<String, FieldRefEntry> globalFields = Map.of();
 
 			private @Nullable JvmMvChannel mvChannel;
 
@@ -7709,280 +7535,280 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
 
-			private Map<String, MethodrefConstant> numOps = Map.of();
+			private Map<String, MethodRefEntry> numOps = Map.of();
 
 			private JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
-			private Map<String, MethodrefConstant> mathOps = Map.of();
+			private Map<String, MethodRefEntry> mathOps = Map.of();
 
-			private Map<String, MethodrefConstant> systemOps = Map.of();
+			private Map<String, MethodRefEntry> systemOps = Map.of();
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
 				return this;
 			}
 
-			Builder systemOut(FieldrefConstant systemOut) {
+			Builder systemOut(FieldRefEntry systemOut) {
 				this.systemOut = systemOut;
 				return this;
 			}
 
-			Builder printlnStr(MethodrefConstant printlnStr) {
+			Builder printlnStr(MethodRefEntry printlnStr) {
 				this.printlnStr = printlnStr;
 				return this;
 			}
 
-			Builder lispToString(MethodrefConstant lispToString) {
+			Builder lispToString(MethodRefEntry lispToString) {
 				this.lispToString = lispToString;
 				return this;
 			}
 
-			Builder printStr(MethodrefConstant printStr) {
+			Builder printStr(MethodRefEntry printStr) {
 				this.printStr = printStr;
 				return this;
 			}
 
-			Builder printlnVoid(MethodrefConstant printlnVoid) {
+			Builder printlnVoid(MethodRefEntry printlnVoid) {
 				this.printlnVoid = printlnVoid;
 				return this;
 			}
 
-			Builder lispToDisplayString(MethodrefConstant lispToDisplayString) {
+			Builder lispToDisplayString(MethodRefEntry lispToDisplayString) {
 				this.lispToDisplayString = lispToDisplayString;
 				return this;
 			}
 
-			Builder longClass(ClassConstant longClass) {
+			Builder longClass(ClassEntry longClass) {
 				this.longClass = longClass;
 				return this;
 			}
 
-			Builder longValueOf(MethodrefConstant longValueOf) {
+			Builder longValueOf(MethodRefEntry longValueOf) {
 				this.longValueOf = longValueOf;
 				return this;
 			}
 
-			Builder longValue(MethodrefConstant longValue) {
+			Builder longValue(MethodRefEntry longValue) {
 				this.longValue = longValue;
 				return this;
 			}
 
-			Builder objectClass(ClassConstant objectClass) {
+			Builder objectClass(ClassEntry objectClass) {
 				this.objectClass = objectClass;
 				return this;
 			}
 
-			Builder objectArrayClass(ClassConstant objectArrayClass) {
+			Builder objectArrayClass(ClassEntry objectArrayClass) {
 				this.objectArrayClass = objectArrayClass;
 				return this;
 			}
 
-			Builder integerClass(ClassConstant integerClass) {
+			Builder integerClass(ClassEntry integerClass) {
 				this.integerClass = integerClass;
 				return this;
 			}
 
-			Builder integerValueOf(MethodrefConstant integerValueOf) {
+			Builder integerValueOf(MethodRefEntry integerValueOf) {
 				this.integerValueOf = integerValueOf;
 				return this;
 			}
 
-			Builder integerValue(MethodrefConstant integerValue) {
+			Builder integerValue(MethodRefEntry integerValue) {
 				this.integerValue = integerValue;
 				return this;
 			}
 
-			Builder doubleClass(ClassConstant doubleClass) {
+			Builder doubleClass(ClassEntry doubleClass) {
 				this.doubleClass = doubleClass;
 				return this;
 			}
 
-			Builder doubleValueOf(MethodrefConstant doubleValueOf) {
+			Builder doubleValueOf(MethodRefEntry doubleValueOf) {
 				this.doubleValueOf = doubleValueOf;
 				return this;
 			}
 
-			Builder numberClass(ClassConstant numberClass) {
+			Builder numberClass(ClassEntry numberClass) {
 				this.numberClass = numberClass;
 				return this;
 			}
 
-			Builder numberDoubleValue(MethodrefConstant numberDoubleValue) {
+			Builder numberDoubleValue(MethodRefEntry numberDoubleValue) {
 				this.numberDoubleValue = numberDoubleValue;
 				return this;
 			}
 
-			Builder stringClass(ClassConstant stringClass) {
+			Builder stringClass(ClassEntry stringClass) {
 				this.stringClass = stringClass;
 				return this;
 			}
 
-			Builder stringCharAt(MethodrefConstant stringCharAt) {
+			Builder stringCharAt(MethodRefEntry stringCharAt) {
 				this.stringCharAt = stringCharAt;
 				return this;
 			}
 
-			Builder appendMethod(MethodrefConstant appendMethod) {
+			Builder appendMethod(MethodRefEntry appendMethod) {
 				this.appendMethod = appendMethod;
 				return this;
 			}
 
-			Builder mathAbsLong(MethodrefConstant mathAbsLong) {
+			Builder mathAbsLong(MethodRefEntry mathAbsLong) {
 				this.mathAbsLong = mathAbsLong;
 				return this;
 			}
 
-			Builder mathAbsDouble(MethodrefConstant mathAbsDouble) {
+			Builder mathAbsDouble(MethodRefEntry mathAbsDouble) {
 				this.mathAbsDouble = mathAbsDouble;
 				return this;
 			}
 
-			Builder mathFloor(MethodrefConstant mathFloor) {
+			Builder mathFloor(MethodRefEntry mathFloor) {
 				this.mathFloor = mathFloor;
 				return this;
 			}
 
-			Builder mathCeil(MethodrefConstant mathCeil) {
+			Builder mathCeil(MethodRefEntry mathCeil) {
 				this.mathCeil = mathCeil;
 				return this;
 			}
 
-			Builder mathRint(MethodrefConstant mathRint) {
+			Builder mathRint(MethodRefEntry mathRint) {
 				this.mathRint = mathRint;
 				return this;
 			}
 
-			Builder objectEquals(MethodrefConstant objectEquals) {
+			Builder objectEquals(MethodRefEntry objectEquals) {
 				this.objectEquals = objectEquals;
 				return this;
 			}
 
-			Builder readLineHelper(MethodrefConstant readLineHelper) {
+			Builder readLineHelper(MethodRefEntry readLineHelper) {
 				this.readLineHelper = readLineHelper;
 				return this;
 			}
 
-			Builder fetchHelper(@Nullable MethodrefConstant fetchHelper) {
+			Builder fetchHelper(@Nullable MethodRefEntry fetchHelper) {
 				this.fetchHelper = fetchHelper;
 				return this;
 			}
 
-			Builder awaitHelper(@Nullable MethodrefConstant awaitHelper) {
+			Builder awaitHelper(@Nullable MethodRefEntry awaitHelper) {
 				this.awaitHelper = awaitHelper;
 				return this;
 			}
 
-			Builder asyncRunHelper(@Nullable MethodrefConstant asyncRunHelper) {
+			Builder asyncRunHelper(@Nullable MethodRefEntry asyncRunHelper) {
 				this.asyncRunHelper = asyncRunHelper;
 				return this;
 			}
 
-			Builder futurepHelper(@Nullable MethodrefConstant futurepHelper) {
+			Builder futurepHelper(@Nullable MethodRefEntry futurepHelper) {
 				this.futurepHelper = futurepHelper;
 				return this;
 			}
 
-			Builder streampHelper(@Nullable MethodrefConstant streampHelper) {
+			Builder streampHelper(@Nullable MethodRefEntry streampHelper) {
 				this.streampHelper = streampHelper;
 				return this;
 			}
 
-			Builder makeStreamHelper(@Nullable MethodrefConstant makeStreamHelper) {
+			Builder makeStreamHelper(@Nullable MethodRefEntry makeStreamHelper) {
 				this.makeStreamHelper = makeStreamHelper;
 				return this;
 			}
 
-			Builder streamNewHelper(@Nullable MethodrefConstant streamNewHelper) {
+			Builder streamNewHelper(@Nullable MethodRefEntry streamNewHelper) {
 				this.streamNewHelper = streamNewHelper;
 				return this;
 			}
 
-			Builder streamReadHelper(@Nullable MethodrefConstant streamReadHelper) {
+			Builder streamReadHelper(@Nullable MethodRefEntry streamReadHelper) {
 				this.streamReadHelper = streamReadHelper;
 				return this;
 			}
 
-			Builder streamWriteHelper(@Nullable MethodrefConstant streamWriteHelper) {
+			Builder streamWriteHelper(@Nullable MethodRefEntry streamWriteHelper) {
 				this.streamWriteHelper = streamWriteHelper;
 				return this;
 			}
 
-			Builder streamCloseHelper(@Nullable MethodrefConstant streamCloseHelper) {
+			Builder streamCloseHelper(@Nullable MethodRefEntry streamCloseHelper) {
 				this.streamCloseHelper = streamCloseHelper;
 				return this;
 			}
 
-			Builder drainBodyHelper(@Nullable MethodrefConstant drainBodyHelper) {
+			Builder drainBodyHelper(@Nullable MethodRefEntry drainBodyHelper) {
 				this.drainBodyHelper = drainBodyHelper;
 				return this;
 			}
 
-			Builder waitForHelper(@Nullable MethodrefConstant waitForHelper) {
+			Builder waitForHelper(@Nullable MethodRefEntry waitForHelper) {
 				this.waitForHelper = waitForHelper;
 				return this;
 			}
 
-			Builder flushStreams(@Nullable MethodrefConstant flushStreams) {
+			Builder flushStreams(@Nullable MethodRefEntry flushStreams) {
 				this.flushStreams = flushStreams;
 				return this;
 			}
 
-			Builder tcpConnectHelper(@Nullable MethodrefConstant tcpConnectHelper) {
+			Builder tcpConnectHelper(@Nullable MethodRefEntry tcpConnectHelper) {
 				this.tcpConnectHelper = tcpConnectHelper;
 				return this;
 			}
 
-			Builder tcpListenHelper(@Nullable MethodrefConstant tcpListenHelper) {
+			Builder tcpListenHelper(@Nullable MethodRefEntry tcpListenHelper) {
 				this.tcpListenHelper = tcpListenHelper;
 				return this;
 			}
 
-			Builder tcpAcceptHelper(@Nullable MethodrefConstant tcpAcceptHelper) {
+			Builder tcpAcceptHelper(@Nullable MethodRefEntry tcpAcceptHelper) {
 				this.tcpAcceptHelper = tcpAcceptHelper;
 				return this;
 			}
 
-			Builder tcpLocalAddressHelper(@Nullable MethodrefConstant tcpLocalAddressHelper) {
+			Builder tcpLocalAddressHelper(@Nullable MethodRefEntry tcpLocalAddressHelper) {
 				this.tcpLocalAddressHelper = tcpLocalAddressHelper;
 				return this;
 			}
 
-			Builder tcpPeerAddressHelper(@Nullable MethodrefConstant tcpPeerAddressHelper) {
+			Builder tcpPeerAddressHelper(@Nullable MethodRefEntry tcpPeerAddressHelper) {
 				this.tcpPeerAddressHelper = tcpPeerAddressHelper;
 				return this;
 			}
 
-			Builder tcpPeerPortHelper(@Nullable MethodrefConstant tcpPeerPortHelper) {
+			Builder tcpPeerPortHelper(@Nullable MethodRefEntry tcpPeerPortHelper) {
 				this.tcpPeerPortHelper = tcpPeerPortHelper;
 				return this;
 			}
 
-			Builder tcpSetTimeoutHelper(@Nullable MethodrefConstant tcpSetTimeoutHelper) {
+			Builder tcpSetTimeoutHelper(@Nullable MethodRefEntry tcpSetTimeoutHelper) {
 				this.tcpSetTimeoutHelper = tcpSetTimeoutHelper;
 				return this;
 			}
 
-			Builder tcpLocalPortHelper(@Nullable MethodrefConstant tcpLocalPortHelper) {
+			Builder tcpLocalPortHelper(@Nullable MethodRefEntry tcpLocalPortHelper) {
 				this.tcpLocalPortHelper = tcpLocalPortHelper;
 				return this;
 			}
 
-			Builder tlsConnectHelper(@Nullable MethodrefConstant tlsConnectHelper) {
+			Builder tlsConnectHelper(@Nullable MethodRefEntry tlsConnectHelper) {
 				this.tlsConnectHelper = tlsConnectHelper;
 				return this;
 			}
 
-			Builder tlsUpgradeHelper(@Nullable MethodrefConstant tlsUpgradeHelper) {
+			Builder tlsUpgradeHelper(@Nullable MethodRefEntry tlsUpgradeHelper) {
 				this.tlsUpgradeHelper = tlsUpgradeHelper;
 				return this;
 			}
 
-			Builder tlsListenHelper(@Nullable MethodrefConstant tlsListenHelper) {
+			Builder tlsListenHelper(@Nullable MethodRefEntry tlsListenHelper) {
 				this.tlsListenHelper = tlsListenHelper;
 				return this;
 			}
 
-			Builder tlsListenP12Helper(@Nullable MethodrefConstant tlsListenP12Helper) {
+			Builder tlsListenP12Helper(@Nullable MethodRefEntry tlsListenP12Helper) {
 				this.tlsListenP12Helper = tlsListenP12Helper;
 				return this;
 			}
@@ -7992,7 +7818,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder javaOps(@Nullable Map<String, MethodrefConstant> javaOps) {
+			Builder javaOps(@Nullable Map<String, MethodRefEntry> javaOps) {
 				this.javaOps = javaOps;
 				return this;
 			}
@@ -8002,32 +7828,32 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder objcOps(@Nullable Map<String, MethodrefConstant> objcOps) {
+			Builder objcOps(@Nullable Map<String, MethodRefEntry> objcOps) {
 				this.objcOps = objcOps;
 				return this;
 			}
 
-			Builder ffiOps(@Nullable Map<String, MethodrefConstant> ffiOps) {
+			Builder ffiOps(@Nullable Map<String, MethodRefEntry> ffiOps) {
 				this.ffiOps = ffiOps;
 				return this;
 			}
 
-			Builder simdOps(@Nullable Map<String, MethodrefConstant> simdOps) {
+			Builder simdOps(@Nullable Map<String, MethodRefEntry> simdOps) {
 				this.simdOps = simdOps;
 				return this;
 			}
 
-			Builder blasOps(@Nullable Map<String, MethodrefConstant> blasOps) {
+			Builder blasOps(@Nullable Map<String, MethodRefEntry> blasOps) {
 				this.blasOps = blasOps;
 				return this;
 			}
 
-			Builder gpuOps(@Nullable Map<String, MethodrefConstant> gpuOps) {
+			Builder gpuOps(@Nullable Map<String, MethodRefEntry> gpuOps) {
 				this.gpuOps = gpuOps;
 				return this;
 			}
 
-			Builder geomOps(@Nullable Map<String, MethodrefConstant> geomOps) {
+			Builder geomOps(@Nullable Map<String, MethodRefEntry> geomOps) {
 				this.geomOps = geomOps;
 				return this;
 			}
@@ -8302,7 +8128,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder globalFields(Map<String, FieldrefConstant> globalFields) {
+			Builder globalFields(Map<String, FieldRefEntry> globalFields) {
 				this.globalFields = globalFields;
 				return this;
 			}
@@ -8312,12 +8138,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder numOps(Map<String, MethodrefConstant> numOps) {
+			Builder numOps(Map<String, MethodRefEntry> numOps) {
 				this.numOps = numOps;
 				return this;
 			}
 
-			Builder mathOps(Map<String, MethodrefConstant> mathOps) {
+			Builder mathOps(Map<String, MethodRefEntry> mathOps) {
 				this.mathOps = mathOps;
 				return this;
 			}
@@ -8327,7 +8153,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder systemOps(Map<String, MethodrefConstant> systemOps) {
+			Builder systemOps(Map<String, MethodRefEntry> systemOps) {
 				this.systemOps = systemOps;
 				return this;
 			}
@@ -8338,9 +8164,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		}
 
-		MethodrefConstant numOp(String key) {
-			MethodrefConstant ref = Objects.requireNonNull(this.numOps.get(key),
-					() -> "Unknown numeric helper: " + key);
+		MethodRefEntry numOp(String key) {
+			MethodRefEntry ref = Objects.requireNonNull(this.numOps.get(key), () -> "Unknown numeric helper: " + key);
 			String desc = JvmNumericRuntimeBuilder.wrappedDesc(key);
 			return desc == null ? ref : wrapForOperator(key, desc, ref);
 		}
@@ -8353,16 +8178,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param ref its reference
 		 * @return the reference to invoke
 		 */
-		MethodrefConstant wrapForOperator(String helper, String desc, MethodrefConstant ref) {
+		MethodRefEntry wrapForOperator(String helper, String desc, MethodRefEntry ref) {
 			JvmOperandTypeRuntime.Wrappers wrappers = this.operandTypeWrappers;
 			return wrappers == null ? ref : wrappers.wrap(this.operator, helper, desc, ref);
 		}
 
-		MethodrefConstant mathOp(String key) {
+		MethodRefEntry mathOp(String key) {
 			return Objects.requireNonNull(this.mathOps.get(key), () -> "Unknown math helper: " + key);
 		}
 
-		MethodrefConstant systemOp(String key) {
+		MethodRefEntry systemOp(String key) {
 			return Objects.requireNonNull(this.systemOps.get(key), () -> "Unknown system helper: " + key);
 		}
 

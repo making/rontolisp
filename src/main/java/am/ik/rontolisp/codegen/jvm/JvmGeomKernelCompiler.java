@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,8 +12,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
-
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the four {@code geom:} members a model FILE spends its whole load time in --
@@ -152,7 +151,7 @@ final class JvmGeomKernelCompiler {
 	 * @param className the internal name of the class being emitted
 	 */
 	static void compile(String qualified, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> ops = Objects.requireNonNull(ctx.geomOps);
+		Map<String, MethodRefEntry> ops = Objects.requireNonNull(ctx.geomOps);
 		List<LispVal> args = cons.toList();
 		int supplied = args.size() - 1;
 		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
@@ -176,7 +175,7 @@ final class JvmGeomKernelCompiler {
 		MethodCode.Label taken = ctx.body.newLabel();
 		emitAttempt(ctx, ops, qualified, slots, arity, taken);
 		loadAll(ctx, slots, arity);
-		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.invokestatic(defun.methodref());
 		ctx.body.labelBinding(taken);
 	}
 
@@ -199,7 +198,7 @@ final class JvmGeomKernelCompiler {
 	 * own lambda list still signals about it.
 	 */
 	private static void compileReadObj(LispCons cons, List<LispVal> args, int supplied,
-			JvmLispCompiler.FunctionInfo defun, Map<String, MethodrefConstant> ops, JvmLispCompiler.Ctx ctx,
+			JvmLispCompiler.FunctionInfo defun, Map<String, MethodRefEntry> ops, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmLispCompiler.FunctionInfo builder = ctx.functions.get(SOLID_OF_VERTICES);
 		if (builder == null || !builder.variadic() || builder.paramCount() != 3 || builder.optionals() != 0
@@ -212,10 +211,10 @@ final class JvmGeomKernelCompiler {
 		// The keyword tail as one cons list, built once and handed to whichever of the
 		// two variadic defuns runs: both declare exactly (&key color label).
 		int restSlot = emitRestList(ctx, slots, 1, supplied);
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)));
 		MethodCode.Label skipPos = ctx.body.newLabel();
 		ctx.body.ifeq(skipPos);
-		ctx.body.aload(slots[0]).invokestatic(Objects.requireNonNull(ops.get(READ_OBJ)).entry());
+		ctx.body.aload(slots[0]).invokestatic(Objects.requireNonNull(ops.get(READ_OBJ)));
 		int scanSlot = ctx.allocTemp();
 		ctx.body.astore(scanSlot).aload(scanSlot);
 		MethodCode.Label declinedPos = ctx.body.newLabel();
@@ -223,18 +222,18 @@ final class JvmGeomKernelCompiler {
 		// %solid-of-vertices(scan[0], scan[1], rest)
 		emitScanElement(ctx, scanSlot, 0);
 		emitScanElement(ctx, scanSlot, 1);
-		ctx.body.aload(restSlot).invokestatic(builder.methodref().entry());
+		ctx.body.aload(restSlot).invokestatic(builder.methodref());
 		MethodCode.Label takenPos = ctx.body.newLabel();
 		ctx.body.goto_(takenPos);
 		ctx.body.labelBinding(skipPos);
 		ctx.body.labelBinding(declinedPos);
-		ctx.body.aload(slots[0]).aload(restSlot).invokestatic(defun.methodref().entry());
+		ctx.body.aload(slots[0]).aload(restSlot).invokestatic(defun.methodref());
 		ctx.body.labelBinding(takenPos);
 	}
 
 	/** {@code (Object[]) scan}{@code [index]}, as one expression on the stack. */
 	private static void emitScanElement(JvmLispCompiler.Ctx ctx, int scanSlot, int index) {
-		ctx.body.aload(scanSlot).checkcast(ctx.objectArrayClass.entry());
+		ctx.body.aload(scanSlot).checkcast(ctx.objectArrayClass);
 		JvmEmitHelper.emitIntConst(ctx, index);
 		ctx.body.aaload();
 	}
@@ -278,7 +277,7 @@ final class JvmGeomKernelCompiler {
 		int restSlot = ctx.allocTemp();
 		ctx.body.aconst_null().astore(restSlot);
 		for (int k = to - 1; k >= from; k--) {
-			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(slots[k]);
+			ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().aload(slots[k]);
 			ctx.body.aastore().dup().iconst_1().aload(restSlot).aastore().astore(restSlot);
 		}
 		return restSlot;
@@ -287,8 +286,8 @@ final class JvmGeomKernelCompiler {
 	/** The {@code ops} key of the availability accessor. */
 	private static final String AVAILABLE_KEY = JvmGeomRuntimeBuilder.AVAILABLE;
 
-	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 	}
 
 	/**
@@ -296,13 +295,13 @@ final class JvmGeomKernelCompiler {
 	 * define the bridge never resolves a method reference into it and lands exactly where
 	 * a declined kernel would, on the spliced defun.
 	 */
-	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String kernelKey,
 			int[] slots, int arity, MethodCode.Label answered) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(AVAILABLE_KEY)));
 		MethodCode.Label skipPos = ctx.body.newLabel();
 		ctx.body.ifeq(skipPos);
 		loadAll(ctx, slots, arity);
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)));
 		// if (result != null) goto end; else fall through to the defun.
 		ctx.body.dup().ifnonnull(answered);
 		ctx.body.pop();

@@ -70,11 +70,11 @@ final class JvmSortCompiler {
 		emitCar(ctx, iSlot);
 		ctx.body.astore(tmpSlot);
 		// car(i) = car(j)
-		ctx.body.aload(iSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0();
+		ctx.body.aload(iSlot).checkcast(ctx.objectArrayClass).iconst_0();
 		emitCar(ctx, jSlot);
 		ctx.body.aastore();
 		// car(j) = tmp
-		ctx.body.aload(jSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aload(tmpSlot);
+		ctx.body.aload(jSlot).checkcast(ctx.objectArrayClass).iconst_0().aload(tmpSlot);
 		ctx.body.aastore();
 
 		// noSwap:
@@ -100,11 +100,11 @@ final class JvmSortCompiler {
 	}
 
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 	}
 
 	private static void emitCdr(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 	}
 
 }

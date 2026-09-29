@@ -4,10 +4,10 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -43,8 +43,8 @@ final class JvmArgvRuntimeBuilder {
 	static final String DESC = "()Ljava/lang/Object;";
 
 	/** The emitted helper: its name/descriptor plus the code and frame sizes. */
-	record ArgvRuntime(Utf8Constant name, Utf8Constant desc, MethodCode code, Utf8Constant fieldName,
-			Utf8Constant fieldDesc, FieldRefEntry field) {
+	record ArgvRuntime(Utf8Entry name, Utf8Entry desc, MethodCode code, Utf8Entry fieldName, Utf8Entry fieldDesc,
+			FieldRefEntry field) {
 	}
 
 	private JvmArgvRuntimeBuilder() {
@@ -56,9 +56,9 @@ final class JvmArgvRuntimeBuilder {
 
 	static ArgvRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass, MethodRefEntry stringConcat,
 			String className) {
-		Utf8Constant fieldName = cp.addUtf8(FIELD);
-		Utf8Constant fieldDesc = cp.addUtf8(FIELD_DESC);
-		FieldRefEntry field = cp.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
+		Utf8Entry fieldName = cp.utf8Entry(FIELD);
+		Utf8Entry fieldDesc = cp.utf8Entry(FIELD_DESC);
+		FieldRefEntry field = cp.fieldRef(thisClass, fieldName, fieldDesc);
 		// Runtime strings carry their quotes, argv0 included: the class name is a
 		// compile-time constant, so it is minted already quoted.
 		StringEntry argv0Str = cp.stringEntry("\"" + className.replace('/', '.') + "\"");
@@ -121,7 +121,7 @@ final class JvmArgvRuntimeBuilder {
 		a.labelBinding(noArgv);
 		a.aconst_null();
 		a.areturn();
-		return new ArgvRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), a, fieldName, fieldDesc, field);
+		return new ArgvRuntime(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), a, fieldName, fieldDesc, field);
 	}
 
 }

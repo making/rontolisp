@@ -5,6 +5,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.LongEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -12,7 +13,6 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayGrowth;
 import am.ik.rontolisp.RenderCycleGuard;
@@ -351,7 +351,7 @@ final class JvmArrayRuntimeBuilder {
 			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER);
 
 	/** An array helper method body ready to be emitted into the generated class. */
-	record ArrayMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record ArrayMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	private JvmArrayRuntimeBuilder() {
@@ -520,7 +520,7 @@ final class JvmArrayRuntimeBuilder {
 		m.labelBinding(end);
 		m.aload(list);
 		m.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), m));
+		methods.add(new ArrayMethod(cp.utf8Entry(MAKE), cp.utf8Entry(MAKE_DESC), m));
 
 		// _aref1(arr, i): return _rmGet(arr, 1 + ((Long) i).intValue()) -- _rmGet
 		// follows the displacement chain, so every accessor goes through it. A string
@@ -579,7 +579,7 @@ final class JvmArrayRuntimeBuilder {
 		a1.iadd();
 		a1.invokestatic(rmGet);
 		a1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(AREF1_DESC), a1));
+		methods.add(new ArrayMethod(cp.utf8Entry(AREF1), cp.utf8Entry(AREF1_DESC), a1));
 
 		// _aref2(arr, i, j): cols = dims[1]; return _rmGet(arr, 1 + i * cols + j)
 		MethodCode a2 = new MethodCode();
@@ -589,7 +589,7 @@ final class JvmArrayRuntimeBuilder {
 		a2.iload(3);
 		a2.invokestatic(rmGet);
 		a2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), a2));
+		methods.add(new ArrayMethod(cp.utf8Entry(AREF2), cp.utf8Entry(AREF2_DESC), a2));
 
 		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val. A string passes
 		// the
@@ -607,7 +607,7 @@ final class JvmArrayRuntimeBuilder {
 		s1.aload(2);
 		s1.invokestatic(rmSet);
 		s1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), s1));
+		methods.add(new ArrayMethod(cp.utf8Entry(ASET1), cp.utf8Entry(ASET1_DESC), s1));
 
 		// _arrayDims(arr): the dimension sizes as a fresh cons list, built backwards
 		// over the dims Object[] in the slot-0 header (the sizes are already boxed
@@ -675,7 +675,7 @@ final class JvmArrayRuntimeBuilder {
 		d.labelBinding(dDone);
 		d.aload(dResult);
 		d.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(DIMS_DESC), d));
+		methods.add(new ArrayMethod(cp.utf8Entry(DIMS), cp.utf8Entry(DIMS_DESC), d));
 
 		// _arrayCheckRank(arr, given): rank = 1 for a string, else the length of the
 		// header's boxed dims (the same derivation DIMS uses, without building the cons
@@ -716,7 +716,7 @@ final class JvmArrayRuntimeBuilder {
 		cr.labelBinding(crHaveRank);
 		emitRankCheckAndReturn(cp, cr, longClass, longIntValue, crSbClass, crSbInit, crSbAppendStr, crSbAppendInt,
 				crSbToString, rtExClass, rtExInit, crArr, crGiven, crRank, crGiv);
-		methods.add(new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), cr));
+		methods.add(new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), cr));
 
 		// _aset2(arr, i, j, val): _rmSet(arr, 1 + i * cols + j, val) -- returns val
 		MethodCode s2 = new MethodCode();
@@ -727,7 +727,7 @@ final class JvmArrayRuntimeBuilder {
 		s2.aload(3);
 		s2.invokestatic(rmSet);
 		s2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), s2));
+		methods.add(new ArrayMethod(cp.utf8Entry(ASET2), cp.utf8Entry(ASET2_DESC), s2));
 
 		// _arefN(arr, subs): return _rmGet(arr, 1 + flatIndex(arr, subs))
 		MethodCode an = new MethodCode();
@@ -738,7 +738,7 @@ final class JvmArrayRuntimeBuilder {
 		an.iadd();
 		an.invokestatic(rmGet);
 		an.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(AREFN_DESC), an));
+		methods.add(new ArrayMethod(cp.utf8Entry(AREFN), cp.utf8Entry(AREFN_DESC), an));
 
 		// _asetN(arr, subs, val): _rmSet(arr, 1 + flatIndex(arr, subs), val)
 		MethodCode sn = new MethodCode();
@@ -750,7 +750,7 @@ final class JvmArrayRuntimeBuilder {
 		sn.aload(2);
 		sn.invokestatic(rmSet);
 		sn.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(ASETN_DESC), sn));
+		methods.add(new ArrayMethod(cp.utf8Entry(ASETN), cp.utf8Entry(ASETN_DESC), sn));
 
 		// _ckArr(x): x when it is an array of any representation, else the unnamed ARRAY
 		// report (CK_ARRAY). The string test is stringp's: a String whose first char is
@@ -783,7 +783,7 @@ final class JvmArrayRuntimeBuilder {
 		ck.labelBinding(ckPass);
 		ck.aload(0);
 		ck.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(CK_ARRAY), cp.addUtf8(CK_ARRAY_DESC), ck));
+		methods.add(new ArrayMethod(cp.utf8Entry(CK_ARRAY), cp.utf8Entry(CK_ARRAY_DESC), ck));
 
 		// _ckFp(x): x when it is a general vector with a fill pointer, else the unnamed
 		// report of (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) -- after _ckArr,
@@ -809,7 +809,7 @@ final class JvmArrayRuntimeBuilder {
 		emitTypeValue(cfp, cp, objectClass, longValueOf, OperandTypes.FILL_POINTER_VECTOR_TYPE);
 		cfp.invokestatic(teOf);
 		cfp.athrow();
-		methods.add(new ArrayMethod(cp.addUtf8(CK_FILL_POINTER), cp.addUtf8(CK_ARRAY_DESC), cfp));
+		methods.add(new ArrayMethod(cp.utf8Entry(CK_FILL_POINTER), cp.utf8Entry(CK_ARRAY_DESC), cfp));
 
 		// _fillPointer(arr): the fill pointer (a Long); _ckFp at the site has checked the
 		// array carries one. Locals: 0 = arr.
@@ -818,7 +818,7 @@ final class JvmArrayRuntimeBuilder {
 		fpm.loadConstant(1);
 		fpm.aaload();
 		fpm.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(FILL_POINTER), cp.addUtf8(FILL_POINTER_DESC), fpm));
+		methods.add(new ArrayMethod(cp.utf8Entry(FILL_POINTER), cp.utf8Entry(FILL_POINTER_DESC), fpm));
 
 		// _setFillPointer(arr, value): the store behind _ckFp; returns value. A value
 		// that
@@ -868,19 +868,19 @@ final class JvmArrayRuntimeBuilder {
 		sfp.aastore();
 		sfp.aload(1);
 		sfp.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(SET_FILL_POINTER), cp.addUtf8(SET_FILL_POINTER_DESC), sfp));
+		methods.add(new ArrayMethod(cp.utf8Entry(SET_FILL_POINTER), cp.utf8Entry(SET_FILL_POINTER_DESC), sfp));
 
 		// _arrayHasFillPointer(arr): "t" when the header carries a fill pointer, else
 		// nil (null). Locals: 0 = arr.
 		MethodCode hfp = new MethodCode();
 		emitHeaderSlotToBool(hfp, arrayListClass, objectArrayClass, alGet, cp, 1);
-		methods.add(new ArrayMethod(cp.addUtf8(HAS_FILL_POINTER), cp.addUtf8(HAS_FILL_POINTER_DESC), hfp));
+		methods.add(new ArrayMethod(cp.utf8Entry(HAS_FILL_POINTER), cp.utf8Entry(HAS_FILL_POINTER_DESC), hfp));
 
 		// _adjustableArrayP(arr): "t" when the array was created :adjustable (the raw
 		// truthy argument is stored verbatim), else nil. Locals: 0 = arr.
 		MethodCode adp = new MethodCode();
 		emitHeaderSlotToBool(adp, arrayListClass, objectArrayClass, alGet, cp, 2);
-		methods.add(new ArrayMethod(cp.addUtf8(ADJUSTABLE_ARRAY_P), cp.addUtf8(ADJUSTABLE_ARRAY_P_DESC), adp));
+		methods.add(new ArrayMethod(cp.utf8Entry(ADJUSTABLE_ARRAY_P), cp.utf8Entry(ADJUSTABLE_ARRAY_P_DESC), adp));
 
 		// _vectorPush(val, arr): store val at the fill pointer and return the index used
 		// (a Long), or nil (null) when the vector is full. Locals: 0 = val, 1 = arr,
@@ -900,7 +900,7 @@ final class JvmArrayRuntimeBuilder {
 		vp.areturn();
 		vp.labelBinding(vpStore);
 		emitStoreAtFillPointerAndAdvance(vp, rmSet, longValueOf, 0, 1, 2, 3);
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH), cp.addUtf8(VECTOR_PUSH_DESC), vp));
+		methods.add(new ArrayMethod(cp.utf8Entry(VECTOR_PUSH), cp.utf8Entry(VECTOR_PUSH_DESC), vp));
 
 		// _vectorPop(arr): decrement the fill pointer and return the element it passed.
 		// Locals: 0 = arr, 1 = header, 2 = fp (int).
@@ -928,7 +928,7 @@ final class JvmArrayRuntimeBuilder {
 		vpop.iload(2);
 		vpop.invokestatic(rmGet);
 		vpop.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_POP), cp.addUtf8(VECTOR_POP_DESC), vpop));
+		methods.add(new ArrayMethod(cp.utf8Entry(VECTOR_POP), cp.utf8Entry(VECTOR_POP_DESC), vpop));
 
 		// _vectorPushExtend(val, arr, ext): like _vectorPush but grows the backing store
 		// when the vector is full, updating the stored dimension size. ext is the shared
@@ -1025,7 +1025,7 @@ final class JvmArrayRuntimeBuilder {
 		vpe.aastore();
 		vpe.labelBinding(vpeStore);
 		emitStoreAtFillPointerAndAdvance(vpe, rmSet, longValueOf, 0, 1, 3, 4);
-		methods.add(new ArrayMethod(cp.addUtf8(VECTOR_PUSH_EXTEND), cp.addUtf8(VECTOR_PUSH_EXTEND_DESC), vpe));
+		methods.add(new ArrayMethod(cp.utf8Entry(VECTOR_PUSH_EXTEND), cp.utf8Entry(VECTOR_PUSH_EXTEND_DESC), vpe));
 
 		// _rmGet(list, idx): the single data-read primitive (idx is the 1-based list
 		// index). Follows the displacement chain: while the header is a 5-element
@@ -1105,7 +1105,7 @@ final class JvmArrayRuntimeBuilder {
 		rg.iload(6);
 		rg.iastore();
 		rg.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(RM_GET), cp.addUtf8(RM_GET_DESC), rg));
+		methods.add(new ArrayMethod(cp.utf8Entry(RM_GET), cp.utf8Entry(RM_GET_DESC), rg));
 
 		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
 		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
@@ -1189,7 +1189,7 @@ final class JvmArrayRuntimeBuilder {
 		rs.aload(6);
 		rs.astore(0);
 		rs.goto_(rsGeneral);
-		methods.add(new ArrayMethod(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC), rs));
+		methods.add(new ArrayMethod(cp.utf8Entry(RM_SET), cp.utf8Entry(RM_SET_DESC), rs));
 
 		// _strToCharVec(s): the immutable runtime string s copied into a fresh mutable
 		// character vector -- an ArrayList whose slot 0 is the length-4 header
@@ -1253,7 +1253,7 @@ final class JvmArrayRuntimeBuilder {
 		tv.labelBinding(tvDone);
 		tv.aload(2);
 		tv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(STR_TO_CHAR_VEC), cp.addUtf8(STR_TO_CHAR_VEC_DESC), tv));
+		methods.add(new ArrayMethod(cp.utf8Entry(STR_TO_CHAR_VEC), cp.utf8Entry(STR_TO_CHAR_VEC_DESC), tv));
 
 		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
 		// the boxed shape IN PLACE -- header replaced by {dims, null, null, null, et},
@@ -1329,7 +1329,7 @@ final class JvmArrayRuntimeBuilder {
 		wd.goto_(wdLoop);
 		wd.labelBinding(wdDone);
 		wd.return_();
-		methods.add(new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), wd));
+		methods.add(new ArrayMethod(cp.utf8Entry(WIDEN), cp.utf8Entry(WIDEN_DESC), wd));
 
 		// _arrayMakeDisplaced(dims, target, offset, fp, adj): a displaced view -- a fresh
 		// ArrayList holding ONLY the 5-element header {dimsArr, fp, adj, target,
@@ -1534,7 +1534,7 @@ final class JvmArrayRuntimeBuilder {
 		md.pop();
 		md.aload(mdList);
 		md.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC), md));
+		methods.add(new ArrayMethod(cp.utf8Entry(MAKE_DISPLACED), cp.utf8Entry(MAKE_DISPLACED_DESC), md));
 
 		// _arrayUndisplace(arr): copy a displaced view's CURRENT contents into data slots
 		// of its own and drop the displacement, keeping the dims, the fill pointer and
@@ -1706,7 +1706,7 @@ final class JvmArrayRuntimeBuilder {
 		un.labelBinding(unFillDone);
 		un.aload(0);
 		un.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC), un));
+		methods.add(new ArrayMethod(cp.utf8Entry(UNDISPLACE), cp.utf8Entry(UNDISPLACE_DESC), un));
 
 		// _arrayBecome(a, b): replace a's dims, fill pointer and data with b's in place
 		// (the in-place half of adjust-array on an adjustable array); returns a. The
@@ -1802,7 +1802,7 @@ final class JvmArrayRuntimeBuilder {
 		bc.labelBinding(copyDone);
 		bc.aload(0);
 		bc.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME), cp.addUtf8(ARRAY_BECOME_DESC), bc));
+		methods.add(new ArrayMethod(cp.utf8Entry(ARRAY_BECOME), cp.utf8Entry(ARRAY_BECOME_DESC), bc));
 
 		// _arrayBecomeDisplaced(a, dims, target, offset, fp): turn a (an adjustable
 		// array) IN PLACE into a displaced view over target and return a -- the in-place
@@ -1858,7 +1858,8 @@ final class JvmArrayRuntimeBuilder {
 		bd.pop();
 		bd.aload(0);
 		bd.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME_DISPLACED), cp.addUtf8(ARRAY_BECOME_DISPLACED_DESC), bd));
+		methods
+			.add(new ArrayMethod(cp.utf8Entry(ARRAY_BECOME_DISPLACED), cp.utf8Entry(ARRAY_BECOME_DISPLACED_DESC), bd));
 
 		// _arrayDispTarget(arr): the displacement target, or null (nil).
 		// Locals: 0 = arr, 1 = header.
@@ -1883,7 +1884,7 @@ final class JvmArrayRuntimeBuilder {
 		dt.labelBinding(dtNil);
 		dt.aconst_null();
 		dt.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DISP_TARGET), cp.addUtf8(DISP_TARGET_DESC), dt));
+		methods.add(new ArrayMethod(cp.utf8Entry(DISP_TARGET), cp.utf8Entry(DISP_TARGET_DESC), dt));
 
 		// _arrayDispOffset(arr): the displacement offset, or 0. Displacement is a
 		// length-5+ header WITH a non-null target -- a packed array's length-6 header
@@ -1912,7 +1913,7 @@ final class JvmArrayRuntimeBuilder {
 		dofs.lconst_0();
 		dofs.invokestatic(longValueOf);
 		dofs.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DISP_OFFSET), cp.addUtf8(DISP_OFFSET_DESC), dofs));
+		methods.add(new ArrayMethod(cp.utf8Entry(DISP_OFFSET), cp.utf8Entry(DISP_OFFSET_DESC), dofs));
 
 		// _charVecMake(dims, init, fp, adj): _arrayMake with the returned list's slot-0
 		// header replaced by a length-4 copy {dims, fp, adj, null} -- the mutable
@@ -1988,7 +1989,7 @@ final class JvmArrayRuntimeBuilder {
 		cv.loadConstant(am.ik.rontolisp.ArrayElementTypes.CHARACTER);
 		cv.invokestatic(selfMakeTyped);
 		cv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(CHAR_VEC_MAKE), cp.addUtf8(MAKE_DESC), cv));
+		methods.add(new ArrayMethod(cp.utf8Entry(CHAR_VEC_MAKE), cp.utf8Entry(MAKE_DESC), cv));
 
 		// _arrayMakeTyped(dims, init, fp, adj, code): _arrayMake plus the REMEMBERED
 		// element type in header slot 4. That slot is free on every non-displaced array
@@ -2043,7 +2044,7 @@ final class JvmArrayRuntimeBuilder {
 		mt.pop();
 		mt.aload(5);
 		mt.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(MAKE_TYPED), cp.addUtf8(MAKE_TYPED_DESC), mt));
+		methods.add(new ArrayMethod(cp.utf8Entry(MAKE_TYPED), cp.utf8Entry(MAKE_TYPED_DESC), mt));
 
 		// _arrayElementType(o): the remembered element type, or the boolean t. A
 		// DISPLACED array HOPS: slot 4 is its offset, not a type, and a view owns no
@@ -2099,7 +2100,7 @@ final class JvmArrayRuntimeBuilder {
 		aet.labelBinding(aetT);
 		aet.ldc(cp.stringEntry("T"));
 		aet.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), aet));
+		methods.add(new ArrayMethod(cp.utf8Entry(ELEMENT_TYPE), cp.utf8Entry(ELEMENT_TYPE_DESC), aet));
 
 		// _arrayDefaultElement(o): the element an UNSUPPLIED slot of o takes -- the
 		// remembered element type's own zero -- or null (nil) when nothing is remembered.
@@ -2180,7 +2181,7 @@ final class JvmArrayRuntimeBuilder {
 		de.labelBinding(deNil);
 		de.aconst_null();
 		de.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(DEFAULT_ELEMENT), cp.addUtf8(DEFAULT_ELEMENT_DESC), de));
+		methods.add(new ArrayMethod(cp.utf8Entry(DEFAULT_ELEMENT), cp.utf8Entry(DEFAULT_ELEMENT_DESC), de));
 
 		// _arrayAdoptElementType(dst, src): make the freshly built general array dst
 		// remember what src remembers, and return dst. adjust-array does not change an
@@ -2309,7 +2310,7 @@ final class JvmArrayRuntimeBuilder {
 		ad.labelBinding(adDone);
 		ad.aload(0);
 		ad.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ADOPT_ELEMENT_TYPE), cp.addUtf8(ADOPT_ELEMENT_TYPE_DESC), ad));
+		methods.add(new ArrayMethod(cp.utf8Entry(ADOPT_ELEMENT_TYPE), cp.utf8Entry(ADOPT_ELEMENT_TYPE_DESC), ad));
 
 		// _arrayAlike(seq, n): a fresh zero-filled rank-1 array of length n of the same
 		// KIND as seq. The kind is _arrayElementType's answer, not seq's runtime class:
@@ -2416,7 +2417,7 @@ final class JvmArrayRuntimeBuilder {
 		al.aload(0);
 		al.invokestatic(cp.methodRef(selfClass, ADOPT_ELEMENT_TYPE, ADOPT_ELEMENT_TYPE_DESC));
 		al.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ALIKE), cp.addUtf8(ALIKE_DESC), al));
+		methods.add(new ArrayMethod(cp.utf8Entry(ALIKE), cp.utf8Entry(ALIKE_DESC), al));
 
 		// _strv(o): normalizes a mutable character vector (a length-4-header array whose
 		// elements are runtime CHARACTERs -- length-1 int[]{codePoint}) into the
@@ -2565,7 +2566,7 @@ final class JvmArrayRuntimeBuilder {
 		sv.labelBinding(svNotCv);
 		sv.aload(0);
 		sv.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(STRV), cp.addUtf8(STRV_DESC), sv));
+		methods.add(new ArrayMethod(cp.utf8Entry(STRV), cp.utf8Entry(STRV_DESC), sv));
 
 		// _subseqCv(o, start, end): the string subseq lane answering a MUTABLE character
 		// vector (.todo/559 step 2 -- a copy-seq/subseq result has a writable identity,
@@ -2584,8 +2585,8 @@ final class JvmArrayRuntimeBuilder {
 		// text, todo a42): "SUBSEQ: invalid bounds " + start + ", " + end + " for string
 		// of length " + cpLen.
 		MethodRefEntry intToStr = cp.methodRef(strClass, "valueOf", "(I)Ljava/lang/String;");
-		StringEntry subseqBoundsPrefix = cp.addString(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ").entry();
-		StringEntry subseqBoundsComma = cp.addString(", ").entry();
+		StringEntry subseqBoundsPrefix = cp.stringEntry(am.ik.rontolisp.LispNames.SUBSEQ + ": invalid bounds ");
+		StringEntry subseqBoundsComma = cp.stringEntry(", ");
 		StringEntry subseqBoundsForStringOfLength = cp.stringEntry(" for string of length ");
 		MethodCode sc = new MethodCode();
 		MethodCode.Label scStr = sc.newLabel();
@@ -2793,7 +2794,7 @@ final class JvmArrayRuntimeBuilder {
 		sc.aastore();
 		sc.aload(6);
 		sc.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(SUBSEQ_CV), cp.addUtf8(SUBSEQ_CV_DESC), sc));
+		methods.add(new ArrayMethod(cp.utf8Entry(SUBSEQ_CV), cp.utf8Entry(SUBSEQ_CV_DESC), sc));
 
 		// _toMutStr(o): the flipped producers' mutable-result wrap. A QUOTE-FRAMED
 		// String -- an actual runtime string -- converts once through _strToCharVec
@@ -2834,7 +2835,7 @@ final class JvmArrayRuntimeBuilder {
 		tm.labelBinding(tmPass);
 		tm.aload(0);
 		tm.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_MUT_STR), cp.addUtf8(TO_MUT_STR_DESC), tm));
+		methods.add(new ArrayMethod(cp.utf8Entry(TO_MUT_STR), cp.utf8Entry(TO_MUT_STR_DESC), tm));
 
 		return methods;
 	}
@@ -3597,7 +3598,7 @@ final class JvmArrayRuntimeBuilder {
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.addString(" subscripts, got ").entry());
+		a.ldc(cp.stringEntry(" subscripts, got "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
@@ -3667,10 +3668,10 @@ final class JvmArrayRuntimeBuilder {
 		MethodRefEntry elementType = cp.methodRef(selfClass, ELEMENT_TYPE, ELEMENT_TYPE_DESC);
 
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(new ArrayMethod(cp.addUtf8(TO_STRING), cp.addUtf8(TO_STRING_DESC),
+		methods.add(new ArrayMethod(cp.utf8Entry(TO_STRING), cp.utf8Entry(TO_STRING_DESC),
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToString, rmGet, elementType, renderGuard)));
-		methods.add(new ArrayMethod(cp.addUtf8(TO_DISPLAY_STRING), cp.addUtf8(TO_STRING_DESC),
+		methods.add(new ArrayMethod(cp.utf8Entry(TO_DISPLAY_STRING), cp.utf8Entry(TO_STRING_DESC),
 				buildToString(cp, arrayListClass, longClass, objectArrayClass, alGet, alSize, longIntValue, sbInit,
 						sbAppend, sbToString, stringValueOfInt, lispToDisplayString, rmGet, elementType, renderGuard)));
 		return methods;
@@ -3700,11 +3701,11 @@ final class JvmArrayRuntimeBuilder {
 		// boxed-general conversion, so it opens the same one frame the interpreter's
 		// packed renderers open.
 		MethodCode.Label pathInited = a.newLabel();
-		a.getstatic(renderGuard.pathField().entry());
+		a.getstatic(renderGuard.pathField());
 		a.ifnonnull(pathInited);
 		a.loadConstant(RenderCycleGuard.MAX_RENDER_DEPTH);
-		a.anewarray(renderGuard.objectClass().entry());
-		a.putstatic(renderGuard.pathField().entry());
+		a.anewarray(renderGuard.objectClass());
+		a.putstatic(renderGuard.pathField());
 		a.labelBinding(pathInited);
 		a.loadConstant(0);
 		a.istore(guardScratch);
@@ -3713,36 +3714,36 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode.Label scanMiss = a.newLabel();
 		a.labelBinding(scanLoop);
 		a.iload(guardScratch);
-		a.getstatic(renderGuard.depthField().entry());
+		a.getstatic(renderGuard.depthField());
 		a.if_icmpge(scanDone);
-		a.getstatic(renderGuard.pathField().entry());
+		a.getstatic(renderGuard.pathField());
 		a.iload(guardScratch);
 		a.aaload();
 		a.aload(arr);
 		a.if_acmpne(scanMiss);
-		a.ldc(renderGuard.depthMarkerStr().entry());
+		a.ldc(renderGuard.depthMarkerStr());
 		a.areturn();
 		a.labelBinding(scanMiss);
 		a.iinc(guardScratch, 1);
 		a.goto_(scanLoop);
 		a.labelBinding(scanDone);
 		MethodCode.Label underCap = a.newLabel();
-		a.getstatic(renderGuard.depthField().entry());
+		a.getstatic(renderGuard.depthField());
 		a.istore(guardScratch);
 		a.iload(guardScratch);
 		a.loadConstant(RenderCycleGuard.MAX_RENDER_DEPTH);
 		a.if_icmplt(underCap);
-		a.ldc(renderGuard.depthMarkerStr().entry());
+		a.ldc(renderGuard.depthMarkerStr());
 		a.areturn();
 		a.labelBinding(underCap);
-		a.getstatic(renderGuard.pathField().entry());
+		a.getstatic(renderGuard.pathField());
 		a.iload(guardScratch);
 		a.aload(arr);
 		a.aastore();
 		a.iload(guardScratch);
 		a.loadConstant(1);
 		a.iadd();
-		a.putstatic(renderGuard.depthField().entry());
+		a.putstatic(renderGuard.depthField());
 		// list = (ArrayList) arr; header = (Object[]) list.get(0)
 		a.aload(arr);
 		a.checkcast(arrayListClass);
@@ -3873,22 +3874,22 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(sb);
 		a.invokevirtual(sbToString);
 		MethodCode.Label bitPopClamp = a.newLabel();
-		a.getstatic(renderGuard.depthField().entry());
+		a.getstatic(renderGuard.depthField());
 		a.loadConstant(1);
 		a.isub();
 		a.istore(guardScratch);
 		a.iload(guardScratch);
 		a.iflt(bitPopClamp);
-		a.getstatic(renderGuard.pathField().entry());
+		a.getstatic(renderGuard.pathField());
 		a.iload(guardScratch);
 		a.aconst_null();
 		a.aastore();
 		a.iload(guardScratch);
-		a.putstatic(renderGuard.depthField().entry());
+		a.putstatic(renderGuard.depthField());
 		a.areturn();
 		a.labelBinding(bitPopClamp);
 		a.loadConstant(0);
-		a.putstatic(renderGuard.depthField().entry());
+		a.putstatic(renderGuard.depthField());
 		a.areturn();
 		a.labelBinding(bitGeneral);
 		// sb = new StringBuilder("#"); rank 1 appends "(", rank n appends n then "A(",
@@ -4005,22 +4006,22 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(sb);
 		a.invokevirtual(sbToString);
 		MethodCode.Label popClamp = a.newLabel();
-		a.getstatic(renderGuard.depthField().entry());
+		a.getstatic(renderGuard.depthField());
 		a.loadConstant(1);
 		a.isub();
 		a.istore(guardScratch);
 		a.iload(guardScratch);
 		a.iflt(popClamp);
-		a.getstatic(renderGuard.pathField().entry());
+		a.getstatic(renderGuard.pathField());
 		a.iload(guardScratch);
 		a.aconst_null();
 		a.aastore();
 		a.iload(guardScratch);
-		a.putstatic(renderGuard.depthField().entry());
+		a.putstatic(renderGuard.depthField());
 		a.areturn();
 		a.labelBinding(popClamp);
 		a.loadConstant(0);
-		a.putstatic(renderGuard.depthField().entry());
+		a.putstatic(renderGuard.depthField());
 		a.areturn();
 		return a;
 	}

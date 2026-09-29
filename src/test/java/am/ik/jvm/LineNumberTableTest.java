@@ -52,8 +52,8 @@ class LineNumberTableTest {
 	void lineNumbersNeedTheAttributeNamed() {
 		ConstantPool cp = new ConstantPool();
 		ClassDefinition.Builder builder = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
-				cp.addClass(cp.addUtf8(CLASS)), cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
-		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("m"), cp.addUtf8("()V"),
+				cp.classEntry(CLASS), cp.classEntry("java/lang/Object"), cp.utf8Entry("Code"));
+		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.utf8Entry("m"), cp.utf8Entry("()V"),
 				new MethodCode().return_(), List.of(new ClassDefinition.Line(0, 1)));
 		assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("LineNumberTable");
@@ -74,8 +74,9 @@ class LineNumberTableTest {
 		code.labelBinding(far);
 		int throwAt = code.position();
 		f.throwingCode(code, "far");
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("far"), f.cp.addUtf8("()V"),
-				code, List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwAt, 2)));
+		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.utf8Entry("far"),
+				f.cp.utf8Entry("()V"), code,
+				List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwAt, 2)));
 		byte[] bytes = write(f.build(), null);
 		assertThat(lines(bytes, "far")).containsExactly(0, 1, 5 + 40_000, 2);
 		assertThat(thrownLine(Map.of(CLASS, bytes), "far")).isEqualTo(2);
@@ -175,10 +176,9 @@ class LineNumberTableTest {
 
 		Fixture(boolean namesLineNumbers) {
 			this.definition = ClassDefinition.builder(this.cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
-					this.cp.addClass(this.cp.addUtf8(CLASS)), this.cp.addClass(this.cp.addUtf8("java/lang/Object")),
-					this.cp.addUtf8("Code"));
+					this.cp.classEntry(CLASS), this.cp.classEntry("java/lang/Object"), this.cp.utf8Entry("Code"));
 			if (namesLineNumbers) {
-				this.definition.lineNumberTableName(this.cp.addUtf8("LineNumberTable"));
+				this.definition.lineNumberTableName(this.cp.utf8Entry("LineNumberTable"));
 			}
 			this.exception = this.cp.classEntry("java/lang/RuntimeException");
 			this.init = this.cp.methodRef(this.exception, "<init>", "(Ljava/lang/String;)V");
@@ -187,8 +187,8 @@ class LineNumberTableTest {
 		void throwing(String name, List<ClassDefinition.Line> lines) {
 			MethodCode code = new MethodCode();
 			this.throwingCode(code, name);
-			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(name),
-					this.cp.addUtf8("()V"), code, lines);
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.utf8Entry(name),
+					this.cp.utf8Entry("()V"), code, lines);
 		}
 
 		void throwingCode(MethodCode code, String name) {

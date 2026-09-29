@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
@@ -87,7 +89,7 @@ final class JvmSymbolApiCompiler {
 		ctx.body.aload(tempSlot);
 		MethodCode.Label isNil = ctx.body.newLabel();
 		ctx.body.ifnull(isNil);
-		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass);
 		MethodCode.Label notSymbol = ctx.body.newLabel();
 		ctx.body.ifeq(notSymbol);
 		MethodCode.Label coerceStr = ctx.body.newLabel();
@@ -97,13 +99,13 @@ final class JvmSymbolApiCompiler {
 		ctx.body.goto_(coerceNil);
 		ctx.body.labelBinding(notSymbol);
 		// character?
-		ctx.body.aload(tempSlot).instanceOf(JvmEmitHelper.charArrayClass(ctx).entry());
+		ctx.body.aload(tempSlot).instanceOf(JvmEmitHelper.charArrayClass(ctx));
 		MethodCode.Label notChar = ctx.body.newLabel();
 		ctx.body.ifeq(notChar);
 		ctx.body.labelBinding(coerceStr);
 		ctx.body.labelBinding(coerceNil);
 		// render and reframe: "\"" + display + "\""
-		ctx.body.aload(tempSlot).invokestatic(ctx.lispToDisplayString.entry());
+		ctx.body.aload(tempSlot).invokestatic(ctx.lispToDisplayString);
 		emitRequote(ctx);
 		MethodCode.Label done2 = ctx.body.newLabel();
 		ctx.body.goto_(done2);
@@ -116,8 +118,7 @@ final class JvmSymbolApiCompiler {
 	// "\"" + content + "\"", the quote frame a string VALUE carries. Display answers
 	// a String already, so this is two concats.
 	private static void emitRequote(JvmLispCompiler.Ctx ctx) {
-		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
-			.methodRefEntry();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
 		ctx.body.swap().invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
@@ -127,19 +128,16 @@ final class JvmSymbolApiCompiler {
 	// throw new RuntimeException("string expects a string designator, got: " + value)
 	// -- the strict designator form's own wording.
 	private static void emitStringDesignatorThrow(int tempSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
-		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry valueOf = ctx.cp.methodRef(ctx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.STRING + " expects a string designator, got: ", ctx);
 		ctx.body.aload(tempSlot);
 		// princ-render the value the way ~s would, so the report reads the same.
-		ctx.body.invokestatic(ctx.lispToDisplayString.entry()).invokestatic(valueOf.entry());
-		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(ctor.entry()).athrow();
+		ctx.body.invokestatic(ctx.lispToDisplayString).invokestatic(valueOf);
+		ctx.body.invokevirtual(concat).invokespecial(ctor).athrow();
 	}
 
 	/** intern: strip the surrounding quotes from the runtime string. */
@@ -176,7 +174,7 @@ final class JvmSymbolApiCompiler {
 		// The literal is compared, never produced, so it is no designator the
 		// dispatch gate's name probes must see.
 		JvmEmitHelper.compileUnspelledLiteral("NIL", ctx);
-		ctx.body.swap().invokevirtual(ctx.objectEquals.methodRefEntry());
+		ctx.body.swap().invokevirtual(ctx.objectEquals);
 		MethodCode.Label keep = ctx.body.newLabel();
 		ctx.body.ifeq(keep);
 		ctx.body.pop().aconst_null();
@@ -186,8 +184,7 @@ final class JvmSymbolApiCompiler {
 	/** make-symbol: {@code "#:".concat(content)} -- the gensym uninterned convention. */
 	static void compileMakeSymbol(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.MAKE_SYMBOL);
-		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
-			.methodRefEntry();
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		JvmEmitHelper.compileStringLiteral("#:", ctx);
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
@@ -312,7 +309,7 @@ final class JvmSymbolApiCompiler {
 		ctx.body.dup();
 		MethodCode.Label ifUnbound = ctx.body.newLabel();
 		ctx.body.ifnull(ifUnbound);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		MethodCode.Label gotoEnd3 = ctx.body.newLabel();
 		ctx.body.goto_(gotoEnd3);
 		ctx.body.labelBinding(ifUnbound);
@@ -367,11 +364,11 @@ final class JvmSymbolApiCompiler {
 		// binding = _envLookup(name, _fenv). A binding decides the answer on its own --
 		// fmakunbound leaves a TOMBSTONE here (value cell null) that must SHADOW the
 		// compiled registry probed below, or a retired name would answer t again.
-		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label fenvMiss = ctx.body.newLabel();
 		ctx.body.ifnull(fenvMiss);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		MethodCode.Label tombstone = ctx.body.newLabel();
 		ctx.body.ifnull(tombstone);
 		JvmEmitHelper.compileTrue(ctx);
@@ -385,10 +382,9 @@ final class JvmSymbolApiCompiler {
 		ctx.body.pop();
 		// _lookup(name) != null -> t
 		ctx.body.aload(tempSlot);
-		ConstantPool.MethodrefConstant lookupRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_lookup"),
-						ctx.cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;")));
-		ctx.body.invokestatic(lookupRef.entry());
+		MethodRefEntry lookupRef = ctx.cp.methodRef(ctx.cp.classEntry(className), "_lookup",
+				"(Ljava/lang/Object;)[Ljava/lang/Object;");
+		ctx.body.invokestatic(lookupRef);
 		MethodCode.Label registryMiss = ctx.body.newLabel();
 		ctx.body.ifnull(registryMiss);
 		JvmEmitHelper.compileTrue(ctx);
@@ -410,11 +406,11 @@ final class JvmSymbolApiCompiler {
 	 */
 	private static MethodCode.Label emitTombstoneGuard(String name, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.compileStringLiteral(name, ctx);
-		ctx.body.getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		ctx.body.getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label noBinding = ctx.body.newLabel();
 		ctx.body.ifnull(noBinding);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		MethodCode.Label cleared = ctx.body.newLabel();
 		ctx.body.ifnull(cleared);
 		JvmEmitHelper.compileTrue(ctx);
@@ -440,21 +436,21 @@ final class JvmSymbolApiCompiler {
 	static void compileFmakunbound(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FMAKUNBOUND);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label create = ctx.body.newLabel();
 		ctx.body.ifnull(create);
 		// existing binding: clear its value cell
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aconst_null().aastore();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aconst_null().aastore();
 		MethodCode.Label done = ctx.body.newLabel();
 		ctx.body.goto_(done);
 		ctx.body.labelBinding(create);
 		ctx.body.pop();
 		// _fenv = new Object[]{new Object[]{name, null}, _fenv}
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().iconst_2();
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(nameSlot).aastore();
-		ctx.body.aastore().dup().iconst_1().getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.aastore().putstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().iconst_2();
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().aload(nameSlot).aastore();
+		ctx.body.aastore().dup().iconst_1().getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.aastore().putstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.labelBinding(done);
 		ctx.body.aload(nameSlot);
 	}
@@ -471,22 +467,22 @@ final class JvmSymbolApiCompiler {
 		List<LispVal> parts = requireArgs(cons, 2, LispNames.SET_SYMBOL_FUNCTION_INTERNAL);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
 		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label create = ctx.body.newLabel();
 		ctx.body.ifnull(create);
 		// existing binding: overwrite its value cell
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aload(valueSlot).aastore();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aload(valueSlot).aastore();
 		MethodCode.Label done = ctx.body.newLabel();
 		ctx.body.goto_(done);
 		ctx.body.labelBinding(create);
 		ctx.body.pop();
 		// _fenv = new Object[]{new Object[]{name, value}, _fenv}
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().iconst_2();
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(nameSlot).aastore();
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().iconst_2();
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().aload(nameSlot).aastore();
 		ctx.body.dup().iconst_1().aload(valueSlot).aastore().aastore().dup().iconst_1();
-		ctx.body.getstatic(evalField(ctx, className, "_fenv").entry()).aastore();
-		ctx.body.putstatic(evalField(ctx, className, "_fenv").entry());
+		ctx.body.getstatic(evalField(ctx, className, "_fenv")).aastore();
+		ctx.body.putstatic(evalField(ctx, className, "_fenv"));
 		ctx.body.labelBinding(done);
 		ctx.body.aload(valueSlot);
 	}
@@ -519,7 +515,7 @@ final class JvmSymbolApiCompiler {
 		emitSetConstantThrow("NIL", ctx);
 		ctx.body.labelBinding(notNil);
 		// not a String (symbols are bare Strings, strings carry their quotes) -> throw
-		ctx.body.aload(nameSlot).instanceOf(ctx.stringClass.entry());
+		ctx.body.aload(nameSlot).instanceOf(ctx.stringClass);
 		MethodCode.Label isString = ctx.body.newLabel();
 		ctx.body.ifne(isString);
 		emitSetTypeThrow(nameSlot, ctx);
@@ -530,8 +526,8 @@ final class JvmSymbolApiCompiler {
 		emitSetConstantNameThrow(nameSlot, "T", ctx);
 		emitSetConstantNameThrow(nameSlot, "NIL", ctx);
 		emitSetEmptyNameThrow(nameSlot, ctx);
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, ':');
 		MethodCode.Label notKeyword = ctx.body.newLabel();
 		ctx.body.if_icmpne(notKeyword);
@@ -543,38 +539,37 @@ final class JvmSymbolApiCompiler {
 		// it.
 		MethodCode.Label toMirror = ctx.body.newLabel();
 		for (String global : ctx.globals) {
-			ConstantPool.FieldrefConstant field = ctx.globalFields.get(global);
+			FieldRefEntry field = ctx.globalFields.get(global);
 			if (field == null) {
 				continue;
 			}
 			JvmEmitHelper.compileStringLiteral(global, ctx);
-			ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+			ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals);
 			MethodCode.Label miss = ctx.body.newLabel();
 			ctx.body.ifeq(miss);
-			ctx.body.aload(valueSlot).putstatic(field.entry()).goto_(toMirror);
+			ctx.body.aload(valueSlot).putstatic(field).goto_(toMirror);
 			ctx.body.labelBinding(miss);
 		}
 		// the mirror, unconditionally: _store creates the binding when no backing
 		// store took it, and answers the stored value, the set result.
 		ctx.body.labelBinding(toMirror);
 		ctx.body.aload(nameSlot).aload(valueSlot).aconst_null();
-		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef).entry());
+		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef));
 	}
 
 	// throw new RuntimeException("SET cannot set " + constant)
 	private static void emitSetConstantThrow(String constant, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set " + constant, ctx);
-		ctx.body.invokespecial(ctor.entry()).athrow();
+		ctx.body.invokespecial(ctor).athrow();
 	}
 
 	// throw new RuntimeException("SET cannot set " + name) for a computed constant name
 	private static void emitSetConstantNameThrow(int nameSlot, String constant, JvmLispCompiler.Ctx ctx) {
 		JvmEmitHelper.compileStringLiteral(constant, ctx);
-		ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		ctx.body.aload(nameSlot).invokevirtual(ctx.objectEquals);
 		MethodCode.Label keep = ctx.body.newLabel();
 		ctx.body.ifeq(keep);
 		emitSetConstantThrow(constant, ctx);
@@ -584,26 +579,22 @@ final class JvmSymbolApiCompiler {
 	// throw new RuntimeException("SET cannot set " + name) for a keyword (the name is
 	// on the stack as a String here)
 	private static void emitSetConstantNameThrowDynamic(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set ", ctx);
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
-		ctx.body.invokespecial(ctor.entry()).athrow();
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
+		ctx.body.invokespecial(ctor).athrow();
 	}
 
 	// throw new RuntimeException("SET cannot set ") for the empty name (the name is
 	// on the stack as a String here)
 	private static void emitSetEmptyNameThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant isEmpty = ctx.cp.addMethodref(ctx.stringClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("isEmpty"), ctx.cp.addUtf8("()Z")));
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(isEmpty.methodRefEntry());
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry isEmpty = ctx.cp.methodRef(ctx.stringClass, "isEmpty", "()Z");
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(isEmpty);
 		MethodCode.Label keep = ctx.body.newLabel();
 		ctx.body.ifeq(keep);
 		emitSetConstantThrow("", ctx);
@@ -612,17 +603,14 @@ final class JvmSymbolApiCompiler {
 
 	// throw new RuntimeException("SET expects a symbol, got " + value)
 	private static void emitSetTypeThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
-		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry valueOf = ctx.cp.methodRef(ctx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral(LispNames.SET + " expects a symbol, got ", ctx);
-		ctx.body.aload(nameSlot).invokestatic(valueOf.entry()).invokevirtual(concat.methodRefEntry());
-		ctx.body.invokespecial(ctor.entry()).athrow();
+		ctx.body.aload(nameSlot).invokestatic(valueOf).invokevirtual(concat);
+		ctx.body.invokespecial(ctor).athrow();
 	}
 
 	/**
@@ -635,11 +623,11 @@ final class JvmSymbolApiCompiler {
 	static void compileFenvFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.FENV_FUNCTION_INTERNAL);
 		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
-		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+		ctx.body.aload(nameSlot).getstatic(evalField(ctx, className, "_fenv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 		MethodCode.Label noBinding = ctx.body.newLabel();
 		ctx.body.ifnull(noBinding);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload().dup();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload().dup();
 		MethodCode.Label cleared = ctx.body.newLabel();
 		ctx.body.ifnull(cleared);
 		MethodCode.Label end = ctx.body.newLabel();
@@ -655,16 +643,14 @@ final class JvmSymbolApiCompiler {
 	// compile-expression twin of the funcall dispatchers' symbol arm
 	// (JvmRuntimeBuilder.buildNotFnBody).
 	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral("The function ", ctx);
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
-		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(exCtor.entry()).athrow();
+		ctx.body.invokevirtual(concat).invokespecial(exCtor).athrow();
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {
@@ -691,14 +677,14 @@ final class JvmSymbolApiCompiler {
 	private static MethodCode.Label emitSelfBoundCheck(int tempSlot, JvmLispCompiler.Ctx ctx) {
 		// "T".equals(value) -> self-bound
 		JvmEmitHelper.compileStringLiteral("T", ctx);
-		ctx.body.aload(tempSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		ctx.body.aload(tempSlot).invokevirtual(ctx.objectEquals);
 		MethodCode.Label isT = ctx.body.newLabel();
 		ctx.body.ifne(isT);
 		// keyword: a String whose first char is ':'
 		MethodCode.Label notSelfBound = ctx.body.newLabel();
-		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry()).ifeq(notSelfBound);
-		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass).ifeq(notSelfBound);
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, ':');
 		ctx.body.if_icmpne(notSelfBound);
 		// keyword falls through, t jumps here: both land in the self-bound code
@@ -707,43 +693,37 @@ final class JvmSymbolApiCompiler {
 	}
 
 	private static void emitGenvLookup(int tempSlot, JvmLispCompiler.Ctx ctx, String className) {
-		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_genv").entry());
-		ctx.body.invokestatic(envLookupRef(ctx, className).entry());
+		ctx.body.aload(tempSlot).getstatic(evalField(ctx, className, "_genv"));
+		ctx.body.invokestatic(envLookupRef(ctx, className));
 	}
 
 	private static void emitUnboundThrow(int tempSlot, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
-		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
-			.methodRefEntry();
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry valueOf = ctx.cp.methodRef(ctx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral("The variable ", ctx);
-		ctx.body.aload(tempSlot).invokestatic(valueOf.entry()).invokevirtual(concat);
+		ctx.body.aload(tempSlot).invokestatic(valueOf).invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral(" is unbound", ctx);
-		ctx.body.invokevirtual(concat).invokespecial(ctor.entry()).athrow();
+		ctx.body.invokevirtual(concat).invokespecial(ctor).athrow();
 	}
 
 	/** Strips the surrounding quotes: {@code s.substring(1, s.length() - 1)}. */
 	private static void emitStripQuotes(JvmLispCompiler.Ctx ctx) {
-		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I").methodRefEntry();
-		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;")
-			.methodRefEntry();
-		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length);
+		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		ctx.body.checkcast(ctx.stringClass).dup().invokevirtual(length);
 		ctx.body.iconst_1().isub().iconst_1().swap().invokevirtual(substring);
 	}
 
-	private static ConstantPool.FieldrefConstant evalField(JvmLispCompiler.Ctx ctx, String className, String name) {
-		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8("Ljava/lang/Object;")));
+	private static FieldRefEntry evalField(JvmLispCompiler.Ctx ctx, String className, String name) {
+		return ctx.cp.fieldRef(ctx.cp.classEntry(className), name, "Ljava/lang/Object;");
 	}
 
-	private static ConstantPool.MethodrefConstant envLookupRef(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_envLookup"),
-						ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+	private static MethodRefEntry envLookupRef(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_envLookup",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 	}
 
 }

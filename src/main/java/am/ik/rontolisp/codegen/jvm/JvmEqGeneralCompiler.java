@@ -59,7 +59,7 @@ final class JvmEqGeneralCompiler {
 		ctx.body.labelBinding(ifNonNullPos);
 		ctx.body.aload(aSlot).aload(bSlot);
 		// _eqv is a.equals(b) plus element-wise comparison for ratios.
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQV).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQV));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		// end
 		ctx.body.labelBinding(gotoBothNullPos);

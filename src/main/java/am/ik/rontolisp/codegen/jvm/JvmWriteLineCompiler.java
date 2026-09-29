@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -33,11 +33,10 @@ final class JvmWriteLineCompiler {
 		else {
 			ctx.body.aconst_null();
 		}
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_METHOD);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_DESC);
-		MethodrefConstant writeLineRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(writeLineRef.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.WRITE_LINE_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.WRITE_LINE_DESC);
+		MethodRefEntry writeLineRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(writeLineRef);
 	}
 
 }

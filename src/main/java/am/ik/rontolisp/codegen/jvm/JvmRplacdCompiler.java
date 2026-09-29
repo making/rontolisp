@@ -20,7 +20,7 @@ final class JvmRplacdCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// A cons, cast; anything else (nil included) is RPLACD's CONS type-error
 		// (JvmOperandTypeRuntime).
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CONS).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CONS));
 		// DUP the array ref (to leave it on stack after AASTORE)
 		ctx.body.dup();
 		// Index 1 = cdr

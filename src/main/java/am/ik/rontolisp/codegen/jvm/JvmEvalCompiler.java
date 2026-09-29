@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 
 /**
  * Compiles the {@code eval} built-in. The argument expression is compiled normally to
@@ -25,11 +25,10 @@ final class JvmEvalCompiler {
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		// env = null (empty/global lexical environment)
 		ctx.body.aconst_null();
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8("_eval");
-		Utf8Constant descUtf8 = ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-		MethodrefConstant evalRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(evalRef.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_eval");
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry evalRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(evalRef);
 	}
 
 }

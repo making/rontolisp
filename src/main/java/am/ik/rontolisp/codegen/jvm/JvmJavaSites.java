@@ -1,12 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -65,13 +65,13 @@ final class JvmJavaSites {
 	 * @param javaStatic whether a site that needs the bridge is refused
 	 * ({@code --java-static})
 	 */
-	JvmJavaSites(JavaClassLookup lookup, ConstantPool cp, ClassConstant thisClass, String programInternalName,
-			MethodrefConstant lispToString, boolean javaStatic) {
+	JvmJavaSites(JavaClassLookup lookup, ConstantPool cp, ClassEntry thisClass, String programInternalName,
+			MethodRefEntry lispToString, boolean javaStatic) {
 		this.resolver = new JavaSiteResolver(lookup);
 		this.lookup = lookup;
-		this.direct = new JvmJavaDirectSites(cp, thisClass.entry(), lookup, lispToString.methodRefEntry());
-		this.implementations = new JvmJavaImplementations(cp, thisClass.entry(), programInternalName, lookup,
-				this.direct, lispToString.methodRefEntry());
+		this.direct = new JvmJavaDirectSites(cp, thisClass, lookup, lispToString);
+		this.implementations = new JvmJavaImplementations(cp, thisClass, programInternalName, lookup, this.direct,
+				lispToString);
 		this.direct.implementations(this.implementations);
 		this.javaStatic = javaStatic;
 	}

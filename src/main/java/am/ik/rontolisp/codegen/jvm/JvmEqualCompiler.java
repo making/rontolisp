@@ -21,7 +21,7 @@ final class JvmEqualCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQUAL).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.EQUAL));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

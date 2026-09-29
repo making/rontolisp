@@ -40,42 +40,42 @@ final class JvmRemfTailCompiler {
 		// loop:
 		MethodCode.Label loopPos = ctx.body.newBoundLabel();
 		// Check current instanceof Object[] (cons)
-		ctx.body.aload(currentSlot).instanceOf(ctx.objectArrayClass.entry());
+		ctx.body.aload(currentSlot).instanceOf(ctx.objectArrayClass);
 		MethodCode.Label ifNotConsPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotConsPos);
 
 		// valueCell = cdr(current) = ((Object[])current)[1]
-		ctx.body.aload(currentSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(currentSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		ctx.body.astore(valueCellSlot);
 
 		// Check valueCell instanceof Object[]
-		ctx.body.aload(valueCellSlot).instanceOf(ctx.objectArrayClass.entry());
+		ctx.body.aload(valueCellSlot).instanceOf(ctx.objectArrayClass);
 		MethodCode.Label ifValNotConsPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifValNotConsPos);
 
 		// nextKeyCell = cdr(valueCell) = ((Object[])valueCell)[1]
-		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		ctx.body.astore(nextKeyCellSlot);
 
 		// Check nextKeyCell instanceof Object[]
-		ctx.body.aload(nextKeyCellSlot).instanceOf(ctx.objectArrayClass.entry());
+		ctx.body.aload(nextKeyCellSlot).instanceOf(ctx.objectArrayClass);
 		MethodCode.Label ifNextNotConsPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNextNotConsPos);
 
 		// Compare car(nextKeyCell) with indicator
 		// car(nextKeyCell) = ((Object[])nextKeyCell)[0]
-		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
-		ctx.body.aload(indicatorSlot).invokevirtual(ctx.objectEquals.methodRefEntry());
+		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
+		ctx.body.aload(indicatorSlot).invokevirtual(ctx.objectEquals);
 		MethodCode.Label ifNoMatchPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNoMatchPos);
 
 		// Match! splice: rplacd(valueCell, cddr(nextKeyCell))
 		// ((Object[])valueCell)[1] = ((Object[])((Object[])nextKeyCell)[1])[1]
-		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aload(valueCellSlot).checkcast(ctx.objectArrayClass).iconst_1();
 		// Compute cddr(nextKeyCell)
-		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.aload(nextKeyCellSlot).checkcast(ctx.objectArrayClass).iconst_1();
 		ctx.body.aaload(); // cdr(nextKeyCell)
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1();
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_1();
 		ctx.body.aaload(); // cddr(nextKeyCell)
 		ctx.body.aastore();
 		// Return t = Long(1)

@@ -18,9 +18,9 @@ final class JvmRationalpCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int temp = ctx.allocTemp();
-		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass.entry()).aload(temp);
-		ctx.body.instanceOf(JvmEmitHelper.bigIntegerClass(ctx).entry()).ior().aload(temp);
-		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry()).ior();
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass).aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.bigIntegerClass(ctx)).ior().aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx)).ior();
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

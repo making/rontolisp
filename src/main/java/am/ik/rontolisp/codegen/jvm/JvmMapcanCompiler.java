@@ -56,7 +56,7 @@ final class JvmMapcanCompiler {
 
 		// Sentinel head and its tail: every piece's fresh copy is linked here, so
 		// the walk is linear in the total output rather than quadratic in it.
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry());
+		ctx.body.iconst_2().anewarray(ctx.objectClass);
 		int headSlot = ctx.allocTemp();
 		ctx.body.astore(headSlot).aload(headSlot);
 		int tailSlot = ctx.allocTemp();
@@ -69,7 +69,7 @@ final class JvmMapcanCompiler {
 		// if any list is no cons, goto exit (stop at the shortest list)
 		MethodCode.Label exit = ctx.body.newLabel();
 		for (int listSlot : listSlots) {
-			ctx.body.aload(listSlot).invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).entry());
+			ctx.body.aload(listSlot).invokestatic(ctx.numOp(JvmOperandTypeRuntime.IS_CONS));
 			ctx.body.ifeq(exit);
 		}
 
@@ -94,19 +94,19 @@ final class JvmMapcanCompiler {
 		MethodCode.Label piecePos = ctx.body.newBoundLabel();
 		MethodCode.Label pieceDone = ctx.body.newLabel();
 		ctx.body.aload(cursorSlot).ifnull(pieceDone);
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(cursorSlot);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload().aastore();
-		ctx.body.astore(freshSlot).aload(tailSlot).checkcast(ctx.objectArrayClass.entry());
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().aload(cursorSlot);
+		ctx.body.checkcast(ctx.objectArrayClass).iconst_0().aaload().aastore();
+		ctx.body.astore(freshSlot).aload(tailSlot).checkcast(ctx.objectArrayClass);
 		ctx.body.iconst_1().aload(freshSlot).aastore().aload(freshSlot).astore(tailSlot);
 		// cursor = cdr(cursor); goto piece loop
-		ctx.body.aload(cursorSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(cursorSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 		ctx.body.astore(cursorSlot).goto_(piecePos);
 		ctx.body.labelBinding(pieceDone);
 		ctx.body.labelBinding(advance);
 
 		// advance each list: list = cdr(list) = ((Object[]) list)[1]
 		for (int listSlot : listSlots) {
-			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+			ctx.body.aload(listSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 			ctx.body.astore(listSlot);
 		}
 
@@ -122,12 +122,12 @@ final class JvmMapcanCompiler {
 			JvmEmitHelper.emitListCheck(ctx);
 			ctx.body.pop();
 		}
-		ctx.body.aload(headSlot).checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload();
+		ctx.body.aload(headSlot).checkcast(ctx.objectArrayClass).iconst_1().aaload();
 	}
 
 	// car(list) = ((Object[]) list)[0]
 	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 	}
 
 }

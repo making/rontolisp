@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -41,18 +41,16 @@ final class JvmExitCompiler {
 		// Number.intValue rather than Long.intValue: uiop:quit's code is whatever
 		// arithmetic produced it, and a ClassCastException is not the diagnostic anybody
 		// wants out of an exit status.
-		MethodrefConstant intValue = ctx.cp.addMethodref(ctx.numberClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("intValue"), ctx.cp.addUtf8("()I")));
-		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(intValue.methodRefEntry());
+		MethodRefEntry intValue = ctx.cp.methodRef(ctx.numberClass, "intValue", "()I");
+		ctx.body.checkcast(ctx.numberClass).invokevirtual(intValue);
 		// System.exit runs no finally and main's return is never reached, so the output
 		// files the program never closed are flushed here (a program that opens none has
 		// no _flushStreams and keeps its bytes).
 		if (ctx.flushStreams != null) {
-			ctx.body.invokestatic(ctx.flushStreams.entry());
+			ctx.body.invokestatic(ctx.flushStreams);
 		}
-		MethodrefConstant exit = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System")),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("exit"), ctx.cp.addUtf8("(I)V")));
-		ctx.body.invokestatic(exit.entry());
+		MethodRefEntry exit = ctx.cp.methodRef(ctx.cp.classEntry("java/lang/System"), "exit", "(I)V");
+		ctx.body.invokestatic(exit);
 		// Never reached, but the verifier types this expression like any other: it leaves
 		// one value behind.
 		ctx.body.aconst_null();

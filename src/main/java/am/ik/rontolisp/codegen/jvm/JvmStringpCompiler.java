@@ -1,13 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the {@code stringp} predicate. A value is a string when it is a quote-framed
@@ -39,11 +39,11 @@ final class JvmStringpCompiler {
 	 * @param tempSlot the local holding the value to test
 	 */
 	static void emitStringpCheck(JvmLispCompiler.Ctx ctx, int tempSlot) {
-		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass);
 		MethodCode.Label ifNotStringPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotStringPos);
-		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, 34);
 		MethodCode.Label nil = ctx.body.newLabel();
 		ctx.body.if_icmpne(nil);
@@ -55,19 +55,17 @@ final class JvmStringpCompiler {
 			// A mutable character vector (an ArrayList whose slot-0 header Object[] has
 			// length 4) is a string too; the branch exists only when the array helpers
 			// are emitted, so array-free programs stay byte-identical.
-			ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
-			MethodrefConstant alSize = ctx.cp.addMethodref(arrayListClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")));
-			MethodrefConstant alGet = ctx.cp.addMethodref(arrayListClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
-			ctx.body.aload(tempSlot).instanceOf(arrayListClass.entry()).ifeq(nil);
-			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry());
-			ctx.body.invokevirtual(alSize.methodRefEntry()).ifeq(nil);
-			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry()).iconst_0();
-			ctx.body.invokevirtual(alGet.methodRefEntry()).instanceOf(ctx.objectArrayClass.entry());
+			ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+			MethodRefEntry alSize = ctx.cp.methodRef(arrayListClass, "size", "()I");
+			MethodRefEntry alGet = ctx.cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+			ctx.body.aload(tempSlot).instanceOf(arrayListClass).ifeq(nil);
+			ctx.body.aload(tempSlot).checkcast(arrayListClass);
+			ctx.body.invokevirtual(alSize).ifeq(nil);
+			ctx.body.aload(tempSlot).checkcast(arrayListClass).iconst_0();
+			ctx.body.invokevirtual(alGet).instanceOf(ctx.objectArrayClass);
 			ctx.body.ifeq(nil);
-			ctx.body.aload(tempSlot).checkcast(arrayListClass.entry()).iconst_0();
-			ctx.body.invokevirtual(alGet.methodRefEntry()).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.aload(tempSlot).checkcast(arrayListClass).iconst_0();
+			ctx.body.invokevirtual(alGet).checkcast(ctx.objectArrayClass);
 			ctx.body.arraylength();
 			// Header length 4 is a character vector; 7 is a displaced STRING VIEW (a
 			// view whose target is a string). Length 3 / 5 / 6 -- the ordinary, the

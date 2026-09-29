@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -32,23 +32,23 @@ final class JvmGetcwdCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.HOST_GETCWD + " expects no arguments, got " + (parts.size() - 1));
 		}
-		ClassConstant systemClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System"));
-		MethodrefConstant getProperty = ctx.cp.addMethodref(systemClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("getProperty"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		final MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat",
+		ClassEntry systemClass = ctx.cp.classEntry("java/lang/System");
+		MethodRefEntry getProperty = ctx.cp.methodRef(systemClass, "getProperty",
+				"(Ljava/lang/String;)Ljava/lang/String;");
+		final MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat",
 				"(Ljava/lang/String;)Ljava/lang/String;");
 		// System.getProperty("user.dir") -- the raw host string, no Lisp quotes.
 		JvmEmitHelper.compileUnspelledLiteral("user.dir", ctx);
-		ctx.body.invokestatic(getProperty.entry()); // [value|null]
+		ctx.body.invokestatic(getProperty); // [value|null]
 		ctx.body.dup(); // [value, value]
 		MethodCode.Label end = ctx.body.newLabel();
 		ctx.body.ifnull(end);
 		// non-null: wrap as "\"" + value + "\"", the runtime string representation.
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [value, q]
 		ctx.body.swap(); // [q, value]
-		ctx.body.invokevirtual(concat.methodRefEntry()); // [q+value]
+		ctx.body.invokevirtual(concat); // [q+value]
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [.., q]
-		ctx.body.invokevirtual(concat.methodRefEntry()); // [quoted]
+		ctx.body.invokevirtual(concat); // [quoted]
 		ctx.body.goto_(end);
 		// null path: leave the null (nil) on the stack.
 		ctx.body.labelBinding(end);

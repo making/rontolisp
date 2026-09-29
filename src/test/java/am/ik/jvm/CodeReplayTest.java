@@ -47,9 +47,9 @@ class CodeReplayTest {
 		c.labelBinding(far);
 		int target = c.position();
 		c.aload(slot).areturn();
-		f.definition.lineNumberTableName(f.cp.addUtf8("LineNumberTable"));
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"),
-				f.cp.addUtf8("()Ljava/lang/Object;"), c, List.of(new ClassDefinition.Line(target, 7)));
+		f.definition.lineNumberTableName(f.cp.utf8Entry("LineNumberTable"));
+		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.utf8Entry("run"),
+				f.cp.utf8Entry("()Ljava/lang/Object;"), c, List.of(new ClassDefinition.Line(target, 7)));
 		byte[] written = f.write();
 
 		assertThat(f.load(written).getMethod("run").invoke(null)).isEqualTo("ok");
@@ -278,13 +278,12 @@ class CodeReplayTest {
 		Fixture(String name) {
 			this.name = name;
 			this.definition = ClassDefinition.builder(this.cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
-					this.cp.addClass(this.cp.addUtf8(name)), this.cp.addClass(this.cp.addUtf8("java/lang/Object")),
-					this.cp.addUtf8("Code"));
+					this.cp.classEntry(name), this.cp.classEntry("java/lang/Object"), this.cp.utf8Entry("Code"));
 		}
 
 		void add(String method, String descriptor, MethodCode code) {
-			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(method),
-					this.cp.addUtf8(descriptor), code);
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.utf8Entry(method),
+					this.cp.utf8Entry(descriptor), code);
 		}
 
 		byte[] write() {

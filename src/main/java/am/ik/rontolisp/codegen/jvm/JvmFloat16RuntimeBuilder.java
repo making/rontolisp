@@ -140,7 +140,7 @@ final class JvmFloat16RuntimeBuilder {
 				resultInt);
 		a.labelBinding(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "WIDEN-FLOAT-BITS: dst must be a packed float array");
-		return new ArrayMethod(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(WIDEN), cp.utf8Entry(WIDEN_DESC), a);
 	}
 
 	private static void emitWidenArm(MethodCode a, JvmPackedFloatWidth w, ClassEntry arrayClass,
@@ -295,7 +295,7 @@ final class JvmFloat16RuntimeBuilder {
 				rank, off, k);
 		a.labelBinding(notArray);
 		emitThrow(a, cp, rtExClass, rtExInit, "NARROW-FLOAT-BITS: src must be a packed float array");
-		return new ArrayMethod(cp.addUtf8(NARROW), cp.addUtf8(NARROW_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(NARROW), cp.utf8Entry(NARROW_DESC), a);
 	}
 
 	private static void emitNarrowArm(MethodCode a, JvmPackedFloatWidth w, ClassEntry arrayClass,

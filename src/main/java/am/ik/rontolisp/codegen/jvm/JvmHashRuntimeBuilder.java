@@ -5,6 +5,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MemberRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -12,7 +13,6 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispEquality;
 import am.ik.rontolisp.runtime.RontoHashTable;
@@ -216,7 +216,7 @@ final class JvmHashRuntimeBuilder {
 	static final String EQL_KEY = "#eql";
 
 	/** A hash-table helper method body ready to be emitted into the generated class. */
-	record HashMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record HashMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	private JvmHashRuntimeBuilder() {
@@ -329,7 +329,7 @@ final class JvmHashRuntimeBuilder {
 		make.invokevirtual(mapPut);
 		make.pop();
 		make.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), make));
+		methods.add(new HashMethod(cp.utf8Entry(MAKE), cp.utf8Entry(MAKE_DESC), make));
 
 		// _hashOrd(table): return (ArrayList) ((LinkedHashMap) table).get(ORDER_KEY)
 		MethodCode ord = new MethodCode();
@@ -339,7 +339,7 @@ final class JvmHashRuntimeBuilder {
 		ord.invokevirtual(mapGet);
 		ord.checkcast(listClass);
 		ord.areturn();
-		methods.add(new HashMethod(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC), ord));
+		methods.add(new HashMethod(cp.utf8Entry(ORD), cp.utf8Entry(ORD_DESC), ord));
 
 		// The test reader the identity dispatch below branches on. Emitted only for a
 		// program that can build an identity table; every other program keeps the
@@ -455,7 +455,7 @@ final class JvmHashRuntimeBuilder {
 		}
 		clr.aload(0);
 		clr.areturn();
-		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), clr));
+		methods.add(new HashMethod(cp.utf8Entry(CLR), cp.utf8Entry(CLR_DESC), clr));
 
 		// _hashCount(table): return Long.valueOf(liveCount(table))
 		MethodCode count = new MethodCode();
@@ -464,14 +464,14 @@ final class JvmHashRuntimeBuilder {
 		count.i2l();
 		count.invokestatic(longValueOf);
 		count.areturn();
-		methods.add(new HashMethod(cp.addUtf8(COUNT), cp.addUtf8(COUNT_DESC), count));
+		methods.add(new HashMethod(cp.utf8Entry(COUNT), cp.utf8Entry(COUNT_DESC), count));
 
 		// _hashSize(table): the same count as a bare int (the printer's :COUNT field)
 		MethodCode size = new MethodCode();
 		size.aload(0);
 		size.invokestatic(liveCountRef);
 		size.ireturn();
-		methods.add(new HashMethod(cp.addUtf8(SIZE), cp.addUtf8(SIZE_DESC), size));
+		methods.add(new HashMethod(cp.utf8Entry(SIZE), cp.utf8Entry(SIZE_DESC), size));
 
 		// _hashP(x): return (x instanceof LinkedHashMap) ? "T" : null -- in a java:
 		// program
@@ -491,7 +491,7 @@ final class JvmHashRuntimeBuilder {
 		hp.labelBinding(hpFalse);
 		hp.aconst_null();
 		hp.areturn();
-		methods.add(new HashMethod(cp.addUtf8(P), cp.addUtf8(P_DESC), hp));
+		methods.add(new HashMethod(cp.utf8Entry(P), cp.utf8Entry(P_DESC), hp));
 
 		// _hashValues(table): the live pairs in insertion order, compacting first when
 		// half dead -- what maphash walks.
@@ -499,7 +499,7 @@ final class JvmHashRuntimeBuilder {
 		values.aload(0);
 		values.invokestatic(liveValuesRef);
 		values.areturn();
-		methods.add(new HashMethod(cp.addUtf8(VALUES), cp.addUtf8(VALUES_DESC), values));
+		methods.add(new HashMethod(cp.utf8Entry(VALUES), cp.utf8Entry(VALUES_DESC), values));
 
 		return methods;
 	}
@@ -706,7 +706,7 @@ final class JvmHashRuntimeBuilder {
 		a.aload(0);
 		a.invokevirtual(objectHashCode);
 		a.ireturn();
-		return new HashMethod(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC), a);
+		return new HashMethod(cp.utf8Entry(HASH), cp.utf8Entry(HASH_DESC), a);
 	}
 
 	// _hashGet(key, table, default): scan the key's bucket with the table's own test --
@@ -763,7 +763,7 @@ final class JvmHashRuntimeBuilder {
 		a.labelBinding(miss);
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(GET), cp.addUtf8(GET_DESC), a);
+		return new HashMethod(cp.utf8Entry(GET), cp.utf8Entry(GET_DESC), a);
 	}
 
 	// _hashPut(key, table, value): replace the value of the equal key in the bucket, or
@@ -867,7 +867,7 @@ final class JvmHashRuntimeBuilder {
 		a.invokestatic(maybeCompactRef);
 		a.aload(2);
 		a.areturn();
-		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), a);
+		return new HashMethod(cp.utf8Entry(PUT), cp.utf8Entry(PUT_DESC), a);
 	}
 
 	// _hashRem(key, table): drop the pair from its bucket and tombstone it in the order
@@ -944,7 +944,7 @@ final class JvmHashRuntimeBuilder {
 		a.labelBinding(miss);
 		a.aconst_null();
 		a.areturn();
-		return new HashMethod(cp.addUtf8(REM), cp.addUtf8(REM_DESC), a);
+		return new HashMethod(cp.utf8Entry(REM), cp.utf8Entry(REM_DESC), a);
 	}
 
 	// The equalp trio, emitted only for a program that writes :test 'equalp.
@@ -976,7 +976,7 @@ final class JvmHashRuntimeBuilder {
 		make.pop();
 		make.aload(0);
 		make.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQUALP), cp.addUtf8(MAKE_EQUALP_DESC), make));
+		methods.add(new HashMethod(cp.utf8Entry(MAKE_EQUALP), cp.utf8Entry(MAKE_EQUALP_DESC), make));
 
 		MethodCode eqp = new MethodCode();
 		eqp.aload(0);
@@ -991,7 +991,7 @@ final class JvmHashRuntimeBuilder {
 		eqp.labelBinding(notTable);
 		eqp.aconst_null();
 		eqp.areturn();
-		methods.add(new HashMethod(cp.addUtf8(EQUALP_P), cp.addUtf8(EQUALP_P_DESC), eqp));
+		methods.add(new HashMethod(cp.utf8Entry(EQUALP_P), cp.utf8Entry(EQUALP_P_DESC), eqp));
 
 		MethodCode key = new MethodCode();
 		key.aload(1);
@@ -1013,7 +1013,7 @@ final class JvmHashRuntimeBuilder {
 		key.labelBinding(unfolded);
 		key.aload(0);
 		key.areturn();
-		methods.add(new HashMethod(cp.addUtf8(KEY), cp.addUtf8(KEY_DESC), key));
+		methods.add(new HashMethod(cp.utf8Entry(KEY), cp.utf8Entry(KEY_DESC), key));
 
 		return methods;
 	}
@@ -1046,7 +1046,7 @@ final class JvmHashRuntimeBuilder {
 		makeEq.pop();
 		makeEq.aload(0);
 		makeEq.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQ), cp.addUtf8(MAKE_EQ_DESC), makeEq));
+		methods.add(new HashMethod(cp.utf8Entry(MAKE_EQ), cp.utf8Entry(MAKE_EQ_DESC), makeEq));
 
 		MethodCode makeEql = new MethodCode();
 		makeEql.invokestatic(makeRef);
@@ -1059,7 +1059,7 @@ final class JvmHashRuntimeBuilder {
 		makeEql.pop();
 		makeEql.aload(0);
 		makeEql.areturn();
-		methods.add(new HashMethod(cp.addUtf8(MAKE_EQL), cp.addUtf8(MAKE_EQL_DESC), makeEql));
+		methods.add(new HashMethod(cp.utf8Entry(MAKE_EQL), cp.utf8Entry(MAKE_EQL_DESC), makeEql));
 
 		MethodCode test = new MethodCode();
 		test.aload(0);
@@ -1096,7 +1096,7 @@ final class JvmHashRuntimeBuilder {
 		test.labelBinding(notTable);
 		test.loadConstant(0);
 		test.ireturn();
-		methods.add(new HashMethod(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC), test));
+		methods.add(new HashMethod(cp.utf8Entry(TEST), cp.utf8Entry(TEST_DESC), test));
 
 		return methods;
 	}

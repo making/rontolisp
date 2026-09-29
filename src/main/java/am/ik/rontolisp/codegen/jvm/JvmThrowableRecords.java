@@ -170,7 +170,7 @@ final class JvmThrowableRecords {
 		m.labelBinding(have);
 		m.aload(1);
 		m.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TL_MAP), cp.addUtf8(TL_MAP_DESC), m));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(TL_MAP), cp.utf8Entry(TL_MAP_DESC), m));
 		if (condTl == null) {
 			return methods;
 		}
@@ -191,8 +191,8 @@ final class JvmThrowableRecords {
 		take.labelBinding(none);
 		take.aconst_null();
 		take.areturn();
-		methods
-			.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_TAKE), cp.addUtf8(COND_TAKE_DESC), take));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(COND_TAKE), cp.utf8Entry(COND_TAKE_DESC),
+				take));
 
 		// _condPut(Throwable t, Object c): _tlMap(_condTl).put(t, c) unless c is null; t.
 		MethodCode put = new MethodCode();
@@ -208,7 +208,8 @@ final class JvmThrowableRecords {
 		put.labelBinding(done);
 		put.aload(0);
 		put.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_PUT), cp.addUtf8(COND_PUT_DESC), put));
+		methods
+			.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(COND_PUT), cp.utf8Entry(COND_PUT_DESC), put));
 		if (!handlersRan) {
 			return methods;
 		}
@@ -229,7 +230,8 @@ final class JvmThrowableRecords {
 		ran.aastore();
 		ran.invokestatic(self(cp, thisClass, COND_PUT, COND_PUT_DESC));
 		ran.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_RAN), cp.addUtf8(COND_RAN_DESC), ran));
+		methods
+			.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(COND_RAN), cp.utf8Entry(COND_RAN_DESC), ran));
 
 		// _condOf(Object r): r[1] when r is a {_condTl, c} record, r otherwise.
 		MethodCode of = new MethodCode();
@@ -256,7 +258,7 @@ final class JvmThrowableRecords {
 		of.labelBinding(plain);
 		of.aload(0);
 		of.areturn();
-		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(COND_OF), cp.addUtf8(COND_OF_DESC), of));
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(COND_OF), cp.utf8Entry(COND_OF_DESC), of));
 		return methods;
 	}
 

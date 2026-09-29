@@ -3,14 +3,14 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -76,9 +76,9 @@ final class JvmGeomRuntimeBuilder {
 	 * ({@code ops} keys: {@code init}, {@value #AVAILABLE}, and the qualified name of
 	 * each accelerated member).
 	 */
-	record GeomRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
-			Utf8Constant initedFieldDesc, Utf8Constant availableFieldName, Utf8Constant availableFieldDesc,
-			Utf8Constant readyName, Utf8Constant readyDesc, MethodCode readyCode, Map<String, MethodrefConstant> ops,
+	record GeomRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
+			Utf8Entry initedFieldDesc, Utf8Entry availableFieldName, Utf8Entry availableFieldDesc, Utf8Entry readyName,
+			Utf8Entry readyDesc, MethodCode readyCode, Map<String, MethodRefEntry> ops,
 			Map<String, byte[]> classFiles) {
 	}
 
@@ -91,33 +91,31 @@ final class JvmGeomRuntimeBuilder {
 	 * named after it and lives in its package (the bridge methods are package-private)
 	 * @return the runtime pieces
 	 */
-	static GeomRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+	static GeomRuntime build(ConstantPool cp, ClassEntry thisClass, String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
 		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
 
-		Utf8Constant initedFieldName = cp.addUtf8("_geomInited");
-		Utf8Constant initedFieldDesc = cp.addUtf8("I");
-		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
-		Utf8Constant availableFieldName = cp.addUtf8(AVAILABLE_FIELD);
-		Utf8Constant availableFieldDesc = cp.addUtf8("I");
-		FieldrefConstant availableField = cp.addFieldref(thisClass,
-				cp.addNameAndType(availableFieldName, availableFieldDesc));
+		Utf8Entry initedFieldName = cp.utf8Entry("_geomInited");
+		Utf8Entry initedFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry initedField = cp.fieldRef(thisClass, initedFieldName, initedFieldDesc);
+		Utf8Entry availableFieldName = cp.utf8Entry(AVAILABLE_FIELD);
+		Utf8Entry availableFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry availableField = cp.fieldRef(thisClass, availableFieldName, availableFieldDesc);
 
-		ClassConstant linkageErrorClass = cp.addClass(cp.addUtf8("java/lang/LinkageError"));
+		ClassEntry linkageErrorClass = cp.classEntry("java/lang/LinkageError");
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
-		Utf8Constant initDesc = cp.addUtf8("()V");
-		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
-		Utf8Constant readyName = cp.addUtf8(READY_METHOD);
-		Utf8Constant readyDesc = cp.addUtf8("()Z");
-		ops.put(AVAILABLE, cp.addMethodref(thisClass, cp.addNameAndType(readyName, readyDesc)));
+		ClassEntry bridgeClass = cp.classEntry(bridgeName);
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		Utf8Entry initName = cp.utf8Entry(INIT_METHOD);
+		Utf8Entry initDesc = cp.utf8Entry("()V");
+		ops.put("init", cp.methodRef(thisClass, initName, initDesc));
+		Utf8Entry readyName = cp.utf8Entry(READY_METHOD);
+		Utf8Entry readyDesc = cp.utf8Entry("()Z");
+		ops.put(AVAILABLE, cp.methodRef(thisClass, readyName, readyDesc));
 		for (String member : JvmGeomKernelCompiler.members()) {
 			String desc = "(" + "Ljava/lang/Object;".repeat(JvmGeomKernelCompiler.arity(member))
 					+ ")Ljava/lang/Object;";
-			ops.put(member, cp.addMethodref(bridgeClass,
-					cp.addNameAndType(cp.addUtf8(JvmGeomKernelCompiler.bridgeMethod(member)), cp.addUtf8(desc))));
+			ops.put(member, cp.methodRef(bridgeClass, JvmGeomKernelCompiler.bridgeMethod(member), desc));
 		}
 
 		// --- _geomInit body (self-contained: no bind callback) ---
@@ -131,14 +129,14 @@ final class JvmGeomRuntimeBuilder {
 		// }
 		// _geomInited = 1;
 		MethodCode code = new MethodCode();
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label guard = code.newLabel();
 		code.ifne(guard);
 		MethodCode.Label tryStart = code.newBoundLabel();
-		code.ldc(bridgeClass.entry()); // [class]
+		code.ldc(bridgeClass); // [class]
 		code.pop();
 		code.iconst_1();
-		code.putstatic(availableField.entry());
+		code.putstatic(availableField);
 		MethodCode.Label skipHandler = code.newLabel();
 		code.goto_(skipHandler);
 		// catch (LinkageError e) -- the operand stack holds just the caught throwable;
@@ -149,15 +147,15 @@ final class JvmGeomRuntimeBuilder {
 		code.labelBinding(skipHandler);
 		// _geomInited = 1 (tried, either way -- never re-attempt)
 		code.iconst_1();
-		code.putstatic(initedField.entry());
+		code.putstatic(initedField);
 		code.labelBinding(guard);
 		code.return_();
 
-		code.exceptionCatch(tryStart, handler, handler, linkageErrorClass.entry());
+		code.exceptionCatch(tryStart, handler, handler, linkageErrorClass);
 
 		// --- _geomReady body: return _geomAvailable != 0; ---
 		MethodCode readyCode = new MethodCode();
-		readyCode.getstatic(availableField.entry());
+		readyCode.getstatic(availableField);
 		readyCode.ireturn();
 
 		return new GeomRuntime(initName, initDesc, code, initedFieldName, initedFieldDesc, availableFieldName,

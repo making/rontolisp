@@ -30,7 +30,7 @@ final class JvmNullPredCompiler {
 	 */
 	static void compileEndp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP));
 		emitNullTest(ctx);
 	}
 
@@ -44,7 +44,7 @@ final class JvmNullPredCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		String operator = LispMacroExpander.checkListOperator(cons);
 		if (LispNames.ENDP.equals(operator)) {
-			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.ENDP));
 			return;
 		}
 		@Nullable String outer = ctx.operator;

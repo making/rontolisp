@@ -30,13 +30,13 @@ final class JvmMinCompiler {
 				&& JvmLispCompiler.isDefinitelyDouble(args.get(2), ctx)) {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMIN).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FMIN));
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.MIN).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.MIN));
 		}
 	}
 

@@ -5,11 +5,11 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
@@ -31,7 +31,7 @@ import org.jspecify.annotations.Nullable;
 final class JvmSocketRuntimeBuilder {
 
 	/** A socket-runtime method body ready to be emitted into the generated class. */
-	record SocketMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record SocketMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -402,37 +402,37 @@ final class JvmSocketRuntimeBuilder {
 		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
 				longValueOf, longValue, stringLength, stringSubstring, stringConcat, arrayRuntime);
 		List<SocketMethod> methods = new ArrayList<>();
-		methods.add(new SocketMethod(cp.addUtf8(TCP_CONNECT_METHOD), cp.addUtf8(TCP_CONNECT_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_CONNECT_METHOD), cp.utf8Entry(TCP_CONNECT_DESC),
 				builder.buildTcpConnect()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_CONNECT_METHOD), cp.addUtf8(TLS_CONNECT_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TLS_CONNECT_METHOD), cp.utf8Entry(TLS_CONNECT_DESC),
 				builder.buildTlsConnect()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_UPGRADE_METHOD), cp.addUtf8(TLS_UPGRADE_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TLS_UPGRADE_METHOD), cp.utf8Entry(TLS_UPGRADE_DESC),
 				builder.buildTlsUpgrade()));
-		methods.add(
-				new SocketMethod(cp.addUtf8(TLS_LISTEN_METHOD), cp.addUtf8(TLS_LISTEN_DESC), builder.buildTlsListen()));
-		methods.add(new SocketMethod(cp.addUtf8(TLS_LISTEN_P12_METHOD), cp.addUtf8(TLS_LISTEN_P12_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TLS_LISTEN_METHOD), cp.utf8Entry(TLS_LISTEN_DESC),
+				builder.buildTlsListen()));
+		methods.add(new SocketMethod(cp.utf8Entry(TLS_LISTEN_P12_METHOD), cp.utf8Entry(TLS_LISTEN_P12_DESC),
 				builder.buildTlsListenP12()));
-		methods.add(
-				new SocketMethod(cp.addUtf8(TCP_LISTEN_METHOD), cp.addUtf8(TCP_LISTEN_DESC), builder.buildTcpListen()));
-		methods.add(
-				new SocketMethod(cp.addUtf8(TCP_ACCEPT_METHOD), cp.addUtf8(TCP_ACCEPT_DESC), builder.buildTcpAccept()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_PORT_METHOD), cp.addUtf8(TCP_LOCAL_PORT_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_LISTEN_METHOD), cp.utf8Entry(TCP_LISTEN_DESC),
+				builder.buildTcpListen()));
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_ACCEPT_METHOD), cp.utf8Entry(TCP_ACCEPT_DESC),
+				builder.buildTcpAccept()));
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_LOCAL_PORT_METHOD), cp.utf8Entry(TCP_LOCAL_PORT_DESC),
 				builder.buildTcpLocalPort()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_LOCAL_ADDRESS_METHOD), cp.addUtf8(TCP_LOCAL_ADDRESS_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_LOCAL_ADDRESS_METHOD), cp.utf8Entry(TCP_LOCAL_ADDRESS_DESC),
 				builder.buildTcpLocalAddress()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_ADDRESS_METHOD), cp.addUtf8(TCP_PEER_ADDRESS_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_PEER_ADDRESS_METHOD), cp.utf8Entry(TCP_PEER_ADDRESS_DESC),
 				builder.buildTcpPeerAddress()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_PEER_PORT_METHOD), cp.addUtf8(TCP_PEER_PORT_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_PEER_PORT_METHOD), cp.utf8Entry(TCP_PEER_PORT_DESC),
 				builder.buildTcpPeerPort()));
-		methods.add(new SocketMethod(cp.addUtf8(TCP_SET_TIMEOUT_METHOD), cp.addUtf8(TCP_SET_TIMEOUT_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(TCP_SET_TIMEOUT_METHOD), cp.utf8Entry(TCP_SET_TIMEOUT_DESC),
 				builder.buildTcpSetTimeout()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_LINE_METHOD), cp.utf8Entry(SOCK_READ_LINE_DESC),
 				builder.buildSockReadLine()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_LINE_METHOD), cp.utf8Entry(SOCK_WRITE_LINE_DESC),
 				builder.buildSockWriteLine()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_STRING_METHOD), cp.utf8Entry(SOCK_WRITE_STRING_DESC),
 				builder.buildSockWriteString()));
-		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC),
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_CHAR_METHOD), cp.utf8Entry(SOCK_READ_CHAR_DESC),
 				builder.buildSockReadChar()));
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
 				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,

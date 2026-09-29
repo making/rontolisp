@@ -43,7 +43,7 @@ final class JvmListCompiler {
 		int tailSlot = ctx.allocTemp();
 		ctx.body.aconst_null();
 		for (int i = args.size() - 1; i >= 1; i--) {
-			ctx.body.astore(tailSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup();
+			ctx.body.astore(tailSlot).iconst_2().anewarray(ctx.objectClass).dup();
 			ctx.body.iconst_0();
 			Integer pre = slots.get(i);
 			if (pre == null) {

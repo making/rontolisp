@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -25,13 +25,13 @@ final class JvmPrincToStringCompiler {
 	 * Emits {@code "\"".concat(toString(value)).concat("\"")} where {@code toString} is
 	 * the given static helper ({@code _lispToDisplayString} or {@code _lispToString}).
 	 */
-	static void emitToString(LispVal value, MethodrefConstant toString, JvmLispCompiler.Ctx ctx, String className) {
-		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+	static void emitToString(LispVal value, MethodRefEntry toString, JvmLispCompiler.Ctx ctx, String className) {
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
 		JvmExprCompiler.compileExpr(value, ctx, className);
-		ctx.body.invokestatic(toString.entry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.invokestatic(toString).invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral("\"", ctx);
-		ctx.body.invokevirtual(concat.methodRefEntry());
+		ctx.body.invokevirtual(concat);
 	}
 
 }

@@ -313,7 +313,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(i);
 		a.invokestatic(aref1Delegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(AREF1), cp.utf8Entry(JvmArrayRuntimeBuilder.AREF1_DESC), a);
 	}
 
 	// Pushes the subscript in local i checked against the vector's length
@@ -420,7 +420,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset1Delegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ASET1), cp.utf8Entry(JvmArrayRuntimeBuilder.ASET1_DESC), a);
 	}
 
 	// _ivDims(arr): packed -> the fresh cons list (n); else delegate. A cons is an
@@ -452,7 +452,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(0);
 		a.invokestatic(dimsDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(DIMS), cp.utf8Entry(JvmArrayRuntimeBuilder.DIMS_DESC), a);
 	}
 
 	// _ivCheckRank(arr, given): packed -> rank is always 1 (a packed integer vector is
@@ -487,7 +487,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), a);
 	}
 
 	// Shared tail of _ivCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
@@ -515,7 +515,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.addString(" subscripts, got ").entry());
+		a.ldc(cp.stringEntry(" subscripts, got "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
@@ -550,7 +550,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(0);
 		a.invokestatic(lengthDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(JvmLengthRuntimeBuilder.DESC), a);
+		return new ArrayMethod(cp.utf8Entry(LENGTH), cp.utf8Entry(JvmLengthRuntimeBuilder.DESC), a);
 	}
 
 	// _ivToGeneral(o): converts a packed vector into the equivalent general array (an
@@ -613,7 +613,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.labelBinding(done);
 		a.aload(list);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(TO_GENERAL), cp.addUtf8(TO_GENERAL_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(TO_GENERAL), cp.utf8Entry(TO_GENERAL_DESC), a);
 	}
 
 	// for (f = 0; f < n; f++) list.add(Long.valueOf(<element f>)); goto done -- the
@@ -674,7 +674,7 @@ final class JvmIntArrayRuntimeBuilder {
 			a.ldc(cp.stringEntry("T"));
 			a.areturn();
 		}
-		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ELEMENT_TYPE), cp.utf8Entry(ELEMENT_TYPE_DESC), a);
 	}
 
 	// Pushes new Object[]{"UNSIGNED-BYTE", new Object[]{Long.valueOf(width), null}}, the
@@ -765,7 +765,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.invokestatic(arrayMakeTyped);
 		a.areturn();
 		a.labelBinding(haveN);
-		StringEntry storesIntegers = cp.addString("make-array: a packed integer vector stores integers").entry();
+		StringEntry storesIntegers = cp.stringEntry("make-array: a packed integer vector stores integers");
 		MethodCode.Label wide = a.newLabel();
 		a.iload(width);
 		a.loadConstant(OCTET_TAG);
@@ -840,7 +840,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.labelBinding(done);
 		a.aload(arr);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(MAKE), cp.addUtf8(MAKE_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(MAKE), cp.utf8Entry(MAKE_DESC), a);
 	}
 
 	// _ivRequireGeneral(o): the fill-pointer-surface guard -- a packed integer vector
@@ -863,7 +863,7 @@ final class JvmIntArrayRuntimeBuilder {
 		a.labelBinding(ok);
 		a.aload(0);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(REQUIRE_GENERAL), cp.utf8Entry(REQUIRE_GENERAL_DESC), a);
 	}
 
 	// The ArrayElementTypes code for the packed width held in widthSlot: the widths are

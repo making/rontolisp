@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
@@ -182,11 +182,11 @@ final class JvmTcpCompiler {
 		}
 	}
 
-	private static void invoke(JvmLispCompiler.Ctx ctx, @Nullable MethodrefConstant helper, String member) {
+	private static void invoke(JvmLispCompiler.Ctx ctx, @Nullable MethodRefEntry helper, String member) {
 		if (helper == null) {
 			throw new IllegalStateException(member + " helper method was not emitted");
 		}
-		ctx.body.invokestatic(helper.entry());
+		ctx.body.invokestatic(helper);
 	}
 
 }

@@ -30,7 +30,7 @@ final class JvmAppendCompiler {
 		}
 		// Right-fold: call _append N-1 times from right to left
 		for (int i = 0; i < argCount - 1; i++) {
-			ctx.body.invokestatic(ctx.appendMethod.entry());
+			ctx.body.invokestatic(ctx.appendMethod);
 		}
 	}
 

@@ -1,6 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -9,10 +13,6 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -263,8 +263,8 @@ final class JvmIntFusionCompiler {
 	 * {@link JvmLetCompiler}; every assignment funnels through {@link #compileRawStore}
 	 * and every boxed read through {@link #emitRawLocalBoxedRead}.
 	 */
-	record RawLocal(int longSlot, int shadowSlot, int flagSlot, @Nullable FieldrefConstant longField,
-			@Nullable FieldrefConstant shadowField, @Nullable FieldrefConstant flagField) {
+	record RawLocal(int longSlot, int shadowSlot, int flagSlot, @Nullable FieldRefEntry longField,
+			@Nullable FieldRefEntry shadowField, @Nullable FieldRefEntry flagField) {
 
 		/** The triple as JVM local slots -- an eligible {@code let} binding. */
 		static RawLocal slots(int longSlot, int shadowSlot, int flagSlot) {
@@ -277,7 +277,7 @@ final class JvmIntFusionCompiler {
 		 * other emission already reads, so a store that leaves the raw slot stale is
 		 * exactly what the unfused compiler would have written.
 		 */
-		static RawLocal fields(FieldrefConstant longField, FieldrefConstant shadowField, FieldrefConstant flagField) {
+		static RawLocal fields(FieldRefEntry longField, FieldRefEntry shadowField, FieldRefEntry flagField) {
 			return new RawLocal(-1, -1, -1, longField, shadowField, flagField);
 		}
 
@@ -307,7 +307,7 @@ final class JvmIntFusionCompiler {
 	/** Pushes the raw {@code long} half of the triple. */
 	private static void emitRawLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.longField()).entry());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.longField()));
 			return;
 		}
 		ctx.body.lload(raw.longSlot());
@@ -316,7 +316,7 @@ final class JvmIntFusionCompiler {
 	/** Pushes the boxed shadow half of the triple. */
 	private static void emitShadowLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.shadowField()).entry());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.shadowField()));
 			return;
 		}
 		ctx.body.aload(raw.shadowSlot());
@@ -325,7 +325,7 @@ final class JvmIntFusionCompiler {
 	/** Pushes the {@code int} flag half of the triple. */
 	private static void emitFlagLoad(RawLocal raw, JvmLispCompiler.Ctx ctx) {
 		if (raw.isField()) {
-			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.flagField()).entry());
+			ctx.body.getstatic(java.util.Objects.requireNonNull(raw.flagField()));
 			return;
 		}
 		ctx.body.iload(raw.flagSlot());
@@ -355,7 +355,7 @@ final class JvmIntFusionCompiler {
 
 		final List<Pending> pending = new ArrayList<>();
 
-		private final Map<String, MethodrefConstant> byKey = new HashMap<>();
+		private final Map<String, MethodRefEntry> byKey = new HashMap<>();
 
 		private int nextId;
 
@@ -375,7 +375,7 @@ final class JvmIntFusionCompiler {
 	}
 
 	/** One outlined fused-site method awaiting its body (the compiler's fused pass). */
-	record Pending(MethodrefConstant ref, Utf8Constant nameUtf8, Utf8Constant descUtf8, Node root, List<Node> leaves,
+	record Pending(MethodRefEntry ref, Utf8Entry nameUtf8, Utf8Entry descUtf8, Node root, List<Node> leaves,
 			int cmpMask) {
 
 		boolean isCompare() {
@@ -463,9 +463,9 @@ final class JvmIntFusionCompiler {
 			// generic call keeps owning that shape (and its emission stays byte-stable).
 			return false;
 		}
-		MethodrefConstant ref = methodFor(root, site.leaves, -1, ctx);
+		MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
 		pushLeaves(site.leaves, ctx, className);
-		ctx.body.invokestatic(ref.entry());
+		ctx.body.invokestatic(ref);
 		return true;
 	}
 
@@ -541,9 +541,9 @@ final class JvmIntFusionCompiler {
 			return false;
 		}
 		Node root = new OpNode(CMP_ROOT, List.of(left, right), sourceSite(cons, ctx, site));
-		MethodrefConstant ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
+		MethodRefEntry ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
 		pushLeaves(site.leaves, ctx, className);
-		ctx.body.invokestatic(ref.entry());
+		ctx.body.invokestatic(ref);
 		return true;
 	}
 
@@ -764,16 +764,16 @@ final class JvmIntFusionCompiler {
 			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
 					&& site.leaves.size() <= MAX_EXPR_LEAVES) {
 				MethodCode.Label @Nullable [] step = emitRawStepFastPath(root, ctx, target);
-				MethodrefConstant ref = methodFor(root, site.leaves, -1, ctx);
+				MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
 				if (step != null) {
 					ctx.body.labelBinding(step[0]);
 				}
 				pushLeaves(site.leaves, ctx, className);
-				ctx.body.invokestatic(ref.entry());
+				ctx.body.invokestatic(ref);
 				// Dispatch on the VALUE's type, not on which path computed it: a Long
 				// is the raw representation whichever path answered it.
 				int tmp = ctx.allocTemp();
-				ctx.body.astore(tmp).aload(tmp).instanceOf(ctx.longClass.entry());
+				ctx.body.astore(tmp).aload(tmp).instanceOf(ctx.longClass);
 				MethodCode.Label notLong = ctx.body.newLabel();
 				ctx.body.ifeq(notLong);
 				ctx.body.aload(tmp);
@@ -891,7 +891,7 @@ final class JvmIntFusionCompiler {
 	/** Raw {@code long} on the stack -> the raw half; the flag is NOT touched. */
 	private static void emitRawHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.body.putstatic(java.util.Objects.requireNonNull(target.longField()).entry());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.longField()));
 			return;
 		}
 		ctx.body.lstore(target.longSlot());
@@ -900,7 +900,7 @@ final class JvmIntFusionCompiler {
 	/** Boxed value on the stack -> the shadow half; the flag is NOT touched. */
 	private static void emitShadowHalfStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.body.putstatic(java.util.Objects.requireNonNull(target.shadowField()).entry());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.shadowField()));
 			return;
 		}
 		ctx.body.astore(target.shadowSlot());
@@ -909,7 +909,7 @@ final class JvmIntFusionCompiler {
 	/** {@code int} on the stack -> the flag half. */
 	private static void emitFlagStore(RawLocal target, JvmLispCompiler.Ctx ctx) {
 		if (target.isField()) {
-			ctx.body.putstatic(java.util.Objects.requireNonNull(target.flagField()).entry());
+			ctx.body.putstatic(java.util.Objects.requireNonNull(target.flagField()));
 			return;
 		}
 		ctx.body.istore(target.flagSlot());
@@ -925,15 +925,15 @@ final class JvmIntFusionCompiler {
 		emitShadowLoad(raw, ctx);
 		emitRawLoad(raw, ctx);
 		emitFlagLoad(raw, ctx);
-		ctx.body.invokestatic(ubReadRef(ctx, state).entry());
+		ctx.body.invokestatic(ubReadRef(ctx, state));
 	}
 
-	private static MethodrefConstant ubReadRef(JvmLispCompiler.Ctx ctx, State state) {
+	private static MethodRefEntry ubReadRef(JvmLispCompiler.Ctx ctx, State state) {
 		state.usesUbRead = true;
 		return JvmEmitHelper.selfMethod(ctx, state.className, "_ubRead", "(Ljava/lang/Object;JI)Ljava/lang/Object;");
 	}
 
-	private static MethodrefConstant fxAshRef(JvmLispCompiler.Ctx ctx, State state) {
+	private static MethodRefEntry fxAshRef(JvmLispCompiler.Ctx ctx, State state) {
 		state.usesFxAsh = true;
 		return JvmEmitHelper.selfMethod(ctx, state.className, "_fxAsh", "(JJ)J");
 	}
@@ -1459,7 +1459,7 @@ final class JvmIntFusionCompiler {
 	 * The method reference for this tree shape, minting (and queueing for the fused pass)
 	 * a new {@code _fx$N} only when no structurally identical site exists yet.
 	 */
-	private static MethodrefConstant methodFor(Node root, List<Node> leaves, int cmpMask, JvmLispCompiler.Ctx ctx) {
+	private static MethodRefEntry methodFor(Node root, List<Node> leaves, int cmpMask, JvmLispCompiler.Ctx ctx) {
 		if (reportsOnlyCallerSite(root, ctx.siteCurrent)) {
 			// Every form in the tree reports the site the call itself is at -- the
 			// common one-line tree -- so the method needs no line numbers of its own: it
@@ -1481,15 +1481,14 @@ final class JvmIntFusionCompiler {
 		}
 		desc.append(")").append(cmpMask >= 0 ? "I" : "Ljava/lang/Object;");
 		String key = cmpMask + "|" + desc + "|" + structureKey(root, leaves);
-		MethodrefConstant existing = state.byKey.get(key);
+		MethodRefEntry existing = state.byKey.get(key);
 		if (existing != null) {
 			return existing;
 		}
 		String name = "_fx$" + state.nextId++;
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(name);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(desc.toString());
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(state.className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(name);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(state.className), nameUtf8, descUtf8);
 		state.byKey.put(key, ref);
 		state.pending.add(new Pending(ref, nameUtf8, descUtf8, root, leaves, cmpMask));
 		return ref;
@@ -1641,7 +1640,7 @@ final class JvmIntFusionCompiler {
 		ctx.nextLocal = slot;
 		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
 		MethodCode.Label bails = ctx.body.newLabel();
-		ClassConstant longArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[J"));
+		ClassEntry longArrayClass = ctx.cp.classEntry("[J");
 		// Every random leaf draws ONCE, here, before any guard and without any bail of
 		// its own: a leaf whose limit is not a Long takes its draw through _random and
 		// raises the shared bail flag instead of jumping, so no draw can be skipped and
@@ -1689,7 +1688,7 @@ final class JvmIntFusionCompiler {
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
-					ctx.body.aload(l.paramSlot).instanceOf(ctx.longClass.entry()).ifeq(bails);
+					ctx.body.aload(l.paramSlot).instanceOf(ctx.longClass).ifeq(bails);
 					ctx.body.aload(l.paramSlot);
 					JvmEmitHelper.unboxLong(ctx);
 					l.longSlot = ctx.allocTemp();
@@ -1703,7 +1702,7 @@ final class JvmIntFusionCompiler {
 					ctx.body.iload(l.flagParam);
 					MethodCode.Label isRaw = ctx.body.newLabel();
 					ctx.body.ifne(isRaw);
-					ctx.body.aload(l.shadowParam).instanceOf(ctx.longClass.entry()).ifeq(bails);
+					ctx.body.aload(l.shadowParam).instanceOf(ctx.longClass).ifeq(bails);
 					ctx.body.aload(l.shadowParam);
 					JvmEmitHelper.unboxLong(ctx);
 					ctx.body.lstore(l.rawParam);
@@ -1794,14 +1793,14 @@ final class JvmIntFusionCompiler {
 	 * the bail flag, so the tree falls back with the value already drawn -- or, for a
 	 * rejected limit, with {@code _random}'s throw instead.
 	 */
-	private static void emitRandomDraw(RandomLeaf leaf, JvmLispCompiler.Ctx ctx, MethodrefConstant randomHelper,
+	private static void emitRandomDraw(RandomLeaf leaf, JvmLispCompiler.Ctx ctx, MethodRefEntry randomHelper,
 			int limitScratch, int bailFlag) {
 		if (leaf.limitExpr == null) {
 			emitDrawTimesDouble(ctx, -1, leaf.limitConst);
 			ctx.body.lstore(leaf.longSlot);
 			return;
 		}
-		ctx.body.aload(leaf.limitParam).instanceOf(ctx.longClass.entry());
+		ctx.body.aload(leaf.limitParam).instanceOf(ctx.longClass);
 		MethodCode.Label notLong = ctx.body.newLabel();
 		ctx.body.ifeq(notLong);
 		ctx.body.aload(leaf.limitParam);
@@ -1824,7 +1823,7 @@ final class JvmIntFusionCompiler {
 		// the tree around it started on.
 		int outerSite = ctx.siteCurrent;
 		ctx.restoreSite(leaf.site);
-		ctx.body.aload(leaf.limitParam).invokestatic(randomHelper.entry());
+		ctx.body.aload(leaf.limitParam).invokestatic(randomHelper);
 		ctx.restoreSite(outerSite);
 		ctx.body.astore(leaf.boxSlot);
 		JvmEmitHelper.emitRawLong(0, ctx);
@@ -1837,8 +1836,8 @@ final class JvmIntFusionCompiler {
 	 * _random}'s own Long-limit expression, over a raw slot or a constant.
 	 */
 	private static void emitDrawTimesDouble(JvmLispCompiler.Ctx ctx, int limitSlot, long limitConst) {
-		ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).entry());
-		ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).methodRefEntry());
+		ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT));
+		ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE));
 		if (limitSlot >= 0) {
 			ctx.body.lload(limitSlot).l2d();
 		}
@@ -1858,7 +1857,7 @@ final class JvmIntFusionCompiler {
 	 * emission would have called.
 	 */
 	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
-			ClassConstant longArrayClass, ArefScratch scratch) {
+			ClassEntry longArrayClass, ArefScratch scratch) {
 		// idx = (int) <index>, an index past the int range bailing: _aref1 checks the
 		// whole value against the bound, so no truncation may read an element.
 		int idxSlot = scratch.idxSlot();
@@ -1883,54 +1882,52 @@ final class JvmIntFusionCompiler {
 			// An (unsigned-byte 8) vector, byte[]{8, e0, ...}: element e & 0xFF. Where a
 			// quantized matrix (also a byte[]) can exist, the tag in slot 0 tells them
 			// apart, and the matrix bails to _aref1 like any other shape.
-			ClassConstant byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B"));
+			ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
 			MethodCode.Label notOctets = ctx.body.newLabel();
-			ctx.body.aload(leaf.arrParam).instanceOf(byteArrayClass.entry()).ifeq(notOctets);
+			ctx.body.aload(leaf.arrParam).instanceOf(byteArrayClass).ifeq(notOctets);
 			if (ctx.usesQuantized) {
-				ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass.entry()).iconst_0().baload();
+				ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass).iconst_0().baload();
 				ctx.body.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG).if_icmpne(notOctets);
 			}
 			ctx.body.iload(idxSlot).iflt(bails);
-			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(byteArrayClass.entry());
+			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(byteArrayClass);
 			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);
-			ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass.entry()).iconst_1();
+			ctx.body.aload(leaf.arrParam).checkcast(byteArrayClass).iconst_1();
 			ctx.body.iload(idxSlot).iadd().baload().loadConstant(0xFF).iand().i2l();
 			ctx.body.lstore(leaf.longSlot).goto_(done);
 			ctx.body.labelBinding(notOctets);
-			ctx.body.aload(leaf.arrParam).instanceOf(longArrayClass.entry());
+			ctx.body.aload(leaf.arrParam).instanceOf(longArrayClass);
 			MethodCode.Label notPackedVector = ctx.body.newLabel();
 			ctx.body.ifeq(notPackedVector);
 			ctx.body.iload(idxSlot).iflt(bails);
-			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(longArrayClass.entry());
+			ctx.body.iload(idxSlot).aload(leaf.arrParam).checkcast(longArrayClass);
 			ctx.body.arraylength().iconst_1().isub().if_icmpge(bails);
-			ctx.body.aload(leaf.arrParam).checkcast(longArrayClass.entry()).iconst_1();
+			ctx.body.aload(leaf.arrParam).checkcast(longArrayClass).iconst_1();
 			ctx.body.iload(idxSlot).iadd().laload().lstore(leaf.longSlot).goto_(done);
 			ctx.body.labelBinding(notPackedVector);
 		}
 		if (ctx.usesArrays) {
-			ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
-			ClassConstant objectArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/lang/Object;"));
-			MethodrefConstant alSize = ctx.cp.addMethodref(arrayListClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")));
-			MethodrefConstant alGet = ctx.cp.addMethodref(arrayListClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")));
+			ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+			ClassEntry objectArrayClass = ctx.cp.classEntry("[Ljava/lang/Object;");
+			MethodRefEntry alSize = ctx.cp.methodRef(arrayListClass, "size", "()I");
+			MethodRefEntry alGet = ctx.cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
 			int headerSlot = scratch.headerSlot();
 			int dataSlot = scratch.dataSlot();
-			ctx.body.aload(leaf.arrParam).instanceOf(arrayListClass.entry()).ifeq(bails);
+			ctx.body.aload(leaf.arrParam).instanceOf(arrayListClass).ifeq(bails);
 			// The same "is this an array?" shape test _arrayp makes, so get(0) on an
 			// ArrayList that is not one cannot throw past the bail.
-			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass.entry());
-			ctx.body.invokevirtual(alSize.methodRefEntry()).ifeq(bails);
-			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass.entry()).iconst_0();
-			ctx.body.invokevirtual(alGet.methodRefEntry()).astore(headerSlot).aload(headerSlot);
-			ctx.body.instanceOf(objectArrayClass.entry()).ifeq(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass);
+			ctx.body.invokevirtual(alSize).ifeq(bails);
+			ctx.body.aload(leaf.arrParam).checkcast(arrayListClass).iconst_0();
+			ctx.body.invokevirtual(alGet).astore(headerSlot).aload(headerSlot);
+			ctx.body.instanceOf(objectArrayClass).ifeq(bails);
 			// Header length 6 IS the packed shape: 4 is a character vector, 5 a
 			// displaced array, 3 the boxed general array -- all of them _aref1's.
-			ctx.body.aload(headerSlot).checkcast(objectArrayClass.entry()).arraylength();
+			ctx.body.aload(headerSlot).checkcast(objectArrayClass).arraylength();
 			JvmEmitHelper.emitIntConst(ctx, 6);
 			ctx.body.if_icmpne(bails);
-			ctx.body.aload(headerSlot).checkcast(objectArrayClass.entry()).iconst_5().aaload();
-			ctx.body.checkcast(longArrayClass.entry()).astore(dataSlot).iload(idxSlot).iflt(bails);
+			ctx.body.aload(headerSlot).checkcast(objectArrayClass).iconst_5().aaload();
+			ctx.body.checkcast(longArrayClass).astore(dataSlot).iload(idxSlot).iflt(bails);
 			ctx.body.iload(idxSlot).aload(dataSlot).arraylength().if_icmpge(bails);
 			ctx.body.aload(dataSlot).iload(idxSlot).laload().lstore(leaf.longSlot);
 			// The nil sentinel is not an integer: the fallback reads it back as nil.
@@ -2028,13 +2025,12 @@ final class JvmIntFusionCompiler {
 	 * unboxed local whose raw slot is authoritative -- branches to the generic fallback.
 	 */
 	private static void emitDoubleGuards(List<Node> leaves, JvmLispCompiler.Ctx ctx, MethodCode.Label bails) {
-		ClassConstant doubleClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Double"));
-		MethodrefConstant doubleValue = ctx.cp.addMethodref(doubleClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("doubleValue"), ctx.cp.addUtf8("()D")));
+		ClassEntry doubleClass = ctx.cp.classEntry("java/lang/Double");
+		MethodRefEntry doubleValue = ctx.cp.methodRef(doubleClass, "doubleValue", "()D");
 		for (Node leaf : leaves) {
 			switch (leaf) {
 				case ExprLeaf l -> {
-					ctx.body.aload(l.paramSlot).instanceOf(doubleClass.entry()).ifeq(bails);
+					ctx.body.aload(l.paramSlot).instanceOf(doubleClass).ifeq(bails);
 					ctx.body.aload(l.paramSlot);
 					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
 				}
@@ -2042,7 +2038,7 @@ final class JvmIntFusionCompiler {
 					// The flag set means the raw long slot is authoritative -- an
 					// integer, which this path does not mix in.
 					ctx.body.iload(l.flagParam).ifne(bails);
-					ctx.body.aload(l.shadowParam).instanceOf(doubleClass.entry()).ifeq(bails);
+					ctx.body.aload(l.shadowParam).instanceOf(doubleClass).ifeq(bails);
 					ctx.body.aload(l.shadowParam);
 					l.dblSlot = storeDouble(ctx, doubleClass, doubleValue);
 				}
@@ -2052,8 +2048,8 @@ final class JvmIntFusionCompiler {
 	}
 
 	/** Unboxes the reference on the stack into a fresh {@code double} local. */
-	private static int storeDouble(JvmLispCompiler.Ctx ctx, ClassConstant doubleClass, MethodrefConstant doubleValue) {
-		ctx.body.checkcast(doubleClass.entry()).invokevirtual(doubleValue.methodRefEntry());
+	private static int storeDouble(JvmLispCompiler.Ctx ctx, ClassEntry doubleClass, MethodRefEntry doubleValue) {
+		ctx.body.checkcast(doubleClass).invokevirtual(doubleValue);
 		int slot = ctx.allocTemp();
 		ctx.allocTemp();
 		ctx.body.dstore(slot);
@@ -2103,8 +2099,7 @@ final class JvmIntFusionCompiler {
 			emitFallback(root.args().get(0), ctx, className);
 			emitFallback(root.args().get(1), ctx, className);
 			ctx.restoreSite(root.site());
-			ctx.body
-				.invokestatic(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx).entry());
+			ctx.body.invokestatic(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx));
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
 			ctx.body.iand().ireturn();
 		}
@@ -2112,13 +2107,12 @@ final class JvmIntFusionCompiler {
 			emitFallback(pending.root(), ctx, className);
 			ctx.body.areturn();
 		}
-		ClassConstant arithEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/ArithmeticException"));
-		ctx.body.exceptionCatch(tryStart, tryEnd, handler, arithEx.entry());
+		ClassEntry arithEx = ctx.cp.classEntry("java/lang/ArithmeticException");
+		ctx.body.exceptionCatch(tryStart, tryEnd, handler, arithEx);
 	}
 
-	private static MethodrefConstant longIntValue(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addMethodref(ctx.longClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("intValue"), ctx.cp.addUtf8("()I")));
+	private static MethodRefEntry longIntValue(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.methodRef(ctx.longClass, "intValue", "()I");
 	}
 
 	// ------------------------------------------------------------------ the fast path
@@ -2252,16 +2246,15 @@ final class JvmIntFusionCompiler {
 			case LispNames.MUL -> emitMathCall(ctx, "multiplyExact");
 			case LispNames.MOD -> emitMathCall(ctx, "floorMod");
 			case LispNames.ASH -> {
-				ctx.body.invokestatic(fxAshRef(ctx, state).entry());
+				ctx.body.invokestatic(fxAshRef(ctx, state));
 			}
 			default -> throw new IllegalStateException("Not a fusable operator: " + op);
 		}
 	}
 
 	private static void emitMathCall(JvmLispCompiler.Ctx ctx, String name) {
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math")),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8("(JJ)J")));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry("java/lang/Math"), name, "(JJ)J");
+		ctx.body.invokestatic(ref);
 	}
 
 	// ------------------------------------------------------------------ the fallback
@@ -2285,7 +2278,7 @@ final class JvmIntFusionCompiler {
 				ctx.body.aload(leaf.arrParam);
 				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
 				ctx.restoreSite(leaf.site);
-				ctx.body.invokestatic(namedAref1Helper(ctx, className).entry());
+				ctx.body.invokestatic(namedAref1Helper(ctx, className));
 			}
 			// The ONE draw the prologue took, re-boxed: raw from the slot, or the
 			// boxed value _random answered for a limit the raw path could not take.
@@ -2329,11 +2322,11 @@ final class JvmIntFusionCompiler {
 					// A wrong-type operand fails in this call: it reports this node's
 					// form.
 					ctx.restoreSite(op.site());
-					ctx.body.invokestatic(numOpFor(op.op(), fallbackKey(op.op()), ctx).entry());
+					ctx.body.invokestatic(numOpFor(op.op(), fallbackKey(op.op()), ctx));
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
 					ctx.restoreSite(op.site());
-					ctx.body.invokestatic(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx).entry());
+					ctx.body.invokestatic(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx));
 				}
 			}
 		}
@@ -2344,8 +2337,8 @@ final class JvmIntFusionCompiler {
 	 * it: the fallback is compiled away from the form, so an out-of-range subscript names
 	 * the access whatever operator the tree node is ({@link JvmOperandTypeRuntime}).
 	 */
-	private static MethodrefConstant namedAref1Helper(JvmLispCompiler.Ctx ctx, String className) {
-		MethodrefConstant ref = aref1Helper(ctx, className);
+	private static MethodRefEntry namedAref1Helper(JvmLispCompiler.Ctx ctx, String className) {
+		MethodRefEntry ref = aref1Helper(ctx, className);
 		@Nullable String outer = ctx.operator;
 		ctx.operator = LispNames.AREF;
 		try {
@@ -2357,7 +2350,7 @@ final class JvmIntFusionCompiler {
 	}
 
 	/** The same helper the ordinary rank-1 aref emission calls for this program. */
-	private static MethodrefConstant aref1Helper(JvmLispCompiler.Ctx ctx, String className) {
+	private static MethodRefEntry aref1Helper(JvmLispCompiler.Ctx ctx, String className) {
 		return JvmEmitHelper.selfMethod(ctx, className, aref1HelperName(ctx), JvmArrayRuntimeBuilder.AREF1_DESC);
 	}
 
@@ -2371,7 +2364,7 @@ final class JvmIntFusionCompiler {
 	 * compiled away from the form, so the node names a wrong-type operand's report
 	 * ({@link JvmOperandTypeRuntime}).
 	 */
-	private static MethodrefConstant numOpFor(String operator, String key, JvmLispCompiler.Ctx ctx) {
+	private static MethodRefEntry numOpFor(String operator, String key, JvmLispCompiler.Ctx ctx) {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = operator;
 		try {
@@ -2404,19 +2397,19 @@ final class JvmIntFusionCompiler {
 	 * local -- {@code Long.valueOf(raw)} when the flag says the raw slot is
 	 * authoritative, else the shadow.
 	 */
-	static JvmNumericRuntimeBuilder.NumericMethod buildUbRead(ConstantPool cp, MethodrefConstant longValueOf) {
+	static JvmNumericRuntimeBuilder.NumericMethod buildUbRead(ConstantPool cp, MethodRefEntry longValueOf) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label useShadow = a.newLabel();
 		a.iload(3);
 		a.ifeq(useShadow);
 		a.lload(1);
-		a.invokestatic(longValueOf.entry());
+		a.invokestatic(longValueOf);
 		a.areturn();
 		a.labelBinding(useShadow);
 		a.aload(0);
 		a.areturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_ubRead"),
-				cp.addUtf8("(Ljava/lang/Object;JI)Ljava/lang/Object;"), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry("_ubRead"),
+				cp.utf8Entry("(Ljava/lang/Object;JI)Ljava/lang/Object;"), a);
 	}
 
 	/**
@@ -2428,9 +2421,8 @@ final class JvmIntFusionCompiler {
 	 * fallback then answers what {@code _ash} answers).
 	 */
 	static JvmNumericRuntimeBuilder.NumericMethod buildFxAsh(ConstantPool cp) {
-		ClassConstant arithEx = cp.addClass(cp.addUtf8("java/lang/ArithmeticException"));
-		MethodrefConstant arithExInit = cp.addMethodref(arithEx,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+		ClassEntry arithEx = cp.classEntry("java/lang/ArithmeticException");
+		MethodRefEntry arithExInit = cp.methodRef(arithEx, "<init>", "()V");
 		MethodCode a = new MethodCode();
 		MethodCode.Label hugeNeg = a.newLabel();
 		MethodCode.Label rightShift = a.newLabel();
@@ -2489,16 +2481,16 @@ final class JvmIntFusionCompiler {
 		a.lload(5);
 		a.lreturn();
 		a.labelBinding(overflow);
-		a.new_(arithEx.entry());
+		a.new_(arithEx);
 		a.dup();
-		a.invokespecial(arithExInit.entry());
+		a.invokespecial(arithExInit);
 		a.athrow();
 		a.labelBinding(hugeNeg);
 		a.lload(0);
 		a.loadConstant(63);
 		a.lshr();
 		a.lreturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"), a);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry("_fxAsh"), cp.utf8Entry("(JJ)J"), a);
 	}
 
 }

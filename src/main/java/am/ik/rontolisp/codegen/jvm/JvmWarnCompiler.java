@@ -1,9 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -59,32 +61,29 @@ final class JvmWarnCompiler {
 					java.util.Objects
 						.requireNonNull(JvmStringStreamCompiler.streamDesignator(ctx, StreamDesignators.errorOutput())),
 					ctx, className);
-			ConstantPool.MethodrefConstant writeLineRef = ctx.cp.addMethodref(
-					ctx.cp.addClass(ctx.cp.addUtf8(className)),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_METHOD),
-							ctx.cp.addUtf8(JvmIoRuntimeBuilder.WRITE_LINE_DESC)));
-			ctx.body.invokestatic(writeLineRef.entry());
+			MethodRefEntry writeLineRef = ctx.cp.methodRef(ctx.cp.classEntry(className),
+					JvmIoRuntimeBuilder.WRITE_LINE_METHOD, JvmIoRuntimeBuilder.WRITE_LINE_DESC);
+			ctx.body.invokestatic(writeLineRef);
 			// _writeLine answers the string; %warn answers nil.
 			ctx.body.pop().aconst_null();
 			return;
 		}
-		ConstantPool.ClassConstant systemClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System"));
-		ConstantPool.FieldrefConstant systemErr = ctx.cp.addFieldref(systemClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("err"), ctx.cp.addUtf8("Ljava/io/PrintStream;")));
-		MethodrefConstant length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		ClassEntry systemClass = ctx.cp.classEntry("java/lang/System");
+		FieldRefEntry systemErr = ctx.cp.fieldRef(systemClass, "err", "Ljava/io/PrintStream;");
+		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
 		// System.err
-		ctx.body.getstatic(systemErr.entry());
+		ctx.body.getstatic(systemErr);
 		// message: arg.substring(1, arg.length() - 1)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// A warning message can be a mutable character vector (a flipped producer's
 		// result): render it before the (String) cast (a no-op without the array
 		// runtime).
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length.methodRefEntry());
-		ctx.body.iconst_1().isub().iconst_1().swap().invokevirtual(substring.methodRefEntry());
+		ctx.body.checkcast(ctx.stringClass).dup().invokevirtual(length);
+		ctx.body.iconst_1().isub().iconst_1().swap().invokevirtual(substring);
 		// System.err.println(message); result is nil
-		ctx.body.invokevirtual(ctx.printlnStr.methodRefEntry()).aconst_null();
+		ctx.body.invokevirtual(ctx.printlnStr).aconst_null();
 	}
 
 }

@@ -3,12 +3,12 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Builds the {@code --blas} CBLAS bridge for the generated {@code .class}: the logic
@@ -85,7 +85,7 @@ final class JvmBlasRuntimeBuilder {
 	 * file that travels beside the program with its native-image downcall registration,
 	 * keyed by their paths within an output tree.
 	 */
-	record BlasRuntime(Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
+	record BlasRuntime(Map<String, MethodRefEntry> ops, Map<String, byte[]> classFiles) {
 	}
 
 	/**
@@ -100,14 +100,13 @@ final class JvmBlasRuntimeBuilder {
 		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadResource(TEMPLATE_INTERNAL_NAME + ".class"),
 				TEMPLATE_INTERNAL_NAME, bridgeName);
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		ops.put(DOT, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasDot"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATVEC, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasMatvec"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put(MATVEC_INTO, cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("blasMatvecInto"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
+		ClassEntry bridgeClass = cp.classEntry(bridgeName);
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		ops.put(DOT, cp.methodRef(bridgeClass, "blasDot", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATVEC,
+				cp.methodRef(bridgeClass, "blasMatvec", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put(MATVEC_INTO, cp.methodRef(bridgeClass, "blasMatvecInto",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
 		// The shapes the bridge binds, where native-image reads them from a class path
 		// entry: without them an image built from the output refuses every downcall and
 		// the bridge declines as though the machine had no library.

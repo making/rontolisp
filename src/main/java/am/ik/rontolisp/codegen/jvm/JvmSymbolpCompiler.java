@@ -23,11 +23,11 @@ final class JvmSymbolpCompiler {
 		ctx.body.aload(tempSlot);
 		MethodCode.Label ifNullPos = ctx.body.newLabel();
 		ctx.body.ifnull(ifNullPos);
-		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass.entry());
+		ctx.body.aload(tempSlot).instanceOf(ctx.stringClass);
 		MethodCode.Label ifNotStringPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotStringPos);
-		ctx.body.aload(tempSlot).checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.aload(tempSlot).checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, 34);
 		MethodCode.Label ifQuotePos = ctx.body.newLabel();
 		ctx.body.if_icmpeq(ifQuotePos);

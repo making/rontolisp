@@ -16,7 +16,7 @@ final class JvmFloatpCompiler {
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.instanceOf(ctx.doubleClass.entry());
+		ctx.body.instanceOf(ctx.doubleClass);
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 

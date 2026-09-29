@@ -1,6 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -208,7 +210,7 @@ final class JvmHandlerCaseCompiler {
 		}
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
-		ConstantPool.MethodrefConstant landingPad = guardLandingPad(ctx, className);
+		MethodRefEntry landingPad = guardLandingPad(ctx, className);
 		int savedNextLocal = ctx.nextLocal;
 		JvmLispCompiler.Ctx.Spill spill = ctx.spillOperandStack();
 		int resultSlot = ctx.allocTemp();
@@ -225,7 +227,7 @@ final class JvmHandlerCaseCompiler {
 		// classes are.
 		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
-		ctx.body.invokestatic(landingPad.entry()).athrow();
+		ctx.body.invokestatic(landingPad).athrow();
 		ctx.body.labelBinding(done);
 		if (!spill.live().isEmpty()) {
 			ctx.spillScopes.pop();
@@ -260,15 +262,15 @@ final class JvmHandlerCaseCompiler {
 	 * {@code parse-header-field-and-value} being past HotSpot's {@code HugeMethodLimit}
 	 * ({@code .kb/hot-path-method-size.md}).
 	 */
-	private static ConstantPool.MethodrefConstant guardLandingPad(JvmLispCompiler.Ctx ctx, String className) {
+	private static MethodRefEntry guardLandingPad(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		if (channel.hbGuardPad != null) {
 			return channel.hbGuardPad;
 		}
 		String methodName = "_hbGuard";
-		ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
-		ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(GUARD_PAD_DESC);
-		ConstantPool.MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, GUARD_PAD_DESC);
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(GUARD_PAD_DESC);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, GUARD_PAD_DESC);
 		// Recorded BEFORE the body is emitted: the body compiles ordinary Lisp forms,
 		// and a nested handler-bind in one of them must find the pad already claimed
 		// rather than start a second.
@@ -360,11 +362,11 @@ final class JvmHandlerCaseCompiler {
 	 */
 	private static void emitSynthesizeUnlessRecorded(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
 			String className) {
-		ConstantPool.MethodrefConstant synthesizer = conditionSynthesizer(ctx, className);
+		MethodRefEntry synthesizer = conditionSynthesizer(ctx, className);
 		ctx.body.aload(condSlot);
 		MethodCode.Label ifHaveCondPos = ctx.body.newLabel();
 		ctx.body.ifnonnull(ifHaveCondPos);
-		ctx.body.aload(excSlot).invokestatic(synthesizer.entry()).astore(condSlot);
+		ctx.body.aload(excSlot).invokestatic(synthesizer).astore(condSlot);
 		ctx.body.labelBinding(ifHaveCondPos);
 	}
 
@@ -385,15 +387,15 @@ final class JvmHandlerCaseCompiler {
 	 * StackMapTable. One copy per class serves every landing and the {@code _hbGuard}
 	 * pad; the site is a null test, a call and a store.
 	 */
-	private static ConstantPool.MethodrefConstant conditionSynthesizer(JvmLispCompiler.Ctx ctx, String className) {
+	private static MethodRefEntry conditionSynthesizer(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		if (channel.conditionSynthesizer != null) {
 			return channel.conditionSynthesizer;
 		}
 		String methodName = "_hcSynth";
-		ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
-		ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(SYNTHESIZER_DESC);
-		ConstantPool.MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, SYNTHESIZER_DESC);
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(SYNTHESIZER_DESC);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, SYNTHESIZER_DESC);
 		// Recorded BEFORE the body is emitted, as for the guard pad: the arms compile
 		// ordinary Lisp forms.
 		channel.conditionSynthesizer = ref;
@@ -420,11 +422,11 @@ final class JvmHandlerCaseCompiler {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
 		int nleSlot = ctx.allocTemp();
-		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).astore(nleSlot);
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField));
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet)).astore(nleSlot);
 		MethodCode.Label proceed = ctx.body.newLabel();
 		ctx.body.aload(nleSlot).ifnull(proceed);
-		ctx.body.aload(nleSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(nleSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 		ctx.body.aload(excSlot).if_acmpne(proceed);
 		ctx.body.aload(excSlot).athrow();
 		ctx.body.labelBinding(proceed);
@@ -623,13 +625,11 @@ final class JvmHandlerCaseCompiler {
 	 * behaves the same interpreted and compiled; change the two together.
 	 */
 	private static void emitSynthesizeCondition(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx, String className) {
-		ConstantPool.ClassConstant throwableClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Throwable"));
-		ConstantPool.MethodrefConstant getMessage = ctx.cp.addMethodref(throwableClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("getMessage"), ctx.cp.addUtf8("()Ljava/lang/String;")));
-		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;")
-			.methodRefEntry();
+		ClassEntry throwableClass = ctx.cp.classEntry("java/lang/Throwable");
+		MethodRefEntry getMessage = ctx.cp.methodRef(throwableClass, "getMessage", "()Ljava/lang/String;");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		int rawSlot = ctx.allocTemp();
-		ctx.body.aload(excSlot).invokevirtual(getMessage.methodRefEntry()).astore(rawSlot);
+		ctx.body.aload(excSlot).invokevirtual(getMessage).astore(rawSlot);
 		emitHostTextOverride(excSlot, rawSlot, "java/lang/ClassCastException", ClosRegistry.TYPE_ERROR_MESSAGE, ctx);
 		emitHostTextOverride(excSlot, rawSlot, "java/lang/IndexOutOfBoundsException",
 				ClosRegistry.INDEX_OUT_OF_BOUNDS_MESSAGE, ctx);
@@ -724,7 +724,7 @@ final class JvmHandlerCaseCompiler {
 		for (int[] slot : new int[][] { { 1, datumSlot }, { 2, typeSlot } }) {
 			ctx.body.aload(excSlot);
 			JvmEmitHelper.emitIntConst(ctx, slot[0]);
-			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).entry()).astore(slot[1]);
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT)).astore(slot[1]);
 		}
 		String datumVar = "__hc_datum$" + datumSlot;
 		String typeVar = "__hc_etype$" + typeSlot;
@@ -767,7 +767,7 @@ final class JvmHandlerCaseCompiler {
 					// A wrong-type operand's exception is recorded under its identity
 					// (JvmOperandTypeRuntime), so no message is parsed here.
 					ctx.body.aload(excSlot).iconst_0();
-					ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).entry());
+					ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT));
 					ctx.body.ifnonnull(hits);
 				}
 				else {
@@ -804,7 +804,7 @@ final class JvmHandlerCaseCompiler {
 	 */
 	private static void emitInstanceOfJump(int excSlot, String type, JvmLispCompiler.Ctx ctx, boolean jumpWhenTrue,
 			MethodCode.Label target) {
-		ctx.body.aload(excSlot).instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(type)).entry());
+		ctx.body.aload(excSlot).instanceOf(ctx.cp.classEntry(type));
 		if (jumpWhenTrue) {
 			ctx.body.ifne(target);
 		}
@@ -825,7 +825,7 @@ final class JvmHandlerCaseCompiler {
 		ctx.body.ifnull(ifNullPos);
 		ctx.body.aload(rawSlot);
 		JvmEmitHelper.compileStringLiteral(prefix, ctx);
-		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z").methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, "startsWith", "(Ljava/lang/String;)Z"));
 		ctx.body.ifne(hit);
 		ctx.body.labelBinding(ifNullPos);
 	}
@@ -843,7 +843,7 @@ final class JvmHandlerCaseCompiler {
 		ctx.body.ifnull(ifNullPos);
 		ctx.body.aload(rawSlot);
 		JvmEmitHelper.compileStringLiteral(argument, ctx);
-		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, method, descriptor).methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.stringMethod(ctx, method, descriptor));
 		MethodCode.Label pos = ctx.body.newLabel();
 		ctx.body.ifne(pos);
 		ctx.body.labelBinding(ifNullPos);
@@ -859,7 +859,7 @@ final class JvmHandlerCaseCompiler {
 	static void emitDepthAdjust(JvmLispCompiler.Ctx ctx, String className, boolean up) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
-		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField).entry());
+		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField));
 		emitReadDepth(ctx, className);
 		ctx.body.iconst_1();
 		if (up) {
@@ -868,8 +868,8 @@ final class JvmHandlerCaseCompiler {
 		else {
 			ctx.body.isub();
 		}
-		ctx.body.invokestatic(ctx.integerValueOf.entry());
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
+		ctx.body.invokestatic(ctx.integerValueOf);
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet));
 	}
 
 	/**
@@ -879,11 +879,11 @@ final class JvmHandlerCaseCompiler {
 	static void emitReadDepth(JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensure(ctx.cp, className);
-		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField).entry());
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).dup();
+		ctx.body.getstatic(Objects.requireNonNull(channel.depthTlField));
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet)).dup();
 		MethodCode.Label ifNullPos = ctx.body.newLabel();
 		ctx.body.ifnull(ifNullPos);
-		ctx.body.checkcast(ctx.integerClass.entry()).invokevirtual(ctx.integerValue.methodRefEntry());
+		ctx.body.checkcast(ctx.integerClass).invokevirtual(ctx.integerValue);
 		MethodCode.Label gotoHavePos = ctx.body.newLabel();
 		ctx.body.goto_(gotoHavePos);
 		ctx.body.labelBinding(ifNullPos);

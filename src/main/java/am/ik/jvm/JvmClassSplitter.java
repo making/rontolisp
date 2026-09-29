@@ -4,8 +4,13 @@ import java.lang.classfile.ClassBuilder;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.ConstantPoolBuilder;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MemberRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.NameAndTypeEntry;
 import java.lang.classfile.constantpool.PoolEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.HashMap;
@@ -179,7 +184,7 @@ public final class JvmClassSplitter {
 
 	/** Everything kept, in the main class. */
 	private static Placement oneClass(Scan scan, boolean[] keptMethod, boolean[] keptField) {
-		Part main = new Part(scan, scan.cp.utf8At(scan.cp.firstComponentAt(scan.thisClass)));
+		Part main = new Part(scan, scan.thisName);
 		for (int m = 0; m < scan.methods.size(); m++) {
 			if (keptMethod[m]) {
 				main.methods.add(m);
@@ -196,16 +201,16 @@ public final class JvmClassSplitter {
 			Predicate<ClassDefinition.Method> pinned, int budget) {
 		ClassDefinition definition = scan.definition;
 		List<Part> parts = new ArrayList<>();
-		Part main = new Part(scan, scan.cp.utf8At(scan.cp.firstComponentAt(definition.thisClass().index())));
+		Part main = new Part(scan, scan.thisName);
 		parts.add(main);
-		main.include(scan.closure(definition.thisClass().index()));
-		for (ConstantPool.ClassConstant iface : definition.interfaces()) {
-			main.include(scan.closure(iface.index()));
+		main.include(scan.closure(definition.thisClass()));
+		for (ClassEntry iface : definition.interfaces()) {
+			main.include(scan.closure(iface));
 		}
 		for (int f = 0; f < scan.fields.size(); f++) {
 			if (keptField[f]) {
-				main.include(scan.closure(scan.fields.get(f).name().index()));
-				main.include(scan.closure(scan.fields.get(f).descriptor().index()));
+				main.include(scan.closure(scan.fields.get(f).name()));
+				main.include(scan.closure(scan.fields.get(f).descriptor()));
 			}
 		}
 		int[] owner = new int[scan.methods.size()];
@@ -232,7 +237,7 @@ public final class JvmClassSplitter {
 				parts.add(last);
 				if (last.sizeWith(closure) > budget) {
 					throw new IllegalStateException(
-							"method " + scan.cp.utf8At(scan.methods.get(m).name().index()) + " alone needs "
+							"method " + scan.methods.get(m).name().stringValue() + " alone needs "
 									+ last.sizeWith(closure) + " constant pool entries, past the limit of one class");
 				}
 			}
@@ -263,22 +268,22 @@ public final class JvmClassSplitter {
 				for (int m = 0; m < this.scan.methods.size(); m++) {
 					if (this.keptMethod[m] && this.owner[m] > 0) {
 						ClassDefinition.Method method = this.scan.methods.get(m);
-						ownerByMember.put(this.scan.member(method.name().index(), method.descriptor().index()),
-								this.owner[m]);
+						ownerByMember.put(member(method.name(), method.descriptor()), this.owner[m]);
 					}
 				}
 				for (int m = 0; m < this.scan.methods.size(); m++) {
-					for (int index : this.scan.sites.get(m)) {
-						OwnCallGraph.Member call = this.scan.ownMethod(index);
+					for (PoolEntry entry : this.scan.sites.get(m)) {
+						OwnCallGraph.Member call = this.scan.ownMethod(entry);
 						Integer part = call == null ? null : ownerByMember.get(call);
 						if (part != null) {
-							movedTo[index] = part;
+							movedTo[entry.index()] = part;
 						}
 					}
 				}
 			}
 			// The replay writes every branch that does not reach in its long form itself
-			// (CodeReplay.Layout); a short jump the writer still finds out of range is a
+			// (CodeReplay.farBranches); a short jump the writer still finds out of range
+			// is a
 			// replay bug, reported rather than papered over by rewriting every forward
 			// branch of the method long.
 			ClassFile classFile = ClassFile.of(
@@ -295,7 +300,6 @@ public final class JvmClassSplitter {
 		private byte[] writeClass(ClassFile classFile, ClassDefinition definition, Target target, int self,
 				int[] movedTo, boolean split) {
 			Part part = this.parts.get(self);
-			ConstantPool master = definition.cp();
 			ConstantPoolBuilder pool = ConstantPoolBuilder.of();
 			ClassEntry thisClass = pool.classEntry(pool.utf8Entry(part.name));
 			ClassEntry[] partClasses = new ClassEntry[this.parts.size()];
@@ -319,7 +323,7 @@ public final class JvmClassSplitter {
 					}
 					else {
 						clb.withFlags(AccessFlag.ACC_SUPER | AccessFlag.ACC_FINAL | AccessFlag.ACC_SYNTHETIC);
-						clb.withSuperclass(definition.superClass().entry());
+						clb.withSuperclass(definition.superClass());
 					}
 					for (int m : part.methods) {
 						ClassDefinition.Method method = this.scan.methods.get(m);
@@ -327,11 +331,11 @@ public final class JvmClassSplitter {
 							// A longer body produces a class every JVM rejects with a
 							// message that no longer names the culprit; fail here
 							// instead.
-							throw new IllegalArgumentException("method " + master.utf8At(method.name().index())
+							throw new IllegalArgumentException("method " + method.name().stringValue()
 									+ ": method code exceeds the JVM's 65535-byte limit: " + method.body().size());
 						}
 						int access = split ? method.access() & ~AccessFlag.ACC_PRIVATE : method.access();
-						clb.withMethod(method.name().entry(), method.descriptor().entry(), access,
+						clb.withMethod(method.name(), method.descriptor(), access,
 								mb -> mb.withCode(cb -> CodeReplay.replay(method, cb, operand)));
 					}
 				});
@@ -355,18 +359,14 @@ public final class JvmClassSplitter {
 
 		private void writeHeader(ClassBuilder clb, ClassDefinition definition, boolean split) {
 			clb.withFlags(definition.accessFlags());
-			clb.withSuperclass(definition.superClass().entry());
-			List<ClassEntry> interfaces = new ArrayList<>();
-			for (ConstantPool.ClassConstant iface : definition.interfaces()) {
-				interfaces.add(iface.entry());
-			}
-			clb.withInterfaces(interfaces);
+			clb.withSuperclass(definition.superClass());
+			clb.withInterfaces(definition.interfaces());
 			for (int f = 0; f < definition.fields().size(); f++) {
 				if (!this.keptField[f]) {
 					continue;
 				}
 				ClassDefinition.Field field = definition.fields().get(f);
-				clb.withField(field.name().entry(), field.descriptor().entry(),
+				clb.withField(field.name(), field.descriptor(),
 						split ? field.access() & ~AccessFlag.ACC_PRIVATE : field.access());
 			}
 		}
@@ -374,12 +374,11 @@ public final class JvmClassSplitter {
 	}
 
 	/**
-	 * The definition walked once: every method's constant-pool operands at full width,
-	 * and the lookups the shake, the placement and the writing share.
+	 * The definition walked once: every method's constant-pool operands, and the lookups
+	 * the shake, the placement and the writing share. An entry is counted by its
+	 * master-pool index.
 	 */
 	private static final class Scan {
-
-		final ConstantPool cp;
 
 		final ClassDefinition definition;
 
@@ -387,46 +386,47 @@ public final class JvmClassSplitter {
 
 		final List<ClassDefinition.Field> fields;
 
-		/** Per method, the master-pool index of every constant-pool operand. */
-		final List<int[]> sites = new ArrayList<>();
+		/** Per method, the entry of every instruction that names one, in order. */
+		final List<PoolEntry[]> sites = new ArrayList<>();
 
 		final OwnCallGraph graph = new OwnCallGraph();
 
-		final int thisClass;
+		/** The definition's own class, by name. */
+		final String thisName;
+
+		/** The master-pool indexes of the entries that take two slots (long, double). */
+		private final BitSet wide = new BitSet();
 
 		private final @Nullable BitSet[] closures;
 
 		Scan(ClassDefinition definition) {
 			this.definition = definition;
-			this.cp = definition.cp();
 			this.methods = definition.methods();
 			this.fields = definition.fields();
-			this.thisClass = definition.thisClass().index();
+			this.thisName = definition.thisClass().asInternalName();
 			for (ClassDefinition.Method method : this.methods) {
-				int[] indexes = operands(method.body());
-				this.sites.add(indexes);
+				PoolEntry[] entries = operands(method.body());
+				this.sites.add(entries);
 				List<OwnCallGraph.Member> calls = new ArrayList<>();
 				List<OwnCallGraph.Member> fieldUses = new ArrayList<>();
-				for (int index : indexes) {
-					OwnCallGraph.Member call = this.ownMethod(index);
+				for (PoolEntry entry : entries) {
+					OwnCallGraph.Member call = this.ownMethod(entry);
 					if (call != null) {
 						calls.add(call);
 					}
-					OwnCallGraph.Member field = this.ownField(index);
+					OwnCallGraph.Member field = this.ownField(entry);
 					if (field != null) {
 						fieldUses.add(field);
 					}
 				}
-				this.graph.method(this.member(method.name().index(), method.descriptor().index()), calls, fieldUses);
+				this.graph.method(member(method.name(), method.descriptor()), calls, fieldUses);
 			}
 			this.closures = new BitSet[this.methods.size()];
 		}
 
-		/**
-		 * The master-pool index of every instruction's constant-pool operand, in order.
-		 */
-		private static int[] operands(MethodCode body) {
-			int[] found = new int[16];
+		/** The entry of every instruction of a body that names one, in order. */
+		private static PoolEntry[] operands(MethodCode body) {
+			PoolEntry[] found = new PoolEntry[16];
 			int count = 0;
 			for (int i = 0; i < body.count(); i++) {
 				PoolEntry entry = body.entry(i);
@@ -434,46 +434,36 @@ public final class JvmClassSplitter {
 					if (count == found.length) {
 						found = java.util.Arrays.copyOf(found, count * 2);
 					}
-					found[count++] = entry.index();
+					found[count++] = entry;
 				}
 			}
 			return java.util.Arrays.copyOf(found, count);
 		}
 
-		OwnCallGraph.Member member(int nameIndex, int descriptorIndex) {
-			return new OwnCallGraph.Member(this.cp.utf8At(nameIndex), this.cp.utf8At(descriptorIndex));
-		}
-
 		/**
-		 * The own-class method a site's entry invokes, or null when the entry is not a
-		 * method reference to the definition's own class.
+		 * The own-class method an entry invokes, or null when it is not a method
+		 * reference to the definition's own class.
 		 */
-		OwnCallGraph.@Nullable Member ownMethod(int index) {
-			ConstantType type = this.cp.typeAt(index);
-			if (type != ConstantType.METHODREF && type != ConstantType.INTERFACE_METHODREF) {
-				return null;
+		OwnCallGraph.@Nullable Member ownMethod(PoolEntry entry) {
+			if (entry instanceof MemberRefEntry ref && !(entry instanceof FieldRefEntry)
+					&& this.isThisClass(ref.owner())) {
+				return member(ref.name(), ref.type());
 			}
-			if (!this.isThisClass(this.cp.firstComponentAt(index))) {
-				return null;
-			}
-			int nameAndType = this.cp.secondComponentAt(index);
-			return this.member(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
+			return null;
 		}
 
-		OwnCallGraph.@Nullable Member ownField(int index) {
-			if (this.cp.typeAt(index) != ConstantType.FIELDREF || !this.isThisClass(this.cp.firstComponentAt(index))) {
-				return null;
+		OwnCallGraph.@Nullable Member ownField(PoolEntry entry) {
+			if (entry instanceof FieldRefEntry ref && this.isThisClass(ref.owner())) {
+				return member(ref.name(), ref.type());
 			}
-			int nameAndType = this.cp.secondComponentAt(index);
-			return this.member(this.cp.firstComponentAt(nameAndType), this.cp.secondComponentAt(nameAndType));
+			return null;
 		}
 
-		// Identity by NAME, never by index: the pool may hold two Class entries that
+		// Identity by NAME, never by entry: the pool may hold two Class entries that
 		// spell the same class, and a method is the same method whichever one its call
 		// site used.
-		private boolean isThisClass(int classIndex) {
-			return classIndex == this.thisClass || this.cp.utf8At(this.cp.firstComponentAt(classIndex))
-				.equals(this.cp.utf8At(this.cp.firstComponentAt(this.thisClass)));
+		private boolean isThisClass(ClassEntry owner) {
+			return owner.name().equalsString(this.thisName);
 		}
 
 		/**
@@ -484,7 +474,7 @@ public final class JvmClassSplitter {
 			Set<OwnCallGraph.Member> used = this.graph.usedFields(keptMethod);
 			for (int f = 0; f < this.fields.size(); f++) {
 				ClassDefinition.Field field = this.fields.get(f);
-				kept[f] = !shaking || used.contains(this.member(field.name().index(), field.descriptor().index()));
+				kept[f] = !shaking || used.contains(member(field.name(), field.descriptor()));
 			}
 			return kept;
 		}
@@ -502,15 +492,12 @@ public final class JvmClassSplitter {
 					|| (method.access() & AccessFlag.ACC_SYNCHRONIZED) != 0) {
 				return true;
 			}
-			String name = this.cp.utf8At(method.name().index());
-			if (name.startsWith("<")) {
+			if (method.name().stringValue().startsWith("<")) {
 				return true;
 			}
-			for (int index : this.sites.get(m)) {
-				ConstantType type = this.cp.typeAt(index);
-				if ((type == ConstantType.METHODREF || type == ConstantType.INTERFACE_METHODREF)
-						&& this.cp.utf8At(this.cp.firstComponentAt(this.cp.firstComponentAt(index)))
-							.startsWith(METHOD_HANDLES)) {
+			for (PoolEntry entry : this.sites.get(m)) {
+				if (entry instanceof MemberRefEntry ref && !(entry instanceof FieldRefEntry)
+						&& ref.owner().asInternalName().startsWith(METHOD_HANDLES)) {
 					return true;
 				}
 			}
@@ -522,16 +509,16 @@ public final class JvmClassSplitter {
 		 */
 		int oneClassSize(boolean[] keptMethod, boolean[] keptField) {
 			BitSet all = new BitSet();
-			this.close(this.definition.thisClass().index(), all);
-			this.close(this.definition.superClass().index(), all);
-			this.close(this.definition.codeName().index(), all);
-			for (ConstantPool.ClassConstant iface : this.definition.interfaces()) {
-				this.close(iface.index(), all);
+			this.close(this.definition.thisClass(), all);
+			this.close(this.definition.superClass(), all);
+			this.close(this.definition.codeName(), all);
+			for (ClassEntry iface : this.definition.interfaces()) {
+				this.close(iface, all);
 			}
 			for (int f = 0; f < this.fields.size(); f++) {
 				if (keptField[f]) {
-					this.close(this.fields.get(f).name().index(), all);
-					this.close(this.fields.get(f).descriptor().index(), all);
+					this.close(this.fields.get(f).name(), all);
+					this.close(this.fields.get(f).descriptor(), all);
 				}
 			}
 			for (int m = 0; m < this.methods.size(); m++) {
@@ -539,11 +526,14 @@ public final class JvmClassSplitter {
 					this.closeMethod(m, all);
 				}
 			}
-			int size = 0;
-			for (int i = all.nextSetBit(0); i >= 0; i = all.nextSetBit(i + 1)) {
-				size += slots(this.cp.typeAt(i));
-			}
-			return size;
+			return all.cardinality() + this.wideIn(all);
+		}
+
+		/** The two-slot entries among a set, each counting one slot more. */
+		int wideIn(BitSet entries) {
+			BitSet both = (BitSet) entries.clone();
+			both.and(this.wide);
+			return both.cardinality();
 		}
 
 		/**
@@ -561,40 +551,49 @@ public final class JvmClassSplitter {
 
 		private void closeMethod(int m, BitSet into) {
 			ClassDefinition.Method method = this.methods.get(m);
-			this.close(method.name().index(), into);
-			this.close(method.descriptor().index(), into);
-			for (int index : this.sites.get(m)) {
-				this.close(index, into);
+			this.close(method.name(), into);
+			this.close(method.descriptor(), into);
+			for (PoolEntry entry : this.sites.get(m)) {
+				this.close(entry, into);
 			}
 			for (MethodCode.Handler handler : method.body().handlers()) {
 				ClassEntry type = handler.catchType();
 				if (type != null) {
-					this.close(type.index(), into);
+					this.close(type, into);
 				}
 			}
 			if (!method.lineNumbers().isEmpty()) {
-				this.close(java.util.Objects.requireNonNull(this.definition.lineNumberTableName()).index(), into);
+				this.close(java.util.Objects.requireNonNull(this.definition.lineNumberTableName()), into);
 			}
 		}
 
-		BitSet closure(int index) {
+		BitSet closure(PoolEntry entry) {
 			BitSet closure = new BitSet();
-			this.close(index, closure);
+			this.close(entry, closure);
 			return closure;
 		}
 
-		private void close(int index, BitSet into) {
+		private void close(PoolEntry entry, BitSet into) {
+			int index = entry.index();
 			if (into.get(index)) {
 				return;
 			}
 			into.set(index);
-			switch (this.cp.typeAt(index)) {
-				case CLASS, STRING -> this.close(this.cp.firstComponentAt(index), into);
-				case NAME_AND_TYPE, FIELDREF, METHODREF, INTERFACE_METHODREF -> {
-					this.close(this.cp.firstComponentAt(index), into);
-					this.close(this.cp.secondComponentAt(index), into);
+			switch (entry) {
+				case ClassEntry type -> this.close(type.name(), into);
+				case StringEntry string -> this.close(string.utf8(), into);
+				case NameAndTypeEntry nameAndType -> {
+					this.close(nameAndType.name(), into);
+					this.close(nameAndType.type(), into);
+				}
+				case MemberRefEntry ref -> {
+					this.close(ref.owner(), into);
+					this.close(ref.nameAndType(), into);
 				}
 				default -> {
+					if (entry.width() == 2) {
+						this.wide.set(index);
+					}
 				}
 			}
 		}
@@ -619,9 +618,9 @@ public final class JvmClassSplitter {
 			this.name = name;
 			// Every class names its superclass and its methods' Code attribute; a part
 			// also names itself, a Class entry and its Utf8.
-			this.include(scan.closure(scan.definition.superClass().index()));
-			this.include(scan.closure(scan.definition.codeName().index()));
-			if (!name.equals(scan.cp.utf8At(scan.cp.firstComponentAt(scan.thisClass)))) {
+			this.include(scan.closure(scan.definition.superClass()));
+			this.include(scan.closure(scan.definition.codeName()));
+			if (!name.equals(scan.thisName)) {
 				this.size += 2;
 			}
 		}
@@ -634,11 +633,7 @@ public final class JvmClassSplitter {
 		int sizeWith(BitSet closure) {
 			BitSet added = (BitSet) closure.clone();
 			added.andNot(this.entries);
-			int size = this.size;
-			for (int i = added.nextSetBit(0); i >= 0; i = added.nextSetBit(i + 1)) {
-				size += slots(this.scan.cp.typeAt(i));
-			}
-			return size;
+			return this.size + added.cardinality() + this.scan.wideIn(added);
 		}
 
 		void include(BitSet closure) {
@@ -648,8 +643,8 @@ public final class JvmClassSplitter {
 
 	}
 
-	private static int slots(ConstantType type) {
-		return type == ConstantType.LONG || type == ConstantType.DOUBLE ? 2 : 1;
+	private static OwnCallGraph.Member member(Utf8Entry name, Utf8Entry descriptor) {
+		return new OwnCallGraph.Member(name.stringValue(), descriptor.stringValue());
 	}
 
 }

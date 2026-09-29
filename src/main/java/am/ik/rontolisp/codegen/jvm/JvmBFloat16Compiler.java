@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
@@ -124,10 +126,9 @@ final class JvmBFloat16Compiler {
 	}
 
 	private static void invokeStatic(JvmLispCompiler.Ctx ctx, String owner, String name, String desc) {
-		ConstantPool.ClassConstant cls = ctx.cp.addClass(ctx.cp.addUtf8(owner));
-		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(cls,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ref.entry());
+		ClassEntry cls = ctx.cp.classEntry(owner);
+		MethodRefEntry ref = ctx.cp.methodRef(cls, name, desc);
+		ctx.body.invokestatic(ref);
 	}
 
 }

@@ -4,11 +4,11 @@ import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.EmittedReaderInitforms;
@@ -36,7 +36,7 @@ import org.jspecify.annotations.Nullable;
 final class JvmReadRuntimeBuilder {
 
 	/** A reader method body ready to be emitted into the generated class. */
-	record ReadMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record ReadMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -453,7 +453,7 @@ final class JvmReadRuntimeBuilder {
 	private static FieldRefEntry layoutFieldFor(JvmLispCompiler.LayoutPool pool, String tag) {
 		for (JvmLispCompiler.LayoutPool.LayoutField lf : pool.fields()) {
 			if (lf.layout().tag().equals(tag)) {
-				return lf.ref().entry();
+				return lf.ref();
 			}
 		}
 		throw new IllegalStateException("Struct layout not interned for the reader directory: " + tag);
@@ -462,46 +462,53 @@ final class JvmReadRuntimeBuilder {
 	/** Returns all reader method bodies to emit. */
 	List<ReadMethod> methods() {
 		List<ReadMethod> ms = new ArrayList<>();
-		ms.add(new ReadMethod(this.cp.addUtf8("_readSkipWs"), this.cp.addUtf8("()V"), buildSkipWs()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readExpr"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadExpr()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readList"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadList()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readAtom"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadAtom()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStr"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadStr()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
-				buildClassify()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readFromString"),
-				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), buildReadFromString()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readHash"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadHash()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readCharLit"), this.cp.addUtf8("()Ljava/lang/Object;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readSkipWs"), this.cp.utf8Entry("()V"), buildSkipWs()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readExpr"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadExpr()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readList"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadList()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readAtom"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadAtom()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readStr"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadStr()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_classify"),
+				this.cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/Object;"), buildClassify()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readFromString"),
+				this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;"), buildReadFromString()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readHash"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadHash()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readCharLit"), this.cp.utf8Entry("()Ljava/lang/Object;"),
 				buildReadCharLit()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readRadix"), this.cp.addUtf8("(II)Ljava/lang/Object;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readRadix"), this.cp.utf8Entry("(II)Ljava/lang/Object;"),
 				buildReadRadix()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readBits"), this.cp.addUtf8("()Ljava/lang/Object;"), buildReadBits()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readArrayN"), this.cp.addUtf8("(I)Ljava/lang/Object;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readBits"), this.cp.utf8Entry("()Ljava/lang/Object;"),
+				buildReadBits()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readArrayN"), this.cp.utf8Entry("(I)Ljava/lang/Object;"),
 				buildReadArrayN()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readPacked"), this.cp.addUtf8("(I)Ljava/lang/Object;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readPacked"), this.cp.utf8Entry("(I)Ljava/lang/Object;"),
 				buildReadPacked()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStruct"), this.cp.addUtf8("()Ljava/lang/Object;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_readStruct"), this.cp.utf8Entry("()Ljava/lang/Object;"),
 				buildReadStruct()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdLen"), this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)I"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdLen"), this.cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;)I"),
 				buildRdLen()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdConsp"), this.cp.addUtf8("(Ljava/lang/Object;)Z"), buildRdConsp()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdLevel"),
-				this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"), buildRdLevel()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdDims"),
-				this.cp.addUtf8("(Ljava/lang/Object;ILjava/lang/String;)[Ljava/lang/Object;"), buildRdDims()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdFlat"),
-				this.cp.addUtf8("(Ljava/lang/Object;I[Ljava/lang/Object;Ljava/util/ArrayList;Ljava/lang/String;)V"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdConsp"), this.cp.utf8Entry("(Ljava/lang/Object;)Z"),
+				buildRdConsp()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdLevel"),
+				this.cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"), buildRdLevel()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdDims"),
+				this.cp.utf8Entry("(Ljava/lang/Object;ILjava/lang/String;)[Ljava/lang/Object;"), buildRdDims()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdFlat"),
+				this.cp.utf8Entry("(Ljava/lang/Object;I[Ljava/lang/Object;Ljava/util/ArrayList;Ljava/lang/String;)V"),
 				buildRdFlat()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdErr"), this.cp.addUtf8("(Ljava/lang/String;)V"), buildRdErr()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdName"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdErr"), this.cp.utf8Entry("(Ljava/lang/String;)V"), buildRdErr()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdName"), this.cp.utf8Entry("(Ljava/lang/String;)Ljava/lang/String;"),
 				buildRdName()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdF"), this.cp.addUtf8("(Ljava/lang/Object;)D"), buildRdF()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_rdInferRank"), this.cp.addUtf8("(Ljava/lang/Object;)I"),
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdF"), this.cp.utf8Entry("(Ljava/lang/Object;)D"), buildRdF()));
+		ms.add(new ReadMethod(this.cp.utf8Entry("_rdInferRank"), this.cp.utf8Entry("(Ljava/lang/Object;)I"),
 				buildRdInferRank()));
 		if (this.emitLoad) {
-			ms.add(new ReadMethod(this.cp.addUtf8("_load"), this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"),
-					buildLoad()));
+			ms.add(new ReadMethod(this.cp.utf8Entry("_load"),
+					this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/Object;"), buildLoad()));
 		}
 		return ms;
 	}

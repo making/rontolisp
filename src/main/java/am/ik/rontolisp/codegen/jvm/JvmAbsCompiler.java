@@ -17,12 +17,12 @@ final class JvmAbsCompiler {
 		List<LispVal> args = cons.toList();
 		if (!JvmLispCompiler.hasComplexOperand(args) && JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-			ctx.body.invokestatic(ctx.mathAbsDouble.entry());
+			ctx.body.invokestatic(ctx.mathAbsDouble);
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.ABS).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.ABS));
 		}
 	}
 

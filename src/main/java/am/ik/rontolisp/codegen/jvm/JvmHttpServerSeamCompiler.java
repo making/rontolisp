@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
@@ -40,7 +42,7 @@ final class JvmHttpServerSeamCompiler {
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = cons.toList();
-		ConstantPool.ClassConstant supportClass = ctx.cp.addClass(ctx.cp.addUtf8(SUPPORT_CLASS));
+		ClassEntry supportClass = ctx.cp.classEntry(SUPPORT_CLASS);
 		if (LispNames.HTTP_SERVER_START.equals(member)) {
 			JvmHttpHandlerRuntimeBuilder.HttpHandlerRuntime runtime = ctx.httpHandlerRuntime;
 			if (runtime == null) {
@@ -57,7 +59,7 @@ final class JvmHttpServerSeamCompiler {
 			}
 			// _httpHandlerFn = the handler function value
 			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-			ctx.body.putstatic(runtime.handlerField().entry());
+			ctx.body.putstatic(runtime.handlerField());
 			if (ctx.servletMode) {
 				// Servlet mode (-o app.war): the seam REGISTERS AND RETURNS rather than
 				// refusing by name. Refusing would be the more honest answer to "a war
@@ -84,12 +86,11 @@ final class JvmHttpServerSeamCompiler {
 			// unwraps)
 			JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
 			// RontoHttpServer.startServer(port, address, new Prog())
-			ctx.body.new_(runtime.progClass().entry()).dup();
-			ctx.body.invokespecial(runtime.progInit().entry());
-			ConstantPool.MethodrefConstant start = ctx.cp.addMethodref(supportClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("startServer"),
-							ctx.cp.addUtf8("(ILjava/lang/Object;L" + SUPPORT_CLASS + "$Handler;)J")));
-			ctx.body.invokestatic(start.entry());
+			ctx.body.new_(runtime.progClass()).dup();
+			ctx.body.invokespecial(runtime.progInit());
+			MethodRefEntry start = ctx.cp.methodRef(supportClass, "startServer",
+					"(ILjava/lang/Object;L" + SUPPORT_CLASS + "$Handler;)J");
+			ctx.body.invokestatic(start);
 			JvmEmitHelper.boxLong(ctx);
 			return;
 		}
@@ -112,16 +113,14 @@ final class JvmHttpServerSeamCompiler {
 		}
 		JvmEmitHelper.unboxLong(ctx);
 		if (LispNames.HTTP_SERVER_PORT.equals(member)) {
-			ConstantPool.MethodrefConstant port = ctx.cp.addMethodref(supportClass,
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("serverPort"), ctx.cp.addUtf8("(J)J")));
-			ctx.body.invokestatic(port.entry());
+			MethodRefEntry port = ctx.cp.methodRef(supportClass, "serverPort", "(J)J");
+			ctx.body.invokestatic(port);
 			JvmEmitHelper.boxLong(ctx);
 			return;
 		}
 		String method = LispNames.HTTP_SERVER_JOIN.equals(member) ? "joinServer" : "stopServer";
-		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(supportClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8("(J)V")));
-		ctx.body.invokestatic(ref.entry()).aconst_null();
+		MethodRefEntry ref = ctx.cp.methodRef(supportClass, method, "(J)V");
+		ctx.body.invokestatic(ref).aconst_null();
 	}
 
 }

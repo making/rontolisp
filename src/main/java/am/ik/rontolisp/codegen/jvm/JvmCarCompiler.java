@@ -18,7 +18,7 @@ final class JvmCarCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// nil answers nil, a cons its field, a non-list is CAR's type-error
 		// (JvmOperandTypeRuntime).
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CAR).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CAR));
 	}
 
 }

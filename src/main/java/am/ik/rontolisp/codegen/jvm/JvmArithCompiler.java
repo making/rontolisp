@@ -48,19 +48,19 @@ final class JvmArithCompiler {
 		if (unaryDiv) {
 			JvmEmitHelper.compileLong(1, ctx);
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV));
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		// Unary subtraction is negation; the other operators leave a single argument
 		// as-is.
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NEG).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NEG));
 			return;
 		}
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.body.invokestatic(ctx.numOp(opKey).entry());
+			ctx.body.invokestatic(ctx.numOp(opKey));
 		}
 	}
 
@@ -87,18 +87,18 @@ final class JvmArithCompiler {
 		if (JvmNumericRuntimeBuilder.DIV.equals(opKey) && args.size() == 2) {
 			JvmEmitHelper.compileLong(1, ctx);
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp).entry());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp));
 			return;
 		}
 		if (JvmNumericRuntimeBuilder.SUB.equals(opKey) && args.size() == 2) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.NEG).entry());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.NEG));
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		for (int i = 2; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp).entry());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, complexOp));
 		}
 	}
 
@@ -135,8 +135,7 @@ final class JvmArithCompiler {
 				// of which is a bare DREM: _fmod corrects the sign of a nonzero result
 				// to the divisor's, and both take CLHS's sign for a ZERO result from
 				// _frem rather than IEEE fmod's sign-of-the-dividend.
-				ctx.body.invokestatic(
-						ctx.numOp(isMod ? JvmNumericRuntimeBuilder.FMOD : JvmNumericRuntimeBuilder.FREM).entry());
+				ctx.body.invokestatic(ctx.numOp(isMod ? JvmNumericRuntimeBuilder.FMOD : JvmNumericRuntimeBuilder.FREM));
 			}
 			else {
 				emitDoubleOp(ctx, doubleOpcode);

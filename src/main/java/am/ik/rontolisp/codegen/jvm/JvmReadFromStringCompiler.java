@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -38,9 +38,8 @@ final class JvmReadFromStringCompiler {
 	static void compileEnd(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		emitRead(cons, ctx, className, LispNames.READ_FROM_STRING_END);
 		ctx.body.pop();
-		FieldrefConstant pos = ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_readPos"), ctx.cp.addUtf8("I")));
-		ctx.body.getstatic(pos.entry()).i2l();
+		FieldRefEntry pos = ctx.cp.fieldRef(ctx.cp.classEntry(className), "_readPos", "I");
+		ctx.body.getstatic(pos).i2l();
 		JvmEmitHelper.boxLong(ctx);
 	}
 
@@ -53,9 +52,9 @@ final class JvmReadFromStringCompiler {
 		// The source may be a mutable character vector (a filled make-string buffer);
 		// _readFromString casts to String, so normalize first.
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
-				ctx.cp.addUtf8("_readFromString"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), "_readFromString",
+				"(Ljava/lang/Object;)Ljava/lang/Object;");
+		ctx.body.invokestatic(ref);
 	}
 
 }

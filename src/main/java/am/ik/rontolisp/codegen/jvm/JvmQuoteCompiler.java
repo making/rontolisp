@@ -1,12 +1,15 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
@@ -155,8 +158,8 @@ final class JvmQuoteCompiler {
 			ctx.body.lconst_1();
 		}
 		else {
-			am.ik.jvm.ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-			ctx.body.ldc(lc.entry());
+			LongEntry lc = ctx.cp.entries().longEntry(value);
+			ctx.body.ldc(lc);
 		}
 		ctx.body.lastore();
 	}
@@ -295,8 +298,8 @@ final class JvmQuoteCompiler {
 			ctx.body.dconst_1();
 		}
 		else {
-			am.ik.jvm.ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
-			ctx.body.ldc(dc.entry());
+			DoubleEntry dc = ctx.cp.entries().doubleEntry(value);
+			ctx.body.ldc(dc);
 		}
 	}
 
@@ -369,10 +372,10 @@ final class JvmQuoteCompiler {
 			throw new UnsupportedOperationException(
 					"an instance literal of type " + inst.layout().tag() + " appeared after the instance gate closed");
 		}
-		am.ik.jvm.ConstantPool.FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
+		FieldRefEntry lf = ctx.layoutPool.intern(ctx.cp, className, inst.layout());
 		int slots = inst.slotCount();
 		JvmEmitHelper.emitIntConst(ctx, 1 + slots);
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().getstatic(lf);
 		ctx.body.aastore();
 		for (int i = 0; i < slots; i++) {
 			ctx.body.dup();
@@ -390,12 +393,10 @@ final class JvmQuoteCompiler {
 	// shallow regardless of the element count.
 	private static void compileQuotedArray(LispArray array, JvmLispCompiler.Ctx ctx, String className) {
 		int[] dims = array.dimensions();
-		ClassConstant arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList"));
-		MethodrefConstant alInit = ctx.cp.addMethodref(arrayListClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
-		MethodrefConstant alAdd = ctx.cp.addMethodref(arrayListClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("add"), ctx.cp.addUtf8("(Ljava/lang/Object;)Z")));
-		ctx.body.new_(arrayListClass.entry()).dup().invokespecial(alInit.entry());
+		ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+		MethodRefEntry alInit = ctx.cp.methodRef(arrayListClass, "<init>", "()V");
+		MethodRefEntry alAdd = ctx.cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+		ctx.body.new_(arrayListClass).dup().invokespecial(alInit);
 		// A bit-vector literal (#*1011) is stamped with the remembered element type
 		// bit: the header grows to the length-5 shape _arrayMakeTyped builds, carrying
 		// the name in slot 4, so array-element-type and bit-vector-p read it back.
@@ -405,10 +406,10 @@ final class JvmQuoteCompiler {
 		boolean stampedBit = array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT;
 		addElement(ctx, alAdd, () -> {
 			JvmEmitHelper.emitIntConst(ctx, stampedBit ? 5 : 3);
-			ctx.body.anewarray(ctx.objectClass.entry()).dup();
+			ctx.body.anewarray(ctx.objectClass).dup();
 			JvmEmitHelper.emitIntConst(ctx, 0);
 			JvmEmitHelper.emitIntConst(ctx, dims.length);
-			ctx.body.anewarray(ctx.objectClass.entry());
+			ctx.body.anewarray(ctx.objectClass);
 			for (int d = 0; d < dims.length; d++) {
 				ctx.body.dup();
 				JvmEmitHelper.emitIntConst(ctx, d);
@@ -431,10 +432,10 @@ final class JvmQuoteCompiler {
 
 	// Assumes the ArrayList is on top of the stack; appends one element (pushed by
 	// pushValue) and leaves the list on the stack.
-	private static void addElement(JvmLispCompiler.Ctx ctx, MethodrefConstant alAdd, Runnable pushValue) {
+	private static void addElement(JvmLispCompiler.Ctx ctx, MethodRefEntry alAdd, Runnable pushValue) {
 		ctx.body.dup();
 		pushValue.run();
-		ctx.body.invokevirtual(alAdd.methodRefEntry()).pop();
+		ctx.body.invokevirtual(alAdd).pop();
 	}
 
 	/**
@@ -476,9 +477,9 @@ final class JvmQuoteCompiler {
 			int[] chunk = chunks.get(c);
 			String methodName = "_ql$" + ctx.nextOutlinedBodyId[0]++;
 			String desc = "(Ljava/lang/Object;)Ljava/lang/Object;";
-			Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
-			Utf8Constant descUtf8 = ctx.cp.addUtf8(desc);
-			MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
+			Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+			Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc);
+			MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc);
 			JvmLispCompiler.Ctx builder = ctx.ctxBuilder.build();
 			builder.evalStoreRef = ctx.evalStoreRef;
 			builder.nextLocal = 1;
@@ -487,7 +488,7 @@ final class JvmQuoteCompiler {
 			emitSpineCells(cars, chunk[0], chunk[1], builder, className);
 			builder.body.areturn();
 			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(methodName, nameUtf8, descUtf8, builder));
-			ctx.body.invokestatic(ref.entry());
+			ctx.body.invokestatic(ref);
 		}
 	}
 
@@ -505,7 +506,7 @@ final class JvmQuoteCompiler {
 		int savedNextLocal = ctx.nextLocal;
 		int tempSlot = ctx.allocTemp();
 		for (int i = to - 1; i >= from; i--) {
-			ctx.body.astore(tempSlot).iconst_2().anewarray(ctx.objectClass.entry()).dup();
+			ctx.body.astore(tempSlot).iconst_2().anewarray(ctx.objectClass).dup();
 			ctx.body.iconst_0();
 			compileQuotedVal(cars.get(i), ctx, className);
 			ctx.body.aastore().dup().iconst_1().aload(tempSlot).aastore();

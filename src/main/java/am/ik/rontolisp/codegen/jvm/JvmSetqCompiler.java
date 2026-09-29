@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
@@ -137,7 +137,7 @@ final class JvmSetqCompiler {
 		Integer slot = ctx.locals.get(name);
 		if (slot != null && ctx.boxedVars.contains(name)) {
 			int tempSlot = ctx.allocTemp();
-			ctx.body.astore(tempSlot).aload(slot).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.astore(tempSlot).aload(slot).checkcast(ctx.objectArrayClass);
 			ctx.body.iconst_0().aload(tempSlot).aastore().aload(tempSlot);
 		}
 		else if (ctx.captures.containsKey(name)) {
@@ -145,7 +145,7 @@ final class JvmSetqCompiler {
 			int tempSlot = ctx.allocTemp();
 			ctx.body.astore(tempSlot).aload(ctx.closureEnvSlot);
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
-			ctx.body.aaload().checkcast(ctx.objectArrayClass.entry()).iconst_0().aload(tempSlot);
+			ctx.body.aaload().checkcast(ctx.objectArrayClass).iconst_0().aload(tempSlot);
 			ctx.body.aastore().aload(tempSlot);
 		}
 		else if (slot == null && ctx.globals.contains(name)) {
@@ -195,16 +195,16 @@ final class JvmSetqCompiler {
 		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 		java.lang.classfile.constantpool.FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
-		FieldrefConstant globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name));
+		FieldRefEntry globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name));
 		if (dyn == null || tlField == null) {
-			ctx.body.dup().putstatic(globalFieldIndex.entry());
+			ctx.body.dup().putstatic(globalFieldIndex);
 			return;
 		}
 		// stack: v -> v v tl -> v tl v -> v wrote? ; when 0, fall through to the global.
 		ctx.body.dup().getstatic(tlField).swap().invokestatic(dyn.dset());
 		MethodCode.Label ifWrotePos = ctx.body.newLabel();
 		ctx.body.ifne(ifWrotePos);
-		ctx.body.dup().putstatic(globalFieldIndex.entry());
+		ctx.body.dup().putstatic(globalFieldIndex);
 		ctx.body.labelBinding(ifWrotePos);
 	}
 
@@ -223,7 +223,7 @@ final class JvmSetqCompiler {
 		// stack: value -> _store(name, value, null) -> value
 		JvmEmitHelper.compileStringLiteral(name, ctx);
 		ctx.body.swap().aconst_null();
-		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef).entry());
+		ctx.body.invokestatic(java.util.Objects.requireNonNull(ctx.evalStoreRef));
 	}
 
 	/**

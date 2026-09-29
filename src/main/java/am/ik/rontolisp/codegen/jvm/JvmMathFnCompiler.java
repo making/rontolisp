@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -8,8 +10,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the unary floating-point math built-ins ({@code sqrt}, {@code exp},
@@ -78,23 +78,21 @@ final class JvmMathFnCompiler {
 	 * @return references keyed by Lisp name (for the unary functions), plus {@link #POW},
 	 * {@link #ATAN2}, {@link #SIGNUM_D} and the two {@code ThreadLocalRandom} halves
 	 */
-	static Map<String, MethodrefConstant> buildOps(ConstantPool cp, ClassConstant mathClass) {
-		ClassConstant strictMathClass = cp.addClass(cp.addUtf8("java/lang/StrictMath"));
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
+	static Map<String, MethodRefEntry> buildOps(ConstantPool cp, ClassEntry mathClass) {
+		ClassEntry strictMathClass = cp.classEntry("java/lang/StrictMath");
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
 		for (String name : UNARY_NAMES) {
 			// The map key is the (uppercase-canonical) Lisp name; the Java method name
 			// is its lowercase spelling (StrictMath.sin, not StrictMath.SIN).
-			ops.put(name, cp.addMethodref(LispNames.SQRT.equals(name) ? mathClass : strictMathClass,
-					cp.addNameAndType(cp.addUtf8(name.toLowerCase(java.util.Locale.ROOT)), cp.addUtf8("(D)D"))));
+			ops.put(name, cp.methodRef(LispNames.SQRT.equals(name) ? mathClass : strictMathClass,
+					name.toLowerCase(java.util.Locale.ROOT), "(D)D"));
 		}
-		ops.put(POW, cp.addMethodref(strictMathClass, cp.addNameAndType(cp.addUtf8("pow"), cp.addUtf8("(DD)D"))));
-		ops.put(ATAN2, cp.addMethodref(strictMathClass, cp.addNameAndType(cp.addUtf8("atan2"), cp.addUtf8("(DD)D"))));
-		ops.put(SIGNUM_D, cp.addMethodref(mathClass, cp.addNameAndType(cp.addUtf8("signum"), cp.addUtf8("(D)D"))));
-		ClassConstant tlrClass = cp.addClass(cp.addUtf8("java/util/concurrent/ThreadLocalRandom"));
-		ops.put(TLR_CURRENT, cp.addMethodref(tlrClass,
-				cp.addNameAndType(cp.addUtf8("current"), cp.addUtf8("()Ljava/util/concurrent/ThreadLocalRandom;"))));
-		ops.put(TLR_NEXT_DOUBLE,
-				cp.addMethodref(tlrClass, cp.addNameAndType(cp.addUtf8("nextDouble"), cp.addUtf8("()D"))));
+		ops.put(POW, cp.methodRef(strictMathClass, "pow", "(DD)D"));
+		ops.put(ATAN2, cp.methodRef(strictMathClass, "atan2", "(DD)D"));
+		ops.put(SIGNUM_D, cp.methodRef(mathClass, "signum", "(D)D"));
+		ClassEntry tlrClass = cp.classEntry("java/util/concurrent/ThreadLocalRandom");
+		ops.put(TLR_CURRENT, cp.methodRef(tlrClass, "current", "()Ljava/util/concurrent/ThreadLocalRandom;"));
+		ops.put(TLR_NEXT_DOUBLE, cp.methodRef(tlrClass, "nextDouble", "()D"));
 		return ops;
 	}
 
@@ -118,12 +116,12 @@ final class JvmMathFnCompiler {
 			// keeps the inline Math call below.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			ctx.body.loadConstant(u1Op(name));
-			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
 			return;
 		}
 		// Number.doubleValue() coerces both Long and Double arguments to double.
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.mathOp(name).entry());
+		ctx.body.invokestatic(ctx.mathOp(name));
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
@@ -143,7 +141,7 @@ final class JvmMathFnCompiler {
 			// interpreter's REAL operand-type report there.
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-			ctx.body.invokestatic(ctx.mathOp(ATAN2).entry());
+			ctx.body.invokestatic(ctx.mathOp(ATAN2));
 			JvmEmitHelper.boxDouble(ctx);
 			return;
 		}
@@ -154,13 +152,13 @@ final class JvmMathFnCompiler {
 			// of helpers (/ (log n) (log base)) would reach with a complex operand.
 			compileLogThroughU1(args.get(1), ctx, className);
 			compileLogThroughU1(args.get(2), ctx, className);
-			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.DIV).entry());
+			ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.DIV));
 			return;
 		}
 		JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG).entry());
+		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG));
 		JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG).entry()).ddiv();
+		ctx.body.invokestatic(ctx.mathOp(LispNames.LOG)).ddiv();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
@@ -168,7 +166,7 @@ final class JvmMathFnCompiler {
 	private static void compileLogThroughU1(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(arg, ctx, className);
 		ctx.body.loadConstant(JvmComplexRuntimeBuilder.U1_LOG);
-		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
+		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
 	}
 
 	/**
@@ -195,7 +193,7 @@ final class JvmMathFnCompiler {
 			case LispNames.CIS -> JvmComplexRuntimeBuilder.U1_CIS;
 			default -> throw new IllegalArgumentException("not an always-complex-capable unary: " + name);
 		});
-		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1).entry());
+		ctx.body.invokestatic(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.U1));
 	}
 
 	/** The {@code _cu1} opcode selecting the formula for a Lisp name. */

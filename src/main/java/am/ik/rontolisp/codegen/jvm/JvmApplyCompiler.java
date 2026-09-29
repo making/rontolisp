@@ -1,12 +1,12 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -56,7 +56,7 @@ final class JvmApplyCompiler {
 					emitArityGuard(ctx, className, tailSlot, 0, true, null);
 					ctx.body.aload(tailSlot);
 				}
-				ctx.body.invokestatic(fi.methodref().entry());
+				ctx.body.invokestatic(fi.methodref());
 				return;
 			}
 			if (fi != null) {
@@ -74,7 +74,7 @@ final class JvmApplyCompiler {
 				// The parameters out of the list: an optional past its end is the
 				// UNSUPPLIED marker, and the rest list is the tail past the optionals.
 				JvmPhysicalArgs.emitFromList(ctx, className, fi, argsSlot);
-				ctx.body.invokestatic(fi.methodref().entry());
+				ctx.body.invokestatic(fi.methodref());
 				return;
 			}
 		}
@@ -100,17 +100,16 @@ final class JvmApplyCompiler {
 
 		// Prepend each leading argument: cur = new Object[]{arg, cur}.
 		for (int k = argSlots.size() - 1; k >= 0; k--) {
-			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+			ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 			ctx.body.aload(argSlots.get(k)).aastore().dup().iconst_1().aload(curSlot).aastore();
 			ctx.body.astore(curSlot);
 		}
 
 		// _apply(func, argList)
 		ctx.body.aload(funcSlot).aload(curSlot);
-		MethodrefConstant applyRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_apply"),
-						ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
-		ctx.body.invokestatic(applyRef.entry());
+		MethodRefEntry applyRef = ctx.cp.methodRef(ctx.cp.classEntry(className), "_apply",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+		ctx.body.invokestatic(applyRef);
 	}
 
 	/**
@@ -123,12 +122,11 @@ final class JvmApplyCompiler {
 			boolean variadic, @Nullable String target) {
 		int shape = ctx.arityOperators.shape(required, variadic, target);
 		ctx.arityGuardShapes.add(shape);
-		MethodrefConstant chkRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
-						ctx.cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)));
+		MethodRefEntry chkRef = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmRuntimeBuilder.ARITY_CHK_NAME,
+				JvmRuntimeBuilder.ARITY_CHK_DESC);
 		ctx.body.aload(argsSlot);
 		JvmEmitHelper.emitIntConst(ctx, shape);
-		ctx.body.invokestatic(chkRef.entry());
+		ctx.body.invokestatic(chkRef);
 	}
 
 }

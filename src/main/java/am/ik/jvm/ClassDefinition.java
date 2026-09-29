@@ -1,11 +1,10 @@
 package am.ik.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 
 import org.jspecify.annotations.Nullable;
 
@@ -28,15 +27,15 @@ public final class ClassDefinition {
 
 	private final int accessFlags;
 
-	private final ClassConstant thisClass;
+	private final ClassEntry thisClass;
 
-	private final ClassConstant superClass;
+	private final ClassEntry superClass;
 
-	private final Utf8Constant codeName;
+	private final Utf8Entry codeName;
 
-	private final @Nullable Utf8Constant lineNumberTableName;
+	private final @Nullable Utf8Entry lineNumberTableName;
 
-	private final List<ClassConstant> interfaces;
+	private final List<ClassEntry> interfaces;
 
 	private final List<Field> fields;
 
@@ -55,7 +54,7 @@ public final class ClassDefinition {
 		if (this.lineNumberTableName == null) {
 			for (Method method : this.methods) {
 				if (!method.lineNumbers().isEmpty()) {
-					throw new IllegalStateException("method " + this.cp.utf8At(method.name().index())
+					throw new IllegalStateException("method " + method.name().stringValue()
 							+ " carries line numbers, but the definition names no LineNumberTable attribute");
 				}
 			}
@@ -64,20 +63,20 @@ public final class ClassDefinition {
 
 	/**
 	 * Starts a definition.
-	 * @param cp the pool every index in the definition refers to
+	 * @param cp the master pool every entry in the definition belongs to
 	 * @param accessFlags the class's access flags
 	 * @param thisClass the class itself
 	 * @param superClass its superclass
 	 * @param codeName the {@code "Code"} Utf8 every method's attribute is named by
 	 * @return a builder
 	 */
-	public static Builder builder(ConstantPool cp, int accessFlags, ClassConstant thisClass, ClassConstant superClass,
-			Utf8Constant codeName) {
+	public static Builder builder(ConstantPool cp, int accessFlags, ClassEntry thisClass, ClassEntry superClass,
+			Utf8Entry codeName) {
 		return new Builder(cp, accessFlags, thisClass, superClass, codeName);
 	}
 
 	/**
-	 * @return the pool every index in the definition refers to
+	 * @return the master pool every entry in the definition belongs to
 	 */
 	public ConstantPool cp() {
 		return this.cp;
@@ -93,21 +92,21 @@ public final class ClassDefinition {
 	/**
 	 * @return the class itself
 	 */
-	public ClassConstant thisClass() {
+	public ClassEntry thisClass() {
 		return this.thisClass;
 	}
 
 	/**
 	 * @return its superclass
 	 */
-	public ClassConstant superClass() {
+	public ClassEntry superClass() {
 		return this.superClass;
 	}
 
 	/**
 	 * @return the {@code "Code"} Utf8
 	 */
-	public Utf8Constant codeName() {
+	public Utf8Entry codeName() {
 		return this.codeName;
 	}
 
@@ -115,14 +114,14 @@ public final class ClassDefinition {
 	 * @return the {@code "LineNumberTable"} Utf8 every method's line numbers are named
 	 * by, or {@code null} when no method carries any
 	 */
-	public @Nullable Utf8Constant lineNumberTableName() {
+	public @Nullable Utf8Entry lineNumberTableName() {
 		return this.lineNumberTableName;
 	}
 
 	/**
 	 * @return the implemented interfaces, in declaration order
 	 */
-	public List<ClassConstant> interfaces() {
+	public List<ClassEntry> interfaces() {
 		return this.interfaces;
 	}
 
@@ -147,7 +146,7 @@ public final class ClassDefinition {
 	 * @param name its name
 	 * @param descriptor its descriptor
 	 */
-	public record Field(int access, Utf8Constant name, Utf8Constant descriptor) {
+	public record Field(int access, Utf8Entry name, Utf8Entry descriptor) {
 	}
 
 	/**
@@ -173,8 +172,7 @@ public final class ClassDefinition {
 	 * @param lineNumbers the {@code LineNumberTable} entries, in ascending position
 	 * order; empty for a method that carries none
 	 */
-	public record Method(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body,
-			List<Line> lineNumbers) {
+	public record Method(int access, Utf8Entry name, Utf8Entry descriptor, MethodCode body, List<Line> lineNumbers) {
 
 		/**
 		 * Copies the line table.
@@ -194,22 +192,22 @@ public final class ClassDefinition {
 
 		private final int accessFlags;
 
-		private final ClassConstant thisClass;
+		private final ClassEntry thisClass;
 
-		private final ClassConstant superClass;
+		private final ClassEntry superClass;
 
-		private final Utf8Constant codeName;
+		private final Utf8Entry codeName;
 
-		private @Nullable Utf8Constant lineNumberTableName;
+		private @Nullable Utf8Entry lineNumberTableName;
 
-		private final List<ClassConstant> interfaces = new ArrayList<>();
+		private final List<ClassEntry> interfaces = new ArrayList<>();
 
 		private final List<Field> fields = new ArrayList<>();
 
 		private final List<Method> methods = new ArrayList<>();
 
-		private Builder(ConstantPool cp, int accessFlags, ClassConstant thisClass, ClassConstant superClass,
-				Utf8Constant codeName) {
+		private Builder(ConstantPool cp, int accessFlags, ClassEntry thisClass, ClassEntry superClass,
+				Utf8Entry codeName) {
 			this.cp = Objects.requireNonNull(cp);
 			this.accessFlags = accessFlags;
 			this.thisClass = Objects.requireNonNull(thisClass);
@@ -223,7 +221,7 @@ public final class ClassDefinition {
 		 * @param name the {@code "LineNumberTable"} Utf8
 		 * @return this builder
 		 */
-		public Builder lineNumberTableName(Utf8Constant name) {
+		public Builder lineNumberTableName(Utf8Entry name) {
 			this.lineNumberTableName = Objects.requireNonNull(name);
 			return this;
 		}
@@ -232,7 +230,7 @@ public final class ClassDefinition {
 		 * @param iface an implemented interface
 		 * @return this builder
 		 */
-		public Builder addInterface(ClassConstant iface) {
+		public Builder addInterface(ClassEntry iface) {
 			this.interfaces.add(Objects.requireNonNull(iface));
 			return this;
 		}
@@ -243,7 +241,7 @@ public final class ClassDefinition {
 		 * @param descriptor its descriptor
 		 * @return this builder
 		 */
-		public Builder addField(int access, Utf8Constant name, Utf8Constant descriptor) {
+		public Builder addField(int access, Utf8Entry name, Utf8Entry descriptor) {
 			this.fields.add(new Field(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor)));
 			return this;
 		}
@@ -257,7 +255,7 @@ public final class ClassDefinition {
 		 * @return this builder
 		 * @throws IllegalStateException when a branch in the body waits for its label
 		 */
-		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body) {
+		public Builder addMethod(int access, Utf8Entry name, Utf8Entry descriptor, MethodCode body) {
 			return this.addMethod(access, name, descriptor, body, List.of());
 		}
 
@@ -271,7 +269,7 @@ public final class ClassDefinition {
 		 * @return this builder
 		 * @throws IllegalStateException when a branch in the body waits for its label
 		 */
-		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body,
+		public Builder addMethod(int access, Utf8Entry name, Utf8Entry descriptor, MethodCode body,
 				List<Line> lineNumbers) {
 			body.checkComplete();
 			this.methods.add(new Method(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor), body,

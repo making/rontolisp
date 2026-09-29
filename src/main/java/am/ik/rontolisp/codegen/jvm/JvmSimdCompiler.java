@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -11,8 +12,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
-
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
@@ -153,7 +152,7 @@ final class JvmSimdCompiler {
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> ops = ctx.simdOps;
+		Map<String, MethodRefEntry> ops = ctx.simdOps;
 		if (ops == null) {
 			throw new IllegalStateException("simd acceleration runtime was not emitted");
 		}
@@ -176,7 +175,7 @@ final class JvmSimdCompiler {
 		// Make sure the bridge class is initialized -- or, on a runtime without
 		// jdk.incubator.vector, that _simdReady() below reads false -- before anything
 		// decides which path to take.
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 		// Under --gpu the lane kernel reads its arguments on the host, so each is
 		// materialized first (a result the device still holds comes home) and the kernel
 		// is handed what the guard answers -- the array, or a result stub's backing; an
@@ -191,7 +190,7 @@ final class JvmSimdCompiler {
 		// call and the scalar-defun fallback below read -- recompiling an argument form
 		// would run its side effects twice (the same reason JvmLinalgKernelCompiler's
 		// chain uses temps).
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 		boolean into = member.endsWith("-INTO");
 		int[] slots = new int[arity];
 		int original = -1, handed = -1;
@@ -203,10 +202,8 @@ final class JvmSimdCompiler {
 					original = ctx.allocTemp();
 					ctx.body.dup().astore(original);
 				}
-				ctx.body.invokestatic(Objects
-					.requireNonNull(
-							gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE))
-					.entry());
+				ctx.body.invokestatic(Objects.requireNonNull(
+						gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE)));
 				if (destination) {
 					handed = ctx.allocTemp();
 					ctx.body.dup().astore(handed);
@@ -220,24 +217,24 @@ final class JvmSimdCompiler {
 		// lands exactly where a declined linalg: attempt would, so the gpu unswap below
 		// applies uniformly to either answer.
 		MethodCode.Label fallback = ctx.body.newLabel();
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)));
 		ctx.body.ifeq(fallback);
 		emitLaneWidthGuard(ctx, member, slots, fallback);
 		for (int slot : slots) {
 			ctx.body.aload(slot);
 		}
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(member)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(member)));
 		MethodCode.Label skipFallback = ctx.body.newLabel();
 		ctx.body.goto_(skipFallback);
 		ctx.body.labelBinding(fallback);
 		for (int slot : slots) {
 			ctx.body.aload(slot);
 		}
-		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.invokestatic(defun.methodref());
 		ctx.body.labelBinding(skipFallback);
 		if (gpuOps != null && into) {
 			ctx.body.aload(original).aload(handed);
-			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)).entry());
+			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)));
 		}
 	}
 
@@ -268,11 +265,11 @@ final class JvmSimdCompiler {
 	static void compileMatvecChain(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		boolean into = LispNames.VEC_MATVEC_INTO.equals(member);
 		int arity = into ? 3 : 2;
-		Map<String, MethodrefConstant> simd = ctx.simdOps;
-		Map<String, MethodrefConstant> blas = ctx.blasOps;
+		Map<String, MethodRefEntry> simd = ctx.simdOps;
+		Map<String, MethodRefEntry> blas = ctx.blasOps;
 		// The device takes the allocating form only; the -into form's chain starts at the
 		// library.
-		Map<String, MethodrefConstant> gpu = into ? null : ctx.gpuOps;
+		Map<String, MethodRefEntry> gpu = into ? null : ctx.gpuOps;
 		String blasKey = blas != null ? JvmLinalgBlas.vecKernelKey(member) : null;
 		List<LispVal> args = cons.toList();
 		requireArity(args.size() == arity + 1, "vec:" + member + " expects " + arity + " arguments");
@@ -310,11 +307,11 @@ final class JvmSimdCompiler {
 		// (a result the device still holds the only copy of comes home); the -into form
 		// WRITES its destination, so that one is reported instead, with the caller's own
 		// object kept beside it so a host rung's answer can be mapped back (_gpuUnswap).
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 		int destinationOriginal = -1;
 		if (gpuOps != null) {
-			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
-			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			MethodRefEntry materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
+			MethodRefEntry report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
 			for (int i = 0; i < arity; i++) {
 				boolean destination = into && i == 0;
 				ctx.body.aload(slots[i]);
@@ -322,7 +319,7 @@ final class JvmSimdCompiler {
 					destinationOriginal = ctx.allocTemp();
 					ctx.body.dup().astore(destinationOriginal);
 				}
-				ctx.body.invokestatic((destination ? report : materialize).entry());
+				ctx.body.invokestatic((destination ? report : materialize));
 				ctx.body.astore(slots[i]);
 			}
 		}
@@ -337,29 +334,29 @@ final class JvmSimdCompiler {
 			// every other accelerated vec:/linalg: call site gives -- and so does an
 			// operand of a width the lane kernels do not carry (emitLaneWidthGuard).
 			MethodCode.Label fallback = ctx.body.newLabel();
-			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)));
 			ctx.body.ifeq(fallback);
 			emitLaneWidthGuard(ctx, member, slots, fallback);
 			loadAll(ctx, slots);
-			ctx.body.invokestatic(Objects.requireNonNull(simd.get(member)).entry());
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(member)));
 			MethodCode.Label skipFallback = ctx.body.newLabel();
 			ctx.body.goto_(skipFallback);
 			ctx.body.labelBinding(fallback);
 			loadAll(ctx, slots);
-			ctx.body.invokestatic(defun.methodref().entry());
+			ctx.body.invokestatic(defun.methodref());
 			ctx.body.labelBinding(skipFallback);
 		}
 		else {
 			loadAll(ctx, slots);
-			ctx.body.invokestatic(defun.methodref().entry());
+			ctx.body.invokestatic(defun.methodref());
 		}
 		ctx.body.labelBinding(hostAnswered);
 		if (destinationOriginal >= 0) {
 			// A host rung answered the destination backing it was handed: answer the
 			// caller's own object instead.
 			ctx.body.aload(destinationOriginal).aload(slots[0]);
-			ctx.body.invokestatic(
-					Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)).entry());
+			ctx.body
+				.invokestatic(Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)));
 		}
 		ctx.body.labelBinding(deviceAnswered);
 	}
@@ -416,8 +413,8 @@ final class JvmSimdCompiler {
 	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
 			MethodCode.Label fallback) {
 		int arrays = slots.length - SCALAR_TAIL.getOrDefault(member, 0);
-		ClassEntry doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D")).entry();
-		ClassEntry floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F")).entry();
+		ClassEntry doubleArrayClass = ctx.cp.classEntry("[D");
+		ClassEntry floatArrayClass = ctx.cp.classEntry("[F");
 		Integer bf16Operand = BF16_OPERAND.get(member);
 		Integer quantizedOperand = QUANTIZED_OPERAND.get(member);
 		MethodCode.Label skipGenerals = ctx.body.newLabel();
@@ -425,7 +422,7 @@ final class JvmSimdCompiler {
 			// if (!(slot_q instanceof byte[])) goto next arm; then the other array
 			// operands are all float[] or all double[] (decided by the first of them),
 			// else fallback.
-			ClassEntry byteArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[B")).entry();
+			ClassEntry byteArrayClass = ctx.cp.classEntry("[B");
 			MethodCode.Label notQuantized = ctx.body.newLabel();
 			ctx.body.aload(slots[quantizedOperand]).instanceOf(byteArrayClass).ifeq(notQuantized);
 			if (ctx.usesIntArray) {
@@ -459,7 +456,7 @@ final class JvmSimdCompiler {
 		}
 		if (bf16Operand != null) {
 			// if (!(slot_p instanceof short[])) goto general;
-			ClassEntry shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).entry();
+			ClassEntry shortArrayClass = ctx.cp.classEntry("[S");
 			ctx.body.aload(slots[bf16Operand]).instanceOf(shortArrayClass);
 			MethodCode.Label general = ctx.body.newLabel();
 			ctx.body.ifeq(general);
@@ -475,7 +472,7 @@ final class JvmSimdCompiler {
 		}
 		if (BF16_ELEMENTWISE.contains(member)) {
 			// if (!(slot_0 instanceof short[])) goto general;
-			ClassEntry shortArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[S")).entry();
+			ClassEntry shortArrayClass = ctx.cp.classEntry("[S");
 			ctx.body.aload(slots[0]).instanceOf(shortArrayClass);
 			MethodCode.Label generalBf16 = ctx.body.newLabel();
 			ctx.body.ifeq(generalBf16);
@@ -505,18 +502,18 @@ final class JvmSimdCompiler {
 	}
 
 	/** Sets a bridge up before its first call. */
-	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 	}
 
 	/**
 	 * One partial rung: call the kernel over the temps and jump to the chain's end when
 	 * it answered, leaving the stack as it was found when it declined.
 	 */
-	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String kernelKey,
 			int[] slots, MethodCode.Label answered) {
 		loadAll(ctx, slots);
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry()).dup();
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey))).dup();
 		ctx.body.ifnonnull(answered);
 		ctx.body.pop();
 	}

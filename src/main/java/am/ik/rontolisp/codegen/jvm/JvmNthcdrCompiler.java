@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -28,13 +28,13 @@ final class JvmNthcdrCompiler {
 		// Evaluate n -> Long, unbox to long, convert to int. Evaluated before the list,
 		// as the inline walk this replaced did.
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.body.l2i();
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
-				ctx.cp.addUtf8(JvmNthcdrRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmNthcdrRuntimeBuilder.DESC)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmNthcdrRuntimeBuilder.METHOD,
+				JvmNthcdrRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 }

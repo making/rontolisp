@@ -1,10 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispCons;
@@ -25,8 +25,8 @@ final class JvmComplexCompiler {
 	}
 
 	/** The travelling holder's class constant. */
-	static ClassConstant complexClass(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addClass(ctx.cp.addUtf8("am/ik/rontolisp/runtime/RontoComplex"));
+	static ClassEntry complexClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.classEntry("am/ik/rontolisp/runtime/RontoComplex");
 	}
 
 	/**
@@ -35,9 +35,8 @@ final class JvmComplexCompiler {
 	 * travelling class. Created on demand like {@link #complexOp} -- only a site that
 	 * emits the probe names the field.
 	 */
-	static FieldrefConstant hasComplexField(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_hasComplex"), ctx.cp.addUtf8("Z")));
+	static FieldRefEntry hasComplexField(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.fieldRef(ctx.cp.classEntry(className), "_hasComplex", "Z");
 	}
 
 	/**
@@ -48,7 +47,7 @@ final class JvmComplexCompiler {
 	 * pushed and popped above whatever is live).
 	 */
 	static void emitNoHolderJump(JvmLispCompiler.Ctx ctx, String className, MethodCode.Label noHolder) {
-		ctx.body.getstatic(hasComplexField(ctx, className).entry()).ifeq(noHolder);
+		ctx.body.getstatic(hasComplexField(ctx, className)).ifeq(noHolder);
 	}
 
 	/**
@@ -57,9 +56,9 @@ final class JvmComplexCompiler {
 	 * it up in the always-present map -- the same reason every other gated runtime builds
 	 * its references at the call site.
 	 */
-	static MethodrefConstant complexOp(JvmLispCompiler.Ctx ctx, String className, String op) {
+	static MethodRefEntry complexOp(JvmLispCompiler.Ctx ctx, String className, String op) {
 		String desc = JvmComplexRuntimeBuilder.descFor(op);
-		MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, op, desc);
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, op, desc);
 		// Every complex helper but the constructor can meet a wrong-type operand.
 		return JvmComplexRuntimeBuilder.COMPLEX.equals(op) ? ref : ctx.wrapForOperator(op, desc, ref);
 	}
@@ -71,7 +70,7 @@ final class JvmComplexCompiler {
 	static void compileLiteral(LispComplex complex, JvmLispCompiler.Ctx ctx, String className) {
 		compileRealPart(complex.real(), ctx);
 		compileRealPart(complex.imag(), ctx);
-		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX).entry());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX));
 	}
 
 	private static void compileRealPart(LispVal part, JvmLispCompiler.Ctx ctx) {
@@ -102,8 +101,7 @@ final class JvmComplexCompiler {
 		// named COMPLEX (a literal's parts are canonical and cannot fail).
 		String desc = JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.COMPLEX);
 		ctx.body.invokestatic(ctx.wrapForOperator(JvmComplexRuntimeBuilder.COMPLEX, desc,
-				complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX))
-			.entry());
+				complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX)));
 	}
 
 	/** Compiles {@code (complexp x)}. */
@@ -125,7 +123,7 @@ final class JvmComplexCompiler {
 		// (.todo/757) -- exact, since no holder can exist then.
 		MethodCode.Label notHolder = ctx.body.newLabel();
 		emitNoHolderJump(ctx, className, notHolder);
-		ctx.body.instanceOf(complexClass(ctx).entry());
+		ctx.body.instanceOf(complexClass(ctx));
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		MethodCode.Label donePos = ctx.body.newLabel();
 		ctx.body.goto_(donePos);
@@ -147,10 +145,10 @@ final class JvmComplexCompiler {
 	/** The four real representations as a boolean value. */
 	private static void compileIsReal(JvmLispCompiler.Ctx ctx) {
 		int temp = ctx.allocTemp();
-		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass.entry()).aload(temp);
-		ctx.body.instanceOf(JvmEmitHelper.bigIntegerClass(ctx).entry()).ior().aload(temp);
-		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry()).ior().aload(temp);
-		ctx.body.instanceOf(ctx.doubleClass.entry()).ior();
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass).aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.bigIntegerClass(ctx)).ior().aload(temp);
+		ctx.body.instanceOf(JvmEmitHelper.ratioArrayClass(ctx)).ior().aload(temp);
+		ctx.body.instanceOf(ctx.doubleClass).ior();
 		JvmEmitHelper.emitBoolFromInt(ctx);
 	}
 
@@ -170,9 +168,9 @@ final class JvmComplexCompiler {
 			// (.todo/757).
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			emitNoHolderJump(ctx, className, notHolder);
-			ctx.body.aload(temp).instanceOf(complexClass(ctx).entry()).ifeq(notHolder);
-			ctx.body.aload(temp).checkcast(complexClass(ctx).entry());
-			ctx.body.getfield(realField(ctx).entry());
+			ctx.body.aload(temp).instanceOf(complexClass(ctx)).ifeq(notHolder);
+			ctx.body.aload(temp).checkcast(complexClass(ctx));
+			ctx.body.getfield(realField(ctx));
 			MethodCode.Label donePos = ctx.body.newLabel();
 			ctx.body.goto_(donePos);
 			ctx.body.labelBinding(notHolder);
@@ -195,7 +193,7 @@ final class JvmComplexCompiler {
 		// Not a holder: the _dbl funnel validates (signalling NUMBER operand-type report
 		// for a non-real, like the interpreter's requireReal) and the value
 		// itself is the answer.
-		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
+		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL));
 		ctx.body.pop();
 	}
 
@@ -215,9 +213,9 @@ final class JvmComplexCompiler {
 			// (.todo/757).
 			MethodCode.Label notHolder = ctx.body.newLabel();
 			emitNoHolderJump(ctx, className, notHolder);
-			ctx.body.aload(temp).instanceOf(complexClass(ctx).entry()).ifeq(notHolder);
-			ctx.body.aload(temp).checkcast(complexClass(ctx).entry());
-			ctx.body.getfield(imagField(ctx).entry());
+			ctx.body.aload(temp).instanceOf(complexClass(ctx)).ifeq(notHolder);
+			ctx.body.aload(temp).checkcast(complexClass(ctx));
+			ctx.body.getfield(imagField(ctx));
 			MethodCode.Label donePos = ctx.body.newLabel();
 			ctx.body.goto_(donePos);
 			ctx.body.labelBinding(notHolder);
@@ -233,7 +231,7 @@ final class JvmComplexCompiler {
 
 	/** The imagpart answer for a real: (* 0 x) for a float, else int zero. */
 	private static void emitZeroForReal(JvmLispCompiler.Ctx ctx, int temp) {
-		ctx.body.aload(temp).instanceOf(ctx.doubleClass.entry());
+		ctx.body.aload(temp).instanceOf(ctx.doubleClass);
 		MethodCode.Label ifNotDoublePos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotDoublePos);
 		// CLHS: (imagpart x) of a real IS (* 0 x) -- multiply the unboxed value
@@ -246,7 +244,7 @@ final class JvmComplexCompiler {
 		MethodCode.Label done2Pos = ctx.body.newLabel();
 		ctx.body.goto_(done2Pos);
 		ctx.body.labelBinding(ifNotDoublePos);
-		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
+		ctx.body.aload(temp).dup().invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL));
 		ctx.body.pop().pop();
 		JvmEmitHelper.compileLong(0, ctx);
 		ctx.body.labelBinding(done2Pos);
@@ -257,7 +255,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CONJUGATE).entry());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CONJUGATE));
 	}
 
 	/** Compiles {@code (phase x)}. */
@@ -265,7 +263,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CPHASE).entry());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.CPHASE));
 	}
 
 	/**
@@ -276,7 +274,7 @@ final class JvmComplexCompiler {
 		List<LispVal> args = cons.toList();
 		requireArity(cons, 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.SQRT).entry());
+		ctx.body.invokestatic(complexOp(ctx, className, JvmComplexRuntimeBuilder.SQRT));
 	}
 
 	private static void requireArity(LispCons cons, int arity) {
@@ -287,14 +285,12 @@ final class JvmComplexCompiler {
 		}
 	}
 
-	private static FieldrefConstant realField(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addFieldref(complexClass(ctx),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("real"), ctx.cp.addUtf8("Ljava/lang/Object;")));
+	private static FieldRefEntry realField(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.fieldRef(complexClass(ctx), "real", "Ljava/lang/Object;");
 	}
 
-	private static FieldrefConstant imagField(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addFieldref(complexClass(ctx),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("imag"), ctx.cp.addUtf8("Ljava/lang/Object;")));
+	private static FieldRefEntry imagField(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.fieldRef(complexClass(ctx), "imag", "Ljava/lang/Object;");
 	}
 
 }

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -8,8 +9,6 @@ import java.util.Objects;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the {@code ffi:} verbs ({@code ffi:open}, {@code ffi:symbol},
@@ -44,14 +43,14 @@ final class JvmFfiInteropCompiler {
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> ops = ctx.ffiOps;
+		Map<String, MethodRefEntry> ops = ctx.ffiOps;
 		if (ops == null) {
 			throw new IllegalStateException("ffi runtime was not emitted");
 		}
 		List<LispVal> args = cons.toList();
 		String spelled = "ffi:" + member.toLowerCase(Locale.ROOT);
 		// Make sure the bridge holds the program's _apply before any verb runs.
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 		switch (member) {
 			case LispNames.FFI_OPEN -> {
 				requireArity(args.size() <= 2, "ffi:open expects at most 1 argument, got " + (args.size() - 1));
@@ -135,7 +134,7 @@ final class JvmFfiInteropCompiler {
 	/** Evaluates {@code args[from..]} into a fresh {@code Object[]} left on the stack. */
 	private static void compileRestArray(List<LispVal> args, int from, JvmLispCompiler.Ctx ctx, String className) {
 		JvmEmitHelper.emitIntConst(ctx, args.size() - from);
-		ctx.body.anewarray(ctx.objectClass.entry());
+		ctx.body.anewarray(ctx.objectClass);
 		for (int i = from; i < args.size(); i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i - from);
@@ -144,8 +143,8 @@ final class JvmFfiInteropCompiler {
 		}
 	}
 
-	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String key) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)).entry());
+	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String key) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(key)));
 	}
 
 }

@@ -3,15 +3,15 @@ package am.ik.rontolisp.codegen.jvm;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -104,8 +104,8 @@ final class JvmFfiRuntimeBuilder {
 	 * {@code init}, one per verb, {@value #PRINT}). The class files that travel beside
 	 * the program are keyed by their paths within an output tree.
 	 */
-	record FfiRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
-			Utf8Constant initedFieldDesc, FieldrefConstant initedField, Map<String, MethodrefConstant> ops,
+	record FfiRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
+			Utf8Entry initedFieldDesc, FieldRefEntry initedField, Map<String, MethodRefEntry> ops,
 			Map<String, byte[]> classFiles) {
 	}
 
@@ -145,7 +145,7 @@ final class JvmFfiRuntimeBuilder {
 	 * named after it and live in its package (their members are package-private)
 	 * @return the runtime pieces
 	 */
-	static FfiRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+	static FfiRuntime build(ConstantPool cp, ClassEntry thisClass, String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
 		String handleName = handleName(programInternalName);
 		String ffiPrefix = ffiPrefix(programInternalName);
@@ -159,63 +159,51 @@ final class JvmFfiRuntimeBuilder {
 		classFiles.put(bridgeName + ".class",
 				rename(loadResource(TEMPLATE_INTERNAL_NAME + ".class"), bridgeName, handleName, ffiPrefix));
 
-		Utf8Constant initedFieldName = cp.addUtf8("_ffiInited");
-		Utf8Constant initedFieldDesc = cp.addUtf8("I");
-		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
+		Utf8Entry initedFieldName = cp.utf8Entry("_ffiInited");
+		Utf8Entry initedFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry initedField = cp.fieldRef(thisClass, initedFieldName, initedFieldDesc);
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		MethodrefConstant bind = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
+		ClassEntry bridgeClass = cp.classEntry(bridgeName);
+		MethodRefEntry bind = cp.methodRef(bridgeClass, "bind", "(Ljava/lang/Class;)V");
 		String oneArgDesc = "(Ljava/lang/Object;)Ljava/lang/Object;";
 		String twoArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String threeArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String fourArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)"
 				+ "Ljava/lang/Object;";
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
-		Utf8Constant initDesc = cp.addUtf8("()V");
-		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
-		ops.put("open", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiOpen"), cp.addUtf8(oneArgDesc))));
-		ops.put("symbol",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiSymbol"), cp.addUtf8(twoArgDesc))));
-		ops.put("call", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiCall"), cp.addUtf8(
-				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"))));
-		ops.put("%apply-call",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiApplyCall"), cp.addUtf8(fourArgDesc))));
-		ops.put("callback",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiCallback"), cp.addUtf8(threeArgDesc))));
-		ops.put("alloc",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiAlloc"), cp.addUtf8(oneArgDesc))));
-		ops.put("free", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiFree"), cp.addUtf8(oneArgDesc))));
-		ops.put("peek",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiPeek"), cp.addUtf8(threeArgDesc))));
-		ops.put("poke",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiPoke"), cp.addUtf8(fourArgDesc))));
-		ops.put("size", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiSize"), cp.addUtf8(oneArgDesc))));
-		ops.put("align",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiAlign"), cp.addUtf8(oneArgDesc))));
-		ops.put("pointerp",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiPointerp"), cp.addUtf8(oneArgDesc))));
-		ops.put("address",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("ffiAddress"), cp.addUtf8(oneArgDesc))));
-		ops.put("errno", cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("ffiErrno"), cp.addUtf8("()Ljava/lang/Object;"))));
-		ops.put(PRINT, cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("ffiPrint"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))));
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		Utf8Entry initName = cp.utf8Entry(INIT_METHOD);
+		Utf8Entry initDesc = cp.utf8Entry("()V");
+		ops.put("init", cp.methodRef(thisClass, initName, initDesc));
+		ops.put("open", cp.methodRef(bridgeClass, "ffiOpen", oneArgDesc));
+		ops.put("symbol", cp.methodRef(bridgeClass, "ffiSymbol", twoArgDesc));
+		ops.put("call", cp.methodRef(bridgeClass, "ffiCall",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"));
+		ops.put("%apply-call", cp.methodRef(bridgeClass, "ffiApplyCall", fourArgDesc));
+		ops.put("callback", cp.methodRef(bridgeClass, "ffiCallback", threeArgDesc));
+		ops.put("alloc", cp.methodRef(bridgeClass, "ffiAlloc", oneArgDesc));
+		ops.put("free", cp.methodRef(bridgeClass, "ffiFree", oneArgDesc));
+		ops.put("peek", cp.methodRef(bridgeClass, "ffiPeek", threeArgDesc));
+		ops.put("poke", cp.methodRef(bridgeClass, "ffiPoke", fourArgDesc));
+		ops.put("size", cp.methodRef(bridgeClass, "ffiSize", oneArgDesc));
+		ops.put("align", cp.methodRef(bridgeClass, "ffiAlign", oneArgDesc));
+		ops.put("pointerp", cp.methodRef(bridgeClass, "ffiPointerp", oneArgDesc));
+		ops.put("address", cp.methodRef(bridgeClass, "ffiAddress", oneArgDesc));
+		ops.put("errno", cp.methodRef(bridgeClass, "ffiErrno", "()Ljava/lang/Object;"));
+		ops.put(PRINT, cp.methodRef(bridgeClass, "ffiPrint", "(Ljava/lang/Object;)Ljava/lang/String;"));
 
 		// --- _ffiInit body ---------------------------------------------------------
 		// if (_ffiInited != 0) return;
 		MethodCode code = new MethodCode();
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label guard = code.newLabel();
 		code.ifne(guard);
 		// <Program>$FfiBridge.bind(<Program>.class) -- the bridge loads from the
 		// program's own class loader like any other class beside it.
-		code.ldc(thisClass.entry());
-		code.invokestatic(bind.methodRefEntry());
+		code.ldc(thisClass);
+		code.invokestatic(bind);
 		// _ffiInited = 1
 		code.iconst_1();
-		code.putstatic(initedField.entry());
+		code.putstatic(initedField);
 		code.labelBinding(guard);
 		code.return_();
 

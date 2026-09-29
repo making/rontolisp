@@ -1,12 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import org.jspecify.annotations.Nullable;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.FetchResponseShape;
@@ -54,7 +55,7 @@ final class JvmFetchRuntimeBuilder {
 	}
 
 	/** A ready-to-emit method body. */
-	record FetchMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record FetchMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -74,8 +75,8 @@ final class JvmFetchRuntimeBuilder {
 	 * @param strvRef the program's {@code _strv}, or null without the array runtime
 	 * @return the method body
 	 */
-	static FetchRuntime build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
+	static FetchRuntime build(ConstantPool cp, ClassEntry objectArrayClass, ClassEntry stringClass,
+			MethodRefEntry stringLength, MethodRefEntry stringSubstring, @Nullable MethodRefEntry strvRef) {
 		// The transport builds the response plist in its own key order; the shape every
 		// backend derives from the http-plist WIT record must still be that order, or the
 		// compile fails here rather than a key going missing at run time.
@@ -88,34 +89,29 @@ final class JvmFetchRuntimeBuilder {
 					+ RontoFetch.RESPONSE_KEYWORDS + ", but the response shape is " + keywords);
 		}
 		// --- the transport (runtime/RontoFetch, which travels with the class) ---
-		ClassConstant fetchClass = cp.addClass(cp.addUtf8(TRANSPORT_CLASS));
-		MethodrefConstant fetchStart = cp.addMethodref(fetchClass,
-				cp.addNameAndType(cp.addUtf8("start"), cp.addUtf8(TRANSPORT_START_DESC)));
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		MethodrefConstant arrayListInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant arrayListAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		ClassEntry fetchClass = cp.classEntry(TRANSPORT_CLASS);
+		MethodRefEntry fetchStart = cp.methodRef(fetchClass, "start", TRANSPORT_START_DESC);
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		MethodRefEntry arrayListInit = cp.methodRef(arrayListClass, "<init>", "()V");
+		MethodRefEntry arrayListAdd = cp.methodRef(arrayListClass, "add", "(Ljava/lang/Object;)Z");
 
-		MethodrefConstant stringEqualsIgnoreCase = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("equalsIgnoreCase"), cp.addUtf8("(Ljava/lang/String;)Z")));
+		MethodRefEntry stringEqualsIgnoreCase = cp.methodRef(stringClass, "equalsIgnoreCase", "(Ljava/lang/String;)Z");
 
-		ClassConstant runtimeExceptionClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry runtimeExceptionClass = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry runtimeExceptionInit = cp.methodRef(runtimeExceptionClass, "<init>", "(Ljava/lang/String;)V");
 
-		ConstantPool.StringConstant userAgentValue = cp.addString(FetchResponseShape.defaultUserAgent());
+		StringEntry userAgentValue = cp.stringEntry(FetchResponseShape.defaultUserAgent());
 
-		ConstantPool.StringConstant methodKey = cp.addString(":method");
-		ConstantPool.StringConstant headersKey = cp.addString(":headers");
-		ConstantPool.StringConstant bodyKey = cp.addString(":body");
-		ConstantPool.StringConstant unsupportedMsg = cp.addString("fetch: unsupported method");
+		StringEntry methodKey = cp.stringEntry(":method");
+		StringEntry headersKey = cp.stringEntry(":headers");
+		StringEntry bodyKey = cp.stringEntry(":body");
+		StringEntry unsupportedMsg = cp.stringEntry("fetch: unsupported method");
 		// The supported HTTP methods, in canonical (upper-case) form. The request is sent
 		// with the canonical spelling regardless of the case the caller used.
 		String[] methods = { "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH" };
-		ConstantPool.StringConstant[] methodConsts = new ConstantPool.StringConstant[methods.length];
+		StringEntry[] methodConsts = new StringEntry[methods.length];
 		for (int i = 0; i < methods.length; i++) {
-			methodConsts[i] = cp.addString(methods[i]);
+			methodConsts[i] = cp.stringEntry(methods[i]);
 		}
 
 		// Local slots: 0 url, 1 options, 3 cursor, 9 request headers, 10 method value,
@@ -138,29 +134,29 @@ final class JvmFetchRuntimeBuilder {
 		a.aload(10);
 		MethodCode.Label methodGiven = a.newLabel();
 		a.ifnonnull(methodGiven);
-		a.ldc(methodConsts[0].entry()); // "GET"
+		a.ldc(methodConsts[0]); // "GET"
 		a.astore(16);
 		a.goto_(methodDone);
 		a.labelBinding(methodGiven);
 		a.aload(10);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [methodStr]
 		a.astore(17);
-		for (ConstantPool.StringConstant m : methodConsts) {
+		for (StringEntry m : methodConsts) {
 			MethodCode.Label next = a.newLabel();
 			a.aload(17);
-			a.ldc(m.entry());
-			a.invokevirtual(stringEqualsIgnoreCase.methodRefEntry()); // [bool]
+			a.ldc(m);
+			a.invokevirtual(stringEqualsIgnoreCase); // [bool]
 			a.ifeq(next);
-			a.ldc(m.entry());
+			a.ldc(m);
 			a.astore(16);
 			a.goto_(methodDone);
 			a.labelBinding(next);
 		}
 		// none matched: throw new RuntimeException("fetch: unsupported method")
-		a.new_(runtimeExceptionClass.entry());
+		a.new_(runtimeExceptionClass);
 		a.dup();
-		a.ldc(unsupportedMsg.entry());
-		a.invokespecial(runtimeExceptionInit.entry());
+		a.ldc(unsupportedMsg);
+		a.invokespecial(runtimeExceptionInit);
 		a.athrow();
 		a.labelBinding(methodDone);
 
@@ -177,9 +173,9 @@ final class JvmFetchRuntimeBuilder {
 		a.labelBinding(bodyDone);
 
 		// --- the request-header alist (slot 9) flattened into name, value, ... (slot 19)
-		a.new_(arrayListClass.entry());
+		a.new_(arrayListClass);
 		a.dup();
-		a.invokespecial(arrayListInit.entry());
+		a.invokespecial(arrayListInit);
 		a.astore(19);
 		a.aload(9);
 		a.astore(3); // cursor = request headers
@@ -190,10 +186,10 @@ final class JvmFetchRuntimeBuilder {
 		a.ifnull(hEnd); // while cursor != null
 		// pair = ((Object[]) cursor)[0]
 		a.aload(3);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.astore(20);
 		for (int part = 0; part < 2; part++) {
 			a.aload(19);
@@ -202,12 +198,12 @@ final class JvmFetchRuntimeBuilder {
 			a.aaload();
 			stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef); // [list,
 																						// text]
-			a.invokevirtual(arrayListAdd.methodRefEntry());
+			a.invokevirtual(arrayListAdd);
 			a.pop();
 		}
 		// cursor = ((Object[]) cursor)[1]
 		a.aload(3);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
 		a.astore(3);
@@ -220,12 +216,12 @@ final class JvmFetchRuntimeBuilder {
 		a.aload(16);
 		a.aload(19);
 		a.aload(18);
-		a.ldc(userAgentValue.entry());
-		a.invokestatic(fetchStart.entry());
+		a.ldc(userAgentValue);
+		a.invokestatic(fetchStart);
 		a.areturn();
 
-		Utf8Constant nameUtf8 = cp.addUtf8(METHOD_NAME);
-		Utf8Constant descUtf8 = cp.addUtf8(METHOD_DESC);
+		Utf8Entry nameUtf8 = cp.utf8Entry(METHOD_NAME);
+		Utf8Entry descUtf8 = cp.utf8Entry(METHOD_DESC);
 		FetchMethod fetch = new FetchMethod(nameUtf8, descUtf8, a);
 
 		return new FetchRuntime(fetch);
@@ -237,8 +233,8 @@ final class JvmFetchRuntimeBuilder {
 	 * against {@code key}; stores the matching value (or null) into {@code resultSlot},
 	 * using {@code cursorSlot} as scratch.
 	 */
-	private static void emitPlistGet(MethodCode a, ConstantPool.StringConstant key, int cursorSlot, int resultSlot,
-			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant stringEquals) {
+	private static void emitPlistGet(MethodCode a, StringEntry key, int cursorSlot, int resultSlot,
+			ClassEntry objectArrayClass, ClassEntry stringClass, MethodRefEntry stringEquals) {
 		a.aload(1);
 		a.astore(cursorSlot); // cursor = options
 		a.aconst_null();
@@ -250,20 +246,20 @@ final class JvmFetchRuntimeBuilder {
 		a.ifnull(end);
 		// key = car(cursor)
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(0);
 		a.aaload();
-		a.checkcast(stringClass.entry());
-		a.ldc(key.entry());
-		a.invokevirtual(stringEquals.methodRefEntry()); // [bool]
+		a.checkcast(stringClass);
+		a.ldc(key);
+		a.invokevirtual(stringEquals); // [bool]
 		MethodCode.Label notMatch = a.newLabel();
 		a.ifeq(notMatch);
 		// value = car(cdr(cursor))
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(0);
 		a.aaload();
 		a.astore(resultSlot);
@@ -271,10 +267,10 @@ final class JvmFetchRuntimeBuilder {
 		a.labelBinding(notMatch);
 		// cursor = cdr(cdr(cursor))
 		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
 		a.astore(cursorSlot);
@@ -283,8 +279,8 @@ final class JvmFetchRuntimeBuilder {
 	}
 
 	/** Loads local {@code slot} (a quoted runtime String) and strips the quotes. */
-	private static void stripQuotes(MethodCode a, int slot, ClassConstant stringClass, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
+	private static void stripQuotes(MethodCode a, int slot, ClassEntry stringClass, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, @Nullable MethodRefEntry strvRef) {
 		a.aload(slot);
 		stripQuotesValue(a, stringClass, stringLength, stringSubstring, strvRef);
 	}
@@ -296,19 +292,19 @@ final class JvmFetchRuntimeBuilder {
 	 * shape builds its upstream URL with {@code concatenate}); null without the array
 	 * runtime, where no character vector can exist.
 	 */
-	private static void stripQuotesValue(MethodCode a, ClassConstant stringClass, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, @Nullable MethodrefConstant strvRef) {
+	private static void stripQuotesValue(MethodCode a, ClassEntry stringClass, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, @Nullable MethodRefEntry strvRef) {
 		if (strvRef != null) {
-			a.invokestatic(strvRef.entry());
+			a.invokestatic(strvRef);
 		}
-		a.checkcast(stringClass.entry()); // [s]
+		a.checkcast(stringClass); // [s]
 		a.dup(); // [s, s]
-		a.invokevirtual(stringLength.methodRefEntry()); // [s, len]
+		a.invokevirtual(stringLength); // [s, len]
 		a.loadConstant(1);
 		a.isub(); // [s, len-1]
 		a.loadConstant(1);
 		a.swap(); // [s, 1, len-1]
-		a.invokevirtual(stringSubstring.methodRefEntry()); // [inner]
+		a.invokevirtual(stringSubstring); // [inner]
 	}
 
 }

@@ -80,7 +80,7 @@ final class JvmPhysicalArgs {
 		int restSlot = ctx.allocTemp();
 		ctx.body.aconst_null().astore(restSlot);
 		for (int k = extraSlots.size() - 1; k >= 0; k--) {
-			ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+			ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
 			ctx.body.aload(extraSlots.get(k)).aastore().dup().iconst_1().aload(restSlot).aastore();
 			ctx.body.astore(restSlot);
 		}
@@ -128,7 +128,7 @@ final class JvmPhysicalArgs {
 		ctx.body.dup();
 		MethodCode.Label ifNullPos = ctx.body.newLabel();
 		ctx.body.ifnull(ifNullPos);
-		ctx.body.checkcast(ctx.objectArrayClass.entry());
+		ctx.body.checkcast(ctx.objectArrayClass);
 		ctx.body.loadConstant(field);
 		ctx.body.aaload();
 		ctx.body.labelBinding(ifNullPos);

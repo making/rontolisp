@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.OperandTypes;
@@ -34,7 +34,7 @@ import am.ik.rontolisp.compiler.OperandTypes;
 final class JvmNthcdrRuntimeBuilder {
 
 	/** An nthcdr runtime method body ready to be emitted into the generated class. */
-	record NthcdrMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record NthcdrMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	static final String METHOD = "_nthcdr";
@@ -78,7 +78,7 @@ final class JvmNthcdrRuntimeBuilder {
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		a.athrow();
 
-		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), a);
+		return new NthcdrMethod(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), a);
 	}
 
 }

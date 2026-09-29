@@ -4,6 +4,7 @@ import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -15,9 +16,7 @@ import java.util.Set;
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.JvmClassSplitter;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaImplementation;
@@ -246,8 +245,8 @@ final class JvmJavaImplementations {
 		}
 		String name = CALLBACK_PREFIX + this.callbacks.size();
 		this.callbacks.put(key, name);
-		this.methods
-			.add(buildCallback(proxy, iface, slot, this.cp.addUtf8(name), this.cp.addUtf8(callbackDescriptor(slot))));
+		this.methods.add(buildCallback(proxy, iface, slot, this.cp.utf8Entry(name),
+				this.cp.utf8Entry(callbackDescriptor(slot))));
 		return name;
 	}
 
@@ -268,7 +267,7 @@ final class JvmJavaImplementations {
 	// leaves it thrown -- the function's exit or condition, that error -- is recorded on
 	// its way out to the Java caller (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, JavaType iface, JavaImplementation.Slot slot,
-			Utf8Constant name, Utf8Constant desc) {
+			Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label start = a.newBoundLabel();
 		ClassEntry objectClass = cls("java/lang/Object");
@@ -372,27 +371,27 @@ final class JvmJavaImplementations {
 	// functions field and the constructor every generated class shares.
 	private static ClassDefinition writeBase(String internalName) {
 		ConstantPool pool = new ConstantPool();
-		ClassConstant selfClass = pool.addClass(pool.addUtf8(internalName));
-		ClassConstant objectClass = pool.addClass(pool.addUtf8("java/lang/Object"));
+		ClassEntry selfClass = pool.classEntry(internalName);
+		ClassEntry objectClass = pool.classEntry("java/lang/Object");
 		ClassDefinition.Builder definition = ClassDefinition.builder(pool,
 				AccessFlag.ACC_ABSTRACT | AccessFlag.ACC_SUPER | AccessFlag.ACC_SYNTHETIC, selfClass, objectClass,
-				pool.addUtf8("Code"));
+				pool.utf8Entry("Code"));
 		// A Proxy class's supertypes, less Proxy itself: an argument of this kind costs
 		// what the interpreter's Proxy object costs (compiler/JavaImplementationType).
-		definition.addInterface(pool.addClass(pool.addUtf8("java/io/Serializable")));
-		Utf8Constant fnsName = pool.addUtf8("fns");
-		Utf8Constant fnsDesc = pool.addUtf8("[Ljava/lang/Object;");
+		definition.addInterface(pool.classEntry("java/io/Serializable"));
+		Utf8Entry fnsName = pool.utf8Entry("fns");
+		Utf8Entry fnsDesc = pool.utf8Entry("[Ljava/lang/Object;");
 		definition.addField(AccessFlag.ACC_FINAL, fnsName, fnsDesc);
 		// <init>(Object[] fns) { super(); this.fns = fns; }
-		Utf8Constant initName = pool.addUtf8("<init>");
+		Utf8Entry initName = pool.utf8Entry("<init>");
 		MethodCode init = new MethodCode();
 		init.aload(0);
-		init.invokespecial(pool.methodRef(objectClass.entry(), "<init>", "()V"));
+		init.invokespecial(pool.methodRef(objectClass, "<init>", "()V"));
 		init.aload(0);
 		init.aload(1);
-		init.putfield(pool.fieldRef(selfClass.entry(), "fns", "[Ljava/lang/Object;"));
+		init.putfield(pool.fieldRef(selfClass, "fns", "[Ljava/lang/Object;"));
 		init.return_();
-		definition.addMethod(0, initName, pool.addUtf8("([Ljava/lang/Object;)V"), init);
+		definition.addMethod(0, initName, pool.utf8Entry("([Ljava/lang/Object;)V"), init);
 		return definition.build();
 	}
 
@@ -400,18 +399,18 @@ final class JvmJavaImplementations {
 		JavaImplementation implementation = shell.implementation();
 		JavaType iface = Objects.requireNonNull(implementation.iface());
 		ConstantPool pool = new ConstantPool();
-		ClassConstant selfClass = pool.addClass(pool.addUtf8(shell.internalName()));
-		ClassConstant baseClass = pool.addClass(pool.addUtf8(this.programInternalName + "$Implementation"));
+		ClassEntry selfClass = pool.classEntry(shell.internalName());
+		ClassEntry baseClass = pool.classEntry(this.programInternalName + "$Implementation");
 		ClassDefinition.Builder definition = ClassDefinition.builder(pool,
 				AccessFlag.ACC_FINAL | AccessFlag.ACC_SUPER | AccessFlag.ACC_SYNTHETIC, selfClass, baseClass,
-				pool.addUtf8("Code"));
-		definition.addInterface(pool.addClass(pool.addUtf8(JvmJavaDirectSites.internalName(iface))));
-		ClassEntry self = selfClass.entry();
-		ClassEntry base = baseClass.entry();
+				pool.utf8Entry("Code"));
+		definition.addInterface(pool.classEntry(JvmJavaDirectSites.internalName(iface)));
+		ClassEntry self = selfClass;
+		ClassEntry base = baseClass;
 		FieldRefEntry fns = pool.fieldRef(base, "fns", "[Ljava/lang/Object;");
 		// private <init>(Object[] fns) { super(fns); }
-		Utf8Constant initName = pool.addUtf8("<init>");
-		Utf8Constant initDesc = pool.addUtf8("([Ljava/lang/Object;)V");
+		Utf8Entry initName = pool.utf8Entry("<init>");
+		Utf8Entry initDesc = pool.utf8Entry("([Ljava/lang/Object;)V");
 		MethodCode init = new MethodCode();
 		init.aload(0);
 		init.aload(1);
@@ -425,7 +424,7 @@ final class JvmJavaImplementations {
 		factory.aload(0);
 		factory.invokespecial(pool.methodRef(self, "<init>", "([Ljava/lang/Object;)V"));
 		factory.areturn();
-		definition.addMethod(AccessFlag.ACC_STATIC, pool.addUtf8(FACTORY), pool.addUtf8(FACTORY_DESC), factory);
+		definition.addMethod(AccessFlag.ACC_STATIC, pool.utf8Entry(FACTORY), pool.utf8Entry(FACTORY_DESC), factory);
 		ClassEntry program = pool.classEntry(this.programInternalName);
 		List<JavaImplementation.Slot> slots = implementation.slots();
 		for (int i = 0; i < slots.size(); i++) {
@@ -435,8 +434,8 @@ final class JvmJavaImplementations {
 			MethodCode text = new MethodCode();
 			text.ldc(pool.stringEntry(implementation.defaultToString()));
 			text.areturn();
-			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8("toString"), pool.addUtf8("()Ljava/lang/String;"),
-					text);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry("toString"),
+					pool.utf8Entry("()Ljava/lang/String;"), text);
 		}
 		return definition.build();
 	}
@@ -458,7 +457,8 @@ final class JvmJavaImplementations {
 			a.ldc(pool.stringEntry(JavaImplementation.noImplementation(iface.name(), slot.key())));
 			a.invokespecial(pool.methodRef(unsupported, "<init>", "(Ljava/lang/String;)V"));
 			a.athrow();
-			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()), a);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry(slot.name()), pool.utf8Entry(desc.toString()),
+					a);
 			return;
 		}
 		a.aload(0);
@@ -480,7 +480,7 @@ final class JvmJavaImplementations {
 		}
 		a.invokestatic(pool.methodRef(program, callback, callbackDescriptor(slot)));
 		a.return_(returnKind(slot.returnType()));
-		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()), a);
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.utf8Entry(slot.name()), pool.utf8Entry(desc.toString()), a);
 	}
 
 	private static int width(JavaType type) {

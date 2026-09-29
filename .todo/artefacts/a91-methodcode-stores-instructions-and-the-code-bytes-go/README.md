@@ -1,9 +1,9 @@
-# `MethodCode` stores instruction records: the tools
+# `MethodCode` stores instruction records, the pool wrappers go: the tools
 
-The recipe is `.kb/jvm-method-size-limits.md`, "The records". Run from the repository with
-`PYTHONDONTWRITEBYTECODE=1`; the jars and the byte comparison are a87's `mkjar.sh` and a85's
-`runchunks.sh` / `cmpcli.sh` / `Cmp.java` (with `ROOT` and `WORK` set), plus the gate programs of
-a86 and a88.
+The recipe is `.kb/jvm-method-size-limits.md`, "The records" and "The pool wrappers go". Run from
+the repository with `PYTHONDONTWRITEBYTECODE=1`; the jars and the byte comparison are a87's
+`mkjar.sh` and a85's `runchunks.sh` / `cmpcli.sh` / `Cmp.java` (with `ROOT` and `WORK` set), plus
+the gate programs of a86 and a88.
 
 Converting:
 
@@ -12,6 +12,16 @@ Converting:
 - `addto.py [--list] FILE...` -- `code.addTo(definition, access, name, desc)` on a `MethodCode`
   becomes `definition.addMethod(access, name, desc, code)`; a compile context's own `addTo`
   (the receivers in its `CTX` set) stays.
+- `pool2.py FILE... | @LIST` -- every `ConstantPool` wrapper to the entry it wraps and every
+  `add*` facade to the entry facade, in the same minting order (a86's `pool.py` plus Utf8 and
+  NameAndType); a call chain split over lines is followed. Leave out the wasm compilers: their
+  string tables have an `addString` of their own.
+- `unentry2.py JC_LOG` -- then removes each `.entry()` / `.methodRefEntry()` /
+  `.interfaceMethodRefEntry()` javac reports missing (a87's `mkjar.sh` writes the main log; the
+  test sources need a javac run of their own). Run it and javac in turns.
+- `refold.py FILE... | @LIST` (with `PYTHONPATH` at this directory) -- a reference `pool2.py`
+  left spelled out, `cp.entries().methodRefEntry(c, cp.entries().nameAndTypeEntry(...))`, back
+  to `cp.methodRef(c, name, desc)`.
 
 Verifying:
 
@@ -22,5 +32,6 @@ Verifying:
   frames, lines, pool), its method families side by side (`_invoke_v$k` segments, `_top$k`
   chunks), and what its frames take.
 
-Expected differences with the patch: none (a failure message may differ in a class loader's hash).
-Without it: the budgets' cuts ("The records").
+Expected differences: none under `legacy.py` for the records, none at all for the pool migration
+(a failure message may differ in a class loader's hash). The records without the patch: the
+budgets' cuts ("The records").

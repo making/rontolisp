@@ -3,9 +3,10 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -32,8 +33,8 @@ final class JvmSecureRandomRuntimeBuilder {
 	static final String DESC = "()Ljava/lang/Object;";
 
 	/** The emitted helper: its name/descriptor plus the body. */
-	record SecureRandomRuntime(Utf8Constant name, Utf8Constant desc, MethodCode code, Utf8Constant fieldName,
-			Utf8Constant fieldDesc) {
+	record SecureRandomRuntime(Utf8Entry name, Utf8Entry desc, MethodCode code, Utf8Entry fieldName,
+			Utf8Entry fieldDesc) {
 	}
 
 	private JvmSecureRandomRuntimeBuilder() {
@@ -44,9 +45,9 @@ final class JvmSecureRandomRuntimeBuilder {
 	}
 
 	static SecureRandomRuntime build(ConstantPool cp, ClassEntry thisClass, MethodRefEntry longValueOf) {
-		Utf8Constant fieldName = cp.addUtf8(FIELD);
-		Utf8Constant fieldDesc = cp.addUtf8(FIELD_DESC);
-		FieldRefEntry field = cp.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
+		Utf8Entry fieldName = cp.utf8Entry(FIELD);
+		Utf8Entry fieldDesc = cp.utf8Entry(FIELD_DESC);
+		FieldRefEntry field = cp.fieldRef(thisClass, fieldName, fieldDesc);
 		ClassEntry secureRandomClass = cp.classEntry("java/security/SecureRandom");
 		MethodRefEntry init = cp.methodRef(secureRandomClass, "<init>", "()V");
 		MethodRefEntry nextInt = cp.methodRef(secureRandomClass, "nextInt", "(I)I");
@@ -67,7 +68,7 @@ final class JvmSecureRandomRuntimeBuilder {
 		code.i2l();
 		code.invokestatic(longValueOf);
 		code.areturn();
-		return new SecureRandomRuntime(cp.addUtf8(METHOD), cp.addUtf8(DESC), code, fieldName, fieldDesc);
+		return new SecureRandomRuntime(cp.utf8Entry(METHOD), cp.utf8Entry(DESC), code, fieldName, fieldDesc);
 	}
 
 }

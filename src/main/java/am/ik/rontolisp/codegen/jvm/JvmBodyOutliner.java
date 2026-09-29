@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -8,8 +10,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.TreeSet;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -89,7 +89,7 @@ final class JvmBodyOutliner {
 	}
 
 	/** An outlined continuation, ready for class assembly. */
-	record OutlinedBody(String name, Utf8Constant nameUtf8, Utf8Constant descUtf8, JvmLispCompiler.Ctx ctx) {
+	record OutlinedBody(String name, Utf8Entry nameUtf8, Utf8Entry descUtf8, JvmLispCompiler.Ctx ctx) {
 
 	}
 
@@ -234,9 +234,9 @@ final class JvmBodyOutliner {
 		}
 		desc.append("Ljava/lang/Object;".repeat(names.size())).append(")Ljava/lang/Object;");
 		String methodName = "_k$" + ctx.nextOutlinedBodyId[0]++;
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(methodName);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(desc.toString());
-		MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc.toString());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(methodName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
+		MethodRefEntry ref = JvmEmitHelper.selfMethod(ctx, className, methodName, desc.toString());
 		// The call: the live environment, in the continuation's parameter order.
 		if (hasEnv) {
 			ctx.body.aload(ctx.closureEnvSlot);
@@ -259,7 +259,7 @@ final class JvmBodyOutliner {
 				ctx.body.aload(java.util.Objects.requireNonNull(ctx.locals.get(name)));
 			}
 		}
-		ctx.body.invokestatic(ref.entry());
+		ctx.body.invokestatic(ref);
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
 		// The continuation is the same function, part way through: the uncaught report

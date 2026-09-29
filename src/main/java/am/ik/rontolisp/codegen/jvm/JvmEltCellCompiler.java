@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -21,10 +21,10 @@ final class JvmEltCellCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp.addNameAndType(
-				ctx.cp.addUtf8(JvmEltCellRuntimeBuilder.METHOD), ctx.cp.addUtf8(JvmEltCellRuntimeBuilder.DESC)));
-		ctx.body.invokestatic(ref.entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmEltCellRuntimeBuilder.METHOD,
+				JvmEltCellRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 }

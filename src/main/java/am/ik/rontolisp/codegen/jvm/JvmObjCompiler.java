@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -89,7 +89,7 @@ final class JvmObjCompiler {
 		requireGate(ctx, LispNames.OBJ_NEW);
 		List<LispVal> args = cons.toList();
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(1)));
-		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
+		FieldRefEntry lf = ctx.layoutPool.intern(ctx.cp, className, layout);
 		int slots = layout.capacity();
 		// capacity, not slotCount, in BOTH places: an instance IS its Object[] here, so a
 		// change-class into a wider class of the same chain can only keep the object
@@ -99,7 +99,7 @@ final class JvmObjCompiler {
 		// reader closure) is handed that cell as an ordinary trailing argument. Cells no
 		// argument reaches stay null (= nil).
 		JvmEmitHelper.emitIntConst(ctx, 1 + layout.capacity());
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().getstatic(lf);
 		ctx.body.aastore();
 		for (int i = 0; i < slots; i++) {
 			ctx.body.dup();
@@ -132,11 +132,11 @@ final class JvmObjCompiler {
 	 */
 	static void emitWrapStream(JvmLispCompiler.Ctx ctx, String className, String kind) {
 		requireGate(ctx, LispNames.OBJ_NEW);
-		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, LispLayout.STREAM);
+		FieldRefEntry lf = ctx.layoutPool.intern(ctx.cp, className, LispLayout.STREAM);
 		int handleSlot = ctx.allocTemp();
 		ctx.body.astore(handleSlot);
 		JvmEmitHelper.emitIntConst(ctx, 1 + LispLayout.STREAM.capacity());
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().getstatic(lf);
 		ctx.body.aastore().dup().iconst_1().aload(handleSlot).aastore().dup().iconst_2();
 		// Through the ordinary keyword compilation, so the KIND slot holds exactly what
 		// the makeTypeTest kind comparison reads back.
@@ -168,7 +168,7 @@ final class JvmObjCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (failure == null) {
-			ctx.body.checkcast(ctx.objectArrayClass.entry());
+			ctx.body.checkcast(ctx.objectArrayClass);
 			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 			ctx.body.aaload();
 			return;
@@ -176,7 +176,7 @@ final class JvmObjCompiler {
 		int objSlot = ctx.allocTemp();
 		ctx.body.astore(objSlot);
 		emitChecked(ctx, className, objSlot, failure, () -> {
-			ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry());
+			ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass);
 			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 			ctx.body.aaload();
 		});
@@ -199,9 +199,9 @@ final class JvmObjCompiler {
 		ctx.body.labelBinding(gotoEndPos);
 	}
 
-	private static MethodrefConstant arraysCopyOfMethod(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/Arrays")), ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("copyOf"), ctx.cp.addUtf8("([Ljava/lang/Object;I)[Ljava/lang/Object;")));
+	private static MethodRefEntry arraysCopyOfMethod(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.methodRef(ctx.cp.classEntry("java/util/Arrays"), "copyOf",
+				"([Ljava/lang/Object;I)[Ljava/lang/Object;");
 	}
 
 	/**
@@ -220,8 +220,8 @@ final class JvmObjCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).dup().arraylength();
-		ctx.body.invokestatic(arraysCopyOfMethod(ctx).entry());
+		ctx.body.checkcast(ctx.objectArrayClass).dup().arraylength();
+		ctx.body.invokestatic(arraysCopyOfMethod(ctx));
 	}
 
 	/**
@@ -234,9 +234,9 @@ final class JvmObjCompiler {
 		requireGate(ctx, LispNames.OBJ_BECOME);
 		List<LispVal> args = cons.toList();
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(2)));
-		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
+		FieldRefEntry lf = ctx.layoutPool.intern(ctx.cp, className, layout);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).dup().iconst_0().getstatic(lf.entry());
+		ctx.body.checkcast(ctx.objectArrayClass).dup().iconst_0().getstatic(lf);
 		ctx.body.aastore();
 	}
 
@@ -256,14 +256,14 @@ final class JvmObjCompiler {
 			int valSlot = ctx.allocTemp();
 			ctx.body.astore(valSlot);
 			emitChecked(ctx, className, objSlot, args.get(4), () -> {
-				ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry());
+				ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass);
 				JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 				ctx.body.aload(valSlot).aastore().aload(valSlot);
 			});
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.checkcast(ctx.objectArrayClass.entry());
+		ctx.body.checkcast(ctx.objectArrayClass);
 		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		// [arr, idx, v] -> [v, arr, idx, v]: keeps left-to-right evaluation without a
@@ -278,11 +278,11 @@ final class JvmObjCompiler {
 	 * jumps to {@code toFalse}.
 	 */
 	private static void emitInstanceGuard(JvmLispCompiler.Ctx ctx, int objSlot, int hdrSlot, MethodCode.Label toFalse) {
-		ctx.body.aload(objSlot).instanceOf(ctx.objectArrayClass.entry()).ifeq(toFalse);
-		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry()).arraylength().ifeq(toFalse);
-		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+		ctx.body.aload(objSlot).instanceOf(ctx.objectArrayClass).ifeq(toFalse);
+		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass).arraylength().ifeq(toFalse);
+		ctx.body.aload(objSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 		ctx.body.astore(hdrSlot).aload(hdrSlot);
-		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp).entry()).ifeq(toFalse);
+		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp)).ifeq(toFalse);
 	}
 
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
@@ -302,10 +302,10 @@ final class JvmObjCompiler {
 		for (int i = 2; i < args.size(); i++) {
 			// Compares the tag TEXT, not layout-array identity: an instance may be built
 			// by the runtime reader or the embedded eval as well as by %obj-new here.
-			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp));
 			ctx.body.iconst_0().aaload();
 			JvmEmitHelper.compileStringLiteral(literalTag(args.get(i)), ctx);
-			ctx.body.invokevirtual(ctx.objectEquals.methodRefEntry()).ifne(toTrue);
+			ctx.body.invokevirtual(ctx.objectEquals).ifne(toTrue);
 		}
 		MethodCode.Label gotoFalsePos = ctx.body.newLabel();
 		ctx.body.goto_(gotoFalsePos);
@@ -351,14 +351,14 @@ final class JvmObjCompiler {
 		int listSlot = ctx.allocTemp();
 		ctx.body.aconst_null().astore(listSlot);
 		int idxSlot = ctx.allocTemp();
-		ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+		ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp));
 		ctx.body.arraylength().iconst_3().isub().istore(idxSlot);
 		MethodCode.Label loopTop = ctx.body.newBoundLabel();
 		ctx.body.iload(idxSlot);
 		MethodCode.Label exitLoop = ctx.body.newLabel();
 		ctx.body.ifle(exitLoop);
-		ctx.body.iconst_2().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(objSlot);
-		ctx.body.checkcast(ctx.objectArrayClass.entry()).iload(idxSlot).aaload().aastore().dup();
+		ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0().aload(objSlot);
+		ctx.body.checkcast(ctx.objectArrayClass).iload(idxSlot).aaload().aastore().dup();
 		ctx.body.iconst_1().aload(listSlot).aastore().astore(listSlot);
 		// Through the typed layer: the byte emitter wrote iinc's slot in one byte, which
 		// past 255 named another local.
@@ -400,7 +400,7 @@ final class JvmObjCompiler {
 		MethodCode.Label toFalse = ctx.body.newLabel();
 		emitInstanceGuard(ctx, objSlot, hdrSlot, toFalse);
 		if (readTag) {
-			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp).entry());
+			ctx.body.aload(hdrSlot).checkcast(ctx.layoutPool.stringArrayClass(ctx.cp));
 			ctx.body.iconst_0().aaload();
 		}
 		else {

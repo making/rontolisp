@@ -3,9 +3,9 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 import org.jspecify.annotations.Nullable;
@@ -52,10 +52,10 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 	 * @param tlGet {@code ThreadLocal.get()}
 	 * @param tlSet {@code ThreadLocal.set(Object)}
 	 */
-	record PerThread(Utf8Constant threadLocalName, Utf8Constant threadLocalDesc, FieldRefEntry threadLocal,
-			Utf8Constant ownerName, Utf8Constant ownerDesc, FieldRefEntry owner, Utf8Constant getName,
-			Utf8Constant getDesc, MethodRefEntry get, Utf8Constant setName, Utf8Constant setDesc, MethodRefEntry set,
-			MethodRefEntry currentThread, MethodRefEntry tlGet, MethodRefEntry tlSet) {
+	record PerThread(Utf8Entry threadLocalName, Utf8Entry threadLocalDesc, FieldRefEntry threadLocal,
+			Utf8Entry ownerName, Utf8Entry ownerDesc, FieldRefEntry owner, Utf8Entry getName, Utf8Entry getDesc,
+			MethodRefEntry get, Utf8Entry setName, Utf8Entry setDesc, MethodRefEntry set, MethodRefEntry currentThread,
+			MethodRefEntry tlGet, MethodRefEntry tlSet) {
 
 		/** {@code _mvGet}: the owner's static field, or this thread's ThreadLocal. */
 		MethodCode getCode(FieldRefEntry field) {
@@ -103,22 +103,20 @@ record JvmMvChannel(FieldRefEntry field, JvmMvChannel.@Nullable PerThread perThr
 	static JvmMvChannel perThread(ConstantPool cp, ClassEntry thisClass, FieldRefEntry field) {
 		ClassEntry threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
 		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
-		Utf8Constant tlName = cp.addUtf8("_mvTl");
-		Utf8Constant tlDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
-		Utf8Constant ownerName = cp.addUtf8("_mvOwner");
-		Utf8Constant ownerDesc = cp.addUtf8("Ljava/lang/Thread;");
-		Utf8Constant getName = cp.addUtf8("_mvGet");
-		Utf8Constant getDesc = cp.addUtf8("()Ljava/lang/Object;");
-		Utf8Constant setName = cp.addUtf8("_mvSet");
-		Utf8Constant setDesc = cp.addUtf8("(Ljava/lang/Object;)V");
-		return new JvmMvChannel(field,
-				new PerThread(tlName, tlDesc, cp.fieldRef(thisClass, tlName.entry(), tlDesc.entry()), ownerName,
-						ownerDesc, cp.fieldRef(thisClass, ownerName.entry(), ownerDesc.entry()), getName, getDesc,
-						cp.methodRef(thisClass, getName.entry(), getDesc.entry()), setName, setDesc,
-						cp.methodRef(thisClass, setName.entry(), setDesc.entry()),
-						cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;"),
-						cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;"),
-						cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V")));
+		Utf8Entry tlName = cp.utf8Entry("_mvTl");
+		Utf8Entry tlDesc = cp.utf8Entry("Ljava/lang/ThreadLocal;");
+		Utf8Entry ownerName = cp.utf8Entry("_mvOwner");
+		Utf8Entry ownerDesc = cp.utf8Entry("Ljava/lang/Thread;");
+		Utf8Entry getName = cp.utf8Entry("_mvGet");
+		Utf8Entry getDesc = cp.utf8Entry("()Ljava/lang/Object;");
+		Utf8Entry setName = cp.utf8Entry("_mvSet");
+		Utf8Entry setDesc = cp.utf8Entry("(Ljava/lang/Object;)V");
+		return new JvmMvChannel(field, new PerThread(tlName, tlDesc, cp.fieldRef(thisClass, tlName, tlDesc), ownerName,
+				ownerDesc, cp.fieldRef(thisClass, ownerName, ownerDesc), getName, getDesc,
+				cp.methodRef(thisClass, getName, getDesc), setName, setDesc, cp.methodRef(thisClass, setName, setDesc),
+				cp.methodRef(threadClass, "currentThread", "()Ljava/lang/Thread;"),
+				cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;"),
+				cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V")));
 	}
 
 	/**

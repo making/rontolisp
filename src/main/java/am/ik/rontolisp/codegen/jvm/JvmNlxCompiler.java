@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 import java.util.Objects;
 
@@ -55,9 +57,8 @@ final class JvmNlxCompiler {
 
 	/** {@code (%nlx-tag)} -- a fresh unique identity object. */
 	static void compileTag(JvmLispCompiler.Ctx ctx) {
-		ConstantPool.MethodrefConstant objectCtor = ctx.cp.addMethodref(ctx.objectClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
-		ctx.body.new_(ctx.objectClass.entry()).dup().invokespecial(objectCtor.entry());
+		MethodRefEntry objectCtor = ctx.cp.methodRef(ctx.objectClass, "<init>", "()V");
+		ctx.body.new_(ctx.objectClass).dup().invokespecial(objectCtor);
 	}
 
 	/** {@code (%nlx-throw id value)} -- throw a non-local exit carrying (id, value). */
@@ -96,31 +97,31 @@ final class JvmNlxCompiler {
 			JvmLispCompiler.Ctx ctx, String className) {
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
-		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx, ctx.cp.addNameAndType(
-				ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8(message == null ? "()V" : "(Ljava/lang/String;)V")));
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>",
+				message == null ? "()V" : "(Ljava/lang/String;)V");
 		int savedNextLocal = ctx.nextLocal;
 		int exSlot = ctx.allocTemp();
 		// ex = new RuntimeException([message])
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ctx.body.new_(runtimeEx).dup();
 		if (message != null) {
 			JvmEmitHelper.compileStringLiteral(message, ctx);
 		}
-		ctx.body.invokespecial(exCtor.entry()).astore(exSlot);
+		ctx.body.invokespecial(exCtor).astore(exSlot);
 		// _nleTl.set(new Object[]{ex, id, value, previous}) -- pushing onto the channel
 		// rather than overwriting it. The previous entry is read LAST, after the tag and
 		// value forms have run, so an exit those forms complete themselves is already
 		// popped by the time it is captured.
-		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry()).iconst_4();
-		ctx.body.anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(exSlot).aastore().dup();
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField)).iconst_4();
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0().aload(exSlot).aastore().dup();
 		ctx.body.iconst_1();
 		JvmExprCompiler.compileExpr(tagForm, ctx, className);
 		ctx.body.aastore().dup().iconst_2();
 		JvmExprCompiler.compileExpr(valueForm, ctx, className);
 		ctx.body.aastore().dup().iconst_3();
-		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).aastore();
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField));
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet)).aastore();
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet));
 		// throw ex
 		ctx.body.aload(exSlot).athrow();
 		ctx.nextLocal = savedNextLocal;
@@ -156,7 +157,7 @@ final class JvmNlxCompiler {
 		LispVal idForm = parts.get(1);
 		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
 		channel.ensureNle(ctx.cp, className);
-		ConstantPool.ClassConstant objectArrayClass = ctx.objectArrayClass;
+		ClassEntry objectArrayClass = ctx.objectArrayClass;
 		int savedNextLocal = ctx.nextLocal;
 		// Entering the handler discards the operand stack, so enclosing operands are
 		// spilled and reloaded past the merge (a statement-position catch spills nothing
@@ -201,8 +202,8 @@ final class JvmNlxCompiler {
 		// Handler: read the pending NLE; deliver on an id match, else rethrow.
 		MethodCode.Label handler = ctx.body.newBoundLabel();
 		ctx.stack.enterHandler();
-		ctx.body.astore(excSlot).getstatic(Objects.requireNonNull(channel.nleTlField).entry());
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet).methodRefEntry()).astore(arrSlot);
+		ctx.body.astore(excSlot).getstatic(Objects.requireNonNull(channel.nleTlField));
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlGet)).astore(arrSlot);
 		// if (_nleTl == null) rethrow
 		ctx.body.aload(arrSlot).ifnull(rethrow);
 		// if (triple[0] != caught) rethrow -- identity guards against a stale channel
@@ -238,9 +239,9 @@ final class JvmNlxCompiler {
 		// the bottom), deliver entry[2]. Popping rather than clearing is what keeps an
 		// exit that was already travelling -- this catch may be running inside an
 		// unwind-protect cleanup on ITS way out -- findable by its own landing pad.
-		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField).entry());
+		ctx.body.getstatic(Objects.requireNonNull(channel.nleTlField));
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 3);
-		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet).methodRefEntry());
+		ctx.body.invokevirtual(Objects.requireNonNull(channel.tlSet));
 		emitArrayElement(ctx, arrSlot, objectArrayClass, 2);
 		ctx.body.astore(resultSlot).goto_(done);
 		// Rethrow: a real condition, a stale channel, or an outer block's exit.
@@ -263,9 +264,8 @@ final class JvmNlxCompiler {
 	}
 
 	/** Loads {@code ((Object[]) arrSlot)[index]} onto the stack. */
-	private static void emitArrayElement(JvmLispCompiler.Ctx ctx, int arrSlot, ConstantPool.ClassConstant arrayClass,
-			int index) {
-		ctx.body.aload(arrSlot).checkcast(arrayClass.entry()).loadConstant(index).aaload();
+	private static void emitArrayElement(JvmLispCompiler.Ctx ctx, int arrSlot, ClassEntry arrayClass, int index) {
+		ctx.body.aload(arrSlot).checkcast(arrayClass).loadConstant(index).aaload();
 	}
 
 }

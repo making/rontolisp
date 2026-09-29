@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -12,8 +13,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.LinalgKernelCallLayout;
-
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * Compiles the accelerated {@code linalg:} kernels to calls into the shipped bridges, the
@@ -261,9 +260,9 @@ final class JvmLinalgKernelCompiler {
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		Map<String, MethodrefConstant> simd = ctx.simdOps != null && handles(member) ? ctx.simdOps : null;
-		Map<String, MethodrefConstant> blas = ctx.blasOps != null && JvmLinalgBlas.handles(member) ? ctx.blasOps : null;
-		Map<String, MethodrefConstant> gpu = ctx.gpuOps != null && JvmLinalgGpu.handles(member) ? ctx.gpuOps : null;
+		Map<String, MethodRefEntry> simd = ctx.simdOps != null && handles(member) ? ctx.simdOps : null;
+		Map<String, MethodRefEntry> blas = ctx.blasOps != null && JvmLinalgBlas.handles(member) ? ctx.blasOps : null;
+		Map<String, MethodRefEntry> gpu = ctx.gpuOps != null && JvmLinalgGpu.handles(member) ? ctx.gpuOps : null;
 		if (simd == null && blas == null && gpu == null) {
 			throw new IllegalStateException("no linalg: acceleration runtime was emitted for " + member);
 		}
@@ -343,12 +342,12 @@ final class JvmLinalgKernelCompiler {
 		// straight back (2026-09-03). The report half is emitted whatever follows: an
 		// in-place write must reach the library before it happens, whichever rung makes
 		// it.
-		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 		boolean hostKernelRung = simd != null || (blas != null && !extendedCall);
 		int[] originals = new int[0];
 		if (gpuOps != null) {
-			MethodrefConstant materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
-			MethodrefConstant report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			MethodRefEntry materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
+			MethodRefEntry report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
 			int[] written = WRITTEN.getOrDefault(member, new int[0]);
 			originals = new int[supplied];
 			for (int i = 0; i < supplied; i++) {
@@ -363,7 +362,7 @@ final class JvmLinalgKernelCompiler {
 					continue;
 				}
 				ctx.body.dup().astore(originals[i]);
-				ctx.body.invokestatic((writes ? report : materialize).entry());
+				ctx.body.invokestatic((writes ? report : materialize));
 				ctx.body.astore(slots[i]);
 			}
 		}
@@ -379,7 +378,7 @@ final class JvmLinalgKernelCompiler {
 			// _simdReady() false): skip this rung entirely rather than resolve a
 			// method reference into it, landing exactly where a declined kernel would
 			// -- the next rung, or the scalar defun.
-			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)).entry());
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)));
 			MethodCode.Label skipPos = ctx.body.newLabel();
 			ctx.body.ifeq(skipPos);
 			emitAttempt(ctx, simd, extendedCall ? extendedKey(member) : qualified, layout, slots, arity, hostTaken);
@@ -395,14 +394,14 @@ final class JvmLinalgKernelCompiler {
 			});
 		}
 		JvmPhysicalArgs.emit(ctx, className, defun, temps);
-		ctx.body.invokestatic(defun.methodref().entry());
+		ctx.body.invokestatic(defun.methodref());
 		ctx.body.labelBinding(hostTaken);
 		if (gpuOps != null) {
 			// A host rung that answered one of its arguments answered the backing it was
 			// handed: answer the caller's object instead, once per argument.
-			MethodrefConstant unswap = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP));
+			MethodRefEntry unswap = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP));
 			for (int i = 0; i < supplied; i++) {
-				ctx.body.aload(originals[i]).aload(slots[i]).invokestatic(unswap.entry());
+				ctx.body.aload(originals[i]).aload(slots[i]).invokestatic(unswap);
 			}
 		}
 		ctx.body.labelBinding(taken);
@@ -413,11 +412,11 @@ final class JvmLinalgKernelCompiler {
 	 * when it answered. A declined kernel leaves the stack as it found it, so the next
 	 * attempt (or the scalar defun) starts from the same shape.
 	 */
-	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops) {
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")).entry());
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
 	}
 
-	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String kernelKey,
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String kernelKey,
 			int @org.jspecify.annotations.Nullable [] layout, int[] slots, int arity, MethodCode.Label taken) {
 		if (layout != null) {
 			// The kernel's parameters in its own order: the temp of the form supplying
@@ -434,7 +433,7 @@ final class JvmLinalgKernelCompiler {
 		else {
 			loadAll(ctx, java.util.Arrays.copyOf(slots, arity));
 		}
-		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)).entry());
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey)));
 		// if (result != null) goto end; else fall through to the next attempt.
 		ctx.body.dup();
 		ctx.body.ifnonnull(taken);

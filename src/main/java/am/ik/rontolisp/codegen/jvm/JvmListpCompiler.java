@@ -27,15 +27,15 @@ final class JvmListpCompiler {
 		ctx.body.aload(tempSlot);
 		MethodCode.Label ifNullPos = ctx.body.newLabel();
 		ctx.body.ifnull(ifNullPos);
-		ctx.body.aload(tempSlot).instanceOf(ctx.objectArrayClass.entry());
+		ctx.body.aload(tempSlot).instanceOf(ctx.objectArrayClass);
 		MethodCode.Label ifNotArrayPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotArrayPos);
 		// A ratio (BigInteger[]) is also an Object[] but is not a list.
-		ctx.body.aload(tempSlot).instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		ctx.body.aload(tempSlot).instanceOf(JvmEmitHelper.ratioArrayClass(ctx));
 		MethodCode.Label ifRatioPos = ctx.body.newLabel();
 		ctx.body.ifne(ifRatioPos);
-		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
-		ctx.body.instanceOf(ctx.integerClass.entry());
+		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
+		ctx.body.instanceOf(ctx.integerClass);
 		MethodCode.Label ifFuncRefPos = ctx.body.newLabel();
 		ctx.body.ifne(ifFuncRefPos);
 		MethodCode.Label notCons = ctx.body.newLabel();

@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -28,9 +28,9 @@ final class JvmGetenvCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.HOST_GETENV + " expects 1 argument, got " + (args.size() - 1));
 		}
-		final MethodrefConstant length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		final MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
-		final MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat",
+		final MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		final MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		final MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat",
 				"(Ljava/lang/String;)Ljava/lang/String;");
 
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className); // [s]
@@ -38,26 +38,26 @@ final class JvmGetenvCompiler {
 		// mutable character vector: render it before the (String) cast (a no-op
 		// without the array runtime).
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(ctx.stringClass.entry());
+		ctx.body.checkcast(ctx.stringClass);
 		// name = s.substring(1, s.length() - 1)
 		ctx.body.dup(); // [s, s]
-		ctx.body.invokevirtual(length.methodRefEntry()); // [s, len]
+		ctx.body.invokevirtual(length); // [s, len]
 		ctx.body.iconst_1();
 		ctx.body.isub(); // [s, len-1]
 		ctx.body.iconst_1();
 		ctx.body.swap(); // [s, 1, len-1]
-		ctx.body.invokevirtual(substring.methodRefEntry()); // [name]
+		ctx.body.invokevirtual(substring); // [name]
 		// System.getenv(name)
-		ctx.body.invokestatic(ctx.systemOp("getenv").entry()); // [value|null]
+		ctx.body.invokestatic(ctx.systemOp("getenv")); // [value|null]
 		ctx.body.dup(); // [value, value]
 		MethodCode.Label end = ctx.body.newLabel();
 		ctx.body.ifnull(end);
 		// non-null: wrap as "\"" + value + "\""
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [value, q]
 		ctx.body.swap(); // [q, value]
-		ctx.body.invokevirtual(concat.methodRefEntry()); // [q+value]
+		ctx.body.invokevirtual(concat); // [q+value]
 		JvmEmitHelper.compileStringLiteral("\"", ctx); // [.., q]
-		ctx.body.invokevirtual(concat.methodRefEntry()); // [quoted]
+		ctx.body.invokevirtual(concat); // [quoted]
 		ctx.body.goto_(end);
 		// null path: leave the null (nil) on the stack
 		ctx.body.labelBinding(end);

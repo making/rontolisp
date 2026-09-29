@@ -106,7 +106,7 @@ final class JvmDesignatorCall {
 		// parameter takes, the UNSUPPLIED marker for an optional not passed, and a
 		// surplus linked into the rest list (JvmPhysicalArgs).
 		JvmPhysicalArgs.emit(ctx, className, this.target, args);
-		ctx.body.invokestatic(this.target.methodref().entry());
+		ctx.body.invokestatic(this.target.methodref());
 	}
 
 }

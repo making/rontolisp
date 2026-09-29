@@ -24,7 +24,7 @@ final class JvmFixedDecimalCompiler {
 		for (int i = 1; i <= 4; i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FIXED_DEC).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FIXED_DEC));
 	}
 
 }

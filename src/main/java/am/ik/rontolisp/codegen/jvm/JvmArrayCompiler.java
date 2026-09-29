@@ -1,10 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.ArrayElementTypes;
 import am.ik.rontolisp.ArrayGrowth;
@@ -587,7 +587,7 @@ final class JvmArrayCompiler {
 		ctx.body.ifnonnull(characterPos);
 		if (ctx.usesTypedArray) {
 			ctx.body.aload(tempSlot);
-			ctx.body.instanceOf(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry());
+			ctx.body.instanceOf(ctx.cp.classEntry("java/util/ArrayList"));
 			MethodCode.Label notListPos = ctx.body.newLabel();
 			ctx.body.ifeq(notListPos);
 			ctx.body.aload(tempSlot);
@@ -693,7 +693,7 @@ final class JvmArrayCompiler {
 	private static void emitSubscriptArray(List<LispVal> args, int firstSub, int rank, JvmLispCompiler.Ctx ctx,
 			String className) {
 		JvmEmitHelper.emitIntConst(ctx, rank);
-		ctx.body.anewarray(ctx.objectClass.entry());
+		ctx.body.anewarray(ctx.objectClass);
 		for (int i = 0; i < rank; i++) {
 			ctx.body.dup();
 			JvmEmitHelper.emitIntConst(ctx, i);
@@ -779,7 +779,7 @@ final class JvmArrayCompiler {
 	 */
 	private static void compileSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(subscript, ctx, className);
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
 	}
 
 	/**
@@ -788,15 +788,13 @@ final class JvmArrayCompiler {
 	 * throw an unnamed report, which the wrapper names ({@code JvmOperandTypeRuntime}).
 	 */
 	private static void invokeNamedHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ctx.wrapForOperator(name, desc, ref).entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
+		ctx.body.invokestatic(ctx.wrapForOperator(name, desc, ref));
 	}
 
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
+		ctx.body.invokestatic(ref);
 	}
 
 }

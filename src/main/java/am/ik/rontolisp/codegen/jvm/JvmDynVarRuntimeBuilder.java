@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,7 +12,6 @@ import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -62,13 +62,13 @@ final class JvmDynVarRuntimeBuilder {
 	 * @param methods the three helper method bodies to register
 	 * @param clinitCode the {@code <clinit>} fragment creating every ThreadLocal
 	 */
-	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Constant> fieldNameUtfs, Utf8Constant fieldDescUtf,
+	record DynVarRuntime(Map<String, FieldRefEntry> fields, List<Utf8Entry> fieldNameUtfs, Utf8Entry fieldDescUtf,
 			MethodRefEntry tlSet, MethodRefEntry dget, MethodRefEntry dbind, MethodRefEntry dset,
-			List<HelperMethod> methods, MethodCode clinitCode, Utf8Constant clinitName, Utf8Constant clinitDesc) {
+			List<HelperMethod> methods, MethodCode clinitCode, Utf8Entry clinitName, Utf8Entry clinitDesc) {
 	}
 
 	/** One helper method: its name/descriptor constants and body. */
-	record HelperMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
+	record HelperMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
 	}
 
 	// `boundSpecials` is a SequencedSet, not a plain Set: its iteration order is the mint
@@ -82,14 +82,14 @@ final class JvmDynVarRuntimeBuilder {
 		MethodRefEntry tlCtor = cp.methodRef(threadLocalClass, "<init>", "()V");
 		MethodRefEntry tlGet = cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;");
 		MethodRefEntry tlSet = cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V");
-		Utf8Constant fieldDescUtf = cp.addUtf8("Ljava/lang/ThreadLocal;");
+		Utf8Entry fieldDescUtf = cp.utf8Entry("Ljava/lang/ThreadLocal;");
 		Map<String, FieldRefEntry> fields = new LinkedHashMap<>();
-		List<Utf8Constant> fieldNameUtfs = new ArrayList<>();
+		List<Utf8Entry> fieldNameUtfs = new ArrayList<>();
 		MethodCode clinitCode = new MethodCode();
 		for (String name : boundSpecials) {
-			Utf8Constant nameUtf = cp.addUtf8("_d$" + JvmLispCompiler.mangleMethodName(name));
+			Utf8Entry nameUtf = cp.utf8Entry("_d$" + JvmLispCompiler.mangleMethodName(name));
 			fieldNameUtfs.add(nameUtf);
-			FieldRefEntry field = cp.fieldRef(thisClass, nameUtf.entry(), fieldDescUtf.entry());
+			FieldRefEntry field = cp.fieldRef(thisClass, nameUtf, fieldDescUtf);
 			fields.put(name, field);
 			clinitCode.new_(threadLocalClass);
 			clinitCode.dup();
@@ -97,19 +97,19 @@ final class JvmDynVarRuntimeBuilder {
 			clinitCode.putstatic(field);
 		}
 		String refDesc = "(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Ljava/lang/Object;";
-		Utf8Constant dgetName = cp.addUtf8("_dget");
-		Utf8Constant dbindName = cp.addUtf8("_dbind");
-		Utf8Constant dsetName = cp.addUtf8("_dset");
-		Utf8Constant refDescUtf = cp.addUtf8(refDesc);
-		Utf8Constant boolDescUtf = cp.addUtf8("(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Z");
-		MethodRefEntry dget = cp.methodRef(thisClass, dgetName.entry(), refDescUtf.entry());
-		MethodRefEntry dbind = cp.methodRef(thisClass, dbindName.entry(), refDescUtf.entry());
-		MethodRefEntry dset = cp.methodRef(thisClass, dsetName.entry(), boolDescUtf.entry());
+		Utf8Entry dgetName = cp.utf8Entry("_dget");
+		Utf8Entry dbindName = cp.utf8Entry("_dbind");
+		Utf8Entry dsetName = cp.utf8Entry("_dset");
+		Utf8Entry refDescUtf = cp.utf8Entry(refDesc);
+		Utf8Entry boolDescUtf = cp.utf8Entry("(Ljava/lang/ThreadLocal;Ljava/lang/Object;)Z");
+		MethodRefEntry dget = cp.methodRef(thisClass, dgetName, refDescUtf);
+		MethodRefEntry dbind = cp.methodRef(thisClass, dbindName, refDescUtf);
+		MethodRefEntry dset = cp.methodRef(thisClass, dsetName, boolDescUtf);
 		List<HelperMethod> methods = List.of(new HelperMethod(dgetName, refDescUtf, dgetCode(tlGet, objectArrayClass)),
 				new HelperMethod(dbindName, refDescUtf, dbindCode(tlGet, tlSet, cp)),
 				new HelperMethod(dsetName, boolDescUtf, dsetCode(tlGet, objectArrayClass)));
 		return new DynVarRuntime(fields, fieldNameUtfs, fieldDescUtf, tlSet, dget, dbind, dset, methods, clinitCode,
-				cp.addUtf8("<clinit>"), cp.addUtf8("()V"));
+				cp.utf8Entry("<clinit>"), cp.utf8Entry("()V"));
 	}
 
 	/** {@code _dget(tl, global)}: the thread's cell value when bound, else the global. */

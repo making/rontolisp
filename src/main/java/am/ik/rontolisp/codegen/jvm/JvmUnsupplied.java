@@ -3,11 +3,11 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -139,12 +139,12 @@ final class JvmUnsupplied {
 	Members members() {
 		ConstantPool pool = java.util.Objects.requireNonNull(this.cp);
 		ClassEntry thisClass = java.util.Objects.requireNonNull(this.owner);
-		Utf8Constant fieldName = pool.addUtf8(FIELD_NAME);
-		Utf8Constant fieldDesc = pool.addUtf8(OBJECT_DESC);
-		FieldRefEntry field = pool.fieldRef(thisClass, fieldName.entry(), fieldDesc.entry());
-		Utf8Constant initName = pool.addUtf8(INIT_NAME);
-		Utf8Constant accessorDesc = pool.addUtf8(ACCESSOR_DESC);
-		MethodRefEntry init = pool.methodRef(thisClass, initName.entry(), accessorDesc.entry());
+		Utf8Entry fieldName = pool.utf8Entry(FIELD_NAME);
+		Utf8Entry fieldDesc = pool.utf8Entry(OBJECT_DESC);
+		FieldRefEntry field = pool.fieldRef(thisClass, fieldName, fieldDesc);
+		Utf8Entry initName = pool.utf8Entry(INIT_NAME);
+		Utf8Entry accessorDesc = pool.utf8Entry(ACCESSOR_DESC);
+		MethodRefEntry init = pool.methodRef(thisClass, initName, accessorDesc);
 		ClassEntry objectClass = pool.classEntry("java/lang/Object");
 		MethodRefEntry objectCtor = pool.methodRef(objectClass, "<init>", "()V");
 		// _unsupp(): Object m = _unsupplied; return m != null ? m : _unsuppInit();
@@ -190,9 +190,9 @@ final class JvmUnsupplied {
 			optArgCode.aaload();
 			optArgCode.areturn();
 		}
-		return new Members(fieldName, fieldDesc, pool.addUtf8(ACCESSOR_NAME), initName, accessorDesc, accessorCode,
-				initCode, this.optArg == null ? null : pool.addUtf8(OPT_ARG_NAME),
-				this.optArg == null ? null : pool.addUtf8(OPT_ARG_DESC), optArgCode);
+		return new Members(fieldName, fieldDesc, pool.utf8Entry(ACCESSOR_NAME), initName, accessorDesc, accessorCode,
+				initCode, this.optArg == null ? null : pool.utf8Entry(OPT_ARG_NAME),
+				this.optArg == null ? null : pool.utf8Entry(OPT_ARG_DESC), optArgCode);
 	}
 
 	/**
@@ -210,9 +210,9 @@ final class JvmUnsupplied {
 	 * @param optArgDesc its descriptor, or {@code null} with it
 	 * @param optArgCode its body, or {@code null} with it
 	 */
-	record Members(Utf8Constant fieldName, Utf8Constant fieldDesc, Utf8Constant accessorName, Utf8Constant initName,
-			Utf8Constant methodDesc, MethodCode accessorCode, MethodCode initCode, @Nullable Utf8Constant optArgName,
-			@Nullable Utf8Constant optArgDesc, @Nullable MethodCode optArgCode) {
+	record Members(Utf8Entry fieldName, Utf8Entry fieldDesc, Utf8Entry accessorName, Utf8Entry initName,
+			Utf8Entry methodDesc, MethodCode accessorCode, MethodCode initCode, @Nullable Utf8Entry optArgName,
+			@Nullable Utf8Entry optArgDesc, @Nullable MethodCode optArgCode) {
 	}
 
 }

@@ -1,13 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.PackageRegistry;
@@ -113,7 +113,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 	}
 
 	/** The ready-to-emit {@code handle(Request)} method body. */
-	record HandleMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record HandleMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -121,9 +121,9 @@ final class JvmHttpHandlerRuntimeBuilder {
 	 * implement, the handler-funcref field, the {@code serve} entry point, the program
 	 * class no-arg construction refs and the injected {@code handle} method body.
 	 */
-	record HttpHandlerRuntime(ClassConstant handlerInterface, Utf8Constant handlerFieldName,
-			Utf8Constant handlerFieldDesc, FieldrefConstant handlerField, MethodrefConstant serve,
-			ClassConstant progClass, MethodrefConstant progInit, HandleMethod handle) {
+	record HttpHandlerRuntime(ClassEntry handlerInterface, Utf8Entry handlerFieldName, Utf8Entry handlerFieldDesc,
+			FieldRefEntry handlerField, MethodRefEntry serve, ClassEntry progClass, MethodRefEntry progInit,
+			HandleMethod handle) {
 	}
 
 	/**
@@ -137,61 +137,54 @@ final class JvmHttpHandlerRuntimeBuilder {
 	 * one handler slot, one mode)
 	 * @return the runtime refs and method body
 	 */
-	static HttpHandlerRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
-			MethodrefConstant stringLength, MethodrefConstant stringConcat, boolean bufferBody) {
-		ClassConstant handlerInterface = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Handler"));
-		ClassConstant requestClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Request"));
-		ClassConstant supportClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS));
-		ClassConstant runtimeClass = cp.addClass(cp.addUtf8(RUNTIME_CLASS));
-		MethodrefConstant serve = cp.addMethodref(supportClass,
-				cp.addNameAndType(cp.addUtf8("serve"), cp.addUtf8("(IL" + SUPPORT_CLASS + "$Handler;)V")));
+	static HttpHandlerRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectArrayClass,
+			MethodRefEntry stringLength, MethodRefEntry stringConcat, boolean bufferBody) {
+		ClassEntry handlerInterface = cp.classEntry(SUPPORT_CLASS + "$Handler");
+		ClassEntry requestClass = cp.classEntry(SUPPORT_CLASS + "$Request");
+		ClassEntry supportClass = cp.classEntry(SUPPORT_CLASS);
+		ClassEntry runtimeClass = cp.classEntry(RUNTIME_CLASS);
+		MethodRefEntry serve = cp.methodRef(supportClass, "serve", "(IL" + SUPPORT_CLASS + "$Handler;)V");
 
 		// The async runtime helpers (forced on whenever http-handler is used): the
 		// default request body streams in, the handler's future is awaited, a stream
 		// response body drains out.
-		MethodrefConstant makeStream = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)));
-		MethodrefConstant streamWrite = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD),
-						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC)));
-		MethodrefConstant streamClose = cp.addMethodref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)));
-		MethodrefConstant awaitHelper = cp.addMethodref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.AWAIT_DESC)));
-		MethodrefConstant drainBody = cp.addMethodref(thisClass, cp.addNameAndType(
-				cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)));
+		MethodRefEntry makeStream = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD,
+				JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC);
+		MethodRefEntry streamWrite = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAM_WRITE_METHOD,
+				JvmAsyncRuntimeBuilder.STREAM_WRITE_DESC);
+		MethodRefEntry streamClose = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.STREAM_CLOSE_METHOD,
+				JvmAsyncRuntimeBuilder.UNARY_DESC);
+		MethodRefEntry awaitHelper = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.AWAIT_METHOD,
+				JvmAsyncRuntimeBuilder.AWAIT_DESC);
+		MethodRefEntry drainBody = cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD,
+				JvmAsyncRuntimeBuilder.UNARY_DESC);
 
-		Utf8Constant unaryDesc = cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC);
+		Utf8Entry unaryDesc = cp.utf8Entry(JvmAsyncRuntimeBuilder.UNARY_DESC);
 		// The compiled http-server.lisp entry points, called directly by their mangled
 		// method names (they are methods of this same generated class; the splice
 		// guarantees their presence in every serving program, and the direct call is
 		// the shaker-visible edge).
-		MethodrefConstant normalizeResponse = cp.addMethodref(thisClass,
-				cp.addNameAndType(
-						cp.addUtf8(JvmLispCompiler.mangleMethodName(
-								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
-						unaryDesc));
+		MethodRefEntry normalizeResponse = cp.methodRef(thisClass,
+				cp.utf8Entry(JvmLispCompiler.mangleMethodName(
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
+				unaryDesc);
 		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets answers
 		// the packed byte[] vector -- for both :raw-body modes: the buffered Gray stream
 		// is a byte stream and stores them as they are (encoding a decoded body doubled
 		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
 		// an octet stream on every backend, one settled chunk here.
-		MethodrefConstant bodyOctets = cp.addMethodref(runtimeClass,
-				cp.addNameAndType(cp.addUtf8("bodyOctets"), cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)[B")));
-		MethodrefConstant buildEnv = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("buildEnv"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant toResponse = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("toResponse"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)L" + SUPPORT_CLASS + "$Response;")));
+		MethodRefEntry bodyOctets = cp.methodRef(runtimeClass, "bodyOctets", "(L" + SUPPORT_CLASS + "$Request;)[B");
+		MethodRefEntry buildEnv = cp.methodRef(runtimeClass, "buildEnv",
+				"(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry toResponse = cp.methodRef(runtimeClass, "toResponse",
+				"(Ljava/lang/Object;Ljava/lang/Object;)L" + SUPPORT_CLASS + "$Response;");
 
-		Utf8Constant handlerFieldName = cp.addUtf8("_httpHandlerFn");
-		Utf8Constant handlerFieldDesc = cp.addUtf8("Ljava/lang/Object;");
-		FieldrefConstant handlerField = cp.addFieldref(thisClass,
-				cp.addNameAndType(handlerFieldName, handlerFieldDesc));
-		MethodrefConstant progInit = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant invoke1 = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_invoke_1"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+		Utf8Entry handlerFieldName = cp.utf8Entry("_httpHandlerFn");
+		Utf8Entry handlerFieldDesc = cp.utf8Entry("Ljava/lang/Object;");
+		FieldRefEntry handlerField = cp.fieldRef(thisClass, handlerFieldName, handlerFieldDesc);
+		MethodRefEntry progInit = cp.methodRef(thisClass, "<init>", "()V");
+		MethodRefEntry invoke1 = cp.methodRef(thisClass, "_invoke_1",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 
 		// handle(Request): slots 0 this, 1 request, 2 rawBody, 3 body text scratch /
 		// env, 4 result / triple, 5 drained body.
@@ -200,24 +193,23 @@ final class JvmHttpHandlerRuntimeBuilder {
 			// rawBody = %http-body-stream(bodyOctets(request)) -- the compiled Gray
 			// instance over the octets as they came; the defun itself answers nil for
 			// an empty body.
-			MethodrefConstant bodyStream = cp.addMethodref(thisClass,
-					cp.addNameAndType(
-							cp.addUtf8(JvmLispCompiler.mangleMethodName(
-									PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
-							unaryDesc));
+			MethodRefEntry bodyStream = cp.methodRef(thisClass,
+					cp.utf8Entry(JvmLispCompiler.mangleMethodName(
+							PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
+					unaryDesc);
 			a.aload(1);
-			a.invokestatic(bodyOctets.entry());
-			a.invokestatic(bodyStream.entry());
+			a.invokestatic(bodyOctets);
+			a.invokestatic(bodyStream);
 			a.astore(2);
 		}
 		else {
 			// rawBody = the asynchronous stream: one settled octet chunk when the
 			// request carries a body, an already-closed empty stream otherwise (its
 			// first read observes end of stream) -- interpreter parity.
-			a.invokestatic(makeStream.entry());
+			a.invokestatic(makeStream);
 			a.astore(2);
 			a.aload(1);
-			a.invokestatic(bodyOctets.entry());
+			a.invokestatic(bodyOctets);
 			a.astore(3);
 			MethodCode.Label bodyEmpty = a.newLabel();
 			a.aload(3);
@@ -226,47 +218,47 @@ final class JvmHttpHandlerRuntimeBuilder {
 			a.if_icmple(bodyEmpty); // byte[]{8} alone: no body
 			a.aload(2);
 			a.aload(3);
-			a.invokestatic(streamWrite.entry());
+			a.invokestatic(streamWrite);
 			a.pop();
 			a.labelBinding(bodyEmpty);
 			a.aload(2);
-			a.invokestatic(streamClose.entry());
+			a.invokestatic(streamClose);
 			a.pop();
 		}
 		// env = RontoHttpClack.buildEnv(request, rawBody)
 		a.aload(1);
 		a.aload(2);
-		a.invokestatic(buildEnv.entry());
+		a.invokestatic(buildEnv);
 		a.astore(3);
 		// result = _await(_invoke_1(_httpHandlerFn, env))
-		a.getstatic(handlerField.entry());
+		a.getstatic(handlerField);
 		a.aload(3);
-		a.invokestatic(invoke1.entry());
-		a.invokestatic(awaitHelper.entry());
+		a.invokestatic(invoke1);
+		a.invokestatic(awaitHelper);
 		// triple = %http-normalize-response(result)
-		a.invokestatic(normalizeResponse.entry());
+		a.invokestatic(normalizeResponse);
 		a.astore(4);
 		// drained = _drain_body(third(triple))
 		a.aload(4);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(1);
 		a.aaload();
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(0);
 		a.aaload();
-		a.invokestatic(drainBody.entry());
+		a.invokestatic(drainBody);
 		a.astore(5);
 		// return RontoHttpClack.toResponse(triple, drained)
 		a.aload(4);
 		a.aload(5);
-		a.invokestatic(toResponse.entry());
+		a.invokestatic(toResponse);
 		a.areturn();
 
-		HandleMethod handle = new HandleMethod(cp.addUtf8("handle"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), a);
+		HandleMethod handle = new HandleMethod(cp.utf8Entry("handle"),
+				cp.utf8Entry("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), a);
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
 	}

@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -91,15 +91,14 @@ final class JvmQuantizedMatrixCompiler {
 			boolean materializeFirst) {
 		for (int i = 1; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
-			Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
+			Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
 			if (i == 1 && materializeFirst && gpuOps != null) {
-				ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).entry());
+				ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)));
 			}
 		}
-		ClassConstant selfClass = ctx.cp.addClass(ctx.cp.addUtf8(className));
-		MethodrefConstant ref = ctx.cp.addMethodref(selfClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(helper), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ref.entry());
+		ClassEntry selfClass = ctx.cp.classEntry(className);
+		MethodRefEntry ref = ctx.cp.methodRef(selfClass, helper, desc);
+		ctx.body.invokestatic(ref);
 	}
 
 	private static void requireArity(List<LispVal> args, int arity, String member) {

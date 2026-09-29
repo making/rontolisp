@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
@@ -26,11 +28,10 @@ final class JvmIeee754Compiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.unboxDouble(ctx);
 		invokeStatic(ctx, "java/lang/Double", "doubleToRawLongBits", "(D)J");
-		ctx.body.invokestatic(bigIntegerValueOf(ctx).entry());
+		ctx.body.invokestatic(bigIntegerValueOf(ctx));
 		JvmEmitHelper.compileBigInteger(MASK64, ctx);
-		ctx.body
-			.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "and", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;")
-				.methodRefEntry());
+		ctx.body.invokevirtual(
+				JvmEmitHelper.bigIntegerMethod(ctx, "and", "(Ljava/math/BigInteger;)Ljava/math/BigInteger;"));
 		JvmEmitHelper.normalizeBigInteger(ctx);
 	}
 
@@ -39,7 +40,7 @@ final class JvmIeee754Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J"));
 		invokeStatic(ctx, "java/lang/Double", "longBitsToDouble", "(J)D");
 		JvmEmitHelper.boxDouble(ctx);
 	}
@@ -60,22 +61,21 @@ final class JvmIeee754Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J"));
 		ctx.body.l2i();
 		invokeStatic(ctx, "java/lang/Float", "intBitsToFloat", "(I)F");
 		ctx.body.f2d();
 		JvmEmitHelper.boxDouble(ctx);
 	}
 
-	private static ConstantPool.MethodrefConstant bigIntegerValueOf(JvmLispCompiler.Ctx ctx) {
+	private static MethodRefEntry bigIntegerValueOf(JvmLispCompiler.Ctx ctx) {
 		return JvmEmitHelper.bigIntegerMethod(ctx, "valueOf", "(J)Ljava/math/BigInteger;");
 	}
 
 	private static void invokeStatic(JvmLispCompiler.Ctx ctx, String owner, String name, String desc) {
-		ConstantPool.ClassConstant cls = ctx.cp.addClass(ctx.cp.addUtf8(owner));
-		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(cls,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ref.entry());
+		ClassEntry cls = ctx.cp.classEntry(owner);
+		MethodRefEntry ref = ctx.cp.methodRef(cls, name, desc);
+		ctx.body.invokestatic(ref);
 	}
 
 }

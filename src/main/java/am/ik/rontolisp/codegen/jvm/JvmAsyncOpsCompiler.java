@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
@@ -41,7 +41,7 @@ final class JvmAsyncOpsCompiler {
 			throw new UnsupportedOperationException(member + " expects " + arity + " argument" + (arity == 1 ? "" : "s")
 					+ ", got " + (args.size() - 1));
 		}
-		MethodrefConstant helper = switch (member) {
+		MethodRefEntry helper = switch (member) {
 			case LispNames.ASYNC_RUN -> ctx.asyncRunHelper;
 			case LispNames.FUTUREP -> ctx.futurepHelper;
 			case LispNames.ASYNC_STREAMP -> ctx.streampHelper;
@@ -66,7 +66,7 @@ final class JvmAsyncOpsCompiler {
 		for (int i = 1; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}
-		ctx.body.invokestatic(helper.entry());
+		ctx.body.invokestatic(helper);
 	}
 
 }

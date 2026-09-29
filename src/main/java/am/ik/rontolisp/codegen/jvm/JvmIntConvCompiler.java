@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
@@ -8,8 +10,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -43,9 +43,9 @@ final class JvmIntConvCompiler {
 	}
 
 	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
-			@Nullable MethodrefConstant mathMethod, String ratioOpKey, int mode) {
+			@Nullable MethodRefEntry mathMethod, String ratioOpKey, int mode) {
 		List<LispVal> args = cons.toList();
-		ClassConstant bigClass = ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
+		ClassEntry bigClass = ctx.cp.classEntry("java/math/BigInteger");
 		int temp = ctx.allocTemp();
 		// (op (/ a b)) -- which is what both the single-value and the multiple-value
 		// lowerings of the two-argument (op a b) leave behind: a float operand divides
@@ -64,29 +64,29 @@ final class JvmIntConvCompiler {
 			JvmExprCompiler.compileExpr(divArgs.get(1), ctx, className);
 			ctx.body.astore(bSlot).aload(aSlot).aload(bSlot);
 			JvmEmitHelper.emitIntConst(ctx, mode);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).entry()).astore(temp);
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV)).astore(temp);
 			ctx.body.aload(temp);
 			MethodCode.Label ifDeclined = ctx.body.newLabel();
 			ctx.body.ifnull(ifDeclined);
 			ctx.body.aload(temp).goto_(fusedEnd);
 			ctx.body.labelBinding(ifDeclined);
 			ctx.body.aload(aSlot).aload(bSlot);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DIV));
 		}
 		else {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		}
 		// An integer argument (Long or BigInteger) is already an integer: return it as-is
 		// to avoid truncating a BigInteger through a double.
-		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass.entry()).aload(temp);
-		ctx.body.instanceOf(bigClass.entry()).ior();
+		ctx.body.astore(temp).aload(temp).instanceOf(ctx.longClass).aload(temp);
+		ctx.body.instanceOf(bigClass).ior();
 		MethodCode.Label ifIntPos = ctx.body.newLabel();
 		ctx.body.ifne(ifIntPos);
 		// Ratio path: exact integer conversion via the rational runtime helper.
-		ctx.body.aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx).entry());
+		ctx.body.aload(temp).instanceOf(JvmEmitHelper.ratioArrayClass(ctx));
 		MethodCode.Label ifNotRatioPos = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotRatioPos);
-		ctx.body.aload(temp).invokestatic(ctx.numOp(ratioOpKey).entry());
+		ctx.body.aload(temp).invokestatic(ctx.numOp(ratioOpKey));
 		MethodCode.Label gotoEnd2Pos = ctx.body.newLabel();
 		ctx.body.goto_(gotoEnd2Pos);
 		// Float path: convert through a double, which is exact inside the long range --
@@ -100,21 +100,17 @@ final class JvmIntConvCompiler {
 		ctx.body.aload(temp);
 		JvmEmitHelper.unboxDouble(ctx);
 		if (mathMethod != null) {
-			ctx.body.invokestatic(mathMethod.entry());
+			ctx.body.invokestatic(mathMethod);
 		}
 		ctx.body.dup2();
-		ctx.body.invokestatic(
-				ctx.cp
-					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Math")),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8("abs"), ctx.cp.addUtf8("(D)D")))
-					.entry());
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry("java/lang/Math"), "abs", "(D)D"));
 		JvmEmitHelper.emitRawDouble(LONG_LIMIT, ctx);
 		ctx.body.dcmpg();
 		MethodCode.Label ifInLongRange = ctx.body.newLabel();
 		ctx.body.iflt(ifInLongRange);
-		ctx.body.pop2().aload(temp).lconst_1().invokestatic(ctx.longValueOf.entry());
+		ctx.body.pop2().aload(temp).lconst_1().invokestatic(ctx.longValueOf);
 		JvmEmitHelper.emitIntConst(ctx, mode);
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV));
 		MethodCode.Label gotoEndWidened = ctx.body.newLabel();
 		ctx.body.goto_(gotoEndWidened);
 		ctx.body.labelBinding(ifInLongRange);

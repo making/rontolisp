@@ -288,7 +288,7 @@ final class JvmFloatArrayRuntimeBuilder {
 					floatValueOf, bf16Print);
 			a.labelBinding(next);
 		}
-		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(TO_GENERAL_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(name), cp.utf8Entry(TO_GENERAL_DESC), a);
 	}
 
 	/**
@@ -482,7 +482,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(i);
 		a.invokestatic(aref1);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(AREF1), cp.utf8Entry(JvmArrayRuntimeBuilder.AREF1_DESC), a);
 	}
 
 	// _fvAref2(arr, i, j): packed -> Double.valueOf(d[off + i * cols + j]) with
@@ -525,7 +525,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(j);
 		a.invokestatic(aref2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(AREF2), cp.utf8Entry(JvmArrayRuntimeBuilder.AREF2_DESC), a);
 	}
 
 	// _fvArefN(arr, subs): packed -> Horner flat index over the header dims; else _arefN.
@@ -566,7 +566,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(subs);
 		a.invokestatic(arefN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(AREFN), cp.utf8Entry(JvmArrayRuntimeBuilder.AREFN_DESC), a);
 	}
 
 	// Pushes the subscript in local i checked against the flat bound d.length - off,
@@ -708,7 +708,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset1);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(JvmArrayRuntimeBuilder.ASET1_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ASET1), cp.utf8Entry(JvmArrayRuntimeBuilder.ASET1_DESC), a);
 	}
 
 	// _fvAset2(arr, i, j, val): packed store at i*cols+j; else _aset2.
@@ -750,7 +750,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ASET2), cp.utf8Entry(JvmArrayRuntimeBuilder.ASET2_DESC), a);
 	}
 
 	// _fvAsetN(arr, subs, val): packed Horner store; else _asetN.
@@ -792,7 +792,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(asetN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ASETN), cp.utf8Entry(JvmArrayRuntimeBuilder.ASETN_DESC), a);
 	}
 
 	// _fvDims(arr): packed -> a fresh cons list of the header dims as Longs; else
@@ -848,7 +848,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(arr);
 		a.invokestatic(arrayDims);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(DIMS), cp.addUtf8(JvmArrayRuntimeBuilder.DIMS_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(DIMS), cp.utf8Entry(JvmArrayRuntimeBuilder.DIMS_DESC), a);
 	}
 
 	// _fvCheckRank(arr, given): packed -> the header rank (loaded the same way DIMS
@@ -885,7 +885,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(given);
 		a.invokestatic(checkRankDelegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(CHECK_RANK), cp.addUtf8(CHECK_RANK_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(CHECK_RANK), cp.utf8Entry(CHECK_RANK_DESC), a);
 	}
 
 	// Shared tail of _fvCheckRank: unbox `given` (givenSlot) to int (givSlot), compare it
@@ -913,7 +913,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.invokevirtual(sbAppendStr);
 		a.iload(rankSlot);
 		a.invokevirtual(sbAppendInt);
-		a.ldc(cp.addString(" subscripts, got ").entry());
+		a.ldc(cp.stringEntry(" subscripts, got "));
 		a.invokevirtual(sbAppendStr);
 		a.iload(givSlot);
 		a.invokevirtual(sbAppendInt);
@@ -967,7 +967,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(arr);
 		a.invokestatic(lengthHelper);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(LENGTH), cp.addUtf8(LENGTH_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(LENGTH), cp.utf8Entry(LENGTH_DESC), a);
 	}
 
 	// _fvMake / _sfvMake / _bfvMake(dims, init): build a packed array of the width with a
@@ -1139,7 +1139,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		}
 		a.aload(arr);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(name), cp.addUtf8(MAKE_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(name), cp.utf8Entry(MAKE_DESC), a);
 	}
 
 	// _fvElementType(arr): packed double[] -> the symbol double-float; packed float[] ->
@@ -1164,7 +1164,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.areturn();
 		// 2: the quantized arm's tag test (a byte[] slot and the tag) where an octet
 		// vector can exist.
-		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(ELEMENT_TYPE), cp.utf8Entry(ELEMENT_TYPE_DESC), a);
 	}
 
 	// _fvRequireGeneral(o): the fill-pointer-surface guard for a packed float array -- a
@@ -1181,7 +1181,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		emitWidthDispatch(a, refs, 0, (asm, w) -> emitThrow(asm, rtExClass, rtExInit, message));
 		a.aload(0);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(REQUIRE_GENERAL), cp.addUtf8(REQUIRE_GENERAL_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(REQUIRE_GENERAL), cp.utf8Entry(REQUIRE_GENERAL_DESC), a);
 	}
 
 	// _bf16Value(bits): BFloat16.value(int), instruction for instruction. Locals:
@@ -1237,7 +1237,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.invokestatic(intBitsToFloat);
 		a.f2d();
 		a.dreturn();
-		return new ArrayMethod(cp.addUtf8(BF16_VALUE), cp.addUtf8(BF16_VALUE_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(BF16_VALUE), cp.utf8Entry(BF16_VALUE_DESC), a);
 	}
 
 	// _bf16Bits(value): BFloat16.bits(double) then bits(float), instruction for
@@ -1341,7 +1341,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.iushr();
 		JvmPackedFloatWidth.emitMaskU16(a);
 		a.ireturn();
-		return new ArrayMethod(cp.addUtf8(BF16_BITS), cp.addUtf8(BF16_BITS_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(BF16_BITS), cp.utf8Entry(BF16_BITS_DESC), a);
 	}
 
 	// stack: (...) -> (..., int): payload | ((payload - 1) >>> 31) -- a zero payload
@@ -1433,7 +1433,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.fload(f);
 		a.invokestatic(floatValueOf);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(BF16_PRINT), cp.addUtf8(BF16_PRINT_DESC), a);
+		return new ArrayMethod(cp.utf8Entry(BF16_PRINT), cp.utf8Entry(BF16_PRINT_DESC), a);
 	}
 
 	// new RuntimeException(message); athrow.

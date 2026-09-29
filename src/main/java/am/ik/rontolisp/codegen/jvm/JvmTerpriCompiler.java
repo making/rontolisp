@@ -27,7 +27,7 @@ final class JvmTerpriCompiler {
 			ctx.body.pop().aconst_null();
 			return;
 		}
-		ctx.body.getstatic(ctx.systemOut.entry()).invokevirtual(ctx.printlnVoid.methodRefEntry());
+		ctx.body.getstatic(ctx.systemOut).invokevirtual(ctx.printlnVoid);
 		JvmFreshLineCompiler.emitSetLineStart(ctx, className);
 		ctx.body.aconst_null();
 	}

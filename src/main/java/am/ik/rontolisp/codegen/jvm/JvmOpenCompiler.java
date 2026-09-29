@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OpenModes;
@@ -37,11 +37,10 @@ final class JvmOpenCompiler {
 		// 5 and 7 are the OpenModes.APPEND_BIT arms, so the constant no longer fits
 		// ICONST_0..3.
 		JvmEmitHelper.emitIntConst(ctx, OpenModes.staticMode(parts));
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_METHOD);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_DESC);
-		MethodrefConstant openRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(openRef.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.OPEN_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.OPEN_DESC);
+		MethodRefEntry openRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(openRef);
 	}
 
 }

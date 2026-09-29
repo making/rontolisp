@@ -51,11 +51,11 @@ final class JvmSimpleArrayPCompiler {
 		// The immutable runtime string: simple, no header to read -- but only when it is
 		// QUOTE-FRAMED, since a symbol shares java/lang/String without the frame (the
 		// same frame test stringp makes) and a symbol is no array at all.
-		ctx.body.dup().instanceOf(ctx.stringClass.entry());
+		ctx.body.dup().instanceOf(ctx.stringClass);
 		MethodCode.Label ifNotString = ctx.body.newLabel();
 		ctx.body.ifeq(ifNotString);
-		ctx.body.dup().checkcast(ctx.stringClass.entry()).iconst_0();
-		ctx.body.invokevirtual(ctx.stringCharAt.methodRefEntry());
+		ctx.body.dup().checkcast(ctx.stringClass).iconst_0();
+		ctx.body.invokevirtual(ctx.stringCharAt);
 		JvmEmitHelper.emitIntConst(ctx, 34);
 		ctx.body.if_icmpne(gotoFalse);
 		ctx.body.goto_(gotoTrue);
@@ -78,30 +78,24 @@ final class JvmSimpleArrayPCompiler {
 			simpleClasses.add("[S");
 		}
 		for (String cls : simpleClasses) {
-			ctx.body.dup().instanceOf(ctx.cp.addClass(ctx.cp.addUtf8(cls)).entry());
+			ctx.body.dup().instanceOf(ctx.cp.classEntry(cls));
 			MethodCode.Label ifNot = ctx.body.newLabel();
 			ctx.body.ifeq(ifNot);
 			ctx.body.goto_(gotoTrue);
 			ctx.body.labelBinding(ifNot);
 		}
 		// Only the general ArrayList shape can still be an array.
-		ClassEntry arrayListClass = ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).entry();
-		ClassEntry objectArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/lang/Object;")).entry();
+		ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+		ClassEntry objectArrayClass = ctx.cp.classEntry("[Ljava/lang/Object;");
 		ctx.body.dup().instanceOf(arrayListClass).ifeq(gotoFalse);
 		ctx.body.checkcast(arrayListClass);
 		// An EMPTY list carries no header, so it is no array shape this predicate knows.
 		ctx.body.dup();
-		ctx.body.invokevirtual(
-				ctx.cp
-					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8("size"), ctx.cp.addUtf8("()I")))
-					.methodRefEntry());
+		ctx.body.invokevirtual(ctx.cp.methodRef(ctx.cp.classEntry("java/util/ArrayList"), "size", "()I"));
 		ctx.body.ifeq(gotoFalse);
 		ctx.body.iconst_0();
-		ctx.body.invokevirtual(ctx.cp
-			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")),
-					ctx.cp.addNameAndType(ctx.cp.addUtf8("get"), ctx.cp.addUtf8("(I)Ljava/lang/Object;")))
-			.methodRefEntry());
+		ctx.body
+			.invokevirtual(ctx.cp.methodRef(ctx.cp.classEntry("java/util/ArrayList"), "get", "(I)Ljava/lang/Object;"));
 		ctx.body.dup().instanceOf(objectArrayClass).ifeq(gotoFalse);
 		ctx.body.checkcast(objectArrayClass);
 		// header[1] (the fill pointer) and header[2] (the :adjustable argument): either

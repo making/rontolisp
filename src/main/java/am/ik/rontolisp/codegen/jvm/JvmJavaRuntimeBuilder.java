@@ -4,15 +4,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -61,8 +61,8 @@ final class JvmJavaRuntimeBuilder {
 	 * {@code proxy}, {@code reify}), and the bridge class file that travels beside the
 	 * program, keyed by its path within an output tree.
 	 */
-	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, MethodCode initCode, Utf8Constant initedFieldName,
-			Utf8Constant initedFieldDesc, Map<String, MethodrefConstant> ops, Map<String, byte[]> classFiles) {
+	record JavaRuntime(Utf8Entry initName, Utf8Entry initDesc, MethodCode initCode, Utf8Entry initedFieldName,
+			Utf8Entry initedFieldDesc, Map<String, MethodRefEntry> ops, Map<String, byte[]> classFiles) {
 	}
 
 	/**
@@ -83,47 +83,43 @@ final class JvmJavaRuntimeBuilder {
 	 * named after it and lives in its package (the bridge methods are package-private)
 	 * @return the runtime pieces
 	 */
-	static JavaRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+	static JavaRuntime build(ConstantPool cp, ClassEntry thisClass, String programInternalName) {
 		String bridgeName = bridgeName(programInternalName);
 		byte[] bridgeBytes = renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
 
-		Utf8Constant initedFieldName = cp.addUtf8("_javaInited");
-		Utf8Constant initedFieldDesc = cp.addUtf8("I");
-		FieldrefConstant initedField = cp.addFieldref(thisClass, cp.addNameAndType(initedFieldName, initedFieldDesc));
+		Utf8Entry initedFieldName = cp.utf8Entry("_javaInited");
+		Utf8Entry initedFieldDesc = cp.utf8Entry("I");
+		FieldRefEntry initedField = cp.fieldRef(thisClass, initedFieldName, initedFieldDesc);
 
-		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
-		MethodrefConstant bind = cp.addMethodref(bridgeClass,
-				cp.addNameAndType(cp.addUtf8("bind"), cp.addUtf8("(Ljava/lang/Class;)V")));
+		ClassEntry bridgeClass = cp.classEntry(bridgeName);
+		MethodRefEntry bind = cp.methodRef(bridgeClass, "bind", "(Ljava/lang/Class;)V");
 		String twoArgDesc = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 		String newDesc = "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
 		String callDesc = "(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
-		Utf8Constant initName = cp.addUtf8(INIT_METHOD);
-		Utf8Constant initDesc = cp.addUtf8("()V");
-		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
-		ops.put("new", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaNew"), cp.addUtf8(newDesc))));
-		ops.put("call", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaCall"), cp.addUtf8(callDesc))));
-		ops.put("static",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaStatic"), cp.addUtf8(callDesc))));
-		ops.put("field",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaField"), cp.addUtf8(twoArgDesc))));
-		ops.put("proxy",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaProxy"), cp.addUtf8(twoArgDesc))));
-		ops.put("reify", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaReify"), cp.addUtf8(newDesc))));
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
+		Utf8Entry initName = cp.utf8Entry(INIT_METHOD);
+		Utf8Entry initDesc = cp.utf8Entry("()V");
+		ops.put("init", cp.methodRef(thisClass, initName, initDesc));
+		ops.put("new", cp.methodRef(bridgeClass, "javaNew", newDesc));
+		ops.put("call", cp.methodRef(bridgeClass, "javaCall", callDesc));
+		ops.put("static", cp.methodRef(bridgeClass, "javaStatic", callDesc));
+		ops.put("field", cp.methodRef(bridgeClass, "javaField", twoArgDesc));
+		ops.put("proxy", cp.methodRef(bridgeClass, "javaProxy", twoArgDesc));
+		ops.put("reify", cp.methodRef(bridgeClass, "javaReify", newDesc));
 
 		// --- _javaInit body ---
 		MethodCode code = new MethodCode();
 		// if (_javaInited != 0) return;
-		code.getstatic(initedField.entry());
+		code.getstatic(initedField);
 		MethodCode.Label guard = code.newLabel();
 		code.ifne(guard);
 		// <Program>$JavaBridge.bind(<Program>.class) -- the bridge loads from the
 		// program's own class loader like any other class beside it.
-		code.ldc(thisClass.entry());
-		code.invokestatic(bind.entry());
+		code.ldc(thisClass);
+		code.invokestatic(bind);
 		// _javaInited = 1
 		code.iconst_1();
-		code.putstatic(initedField.entry());
+		code.putstatic(initedField);
 		code.labelBinding(guard);
 		code.return_();
 

@@ -23,7 +23,7 @@ final class JvmSignumCompiler {
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (!JvmLispCompiler.hasComplexOperand(args) && JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
 			JvmEmitHelper.unboxDouble(ctx);
-			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.SIGNUM_D).entry());
+			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.SIGNUM_D));
 			JvmEmitHelper.boxDouble(ctx);
 		}
 		else {
@@ -31,7 +31,7 @@ final class JvmSignumCompiler {
 			// float
 			// reaching signum through a variable works), otherwise the integer sign as a
 			// Long (the numerator's sign for a ratio).
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.SIGNUM).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.SIGNUM));
 		}
 	}
 

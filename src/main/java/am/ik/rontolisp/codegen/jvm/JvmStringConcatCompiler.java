@@ -1,8 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
@@ -19,19 +19,19 @@ final class JvmStringConcatCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		MethodrefConstant length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		MethodrefConstant substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
-		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry length = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
 		// a.substring(0, a.length() - 1)
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length.methodRefEntry());
-		ctx.body.iconst_1().isub().iconst_0().swap().invokevirtual(substring.methodRefEntry());
+		ctx.body.checkcast(ctx.stringClass).dup().invokevirtual(length);
+		ctx.body.iconst_1().isub().iconst_0().swap().invokevirtual(substring);
 		// b.substring(1, b.length())
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(ctx.stringClass.entry()).dup().invokevirtual(length.methodRefEntry());
-		ctx.body.iconst_1().swap().invokevirtual(substring.methodRefEntry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.checkcast(ctx.stringClass).dup().invokevirtual(length);
+		ctx.body.iconst_1().swap().invokevirtual(substring).invokevirtual(concat);
 	}
 
 }

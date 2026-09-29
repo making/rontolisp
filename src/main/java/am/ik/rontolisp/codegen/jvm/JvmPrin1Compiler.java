@@ -26,17 +26,17 @@ final class JvmPrin1Compiler {
 		if (stream != null) {
 			// (prin1 value stream): render, then route through _writeStr.
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-			ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString.entry());
+			ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString);
 			JvmExprCompiler.compileExpr(stream, ctx, className);
 			JvmStringStreamCompiler.emitWriteStr(ctx, className);
 			ctx.body.aload(objSlot);
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString.entry());
+		ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString);
 		int slot = ctx.allocTemp();
-		ctx.body.astore(slot).getstatic(ctx.systemOut.entry()).aload(slot);
-		ctx.body.invokevirtual(ctx.printStr.methodRefEntry());
+		ctx.body.astore(slot).getstatic(ctx.systemOut).aload(slot);
+		ctx.body.invokevirtual(ctx.printStr);
 		JvmFreshLineCompiler.emitTrackLocal(ctx, className, slot);
 		ctx.body.aload(objSlot);
 	}

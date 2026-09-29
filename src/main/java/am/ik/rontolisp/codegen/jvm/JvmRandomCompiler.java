@@ -41,13 +41,13 @@ final class JvmRandomCompiler {
 			ctx.body.dconst_0().dcmpl();
 			MethodCode.Label ifPositive = ctx.body.newLabel();
 			ctx.body.ifgt(ifPositive);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM));
 			MethodCode.Label done = ctx.body.newLabel();
 			ctx.body.goto_(done);
 			ctx.body.labelBinding(ifPositive);
 			JvmEmitHelper.unboxDouble(ctx);
-			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).entry());
-			ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).methodRefEntry()).dmul();
+			ctx.body.invokestatic(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT));
+			ctx.body.invokevirtual(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE)).dmul();
 			JvmEmitHelper.boxDouble(ctx);
 			ctx.body.labelBinding(done);
 		}
@@ -55,7 +55,7 @@ final class JvmRandomCompiler {
 			// Non-literal limit: _random dispatches on the runtime type (a Double limit
 			// returns a Double, otherwise the truncated Long), so a float limit through a
 			// variable works, and rejects a non-positive or ratio limit (.todo/981).
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).entry());
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM));
 		}
 	}
 

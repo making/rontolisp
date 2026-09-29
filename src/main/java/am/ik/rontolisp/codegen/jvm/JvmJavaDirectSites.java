@@ -6,6 +6,7 @@ import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,7 +14,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
@@ -182,7 +182,7 @@ final class JvmJavaDirectSites {
 	 * @param desc its descriptor
 	 * @param code the body, its handlers included
 	 */
-	record Method(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record Method(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	private final ConstantPool cp;
@@ -247,7 +247,7 @@ final class JvmJavaDirectSites {
 	 * @param name its name
 	 * @param desc its descriptor
 	 */
-	record Signals(FieldRefEntry field, Utf8Constant name, Utf8Constant desc) {
+	record Signals(FieldRefEntry field, Utf8Entry name, Utf8Entry desc) {
 	}
 
 	/**
@@ -400,11 +400,11 @@ final class JvmJavaDirectSites {
 		Signals signals = null;
 		MethodRefEntry condTake = channel.used ? channel.condTake : null;
 		MethodRefEntry condPut = channel.used ? channel.condPut : null;
-		FieldRefEntry nleTl = channel.nleUsed ? Objects.requireNonNull(channel.nleTlField).entry() : null;
+		FieldRefEntry nleTl = channel.nleUsed ? Objects.requireNonNull(channel.nleTlField) : null;
 		if (this.signal != null) {
-			Utf8Constant name = this.cp.addUtf8(SIGNALS);
-			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
-			signals = new Signals(this.cp.fieldRef(this.thisClass, name.entry(), desc.entry()), name, desc);
+			Utf8Entry name = this.cp.utf8Entry(SIGNALS);
+			Utf8Entry desc = this.cp.utf8Entry("Ljava/lang/ThreadLocal;");
+			signals = new Signals(this.cp.fieldRef(this.thisClass, name, desc), name, desc);
 			this.methods.add(buildSignal(signals.field(), condTake, nleTl));
 		}
 		if (this.failure != null) {
@@ -501,7 +501,7 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(set);
 		a.aload(0);
 		a.areturn();
-		return new Method(this.cp.addUtf8(SIGNAL), this.cp.addUtf8(SIGNAL_DESC), a);
+		return new Method(this.cp.utf8Entry(SIGNAL), this.cp.utf8Entry(SIGNAL_DESC), a);
 	}
 
 	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
@@ -581,7 +581,7 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
 		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
 		a.areturn();
-		return new Method(this.cp.addUtf8(FAIL), this.cp.addUtf8(FAIL_DESC), a);
+		return new Method(this.cp.utf8Entry(FAIL), this.cp.utf8Entry(FAIL_DESC), a);
 	}
 
 	/**
@@ -610,9 +610,9 @@ final class JvmJavaDirectSites {
 			desc.append("Ljava/lang/Object;".repeat(valueCount));
 		}
 		desc.append(")Ljava/lang/Object;");
-		Utf8Constant nameUtf = this.cp.addUtf8(name);
-		Utf8Constant descUtf = this.cp.addUtf8(desc.toString());
-		MethodRefEntry ref = this.cp.methodRef(this.thisClass, nameUtf.entry(), descUtf.entry());
+		Utf8Entry nameUtf = this.cp.utf8Entry(name);
+		Utf8Entry descUtf = this.cp.utf8Entry(desc.toString());
+		MethodRefEntry ref = this.cp.methodRef(this.thisClass, nameUtf, descUtf);
 		// Registered before it is built, which may add the shared helpers first.
 		this.sites.put(key, ref);
 		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues).build(nameUtf, descUtf));
@@ -707,9 +707,9 @@ final class JvmJavaDirectSites {
 	private MethodRefEntry host() {
 		MethodRefEntry ref = this.host;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(HOST);
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(HOST);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)Z");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.host = ref;
 			this.methods.add(buildHost(name, desc));
 		}
@@ -725,9 +725,9 @@ final class JvmJavaDirectSites {
 	MethodRefEntry lispArray() {
 		MethodRefEntry ref = this.lispArray;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(LISP_ARRAY);
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(LISP_ARRAY);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)Z");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.lispArray = ref;
 			this.methods.add(buildLispArray(name, desc));
 		}
@@ -742,9 +742,9 @@ final class JvmJavaDirectSites {
 	MethodRefEntry lispTable() {
 		MethodRefEntry ref = this.lispTable;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(LISP_TABLE);
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(LISP_TABLE);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)Z");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.lispTable = ref;
 			this.methods.add(buildLispTable(name, desc));
 		}
@@ -760,9 +760,9 @@ final class JvmJavaDirectSites {
 	MethodRefEntry arrayGuard() {
 		MethodRefEntry ref = this.arrayGuard;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(ARRAY_GUARD);
-			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(ARRAY_GUARD);
+			Utf8Entry desc = this.cp.utf8Entry(GUARD_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.arrayGuard = ref;
 			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), OperandTypes.Kind.ARRAY));
 		}
@@ -777,9 +777,9 @@ final class JvmJavaDirectSites {
 	MethodRefEntry tableGuard() {
 		MethodRefEntry ref = this.tableGuard;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(TABLE_GUARD);
-			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(TABLE_GUARD);
+			Utf8Entry desc = this.cp.utf8Entry(GUARD_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.tableGuard = ref;
 			this.methods
 				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), OperandTypes.Kind.HASH_TABLE));
@@ -790,9 +790,9 @@ final class JvmJavaDirectSites {
 	private MethodRefEntry unmarshal() {
 		MethodRefEntry ref = this.unmarshal;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(UNMARSHAL);
-			Utf8Constant desc = this.cp.addUtf8(OBJECT_DESC);
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(UNMARSHAL);
+			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.unmarshal = ref;
 			MethodRefEntry toList = arrayToList();
 			this.methods.add(buildUnmarshal(name, desc, toList));
@@ -803,9 +803,9 @@ final class JvmJavaDirectSites {
 	private MethodRefEntry arrayToList() {
 		MethodRefEntry ref = this.arrayToList;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(ARRAY_TO_LIST);
-			Utf8Constant desc = this.cp.addUtf8(OBJECT_DESC);
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(ARRAY_TO_LIST);
+			Utf8Entry desc = this.cp.utf8Entry(OBJECT_DESC);
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.arrayToList = ref;
 			// _jarr and _junm call each other (an Object[] element is unmarshalled): the
 			// reference is published before the body naming _junm is built.
@@ -889,7 +889,7 @@ final class JvmJavaDirectSites {
 			}
 		}
 
-		Method build(Utf8Constant name, Utf8Constant desc) {
+		Method build(Utf8Entry name, Utf8Entry desc) {
 			MethodCode.Label classMissing = this.a.newLabel();
 			MethodCode.Label memberFailed = this.a.newLabel();
 			boolean hasReceiver = this.site.operator() == JavaSite.Operator.CALL
@@ -1357,7 +1357,7 @@ final class JvmJavaDirectSites {
 			this.pendingHandlers.add(new PendingHandler(start, end, handler, cls(catchType)));
 		}
 
-		Method finish(Utf8Constant name, Utf8Constant desc) {
+		Method finish(Utf8Entry name, Utf8Entry desc) {
 			for (PendingHandler pending : this.pendingHandlers) {
 				this.a.exceptionCatch(pending.start(), pending.end(), pending.handler(), pending.catchType());
 			}
@@ -1863,9 +1863,9 @@ final class JvmJavaDirectSites {
 	private MethodRefEntry kind() {
 		MethodRefEntry ref = this.kind;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(KIND);
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(KIND);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)I");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.kind = ref;
 			this.methods.add(buildKind(name, desc, host()));
 		}
@@ -1875,9 +1875,9 @@ final class JvmJavaDirectSites {
 	private MethodRefEntry sequence() {
 		MethodRefEntry ref = this.sequence;
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(SEQUENCE);
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(SEQUENCE);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)[Ljava/lang/Object;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.sequence = ref;
 			this.methods.add(buildSequence(name, desc));
 		}
@@ -1900,9 +1900,9 @@ final class JvmJavaDirectSites {
 		String key = target.name() + (functions ? "" : " returned");
 		MethodRefEntry ref = this.costs.get(key);
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(COST_PREFIX + this.costs.size());
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(COST_PREFIX + this.costs.size());
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)I");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			// Registered before it is built: a list of lists costs itself.
 			this.costs.put(key, ref);
 			this.methods.add(buildCost(name, desc, target, functions));
@@ -1922,9 +1922,9 @@ final class JvmJavaDirectSites {
 		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
 		MethodRefEntry ref = this.converts.get(key);
 		if (ref == null) {
-			Utf8Constant name = this.cp.addUtf8(CONVERT_PREFIX + this.converts.size());
-			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)" + descriptor(target));
-			ref = this.cp.methodRef(this.thisClass, name.entry(), desc.entry());
+			Utf8Entry name = this.cp.utf8Entry(CONVERT_PREFIX + this.converts.size());
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)" + descriptor(target));
+			ref = this.cp.methodRef(this.thisClass, name, desc);
 			this.converts.put(key, ref);
 			this.methods.add(buildConvert(name, desc, target, functions, sequences));
 		}
@@ -1962,7 +1962,7 @@ final class JvmJavaDirectSites {
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
 	// index), a cons, a Lisp array (a specialized one too), a host object, or none (a
 	// symbol, a ratio, a hash table) -- tested in its order.
-	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodRefEntry hostTest) {
+	private Method buildKind(Utf8Entry name, Utf8Entry desc, MethodRefEntry hostTest) {
 		MethodCode a = new MethodCode();
 		ClassEntry string = cls("java/lang/String");
 		ClassEntry objects = cls("[Ljava/lang/Object;");
@@ -2135,7 +2135,7 @@ final class JvmJavaDirectSites {
 	// a list ending in a function value, an array of rank other than 1, a quantized
 	// matrix. A packed fixnum vector's Long.MIN_VALUE is nil; a fill pointer bounds the
 	// elements; a specialized vector's are the values aref reads (emitPackedElements).
-	private Method buildSequence(Utf8Constant name, Utf8Constant desc) {
+	private Method buildSequence(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry objects = cls("[Ljava/lang/Object;");
 		ClassEntry arrayList = cls("java/util/ArrayList");
@@ -2471,7 +2471,7 @@ final class JvmJavaDirectSites {
 	// _jcost$N(Object)I for one type: the bridge's marshal cost -- kindCost of a value's
 	// kind, a host object's class against the type, a sequence its base plus its
 	// elements' costs -- or NO_MATCH.
-	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions) {
+	private Method buildCost(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions) {
 		MethodCode a = new MethodCode();
 		render(a, 0);
 		int code = 1;
@@ -2579,8 +2579,7 @@ final class JvmJavaDirectSites {
 	// host object itself, and in the open variant a function's proxy and a sequence's
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
-	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions,
-			boolean sequences) {
+	private Method buildConvert(Utf8Entry name, Utf8Entry desc, JavaType target, boolean functions, boolean sequences) {
 		Body body = new Body(2);
 		MethodCode a = body.a;
 		int code = 1;
@@ -2711,7 +2710,7 @@ final class JvmJavaDirectSites {
 	// (characters, ratios, conses, function values, specialized vectors), not a Lisp
 	// array (_jlarr), not a Lisp hash table (_jltab), not a travelling runtime class's
 	// value (a complex number).
-	private Method buildHost(Utf8Constant name, Utf8Constant desc) {
+	private Method buildHost(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
 		MethodCode.Label no = a.newLabel();
@@ -2750,7 +2749,7 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jlarr(Object)Z: a non-empty ArrayList whose first element is an Object[] header.
-	private Method buildLispArray(Utf8Constant name, Utf8Constant desc) {
+	private Method buildLispArray(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry arrayList = cls("java/util/ArrayList");
 		MethodCode.Label no = a.newLabel();
@@ -2777,7 +2776,7 @@ final class JvmJavaDirectSites {
 	// class a Lisp array / table shares with a host collection and the shared test says
 	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
 	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
-	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodRefEntry lispTest,
+	private Method buildGuard(Utf8Entry name, Utf8Entry desc, String sharedClass, MethodRefEntry lispTest,
 			OperandTypes.Kind kind) {
 		MethodCode a = new MethodCode();
 		MethodCode.Label pass = a.newLabel();
@@ -2811,7 +2810,7 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
-	private Method buildLispTable(Utf8Constant name, Utf8Constant desc) {
+	private Method buildLispTable(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry linkedHashMap = cls(RontoHashTable.MAP_CLASS);
 		MethodCode.Label no = a.newLabel();
@@ -2831,7 +2830,7 @@ final class JvmJavaDirectSites {
 	}
 
 	// _junm(Object)Object: the bridge's unmarshal.
-	private Method buildUnmarshal(Utf8Constant name, Utf8Constant desc, MethodRefEntry toList) {
+	private Method buildUnmarshal(Utf8Entry name, Utf8Entry desc, MethodRefEntry toList) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
@@ -2945,7 +2944,7 @@ final class JvmJavaDirectSites {
 
 	// _jarr(Object)Object: the bridge's arrayToList over every array type (elements
 	// unmarshalled as Array.get would box them), or the value itself when it is no array.
-	private Method buildArrayToList(Utf8Constant name, Utf8Constant desc, MethodRefEntry unmarshal) {
+	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal) {
 		MethodCode a = new MethodCode();
 		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");

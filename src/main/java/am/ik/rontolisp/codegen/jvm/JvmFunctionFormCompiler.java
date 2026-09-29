@@ -1,5 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
@@ -76,11 +79,11 @@ final class JvmFunctionFormCompiler {
 		ctx.body.astore(symSlot);
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.evalStoreRef != null) {
-			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className).entry());
-			ctx.body.invokestatic(envLookupRef(ctx, className).entry()).dup();
+			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className));
+			ctx.body.invokestatic(envLookupRef(ctx, className)).dup();
 			MethodCode.Label fenvMiss = ctx.body.newLabel();
 			ctx.body.ifnull(fenvMiss);
-			ctx.body.checkcast(ctx.objectArrayClass.entry()).iconst_1().aaload().dup();
+			ctx.body.checkcast(ctx.objectArrayClass).iconst_1().aaload().dup();
 			MethodCode.Label tombstone = ctx.body.newLabel();
 			ctx.body.ifnull(tombstone);
 			ctx.body.goto_(done);
@@ -90,12 +93,12 @@ final class JvmFunctionFormCompiler {
 			ctx.body.labelBinding(fenvMiss);
 			ctx.body.pop();
 		}
-		ctx.body.aload(symSlot).invokestatic(lookupRef(ctx, className).entry()).dup();
+		ctx.body.aload(symSlot).invokestatic(lookupRef(ctx, className)).dup();
 		MethodCode.Label registryMiss = ctx.body.newLabel();
 		ctx.body.ifnull(registryMiss);
 		ctx.body.iconst_0().aaload();
 		int idSlot = ctx.allocTemp();
-		ctx.body.astore(idSlot).iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+		ctx.body.astore(idSlot).iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 		ctx.body.aload(idSlot).aastore();
 		MethodCode.Label boxed = ctx.body.newLabel();
 		ctx.body.goto_(boxed);
@@ -117,9 +120,9 @@ final class JvmFunctionFormCompiler {
 			// One of the two places a funcId becomes a callable VALUE, so it is where
 			// the _invoke_N dispatchers learn they must carry a case for it.
 			ctx.valueFuncIds.add(fi.funcId());
-			ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0();
+			ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
 			JvmEmitHelper.emitIntConst(ctx, fi.funcId());
-			ctx.body.invokestatic(ctx.integerValueOf.entry()).aastore();
+			ctx.body.invokestatic(ctx.integerValueOf).aastore();
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -148,36 +151,31 @@ final class JvmFunctionFormCompiler {
 				new LispCons(params, new LispCons(call, LispNil.INSTANCE)));
 	}
 
-	private static am.ik.jvm.ConstantPool.FieldrefConstant fenvField(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addFieldref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_fenv"), ctx.cp.addUtf8("Ljava/lang/Object;")));
+	private static FieldRefEntry fenvField(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.fieldRef(ctx.cp.classEntry(className), "_fenv", "Ljava/lang/Object;");
 	}
 
-	private static am.ik.jvm.ConstantPool.MethodrefConstant envLookupRef(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("_envLookup"),
-						ctx.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
+	private static MethodRefEntry envLookupRef(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_envLookup",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
 	}
 
-	private static am.ik.jvm.ConstantPool.MethodrefConstant lookupRef(JvmLispCompiler.Ctx ctx, String className) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)), ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("_lookup"), ctx.cp.addUtf8("(Ljava/lang/Object;)[Ljava/lang/Object;")));
+	private static MethodRefEntry lookupRef(JvmLispCompiler.Ctx ctx, String className) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), "_lookup", "(Ljava/lang/Object;)[Ljava/lang/Object;");
 	}
 
 	// throw new RuntimeException("The function " + name + " is undefined") -- the
 	// same late-binding failure the _invoke_N dispatchers raise for a symbol no
 	// registry row answers.
 	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
-		am.ik.jvm.ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
-		am.ik.jvm.ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
-		am.ik.jvm.ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
-		ctx.body.new_(runtimeEx.entry()).dup();
+		ClassEntry runtimeEx = ctx.cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry exCtor = ctx.cp.methodRef(runtimeEx, "<init>", "(Ljava/lang/String;)V");
+		MethodRefEntry concat = ctx.cp.methodRef(ctx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		ctx.body.new_(runtimeEx).dup();
 		JvmEmitHelper.compileStringLiteral("The function ", ctx);
-		ctx.body.aload(nameSlot).checkcast(ctx.stringClass.entry()).invokevirtual(concat.methodRefEntry());
+		ctx.body.aload(nameSlot).checkcast(ctx.stringClass).invokevirtual(concat);
 		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
-		ctx.body.invokevirtual(concat.methodRefEntry()).invokespecial(exCtor.entry()).athrow();
+		ctx.body.invokevirtual(concat).invokespecial(exCtor).athrow();
 	}
 
 }

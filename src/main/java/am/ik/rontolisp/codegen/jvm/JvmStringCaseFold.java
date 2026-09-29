@@ -1,9 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 
 /**
  * The shared code-point walk behind {@code string-upcase} / {@code string-downcase} /
@@ -40,33 +41,26 @@ final class JvmStringCaseFold {
 	}
 
 	private static void compileLoop(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Mode mode) {
-		ClassConstant sbClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/StringBuilder"));
-		MethodrefConstant sbInit = ctx.cp.addMethodref(sbClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("()V")));
-		MethodrefConstant sbAppendCodePoint = ctx.cp.addMethodref(sbClass, ctx.cp
-			.addNameAndType(ctx.cp.addUtf8("appendCodePoint"), ctx.cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
-		MethodrefConstant sbToString = ctx.cp.addMethodref(sbClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("toString"), ctx.cp.addUtf8("()Ljava/lang/String;")));
-		ClassConstant charClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Character"));
+		ClassEntry sbClass = ctx.cp.classEntry("java/lang/StringBuilder");
+		MethodRefEntry sbInit = ctx.cp.methodRef(sbClass, "<init>", "()V");
+		MethodRefEntry sbAppendCodePoint = ctx.cp.methodRef(sbClass, "appendCodePoint", "(I)Ljava/lang/StringBuilder;");
+		MethodRefEntry sbToString = ctx.cp.methodRef(sbClass, "toString", "()Ljava/lang/String;");
+		ClassEntry charClass = ctx.cp.classEntry("java/lang/Character");
 		// Full-Unicode variants: (int)->(bool/int) accepts a code point, so a Latin-1
 		// supplement letter or a supplementary alphabetic character is folded correctly.
-		MethodrefConstant isLetterOrDigit = ctx.cp.addMethodref(charClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("isLetterOrDigit"), ctx.cp.addUtf8("(I)Z")));
-		MethodrefConstant toUpper = ctx.cp.addMethodref(charClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("toUpperCase"), ctx.cp.addUtf8("(I)I")));
-		MethodrefConstant toLower = ctx.cp.addMethodref(charClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("toLowerCase"), ctx.cp.addUtf8("(I)I")));
-		MethodrefConstant charCharCount = ctx.cp.addMethodref(charClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8("charCount"), ctx.cp.addUtf8("(I)I")));
-		MethodrefConstant stringLength = JvmEmitHelper.stringMethod(ctx, "length", "()I");
-		MethodrefConstant stringCodePointAt = JvmEmitHelper.stringMethod(ctx, "codePointAt", "(I)I");
+		MethodRefEntry isLetterOrDigit = ctx.cp.methodRef(charClass, "isLetterOrDigit", "(I)Z");
+		MethodRefEntry toUpper = ctx.cp.methodRef(charClass, "toUpperCase", "(I)I");
+		MethodRefEntry toLower = ctx.cp.methodRef(charClass, "toLowerCase", "(I)I");
+		MethodRefEntry charCharCount = ctx.cp.methodRef(charClass, "charCount", "(I)I");
+		MethodRefEntry stringLength = JvmEmitHelper.stringMethod(ctx, "length", "()I");
+		MethodRefEntry stringCodePointAt = JvmEmitHelper.stringMethod(ctx, "codePointAt", "(I)I");
 
 		// s = the argument, already normalized to a quoted runtime string by the shared
 		// (string ...) designator coercion the dispatcher wraps it in. A mutable
 		// character vector still normalizes here.
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		ctx.body.checkcast(ctx.stringClass.entry());
+		ctx.body.checkcast(ctx.stringClass);
 		int sSlot = ctx.allocTemp();
 		ctx.body.astore(sSlot);
 
@@ -81,9 +75,9 @@ final class JvmStringCaseFold {
 		MethodCode.Label end = asm.newLabel();
 
 		// sb = new StringBuilder()
-		asm.new_(sbClass.entry());
+		asm.new_(sbClass);
 		asm.dup();
-		asm.invokespecial(sbInit.entry());
+		asm.invokespecial(sbInit);
 		asm.astore(sbSlot);
 		if (capitalize) {
 			// ws = 1 (the string starts at a word boundary)
@@ -96,13 +90,13 @@ final class JvmStringCaseFold {
 		asm.labelBinding(loop);
 		asm.iload(iSlot);
 		asm.aload(sSlot);
-		asm.invokevirtual(stringLength.methodRefEntry());
+		asm.invokevirtual(stringLength);
 		asm.if_icmpge(end);
 		// cp = s.codePointAt(i) -- walks by code point, so a supplementary code point
 		// (surrogate pair) is one indexed step.
 		asm.aload(sSlot);
 		asm.iload(iSlot);
-		asm.invokevirtual(stringCodePointAt.methodRefEntry());
+		asm.invokevirtual(stringCodePointAt);
 		asm.istore(chSlot);
 		if (capitalize) {
 			MethodCode.Label notAlnum = asm.newLabel();
@@ -111,7 +105,7 @@ final class JvmStringCaseFold {
 			MethodCode.Label cont = asm.newLabel();
 			// if (!isLetterOrDigit(cp)) goto notAlnum
 			asm.iload(chSlot);
-			asm.invokestatic(isLetterOrDigit.entry());
+			asm.invokestatic(isLetterOrDigit);
 			asm.ifeq(notAlnum);
 			// alphanumeric: upcase at word start, else downcase.
 			asm.iload(wsSlot);
@@ -128,7 +122,7 @@ final class JvmStringCaseFold {
 			asm.labelBinding(notAlnum);
 			asm.aload(sbSlot);
 			asm.iload(chSlot);
-			asm.invokevirtual(sbAppendCodePoint.methodRefEntry());
+			asm.invokevirtual(sbAppendCodePoint);
 			asm.pop();
 			asm.loadConstant(1);
 			asm.istore(wsSlot);
@@ -142,23 +136,23 @@ final class JvmStringCaseFold {
 		// i += Character.charCount(cp) -- 1 for BMP, 2 for a surrogate pair.
 		asm.iload(iSlot);
 		asm.iload(chSlot);
-		asm.invokestatic(charCharCount.entry());
+		asm.invokestatic(charCharCount);
 		asm.iadd();
 		asm.istore(iSlot);
 		asm.goto_(loop);
 
 		asm.labelBinding(end);
 		asm.aload(sbSlot);
-		asm.invokevirtual(sbToString.methodRefEntry());
+		asm.invokevirtual(sbToString);
 
 	}
 
-	private static void emitAppendFolded(MethodCode asm, int sbSlot, int chSlot, MethodrefConstant fold,
-			MethodrefConstant sbAppendCodePoint) {
+	private static void emitAppendFolded(MethodCode asm, int sbSlot, int chSlot, MethodRefEntry fold,
+			MethodRefEntry sbAppendCodePoint) {
 		asm.aload(sbSlot);
 		asm.iload(chSlot);
-		asm.invokestatic(fold.entry());
-		asm.invokevirtual(sbAppendCodePoint.methodRefEntry());
+		asm.invokestatic(fold);
+		asm.invokevirtual(sbAppendCodePoint);
 		asm.pop();
 	}
 

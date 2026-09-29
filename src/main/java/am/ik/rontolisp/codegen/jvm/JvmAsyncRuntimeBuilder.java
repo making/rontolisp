@@ -1,14 +1,16 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.runtime.RontoFetch;
 
@@ -158,7 +160,7 @@ final class JvmAsyncRuntimeBuilder {
 	}
 
 	/** A ready-to-emit method body, its handlers included. */
-	record AsyncMethod(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record AsyncMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -195,111 +197,82 @@ final class JvmAsyncRuntimeBuilder {
 	 * ({@link JvmUncaughtHandler}) -- or null when no async body records its boundary
 	 * @return the runtime bodies
 	 */
-	static AsyncRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
-			MethodrefConstant instanceInitRef, MethodrefConstant longValueOf, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant stringConcat, @Nullable MethodrefConstant launcherRun,
-			@Nullable JvmMvChannel mvChannel, @Nullable MethodrefConstant asyncAwaited) {
+	static AsyncRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry objectClass,
+			ClassEntry objectArrayClass, ClassEntry stringClass, JvmLispCompiler.ConditionChannel channel,
+			MethodRefEntry instanceInitRef, MethodRefEntry longValueOf, MethodRefEntry stringLength,
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, @Nullable MethodRefEntry launcherRun,
+			@Nullable JvmMvChannel mvChannel, @Nullable MethodRefEntry asyncAwaited) {
 		// --- shared class/method references ---
-		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
-		MethodrefConstant futureCtor = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant futureJoin = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("join"), cp.addUtf8("()Ljava/lang/Object;")));
-		MethodrefConstant futureIsDone = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("isDone"), cp.addUtf8("()Z")));
-		MethodrefConstant futureComplete = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("complete"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant futureCompleted = cp.addMethodref(futureClass,
-				cp.addNameAndType(cp.addUtf8("completedFuture"),
-						cp.addUtf8("(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;")));
+		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
+		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
+		MethodRefEntry futureJoin = cp.methodRef(futureClass, "join", "()Ljava/lang/Object;");
+		MethodRefEntry futureIsDone = cp.methodRef(futureClass, "isDone", "()Z");
+		MethodRefEntry futureComplete = cp.methodRef(futureClass, "complete", "(Ljava/lang/Object;)Z");
+		MethodRefEntry futureCompleted = cp.methodRef(futureClass, "completedFuture",
+				"(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;");
 
-		ClassConstant queueClass = cp.addClass(cp.addUtf8("java/util/concurrent/LinkedBlockingQueue"));
-		MethodrefConstant queueCtor = cp.addMethodref(queueClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant queueOffer = cp.addMethodref(queueClass,
-				cp.addNameAndType(cp.addUtf8("offer"), cp.addUtf8("(Ljava/lang/Object;)Z")));
-		MethodrefConstant queueTake = cp.addMethodref(queueClass,
-				cp.addNameAndType(cp.addUtf8("take"), cp.addUtf8("()Ljava/lang/Object;")));
+		ClassEntry queueClass = cp.classEntry("java/util/concurrent/LinkedBlockingQueue");
+		MethodRefEntry queueCtor = cp.methodRef(queueClass, "<init>", "()V");
+		MethodRefEntry queueOffer = cp.methodRef(queueClass, "offer", "(Ljava/lang/Object;)Z");
+		MethodRefEntry queueTake = cp.methodRef(queueClass, "take", "()Ljava/lang/Object;");
 
-		ClassConstant atomicIntClass = cp.addClass(cp.addUtf8("java/util/concurrent/atomic/AtomicInteger"));
-		MethodrefConstant atomicIntCtor = cp.addMethodref(atomicIntClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
-		MethodrefConstant atomicIntGet = cp.addMethodref(atomicIntClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()I")));
-		MethodrefConstant atomicIntGetAndSet = cp.addMethodref(atomicIntClass,
-				cp.addNameAndType(cp.addUtf8("getAndSet"), cp.addUtf8("(I)I")));
+		ClassEntry atomicIntClass = cp.classEntry("java/util/concurrent/atomic/AtomicInteger");
+		MethodRefEntry atomicIntCtor = cp.methodRef(atomicIntClass, "<init>", "(I)V");
+		MethodRefEntry atomicIntGet = cp.methodRef(atomicIntClass, "get", "()I");
+		MethodRefEntry atomicIntGetAndSet = cp.methodRef(atomicIntClass, "getAndSet", "(I)I");
 
-		ClassConstant latchClass = cp.addClass(cp.addUtf8("java/util/concurrent/CountDownLatch"));
-		MethodrefConstant latchCtor = cp.addMethodref(latchClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(I)V")));
-		MethodrefConstant latchAwait = cp.addMethodref(latchClass,
-				cp.addNameAndType(cp.addUtf8("await"), cp.addUtf8("()V")));
-		MethodrefConstant latchCountDown = cp.addMethodref(latchClass,
-				cp.addNameAndType(cp.addUtf8("countDown"), cp.addUtf8("()V")));
+		ClassEntry latchClass = cp.classEntry("java/util/concurrent/CountDownLatch");
+		MethodRefEntry latchCtor = cp.methodRef(latchClass, "<init>", "(I)V");
+		MethodRefEntry latchAwait = cp.methodRef(latchClass, "await", "()V");
+		MethodRefEntry latchCountDown = cp.methodRef(latchClass, "countDown", "()V");
 
-		ClassConstant threadClass = cp.addClass(cp.addUtf8("java/lang/Thread"));
-		MethodrefConstant threadOfVirtual = cp.addMethodref(threadClass,
-				cp.addNameAndType(cp.addUtf8("ofVirtual"), cp.addUtf8("()Ljava/lang/Thread$Builder$OfVirtual;")));
-		ClassConstant ofVirtualClass = cp.addClass(cp.addUtf8("java/lang/Thread$Builder$OfVirtual"));
-		MethodrefConstant builderStart = cp.addInterfaceMethodref(ofVirtualClass,
-				cp.addNameAndType(cp.addUtf8("start"), cp.addUtf8("(Ljava/lang/Runnable;)Ljava/lang/Thread;")));
+		ClassEntry threadClass = cp.classEntry("java/lang/Thread");
+		MethodRefEntry threadOfVirtual = cp.methodRef(threadClass, "ofVirtual",
+				"()Ljava/lang/Thread$Builder$OfVirtual;");
+		ClassEntry ofVirtualClass = cp.classEntry("java/lang/Thread$Builder$OfVirtual");
+		InterfaceMethodRefEntry builderStart = cp.interfaceMethodRef(ofVirtualClass, "start",
+				"(Ljava/lang/Runnable;)Ljava/lang/Thread;");
 
-		ClassConstant threadLocalClass = cp.addClass(cp.addUtf8("java/lang/ThreadLocal"));
-		MethodrefConstant tlSet = cp.addMethodref(threadLocalClass,
-				cp.addNameAndType(cp.addUtf8("set"), cp.addUtf8("(Ljava/lang/Object;)V")));
-		MethodrefConstant tlGet = cp.addMethodref(threadLocalClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
+		ClassEntry threadLocalClass = cp.classEntry("java/lang/ThreadLocal");
+		MethodRefEntry tlSet = cp.methodRef(threadLocalClass, "set", "(Ljava/lang/Object;)V");
+		MethodRefEntry tlGet = cp.methodRef(threadLocalClass, "get", "()Ljava/lang/Object;");
 
-		ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
 		// An async body's error payload carries its trace when the uncaught report
 		// records
 		// the boundary in it (asyncAwaited): {EMARKER, t, cond, trace}.
 		int errorPayloadLength = asyncAwaited != null ? 4 : 3;
-		@Nullable MethodrefConstant throwableGetStackTrace = asyncAwaited != null
-				? cp.addMethodref(throwableClass,
-						cp.addNameAndType(cp.addUtf8("getStackTrace"), cp.addUtf8("()[Ljava/lang/StackTraceElement;")))
-				: null;
-		@Nullable ClassConstant stackTraceArrayClass = asyncAwaited != null
-				? cp.addClass(cp.addUtf8("[Ljava/lang/StackTraceElement;")) : null;
-		ClassConstant runtimeExceptionClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		@Nullable MethodRefEntry throwableGetStackTrace = asyncAwaited != null
+				? cp.methodRef(throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;") : null;
+		@Nullable ClassEntry stackTraceArrayClass = asyncAwaited != null ? cp.classEntry("[Ljava/lang/StackTraceElement;") : null;
+		ClassEntry runtimeExceptionClass = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry runtimeExceptionInit = cp.methodRef(runtimeExceptionClass, "<init>", "(Ljava/lang/String;)V");
 
-		ConstantPool.FieldrefConstant handoffField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(HANDOFF_FIELD), cp.addUtf8("Ljava/lang/ThreadLocal;")));
+		FieldRefEntry handoffField = cp.fieldRef(thisClass, HANDOFF_FIELD, "Ljava/lang/ThreadLocal;");
 		java.lang.classfile.constantpool.MethodRefEntry condTake = java.util.Objects.requireNonNull(channel.condTake);
 		java.lang.classfile.constantpool.MethodRefEntry condPut = java.util.Objects.requireNonNull(channel.condPut);
 
-		ConstantPool.FieldrefConstant fnField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(FN_FIELD), cp.addUtf8("Ljava/lang/Object;")));
-		ConstantPool.FieldrefConstant futureField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(FUTURE_FIELD), cp.addUtf8("Ljava/lang/Object;")));
-		ConstantPool.FieldrefConstant latchField = cp.addFieldref(thisClass,
-				cp.addNameAndType(cp.addUtf8(LATCH_FIELD), cp.addUtf8("Ljava/lang/Object;")));
+		FieldRefEntry fnField = cp.fieldRef(thisClass, FN_FIELD, "Ljava/lang/Object;");
+		FieldRefEntry futureField = cp.fieldRef(thisClass, FUTURE_FIELD, "Ljava/lang/Object;");
+		FieldRefEntry latchField = cp.fieldRef(thisClass, LATCH_FIELD, "Ljava/lang/Object;");
 
-		MethodrefConstant invoke0 = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8("_invoke_0"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		MethodrefConstant releaseHandoff = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC)));
+		MethodRefEntry invoke0 = cp.methodRef(thisClass, "_invoke_0", "(Ljava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry releaseHandoff = cp.methodRef(thisClass, RELEASE_HANDOFF_METHOD, RELEASE_HANDOFF_DESC);
 		// Self-references: a pull stream's read resolves the thunk's answer through the
 		// generic _await (a thunk may answer a future), and _drain_body reads through
 		// _stream_read so one drain serves both stream modes.
-		MethodrefConstant awaitSelf = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC)));
-		MethodrefConstant streamReadSelf = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC)));
-		MethodrefConstant ivOfBytesSelf = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC)));
-		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
-		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
+		MethodRefEntry awaitSelf = cp.methodRef(thisClass, AWAIT_METHOD, AWAIT_DESC);
+		MethodRefEntry streamReadSelf = cp.methodRef(thisClass, STREAM_READ_METHOD, UNARY_DESC);
+		MethodRefEntry ivOfBytesSelf = cp.methodRef(thisClass, IV_OF_BYTES_METHOD, IV_OF_BYTES_DESC);
+		ClassEntry byteArrayClass = cp.classEntry("[B");
+		ClassEntry longArrayClass = cp.classEntry("[J");
 
-		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
-		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
-		ConstantPool.StringConstant eMarker = cp.addString(EMARKER);
-		ConstantPool.@Nullable StringConstant vMarker = mvChannel != null ? cp.addString(VMARKER) : null;
-		ConstantPool.StringConstant tStr = cp.addString("T");
-		ConstantPool.StringConstant quote = cp.addString("\"");
+		StringEntry sMarker = cp.stringEntry(SMARKER);
+		StringEntry rMarker = cp.stringEntry(RMARKER);
+		StringEntry eMarker = cp.stringEntry(EMARKER);
+		@Nullable StringEntry vMarker = mvChannel != null ? cp.stringEntry(VMARKER) : null;
+		StringEntry tStr = cp.stringEntry("T");
+		StringEntry quote = cp.stringEntry("\"");
 
 		List<AsyncMethod> methods = new ArrayList<>();
 
@@ -307,60 +280,60 @@ final class JvmAsyncRuntimeBuilder {
 		{
 			MethodCode a = new MethodCode();
 			MethodCode.Label done = a.newLabel();
-			a.getstatic(handoffField.entry());
-			a.invokevirtual(tlGet.methodRefEntry()); // [latch-or-null]
+			a.getstatic(handoffField);
+			a.invokevirtual(tlGet); // [latch-or-null]
 			a.dup();
 			MethodCode.Label nonNull = a.newLabel();
 			a.ifnonnull(nonNull);
 			a.pop();
 			a.goto_(done);
 			a.labelBinding(nonNull);
-			a.checkcast(latchClass.entry());
-			a.invokevirtual(latchCountDown.methodRefEntry());
+			a.checkcast(latchClass);
+			a.invokevirtual(latchCountDown);
 			a.labelBinding(done);
 			a.return_();
-			methods.add(new AsyncMethod(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(RELEASE_HANDOFF_METHOD), cp.utf8Entry(RELEASE_HANDOFF_DESC), a));
 		}
 
 		// --- _async_run(fn): spawn the body on a virtual thread, eager-start handoff
 		{
 			MethodCode a = new MethodCode();
 			// future (slot 1)
-			a.new_(futureClass.entry());
+			a.new_(futureClass);
 			a.dup();
-			a.invokespecial(futureCtor.entry());
+			a.invokespecial(futureCtor);
 			a.astore(1);
 			// latch (slot 2)
-			a.new_(latchClass.entry());
+			a.new_(latchClass);
 			a.dup();
 			a.loadConstant(1);
-			a.invokespecial(latchCtor.entry());
+			a.invokespecial(latchCtor);
 			a.astore(2);
 			// runner (slot 3) = new Prog() with the three fields set
-			a.new_(thisClass.entry());
+			a.new_(thisClass);
 			a.dup();
-			a.invokespecial(instanceInitRef.entry());
+			a.invokespecial(instanceInitRef);
 			a.astore(3);
 			a.aload(3);
 			a.aload(0);
-			a.putfield(fnField.entry());
+			a.putfield(fnField);
 			a.aload(3);
 			a.aload(1);
-			a.putfield(futureField.entry());
+			a.putfield(futureField);
 			a.aload(3);
 			a.aload(2);
-			a.putfield(latchField.entry());
+			a.putfield(latchField);
 			// Thread.ofVirtual().start(runner)
-			a.invokestatic(threadOfVirtual.entry()); // [builder]
+			a.invokestatic(threadOfVirtual); // [builder]
 			a.aload(3);
-			a.invokeinterface(builderStart.interfaceMethodRefEntry());
+			a.invokeinterface(builderStart);
 			a.pop();
 			// latch.await() -- resumes at the body's first suspension or completion
 			a.aload(2);
-			a.invokevirtual(latchAwait.methodRefEntry());
+			a.invokevirtual(latchAwait);
 			a.aload(1);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(ASYNC_RUN_METHOD), cp.addUtf8(ASYNC_RUN_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(ASYNC_RUN_METHOD), cp.utf8Entry(ASYNC_RUN_DESC), a));
 		}
 
 		// --- run(): the async body on its virtual thread (Runnable protocol)
@@ -371,26 +344,26 @@ final class JvmAsyncRuntimeBuilder {
 				// if (this._asyncLatch == null) { _main$run(this); return; }
 				MethodCode.Label asyncBody = a.newLabel();
 				a.aload(0);
-				a.getfield(latchField.entry());
+				a.getfield(latchField);
 				a.ifnonnull(asyncBody);
 				a.aload(0);
-				a.invokestatic(launcherRun.entry());
+				a.invokestatic(launcherRun);
 				a.return_();
 				a.labelBinding(asyncBody);
 			}
 			// _handoffTl.set(this._asyncLatch)
-			a.getstatic(handoffField.entry());
+			a.getstatic(handoffField);
 			a.aload(0);
-			a.getfield(latchField.entry());
-			a.invokevirtual(tlSet.methodRefEntry());
+			a.getfield(latchField);
+			a.invokevirtual(tlSet);
 			// try { future.complete(_invoke_0(fn)) }
 			MethodCode.Label tryStart = a.newBoundLabel();
 			a.aload(0);
-			a.getfield(futureField.entry());
-			a.checkcast(futureClass.entry());
+			a.getfield(futureField);
+			a.checkcast(futureClass);
 			a.aload(0);
-			a.getfield(fnField.entry());
-			a.invokestatic(invoke0.entry()); // [future, v]
+			a.getfield(fnField);
+			a.invokestatic(invoke0); // [future, v]
 			if (mvChannel != null && vMarker != null) {
 				// The channel holds the body's extra values the moment its thunk
 				// returns (its tail settled them), on THIS thread: a body that answered
@@ -400,10 +373,10 @@ final class JvmAsyncRuntimeBuilder {
 				mvChannel.emitLoad(a);
 				a.ifnull(single);
 				a.loadConstant(3);
-				a.anewarray(objectClass.entry());
+				a.anewarray(objectClass);
 				a.dup();
 				a.loadConstant(0);
-				a.ldc(vMarker.entry());
+				a.ldc(vMarker);
 				a.aastore();
 				a.dup();
 				a.loadConstant(1);
@@ -417,7 +390,7 @@ final class JvmAsyncRuntimeBuilder {
 				a.labelBinding(single);
 				a.aload(1); // [future, v-or-payload]
 			}
-			a.invokevirtual(futureComplete.methodRefEntry());
+			a.invokevirtual(futureComplete);
 			a.pop();
 			MethodCode.Label tryEnd = a.newBoundLabel();
 			MethodCode.Label done = a.newLabel();
@@ -427,13 +400,13 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode.Label handler = a.newBoundLabel();
 			a.astore(1);
 			a.aload(0);
-			a.getfield(futureField.entry());
-			a.checkcast(futureClass.entry());
+			a.getfield(futureField);
+			a.checkcast(futureClass);
 			a.loadConstant(errorPayloadLength);
-			a.anewarray(objectClass.entry());
+			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
-			a.ldc(eMarker.entry());
+			a.ldc(eMarker);
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
@@ -450,21 +423,21 @@ final class JvmAsyncRuntimeBuilder {
 				a.dup();
 				a.loadConstant(3);
 				a.aload(1);
-				a.invokevirtual(throwableGetStackTrace.methodRefEntry());
+				a.invokevirtual(throwableGetStackTrace);
 				a.aastore();
 			}
 			// [future, payload]
-			a.invokevirtual(futureComplete.methodRefEntry());
+			a.invokevirtual(futureComplete);
 			a.pop();
 			a.labelBinding(done);
 			// latch.countDown() on both paths
 			a.aload(0);
-			a.getfield(latchField.entry());
-			a.checkcast(latchClass.entry());
-			a.invokevirtual(latchCountDown.methodRefEntry());
+			a.getfield(latchField);
+			a.checkcast(latchClass);
+			a.invokevirtual(latchCountDown);
 			a.return_();
-			a.exceptionCatch(tryStart, tryEnd, handler, throwableClass.entry());
-			runMethod = new AsyncMethod(cp.addUtf8("run"), cp.addUtf8("()V"), a);
+			a.exceptionCatch(tryStart, tryEnd, handler, throwableClass);
+			runMethod = new AsyncMethod(cp.utf8Entry("run"), cp.utf8Entry("()V"), a);
 		}
 
 		// --- _await(v): the generic resolver (flattening loop)
@@ -482,38 +455,38 @@ final class JvmAsyncRuntimeBuilder {
 			a.labelBinding(loop);
 			// stream-read token {RMARKER, queue, state}?
 			a.aload(0);
-			a.instanceOf(objectArrayClass.entry());
+			a.instanceOf(objectArrayClass);
 			a.ifeq(notToken);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.arraylength();
 			a.loadConstant(3);
 			a.if_icmpne(notToken);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(0);
 			a.aaload();
-			a.ldc(rMarker.entry());
+			a.ldc(rMarker);
 			a.if_acmpne(notToken);
 			// blocking take (the suspension point): release the handoff first
-			a.invokestatic(releaseHandoff.entry());
+			a.invokestatic(releaseHandoff);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(queueClass.entry());
+			a.checkcast(queueClass);
 			a.astore(1); // q
 			a.aload(1);
-			a.invokevirtual(queueTake.methodRefEntry());
+			a.invokevirtual(queueTake);
 			a.astore(2); // chunk
 			MethodCode.Label notPill = a.newLabel();
 			a.aload(2);
-			a.ldc(sMarker.entry());
+			a.ldc(sMarker);
 			a.if_acmpne(notPill);
 			// end of stream: re-enqueue the pill for other readers, yield nil
 			a.aload(1);
-			a.ldc(sMarker.entry());
-			a.invokevirtual(queueOffer.methodRefEntry());
+			a.ldc(sMarker);
+			a.invokevirtual(queueOffer);
 			a.pop();
 			a.aconst_null();
 			a.areturn();
@@ -528,45 +501,45 @@ final class JvmAsyncRuntimeBuilder {
 			a.labelBinding(notToken);
 			// CompletableFuture?
 			a.aload(0);
-			a.instanceOf(futureClass.entry());
+			a.instanceOf(futureClass);
 			a.ifeq(notFuture);
 			a.aload(0);
-			a.checkcast(futureClass.entry());
+			a.checkcast(futureClass);
 			a.astore(3); // f
 			a.aload(3);
-			a.invokevirtual(futureIsDone.methodRefEntry());
+			a.invokevirtual(futureIsDone);
 			MethodCode.Label joinIt = a.newLabel();
 			a.ifne(joinIt);
-			a.invokestatic(releaseHandoff.entry());
+			a.invokestatic(releaseHandoff);
 			a.labelBinding(joinIt);
 			a.aload(3);
-			a.invokevirtual(futureJoin.methodRefEntry());
+			a.invokevirtual(futureJoin);
 			a.astore(4); // r
 			// the {EMARKER, t, cond[, trace]} error envelope
 			MethodCode.Label plain = a.newLabel();
 			a.aload(4);
-			a.instanceOf(objectArrayClass.entry());
+			a.instanceOf(objectArrayClass);
 			a.ifeq(plain);
 			a.aload(4);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.arraylength();
 			a.loadConstant(errorPayloadLength);
 			a.if_icmpne(plain);
 			a.aload(4);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(0);
 			a.aaload();
-			a.ldc(eMarker.entry());
+			a.ldc(eMarker);
 			a.if_acmpne(plain);
 			// {EMARKER, t, cond}: record the condition under t HERE (the awaiting
 			// thread) and rethrow, so handler-case dispatches by type
 			a.aload(4);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(throwableClass.entry());
+			a.checkcast(throwableClass);
 			a.aload(4);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
 			a.invokestatic(condPut);
@@ -575,11 +548,11 @@ final class JvmAsyncRuntimeBuilder {
 				// thunk recorded in the trace, put back as stored (JvmUncaughtHandler).
 				a.dup();
 				a.aload(4);
-				a.checkcast(objectArrayClass.entry());
+				a.checkcast(objectArrayClass);
 				a.loadConstant(3);
 				a.aaload();
-				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass).entry());
-				a.invokestatic(asyncAwaited.entry());
+				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass));
+				a.invokestatic(asyncAwaited);
 			}
 			a.athrow();
 			a.labelBinding(plain);
@@ -588,12 +561,12 @@ final class JvmAsyncRuntimeBuilder {
 				MethodCode.Label oneValue = a.newLabel();
 				emitMarkerTest(a, objectArrayClass, vMarker, 4, oneValue);
 				a.aload(4);
-				a.checkcast(objectArrayClass.entry());
+				a.checkcast(objectArrayClass);
 				a.loadConstant(2);
 				a.aaload();
 				mvChannel.emitStore(a);
 				a.aload(4);
-				a.checkcast(objectArrayClass.entry());
+				a.checkcast(objectArrayClass);
 				a.loadConstant(1);
 				a.aaload();
 				a.astore(0);
@@ -609,7 +582,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.labelBinding(notFuture);
 			a.aload(0);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(AWAIT_METHOD), cp.utf8Entry(AWAIT_DESC), a));
 		}
 
 		// --- _futurep(v): CompletableFuture or a stream-read token
@@ -618,16 +591,16 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode.Label yes = a.newLabel();
 			MethodCode.Label no = a.newLabel();
 			a.aload(0);
-			a.instanceOf(futureClass.entry());
+			a.instanceOf(futureClass);
 			a.ifne(yes);
 			emitMarkerTest(a, objectArrayClass, rMarker, 0, no);
 			a.labelBinding(yes);
-			a.ldc(tStr.entry());
+			a.ldc(tStr);
 			a.areturn();
 			a.labelBinding(no);
 			a.aconst_null();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(FUTUREP_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(FUTUREP_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _streamp(v)
@@ -635,38 +608,38 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode a = new MethodCode();
 			MethodCode.Label no = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, no);
-			a.ldc(tStr.entry());
+			a.ldc(tStr);
 			a.areturn();
 			a.labelBinding(no);
 			a.aconst_null();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(STREAMP_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(STREAMP_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _make_stream(): {SMARKER, new LinkedBlockingQueue, new AtomicInteger(0)}
 		{
 			MethodCode a = new MethodCode();
 			a.loadConstant(3);
-			a.anewarray(objectClass.entry());
+			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
-			a.ldc(sMarker.entry());
+			a.ldc(sMarker);
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
-			a.new_(queueClass.entry());
+			a.new_(queueClass);
 			a.dup();
-			a.invokespecial(queueCtor.entry());
+			a.invokespecial(queueCtor);
 			a.aastore();
 			a.dup();
 			a.loadConstant(2);
-			a.new_(atomicIntClass.entry());
+			a.new_(atomicIntClass);
 			a.dup();
 			a.loadConstant(0);
-			a.invokespecial(atomicIntCtor.entry());
+			a.invokespecial(atomicIntCtor);
 			a.aastore();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(MAKE_STREAM_METHOD), cp.addUtf8(MAKE_STREAM_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(MAKE_STREAM_METHOD), cp.utf8Entry(MAKE_STREAM_DESC), a));
 		}
 
 		// --- _stream_new(readFn, closeFn): the PULL stream rontolisp::%stream-new
@@ -677,15 +650,15 @@ final class JvmAsyncRuntimeBuilder {
 		{
 			MethodCode a = new MethodCode();
 			a.loadConstant(3);
-			a.anewarray(objectClass.entry());
+			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
-			a.ldc(sMarker.entry());
+			a.ldc(sMarker);
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
 			a.loadConstant(2);
-			a.anewarray(objectClass.entry());
+			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
 			a.aload(0);
@@ -697,13 +670,13 @@ final class JvmAsyncRuntimeBuilder {
 			a.aastore();
 			a.dup();
 			a.loadConstant(2);
-			a.new_(atomicIntClass.entry());
+			a.new_(atomicIntClass);
 			a.dup();
 			a.loadConstant(0);
-			a.invokespecial(atomicIntCtor.entry());
+			a.invokespecial(atomicIntCtor);
 			a.aastore();
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_NEW_METHOD), cp.addUtf8(STREAM_NEW_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_NEW_METHOD), cp.utf8Entry(STREAM_NEW_DESC), a));
 		}
 
 		// --- _stream_read(s): a buffered stream answers the {RMARKER, q, state} token
@@ -720,28 +693,28 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode.Label settle = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.instanceOf(queueClass.entry());
+			a.instanceOf(queueClass);
 			a.ifeq(pull);
 			a.loadConstant(3);
-			a.anewarray(objectClass.entry());
+			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
-			a.ldc(rMarker.entry());
+			a.ldc(rMarker);
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
 			a.aastore();
 			a.dup();
 			a.loadConstant(2);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
 			a.aastore();
@@ -749,49 +722,49 @@ final class JvmAsyncRuntimeBuilder {
 			a.labelBinding(pull);
 			// fns (slot 1), state (slot 2)
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.astore(1);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass.entry());
+			a.checkcast(atomicIntClass);
 			a.astore(2);
 			a.aload(2);
-			a.invokevirtual(atomicIntGet.methodRefEntry());
+			a.invokevirtual(atomicIntGet);
 			a.ifne(drained);
 			// chunk (slot 3) = _await(_invoke_0(readFn))
 			a.aload(1);
 			a.loadConstant(0);
 			a.aaload();
-			a.invokestatic(invoke0.entry());
-			a.invokestatic(awaitSelf.entry());
+			a.invokestatic(invoke0);
+			a.invokestatic(awaitSelf);
 			a.astore(3);
 			a.aload(3);
 			a.ifnonnull(settle);
 			a.aload(2);
 			a.loadConstant(1);
-			a.invokevirtual(atomicIntGetAndSet.methodRefEntry());
+			a.invokevirtual(atomicIntGetAndSet);
 			a.ifne(settle);
 			a.aload(1);
 			a.loadConstant(1);
 			a.aaload();
-			a.invokestatic(invoke0.entry());
+			a.invokestatic(invoke0);
 			a.pop();
 			a.labelBinding(settle);
 			a.aload(3);
-			a.invokestatic(futureCompleted.entry());
+			a.invokestatic(futureCompleted);
 			a.areturn();
 			a.labelBinding(drained);
 			a.aconst_null();
-			a.invokestatic(futureCompleted.entry());
+			a.invokestatic(futureCompleted);
 			a.areturn();
 			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-read expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_READ_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _stream_write(s, chunk)
@@ -805,32 +778,32 @@ final class JvmAsyncRuntimeBuilder {
 			// A pull stream has no buffer to append to -- its chunks come from its read
 			// thunk -- so the refusal is its own, not "the stream is closed".
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.instanceOf(queueClass.entry());
+			a.instanceOf(queueClass);
 			a.ifeq(noWriteEnd);
 			a.aload(1);
 			a.ifnull(nilChunk);
 			// closed?
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass.entry());
-			a.invokevirtual(atomicIntGet.methodRefEntry());
+			a.checkcast(atomicIntClass);
+			a.invokevirtual(atomicIntGet);
 			a.ifne(closed);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.checkcast(queueClass.entry());
+			a.checkcast(queueClass);
 			a.aload(1);
-			a.invokevirtual(queueOffer.methodRefEntry());
+			a.invokevirtual(queueOffer);
 			a.pop();
 			// accepted immediately: a settled future of nil
 			a.aconst_null();
-			a.invokestatic(futureCompleted.entry());
+			a.invokestatic(futureCompleted);
 			a.areturn();
 			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write expects a stream");
@@ -840,7 +813,7 @@ final class JvmAsyncRuntimeBuilder {
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream is closed");
 			a.labelBinding(noWriteEnd);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream has no write end");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_WRITE_METHOD), cp.addUtf8(STREAM_WRITE_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_WRITE_METHOD), cp.utf8Entry(STREAM_WRITE_DESC), a));
 		}
 
 		// --- _stream_close(s): end the stream once -- the poison pill for a buffered
@@ -852,40 +825,40 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode.Label pull = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(2);
 			a.aaload();
-			a.checkcast(atomicIntClass.entry());
+			a.checkcast(atomicIntClass);
 			a.loadConstant(1);
-			a.invokevirtual(atomicIntGetAndSet.methodRefEntry());
+			a.invokevirtual(atomicIntGetAndSet);
 			a.ifne(already);
 			a.aload(0);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
 			a.astore(1);
 			a.aload(1);
-			a.instanceOf(queueClass.entry());
+			a.instanceOf(queueClass);
 			a.ifeq(pull);
 			a.aload(1);
-			a.checkcast(queueClass.entry());
-			a.ldc(sMarker.entry());
-			a.invokevirtual(queueOffer.methodRefEntry());
+			a.checkcast(queueClass);
+			a.ldc(sMarker);
+			a.invokevirtual(queueOffer);
 			a.pop();
 			a.goto_(already);
 			a.labelBinding(pull);
 			a.aload(1);
-			a.checkcast(objectArrayClass.entry());
+			a.checkcast(objectArrayClass);
 			a.loadConstant(1);
 			a.aaload();
-			a.invokestatic(invoke0.entry());
+			a.invokestatic(invoke0);
 			a.pop();
 			a.labelBinding(already);
 			a.aconst_null();
 			a.areturn();
 			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-close expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_CLOSE_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(STREAM_CLOSE_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _iv_of_bytes(byte[]): raw bytes -> byte[]{8, e0, ...}, the packed
@@ -893,8 +866,8 @@ final class JvmAsyncRuntimeBuilder {
 		// _iv* runtime's representation, so aref/length dispatch on it as on any
 		// make-array'd octet vector).
 		{
-			MethodrefConstant arraycopy = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")), cp
-				.addNameAndType(cp.addUtf8("arraycopy"), cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V")));
+			MethodRefEntry arraycopy = cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
+					"(Ljava/lang/Object;ILjava/lang/Object;II)V");
 			MethodCode a = new MethodCode();
 			// slots: 0 bytes, 1 out
 			a.aload(0);
@@ -914,10 +887,10 @@ final class JvmAsyncRuntimeBuilder {
 			a.loadConstant(1);
 			a.aload(0);
 			a.arraylength();
-			a.invokestatic(arraycopy.entry());
+			a.invokestatic(arraycopy);
 			a.aload(1);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(IV_OF_BYTES_METHOD), cp.utf8Entry(IV_OF_BYTES_DESC), a));
 		}
 
 		// --- _drain_body(v): for http-handler response marshaling -- a stream drains to
@@ -930,31 +903,24 @@ final class JvmAsyncRuntimeBuilder {
 		// stream modes (and leaves the buffered one where it was: that pair takes the
 		// chunk, re-enqueues the pill at the end and answers nil).
 		{
-			ClassConstant baosClass = cp.addClass(cp.addUtf8("java/io/ByteArrayOutputStream"));
-			MethodrefConstant baosInit = cp.addMethodref(baosClass,
-					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-			MethodrefConstant baosWrite = cp.addMethodref(baosClass,
-					cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(I)V")));
-			MethodrefConstant baosWriteBytes = cp.addMethodref(baosClass,
-					cp.addNameAndType(cp.addUtf8("writeBytes"), cp.addUtf8("([B)V")));
-			MethodrefConstant baosWriteRange = cp.addMethodref(baosClass,
-					cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("([BII)V")));
-			MethodrefConstant baosToByteArray = cp.addMethodref(baosClass,
-					cp.addNameAndType(cp.addUtf8("toByteArray"), cp.addUtf8("()[B")));
-			MethodrefConstant baosToString = cp.addMethodref(baosClass, cp.addNameAndType(cp.addUtf8("toString"),
-					cp.addUtf8("(Ljava/nio/charset/Charset;)Ljava/lang/String;")));
-			ClassConstant charsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
-			ConstantPool.FieldrefConstant utf8Field = cp.addFieldref(charsetsClass,
-					cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
-			MethodrefConstant stringGetBytes = cp.addMethodref(stringClass,
-					cp.addNameAndType(cp.addUtf8("getBytes"), cp.addUtf8("(Ljava/nio/charset/Charset;)[B")));
+			ClassEntry baosClass = cp.classEntry("java/io/ByteArrayOutputStream");
+			MethodRefEntry baosInit = cp.methodRef(baosClass, "<init>", "()V");
+			MethodRefEntry baosWrite = cp.methodRef(baosClass, "write", "(I)V");
+			MethodRefEntry baosWriteBytes = cp.methodRef(baosClass, "writeBytes", "([B)V");
+			MethodRefEntry baosWriteRange = cp.methodRef(baosClass, "write", "([BII)V");
+			MethodRefEntry baosToByteArray = cp.methodRef(baosClass, "toByteArray", "()[B");
+			MethodRefEntry baosToString = cp.methodRef(baosClass, "toString",
+					"(Ljava/nio/charset/Charset;)Ljava/lang/String;");
+			ClassEntry charsetsClass = cp.classEntry("java/nio/charset/StandardCharsets");
+			FieldRefEntry utf8Field = cp.fieldRef(charsetsClass, "UTF_8", "Ljava/nio/charset/Charset;");
+			MethodRefEntry stringGetBytes = cp.methodRef(stringClass, "getBytes", "(Ljava/nio/charset/Charset;)[B");
 			MethodCode a = new MethodCode();
 			// slots: 0 v, 1 sink, 2 chunk, 3 octetsSeen, 4 textSeen, 5 i, 6 iv
 			MethodCode.Label passThrough = a.newLabel();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, passThrough);
-			a.new_(baosClass.entry());
+			a.new_(baosClass);
 			a.dup();
-			a.invokespecial(baosInit.entry());
+			a.invokespecial(baosInit);
 			a.astore(1);
 			a.loadConstant(0);
 			a.istore(3);
@@ -966,8 +932,8 @@ final class JvmAsyncRuntimeBuilder {
 			MethodCode.Label mixed = a.newLabel();
 			a.labelBinding(loop);
 			a.aload(0);
-			a.invokestatic(streamReadSelf.entry());
-			a.invokestatic(awaitSelf.entry());
+			a.invokestatic(streamReadSelf);
+			a.invokestatic(awaitSelf);
 			a.astore(2); // chunk
 			a.aload(2);
 			a.ifnull(done);
@@ -975,30 +941,30 @@ final class JvmAsyncRuntimeBuilder {
 			// one write
 			MethodCode.Label notOctets = a.newLabel();
 			a.aload(2);
-			a.instanceOf(byteArrayClass.entry());
+			a.instanceOf(byteArrayClass);
 			a.ifeq(notOctets);
 			a.loadConstant(1);
 			a.istore(3);
 			a.aload(1);
 			a.aload(2);
-			a.checkcast(byteArrayClass.entry());
+			a.checkcast(byteArrayClass);
 			a.dup(); // [sink, chunk, chunk]
 			a.arraylength();
 			a.loadConstant(1);
 			a.isub();
 			a.loadConstant(1);
 			a.swap(); // [sink, chunk, 1, len-1]
-			a.invokevirtual(baosWriteRange.methodRefEntry());
+			a.invokevirtual(baosWriteRange);
 			a.goto_(loop);
 			a.labelBinding(notOctets);
 			a.aload(2);
-			a.instanceOf(longArrayClass.entry());
+			a.instanceOf(longArrayClass);
 			a.ifeq(notIv);
 			// a wider packed chunk: every element after the width header, one write each
 			a.loadConstant(1);
 			a.istore(3);
 			a.aload(2);
-			a.checkcast(longArrayClass.entry());
+			a.checkcast(longArrayClass);
 			a.astore(6);
 			a.loadConstant(1);
 			a.istore(5);
@@ -1014,7 +980,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.iload(5);
 			a.laload();
 			a.l2i();
-			a.invokevirtual(baosWrite.methodRefEntry());
+			a.invokevirtual(baosWrite);
 			a.iinc(5, 1);
 			a.goto_(ivLoop);
 			a.labelBinding(ivDone);
@@ -1025,17 +991,17 @@ final class JvmAsyncRuntimeBuilder {
 			a.istore(4);
 			a.aload(1);
 			a.aload(2);
-			a.checkcast(stringClass.entry());
+			a.checkcast(stringClass);
 			a.dup(); // [sink, chunk, chunk]
-			a.invokevirtual(stringLength.methodRefEntry()); // [sink, chunk, len]
+			a.invokevirtual(stringLength); // [sink, chunk, len]
 			a.loadConstant(1);
 			a.isub();
 			a.loadConstant(1);
 			a.swap(); // [sink, chunk, 1, len-1]
-			a.invokevirtual(stringSubstring.methodRefEntry()); // [sink, raw]
-			a.getstatic(utf8Field.entry());
-			a.invokevirtual(stringGetBytes.methodRefEntry()); // [sink, bytes]
-			a.invokevirtual(baosWriteBytes.methodRefEntry());
+			a.invokevirtual(stringSubstring); // [sink, raw]
+			a.getstatic(utf8Field);
+			a.invokevirtual(stringGetBytes); // [sink, bytes]
+			a.invokevirtual(baosWriteBytes);
 			a.goto_(loop);
 			a.labelBinding(done);
 			a.iload(3);
@@ -1047,18 +1013,18 @@ final class JvmAsyncRuntimeBuilder {
 			a.ifeq(textResult);
 			// octets: one byte[] vector, written by the transport as it is
 			a.aload(1);
-			a.invokevirtual(baosToByteArray.methodRefEntry());
-			a.invokestatic(ivOfBytesSelf.entry());
+			a.invokevirtual(baosToByteArray);
+			a.invokestatic(ivOfBytesSelf);
 			a.areturn();
 			// text (or an empty stream): the quoted concatenation
 			a.labelBinding(textResult);
-			a.ldc(quote.entry());
+			a.ldc(quote);
 			a.aload(1);
-			a.getstatic(utf8Field.entry());
-			a.invokevirtual(baosToString.methodRefEntry());
-			a.invokevirtual(stringConcat.methodRefEntry());
-			a.ldc(quote.entry());
-			a.invokevirtual(stringConcat.methodRefEntry());
+			a.getstatic(utf8Field);
+			a.invokevirtual(baosToString);
+			a.invokevirtual(stringConcat);
+			a.ldc(quote);
+			a.invokevirtual(stringConcat);
 			a.areturn();
 			a.labelBinding(mixed);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
@@ -1066,46 +1032,43 @@ final class JvmAsyncRuntimeBuilder {
 			a.labelBinding(passThrough);
 			a.aload(0);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(DRAIN_BODY_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(DRAIN_BODY_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		// --- _wait_for(ms): a future settling to nil after ms milliseconds, via
 		// CompletableFuture.completeOnTimeout (the JDK's shared delayer thread)
 		{
-			MethodrefConstant longValue = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Long")),
-					cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
-			ClassConstant longBoxClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-			ClassConstant timeUnitClass = cp.addClass(cp.addUtf8("java/util/concurrent/TimeUnit"));
-			ConstantPool.FieldrefConstant millisUnit = cp.addFieldref(timeUnitClass,
-					cp.addNameAndType(cp.addUtf8("MILLISECONDS"), cp.addUtf8("Ljava/util/concurrent/TimeUnit;")));
-			MethodrefConstant completeOnTimeout = cp
-				.addMethodref(futureClass, cp.addNameAndType(cp.addUtf8("completeOnTimeout"), cp.addUtf8(
-						"(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/CompletableFuture;")));
+			MethodRefEntry longValue = cp.methodRef(cp.classEntry("java/lang/Long"), "longValue", "()J");
+			ClassEntry longBoxClass = cp.classEntry("java/lang/Long");
+			ClassEntry timeUnitClass = cp.classEntry("java/util/concurrent/TimeUnit");
+			FieldRefEntry millisUnit = cp.fieldRef(timeUnitClass, "MILLISECONDS", "Ljava/util/concurrent/TimeUnit;");
+			MethodRefEntry completeOnTimeout = cp.methodRef(futureClass, "completeOnTimeout",
+					"(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/CompletableFuture;");
 			MethodCode a = new MethodCode();
 			MethodCode.Label bad = a.newLabel();
 			a.aload(0);
-			a.instanceOf(longBoxClass.entry());
+			a.instanceOf(longBoxClass);
 			a.ifeq(bad);
 			a.aload(0);
-			a.checkcast(longBoxClass.entry());
-			a.invokevirtual(longValue.methodRefEntry()); // [J]
+			a.checkcast(longBoxClass);
+			a.invokevirtual(longValue); // [J]
 			a.lstore(1); // ms in slots 1-2; the bad path is reached stack-empty
 			a.lload(1);
 			a.lconst_0();
 			a.lcmp();
 			a.iflt(bad); // []
-			a.new_(futureClass.entry());
+			a.new_(futureClass);
 			a.dup();
-			a.invokespecial(futureCtor.entry()); // [cf]
+			a.invokespecial(futureCtor); // [cf]
 			a.aconst_null(); // [cf, nil]
 			a.lload(1); // [cf, nil, J]
-			a.getstatic(millisUnit.entry()); // [cf, nil, J, unit]
-			a.invokevirtual(completeOnTimeout.methodRefEntry()); // [cf]
+			a.getstatic(millisUnit); // [cf, nil, J, unit]
+			a.invokevirtual(completeOnTimeout); // [cf]
 			a.areturn();
 			a.labelBinding(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
 					"wait-for expects a non-negative integer of milliseconds");
-			methods.add(new AsyncMethod(cp.addUtf8(WAIT_FOR_METHOD), cp.addUtf8(UNARY_DESC), a));
+			methods.add(new AsyncMethod(cp.utf8Entry(WAIT_FOR_METHOD), cp.utf8Entry(UNARY_DESC), a));
 		}
 
 		return new AsyncRuntime(methods, runMethod, true);
@@ -1136,22 +1099,17 @@ final class JvmAsyncRuntimeBuilder {
 	 * @return the helper body
 	 */
 	static AsyncMethod buildOctetsToString(ConstantPool cp) {
-		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant stringFromBytes = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("([BLjava/nio/charset/Charset;)V")));
-		MethodrefConstant stringFromChars = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("([C)V")));
-		ConstantPool.FieldrefConstant latin1 = cp.addFieldref(
-				cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets")),
-				cp.addNameAndType(cp.addUtf8("ISO_8859_1"), cp.addUtf8("Ljava/nio/charset/Charset;")));
-		MethodrefConstant arraycopy = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
-				cp.addNameAndType(cp.addUtf8("arraycopy"), cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V")));
-		ClassConstant characterClass = cp.addClass(cp.addUtf8("java/lang/Character"));
-		MethodrefConstant highSurrogate = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("highSurrogate"), cp.addUtf8("(I)C")));
-		MethodrefConstant lowSurrogate = cp.addMethodref(characterClass,
-				cp.addNameAndType(cp.addUtf8("lowSurrogate"), cp.addUtf8("(I)C")));
+		ClassEntry byteArrayClass = cp.classEntry("[B");
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		MethodRefEntry stringFromBytes = cp.methodRef(stringClass, "<init>", "([BLjava/nio/charset/Charset;)V");
+		MethodRefEntry stringFromChars = cp.methodRef(stringClass, "<init>", "([C)V");
+		FieldRefEntry latin1 = cp.fieldRef(cp.classEntry("java/nio/charset/StandardCharsets"), "ISO_8859_1",
+				"Ljava/nio/charset/Charset;");
+		MethodRefEntry arraycopy = cp.methodRef(cp.classEntry("java/lang/System"), "arraycopy",
+				"(Ljava/lang/Object;ILjava/lang/Object;II)V");
+		ClassEntry characterClass = cp.classEntry("java/lang/Character");
+		MethodRefEntry highSurrogate = cp.methodRef(characterClass, "highSurrogate", "(I)C");
+		MethodRefEntry lowSurrogate = cp.methodRef(characterClass, "lowSurrogate", "(I)C");
 
 		MethodCode a = new MethodCode();
 		// slots: 0 v, 1 bytes (the vector: tag, then the octets), 2 n (its length), 3 i,
@@ -1162,10 +1120,10 @@ final class JvmAsyncRuntimeBuilder {
 		Unit unit = new Unit(bytesSlot, iSlot, nSlot, bSlot, cpSlot, advSlot, cp4Slot);
 		MethodCode.Label none = a.newLabel();
 		a.aload(0);
-		a.instanceOf(byteArrayClass.entry());
+		a.instanceOf(byteArrayClass);
 		a.ifeq(none);
 		a.aload(0);
-		a.checkcast(byteArrayClass.entry());
+		a.checkcast(byteArrayClass);
 		a.astore(bytesSlot);
 		a.aload(bytesSlot);
 		a.arraylength();
@@ -1220,7 +1178,7 @@ final class JvmAsyncRuntimeBuilder {
 		a.aload(outSlot);
 		a.loadConstant(1);
 		a.iload(unitsSlot);
-		a.invokestatic(arraycopy.entry());
+		a.invokestatic(arraycopy);
 		MethodCode.Label latin1Framed = a.newLabel();
 		a.goto_(latin1Framed);
 		a.labelBinding(notVerbatim);
@@ -1238,7 +1196,7 @@ final class JvmAsyncRuntimeBuilder {
 		a.istore(kSlot);
 		unit.emitLoop(a, latin1Framed, () -> {
 			a.aload(outSlot);
-			a.checkcast(byteArrayClass.entry());
+			a.checkcast(byteArrayClass);
 			a.iload(kSlot);
 			a.iload(cpSlot);
 			a.bastore();
@@ -1247,23 +1205,23 @@ final class JvmAsyncRuntimeBuilder {
 		// out[0] = out[last] = '"'; return new String(out, ISO_8859_1)
 		a.labelBinding(latin1Framed);
 		a.aload(outSlot);
-		a.checkcast(byteArrayClass.entry());
+		a.checkcast(byteArrayClass);
 		a.loadConstant(0);
 		a.loadConstant('"');
 		a.bastore();
 		a.aload(outSlot);
-		a.checkcast(byteArrayClass.entry());
+		a.checkcast(byteArrayClass);
 		a.dup();
 		a.arraylength();
 		a.loadConstant(1);
 		a.isub();
 		a.loadConstant('"');
 		a.bastore();
-		a.new_(stringClass.entry());
+		a.new_(stringClass);
 		a.dup();
 		a.aload(outSlot);
-		a.getstatic(latin1.entry());
-		a.invokespecial(stringFromBytes.entry());
+		a.getstatic(latin1);
+		a.invokespecial(stringFromBytes);
 		a.areturn();
 		// Otherwise a char[], a supplementary character as its surrogate pair.
 		a.labelBinding(wide);
@@ -1286,14 +1244,14 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(cp.classEntry("[C"));
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.invokestatic(highSurrogate.entry());
+			a.invokestatic(highSurrogate);
 			a.castore();
 			a.iinc(kSlot, 1);
 			a.aload(outSlot);
 			a.checkcast(cp.classEntry("[C"));
 			a.iload(kSlot);
 			a.iload(cpSlot);
-			a.invokestatic(lowSurrogate.entry());
+			a.invokestatic(lowSurrogate);
 			a.castore();
 			a.goto_(stored);
 			a.labelBinding(bmp);
@@ -1319,16 +1277,16 @@ final class JvmAsyncRuntimeBuilder {
 		a.isub();
 		a.loadConstant('"');
 		a.castore();
-		a.new_(stringClass.entry());
+		a.new_(stringClass);
 		a.dup();
 		a.aload(outSlot);
 		a.checkcast(cp.classEntry("[C"));
-		a.invokespecial(stringFromChars.entry());
+		a.invokespecial(stringFromChars);
 		a.areturn();
 		a.labelBinding(none);
 		a.aconst_null();
 		a.areturn();
-		return new AsyncMethod(cp.addUtf8(OCTETS_PACKED_METHOD), cp.addUtf8(UNARY_DESC), a);
+		return new AsyncMethod(cp.utf8Entry(OCTETS_PACKED_METHOD), cp.utf8Entry(UNARY_DESC), a);
 	}
 
 	/**
@@ -1454,32 +1412,32 @@ final class JvmAsyncRuntimeBuilder {
 	 * Emits "is local {@code slot} an {@code Object[3]} whose head is {@code marker}",
 	 * branching to {@code noLabel} when it is not (falls through when it is).
 	 */
-	private static void emitMarkerTest(MethodCode a, ClassConstant objectArrayClass, ConstantPool.StringConstant marker,
-			int slot, MethodCode.Label noLabel) {
+	private static void emitMarkerTest(MethodCode a, ClassEntry objectArrayClass, StringEntry marker, int slot,
+			MethodCode.Label noLabel) {
 		a.aload(slot);
-		a.instanceOf(objectArrayClass.entry());
+		a.instanceOf(objectArrayClass);
 		a.ifeq(noLabel);
 		a.aload(slot);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.arraylength();
 		a.loadConstant(3);
 		a.if_icmpne(noLabel);
 		a.aload(slot);
-		a.checkcast(objectArrayClass.entry());
+		a.checkcast(objectArrayClass);
 		a.loadConstant(0);
 		a.aaload();
-		a.ldc(marker.entry());
+		a.ldc(marker);
 		a.if_acmpne(noLabel);
 	}
 
 	/** Emits {@code throw new RuntimeException(message)}. */
-	private static void emitThrow(MethodCode a, ConstantPool cp, ClassConstant runtimeExceptionClass,
-			MethodrefConstant runtimeExceptionInit, String message) {
-		ConstantPool.StringConstant msg = cp.addString(message);
-		a.new_(runtimeExceptionClass.entry());
+	private static void emitThrow(MethodCode a, ConstantPool cp, ClassEntry runtimeExceptionClass,
+			MethodRefEntry runtimeExceptionInit, String message) {
+		StringEntry msg = cp.stringEntry(message);
+		a.new_(runtimeExceptionClass);
 		a.dup();
-		a.ldc(msg.entry());
-		a.invokespecial(runtimeExceptionInit.entry());
+		a.ldc(msg);
+		a.invokespecial(runtimeExceptionInit);
 		a.athrow();
 	}
 

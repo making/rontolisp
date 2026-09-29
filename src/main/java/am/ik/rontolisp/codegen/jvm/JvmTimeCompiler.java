@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.LongEntry;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -29,29 +30,29 @@ final class JvmTimeCompiler {
 		}
 		switch (name) {
 			case LispNames.GET_UNIVERSAL_TIME -> {
-				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis").entry());
+				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis"));
 				pushRawLong(1000L, ctx);
 				ctx.body.ldiv();
 				pushRawLong(UNIVERSAL_TIME_OFFSET, ctx);
 				ctx.body.ladd();
 			}
 			case LispNames.GET_INTERNAL_REAL_TIME -> {
-				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis").entry());
+				ctx.body.invokestatic(ctx.systemOp("currentTimeMillis"));
 			}
 			case LispNames.GET_INTERNAL_RUN_TIME -> {
-				ctx.body.invokestatic(ctx.systemOp("nanoTime").entry());
+				ctx.body.invokestatic(ctx.systemOp("nanoTime"));
 				pushRawLong(1000000L, ctx);
 				ctx.body.ldiv();
 			}
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Box the long result.
-		ctx.body.invokestatic(ctx.longValueOf.entry());
+		ctx.body.invokestatic(ctx.longValueOf);
 	}
 
 	private static void pushRawLong(long value, JvmLispCompiler.Ctx ctx) {
-		final ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-		ctx.body.ldc(lc.entry());
+		final LongEntry lc = ctx.cp.entries().longEntry(value);
+		ctx.body.ldc(lc);
 	}
 
 }

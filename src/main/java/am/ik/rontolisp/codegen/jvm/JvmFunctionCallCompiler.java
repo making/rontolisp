@@ -1,5 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -8,8 +10,6 @@ import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 
 /**
  * Compiles function calls: direct calls, indirect calls, general indirect calls, and
@@ -82,7 +82,7 @@ final class JvmFunctionCallCompiler {
 				emitters.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 			}
 			JvmPhysicalArgs.emit(ctx, className, fi, emitters);
-			ctx.body.invokestatic(fi.methodref().entry());
+			ctx.body.invokestatic(fi.methodref());
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globals.contains(name)) {
 			// A defun nested inside a top-level let or a function body compiles to
@@ -117,11 +117,10 @@ final class JvmFunctionCallCompiler {
 	static void emitDispatchCall(int arity, JvmLispCompiler.Ctx ctx, String className) {
 		String dispatchName = "_invoke_" + arity;
 		String dispatchDesc = "(" + "Ljava/lang/Object;".repeat(arity + 1) + ")Ljava/lang/Object;";
-		Utf8Constant nameUtf8 = ctx.cp.addUtf8(dispatchName);
-		Utf8Constant descUtf8 = ctx.cp.addUtf8(dispatchDesc);
-		MethodrefConstant methodref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(nameUtf8, descUtf8));
-		ctx.body.invokestatic(methodref.entry());
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(dispatchName);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(dispatchDesc);
+		MethodRefEntry methodref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(methodref);
 	}
 
 }

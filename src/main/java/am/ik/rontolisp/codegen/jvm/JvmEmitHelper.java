@@ -1,6 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
@@ -89,7 +96,7 @@ final class JvmEmitHelper {
 
 	static void compileLong(long value, JvmLispCompiler.Ctx ctx) {
 		emitRawLong(value, ctx);
-		ctx.body.invokestatic(ctx.longValueOf.entry());
+		ctx.body.invokestatic(ctx.longValueOf);
 	}
 
 	/** Pushes the primitive {@code long} (no boxing). */
@@ -101,14 +108,14 @@ final class JvmEmitHelper {
 			ctx.body.lconst_1();
 		}
 		else {
-			ConstantPool.LongConstant lc = ctx.cp.addLong(value);
-			ctx.body.ldc(lc.entry());
+			LongEntry lc = ctx.cp.entries().longEntry(value);
+			ctx.body.ldc(lc);
 		}
 	}
 
 	static void compileDouble(double value, JvmLispCompiler.Ctx ctx) {
 		emitRawDouble(value, ctx);
-		ctx.body.invokestatic(ctx.doubleValueOf.entry());
+		ctx.body.invokestatic(ctx.doubleValueOf);
 	}
 
 	/** Pushes the primitive {@code double} (no boxing). */
@@ -122,8 +129,8 @@ final class JvmEmitHelper {
 			ctx.body.dconst_1();
 		}
 		else {
-			ConstantPool.DoubleConstant dc = ctx.cp.addDouble(value);
-			ctx.body.ldc(dc.entry());
+			DoubleEntry dc = ctx.cp.entries().doubleEntry(value);
+			ctx.body.ldc(dc);
 		}
 	}
 
@@ -138,8 +145,8 @@ final class JvmEmitHelper {
 	 * @param ctx the compilation context
 	 */
 	static void compileBigInteger(java.math.BigInteger value, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.FieldrefConstant ref = ctx.bigIntPool.intern(ctx.cp, ctx.className, value);
-		ctx.body.getstatic(ref.entry());
+		FieldRefEntry ref = ctx.bigIntPool.intern(ctx.cp, ctx.className, value);
+		ctx.body.getstatic(ref);
 	}
 
 	/**
@@ -147,7 +154,7 @@ final class JvmEmitHelper {
 	 * {@code BigInteger[2]} of numerator and denominator.
 	 */
 	static void compileRatio(am.ik.rontolisp.LispRatio value, JvmLispCompiler.Ctx ctx) {
-		ctx.body.iconst_2().anewarray(bigIntegerClass(ctx).entry()).dup().iconst_0();
+		ctx.body.iconst_2().anewarray(bigIntegerClass(ctx)).dup().iconst_0();
 		compileBigInteger(value.numerator(), ctx);
 		ctx.body.aastore().dup().iconst_1();
 		compileBigInteger(value.denominator(), ctx);
@@ -155,8 +162,8 @@ final class JvmEmitHelper {
 	}
 
 	/** The {@code BigInteger[]} (ratio runtime representation) class constant. */
-	static ConstantPool.ClassConstant ratioArrayClass(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addClass(ctx.cp.addUtf8("[Ljava/math/BigInteger;"));
+	static ClassEntry ratioArrayClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.classEntry("[Ljava/math/BigInteger;");
 	}
 
 	/**
@@ -174,8 +181,8 @@ final class JvmEmitHelper {
 		if (!ctx.mayUseInstances) {
 			return;
 		}
-		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
-		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp).entry()).ifne(notCons);
+		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
+		ctx.body.instanceOf(ctx.layoutPool.stringArrayClass(ctx.cp)).ifne(notCons);
 	}
 
 	/**
@@ -200,11 +207,11 @@ final class JvmEmitHelper {
 		}
 		// Length first, like the runtime's own marker test: it rejects every cons
 		// (Object[2]) before a string comparison is reached.
-		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).arraylength().iconst_3();
+		ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass).arraylength().iconst_3();
 		MethodCode.Label ifNotTriplePos = ctx.body.newLabel();
 		ctx.body.if_icmpne(ifNotTriplePos);
 		for (String marker : new String[] { JvmAsyncRuntimeBuilder.SMARKER, JvmAsyncRuntimeBuilder.RMARKER }) {
-			ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			ctx.body.aload(tempSlot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 			compileUnspelledLiteral(marker, ctx);
 			ctx.body.if_acmpeq(notCons);
 		}
@@ -235,18 +242,18 @@ final class JvmEmitHelper {
 	 * @param ctx the compilation context
 	 */
 	static void compileUnspelledLiteral(String value, JvmLispCompiler.Ctx ctx) {
-		ConstantPool.StringConstant sc = ctx.cp.addString(value);
+		StringEntry sc = ctx.cp.stringEntry(value);
 		if (sc.index() <= 255) {
-			ctx.body.ldc(sc.entry());
+			ctx.body.ldc(sc);
 		}
 		else {
-			ctx.body.ldc(sc.entry());
+			ctx.body.ldc(sc);
 		}
 	}
 
 	/** The {@code java/math/BigInteger} class constant. */
-	static ConstantPool.ClassConstant bigIntegerClass(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addClass(ctx.cp.addUtf8("java/math/BigInteger"));
+	static ClassEntry bigIntegerClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.classEntry("java/math/BigInteger");
 	}
 
 	/**
@@ -255,8 +262,8 @@ final class JvmEmitHelper {
 	 * runtime CHARACTER representation is a length-1 {@code int[]} whose sole element is
 	 * the Unicode code point ({@link #charArrayClass}), not this class.
 	 */
-	static ConstantPool.ClassConstant characterClass(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Character"));
+	static ClassEntry characterClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.classEntry("java/lang/Character");
 	}
 
 	/**
@@ -264,9 +271,8 @@ final class JvmEmitHelper {
 	 * helpers like {@code Character.toUpperCase(int)} / {@code Character.digit(int, int)}
 	 * that the char builtins delegate to).
 	 */
-	static ConstantPool.MethodrefConstant characterMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
-		return ctx.cp.addMethodref(characterClass(ctx),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	static MethodRefEntry characterMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.methodRef(characterClass(ctx), name, desc);
 	}
 
 	/**
@@ -278,8 +284,8 @@ final class JvmEmitHelper {
 	 * constant are the type discriminator ({@code instanceof int[]}), never
 	 * {@link #characterClass} which is 16-bit.
 	 */
-	static ConstantPool.ClassConstant charArrayClass(JvmLispCompiler.Ctx ctx) {
-		return ctx.cp.addClass(ctx.cp.addUtf8("[I"));
+	static ClassEntry charArrayClass(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.classEntry("[I");
 	}
 
 	/**
@@ -313,25 +319,22 @@ final class JvmEmitHelper {
 	 * {@code [.., ref]}; on exit: {@code [.., cp:int]}.
 	 */
 	static void unboxCodePoint(JvmLispCompiler.Ctx ctx) {
-		ctx.body.checkcast(charArrayClass(ctx).entry()).iconst_0().iaload();
+		ctx.body.checkcast(charArrayClass(ctx)).iconst_0().iaload();
 	}
 
 	/** A {@code java.math.BigInteger} instance-method reference. */
-	static ConstantPool.MethodrefConstant bigIntegerMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
-		return ctx.cp.addMethodref(bigIntegerClass(ctx),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	static MethodRefEntry bigIntegerMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.methodRef(bigIntegerClass(ctx), name, desc);
 	}
 
 	/** A {@code java.lang.String} instance-method reference. */
-	static ConstantPool.MethodrefConstant stringMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
-		return ctx.cp.addMethodref(ctx.stringClass, ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	static MethodRefEntry stringMethod(JvmLispCompiler.Ctx ctx, String name, String desc) {
+		return ctx.cp.methodRef(ctx.stringClass, name, desc);
 	}
 
 	/** A static-method reference into the class being generated (a runtime helper). */
-	static ConstantPool.MethodrefConstant selfMethod(JvmLispCompiler.Ctx ctx, String className, String name,
-			String desc) {
-		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	static MethodRefEntry selfMethod(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
 	}
 
 	/**
@@ -356,11 +359,11 @@ final class JvmEmitHelper {
 	 */
 	static void emitSharedCall(JvmLispCompiler.Ctx ctx, String className, String name, int arity,
 			java.util.function.Consumer<JvmLispCompiler.Ctx> body) {
-		ConstantPool.MethodrefConstant ref = ctx.sharedHelpers.get(name);
+		MethodRefEntry ref = ctx.sharedHelpers.get(name);
 		if (ref == null) {
 			String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
-			ConstantPool.Utf8Constant nameUtf8 = ctx.cp.addUtf8(name);
-			ConstantPool.Utf8Constant descUtf8 = ctx.cp.addUtf8(desc);
+			Utf8Entry nameUtf8 = ctx.cp.utf8Entry(name);
+			Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc);
 			ref = selfMethod(ctx, className, name, desc);
 			// Recorded BEFORE the body is emitted so a helper whose own body reaches the
 			// same emitter finds it claimed rather than starting a second one.
@@ -373,7 +376,7 @@ final class JvmEmitHelper {
 			helper.body.areturn();
 			ctx.outlinedBodies.add(new JvmBodyOutliner.OutlinedBody(name, nameUtf8, descUtf8, helper));
 		}
-		ctx.body.invokestatic(ref.entry());
+		ctx.body.invokestatic(ref);
 	}
 
 	/**
@@ -381,31 +384,31 @@ final class JvmEmitHelper {
 	 * {@code BigInteger}.
 	 */
 	static void toBigInteger(JvmLispCompiler.Ctx ctx) {
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.BIG_OP).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.BIG_OP));
 	}
 
 	/** Normalizes the {@code BigInteger} on the stack to a {@code Long} when it fits. */
 	static void normalizeBigInteger(JvmLispCompiler.Ctx ctx) {
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NORM_OP).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.NORM_OP));
 	}
 
 	static void unboxLong(JvmLispCompiler.Ctx ctx) {
-		ctx.body.checkcast(ctx.longClass.entry()).invokevirtual(ctx.longValue.methodRefEntry());
+		ctx.body.checkcast(ctx.longClass).invokevirtual(ctx.longValue);
 	}
 
 	static void boxLong(JvmLispCompiler.Ctx ctx) {
-		ctx.body.invokestatic(ctx.longValueOf.entry());
+		ctx.body.invokestatic(ctx.longValueOf);
 	}
 
 	static void unboxDouble(JvmLispCompiler.Ctx ctx) {
 		// _dbl coerces Long/BigInteger/Double and ratios (BigInteger[]) to a Double, so
 		// float contagion also works when a ratio flows into a double-literal operation.
-		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL).entry());
-		ctx.body.checkcast(ctx.numberClass.entry()).invokevirtual(ctx.numberDoubleValue.methodRefEntry());
+		ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.DBL));
+		ctx.body.checkcast(ctx.numberClass).invokevirtual(ctx.numberDoubleValue);
 	}
 
 	static void boxDouble(JvmLispCompiler.Ctx ctx) {
-		ctx.body.invokestatic(ctx.doubleValueOf.entry());
+		ctx.body.invokestatic(ctx.doubleValueOf);
 	}
 
 	/**
@@ -417,7 +420,7 @@ final class JvmEmitHelper {
 	 * ({@code .kb/declarations-type-checks.md}).
 	 */
 	static void unboxDeclaredDouble(JvmLispCompiler.Ctx ctx) {
-		ctx.body.checkcast(ctx.doubleClass.entry()).invokevirtual(ctx.numberDoubleValue.methodRefEntry());
+		ctx.body.checkcast(ctx.doubleClass).invokevirtual(ctx.numberDoubleValue);
 	}
 
 	/**
@@ -438,7 +441,7 @@ final class JvmEmitHelper {
 			ctx.body.loadConstant(value);
 		}
 		else {
-			ctx.body.ldc(ctx.cp.addInteger(value).entry());
+			ctx.body.ldc(ctx.cp.entries().intEntry(value));
 		}
 	}
 
@@ -464,14 +467,14 @@ final class JvmEmitHelper {
 	 * @param ctx the compile context
 	 */
 	static void emitListCheck(JvmLispCompiler.Ctx ctx) {
-		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_LIST).entry());
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_LIST));
 	}
 
 	/**
 	 * Boxes a local variable in an Object[1] cell for capture-by-reference.
 	 */
 	static void emitBoxLocal(JvmLispCompiler.Ctx ctx, int slot) {
-		ctx.body.iconst_1().anewarray(ctx.objectClass.entry()).dup().iconst_0().aload(slot);
+		ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0().aload(slot);
 		ctx.body.aastore().astore(slot);
 	}
 

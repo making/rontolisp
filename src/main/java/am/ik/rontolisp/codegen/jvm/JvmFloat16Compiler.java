@@ -1,10 +1,10 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
@@ -45,7 +45,7 @@ final class JvmFloat16Compiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmEmitHelper.toBigInteger(ctx);
-		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+		ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J"));
 		ctx.body.l2i();
 		invokeStatic(ctx, "java/lang/Float", "float16ToFloat", "(S)F");
 		ctx.body.f2d();
@@ -73,16 +73,15 @@ final class JvmFloat16Compiler {
 		if (startExpr != null) {
 			JvmExprCompiler.compileExpr(startExpr, ctx, className);
 			JvmEmitHelper.toBigInteger(ctx);
-			ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J").methodRefEntry());
+			ctx.body.invokevirtual(JvmEmitHelper.bigIntegerMethod(ctx, "longValue", "()J"));
 			ctx.body.l2i();
 		}
 		else {
 			JvmEmitHelper.emitIntConst(ctx, 0);
 		}
-		ClassConstant selfClass = ctx.cp.addClass(ctx.cp.addUtf8(className));
-		MethodrefConstant helper = ctx.cp.addMethodref(selfClass,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(helper.entry());
+		ClassEntry selfClass = ctx.cp.classEntry(className);
+		MethodRefEntry helper = ctx.cp.methodRef(selfClass, name, desc);
+		ctx.body.invokestatic(helper);
 	}
 
 	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword, int from) {
@@ -95,10 +94,9 @@ final class JvmFloat16Compiler {
 	}
 
 	private static void invokeStatic(JvmLispCompiler.Ctx ctx, String owner, String name, String desc) {
-		ConstantPool.ClassConstant cls = ctx.cp.addClass(ctx.cp.addUtf8(owner));
-		ConstantPool.MethodrefConstant ref = ctx.cp.addMethodref(cls,
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
-		ctx.body.invokestatic(ref.entry());
+		ClassEntry cls = ctx.cp.classEntry(owner);
+		MethodRefEntry ref = ctx.cp.methodRef(cls, name, desc);
+		ctx.body.invokestatic(ref);
 	}
 
 }

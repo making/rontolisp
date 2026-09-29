@@ -210,7 +210,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	}
 
 	private static ArrayMethod method(Refs r, String name, String desc, int maxStack, int maxLocals, MethodCode a) {
-		return new ArrayMethod(r.cp().addUtf8(name), r.cp().addUtf8(desc), a);
+		return new ArrayMethod(r.cp().utf8Entry(name), r.cp().utf8Entry(desc), a);
 	}
 
 	private static void throwMessage(MethodCode a, Refs r, String message) {
@@ -771,7 +771,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.invokespecial(r.sbInit());
 		a.aload(7);
 		a.invokevirtual(r.sbAppendStr());
-		a.ldc(r.cp().addString(": a quantized matrix has rank 1 or 2, got rank ").entry());
+		a.ldc(r.cp().stringEntry(": a quantized matrix has rank 1 or 2, got rank "));
 		a.invokevirtual(r.sbAppendStr());
 		a.iload(1);
 		a.invokevirtual(r.sbAppendInt());
@@ -807,7 +807,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.invokespecial(r.sbInit());
 		a.aload(0);
 		a.invokevirtual(r.sbAppendStr());
-		a.ldc(r.cp().addString(": the last dimension must be a multiple of 32 (the q8-0 block), got ").entry());
+		a.ldc(r.cp().stringEntry(": the last dimension must be a multiple of 32 (the q8-0 block), got "));
 		a.invokevirtual(r.sbAppendStr());
 		a.iload(4);
 		a.invokevirtual(r.sbAppendInt());

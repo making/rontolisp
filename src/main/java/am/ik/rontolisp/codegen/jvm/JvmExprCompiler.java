@@ -1,6 +1,8 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
@@ -33,7 +35,6 @@ import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
-import am.ik.jvm.ConstantPool.MethodrefConstant;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -79,10 +80,9 @@ final class JvmExprCompiler {
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
 		compileExpr(args.get(3), ctx, className);
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.METHOD),
-						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.DESC)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmAritySurplusRuntimeBuilder.METHOD,
+				JvmAritySurplusRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 	/**
@@ -142,10 +142,9 @@ final class JvmExprCompiler {
 		List<LispVal> args = cons.toList();
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
 		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
-		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_METHOD),
-						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_DESC)));
-		ctx.body.invokestatic(ref.entry());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className),
+				JvmAritySurplusRuntimeBuilder.MISSING_METHOD, JvmAritySurplusRuntimeBuilder.MISSING_DESC);
+		ctx.body.invokestatic(ref);
 	}
 
 	/**
@@ -318,7 +317,7 @@ final class JvmExprCompiler {
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			if (ctx.boxedVars.contains(name)) {
-				ctx.body.aload(slot).checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+				ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
 			}
 			else {
 				ctx.body.aload(slot);
@@ -328,7 +327,7 @@ final class JvmExprCompiler {
 			int captureIdx = ctx.captures.get(name);
 			ctx.body.aload(ctx.closureEnvSlot);
 			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
-			ctx.body.aaload().checkcast(ctx.objectArrayClass.entry()).iconst_0().aaload();
+			ctx.body.aaload().checkcast(ctx.objectArrayClass).iconst_0().aaload();
 		}
 		else if (ctx.globals.contains(name)) {
 			// A top-level global variable: read from its dedicated static field. Works
@@ -386,12 +385,12 @@ final class JvmExprCompiler {
 			java.lang.classfile.constantpool.FieldRefEntry tlField = dyn.fields().get(name);
 			if (tlField != null) {
 				ctx.body.getstatic(tlField);
-				ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).entry());
+				ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
 				ctx.body.invokestatic(dyn.dget());
 				return;
 			}
 		}
-		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)).entry());
+		ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -537,10 +536,8 @@ final class JvmExprCompiler {
 								"%octets-to-string-packed expects 1 argument, got " + (cons.toList().size() - 1));
 					}
 					compileExpr(cons.toList().get(1), ctx, className);
-					ctx.body.invokestatic(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD),
-									ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
-						.entry());
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className),
+							JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC));
 					return;
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
@@ -550,10 +547,8 @@ final class JvmExprCompiler {
 						throw new UnsupportedOperationException(
 								"%random-byte expects 0 arguments, got " + (cons.toList().size() - 1));
 					}
-					ctx.body.invokestatic(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.METHOD),
-									ctx.cp.addUtf8(JvmSecureRandomRuntimeBuilder.DESC)))
-						.entry());
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className),
+							JvmSecureRandomRuntimeBuilder.METHOD, JvmSecureRandomRuntimeBuilder.DESC));
 					return;
 				}
 				if (LispNames.WASM_EXPORT.equals(qn.member())) {
@@ -2362,11 +2357,7 @@ final class JvmExprCompiler {
 		if (arity == 1) {
 			compileExpr(args.get(1), ctx, className);
 		}
-		ctx.body.invokestatic(
-				ctx.cp
-					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
-					.entry());
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), method, desc));
 	}
 
 	/**
@@ -2416,11 +2407,7 @@ final class JvmExprCompiler {
 			};
 			desc = JvmThreadRuntimeBuilder.UNARY_DESC;
 		}
-		ctx.body.invokestatic(
-				ctx.cp
-					.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
-					.entry());
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), method, desc));
 	}
 
 	/**

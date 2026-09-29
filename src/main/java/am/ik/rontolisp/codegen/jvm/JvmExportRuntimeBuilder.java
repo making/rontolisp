@@ -3,13 +3,13 @@ package am.ik.rontolisp.codegen.jvm;
 import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import org.jspecify.annotations.Nullable;
 
@@ -61,7 +61,7 @@ import am.ik.rontolisp.compiler.JvmExportDirective;
 final class JvmExportRuntimeBuilder {
 
 	/** An emitted method: name, descriptor, body, and its access level. */
-	record BuiltMethod(Utf8Constant name, Utf8Constant desc, MethodCode code, boolean isPublic) {
+	record BuiltMethod(Utf8Entry name, Utf8Entry desc, MethodCode code, boolean isPublic) {
 	}
 
 	private static final String ARG_GUARD = "_exArg";
@@ -221,9 +221,7 @@ final class JvmExportRuntimeBuilder {
 		boolean needBytesIn = false;
 		boolean needBytesOut = false;
 		for (JvmExportDirective decl : decls) {
-			MethodRefEntry target = java.util.Objects.requireNonNull(functions.get(decl.name()))
-				.methodref()
-				.methodRefEntry();
+			MethodRefEntry target = java.util.Objects.requireNonNull(functions.get(decl.name())).methodref();
 			methods.add(buildWrapper(cp, decl, target, refs));
 			for (BoundaryType t : decl.paramTypes()) {
 				needArgGuard |= t == BoundaryType.U8 || t == BoundaryType.U16 || t == BoundaryType.U32
@@ -482,7 +480,7 @@ final class JvmExportRuntimeBuilder {
 				asm.areturn();
 			}
 		}
-		return new BuiltMethod(cp.addUtf8(decl.methodName()), cp.addUtf8(methodDesc(decl)), asm, true);
+		return new BuiltMethod(cp.utf8Entry(decl.methodName()), cp.utf8Entry(methodDesc(decl)), asm, true);
 	}
 
 	// "…".concat(arg).concat("…"): a Lisp string stores its frame quotes
@@ -541,7 +539,7 @@ final class JvmExportRuntimeBuilder {
 		asm.invokevirtual(refs.concat);
 		asm.invokespecial(iaeInit);
 		asm.athrow();
-		return new BuiltMethod(cp.addUtf8(ARG_GUARD), cp.addUtf8(ARG_GUARD_DESC), asm, false);
+		return new BuiltMethod(cp.utf8Entry(ARG_GUARD), cp.utf8Entry(ARG_GUARD_DESC), asm, false);
 	}
 
 	// _exRes(value, min, max, label): the value's long when it is a Long within
@@ -592,7 +590,7 @@ final class JvmExportRuntimeBuilder {
 		asm.invokevirtual(refs.concat);
 		asm.invokespecial(cceInit);
 		asm.athrow();
-		return new BuiltMethod(cp.addUtf8(RESULT_GUARD), cp.addUtf8(RESULT_GUARD_DESC), asm, false);
+		return new BuiltMethod(cp.utf8Entry(RESULT_GUARD), cp.utf8Entry(RESULT_GUARD_DESC), asm, false);
 	}
 
 	// _exStr(value): the content between the frame quotes when the value is a stored
@@ -635,7 +633,7 @@ final class JvmExportRuntimeBuilder {
 		asm.areturn();
 		asm.labelBinding(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return a string: ");
-		return new BuiltMethod(cp.addUtf8(UNFRAME), cp.addUtf8(UNFRAME_DESC), asm, false);
+		return new BuiltMethod(cp.utf8Entry(UNFRAME), cp.utf8Entry(UNFRAME_DESC), asm, false);
 	}
 
 	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector -- byte[]{8, e0, ...},
@@ -667,7 +665,7 @@ final class JvmExportRuntimeBuilder {
 		asm.invokestatic(arraycopy);
 		asm.aload(2);
 		asm.areturn();
-		return new BuiltMethod(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC), asm, false);
+		return new BuiltMethod(cp.utf8Entry(BYTES_IN), cp.utf8Entry(BYTES_IN_DESC), asm, false);
 	}
 
 	// _exBytesOut(value): the byte[] copy of a packed (unsigned-byte 8) vector
@@ -700,7 +698,7 @@ final class JvmExportRuntimeBuilder {
 		asm.areturn();
 		asm.labelBinding(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return an (unsigned-byte 8) vector: ");
-		return new BuiltMethod(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC), asm, false);
+		return new BuiltMethod(cp.utf8Entry(BYTES_OUT), cp.utf8Entry(BYTES_OUT_DESC), asm, false);
 	}
 
 	// new ClassCastException(prefix + _lispToString(value in slot 0)); throw

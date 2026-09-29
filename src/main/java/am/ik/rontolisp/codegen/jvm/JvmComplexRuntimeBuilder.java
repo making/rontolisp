@@ -1,5 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -8,10 +14,6 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.FieldrefConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 
 /**
@@ -196,7 +198,7 @@ final class JvmComplexRuntimeBuilder {
 	 * @param descUtf8 the method descriptor constant
 	 * @param code the body
 	 */
-	record ComplexMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
+	record ComplexMethod(Utf8Entry nameUtf8, Utf8Entry descUtf8, MethodCode code) {
 	}
 
 	/**
@@ -206,7 +208,7 @@ final class JvmComplexRuntimeBuilder {
 	 * @param methods the helper methods to emit into the class
 	 * @param ops the invokable helper references, keyed by operation
 	 */
-	record ComplexRuntime(List<ComplexMethod> methods, Map<String, MethodrefConstant> ops) {
+	record ComplexRuntime(List<ComplexMethod> methods, Map<String, MethodRefEntry> ops) {
 	}
 
 	/**
@@ -218,15 +220,14 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	/** Shared constant-pool references for the complex helpers. */
-	private record Refs(ClassConstant thisClass, ClassConstant rcClass, FieldrefConstant rcReal,
-			FieldrefConstant rcImag, MethodrefConstant rcInit, ClassConstant longClass, ClassConstant doubleClass,
-			ClassConstant bigClass, ClassConstant ratArrClass, ClassConstant numberClass, ClassConstant mathClass,
-			ClassConstant rteClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
-			MethodrefConstant doubleValueOf, MethodrefConstant numDoubleValue, MethodrefConstant rteInit,
-			JvmOperandTypeRuntime.ThrowRefs throwRefs, MethodrefConstant rAdd, MethodrefConstant rSub,
-			MethodrefConstant rMul, MethodrefConstant rDiv, MethodrefConstant rNeg, MethodrefConstant rDbl,
-			MethodrefConstant rCmp, MethodrefConstant rCComplex, MethodrefConstant rCMul, MethodrefConstant rCDiv,
-			MethodrefConstant rPow) {
+	private record Refs(ClassEntry thisClass, ClassEntry rcClass, FieldRefEntry rcReal, FieldRefEntry rcImag,
+			MethodRefEntry rcInit, ClassEntry longClass, ClassEntry doubleClass, ClassEntry bigClass,
+			ClassEntry ratArrClass, ClassEntry numberClass, ClassEntry mathClass, ClassEntry rteClass,
+			MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry doubleValueOf,
+			MethodRefEntry numDoubleValue, MethodRefEntry rteInit, JvmOperandTypeRuntime.ThrowRefs throwRefs,
+			MethodRefEntry rAdd, MethodRefEntry rSub, MethodRefEntry rMul, MethodRefEntry rDiv, MethodRefEntry rNeg,
+			MethodRefEntry rDbl, MethodRefEntry rCmp, MethodRefEntry rCComplex, MethodRefEntry rCMul,
+			MethodRefEntry rCDiv, MethodRefEntry rPow) {
 	}
 
 	/**
@@ -235,27 +236,23 @@ final class JvmComplexRuntimeBuilder {
 	 * @param thisClass the generated class
 	 * @return the helper methods and the invokable references compiled code calls
 	 */
-	static ComplexRuntime build(ConstantPool cp, ClassConstant thisClass) {
-		ClassConstant rcClass = cp.addClass(cp.addUtf8("am/ik/rontolisp/runtime/RontoComplex"));
-		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
-		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
-		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
-		ClassConstant ratArrClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
-		ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
-		ClassConstant mathClass = cp.addClass(cp.addUtf8("java/lang/Math"));
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		ClassConstant rteClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		Refs refs = new Refs(thisClass, rcClass,
-				cp.addFieldref(rcClass, cp.addNameAndType(cp.addUtf8("real"), cp.addUtf8(OBJ))),
-				cp.addFieldref(rcClass, cp.addNameAndType(cp.addUtf8("imag"), cp.addUtf8(OBJ))),
-				cp.addMethodref(rcClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(" + OBJ + OBJ + ")V"))),
-				longClass, doubleClass, bigClass, ratArrClass, numberClass, mathClass, rteClass,
-				cp.addMethodref(longClass, cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;"))),
-				cp.addMethodref(longClass, cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J"))),
-				cp.addMethodref(doubleClass,
-						cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;"))),
-				cp.addMethodref(numberClass, cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D"))),
-				cp.addMethodref(rteClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
+	static ComplexRuntime build(ConstantPool cp, ClassEntry thisClass) {
+		ClassEntry rcClass = cp.classEntry("am/ik/rontolisp/runtime/RontoComplex");
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		ClassEntry doubleClass = cp.classEntry("java/lang/Double");
+		ClassEntry bigClass = cp.classEntry("java/math/BigInteger");
+		ClassEntry ratArrClass = cp.classEntry("[Ljava/math/BigInteger;");
+		ClassEntry numberClass = cp.classEntry("java/lang/Number");
+		ClassEntry mathClass = cp.classEntry("java/lang/Math");
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		ClassEntry rteClass = cp.classEntry("java/lang/RuntimeException");
+		Refs refs = new Refs(thisClass, rcClass, cp.fieldRef(rcClass, "real", OBJ), cp.fieldRef(rcClass, "imag", OBJ),
+				cp.methodRef(rcClass, "<init>", "(" + OBJ + OBJ + ")V"), longClass, doubleClass, bigClass, ratArrClass,
+				numberClass, mathClass, rteClass, cp.methodRef(longClass, "valueOf", "(J)Ljava/lang/Long;"),
+				cp.methodRef(longClass, "longValue", "()J"),
+				cp.methodRef(doubleClass, "valueOf", "(D)Ljava/lang/Double;"),
+				cp.methodRef(numberClass, "doubleValue", "()D"),
+				cp.methodRef(rteClass, "<init>", "(Ljava/lang/String;)V"),
 				JvmOperandTypeRuntime.ThrowRefs.of(cp, thisClass),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.ADD, BINARY_DESC),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.SUB, BINARY_DESC),
@@ -267,45 +264,45 @@ final class JvmComplexRuntimeBuilder {
 				self(cp, thisClass, MUL, BINARY_DESC), self(cp, thisClass, DIV, BINARY_DESC),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.POW, BINARY_DESC));
 		List<ComplexMethod> methods = new ArrayList<>();
-		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
+		Map<String, MethodRefEntry> ops = new LinkedHashMap<>();
 		addMethod(cp, thisClass, methods, ops, COMPLEX, BINARY_DESC,
-				buildComplex(refs, cp.addUtf8(COMPLEX), cp.addUtf8(BINARY_DESC)));
+				buildComplex(refs, cp.utf8Entry(COMPLEX), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, ADD, BINARY_DESC,
-				buildAdd(refs, cp.addUtf8(ADD), cp.addUtf8(BINARY_DESC)));
+				buildAdd(refs, cp.utf8Entry(ADD), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, SUB, BINARY_DESC,
-				buildSub(refs, cp.addUtf8(SUB), cp.addUtf8(BINARY_DESC)));
+				buildSub(refs, cp.utf8Entry(SUB), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, MUL, BINARY_DESC,
-				buildMul(refs, cp.addUtf8(MUL), cp.addUtf8(BINARY_DESC)));
+				buildMul(refs, cp.utf8Entry(MUL), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, DIV, BINARY_DESC,
-				buildDiv(refs, cp, cp.addUtf8(DIV), cp.addUtf8(BINARY_DESC)));
+				buildDiv(refs, cp, cp.utf8Entry(DIV), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, NEG, UNARY_DESC,
-				buildNeg(refs, cp.addUtf8(NEG), cp.addUtf8(UNARY_DESC)));
+				buildNeg(refs, cp.utf8Entry(NEG), cp.utf8Entry(UNARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, SQRT, UNARY_DESC,
-				buildSqrt(refs, cp, cp.addUtf8(SQRT), cp.addUtf8(UNARY_DESC)));
+				buildSqrt(refs, cp, cp.utf8Entry(SQRT), cp.utf8Entry(UNARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, POW, BINARY_DESC,
-				buildPow(refs, cp, cp.addUtf8(POW), cp.addUtf8(BINARY_DESC)));
+				buildPow(refs, cp, cp.utf8Entry(POW), cp.utf8Entry(BINARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, POW_REAL, BINARY_DESC,
-				buildPowReal(refs, cp, cp.addUtf8(POW_REAL), cp.addUtf8(BINARY_DESC)));
-		addMethod(cp, thisClass, methods, ops, U1, U1_DESC, buildU1(refs, cp, cp.addUtf8(U1), cp.addUtf8(U1_DESC)));
+				buildPowReal(refs, cp, cp.utf8Entry(POW_REAL), cp.utf8Entry(BINARY_DESC)));
+		addMethod(cp, thisClass, methods, ops, U1, U1_DESC, buildU1(refs, cp, cp.utf8Entry(U1), cp.utf8Entry(U1_DESC)));
 		addMethod(cp, thisClass, methods, ops, CONJUGATE, UNARY_DESC,
-				buildConjugate(refs, cp.addUtf8(CONJUGATE), cp.addUtf8(UNARY_DESC)));
+				buildConjugate(refs, cp.utf8Entry(CONJUGATE), cp.utf8Entry(UNARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, CCPMB, CMP_DESC,
-				buildCCmpBits(refs, cp, cp.addUtf8(CCPMB), cp.addUtf8(CMP_DESC)));
+				buildCCmpBits(refs, cp, cp.utf8Entry(CCPMB), cp.utf8Entry(CMP_DESC)));
 		addMethod(cp, thisClass, methods, ops, CPHASE, UNARY_DESC,
-				buildCPhase(refs, cp, cp.addUtf8(CPHASE), cp.addUtf8(UNARY_DESC)));
+				buildCPhase(refs, cp, cp.utf8Entry(CPHASE), cp.utf8Entry(UNARY_DESC)));
 		addMethod(cp, thisClass, methods, ops, SIGNUM, UNARY_DESC,
-				buildCSignum(refs, cp, cp.addUtf8(SIGNUM), cp.addUtf8(UNARY_DESC)));
+				buildCSignum(refs, cp, cp.utf8Entry(SIGNUM), cp.utf8Entry(UNARY_DESC)));
 		return new ComplexRuntime(methods, ops);
 	}
 
-	private static MethodrefConstant self(ConstantPool cp, ClassConstant thisClass, String name, String desc) {
-		return cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	private static MethodRefEntry self(ConstantPool cp, ClassEntry thisClass, String name, String desc) {
+		return cp.methodRef(thisClass, name, desc);
 	}
 
-	private static void addMethod(ConstantPool cp, ClassConstant thisClass, List<ComplexMethod> methods,
-			Map<String, MethodrefConstant> ops, String name, String desc, ComplexMethod method) {
+	private static void addMethod(ConstantPool cp, ClassEntry thisClass, List<ComplexMethod> methods,
+			Map<String, MethodRefEntry> ops, String name, String desc, ComplexMethod method) {
 		methods.add(method);
-		ops.put(name, cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))));
+		ops.put(name, cp.methodRef(thisClass, name, desc));
 	}
 
 	// ------------------------------------------------------------------
@@ -318,9 +315,8 @@ final class JvmComplexRuntimeBuilder {
 			"atan", "atan2", "sinh", "cosh", "tanh", "pow", "hypot");
 
 	private static void callMath(MethodCode c, Refs refs, ConstantPool cp, String name, String desc) {
-		ClassConstant owner = STRICT_MATH.contains(name) ? cp.addClass(cp.addUtf8("java/lang/StrictMath"))
-				: refs.mathClass();
-		c.invokestatic(cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))).entry());
+		ClassEntry owner = STRICT_MATH.contains(name) ? cp.classEntry("java/lang/StrictMath") : refs.mathClass();
+		c.invokestatic(cp.methodRef(owner, name, desc));
 	}
 
 	/**
@@ -330,14 +326,14 @@ final class JvmComplexRuntimeBuilder {
 	 */
 	private static void emitToDouble(MethodCode c, Refs refs, int slot) {
 		c.aload(slot);
-		c.invokestatic(refs.rDbl().entry());
-		c.checkcast(refs.numberClass().entry());
-		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.invokestatic(refs.rDbl());
+		c.checkcast(refs.numberClass());
+		c.invokevirtual(refs.numDoubleValue());
 	}
 
 	/** Boxes the raw double on top of the stack. */
 	private static void emitBoxDouble(MethodCode c, Refs refs) {
-		c.invokestatic(refs.doubleValueOf().entry());
+		c.invokestatic(refs.doubleValueOf());
 	}
 
 	/**
@@ -355,16 +351,16 @@ final class JvmComplexRuntimeBuilder {
 	 */
 	private static void emitRequireReal(MethodCode c, Refs refs, int slot, MethodCode.Label onFailure) {
 		c.aload(slot);
-		c.instanceOf(refs.longClass().entry());
+		c.instanceOf(refs.longClass());
 		c.ifne(onFailure);
 		c.aload(slot);
-		c.instanceOf(refs.bigClass().entry());
+		c.instanceOf(refs.bigClass());
 		c.ifne(onFailure);
 		c.aload(slot);
-		c.instanceOf(refs.ratArrClass().entry());
+		c.instanceOf(refs.ratArrClass());
 		c.ifne(onFailure);
 		c.aload(slot);
-		c.instanceOf(refs.doubleClass().entry());
+		c.instanceOf(refs.doubleClass());
 		c.ifne(onFailure);
 	}
 
@@ -377,12 +373,12 @@ final class JvmComplexRuntimeBuilder {
 	 */
 	private static void emitExtractParts(MethodCode c, Refs refs, int paramSlot, int reSlot, int imSlot) {
 		c.aload(paramSlot);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label notHolderRe = c.newLabel();
 		c.ifeq(notHolderRe);
 		c.aload(paramSlot);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
 		c.astore(reSlot);
 		MethodCode.Label doneRe = c.newLabel();
 		c.goto_(doneRe);
@@ -391,18 +387,18 @@ final class JvmComplexRuntimeBuilder {
 		c.astore(reSlot);
 		c.labelBinding(doneRe);
 		c.aload(paramSlot);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label notHolderIm = c.newLabel();
 		c.ifeq(notHolderIm);
 		c.aload(paramSlot);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
 		c.astore(imSlot);
 		MethodCode.Label doneIm = c.newLabel();
 		c.goto_(doneIm);
 		c.labelBinding(notHolderIm);
 		c.aload(paramSlot);
-		c.instanceOf(refs.doubleClass().entry());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label notDouble = c.newLabel();
 		c.ifeq(notDouble);
 		c.dconst_0();
@@ -412,7 +408,7 @@ final class JvmComplexRuntimeBuilder {
 		c.goto_(doneZero);
 		c.labelBinding(notDouble);
 		c.lconst_0();
-		c.invokestatic(refs.longValueOf().entry());
+		c.invokestatic(refs.longValueOf());
 		c.astore(imSlot);
 		c.labelBinding(doneZero);
 		c.labelBinding(doneIm);
@@ -426,7 +422,7 @@ final class JvmComplexRuntimeBuilder {
 	private static void emitFloatTest(MethodCode c, Refs refs, int[] slots, MethodCode.Label toFloat) {
 		for (int slot : slots) {
 			c.aload(slot);
-			c.instanceOf(refs.doubleClass().entry());
+			c.instanceOf(refs.doubleClass());
 			c.ifne(toFloat);
 		}
 	}
@@ -435,11 +431,11 @@ final class JvmComplexRuntimeBuilder {
 	 * Constructs a holder from the two parts in {@code reSlot}/{@code imSlot}.
 	 */
 	private static void emitNewHolderFromSlots(MethodCode c, Refs refs, int reSlot, int imSlot) {
-		c.new_(refs.rcClass().entry());
+		c.new_(refs.rcClass());
 		c.dup();
 		c.aload(reSlot);
 		c.aload(imSlot);
-		c.invokespecial(refs.rcInit().entry());
+		c.invokespecial(refs.rcInit());
 	}
 
 	// _ccomplex(Object real, Object imag): the canonical value. A non-real part
@@ -447,7 +443,7 @@ final class JvmComplexRuntimeBuilder {
 	// (a
 	// float zero never demotes); a rational zero imaginary part demotes to the
 	// real itself; otherwise a fresh holder.
-	private static ComplexMethod buildComplex(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildComplex(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		MethodCode.Label realOk = c.newLabel();
 		emitRequireReal(c, refs, 0, realOk);
@@ -458,18 +454,18 @@ final class JvmComplexRuntimeBuilder {
 		emitNumberErrThrow(c, refs, 1);
 		c.labelBinding(imagOk);
 		c.aload(0);
-		c.instanceOf(refs.doubleClass().entry());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label realIsDouble = c.newLabel();
 		c.ifne(realIsDouble);
 		c.aload(1);
-		c.instanceOf(refs.doubleClass().entry());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label imagIsDouble = c.newLabel();
 		c.ifne(imagIsDouble);
 		// Exact path: a rational zero imaginary part demotes to the real.
 		c.aload(1);
 		c.lconst_0();
-		c.invokestatic(refs.longValueOf().entry());
-		c.invokestatic(refs.rCmp().entry());
+		c.invokestatic(refs.longValueOf());
+		c.invokestatic(refs.rCmp());
 		c.iconst_0();
 		MethodCode.Label notZero = c.newLabel();
 		c.if_icmpne(notZero);
@@ -482,10 +478,10 @@ final class JvmComplexRuntimeBuilder {
 		c.labelBinding(realIsDouble);
 		c.labelBinding(imagIsDouble);
 		c.aload(0);
-		c.invokestatic(refs.rDbl().entry());
+		c.invokestatic(refs.rDbl());
 		c.astore(0);
 		c.aload(1);
-		c.invokestatic(refs.rDbl().entry());
+		c.invokestatic(refs.rDbl());
 		c.astore(1);
 		emitNewHolderFromSlots(c, refs, 0, 1);
 		c.areturn();
@@ -495,16 +491,16 @@ final class JvmComplexRuntimeBuilder {
 	// _cadd/_csub over real-or-complex operands. All-rational parts compute
 	// exactly through _add/_sub; a float anywhere coerces the step to doubles.
 	// Slots: params 0-1, parts 2-5, boxed results 6-7.
-	private static ComplexMethod buildAdd(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildAdd(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		return buildAddSub(refs, name, desc, MethodCode::dadd, JvmNumericRuntimeBuilder.ADD);
 	}
 
-	private static ComplexMethod buildSub(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildSub(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		return buildAddSub(refs, name, desc, MethodCode::dsub, JvmNumericRuntimeBuilder.SUB);
 	}
 
-	private static ComplexMethod buildAddSub(Refs refs, Utf8Constant name, Utf8Constant desc,
-			Consumer<MethodCode> doubleOp, String exactOp) {
+	private static ComplexMethod buildAddSub(Refs refs, Utf8Entry name, Utf8Entry desc, Consumer<MethodCode> doubleOp,
+			String exactOp) {
 		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
@@ -512,11 +508,11 @@ final class JvmComplexRuntimeBuilder {
 		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
 		c.aload(2);
 		c.aload(4);
-		c.invokestatic(exactOpRef(refs, exactOp).entry());
+		c.invokestatic(exactOpRef(refs, exactOp));
 		c.aload(3);
 		c.aload(5);
-		c.invokestatic(exactOpRef(refs, exactOp).entry());
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(exactOpRef(refs, exactOp));
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
@@ -534,7 +530,7 @@ final class JvmComplexRuntimeBuilder {
 		return new ComplexMethod(name, desc, c);
 	}
 
-	private static MethodrefConstant exactOpRef(Refs refs, String exactOp) {
+	private static MethodRefEntry exactOpRef(Refs refs, String exactOp) {
 		if (JvmNumericRuntimeBuilder.ADD.equals(exactOp)) {
 			return refs.rAdd();
 		}
@@ -549,7 +545,7 @@ final class JvmComplexRuntimeBuilder {
 
 	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc).
 	// Slots: params 0-1, parts 2-5, boxed results 6-7, doubles 8-15.
-	private static ComplexMethod buildMul(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildMul(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
@@ -557,23 +553,23 @@ final class JvmComplexRuntimeBuilder {
 		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
 		c.aload(2);
 		c.aload(4);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(5);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rSub().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rSub());
 		c.astore(6);
 		c.aload(2);
 		c.aload(5);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(4);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.astore(7);
 		c.aload(6);
 		c.aload(7);
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
@@ -613,7 +609,7 @@ final class JvmComplexRuntimeBuilder {
 	// is Smith's form, the interpreter's smithDivide (see there for why).
 	// Slots: params 0-1, parts 2-5, temps 6-8, doubles 10-21
 	// (10=a, 12=b, 14=c, 16=d, 18=r, 20=den).
-	private static ComplexMethod buildDiv(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildDiv(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		// Neither operand a holder: a plain real division, which the ungated _div
 		// answers -- exactly, without the c^2+d^2 denominator's two extra roundings
@@ -624,16 +620,16 @@ final class JvmComplexRuntimeBuilder {
 		// what keeps that quotient EQUAL to (/ (log n) (log base)). The WASM twin
 		// (_c_div's own head) is the same arm.
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label firstIsHolder = c.newLabel();
 		c.ifne(firstIsHolder);
 		c.aload(1);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label secondIsHolder = c.newLabel();
 		c.ifne(secondIsHolder);
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(refs.rDiv().entry());
+		c.invokestatic(refs.rDiv());
 		c.areturn();
 		c.labelBinding(firstIsHolder);
 		c.labelBinding(secondIsHolder);
@@ -643,35 +639,35 @@ final class JvmComplexRuntimeBuilder {
 		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
 		c.aload(4);
 		c.aload(4);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(5);
 		c.aload(5);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.astore(6);
 		c.aload(2);
 		c.aload(4);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(5);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.aload(6);
-		c.invokestatic(refs.rDiv().entry());
+		c.invokestatic(refs.rDiv());
 		c.astore(7);
 		c.aload(3);
 		c.aload(4);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(2);
 		c.aload(5);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rSub().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rSub());
 		c.aload(6);
-		c.invokestatic(refs.rDiv().entry());
+		c.invokestatic(refs.rDiv());
 		c.astore(8);
 		c.aload(7);
 		c.aload(8);
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
@@ -762,14 +758,14 @@ final class JvmComplexRuntimeBuilder {
 	// _cneg(Object x): (-re, -im), each part through _neg (which keeps doubles
 	// unboxed-negated, so signed zeros survive exactly like the interpreter's
 	// negateReal/exactNeg).
-	private static ComplexMethod buildNeg(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildNeg(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 1, 2);
 		c.aload(1);
-		c.invokestatic(refs.rNeg().entry());
+		c.invokestatic(refs.rNeg());
 		c.aload(2);
-		c.invokestatic(refs.rNeg().entry());
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rNeg());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		return new ComplexMethod(name, desc, c);
 	}
@@ -783,8 +779,8 @@ final class JvmComplexRuntimeBuilder {
 			c.dconst_1();
 		}
 		else {
-			ConstantPool.DoubleConstant dc = cp.addDouble(value);
-			c.ldc(dc.entry());
+			DoubleEntry dc = cp.entries().doubleEntry(value);
+			c.ldc(dc);
 		}
 	}
 
@@ -872,19 +868,19 @@ final class JvmComplexRuntimeBuilder {
 	// float formula; a negative real roots into the plane as (0, sqrt(-d)); any
 	// other real answers Math.sqrt. Slots: param 0, boxed temps 1-2, doubles
 	// 3-8.
-	private static ComplexMethod buildSqrt(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildSqrt(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label realPath = c.newLabel();
 		c.ifeq(realPath);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
 		c.astore(1);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
 		c.astore(2);
 		emitToDouble(c, refs, 1);
 		c.dstore(3);
@@ -930,46 +926,46 @@ final class JvmComplexRuntimeBuilder {
 	// the exact reciprocal); anything else goes through exp(w*log(z)) in
 	// floats. Slots: params 0-1, base parts 2-3, exp parts 4-5, power 6,
 	// accumulators 7-8, temps 9-10, doubles 11-26.
-	private static ComplexMethod buildPow(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildPow(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.doubleClass().entry());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label floatPathEarly = c.newLabel();
 		c.ifne(floatPathEarly);
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label baseNotHolder = c.newLabel();
 		c.ifeq(baseNotHolder);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
-		c.instanceOf(refs.doubleClass().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label floatPathEarly2 = c.newLabel();
 		c.ifne(floatPathEarly2);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
-		c.instanceOf(refs.doubleClass().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
+		c.instanceOf(refs.doubleClass());
 		MethodCode.Label floatPathEarly3 = c.newLabel();
 		c.ifne(floatPathEarly3);
 		c.labelBinding(baseNotHolder);
 		c.aload(1);
-		c.instanceOf(refs.longClass().entry());
+		c.instanceOf(refs.longClass());
 		MethodCode.Label floatPathExp = c.newLabel();
 		c.ifeq(floatPathExp);
 		c.aload(1);
-		c.checkcast(refs.longClass().entry());
-		c.invokevirtual(refs.longValue().methodRefEntry());
+		c.checkcast(refs.longClass());
+		c.invokevirtual(refs.longValue());
 		c.lstore(9);
 		c.lload(9);
-		ConstantPool.LongConstant maxPow = cp.addLong(Integer.MAX_VALUE);
-		c.ldc(maxPow.entry());
+		LongEntry maxPow = cp.entries().longEntry(Integer.MAX_VALUE);
+		c.ldc(maxPow);
 		c.lcmp();
 		MethodCode.Label floatPathRange = c.newLabel();
 		c.ifgt(floatPathRange);
 		c.lload(9);
-		ConstantPool.LongConstant minPow = cp.addLong(-(long) Integer.MAX_VALUE);
-		c.ldc(minPow.entry());
+		LongEntry minPow = cp.entries().longEntry(-(long) Integer.MAX_VALUE);
+		c.ldc(minPow);
 		c.lcmp();
 		MethodCode.Label floatPathRange2 = c.newLabel();
 		c.iflt(floatPathRange2);
@@ -979,30 +975,30 @@ final class JvmComplexRuntimeBuilder {
 		// Exact path.
 		emitExtractParts(c, refs, 0, 2, 3);
 		c.lconst_1();
-		c.invokestatic(refs.longValueOf().entry());
+		c.invokestatic(refs.longValueOf());
 		c.astore(7);
 		c.lconst_0();
-		c.invokestatic(refs.longValueOf().entry());
+		c.invokestatic(refs.longValueOf());
 		c.astore(8);
 		c.iload(6);
 		MethodCode.Label noRecip = c.newLabel();
 		c.ifge(noRecip);
 		c.aload(2);
 		c.aload(2);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(3);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.astore(9);
 		c.aload(2);
 		c.aload(9);
-		c.invokestatic(refs.rDiv().entry());
+		c.invokestatic(refs.rDiv());
 		c.astore(2);
 		c.aload(3);
-		c.invokestatic(refs.rNeg().entry());
+		c.invokestatic(refs.rNeg());
 		c.aload(9);
-		c.invokestatic(refs.rDiv().entry());
+		c.invokestatic(refs.rDiv());
 		c.astore(3);
 		c.iload(6);
 		c.ineg();
@@ -1019,38 +1015,38 @@ final class JvmComplexRuntimeBuilder {
 		c.ifeq(skipMul);
 		c.aload(7);
 		c.aload(2);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(8);
 		c.aload(3);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rSub().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rSub());
 		c.astore(9);
 		c.aload(7);
 		c.aload(3);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(8);
 		c.aload(2);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.astore(8);
 		c.aload(9);
 		c.astore(7);
 		c.labelBinding(skipMul);
 		c.aload(2);
 		c.aload(2);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(3);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rSub().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rSub());
 		c.astore(9);
 		c.aload(2);
 		c.aload(3);
-		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rMul());
 		c.aload(3);
 		c.aload(2);
-		c.invokestatic(refs.rMul().entry());
-		c.invokestatic(refs.rAdd().entry());
+		c.invokestatic(refs.rMul());
+		c.invokestatic(refs.rAdd());
 		c.astore(3);
 		c.aload(9);
 		c.astore(2);
@@ -1062,7 +1058,7 @@ final class JvmComplexRuntimeBuilder {
 		c.labelBinding(loopEnd);
 		c.aload(7);
 		c.aload(8);
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		// Float path through exp(w*log(z)).
 		c.labelBinding(floatPathEarly);
@@ -1139,7 +1135,7 @@ final class JvmComplexRuntimeBuilder {
 	 * {@code _pow}, which keeps the exact rational path and the error funnels
 	 * unduplicated. Slots: base 0, exp 1, x 2, y 4, modulus 6, boxed parts 8 and 9.
 	 */
-	private static ComplexMethod buildPowReal(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildPowReal(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		emitToDouble(c, refs, 0);
 		c.dstore(2);
@@ -1152,9 +1148,7 @@ final class JvmComplexRuntimeBuilder {
 		MethodCode.Label realPathSign = c.newLabel();
 		c.ifge(realPathSign);
 		c.dload(4);
-		c.invokestatic(
-				cp.addMethodref(refs.doubleClass(), cp.addNameAndType(cp.addUtf8("isFinite"), cp.addUtf8("(D)Z")))
-					.entry());
+		c.invokestatic(cp.methodRef(refs.doubleClass(), "isFinite", "(D)Z"));
 		MethodCode.Label realPathInfinite = c.newLabel();
 		c.ifeq(realPathInfinite);
 		c.dload(4);
@@ -1191,7 +1185,7 @@ final class JvmComplexRuntimeBuilder {
 		c.labelBinding(realPathInteger);
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(refs.rPow().entry());
+		c.invokestatic(refs.rPow());
 		c.areturn();
 		return new ComplexMethod(name, desc, c);
 	}
@@ -1230,19 +1224,19 @@ final class JvmComplexRuntimeBuilder {
 	// answers the float formula; any other operand answers Math.<fn> of its
 	// double. Slots: params 0-1, rd/d 2-3, id 4-5, t0 6-7, t1 8-9, r0 10-11,
 	// r1 12-13, denom 14-15.
-	private static ComplexMethod buildU1(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildU1(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label realPath = c.newLabel();
 		c.ifeq(realPath);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
 		c.astore(6);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
 		c.astore(8);
 		emitToDouble(c, refs, 6);
 		c.dstore(2);
@@ -1908,24 +1902,24 @@ final class JvmComplexRuntimeBuilder {
 
 	// _ccmpb(Object a, Object b): like _cmpb, but a complex operand signals the
 	// interpreter's REAL operand-type report text instead of comparing.
-	private static ComplexMethod buildCCmpBits(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		MethodrefConstant rCmpb = self(cp, refs.thisClass(), JvmNumericRuntimeBuilder.CMPB, CMP_DESC);
+	private static ComplexMethod buildCCmpBits(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
+		MethodRefEntry rCmpb = self(cp, refs.thisClass(), JvmNumericRuntimeBuilder.CMPB, CMP_DESC);
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label ifAReal = c.newLabel();
 		c.ifeq(ifAReal);
 		emitRealErrThrow(c, refs, 0);
 		c.labelBinding(ifAReal);
 		c.aload(1);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label ifBReal = c.newLabel();
 		c.ifeq(ifBReal);
 		emitRealErrThrow(c, refs, 1);
 		c.labelBinding(ifBReal);
 		c.aload(0);
 		c.aload(1);
-		c.invokestatic(rCmpb.entry());
+		c.invokestatic(rCmpb);
 		c.ireturn();
 		return new ComplexMethod(name, desc, c);
 	}
@@ -1941,24 +1935,24 @@ final class JvmComplexRuntimeBuilder {
 	// _cphase(Object x): the angle of a complex value, 0.0 for a non-negative
 	// real and pi for a negative one. A non-number signals through the _dbl
 	// funnel, like the interpreter's requireReal.
-	private static ComplexMethod buildCPhase(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildCPhase(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label ifReal = c.newLabel();
 		c.ifeq(ifReal);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
-		c.invokestatic(refs.rDbl().entry());
-		c.checkcast(refs.numberClass().entry());
-		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
+		c.invokestatic(refs.rDbl());
+		c.checkcast(refs.numberClass());
+		c.invokevirtual(refs.numDoubleValue());
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
-		c.invokestatic(refs.rDbl().entry());
-		c.checkcast(refs.numberClass().entry());
-		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
+		c.invokestatic(refs.rDbl());
+		c.checkcast(refs.numberClass());
+		c.invokevirtual(refs.numDoubleValue());
 		callMath(c, refs, cp, "atan2", "(DD)D");
 		emitBoxDouble(c, refs);
 		c.areturn();
@@ -1985,22 +1979,22 @@ final class JvmComplexRuntimeBuilder {
 	// own parts through _ccomplex (0 for exact parts, #C(0.0 0.0) for float
 	// parts). Only the unconditional _signum's gated holder arm calls this, after
 	// its own instanceof, so the argument is always a holder here.
-	private static ComplexMethod buildCSignum(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildCSignum(Refs refs, ConstantPool cp, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		// re = _dbl(real), im = _dbl(imag).
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
-		c.invokestatic(refs.rDbl().entry());
-		c.checkcast(refs.numberClass().entry());
-		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
+		c.invokestatic(refs.rDbl());
+		c.checkcast(refs.numberClass());
+		c.invokevirtual(refs.numDoubleValue());
 		c.dstore(1);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
-		c.invokestatic(refs.rDbl().entry());
-		c.checkcast(refs.numberClass().entry());
-		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
+		c.invokestatic(refs.rDbl());
+		c.checkcast(refs.numberClass());
+		c.invokevirtual(refs.numDoubleValue());
 		c.dstore(3);
 		// abs = hypot(re, im); a zero takes the canonicalize-own-parts exit.
 		c.dload(1);
@@ -2013,12 +2007,12 @@ final class JvmComplexRuntimeBuilder {
 		MethodCode.Label ifNonZero = c.newLabel();
 		c.ifne(ifNonZero);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
-		c.invokestatic(refs.rCComplex().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		c.labelBinding(ifNonZero);
 		// _ccomplex(Double(re/abs), Double(im/abs)).
@@ -2030,31 +2024,31 @@ final class JvmComplexRuntimeBuilder {
 		c.dload(5);
 		c.ddiv();
 		emitBoxDouble(c, refs);
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cconjugate(Object x): (re, -im) for a holder, the value itself for a
 	// real (signalling NUMBER operand-type report otherwise).
-	private static ComplexMethod buildConjugate(Refs refs, Utf8Constant name, Utf8Constant desc) {
+	private static ComplexMethod buildConjugate(Refs refs, Utf8Entry name, Utf8Entry desc) {
 		MethodCode c = new MethodCode();
 		c.aload(0);
-		c.instanceOf(refs.rcClass().entry());
+		c.instanceOf(refs.rcClass());
 		MethodCode.Label realOnly = c.newLabel();
 		c.ifeq(realOnly);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcReal().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcReal());
 		c.astore(1);
 		c.aload(0);
-		c.checkcast(refs.rcClass().entry());
-		c.getfield(refs.rcImag().entry());
-		c.invokestatic(refs.rNeg().entry());
+		c.checkcast(refs.rcClass());
+		c.getfield(refs.rcImag());
+		c.invokestatic(refs.rNeg());
 		c.astore(2);
 		c.aload(1);
 		c.aload(2);
-		c.invokestatic(refs.rCComplex().entry());
+		c.invokestatic(refs.rCComplex());
 		c.areturn();
 		c.labelBinding(realOnly);
 		MethodCode.Label realOk = c.newLabel();

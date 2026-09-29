@@ -1,12 +1,13 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPool.ClassConstant;
-import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.ConstantPool.StringConstant;
-import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
@@ -154,7 +155,7 @@ final class JvmUncaughtHandler {
 	 * @param desc its descriptor
 	 * @param code the body, its handlers included
 	 */
-	record Built(Utf8Constant name, Utf8Constant desc, MethodCode code) {
+	record Built(Utf8Entry name, Utf8Entry desc, MethodCode code) {
 	}
 
 	/**
@@ -170,24 +171,21 @@ final class JvmUncaughtHandler {
 	static Prepared prepare(JvmLispCompiler.Ctx mainCtx) {
 		ConstantPool cp = mainCtx.cp;
 		int exSlot = mainCtx.allocTemp();
-		ConstantPool.ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
-		ConstantPool.ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
-		ConstantPool.FieldrefConstant systemErr = cp.addFieldref(systemClass,
-				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;")));
-		MethodrefConstant getMessage = method(cp, throwableClass, "getMessage", "()Ljava/lang/String;");
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
+		FieldRefEntry systemErr = cp.fieldRef(systemClass, "err", "Ljava/io/PrintStream;");
+		MethodRefEntry getMessage = method(cp, throwableClass, "getMessage", "()Ljava/lang/String;");
 		// String.valueOf(Object), not concat's argument directly: a RuntimeException
 		// raised by something other than %error may carry a null message, and
 		// "...".concat(null) would replace the report with a NullPointerException.
-		MethodrefConstant valueOf = method(cp, mainCtx.stringClass, "valueOf",
-				"(Ljava/lang/Object;)Ljava/lang/String;");
-		MethodrefConstant concat = method(cp, mainCtx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		MethodrefConstant getenv = method(cp, systemClass, "getenv", "(Ljava/lang/String;)Ljava/lang/String;");
-		MethodrefConstant setStackTrace = method(cp, throwableClass, "setStackTrace",
-				"([Ljava/lang/StackTraceElement;)V");
-		ClassConstant stackTraceElement = cp.addClass(cp.addUtf8("java/lang/StackTraceElement"));
-		StringConstant prefix = cp.addString(UncaughtReport.PREFIX);
-		StringConstant debugEnv = cp.addString(UncaughtReport.DEBUG_ENV);
-		ClassConstant runtimeException = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodRefEntry valueOf = method(cp, mainCtx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry concat = method(cp, mainCtx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry getenv = method(cp, systemClass, "getenv", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry setStackTrace = method(cp, throwableClass, "setStackTrace", "([Ljava/lang/StackTraceElement;)V");
+		ClassEntry stackTraceElement = cp.classEntry("java/lang/StackTraceElement");
+		StringEntry prefix = cp.stringEntry(UncaughtReport.PREFIX);
+		StringEntry debugEnv = cp.stringEntry(UncaughtReport.DEBUG_ENV);
+		ClassEntry runtimeException = cp.classEntry("java/lang/RuntimeException");
 		return new Prepared(mainCtx, exSlot, systemErr, getMessage, valueOf, concat, getenv, setStackTrace,
 				stackTraceElement, prefix, debugEnv, runtimeException);
 	}
@@ -208,10 +206,9 @@ final class JvmUncaughtHandler {
 	 * @param debugEnv {@link UncaughtReport#DEBUG_ENV}
 	 * @param runtimeException the {@code RuntimeException} class, the entry's catch type
 	 */
-	record Prepared(JvmLispCompiler.Ctx mainCtx, int exSlot, ConstantPool.FieldrefConstant systemErr,
-			MethodrefConstant getMessage, MethodrefConstant valueOf, MethodrefConstant concat, MethodrefConstant getenv,
-			MethodrefConstant setStackTrace, ClassConstant stackTraceElement, StringConstant prefix,
-			StringConstant debugEnv, ClassConstant runtimeException) {
+	record Prepared(JvmLispCompiler.Ctx mainCtx, int exSlot, FieldRefEntry systemErr, MethodRefEntry getMessage,
+			MethodRefEntry valueOf, MethodRefEntry concat, MethodRefEntry getenv, MethodRefEntry setStackTrace,
+			ClassEntry stackTraceElement, StringEntry prefix, StringEntry debugEnv, ClassEntry runtimeException) {
 
 		/**
 		 * Appends the handler to main's code and the entry covering the body to its
@@ -220,13 +217,13 @@ final class JvmUncaughtHandler {
 		 * @param where {@code _where}, which prints the location lines after the report
 		 * line, or {@code null} when nothing in the class was located
 		 */
-		void append(@Nullable MethodrefConstant where) {
+		void append(@Nullable MethodRefEntry where) {
 			appendHandler(this, where);
 		}
 
 	}
 
-	private static void appendHandler(Prepared p, @Nullable MethodrefConstant where) {
+	private static void appendHandler(Prepared p, @Nullable MethodRefEntry where) {
 		JvmLispCompiler.Ctx mainCtx = p.mainCtx();
 		MethodCode code = mainCtx.body;
 		MethodCode.Label bodyEnd = code.newBoundLabel();
@@ -235,34 +232,31 @@ final class JvmUncaughtHandler {
 		mainCtx.stack.enterHandler();
 		code.astore(exSlot);
 		// System.err.println(PREFIX.concat(String.valueOf(ex.getMessage())))
-		code.getstatic(p.systemErr().entry())
-			.ldc(p.prefix().entry())
+		code.getstatic(p.systemErr())
+			.ldc(p.prefix())
 			.aload(exSlot)
-			.invokevirtual(p.getMessage().methodRefEntry())
-			.invokestatic(p.valueOf().entry())
-			.invokevirtual(p.concat().methodRefEntry())
-			.invokevirtual(mainCtx.printlnStr.methodRefEntry());
+			.invokevirtual(p.getMessage())
+			.invokestatic(p.valueOf())
+			.invokevirtual(p.concat())
+			.invokevirtual(mainCtx.printlnStr);
 		// _where(ex): the location lines, read off the trace before it is emptied.
 		if (where != null) {
-			code.aload(exSlot).invokestatic(where.entry());
+			code.aload(exSlot).invokestatic(where);
 		}
 		// if (System.getenv("RONTOLISP_DEBUG") == null) ex.setStackTrace(new
 		// StackTraceElement[0]);
 		MethodCode.Label debugging = code.newLabel();
-		code.ldc(p.debugEnv().entry()).invokestatic(p.getenv().entry()).ifnonnull(debugging);
-		code.aload(exSlot)
-			.iconst_0()
-			.anewarray(p.stackTraceElement().entry())
-			.invokevirtual(p.setStackTrace().methodRefEntry());
+		code.ldc(p.debugEnv()).invokestatic(p.getenv()).ifnonnull(debugging);
+		code.aload(exSlot).iconst_0().anewarray(p.stackTraceElement()).invokevirtual(p.setStackTrace());
 		code.labelBinding(debugging);
 		// The program ends here, so the output files it never closed get what they
 		// still buffer -- the same flush main's return and %host-exit do.
 		if (mainCtx.flushStreams != null) {
-			code.invokestatic(mainCtx.flushStreams.entry());
+			code.invokestatic(mainCtx.flushStreams);
 		}
 		// Rethrow: the launcher's exit code is 1 and its echo is now one line.
 		code.aload(exSlot).athrow();
-		code.exceptionCatch(mainCtx.bodyStart, bodyEnd, bodyEnd, p.runtimeException().entry());
+		code.exceptionCatch(mainCtx.bodyStart, bodyEnd, bodyEnd, p.runtimeException());
 	}
 
 	/**
@@ -276,7 +270,7 @@ final class JvmUncaughtHandler {
 	 * @param head the async function's head, fixed where {@code %async-run} was compiled
 	 * @param cross the {@code _asyncCross} reference
 	 */
-	static void appendAsyncCrossing(JvmLispCompiler.Ctx ctx, String head, MethodrefConstant cross) {
+	static void appendAsyncCrossing(JvmLispCompiler.Ctx ctx, String head, MethodRefEntry cross) {
 		ConstantPool cp = ctx.cp;
 		MethodCode.Label bodyEnd = ctx.body.newBoundLabel();
 		int exSlot = ctx.allocTemp();
@@ -284,9 +278,8 @@ final class JvmUncaughtHandler {
 		ctx.body.astore(exSlot).aload(exSlot);
 		// A Java string for the trace, never a value the program can hold.
 		JvmEmitHelper.compileUnspelledLiteral(head, ctx);
-		ctx.body.invokestatic(cross.entry()).aload(exSlot).athrow();
-		ctx.body.exceptionCatch(ctx.bodyStart, bodyEnd, bodyEnd,
-				cp.addClass(cp.addUtf8("java/lang/RuntimeException")).entry());
+		ctx.body.invokestatic(cross).aload(exSlot).athrow();
+		ctx.body.exceptionCatch(ctx.bodyStart, bodyEnd, bodyEnd, cp.classEntry("java/lang/RuntimeException"));
 	}
 
 	/**
@@ -303,42 +296,40 @@ final class JvmUncaughtHandler {
 	 * @param printlnStr {@code PrintStream.println(String)}
 	 * @return the method
 	 */
-	static Built buildWhere(ConstantPool cp, String className, JvmSourceSites sites, MethodrefConstant printlnStr) {
-		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
-		ClassConstant frameClass = cp.addClass(cp.addUtf8("java/lang/StackTraceElement"));
-		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
-		MethodrefConstant getStackTrace = method(cp, throwableClass, "getStackTrace",
-				"()[Ljava/lang/StackTraceElement;");
-		MethodrefConstant concat = method(cp, stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		MethodrefConstant split = method(cp, stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;");
-		MethodrefConstant equals = method(cp, stringClass, "equals", "(Ljava/lang/Object;)Z");
-		MethodrefConstant startsWith = method(cp, stringClass, "startsWith", "(Ljava/lang/String;)Z");
-		MethodrefConstant charAt = method(cp, stringClass, "charAt", "(I)C");
-		MethodrefConstant length = method(cp, stringClass, "length", "()I");
-		MethodrefConstant valueOfInt = method(cp, stringClass, "valueOf", "(I)Ljava/lang/String;");
-		MethodrefConstant getClassName = method(cp, frameClass, "getClassName", "()Ljava/lang/String;");
-		MethodrefConstant getLineNumber = method(cp, frameClass, "getLineNumber", "()I");
-		MethodrefConstant getFileName = method(cp, frameClass, "getFileName", "()Ljava/lang/String;");
-		ConstantPool.FieldrefConstant systemErr = cp.addFieldref(systemClass,
-				cp.addNameAndType(cp.addUtf8("err"), cp.addUtf8("Ljava/io/PrintStream;")));
+	static Built buildWhere(ConstantPool cp, String className, JvmSourceSites sites, MethodRefEntry printlnStr) {
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
+		ClassEntry frameClass = cp.classEntry("java/lang/StackTraceElement");
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		MethodRefEntry getStackTrace = method(cp, throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
+		MethodRefEntry concat = method(cp, stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry split = method(cp, stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;");
+		MethodRefEntry equals = method(cp, stringClass, "equals", "(Ljava/lang/Object;)Z");
+		MethodRefEntry startsWith = method(cp, stringClass, "startsWith", "(Ljava/lang/String;)Z");
+		MethodRefEntry charAt = method(cp, stringClass, "charAt", "(I)C");
+		MethodRefEntry length = method(cp, stringClass, "length", "()I");
+		MethodRefEntry valueOfInt = method(cp, stringClass, "valueOf", "(I)Ljava/lang/String;");
+		MethodRefEntry getClassName = method(cp, frameClass, "getClassName", "()Ljava/lang/String;");
+		MethodRefEntry getLineNumber = method(cp, frameClass, "getLineNumber", "()I");
+		MethodRefEntry getFileName = method(cp, frameClass, "getFileName", "()Ljava/lang/String;");
+		FieldRefEntry systemErr = cp.fieldRef(systemClass, "err", "Ljava/io/PrintStream;");
 		String self = className.replace('/', '.');
-		Strings s = new Strings(cp.addString(self), cp.addString(self + "$Part"), cp.addString(ASYNC_FRAME_CLASS),
-				cp.addString(":"));
+		Strings s = new Strings(cp.stringEntry(self), cp.stringEntry(self + "$Part"), cp.stringEntry(ASYNC_FRAME_CLASS),
+				cp.stringEntry(":"));
 		Refs r = new Refs(concat, equals, startsWith, charAt, length, valueOfInt, getClassName, getLineNumber);
 
 		MethodCode a = new MethodCode();
 		MethodCode.Label start = a.newBoundLabel();
 		// trace = ex.getStackTrace()
 		a.aload(EX);
-		a.invokevirtual(getStackTrace.methodRefEntry());
+		a.invokevirtual(getStackTrace);
 		a.astore(TRACE);
 		// table / names: the constants, concatenated back when one did not hold them
 		emitJoined(a, cp, sites.tableChunks(), concat);
 		a.astore(TABLE);
 		emitJoined(a, cp, sites.nameChunks(), concat);
-		a.ldc(cp.addString(String.valueOf(JvmSourceSites.NAME_SEPARATOR)).entry());
-		a.invokevirtual(split.methodRefEntry());
+		a.ldc(cp.stringEntry(String.valueOf(JvmSourceSites.NAME_SEPARATOR)));
+		a.invokevirtual(split);
 		a.astore(NAMES);
 		a.aload(TRACE);
 		a.arraylength();
@@ -367,7 +358,7 @@ final class JvmUncaughtHandler {
 		a.iload(SITE_BASE);
 		a.loadConstant(2);
 		a.iadd();
-		a.invokevirtual(charAt.methodRefEntry());
+		a.invokevirtual(charAt);
 		a.istore(SITE);
 		a.iload(SITE);
 		a.ifeq(segmentNext);
@@ -384,18 +375,18 @@ final class JvmUncaughtHandler {
 		MethodCode.Label noLocation = a.newLabel();
 		a.iload(LOCATION);
 		a.ifeq(noLocation);
-		a.getstatic(systemErr.entry());
-		a.ldc(cp.addString(UncaughtReport.AT_PREFIX).entry());
+		a.getstatic(systemErr);
+		a.ldc(cp.stringEntry(UncaughtReport.AT_PREFIX));
 		emitPosition(a, s, r, LOCATION);
 		MethodCode.Label noFunction = a.newLabel();
 		a.aload(FUNCTION);
 		a.ifnull(noFunction);
-		a.ldc(cp.addString(UncaughtReport.IN_FUNCTION).entry());
-		a.invokevirtual(concat.methodRefEntry());
+		a.ldc(cp.stringEntry(UncaughtReport.IN_FUNCTION));
+		a.invokevirtual(concat);
 		a.aload(FUNCTION);
-		a.invokevirtual(concat.methodRefEntry());
+		a.invokevirtual(concat);
 		a.labelBinding(noFunction);
-		a.invokevirtual(printlnStr.methodRefEntry());
+		a.invokevirtual(printlnStr);
 		a.labelBinding(noLocation);
 
 		// One line per async boundary: the frame names the head, the frames after it
@@ -409,7 +400,7 @@ final class JvmUncaughtHandler {
 		a.aload(TRACE);
 		a.iload(INDEX);
 		a.aaload();
-		a.invokevirtual(getFileName.methodRefEntry());
+		a.invokevirtual(getFileName);
 		a.astore(HEAD);
 		a.loadConstant(0);
 		a.istore(AWAITED);
@@ -429,18 +420,18 @@ final class JvmUncaughtHandler {
 		a.goto_(hopScan);
 		a.labelBinding(hopEnd);
 		// " in HEAD[, awaited at FILE:LINE]"
-		a.getstatic(systemErr.entry());
-		a.ldc(cp.addString(UncaughtReport.ASYNC_PREFIX).entry());
+		a.getstatic(systemErr);
+		a.ldc(cp.stringEntry(UncaughtReport.ASYNC_PREFIX));
 		a.aload(HEAD);
-		a.invokevirtual(concat.methodRefEntry());
+		a.invokevirtual(concat);
 		MethodCode.Label notAwaited = a.newLabel();
 		a.iload(AWAITED);
 		a.ifeq(notAwaited);
-		a.ldc(cp.addString(UncaughtReport.AWAITED_AT).entry());
-		a.invokevirtual(concat.methodRefEntry());
+		a.ldc(cp.stringEntry(UncaughtReport.AWAITED_AT));
+		a.invokevirtual(concat);
 		emitPosition(a, s, r, AWAITED);
 		a.labelBinding(notAwaited);
-		a.invokevirtual(printlnStr.methodRefEntry());
+		a.invokevirtual(printlnStr);
 		a.goto_(hopLoop);
 		a.labelBinding(done);
 		MethodCode.Label end = a.newBoundLabel();
@@ -450,7 +441,7 @@ final class JvmUncaughtHandler {
 		a.pop();
 		a.return_();
 		a.exceptionCatch(start, end, handler, null);
-		return new Built(cp.addUtf8(WHERE_METHOD), cp.addUtf8(WHERE_DESC), a);
+		return new Built(cp.utf8Entry(WHERE_METHOD), cp.utf8Entry(WHERE_DESC), a);
 	}
 
 	/**
@@ -464,28 +455,28 @@ final class JvmUncaughtHandler {
 		MethodCode a = new MethodCode();
 		// trace = t.getStackTrace(); out = Arrays.copyOf(trace, trace.length + 1)
 		a.aload(0);
-		a.invokevirtual(f.getStackTrace.methodRefEntry());
+		a.invokevirtual(f.getStackTrace);
 		a.astore(2);
 		a.aload(2);
 		a.aload(2);
 		a.arraylength();
 		a.loadConstant(1);
 		a.iadd();
-		a.invokestatic(f.copyOf.entry());
-		a.checkcast(f.frameArrayClass.entry());
+		a.invokestatic(f.copyOf);
+		a.checkcast(f.frameArrayClass);
 		a.astore(3);
 		// out[trace.length] = new StackTraceElement(ASYNC_FRAME_CLASS, "crossed", head,
 		// -1)
 		a.aload(3);
 		a.aload(2);
 		a.arraylength();
-		emitBoundaryFrame(a, f, cp.addString(ASYNC_CROSSED), () -> a.aload(1));
+		emitBoundaryFrame(a, f, cp.stringEntry(ASYNC_CROSSED), () -> a.aload(1));
 		a.aastore();
 		a.aload(0);
 		a.aload(3);
-		a.invokevirtual(f.setStackTrace.methodRefEntry());
+		a.invokevirtual(f.setStackTrace);
 		a.return_();
-		return new Built(cp.addUtf8(ASYNC_CROSS_METHOD), cp.addUtf8(ASYNC_CROSS_DESC), a);
+		return new Built(cp.utf8Entry(ASYNC_CROSS_METHOD), cp.utf8Entry(ASYNC_CROSS_DESC), a);
 	}
 
 	/**
@@ -499,21 +490,19 @@ final class JvmUncaughtHandler {
 	 */
 	static Built buildAsyncAwaited(ConstantPool cp) {
 		Frames f = new Frames(cp);
-		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
-		MethodrefConstant arraycopy = method(cp, systemClass, "arraycopy",
-				"(Ljava/lang/Object;ILjava/lang/Object;II)V");
-		MethodrefConstant throwableInit = method(cp, f.throwableClass, "<init>", "()V");
-		MethodrefConstant equals = method(cp, cp.addClass(cp.addUtf8("java/lang/String")), "equals",
-				"(Ljava/lang/Object;)Z");
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		MethodRefEntry arraycopy = method(cp, systemClass, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+		MethodRefEntry throwableInit = method(cp, f.throwableClass, "<init>", "()V");
+		MethodRefEntry equals = method(cp, cp.classEntry("java/lang/String"), "equals", "(Ljava/lang/Object;)Z");
 		MethodCode a = new MethodCode();
 		MethodCode.Label skip = a.newLabel();
 		// t.setStackTrace(stored): an earlier await's frames are a caught signal's
 		a.aload(0);
 		a.aload(1);
-		a.invokevirtual(f.setStackTrace.methodRefEntry());
+		a.invokevirtual(f.setStackTrace);
 		// trace = t.getStackTrace(); n = trace.length; if (n == 0) return
 		a.aload(0);
-		a.invokevirtual(f.getStackTrace.methodRefEntry());
+		a.invokevirtual(f.getStackTrace);
 		a.astore(1);
 		a.aload(1);
 		a.arraylength();
@@ -527,21 +516,21 @@ final class JvmUncaughtHandler {
 		a.isub();
 		a.aaload();
 		a.astore(3);
-		a.ldc(cp.addString(ASYNC_FRAME_CLASS).entry());
+		a.ldc(cp.stringEntry(ASYNC_FRAME_CLASS));
 		a.aload(3);
-		a.invokevirtual(f.getClassName.methodRefEntry());
-		a.invokevirtual(equals.methodRefEntry());
+		a.invokevirtual(f.getClassName);
+		a.invokevirtual(equals);
 		a.ifeq(skip);
-		a.ldc(cp.addString(ASYNC_CROSSED).entry());
+		a.ldc(cp.stringEntry(ASYNC_CROSSED));
 		a.aload(3);
-		a.invokevirtual(f.getMethodName.methodRefEntry());
-		a.invokevirtual(equals.methodRefEntry());
+		a.invokevirtual(f.getMethodName);
+		a.invokevirtual(equals);
 		a.ifeq(skip);
 		// here = new Throwable().getStackTrace()
-		a.new_(f.throwableClass.entry());
+		a.new_(f.throwableClass);
 		a.dup();
-		a.invokespecial(throwableInit.entry());
-		a.invokevirtual(f.getStackTrace.methodRefEntry());
+		a.invokespecial(throwableInit);
+		a.invokevirtual(f.getStackTrace);
 		a.astore(4);
 		// out = Arrays.copyOf(trace, n + here.length)
 		a.aload(1);
@@ -549,17 +538,17 @@ final class JvmUncaughtHandler {
 		a.aload(4);
 		a.arraylength();
 		a.iadd();
-		a.invokestatic(f.copyOf.entry());
-		a.checkcast(f.frameArrayClass.entry());
+		a.invokestatic(f.copyOf);
+		a.checkcast(f.frameArrayClass);
 		a.astore(5);
 		// out[n - 1] = new StackTraceElement(ASYNC_FRAME_CLASS, "awaited", last.head, -1)
 		a.aload(5);
 		a.iload(2);
 		a.loadConstant(1);
 		a.isub();
-		emitBoundaryFrame(a, f, cp.addString(ASYNC_AWAITED), () -> {
+		emitBoundaryFrame(a, f, cp.stringEntry(ASYNC_AWAITED), () -> {
 			a.aload(3);
-			a.invokevirtual(f.getFileName.methodRefEntry());
+			a.invokevirtual(f.getFileName);
 		});
 		a.aastore();
 		// System.arraycopy(here, 0, out, n, here.length); t.setStackTrace(out)
@@ -569,64 +558,64 @@ final class JvmUncaughtHandler {
 		a.iload(2);
 		a.aload(4);
 		a.arraylength();
-		a.invokestatic(arraycopy.entry());
+		a.invokestatic(arraycopy);
 		a.aload(0);
 		a.aload(5);
-		a.invokevirtual(f.setStackTrace.methodRefEntry());
+		a.invokevirtual(f.setStackTrace);
 		a.labelBinding(skip);
 		a.return_();
-		return new Built(cp.addUtf8(ASYNC_AWAITED_METHOD), cp.addUtf8(ASYNC_AWAITED_DESC), a);
+		return new Built(cp.utf8Entry(ASYNC_AWAITED_METHOD), cp.utf8Entry(ASYNC_AWAITED_DESC), a);
 	}
 
 	/** The string constants {@code _where} compares frames against. */
-	private record Strings(StringConstant self, StringConstant part, StringConstant boundary, StringConstant colon) {
+	private record Strings(StringEntry self, StringEntry part, StringEntry boundary, StringEntry colon) {
 	}
 
 	/** The library methods {@code _where}'s repeated sequences call. */
-	private record Refs(MethodrefConstant concat, MethodrefConstant equals, MethodrefConstant startsWith,
-			MethodrefConstant charAt, MethodrefConstant length, MethodrefConstant valueOfInt,
-			MethodrefConstant getClassName, MethodrefConstant getLineNumber) {
+	private record Refs(MethodRefEntry concat, MethodRefEntry equals, MethodRefEntry startsWith, MethodRefEntry charAt,
+			MethodRefEntry length, MethodRefEntry valueOfInt, MethodRefEntry getClassName,
+			MethodRefEntry getLineNumber) {
 	}
 
 	/** The trace-editing references the two boundary helpers share. */
 	private static final class Frames {
 
-		final ClassConstant throwableClass;
+		final ClassEntry throwableClass;
 
-		final ClassConstant frameClass;
+		final ClassEntry frameClass;
 
-		final ClassConstant frameArrayClass;
+		final ClassEntry frameArrayClass;
 
-		final MethodrefConstant getStackTrace;
+		final MethodRefEntry getStackTrace;
 
-		final MethodrefConstant setStackTrace;
+		final MethodRefEntry setStackTrace;
 
-		final MethodrefConstant copyOf;
+		final MethodRefEntry copyOf;
 
-		final MethodrefConstant frameInit;
+		final MethodRefEntry frameInit;
 
-		final MethodrefConstant getClassName;
+		final MethodRefEntry getClassName;
 
-		final MethodrefConstant getMethodName;
+		final MethodRefEntry getMethodName;
 
-		final MethodrefConstant getFileName;
+		final MethodRefEntry getFileName;
 
-		final StringConstant boundaryClass;
+		final StringEntry boundaryClass;
 
 		Frames(ConstantPool cp) {
-			this.throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
-			this.frameClass = cp.addClass(cp.addUtf8("java/lang/StackTraceElement"));
-			this.frameArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/StackTraceElement;"));
+			this.throwableClass = cp.classEntry("java/lang/Throwable");
+			this.frameClass = cp.classEntry("java/lang/StackTraceElement");
+			this.frameArrayClass = cp.classEntry("[Ljava/lang/StackTraceElement;");
 			this.getStackTrace = method(cp, this.throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
 			this.setStackTrace = method(cp, this.throwableClass, "setStackTrace", "([Ljava/lang/StackTraceElement;)V");
-			this.copyOf = method(cp, cp.addClass(cp.addUtf8("java/util/Arrays")), "copyOf",
+			this.copyOf = method(cp, cp.classEntry("java/util/Arrays"), "copyOf",
 					"([Ljava/lang/Object;I)[Ljava/lang/Object;");
 			this.frameInit = method(cp, this.frameClass, "<init>",
 					"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
 			this.getClassName = method(cp, this.frameClass, "getClassName", "()Ljava/lang/String;");
 			this.getMethodName = method(cp, this.frameClass, "getMethodName", "()Ljava/lang/String;");
 			this.getFileName = method(cp, this.frameClass, "getFileName", "()Ljava/lang/String;");
-			this.boundaryClass = cp.addString(ASYNC_FRAME_CLASS);
+			this.boundaryClass = cp.stringEntry(ASYNC_FRAME_CLASS);
 		}
 
 	}
@@ -635,14 +624,14 @@ final class JvmUncaughtHandler {
 	 * Pushes {@code new StackTraceElement(ASYNC_FRAME_CLASS, state, head, -1)}, the head
 	 * pushed by {@code head}.
 	 */
-	private static void emitBoundaryFrame(MethodCode a, Frames f, StringConstant state, Runnable head) {
-		a.new_(f.frameClass.entry());
+	private static void emitBoundaryFrame(MethodCode a, Frames f, StringEntry state, Runnable head) {
+		a.new_(f.frameClass);
 		a.dup();
-		a.ldc(f.boundaryClass.entry());
-		a.ldc(state.entry());
+		a.ldc(f.boundaryClass);
+		a.ldc(state);
 		head.run();
 		a.loadConstant(-1);
-		a.invokespecial(f.frameInit.entry());
+		a.invokespecial(f.frameInit);
 	}
 
 	/**
@@ -659,11 +648,11 @@ final class JvmUncaughtHandler {
 		a.aaload();
 		a.astore(FRAME);
 		a.aload(FRAME);
-		a.invokevirtual(r.getClassName().methodRefEntry());
+		a.invokevirtual(r.getClassName());
 		a.astore(FRAME_CLASS);
 		a.aload(FRAME_CLASS);
-		a.ldc(s.boundary().entry());
-		a.invokevirtual(r.equals().methodRefEntry());
+		a.ldc(s.boundary());
+		a.invokevirtual(r.equals());
 		a.ifne(end);
 	}
 
@@ -675,16 +664,16 @@ final class JvmUncaughtHandler {
 	private static void emitSiteOf(MethodCode a, Strings s, Refs r, MethodCode.Label none) {
 		MethodCode.Label ours = a.newLabel();
 		a.aload(FRAME_CLASS);
-		a.ldc(s.self().entry());
-		a.invokevirtual(r.equals().methodRefEntry());
+		a.ldc(s.self());
+		a.invokevirtual(r.equals());
 		a.ifne(ours);
 		a.aload(FRAME_CLASS);
-		a.ldc(s.part().entry());
-		a.invokevirtual(r.startsWith().methodRefEntry());
+		a.ldc(s.part());
+		a.invokevirtual(r.startsWith());
 		a.ifeq(none);
 		a.labelBinding(ours);
 		a.aload(FRAME);
-		a.invokevirtual(r.getLineNumber().methodRefEntry());
+		a.invokevirtual(r.getLineNumber());
 		a.istore(SITE);
 		a.iload(SITE);
 		a.ifle(none);
@@ -693,7 +682,7 @@ final class JvmUncaughtHandler {
 		a.loadConstant(3);
 		a.imul();
 		a.aload(TABLE);
-		a.invokevirtual(r.length().methodRefEntry());
+		a.invokevirtual(r.length());
 		a.if_icmpgt(none);
 		a.iload(SITE);
 		a.loadConstant(1);
@@ -717,32 +706,32 @@ final class JvmUncaughtHandler {
 		a.aload(NAMES);
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
-		a.invokevirtual(r.charAt().methodRefEntry());
+		a.invokevirtual(r.charAt());
 		a.aaload();
-		a.invokevirtual(r.concat().methodRefEntry());
-		a.ldc(s.colon().entry());
-		a.invokevirtual(r.concat().methodRefEntry());
+		a.invokevirtual(r.concat());
+		a.ldc(s.colon());
+		a.invokevirtual(r.concat());
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
 		a.loadConstant(1);
 		a.iadd();
-		a.invokevirtual(r.charAt().methodRefEntry());
-		a.invokestatic(r.valueOfInt().entry());
-		a.invokevirtual(r.concat().methodRefEntry());
+		a.invokevirtual(r.charAt());
+		a.invokestatic(r.valueOfInt());
+		a.invokevirtual(r.concat());
 	}
 
 	/** Pushes the concatenation of the chunks, each a string constant. */
-	private static void emitJoined(MethodCode a, ConstantPool cp, List<String> chunks, MethodrefConstant concat) {
+	private static void emitJoined(MethodCode a, ConstantPool cp, List<String> chunks, MethodRefEntry concat) {
 		for (int i = 0; i < chunks.size(); i++) {
-			a.ldc(cp.addString(chunks.get(i)).entry());
+			a.ldc(cp.stringEntry(chunks.get(i)));
 			if (i > 0) {
-				a.invokevirtual(concat.methodRefEntry());
+				a.invokevirtual(concat);
 			}
 		}
 	}
 
-	private static MethodrefConstant method(ConstantPool cp, ClassConstant owner, String name, String desc) {
-		return cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc)));
+	private static MethodRefEntry method(ConstantPool cp, ClassEntry owner, String name, String desc) {
+		return cp.methodRef(owner, name, desc);
 	}
 
 }
