@@ -1,6 +1,5 @@
 package am.ik.jvm;
 
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -15,14 +14,12 @@ import org.jspecify.annotations.Nullable;
  * methods, each method body a list of code bytes whose constant-pool operands are kept at
  * full width. The shape is the one every generated class has -- attribute-free fields,
  * one {@code Code} attribute per method whose only sub-attribute is an optional
- * {@code LineNumberTable}, no class attributes -- the one shape {@link JvmClassSplitter}
- * writes.
+ * {@code LineNumberTable}, no class attributes.
  * <p>
- * A definition whose pool fits one class file is written by {@link #toBytes()}; one whose
- * pool outgrew it is handed to {@link JvmClassSplitter}, which spreads its methods over
- * several class files. Keeping the class as data until that decision is what makes the
- * second outcome possible at all: once written, an operand past 65535 would already have
- * lost the entry it named.
+ * {@link JvmClassSplitter} writes it: as one class file when its members' entries fit one
+ * pool, else spread over several. Keeping the class as data until that decision is what
+ * makes the second outcome possible at all: once written, an operand past 65535 would
+ * already have lost the entry it named.
  */
 public final class ClassDefinition {
 
@@ -143,58 +140,6 @@ public final class ClassDefinition {
 	}
 
 	/**
-	 * Writes the definition as one class file (major version 50, the version the
-	 * generators emit before {@link StackMapFrames} raises it).
-	 * @return the class file
-	 * @throws IllegalStateException when the pool does not fit one class file
-	 * @throws IllegalArgumentException when a method's code exceeds 65535 bytes
-	 */
-	public byte[] toBytes() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		ByteCodeWriter w = new ByteCodeWriter(out);
-		w.write(0xCA, 0xFE, 0xBA, 0xBE).writeVersion(0, 50).writeConstantPool(this.cp);
-		w.writeU2(this.accessFlags).writeU2(this.thisClass).writeU2(this.superClass);
-		w.writeU2(this.interfaces.size());
-		for (ClassConstant iface : this.interfaces) {
-			w.writeU2(iface);
-		}
-		w.writeU2(this.fields.size());
-		for (Field field : this.fields) {
-			w.writeU2(field.access()).writeU2(field.name()).writeU2(field.descriptor()).writeU2(0);
-		}
-		w.writeU2(this.methods.size());
-		for (Method method : this.methods) {
-			byte[] code = method.codeBytes(this.cp);
-			List<ByteCodeWriter.LineNumberEntry> lines = method.lineNumbers();
-			w.writeU2(method.access()).writeU2(method.name()).writeU2(method.descriptor());
-			w.writeU2(1).writeU2(this.codeName);
-			w.writeU4(
-					2 + 2 + 4 + code.length + 2 + 8 * method.exceptionTable().size() + 2 + lineNumberTableSize(lines));
-			w.writeU2(method.maxStack()).writeU2(method.maxLocals()).writeU4(code.length).write(code);
-			w.writeExceptionTable(method.exceptionTable());
-			if (lines.isEmpty()) {
-				w.writeU2(0);
-			}
-			else {
-				w.writeU2(1).writeU2(Objects.requireNonNull(this.lineNumberTableName));
-				w.writeU4(2 + 4 * lines.size()).writeLineNumberTable(lines);
-			}
-		}
-		w.writeU2(0);
-		return out.toByteArray();
-	}
-
-	/**
-	 * The bytes a method's {@code LineNumberTable} sub-attribute adds to its {@code Code}
-	 * attribute: none without entries, else its name index, length and table.
-	 * @param lines the method's entries
-	 * @return the attribute's whole size
-	 */
-	static int lineNumberTableSize(List<ByteCodeWriter.LineNumberEntry> lines) {
-		return lines.isEmpty() ? 0 : 2 + 4 + 2 + 4 * lines.size();
-	}
-
-	/**
 	 * A field: attribute-free.
 	 *
 	 * @param access its access flags
@@ -205,65 +150,69 @@ public final class ClassDefinition {
 	}
 
 	/**
+	 * An exception table entry. An exception thrown while the pc is in
+	 * {@code [startPc, endPc)} is dispatched to {@code handlerPc} when its class is (a
+	 * subclass of) the {@code catchType} class constant; a {@code catchType} of 0 catches
+	 * any throwable (the {@code finally} shape).
+	 *
+	 * @param startPc the inclusive start of the protected code range
+	 * @param endPc the exclusive end of the protected code range
+	 * @param handlerPc the handler entry point (the operand stack there holds only the
+	 * thrown exception)
+	 * @param catchType the {@code CONSTANT_Class} pool index of the caught type, or 0 for
+	 * any
+	 */
+	public record Handler(int startPc, int endPc, int handlerPc, int catchType) {
+	}
+
+	/**
+	 * A {@code LineNumberTable} entry: the instructions from {@code startPc} up to the
+	 * next entry's belong to {@code lineNumber}. What the number MEANS is the producer's
+	 * business -- the JVM only hands it back through
+	 * {@link StackTraceElement#getLineNumber()}.
+	 *
+	 * @param startPc the offset of the first instruction the entry covers; an instruction
+	 * boundary
+	 * @param lineNumber the u2 number those instructions report
+	 */
+	public record Line(int startPc, int lineNumber) {
+	}
+
+	/**
+	 * A branch whose target is too far for the signed 16-bit offset its instruction
+	 * carries: the offset bytes are placeholders, and the writer places the branch in the
+	 * {@code goto_w} form that reaches.
+	 *
+	 * @param pc the offset of the branch instruction
+	 * @param target the offset it jumps to
+	 */
+	public record Branch(int pc, int target) {
+	}
+
+	/**
 	 * A method with its single {@code Code} attribute.
 	 *
 	 * @param access its access flags
 	 * @param name its name
 	 * @param descriptor its descriptor
-	 * @param maxStack the declared {@code max_stack}
-	 * @param maxLocals the declared {@code max_locals}
 	 * @param code the body, one element per byte; a constant-pool operand's high part may
 	 * exceed a byte
 	 * @param exceptionTable the handlers, in dispatch order
 	 * @param lineNumbers the {@code LineNumberTable} entries, in ascending pc order;
 	 * empty for a method that carries none
+	 * @param longBranches the branches whose offset did not fit their instruction
 	 */
-	public record Method(int access, Utf8Constant name, Utf8Constant descriptor, int maxStack, int maxLocals,
-			List<Integer> code, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable,
-			List<ByteCodeWriter.LineNumberEntry> lineNumbers) {
+	public record Method(int access, Utf8Constant name, Utf8Constant descriptor, List<Integer> code,
+			List<Handler> exceptionTable, List<Line> lineNumbers, List<Branch> longBranches) {
 
 		/**
-		 * Copies the body, the handler table and the line numbers.
+		 * Copies the body and its tables.
 		 */
 		public Method {
 			code = List.copyOf(code);
 			exceptionTable = List.copyOf(exceptionTable);
 			lineNumbers = List.copyOf(lineNumbers);
-		}
-
-		/**
-		 * A method without line numbers.
-		 * @param access its access flags
-		 * @param name its name
-		 * @param descriptor its descriptor
-		 * @param maxStack the declared {@code max_stack}
-		 * @param maxLocals the declared {@code max_locals}
-		 * @param code the body, one element per byte
-		 * @param exceptionTable the handlers, in dispatch order
-		 */
-		public Method(int access, Utf8Constant name, Utf8Constant descriptor, int maxStack, int maxLocals,
-				List<Integer> code, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
-			this(access, name, descriptor, maxStack, maxLocals, code, exceptionTable, List.of());
-		}
-
-		/**
-		 * The code array as the class file carries it: each element's low eight bits.
-		 * @param cp the pool the name decodes against, for the error message
-		 * @return the code bytes
-		 * @throws IllegalArgumentException past the 65535-byte limit (JVMS 4.7.3)
-		 */
-		byte[] codeBytes(ConstantPool cp) {
-			if (this.code.size() > 0xFFFF) {
-				// Writing a longer body produces a class every JVM rejects at load time
-				// with a message that no longer names the culprit; fail here instead.
-				throw new IllegalArgumentException("method " + cp.utf8At(this.name.index())
-						+ ": method code exceeds the JVM's 65535-byte limit: " + this.code.size());
-			}
-			byte[] bytes = new byte[this.code.size()];
-			for (int i = 0; i < bytes.length; i++) {
-				bytes[i] = (byte) (int) this.code.get(i);
-			}
-			return bytes;
+			longBranches = List.copyOf(longBranches);
 		}
 
 	}
@@ -332,37 +281,38 @@ public final class ClassDefinition {
 		}
 
 		/**
+		 * Adds a method. The declared {@code max_stack} and {@code max_locals} are
+		 * accepted for the generators' convenience and ignored: the writer derives both
+		 * from the code.
 		 * @param access the method's access flags
 		 * @param name its name
 		 * @param descriptor its descriptor
-		 * @param maxStack the declared {@code max_stack}
-		 * @param maxLocals the declared {@code max_locals}
+		 * @param maxStack the generator's {@code max_stack} (unused)
+		 * @param maxLocals the generator's {@code max_locals} (unused)
 		 * @param code the body, one element per byte
 		 * @param exceptionTable the handlers, in dispatch order
 		 * @return this builder
 		 */
 		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, int maxStack, int maxLocals,
-				List<Integer> code, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
-			return this.addMethod(access, name, descriptor, maxStack, maxLocals, code, exceptionTable, List.of());
+				List<Integer> code, List<Handler> exceptionTable) {
+			return this.addMethod(access, name, descriptor, code, exceptionTable, List.of(), List.of());
 		}
 
 		/**
 		 * @param access the method's access flags
 		 * @param name its name
 		 * @param descriptor its descriptor
-		 * @param maxStack the declared {@code max_stack}
-		 * @param maxLocals the declared {@code max_locals}
 		 * @param code the body, one element per byte
 		 * @param exceptionTable the handlers, in dispatch order
 		 * @param lineNumbers the {@code LineNumberTable} entries, in ascending pc order
 		 * (empty for none; any at all needs {@link #lineNumberTableName})
+		 * @param longBranches the branches whose offset did not fit their instruction
 		 * @return this builder
 		 */
-		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, int maxStack, int maxLocals,
-				List<Integer> code, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable,
-				List<ByteCodeWriter.LineNumberEntry> lineNumbers) {
-			this.methods.add(new Method(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor),
-					maxStack, maxLocals, code, exceptionTable, lineNumbers));
+		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, List<Integer> code,
+				List<Handler> exceptionTable, List<Line> lineNumbers, List<Branch> longBranches) {
+			this.methods.add(new Method(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor), code,
+					exceptionTable, lineNumbers, longBranches));
 			return this;
 		}
 

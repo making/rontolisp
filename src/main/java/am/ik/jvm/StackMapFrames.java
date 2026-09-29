@@ -29,12 +29,11 @@ import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Language-independent post-pass that gives every method of a finished, frame-free class
- * file its {@code StackMapTable} and stamps the class-file version, so the output passes
- * the type-checking verifier that class version 51+ makes mandatory. The frames come from
- * {@code java.lang.classfile}'s stack-map generator (in {@code java.base}): the class is
- * parsed, its method bodies are passed through unchanged, and the writer derives the
- * frames, {@code max_stack} and {@code max_locals} from the code.
+ * The frames of a class file: the class hierarchy {@link JvmClassSplitter} writes every
+ * generated class's frames against, a post-pass that gives a finished, frame-free class
+ * file its {@code StackMapTable}, and a query over the frames a class carries. The frames
+ * come from {@code java.lang.classfile}'s stack-map generator (in {@code java.base}): the
+ * writer derives the frames, {@code max_stack} and {@code max_locals} from the code.
  * <p>
  * Dead code (emitted after an unconditional transfer, never jumped to) is overwritten
  * with {@code nop}s ending in {@code athrow} under a {@code [Throwable]}-stack frame and
@@ -48,9 +47,7 @@ import org.jspecify.annotations.Nullable;
  * type counts as a class directly under {@code Object} -- an unequal pair of those merges
  * to {@code Object}.
  * <p>
- * The pass must run after {@link JvmClassShaker} when both apply: the shaker drops a
- * {@code StackMapTable} rather than keep frames whose merges it did not check. A
- * {@code LineNumberTable} passes through both, its entries riding the instructions they
+ * A {@code LineNumberTable} passes through, its entries riding the instructions they
  * label.
  * <p>
  * {@link #osrHostileBackedges} reads the frames back: which backward branches target a
@@ -101,7 +98,7 @@ public final class StackMapFrames {
 
 	/**
 	 * Computes the frames of every method with the fixed hierarchy table alone.
-	 * @param classFile a frame-free class file (as {@link ByteCodeWriter} writes it)
+	 * @param classFile a class file without frames
 	 * @param majorVersion the class-file major version to stamp (e.g. 61 for Java 17)
 	 * @return the class file with its frames
 	 * @throws ConstantPoolOverflowException when the frames' own constant-pool entries do
@@ -115,7 +112,7 @@ public final class StackMapFrames {
 	/**
 	 * Computes the frames of every method, resolving the types the fixed table does not
 	 * know through {@code classes}.
-	 * @param classFile a frame-free class file (as {@link ByteCodeWriter} writes it)
+	 * @param classFile a class file without frames
 	 * @param majorVersion the class-file major version to stamp (e.g. 61 for Java 17)
 	 * @param classes the declared shape of a class by internal name, or {@code null} when
 	 * unknown
@@ -149,7 +146,14 @@ public final class StackMapFrames {
 		}
 	}
 
-	private static ClassHierarchyResolver resolver(Function<String, @Nullable ClassFileInfo> classes) {
+	/**
+	 * The class hierarchy the frames' merges read: the fixed table, then {@code classes},
+	 * then a class directly under {@code Object}. Loads nothing.
+	 * @param classes the declared shape of a class by internal name, or {@code null} when
+	 * unknown
+	 * @return the resolver
+	 */
+	static ClassHierarchyResolver resolver(Function<String, @Nullable ClassFileInfo> classes) {
 		Map<ClassDesc, ClassHierarchyInfo> cache = new HashMap<>();
 		return desc -> cache.computeIfAbsent(desc, d -> {
 			String name = internalName(d);

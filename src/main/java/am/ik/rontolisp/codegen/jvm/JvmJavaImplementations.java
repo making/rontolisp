@@ -7,12 +7,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.UnaryOperator;
 
 import am.ik.jvm.AccessFlag;
-import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.JvmClassSplitter;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -193,20 +192,25 @@ final class JvmJavaImplementations {
 	/**
 	 * The generated classes, written for the program's class-file version, keyed by their
 	 * path within an output tree.
-	 * @param withFrames gives a finished, frame-free class its StackMapTable and stamps
-	 * the program's class-file version
+	 * @param target the program's class-file version and the class hierarchy its frames
+	 * merge through
 	 * @return the class files
 	 */
-	Map<String, byte[]> classFiles(UnaryOperator<byte[]> withFrames) {
+	Map<String, byte[]> classFiles(JvmClassSplitter.Target target) {
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.baseTested || !this.shells.isEmpty()) {
 			String base = this.programInternalName + "$Implementation";
-			files.put(base + ".class", withFrames.apply(writeBase(base)));
+			files.put(base + ".class", written(writeBase(base), target));
 		}
 		for (Shell shell : this.shells.values()) {
-			files.put(shell.internalName() + ".class", withFrames.apply(write(shell)));
+			files.put(shell.internalName() + ".class", written(write(shell), target));
 		}
 		return files;
+	}
+
+	// One class, never split: every member stays where the interface finds it.
+	private static byte[] written(ClassDefinition definition, JvmClassSplitter.Target target) {
+		return JvmClassSplitter.write(definition, null, method -> true, ConstantPool.MAX_INDEX, target).mainClass();
 	}
 
 	private Shell shell(JavaImplementation implementation) {
@@ -346,7 +350,7 @@ final class JvmJavaImplementations {
 		a.invokestatic(signal);
 		a.athrow();
 		return new JvmJavaDirectSites.Method(name, desc, 6, 5, a.finish(),
-				List.of(new ByteCodeWriter.ExceptionTableEntry(0, end, end, cls("java/lang/Throwable").index())));
+				List.of(new ClassDefinition.Handler(0, end, end, cls("java/lang/Throwable").index())));
 	}
 
 	private static int returnOpcode(JavaType type) {
@@ -364,7 +368,7 @@ final class JvmJavaImplementations {
 
 	// abstract class <Program>$Implementation implements java.io.Serializable: the
 	// functions field and the constructor every generated class shares.
-	private static byte[] writeBase(String internalName) {
+	private static ClassDefinition writeBase(String internalName) {
 		ConstantPool pool = new ConstantPool();
 		ClassConstant self = pool.addClass(pool.addUtf8(internalName));
 		ClassConstant object = pool.addClass(pool.addUtf8("java/lang/Object"));
@@ -388,10 +392,10 @@ final class JvmJavaImplementations {
 		init.u2(pool.addFieldref(self, pool.addNameAndType(fnsName, fnsDesc)).index());
 		init.op(Opcode.RETURN);
 		definition.addMethod(0, initName, pool.addUtf8("([Ljava/lang/Object;)V"), 2, 2, init.finish(), List.of());
-		return definition.build().toBytes();
+		return definition.build();
 	}
 
-	private byte[] write(Shell shell) {
+	private ClassDefinition write(Shell shell) {
 		JavaImplementation implementation = shell.implementation();
 		JavaType iface = Objects.requireNonNull(implementation.iface());
 		ConstantPool pool = new ConstantPool();
@@ -434,7 +438,7 @@ final class JvmJavaImplementations {
 			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8("toString"), pool.addUtf8("()Ljava/lang/String;"),
 					1, 1, text.finish(), List.of());
 		}
-		return definition.build().toBytes();
+		return definition.build();
 	}
 
 	// public R m(P...): the callback over (this.fns[i], the boxed arguments), or the

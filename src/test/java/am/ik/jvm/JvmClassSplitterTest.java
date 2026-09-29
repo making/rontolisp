@@ -18,17 +18,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The splitter against hand-built definitions, where every entry and every byte is known:
- * a chain of static methods too large for one tiny class spreads over parts and still
- * runs, what cannot move stays, what the shaker would drop is not written, and a
- * definition that fits declares and runs what the shaker's output does. The whole
- * compiler's use of it -- programs, output shapes, the forced split -- is
- * {@code JvmLispCompilerSplitTest}.
+ * The writer against hand-built definitions, where every entry and every byte is known: a
+ * chain of static methods too large for one tiny class spreads over parts and still runs,
+ * what cannot move stays, what the roots do not reach is not written, and an unresolved
+ * own call is reported. The whole compiler's use of it -- programs, output shapes, the
+ * forced split -- is {@code JvmLispCompilerSplitTest}.
  */
 class JvmClassSplitterTest {
 
@@ -40,13 +40,12 @@ class JvmClassSplitterTest {
 
 	@Test
 	void aChainTooLargeForOneClassRunsAcrossParts() throws Exception {
-		ClassDefinition definition = chain(ConstantPool.unbounded());
-		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, null, named(definition, "result"),
-				TINY_BUDGET);
+		ClassDefinition definition = chain(new ConstantPool());
+		JvmClassSplitter.Split split = split(definition, null, named(definition, "result"), TINY_BUDGET);
 		assertThat(split.parts()).as("the chain needs several classes").hasSizeGreaterThan(2);
 		assertThat(split.parts().keySet()).allSatisfy(name -> assertThat(name).startsWith("SplitMe$Part"));
 
-		Map<String, byte[]> classes = augmented(split);
+		Map<String, byte[]> classes = classes(split);
 		for (byte[] bytes : classes.values()) {
 			// Each class's own count stays within what it was filled to: the budget, plus
 			// the Class entry of the next part its last step calls into.
@@ -73,25 +72,22 @@ class JvmClassSplitterTest {
 	}
 
 	// Started past 65535, every index is one a class file cannot carry: the code keeps
-	// them
-	// whole and the split re-points each into its class's own pool.
+	// them whole and the writer re-mints each in its class's own pool.
 	@Test
 	void indexesPastTheFormatLimitAreRepointedIntoEachClassesPool() throws Exception {
-		ClassDefinition definition = chain(ConstantPool.unboundedFrom(70_000));
-		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, null, named(definition, "result"),
-				TINY_BUDGET);
-		Class<?> main = new Loader(augmented(split)).loadClass("SplitMe");
+		ClassDefinition definition = chain(ConstantPool.startingAt(70_000));
+		JvmClassSplitter.Split split = split(definition, null, named(definition, "result"), TINY_BUDGET);
+		Class<?> main = new Loader(classes(split)).loadClass("SplitMe");
 		main.getMethod("main", String[].class).invoke(null, (Object) new String[0]);
 		assertThat(main.getMethod("result").invoke(null)).isEqualTo(CHAIN);
 	}
 
 	// A method whose identity is its class stays there whatever the budget: an instance
 	// method, a synchronized one (the class is its monitor), one asking MethodHandles for
-	// a
-	// lookup (the class is the lookup's), and the class initializer.
+	// a lookup (the class is the lookup's), and the class initializer.
 	@Test
 	void whatCannotMoveStaysInTheMainClass() throws Exception {
-		ConstantPool cp = ConstantPool.unbounded();
+		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
 		ConstantPool.MethodrefConstant lookup = cp.addMethodref(
 				cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles")),
@@ -106,21 +102,20 @@ class JvmClassSplitterTest {
 			b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "free" + i, "()V",
 					new Code().ldc(cp.addString("filler-" + i)).op(Opcode.POP).op(Opcode.RETURN));
 		}
-		JvmClassSplitter.Split split = JvmClassSplitter.split(b.build(), null, method -> false, TINY_BUDGET);
+		JvmClassSplitter.Split split = split(b.build(), null, method -> false, TINY_BUDGET);
 		assertThat(split.parts()).isNotEmpty();
-		Class<?> main = new Loader(augmented(split)).loadClass("SplitMe");
+		Class<?> main = new Loader(classes(split)).loadClass("SplitMe");
 		assertThat(declared(main)).contains("instance", "locked", "looksUp");
 		assertThat(declared(main).stream().filter(name -> name.startsWith("free"))).as("what can move did")
 			.hasSizeLessThan(20);
 	}
 
-	// Asked to shake, the split drops exactly what JvmClassShaker drops -- and a
-	// definition that then fits one class declares what the shaker's output declares,
-	// with the same instructions, so the split route cannot make a class that fits any
-	// different. Only the pool's order differs: the shaker writes a fresh one.
+	// Asked to shake, the writer drops what the roots do not reach -- the method, and the
+	// constants only it referenced -- and a definition that then fits one class is
+	// written as one, every kept instruction as it was.
 	@Test
-	void aDefinitionThatFitsIsWrittenAsTheShakerWritesIt() {
-		ConstantPool cp = ConstantPool.unbounded();
+	void aShakenDefinitionWritesOnlyWhatItsRootsReach() {
+		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
 		ConstantPool.MethodrefConstant used = b.ref("used", "()V");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
@@ -129,27 +124,33 @@ class JvmClassSplitterTest {
 				new Code().ldc(cp.addString("kept")).op(Opcode.POP).op(Opcode.RETURN));
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "unused", "()V",
 				new Code().ldc(cp.addString("dropped")).op(Opcode.POP).op(Opcode.RETURN));
-		ClassDefinition definition = b.build();
-		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, Set.of("main"), method -> false);
+		JvmClassSplitter.Split split = split(b.build(), Set.of("main"), method -> false, ConstantPool.MAX_INDEX);
 		assertThat(split.parts()).isEmpty();
-		List<String> shaken = shape(JvmClassShaker.shake(definition.toBytes(), Set.of("main")));
-		assertThat(shaken).contains("method main:([Ljava/lang/String;)V", "method used:()V")
-			.doesNotContain("method unused:()V");
-		assertThat(shape(split.mainClass())).isEqualTo(shaken);
+		assertThat(shape(split.mainClass()))
+			.containsSequence("method used:()V", "flags " + (AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC),
+					"ldc kept")
+			.contains("method main:([Ljava/lang/String;)V")
+			.doesNotContain("method unused:()V", "ldc dropped");
+		assertThat(new String(split.mainClass(), java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("dropped");
 	}
 
 	@Test
-	void unresolvedOwnCallsAreReportedAsTheShakerReportsThem() {
-		ConstantPool cp = ConstantPool.unbounded();
+	void unresolvedOwnCallsAreReportedWithTheirCallers() {
+		ConstantPool cp = new ConstantPool();
 		Builder b = new Builder(cp);
-		ConstantPool.MethodrefConstant missing = b.ref("missing", "()V");
+		ConstantPool.MethodrefConstant missing = b.ref("missing", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new Code().op(Opcode.INVOKESTATIC).u2(missing.index()).op(Opcode.RETURN));
-		ClassDefinition definition = b.build();
-		assertThat(JvmClassSplitter.unresolvedSelfMethods(definition))
-			.isEqualTo(JvmClassShaker.unresolvedSelfMethods(definition.toBytes()))
-			.singleElement()
-			.satisfies(unresolved -> assertThat(unresolved.name()).isEqualTo("missing"));
+				new Code().op(Opcode.ACONST_NULL)
+					.op(Opcode.INVOKESTATIC)
+					.u2(missing.index())
+					.op(Opcode.POP)
+					.op(Opcode.RETURN));
+		assertThat(JvmClassSplitter.unresolvedSelfMethods(b.build())).singleElement().satisfies(unresolved -> {
+			assertThat(unresolved.name()).isEqualTo("missing");
+			assertThat(unresolved.descriptor()).isEqualTo("(Ljava/lang/Object;)Ljava/lang/Object;");
+			assertThat(unresolved.callers()).containsExactly("main");
+		});
 	}
 
 	// main calls step0, each step bumps a private static counter and calls the next, and
@@ -186,10 +187,15 @@ class JvmClassSplitterTest {
 		return method -> definition.cp().utf8At(method.name().index()).equals(name);
 	}
 
-	private static Map<String, byte[]> augmented(JvmClassSplitter.Split split) {
+	private static JvmClassSplitter.Split split(ClassDefinition definition, @Nullable Set<String> roots,
+			Predicate<ClassDefinition.Method> pinned, int limit) {
+		return JvmClassSplitter.write(definition, roots, pinned, limit, JvmClassSplitter.Target.of(61));
+	}
+
+	private static Map<String, byte[]> classes(JvmClassSplitter.Split split) {
 		Map<String, byte[]> classes = new LinkedHashMap<>();
-		classes.put("SplitMe", StackMapFrames.generate(split.mainClass(), 61));
-		split.parts().forEach((name, bytes) -> classes.put(name, StackMapFrames.generate(bytes, 61)));
+		classes.put("SplitMe", split.mainClass());
+		classes.putAll(split.parts());
 		return classes;
 	}
 

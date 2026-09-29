@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 import am.ik.jvm.AccessFlag;
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -43,7 +43,7 @@ final class JvmIoRuntimeBuilder {
 	 * empty for every method but {@code _open}.
 	 */
 	record IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			int extraFlags, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
+			int extraFlags, List<ClassDefinition.Handler> exceptionTable) {
 
 		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 			this(name, desc, maxStack, maxLocals, code, 0);
@@ -1140,7 +1140,7 @@ final class JvmIoRuntimeBuilder {
 		List<IoMethod> ms = new ArrayList<>();
 		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), 3, 3,
 				buildAddStream(), AccessFlag.ACC_SYNCHRONIZED));
-		List<ByteCodeWriter.ExceptionTableEntry> openHandlers = new ArrayList<>();
+		List<ClassDefinition.Handler> openHandlers = new ArrayList<>();
 		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 4, buildOpen(openHandlers), 0,
 				openHandlers));
 		// synchronized with _addStream: the entry is nulled out on the CURRENT table, so
@@ -1724,7 +1724,7 @@ final class JvmIoRuntimeBuilder {
 	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}).
 	 * @param handlers receives the body's one exception-table entry
 	 */
-	private List<Integer> buildOpen(List<ByteCodeWriter.ExceptionTableEntry> handlers) {
+	private List<Integer> buildOpen(List<ClassDefinition.Handler> handlers) {
 		// Slots: 0=path (Object), 1=mode (int), 2=p (String), 3=stream
 		List<Integer> code = new ArrayList<>();
 		// p = ((String) path).substring(1, length - 1);
@@ -1885,7 +1885,7 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.POP);
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
-		handlers.add(new ByteCodeWriter.ExceptionTableEntry(tryStart, tryEnd, handlerPc,
+		handlers.add(new ClassDefinition.Handler(tryStart, tryEnd, handlerPc,
 				this.cp.addClass(this.cp.addUtf8("java/io/IOException")).index()));
 		return code;
 	}

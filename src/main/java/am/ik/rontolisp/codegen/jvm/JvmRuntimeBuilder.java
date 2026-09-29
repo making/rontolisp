@@ -214,7 +214,7 @@ final class JvmRuntimeBuilder {
 			}
 			// A funcId the program never turns into a function VALUE is only ever
 			// called directly, so a case for it would do nothing except keep the
-			// method reachable for JvmClassShaker (JvmLispCompiler.dispatchableFuncIds).
+			// method reachable for the shake (JvmLispCompiler.dispatchableFuncIds).
 			if (dispatchable != null && !dispatchable.contains(fi.funcId())) {
 				continue;
 			}

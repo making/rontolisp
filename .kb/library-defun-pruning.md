@@ -301,11 +301,12 @@ shape would explain. `CompileIndependenceTest` pins the observable half: one pro
 bytes must not move because of what else the JVM compiled, interpreted, or compiled alongside.
 
 ## The constant-pool dedup
-`am.ik.jvm.ConstantPool.add` keys every entry by its serialized bytes (tag + payload) in a
-`HashMap` and returns the existing `Constant` on a hit; a composite entry embeds the u2 indexes
-of its already-deduplicated components, so sharing cascades. `addLong`/`addDouble` pass a
-`twoSlots` flag into the shared `add` so a cache hit does not double-count the second slot;
-doubles key by `doubleToLongBits` (`-0.0` and `0.0` stay distinct). Duplicates are legal in the
-class format, so dedup needs no flag; `JvmClassShaker` is unchanged; nothing in
-`am.ik.jvm`/`codegen.jvm` predicts "the next index will be `size()+1`" (grep-verified) and
-`Constant` is immutable, so returning a shared instance is safe.
+`am.ik.jvm.ConstantPool` mints every entry in one `java.lang.classfile` `ConstantPoolBuilder`
+(since 2026-09-29; before, a hand-written pool keyed entries by their serialized bytes), which
+answers the existing entry for equal content -- a composite entry by its components' identity,
+so sharing cascades, and a long/double's second slot counts once. Doubles compare by value
+within one hash: `-0.0` and `0.0` hash apart and stay distinct entries
+(`ConstantPoolTest#negativeZeroIsItsOwnDoubleConstant`); a NaN is never deduplicated, which only
+repeats an entry. Duplicates are legal in the class format, so dedup needs no flag; nothing in
+`am.ik.jvm`/`codegen.jvm` predicts "the next index will be `size()+1`" (grep-verified) and the
+wrappers are immutable.

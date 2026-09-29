@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -101,8 +101,8 @@ final class JvmFlushStreamsBuilder {
 		patchBranch(code, gotoLoopPos, loop);
 		patchBranch(code, ifDonePos, code.size());
 		code.add(Opcode.RETURN);
-		List<ByteCodeWriter.ExceptionTableEntry> handlers = List
-			.of(new ByteCodeWriter.ExceptionTableEntry(tryStart, tryEnd, handler, ioException.index()));
+		List<ClassDefinition.Handler> handlers = List
+			.of(new ClassDefinition.Handler(tryStart, tryEnd, handler, ioException.index()));
 		return new JvmIoRuntimeBuilder.IoMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 2, 3, code, 0, handlers);
 	}
 

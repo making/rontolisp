@@ -33,7 +33,7 @@ final class JvmQuoteCompiler {
 		// caches its build in a slot of the class's quoted-datum table -- read it; on
 		// null build and fill it -- so every evaluation answers the SAME object, like
 		// the interpreter, whose evalQuote hands back the reader's datum. Lazy AT THE
-		// SITE rather than in <clinit> on purpose: JvmClassShaker runs on every build,
+		// SITE rather than in <clinit> on purpose: the writer shakes on every build,
 		// and a quote site inside a shaken wrapper defun must go with it -- a <clinit>
 		// initializer would keep every quoted table of every dropped wrapper alive
 		// (measured +13 KB on a three-defun program). The fill settles racing first

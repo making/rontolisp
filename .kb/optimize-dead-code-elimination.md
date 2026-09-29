@@ -1080,16 +1080,17 @@ region on both compile paths (`.kb/dynamic-special-variables.md`), at +4.1% on c
 and +1.0% on its wasm module.
 
 ## JVM
-`am.ik.jvm.JvmClassShaker` runs at the end of `JvmLispCompiler.compile`: parses the finished class
-with `java.lang.classfile`, builds the call graph from its `invoke*` instructions
-(`am.ik.jvm.OwnCallGraph`, shared with `JvmClassSplitter`), keeps methods reachable from `main`
-(plus `_apply` as an extra root when the program uses `java:` interop -- the embedded bridge looks
+The shake runs as `am.ik.jvm.JvmClassSplitter.write` writes the class, on the class as DATA (the
+`ClassDefinition` `JvmLispCompiler.compile` ends with): the call graph comes from every body's
+`invoke*` operands (`am.ik.jvm.OwnCallGraph`), methods reachable from `main` are kept (plus
+`_apply` as an extra root when the program uses `java:` interop -- the embedded bridge looks
 `_apply` up REFLECTIVELY, an edge bytecode cannot show; under `--no-main` there is no `main` root at
-all), drops unreachable methods and any field only they referenced, and **compacts the constant
-pool** by writing the class with a fresh one (`NEW_POOL`). No method renumbering is needed since
-JVM methods are referenced by name; an `ldc` whose constant moved past 255 widens to `ldc_w`.
-Mechanics and cost: [stack-map-frames.md](stack-map-frames.md), "The readers and the shaker on the
-API".
+all), and an unreachable method, or a field only unreachable methods referenced, is never written.
+The written class's pool holds only what its members reference -- at every level, `--optimize=off`
+included, since every class is built with a pool of its own. No method renumbering is needed since
+JVM methods are referenced by name. Until 2026-09-29 a byte-level `JvmClassShaker` parsed and
+rewrote the finished class instead. Mechanics and cost:
+[jvm-method-size-limits.md](jvm-method-size-limits.md), "How a class is written".
 
 **A `rontolisp:jvm-export` wrapper is a third liveness source**, next to `main` and the
 dispatchable-funcId set: every export's Java method name joins the roots (its caller is Java code
@@ -1099,6 +1100,7 @@ wasm export IS a module export the shaker already treats as a root; an export ro
 not a registry row. Mechanics and pins: [jvm-export.md](jvm-export.md).
 
 Tests: `JvmClassShakerTest` (structural + behavior, incl. the `_apply` root) and
-`JvmClassShakerCorpusTest` (the whole `ci-spec.yaml` corpus with `--optimize`, asserting shrink +
-identical run output -- the decoder-completeness guard, like `WasmTreeShakerCorpusTest`).
+`JvmClassShakerCorpusTest` (the whole `ci-spec.yaml` corpus at `off` and default, asserting shrink +
+identical run output -- the decoder-completeness guard for `CodeReplay`, like
+`WasmTreeShakerCorpusTest`); `JvmClassSplitterTest#aShakenDefinitionWritesOnlyWhatItsRootsReach`.
 Limitations: README "Optimize".

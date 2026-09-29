@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
@@ -264,7 +264,7 @@ final class JvmHandlerCaseCompiler {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(resultSlot);
 		if (start < end) {
-			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
+			ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
 		}
 		ctx.nextLocal = savedNextLocal;
 	}
@@ -1054,12 +1054,12 @@ final class JvmHandlerCaseCompiler {
 		int cur = start;
 		for (int[] hole : scope.holes) {
 			if (hole[0] > cur) {
-				ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(cur, hole[0], handler, 0));
+				ctx.exceptionTable.add(new ClassDefinition.Handler(cur, hole[0], handler, 0));
 			}
 			cur = Math.max(cur, hole[1]);
 		}
 		if (cur < end) {
-			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(cur, end, handler, 0));
+			ctx.exceptionTable.add(new ClassDefinition.Handler(cur, end, handler, 0));
 		}
 	}
 

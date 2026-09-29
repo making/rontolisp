@@ -2,7 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -254,12 +254,12 @@ final class JvmUnwindProtectCompiler {
 		int cur = start;
 		for (int[] hole : scope.holes) {
 			if (hole[0] > cur) {
-				ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(cur, hole[0], handler, 0));
+				ctx.exceptionTable.add(new ClassDefinition.Handler(cur, hole[0], handler, 0));
 			}
 			cur = Math.max(cur, hole[1]);
 		}
 		if (cur < end) {
-			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(cur, end, handler, 0));
+			ctx.exceptionTable.add(new ClassDefinition.Handler(cur, end, handler, 0));
 		}
 	}
 

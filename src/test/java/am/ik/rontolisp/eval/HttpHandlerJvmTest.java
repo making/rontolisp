@@ -300,7 +300,7 @@ class HttpHandlerJvmTest {
 
 	@Test
 	void compiledDirectiveSurvivesOptimize() throws Exception {
-		// --optimize (JvmClassShaker) must keep handle(): RontoHttpServer invokes it
+		// --optimize (the writer's shake) must keep handle(): RontoHttpServer invokes it
 		// through the Handler interface, an edge the call-graph shaker cannot see.
 		int port = freePort();
 		compileAndServeInBackground("""

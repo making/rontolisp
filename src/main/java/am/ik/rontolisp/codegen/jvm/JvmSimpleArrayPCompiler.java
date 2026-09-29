@@ -34,7 +34,7 @@ import am.ik.jvm.Opcode;
  *
  * <p>
  * Every path keeps EXACTLY ONE reference on the operand stack until the two landings pop
- * it, so the frames {@code StackMapFrames} infers merge at height 1 with no instruction
+ * it, so the frames the class writer infers merge at height 1 with no instruction
  * downstream that needs a narrower type than {@code Object}.
  */
 final class JvmSimpleArrayPCompiler {

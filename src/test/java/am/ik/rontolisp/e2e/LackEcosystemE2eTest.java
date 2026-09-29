@@ -49,8 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * trip, identical output on every backend. It used to be interpreter-only behind two
  * compile-backend ceilings (fast-http's {@code parse-header-field-and-value} past the
  * JVM's signed 16-bit branch offset; a {@code concatenate 'simple-byte-vector} deftype
- * alias outside the WASM result-type family); both since lifted --
- * {@code am.ik.jvm.BranchRelaxer} and the registry-aware
+ * alias outside the WASM result-type family); both since lifted -- the class writer's
+ * {@code goto_w} relaxation ({@code am.ik.jvm.JvmClassSplitter}) and the registry-aware
  * {@code ConcatenateForms.resultFamily} -- along with the two latent bugs the enablement
  * exposed (the babel package redirect, the redefined-defun duplicate emission). See
  * {@code .kb/lack.md}.</li>

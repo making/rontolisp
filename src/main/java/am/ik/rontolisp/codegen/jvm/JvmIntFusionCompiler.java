@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -2315,7 +2315,7 @@ final class JvmIntFusionCompiler {
 			ctx.emit(Opcode.ARETURN);
 		}
 		ClassConstant arithEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/ArithmeticException"));
-		ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(tryStart, tryEnd, handler, arithEx.index()));
+		ctx.exceptionTable.add(new ClassDefinition.Handler(tryStart, tryEnd, handler, arithEx.index()));
 	}
 
 	private static MethodrefConstant longIntValue(JvmLispCompiler.Ctx ctx) {

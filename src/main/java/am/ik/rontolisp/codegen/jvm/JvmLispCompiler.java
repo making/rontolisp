@@ -56,11 +56,8 @@ import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
-import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
-import am.ik.jvm.ConstantPoolOverflowException;
-import am.ik.jvm.JvmClassShaker;
 import am.ik.jvm.JvmClassSplitter;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -68,21 +65,20 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
-import am.ik.jvm.StackMapFrames;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles Lisp expressions to JVM .class bytecode, stamped class file version 61 (Java
- * 17) after {@link StackMapFrames} computes the mandatory StackMapTable offline. Supports
- * first-class functions, closures, and capture-by-reference semantics.
+ * 17), the mandatory StackMapTable computed as {@link JvmClassSplitter} writes the class.
+ * Supports first-class functions, closures, and capture-by-reference semantics.
  */
 public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The class-file major version the finished class is stamped with (61 = Java 17).
-	 * Emission itself stays version-agnostic; {@link StackMapFrames} computes the
-	 * StackMapTable that every version above 50 requires and stamps this version as the
-	 * final step of {@link #compile}.
+	 * Emission itself stays version-agnostic; the writer ({@link JvmClassSplitter})
+	 * computes the StackMapTable that every version above 50 requires and stamps this
+	 * version as the final step of {@link #compile}.
 	 */
 	private static final int CLASS_MAJOR_VERSION = 61;
 
@@ -516,13 +512,13 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		/**
 		 * Sets what to optimize the class FOR (the CLI's {@code --optimize}). Every level
-		 * but {@link OptimizeLevel#NONE} dead-code-eliminates the finished class with
-		 * {@link JvmClassShaker}: methods unreachable from {@code main} (and any static
-		 * field only they reference) are dropped and the constant pool is compacted.
-		 * {@link OptimizeLevel#SIZE} is accepted and equals {@link OptimizeLevel#DEFAULT}
-		 * here: this backend has nothing that spends bytes on speed -- the emissions the
-		 * level declines are wasm-GC ones, and the same program's JVM bytecode is a third
-		 * the size of its WASM to begin with.
+		 * but {@link OptimizeLevel#NONE} dead-code-eliminates the class as it is written
+		 * ({@link JvmClassSplitter}): methods unreachable from {@code main} (and any
+		 * static field only they reference) are not written. {@link OptimizeLevel#SIZE}
+		 * is accepted and equals {@link OptimizeLevel#DEFAULT} here: this backend has
+		 * nothing that spends bytes on speed -- the emissions the level declines are
+		 * wasm-GC ones, and the same program's JVM bytecode is a third the size of its
+		 * WASM to begin with.
 		 * <p>
 		 * Defaults to {@link OptimizeLevel#DEFAULT} -- the level an absent
 		 * {@code --optimize} selects, so an embedder that names no level gets what this
@@ -684,9 +680,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		/**
 		 * Sets the index the constant pool's first entry takes -- a test instrument (also
 		 * read from {@code -Drontolisp.jvm.pool-index-origin}): started past 65535, every
-		 * index is one no class file can carry, so every program takes the split path and
-		 * any writer that cuts an operand to 16 bits fails the compile
-		 * ({@link ConstantPool#unboundedFrom}).
+		 * index is one no class file can carry, so an emitter that cuts an operand to 16
+		 * bits names a filler entry and the write fails
+		 * ({@link ConstantPool#startingAt}).
 		 * @param poolIndexOrigin the first entry's index, 1 by default
 		 * @return this builder
 		 */
@@ -1061,8 +1057,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
-		ConstantPool cp = this.poolIndexOrigin == 1 ? ConstantPool.unbounded()
-				: ConstantPool.unboundedFrom(this.poolIndexOrigin);
+		ConstantPool cp = this.poolIndexOrigin == 1 ? new ConstantPool()
+				: ConstantPool.startingAt(this.poolIndexOrigin);
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
 
@@ -2991,7 +2987,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// exactly the set of funcIds this program turns into function VALUES -- macro
 		// expansions that ran during Pass 2 included. Everything else is only ever
 		// called directly, and dropping its dispatcher case is what lets
-		// JvmClassShaker reach the library code an ASDF system splices.
+		// the writer's shake reach the library code an ASDF system splices.
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
 				nameResolvable, symbolBuilders);
 		if (needsLookup) {
@@ -3819,32 +3815,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		final Utf8Constant standardOutputClinitName = initsClinit ? cp.addUtf8("<clinit>") : null;
 		final Utf8Constant standardOutputClinitDesc = initsClinit ? cp.addUtf8("()V") : null;
 
-		// Branch relaxation: any Ctx-compiled body whose patchBranch overflowed the
-		// signed 16-bit encoding is rewritten over goto_w here, before assembly
-		// (fast-http's generated parse-header-field-and-value state machine is the
-		// real-world trigger). A method with no deferred branch is untouched, byte for
-		// byte. The runtime-builder methods never defer: their raw-list patchBranch
-		// still throws, and they stay under budget by construction. A body's line
-		// numbers move with its instructions.
-		mainCtx.relax();
-		if (topRunnerCtx != null) {
-			topRunnerCtx.relax();
-		}
-		for (Ctx chunk : topChunks) {
-			chunk.relax();
-		}
-		for (Ctx funcCtx : funcCtxs) {
-			funcCtx.relax();
-		}
-		for (Ctx lambdaCtx : lambdaCtxs) {
-			lambdaCtx.relax();
-		}
-		for (Ctx fusedCtx : fusedCtxs) {
-			fusedCtx.relax();
-		}
-		for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
-			outlined.ctx().relax();
-		}
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
 		// fused fast path shifts.
@@ -3889,9 +3859,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The holder-presence probe (.todo/757): whether the travelling
 			// RontoComplex class resolved, set once in <clinit> below.
 			// Final (a JIT constant after class init), and attribute-free
-			// like every other field -- JvmClassShaker rejects field
-			// attributes. The <clinit> store keeps the field alive for the
-			// shaker exactly when the class needs it.
+			// like every field a ClassDefinition declares. The <clinit> store
+			// keeps the field alive for the shake exactly when the class needs
+			// it.
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_FINAL,
 					java.util.Objects.requireNonNull(hasComplexName), java.util.Objects.requireNonNull(hasComplexDesc));
 		}
@@ -4098,17 +4068,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// One private static String[] per instance layout the program references:
 		// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
-		// array in slot 0 of an instance is also its type discriminator. The
-		// attribute count MUST stay 0 -- JvmClassShaker rejects field attributes.
+		// array in slot 0 of an instance is also its type discriminator.
 		for (LayoutPool.LayoutField lf : mainCtx.layoutPool.fields()) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lf.name(),
 					java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc));
 		}
 		// One private static BigInteger per DISTINCT bignum literal, built once
-		// in <clinit> so a use site is a GETSTATIC. The attribute count MUST stay
-		// 0 -- JvmClassShaker rejects field attributes -- which is also why the
-		// field is not marked ACC_FINAL-with-ConstantValue: a BigInteger has no
-		// constant-pool form.
+		// in <clinit> so a use site is a GETSTATIC. The field is not marked
+		// ACC_FINAL-with-ConstantValue: a BigInteger has no constant-pool form.
 		for (BigIntPool.BigIntField bf : mainCtx.bigIntPool.fields()) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, bf.name(),
 					java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc));
@@ -4162,18 +4129,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		if (!this.noMain) {
-			definition.addMethod(
+			mainCtx.addTo(definition,
 					sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
 							: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
-					sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc, mainCtx.maxStack(),
-					mainCtx.maxLocals, mainCtx.code, mainCtx.exceptionTable, mainCtx.lines());
+					sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc);
 		}
 		if (topRunnerCtxFinal != null) {
 			// _top$run: the top-level body <clinit> runs (see mainCtx above).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc, topRunnerCtxFinal.maxStack(),
-					topRunnerCtxFinal.maxLocals, topRunnerCtxFinal.code, topRunnerCtxFinal.exceptionTable,
-					topRunnerCtxFinal.lines());
+			topRunnerCtxFinal.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc);
 		}
 		for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
 			definition.addMethod(
@@ -4183,22 +4147,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The top-level body, split into one or more void chunk methods main()
 		// calls.
 		for (int i = 0; i < topChunks.size(); i++) {
-			final Ctx chunk = topChunks.get(i);
-			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
-					chunk.maxStack(), chunk.maxLocals, chunk.code, chunk.exceptionTable, chunk.lines());
+			topChunks.get(i)
+				.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc);
 		}
 		for (int i = 0; i < defuns.size(); i++) {
 			FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
-			final Ctx funcCtx = funcCtxs.get(i);
-			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-					funcCtx.maxStack(), funcCtx.maxLocals, funcCtx.code, funcCtx.exceptionTable, funcCtx.lines());
+			funcCtxs.get(i).addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8);
 		}
 		for (int i = 0; i < lambdaCtxs.size(); i++) {
 			FunctionInfo fi = lambdaFuncInfos.get(i);
-			final Ctx lambdaCtx = lambdaCtxs.get(i);
-			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-					lambdaCtx.maxStack(), lambdaCtx.maxLocals, lambdaCtx.code, lambdaCtx.exceptionTable,
-					lambdaCtx.lines());
+			lambdaCtxs.get(i)
+				.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8);
 		}
 		for (DispatchMethod dm : dispatchMethods) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, 64,
@@ -4254,7 +4213,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// because no holder can exist). First, so the top level a
 			// <clinit> may run already sees the settled value. Peaks at one
 			// stack slot, under every declared clinit maximum.
-			final List<ByteCodeWriter.ExceptionTableEntry> clinitProbeTable;
+			final List<ClassDefinition.Handler> clinitProbeTable;
 			if (usesComplex) {
 				List<Integer> probe = new java.util.ArrayList<>();
 				int tryStart = probe.size();
@@ -4278,7 +4237,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				int done = probe.size();
 				JvmRuntimeBuilder.patchBranch(probe, toDone, done);
 				clinitCode.addAll(probe);
-				clinitProbeTable = List.of(new ByteCodeWriter.ExceptionTableEntry(tryStart, toDone, handler,
+				clinitProbeTable = List.of(new ClassDefinition.Handler(tryStart, toDone, handler,
 						java.util.Objects.requireNonNull(hasComplexAbsent).index()));
 			}
 			else {
@@ -4381,8 +4340,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			// the inner array build, whose boxed handle is briefly a long).
 			// A stream-VALUE seed adds its own Object[3] build (array, dup,
 			// index, then a briefly-two-slot long) on top of whichever nest it
-			// sits in, hence the +6. StackMapFrames recomputes the shipped
-			// max_stack from the code, so this is the frame-free class's value only.
+			// sits in, hence the +6. The writer recomputes the shipped max_stack from
+			// the code, so this value only documents the peak.
 			// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
 			// dup, the decimal string).
 			final int clinitMaxStack = Math.max(
@@ -4490,7 +4449,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						method.exceptionTable());
 			}
 			this.implementationCallbacks = callbacks;
-			this.bridgeClassFiles.putAll(implementations.classFiles(this::withFrames));
+			this.bridgeClassFiles.putAll(implementations.classFiles(this.writeTarget()));
 		}
 		else {
 			this.implementationCallbacks = Set.of();
@@ -4699,19 +4658,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// raw local -- a program without one is byte-identical to before.
 		for (int i = 0; i < fusedCtxs.size(); i++) {
 			JvmIntFusionCompiler.Pending pendingFused = fusedState.pending.get(i);
-			final Ctx fusedCtx = fusedCtxs.get(i);
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
-					pendingFused.descUtf8(), fusedCtx.maxStack(), fusedCtx.maxLocals, fusedCtx.code,
-					fusedCtx.exceptionTable, fusedCtx.lines());
+			fusedCtxs.get(i)
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
+						pendingFused.descUtf8());
 		}
 		// The outlined tail continuations of a body that would have compiled
 		// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every
 		// program whose bodies stay under the budget.
 		for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
-			final Ctx outlinedCtx = outlined.ctx();
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
-					outlined.descUtf8(), outlinedCtx.maxStack(), outlinedCtx.maxLocals, outlinedCtx.code,
-					outlinedCtx.exceptionTable, outlinedCtx.lines());
+			outlined.ctx()
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
+						outlined.descUtf8());
 		}
 		// The uncaught report's location lines and the async-boundary records their
 		// hops are read from (JvmUncaughtHandler): only in a class something was
@@ -4767,11 +4724,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							+ " cannot be compiled without reflection:\n  " + String.join("\n  ", refusals));
 		}
 		ClassDefinition classDefinition = definition.build();
-		// A pool one class file can carry is written as it always was. One past that is
-		// SPLIT: the methods spread over the class and its $PartN classes, each with a
-		// pool
-		// of its own (JvmClassSplitter, .kb/jvm-method-size-limits.md).
-		byte[] classBytes = cp.size() <= this.classPoolLimit ? classDefinition.toBytes() : null;
+		long writeStart = System.nanoTime();
 		// Check the runtime-helper gates against what the bodies turned out to reference,
 		// rather than trusting the source scans that predicted them (see compile(List)).
 		// An unresolved own-class call is either a mispredicted gate -- re-run with that
@@ -4781,12 +4734,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// including the injected built-in wrappers: their bodies no longer carry an arm
 		// for a value the absent runtime cannot construct, because each lowering behind
 		// them is gated on Ctx.usesArrays (.kb/adjustable-arrays.md).
-		List<JvmClassShaker.UnresolvedSelfMethod> unresolved = classBytes != null
-				? JvmClassShaker.unresolvedSelfMethods(classBytes)
-				: JvmClassSplitter.unresolvedSelfMethods(classDefinition);
+		List<JvmClassSplitter.UnresolvedSelfMethod> unresolved = JvmClassSplitter
+			.unresolvedSelfMethods(classDefinition);
 		Set<String> underpredicted = new LinkedHashSet<>();
-		List<JvmClassShaker.UnresolvedSelfMethod> unrecoverable = new ArrayList<>();
-		for (JvmClassShaker.UnresolvedSelfMethod missing : unresolved) {
+		List<JvmClassSplitter.UnresolvedSelfMethod> unrecoverable = new ArrayList<>();
+		for (JvmClassSplitter.UnresolvedSelfMethod missing : unresolved) {
 			String group = gateGroupFor(missing.name());
 			if (group == null || forcedGroups.contains(group)) {
 				unrecoverable.add(missing);
@@ -4876,43 +4828,28 @@ public final class JvmLispCompiler implements LispCompiler {
 				roots.add("call");
 			}
 		}
-		if (classBytes == null) {
-			return this.writeSplit(classDefinition, roots, exportDecls);
-		}
-		this.partClassFiles = Map.of();
-		if (roots != null) {
-			classBytes = JvmClassShaker.shake(classBytes, roots);
-		}
-		// Insert the StackMapTable every class version above 50 requires (and the shaker
-		// could not have preserved), stamping the target version. Must stay after the
-		// shake: the shaker rejects Code sub-attributes and would not rewrite the
-		// constant-pool entries the frames reference.
-		try {
-			return this.withFrames(classBytes);
-		}
-		catch (ConstantPoolOverflowException fullPool) {
-			// The frames' own Class entries were the ones that did not fit: a pool within
-			// a few hundred entries of the limit. The split reserves room for them.
-			return this.writeSplit(classDefinition, roots, exportDecls);
-		}
+		return this.write(classDefinition, roots, exportDecls, writeStart);
 	}
 
 	/**
-	 * Writes a class whose constant pool outgrew one class file as the class itself plus
-	 * the {@code $PartN} classes the rest of its methods need, keeping in the class every
-	 * method something finds by NAME: {@code main}, the {@code rontolisp:jvm-export}
-	 * wrappers and the defuns behind them (a Java caller's API), and the helpers an
-	 * shipped bridge or the travelling float-array handle looks up reflectively
+	 * Writes the class: one class file when what it keeps fits one pool, else the class
+	 * itself plus the {@code $PartN} classes the rest of its methods need
+	 * ({@code .kb/jvm-method-size-limits.md}), keeping in the class every method
+	 * something finds by NAME: {@code main}, the {@code rontolisp:jvm-export} wrappers
+	 * and the defuns behind them (a Java caller's API), and the helpers an shipped bridge
+	 * or the travelling float-array handle looks up reflectively
 	 * ({@link #REFLECTIVELY_FOUND_METHODS}). {@link JvmClassSplitter} keeps the rest of
 	 * what cannot move by itself. The parts join {@link #runtimeClassFiles()}, the list
 	 * every output shape already writes beside the class.
 	 * @param definition the class as data
 	 * @param roots the tree-shaker roots, or null under {@code --optimize=off}
 	 * @param exportDecls the program's export directives
+	 * @param writeStart when the class was complete as data ({@link System#nanoTime}),
+	 * for {@code -Drontolisp.jvm.debug-write=true}
 	 * @return the class's own bytes
 	 */
-	private byte[] writeSplit(ClassDefinition definition, java.util.@Nullable Set<String> roots,
-			List<JvmExportDirective> exportDecls) {
+	private byte[] write(ClassDefinition definition, java.util.@Nullable Set<String> roots,
+			List<JvmExportDirective> exportDecls, long writeStart) {
 		Set<String> pinnedNames = new HashSet<>(REFLECTIVELY_FOUND_METHODS);
 		pinnedNames.add("main");
 		// The generated java: interface implementations name the program class as the
@@ -4923,40 +4860,63 @@ public final class JvmLispCompiler implements LispCompiler {
 			pinnedNames.add(mangleMethodName(decl.name()));
 		}
 		ConstantPool cp = definition.cp();
-		int budget = this.classPoolLimit == ConstantPool.MAX_INDEX
-				? ConstantPool.MAX_INDEX - JvmClassSplitter.RESERVED_ENTRIES : this.classPoolLimit;
-		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, roots,
-				method -> pinnedNames.contains(cp.utf8At(method.name().index())), budget);
+		JvmClassSplitter.Split split = JvmClassSplitter.write(definition, roots,
+				method -> pinnedNames.contains(cp.utf8At(method.name().index())), this.classPoolLimit,
+				this.writeTarget());
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
-			parts.put(part.getKey() + ".class", this.withFrames(part.getValue()));
+			parts.put(part.getKey() + ".class", part.getValue());
 		}
 		this.partClassFiles = Map.copyOf(parts);
-		return this.withFrames(split.mainClass());
+		if (Boolean.getBoolean("rontolisp.jvm.debug-write")) {
+			// The gate check, the shake, the placement and the write of every class, with
+			// what each class came to.
+			StringBuilder report = new StringBuilder("[write] ").append((System.nanoTime() - writeStart) / 1_000_000)
+				.append(" ms; ")
+				.append(this.className)
+				.append(": ")
+				.append(split.mainClass().length)
+				.append(" B, ")
+				.append(poolEntries(split.mainClass()))
+				.append(" entries");
+			split.parts()
+				.forEach((name, bytes) -> report.append("; ")
+					.append(name)
+					.append(": ")
+					.append(bytes.length)
+					.append(" B, ")
+					.append(poolEntries(bytes))
+					.append(" entries"));
+			System.err.println(report);
+		}
+		return split.mainClass();
+	}
+
+	private static int poolEntries(byte[] classFile) {
+		return ((classFile[8] & 0xFF) << 8 | (classFile[9] & 0xFF)) - 1;
 	}
 
 	/**
-	 * The class with its StackMapTable, stamped {@link #classMajorVersion}. A
-	 * {@code java:} program's frames merge host types through the class files its sites
-	 * resolved against.
-	 * @param classBytes the finished, frame-free class
-	 * @return the class with its frames
+	 * What every class this compile writes is stamped and framed against: version
+	 * {@link #classMajorVersion}, and for a {@code java:} program the class files its
+	 * sites resolved against, through which the frames merge host types.
+	 * @return the target
 	 */
-	byte[] withFrames(byte[] classBytes) {
+	JvmClassSplitter.Target writeTarget() {
 		JvmClassFileLookup classes = this.javaClasses;
-		return classes == null ? StackMapFrames.generate(classBytes, this.classMajorVersion)
-				: StackMapFrames.generate(classBytes, this.classMajorVersion, classes::classInfo);
+		return classes == null ? JvmClassSplitter.Target.of(this.classMajorVersion)
+				: new JvmClassSplitter.Target(this.classMajorVersion, classes::classInfo);
 	}
 
 	/**
 	 * The funcIds the {@code _invoke_N}/{@code _invoke_v} dispatchers and the
 	 * {@code _lookup} name registry must be able to reach -- everything else in
 	 * {@code functions} is called only through a direct {@code invokestatic}, so naming
-	 * it in a dispatcher would do nothing except keep it alive for
-	 * {@link am.ik.jvm.JvmClassShaker} ({@code .kb/optimize-dead-code-elimination.md}).
-	 * The WASM twin is {@code WasmLispCompiler.dispatchableFuncIds}, and the two must
-	 * agree: a name that stops resolving here has to stop resolving there too, or the
-	 * backends disagree about which forged designator still works.
+	 * it in a dispatcher would do nothing except keep it alive for the writer's shake
+	 * ({@code .kb/optimize-dead-code-elimination.md}). The WASM twin is
+	 * {@code WasmLispCompiler.dispatchableFuncIds}, and the two must agree: a name that
+	 * stops resolving here has to stop resolving there too, or the backends disagree
+	 * about which forged designator still works.
 	 *
 	 * <p>
 	 * Two sources, both EXACT rather than heuristic:
@@ -5067,10 +5027,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	// A runtime builder's exception table ({startPc, endPc, handlerPc, catchType} rows)
 	// in
 	// the form a class definition carries.
-	private static List<ByteCodeWriter.ExceptionTableEntry> exceptionTable(List<int[]> rows) {
-		List<ByteCodeWriter.ExceptionTableEntry> entries = new ArrayList<>(rows.size());
+	private static List<ClassDefinition.Handler> exceptionTable(List<int[]> rows) {
+		List<ClassDefinition.Handler> entries = new ArrayList<>(rows.size());
 		for (int[] e : rows) {
-			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
+			entries.add(new ClassDefinition.Handler(e[0], e[1], e[2], e[3]));
 		}
 		return entries;
 	}
@@ -6539,7 +6499,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@link #indirectCallArities}; read once the bodies are done to size the
 		 * {@code _invoke_N} dispatchers and the {@code _lookup} registry -- a funcId
 		 * absent from it is only ever called DIRECTLY, and naming it in a dispatcher
-		 * would keep it alive for {@link am.ik.jvm.JvmClassShaker}.
+		 * would keep it alive for the writer's shake
+		 * ({@link am.ik.jvm.JvmClassSplitter}).
 		 */
 		Set<Integer> valueFuncIds;
 
@@ -7154,16 +7115,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code unwind-protect} appends catch-any entries covering its protected region
 		 * (class version 50 verifies handlers without a StackMapTable).
 		 */
-		final List<ByteCodeWriter.ExceptionTableEntry> exceptionTable = new ArrayList<>();
+		final List<ClassDefinition.Handler> exceptionTable = new ArrayList<>();
 
 		/**
-		 * Branches whose patch overflowed the signed 16-bit encoding, as
-		 * {@code {branchPos, targetPos}} pairs: {@code JvmEmitHelper.patchBranch} defers
-		 * them here instead of throwing, and {@link am.ik.jvm.BranchRelaxer} rewrites
-		 * each over a {@code goto_w} once the body is complete. Empty for every method
-		 * whose branches fit, which keeps those bodies byte-identical.
+		 * Branches whose patch overflowed the signed 16-bit encoding:
+		 * {@code JvmEmitHelper.patchBranch} records them here instead of throwing, their
+		 * offset bytes left as placeholders, and the class writer places each in its
+		 * {@code goto_w} form ({@link am.ik.jvm.JvmClassSplitter}). Empty for every
+		 * method whose branches fit.
 		 */
-		final List<int[]> deferredBranches = new ArrayList<>();
+		final List<ClassDefinition.Branch> deferredBranches = new ArrayList<>();
 
 		/**
 		 * The compilation's source-site table, shared by every context like
@@ -7214,9 +7175,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@code LineNumberTable}.
 		 */
 		private final List<int[]> siteMarks = new ArrayList<>();
-
-		/** The line numbers {@link #relax} moved along with the code, once it has run. */
-		private @Nullable List<ByteCodeWriter.LineNumberEntry> relaxedLines;
 
 		/**
 		 * The compilation-wide condition-channel state (the {@code _condTl} ThreadLocal
@@ -7482,24 +7440,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Relaxes this method's out-of-range branches ({@link am.ik.jvm.BranchRelaxer})
-		 * with its line numbers moving along, which {@link #lines} then answers. Call
-		 * once, when the body is complete.
+		 * Adds this body to the class as a method.
+		 * @param definition the class
+		 * @param access the method's access flags
+		 * @param name its name
+		 * @param descriptor its descriptor
 		 */
-		void relax() {
-			List<ByteCodeWriter.LineNumberEntry> lines = this.lineNumbers();
-			am.ik.jvm.BranchRelaxer.relax(this.code, this.deferredBranches, this.exceptionTable, lines);
-			this.relaxedLines = lines;
-		}
-
-		/**
-		 * This method's finished {@code LineNumberTable}: the one {@link #relax} moved
-		 * along with the code, else the marks as they stand.
-		 * @return the entries, in pc order; empty when the method has no site
-		 */
-		List<ByteCodeWriter.LineNumberEntry> lines() {
-			List<ByteCodeWriter.LineNumberEntry> relaxed = this.relaxedLines;
-			return relaxed != null ? relaxed : this.lineNumbers();
+		void addTo(ClassDefinition.Builder definition, int access, Utf8Constant name, Utf8Constant descriptor) {
+			definition.addMethod(access, name, descriptor, this.code, this.exceptionTable, this.lines(),
+					this.deferredBranches);
 		}
 
 		/**
@@ -7507,11 +7456,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * last mark winning where several fall on one instruction, nothing before the
 		 * first site (an instruction before every entry reports no line at all). The
 		 * number is a site id ({@link JvmSourceSites}); {@link JvmSourceSites#NO_SITE}
-		 * marks code outside any site.
+		 * marks code outside any site. The writer moves an entry along with the
+		 * instruction it starts at when a relaxed branch grows the code before it.
 		 * @return the entries, in pc order; empty when the method has no site
 		 */
-		private List<ByteCodeWriter.LineNumberEntry> lineNumbers() {
-			List<ByteCodeWriter.LineNumberEntry> entries = new ArrayList<>();
+		List<ClassDefinition.Line> lines() {
+			List<ClassDefinition.Line> entries = new ArrayList<>();
 			int end = this.code.size();
 			for (int[] mark : this.siteMarks) {
 				int pc = mark[0];
@@ -7524,7 +7474,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				int line = mark[1] == 0 ? JvmSourceSites.NO_SITE : mark[1];
 				int previous = entries.isEmpty() ? JvmSourceSites.NO_SITE : entries.getLast().lineNumber();
 				if (line != previous) {
-					entries.add(new ByteCodeWriter.LineNumberEntry(pc, line));
+					entries.add(new ClassDefinition.Line(pc, line));
 				}
 			}
 			return entries;

@@ -19,10 +19,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * A method's {@code LineNumberTable} through every stage a generated class passes:
- * written by {@link ClassDefinition}, moved by {@link BranchRelaxer}, kept by
- * {@link JvmClassShaker}, {@link JvmClassSplitter} and {@link StackMapFrames} -- each
- * checked where it matters, in the line a thrown exception's stack trace reports.
+ * A method's {@code LineNumberTable} through every way {@link JvmClassSplitter} writes a
+ * {@link ClassDefinition}: one class, one class shaken, a relaxed branch in front of the
+ * line, a method moved to a part -- each checked where it matters, in the line a thrown
+ * exception's stack trace reports.
  */
 class LineNumberTableTest {
 
@@ -31,8 +31,8 @@ class LineNumberTableTest {
 	@Test
 	void aThrowingMethodReportsTheLineItsInstructionMapsTo() throws Exception {
 		Fixture f = new Fixture(true);
-		f.throwing("boom", List.of(new ByteCodeWriter.LineNumberEntry(0, 7)));
-		byte[] bytes = StackMapFrames.generate(f.build().toBytes(), 61);
+		f.throwing("boom", List.of(new ClassDefinition.Line(0, 7)));
+		byte[] bytes = write(f.build(), null);
 		assertThat(lines(bytes, "boom")).containsExactly(0, 7);
 		assertThat(thrownLine(Map.of(CLASS, bytes), "boom")).isEqualTo(7);
 	}
@@ -41,55 +41,55 @@ class LineNumberTableTest {
 	void aMethodWithoutLineNumbersCarriesNoAttributeAndNoName() {
 		Fixture f = new Fixture(false);
 		f.throwing("boom", List.of());
-		byte[] bytes = f.build().toBytes();
+		byte[] bytes = write(f.build(), null);
 		assertThat(lines(bytes, "boom")).isEmpty();
 		assertThat(new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("LineNumberTable");
 	}
 
 	@Test
 	void lineNumbersNeedTheAttributeNamed() {
-		ConstantPool cp = ConstantPool.unbounded();
+		ConstantPool cp = new ConstantPool();
 		ClassDefinition.Builder builder = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
 				cp.addClass(cp.addUtf8(CLASS)), cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
-		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("m"), cp.addUtf8("()V"), 1, 0,
-				List.of(Opcode.RETURN), List.of(), List.of(new ByteCodeWriter.LineNumberEntry(0, 1)));
+		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("m"), cp.addUtf8("()V"),
+				List.of(Opcode.RETURN), List.of(), List.of(new ClassDefinition.Line(0, 1)), List.of());
 		assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("LineNumberTable");
 	}
 
 	@Test
-	void relaxingABranchMovesTheLinesAfterIt() {
-		// A goto over 40,000 nops to a return is past the signed 16-bit offset: widening
-		// it to goto_w moves every later instruction two bytes on, and the line starting
-		// at the return with them.
+	void relaxingABranchMovesTheLinesAfterIt() throws Exception {
+		// A goto over 40,000 nops to a throw is past the signed 16-bit offset: written as
+		// a goto_w it moves every later instruction two bytes on, and the line starting
+		// at the throw's first instruction with them.
+		Fixture f = new Fixture(true);
 		int gap = 40_000;
 		List<Integer> code = new ArrayList<>(List.of(Opcode.GOTO, 0, 0));
 		for (int i = 0; i < gap; i++) {
 			code.add(Opcode.NOP);
 		}
-		code.add(Opcode.RETURN);
-		int returnPc = 3 + gap;
-		List<int[]> deferred = new ArrayList<>();
-		deferred.add(new int[] { 0, returnPc });
-		List<ByteCodeWriter.LineNumberEntry> lines = new ArrayList<>(
-				List.of(new ByteCodeWriter.LineNumberEntry(0, 1), new ByteCodeWriter.LineNumberEntry(returnPc, 2)));
-		BranchRelaxer.relax(code, deferred, new ArrayList<>(), lines);
-		assertThat(code.get(0)).isEqualTo(Opcode.GOTO_W);
-		assertThat(code.get(returnPc + 2)).isEqualTo(Opcode.RETURN);
-		assertThat(lines).containsExactly(new ByteCodeWriter.LineNumberEntry(0, 1),
-				new ByteCodeWriter.LineNumberEntry(returnPc + 2, 2));
+		int throwPc = code.size();
+		code.addAll(f.throwingCode("far"));
+		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("far"), f.cp.addUtf8("()V"),
+				code, List.of(), List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwPc, 2)),
+				List.of(new ClassDefinition.Branch(0, throwPc)));
+		byte[] bytes = write(f.build(), null);
+		assertThat(lines(bytes, "far")).containsExactly(0, 1, throwPc + 2, 2);
+		assertThat(thrownLine(Map.of(CLASS, bytes), "far")).isEqualTo(2);
 	}
 
 	@Test
-	void theShakerKeepsAKeptMethodsLinesAndDropsTheNameWithTheLastMethodCarryingThem() throws Exception {
+	void theShakeKeepsAKeptMethodsLinesAndDropsTheNameWithTheLastMethodCarryingThem() throws Exception {
 		Fixture f = new Fixture(true);
-		f.throwing("boom", List.of(new ByteCodeWriter.LineNumberEntry(0, 11)));
-		f.throwing("gone", List.of(new ByteCodeWriter.LineNumberEntry(0, 12)));
-		byte[] definition = f.build().toBytes();
-		byte[] kept = StackMapFrames.generate(JvmClassShaker.shake(definition, Set.of("boom")), 61);
+		f.throwing("boom", List.of(new ClassDefinition.Line(0, 11)));
+		f.throwing("gone", List.of(new ClassDefinition.Line(0, 12)));
+		byte[] kept = write(f.build(), Set.of("boom"));
 		assertThat(lines(kept, "boom")).containsExactly(0, 11);
 		assertThat(thrownLine(Map.of(CLASS, kept), "boom")).isEqualTo(11);
-		byte[] none = JvmClassShaker.shake(new Fixture(true).throwingAndBuild("boom", List.of()), Set.of("boom"));
+		Fixture g = new Fixture(true);
+		g.throwing("boom", List.of());
+		g.throwing("gone", List.of(new ClassDefinition.Line(0, 12)));
+		byte[] none = write(g.build(), Set.of("boom"));
 		assertThat(new String(none, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("LineNumberTable");
 	}
 
@@ -98,19 +98,26 @@ class LineNumberTableTest {
 		Fixture f = new Fixture(true);
 		// Enough strings that a tiny budget forces the later methods into parts.
 		for (int k = 0; k < 12; k++) {
-			f.throwing("boom" + k, List.of(new ByteCodeWriter.LineNumberEntry(0, 100 + k)));
+			f.throwing("boom" + k, List.of(new ClassDefinition.Line(0, 100 + k)));
 		}
-		ClassDefinition definition = f.build();
-		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, null, method -> false, 40);
+		JvmClassSplitter.Split split = JvmClassSplitter.write(f.build(), null, method -> false, 40,
+				JvmClassSplitter.Target.of(61));
 		assertThat(split.parts()).isNotEmpty();
-		Map<String, byte[]> classes = new HashMap<>();
-		classes.put(CLASS, StackMapFrames.generate(split.mainClass(), 61));
-		split.parts().forEach((name, bytes) -> classes.put(name, StackMapFrames.generate(bytes, 61)));
+		Map<String, byte[]> classes = new HashMap<>(split.parts());
+		classes.put(CLASS, split.mainClass());
 		String part = split.parts().keySet().iterator().next();
 		String moved = firstMethod(java.util.Objects.requireNonNull(classes.get(part)));
 		int k = Integer.parseInt(moved.substring("boom".length()));
 		assertThat(lines(java.util.Objects.requireNonNull(classes.get(part)), moved)).containsExactly(0, 100 + k);
 		assertThat(thrownLine(classes, part, moved)).isEqualTo(100 + k);
+	}
+
+	private static byte[] write(ClassDefinition definition,
+			java.util.@org.jspecify.annotations.Nullable Set<String> roots) {
+		JvmClassSplitter.Split split = JvmClassSplitter.write(definition, roots, method -> false,
+				ConstantPool.MAX_INDEX, JvmClassSplitter.Target.of(61));
+		assertThat(split.parts()).isEmpty();
+		return split.mainClass();
 	}
 
 	private static List<Integer> lines(byte[] classFile, String method) {
@@ -155,7 +162,7 @@ class LineNumberTableTest {
 	/** Class Lines: static methods that throw a fresh RuntimeException. */
 	private static final class Fixture {
 
-		final ConstantPool cp = ConstantPool.unbounded();
+		final ConstantPool cp = new ConstantPool();
 
 		final ClassDefinition.Builder definition;
 
@@ -175,7 +182,12 @@ class LineNumberTableTest {
 					this.cp.addNameAndType(this.cp.addUtf8("<init>"), this.cp.addUtf8("(Ljava/lang/String;)V")));
 		}
 
-		void throwing(String name, List<ByteCodeWriter.LineNumberEntry> lines) {
+		void throwing(String name, List<ClassDefinition.Line> lines) {
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(name),
+					this.cp.addUtf8("()V"), throwingCode(name), List.of(), lines, List.of());
+		}
+
+		List<Integer> throwingCode(String name) {
 			ConstantPool.StringConstant message = this.cp.addString("from " + name);
 			List<Integer> code = new ArrayList<>();
 			code.add(Opcode.NEW);
@@ -186,13 +198,7 @@ class LineNumberTableTest {
 			code.add(Opcode.INVOKESPECIAL);
 			u2(code, this.init.index());
 			code.add(Opcode.ATHROW);
-			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(name),
-					this.cp.addUtf8("()V"), 3, 0, code, List.of(), lines);
-		}
-
-		byte[] throwingAndBuild(String name, List<ByteCodeWriter.LineNumberEntry> lines) {
-			throwing(name, lines);
-			return build().toBytes();
+			return code;
 		}
 
 		ClassDefinition build() {

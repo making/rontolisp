@@ -55,7 +55,7 @@ import am.ik.jvm.Opcode;
  * value still names the scalar defun, exactly as with {@code vec:}.
  *
  * <p>
- * {@code JvmClassShaker} needs no new root: the emitted call site has an ordinary
+ * The writer's shake needs no new root: the emitted call site has an ordinary
  * {@code INVOKESTATIC} edge to both the bridge init and the scalar defun, so the defun
  * stays reachable (and therefore un-shaken) wherever a kernel can decline.
  */

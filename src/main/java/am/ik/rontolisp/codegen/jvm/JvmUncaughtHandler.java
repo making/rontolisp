@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.ArrayList;
 import java.util.List;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -84,8 +84,7 @@ import org.jspecify.annotations.Nullable;
  * must win. The region is the whole body, and the entry costs 8 bytes plus this handler's
  * ~30 -- main is a list of {@code invokestatic} chunk calls, so neither the 64 KB method
  * limit nor {@code maxStack} (floored at 64) is in reach. Offsets are written raw rather
- * than deferred because main never overflows a branch, so {@link am.ik.jvm.BranchRelaxer}
- * leaves its code untouched.
+ * than deferred because main never overflows a branch.
  */
 final class JvmUncaughtHandler {
 
@@ -162,7 +161,7 @@ final class JvmUncaughtHandler {
 	 * @param exceptionTable the handlers
 	 */
 	record Built(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
+			List<ClassDefinition.Handler> exceptionTable) {
 	}
 
 	/**
@@ -316,7 +315,7 @@ final class JvmUncaughtHandler {
 		code.add(Opcode.ATHROW);
 
 		mainCtx.code.addAll(code);
-		mainCtx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(0, bodyEnd, bodyEnd, p.runtimeException()));
+		mainCtx.exceptionTable.add(new ClassDefinition.Handler(0, bodyEnd, bodyEnd, p.runtimeException()));
 	}
 
 	/**
@@ -346,7 +345,7 @@ final class JvmUncaughtHandler {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(exSlot);
 		ctx.emit(Opcode.ATHROW);
-		ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(0, bodyEnd, bodyEnd,
+		ctx.exceptionTable.add(new ClassDefinition.Handler(0, bodyEnd, bodyEnd,
 				cp.addClass(cp.addUtf8("java/lang/RuntimeException")).index()));
 	}
 
@@ -509,8 +508,7 @@ final class JvmUncaughtHandler {
 		int handlerPc = a.code.size();
 		a.pop();
 		a.op0(Opcode.RETURN);
-		List<ByteCodeWriter.ExceptionTableEntry> table = List
-			.of(new ByteCodeWriter.ExceptionTableEntry(0, handler, handlerPc, 0));
+		List<ClassDefinition.Handler> table = List.of(new ClassDefinition.Handler(0, handler, handlerPc, 0));
 		return new Built(cp.addUtf8(WHERE_METHOD), cp.addUtf8(WHERE_DESC), 8, AWAITED + 1, a.finish(), table);
 	}
 

@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
@@ -22,12 +21,13 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Structural + behavioral tests for the JVM dead-code eliminator. These verify the
- * shaker's invariants on real compiled classes: the output is smaller, unreachable
- * methods and unreferenced fields are gone, the class still loads (the JVM verifier is
- * the well-formedness check) and behaves identically, dynamically-reached methods and the
- * reflective {@code _apply} root survive, and the pass is idempotent. The whole
- * cross-backend feature corpus is exercised by {@code JvmClassShakerCorpusTest}.
+ * Structural + behavioral tests for the JVM dead-code eliminator, the shake
+ * {@link JvmClassSplitter} applies as it writes a class. These verify its invariants on
+ * real compiled classes: the output is smaller, unreachable methods and unreferenced
+ * fields are gone, the class still loads (the JVM verifier is the well-formedness check)
+ * and behaves identically, and dynamically-reached methods and the reflective
+ * {@code _apply} root survive. The whole cross-backend feature corpus is exercised by
+ * {@code JvmClassShakerCorpusTest}.
  */
 class JvmClassShakerTest {
 
@@ -331,115 +331,6 @@ class JvmClassShakerTest {
 		// Compaction copies CONSTANT_Utf8 entries verbatim (byte-length modified UTF-8).
 		assertThat(run(compile("(princ \"日本語\")", OptimizeLevel.DEFAULT))).isEqualTo("日本語");
 		assertThat(run(compile("(print '日本語)", OptimizeLevel.DEFAULT))).isEqualTo("日本語");
-	}
-
-	@Test
-	void isIdempotent() {
-		byte[] once = JvmClassShaker.shake(compile("(print (+ 1 2))", OptimizeLevel.NONE), Set.of("main"));
-		byte[] twice = JvmClassShaker.shake(once, Set.of("main"));
-		assertThat(twice).isEqualTo(once);
-	}
-
-	// The shaker writes a fresh pool in the order it writes the class, so a constant the
-	// input had below 256 can land above it: its ldc becomes an ldc_w, a byte longer,
-	// and the branch over it has to follow.
-	@Test
-	void anLdcWhoseConstantMovesPastIndex255WidensAndTheBranchOverItFollows() throws Exception {
-		ConstantPool cp = new ConstantPool();
-		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8("Widen"));
-		ConstantPool.StringConstant hello = cp.addString(cp.addUtf8("hello"));
-		ClassDefinition.Builder b = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass,
-				cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
-		ConstantPool.Utf8Constant voidDesc = cp.addUtf8("()V");
-		Set<String> roots = new java.util.HashSet<>(Set.of("run"));
-		for (int k = 0; k < 200; k++) {
-			ConstantPool.StringConstant filler = cp.addString(cp.addUtf8("filler-" + k));
-			b.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("f" + k), voidDesc, 1, 0,
-					List.of(Opcode.LDC_W, filler.index() >> 8, filler.index() & 0xFF, Opcode.POP, Opcode.RETURN),
-					List.of());
-			roots.add("f" + k);
-		}
-		// iconst_0; ifne +6 (to aconst_null); ldc hello; areturn; aconst_null; areturn
-		b.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("run"),
-				cp.addUtf8("()Ljava/lang/Object;"), 1, 0, List.of(Opcode.ICONST_0, Opcode.IFNE, 0, 6, Opcode.LDC,
-						hello.index(), Opcode.ARETURN, Opcode.ACONST_NULL, Opcode.ARETURN),
-				List.of());
-		byte[] input = b.build().toBytes();
-		assertThat(hello.index()).isLessThan(256);
-
-		byte[] shaken = JvmClassShaker.shake(input, roots);
-		java.lang.classfile.MethodModel run = java.lang.classfile.ClassFile.of()
-			.parse(shaken)
-			.methods()
-			.stream()
-			.filter(m -> m.methodName().equalsString("run"))
-			.findFirst()
-			.orElseThrow();
-		assertThat(run.code().orElseThrow().elementStream())
-			.filteredOn(e -> e instanceof java.lang.classfile.instruction.ConstantInstruction.LoadConstantInstruction)
-			.singleElement()
-			.satisfies(ldc -> assertThat(((java.lang.classfile.Instruction) ldc).opcode())
-				.isEqualTo(java.lang.classfile.Opcode.LDC_W));
-		byte[] framed = StackMapFrames.generate(shaken, 61);
-		Class<?> widen = new ClassLoader(JvmClassShakerTest.class.getClassLoader()) {
-			Class<?> define() {
-				return defineClass("Widen", framed, 0, framed.length);
-			}
-		}.define();
-		assertThat(widen.getMethod("run").invoke(null)).isEqualTo("hello");
-	}
-
-	@Test
-	void aWellFormedClassHasNoUnresolvedSelfMethods() {
-		// The compiler runs this check on every build (an unresolved own-class call is
-		// how a mispredicted runtime-helper gate shows up), so anything it emits must
-		// come back clean.
-		assertThat(JvmClassShaker.unresolvedSelfMethods(compile("""
-				(defun add1 (x) (+ x 1))
-				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
-				(print (funcall #'funcall #'add1 41))
-				(print (mapcar #'class-of (list 1)))
-				""", OptimizeLevel.NONE))).isEmpty();
-	}
-
-	@Test
-	void unresolvedSelfMethodsNamesTheCallAndItsCallers() {
-		// A class whose main() invokestatics an own _helper that is never declared --
-		// exactly the shape a mispredicted runtime-helper gate produces, and one the
-		// JVM accepts until the branch actually runs.
-		ConstantPool cp = new ConstantPool();
-		ConstantPool.ClassConstant thisClass = cp.addClass(cp.addUtf8("Dangling"));
-		ConstantPool.ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
-		ConstantPool.MethodrefConstant helper = cp.addMethodref(thisClass,
-				cp.addNameAndType(cp.addUtf8("_helper"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
-		ConstantPool.Utf8Constant mainName = cp.addUtf8("main");
-		ConstantPool.Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
-		ConstantPool.Utf8Constant codeAttr = cp.addUtf8("Code");
-		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
-		new ByteCodeWriter(classOut).write(0xCA, 0xFE, 0xBA, 0xBE)
-			.writeVersion(0, 50)
-			.writeConstantPool(cp)
-			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass)
-			.writeInterfaces(i -> {
-			})
-			.writeFields(f -> {
-			})
-			.writeMethods(methods -> methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainName, mainDesc,
-					method -> method.writeAttributes(attrs -> attrs.add(codeAttr,
-							attr -> attr.writeU2(1)
-								.writeU2(1)
-								.writeCode(Opcode.ACONST_NULL, Opcode.INVOKESTATIC, helper.indexAsU2(), Opcode.POP,
-										Opcode.RETURN)
-								.writeU2(0)
-								.writeU2(0)))))
-			.writeAttributes(a -> {
-			});
-
-		assertThat(JvmClassShaker.unresolvedSelfMethods(classOut.toByteArray())).singleElement().satisfies(missing -> {
-			assertThat(missing.name()).isEqualTo("_helper");
-			assertThat(missing.descriptor()).isEqualTo("(Ljava/lang/Object;)Ljava/lang/Object;");
-			assertThat(missing.callers()).containsExactly("main");
-		});
 	}
 
 }

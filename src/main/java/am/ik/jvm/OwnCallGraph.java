@@ -16,9 +16,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The references one class's method bodies make to the class's OWN methods and fields --
- * the graph behind {@link JvmClassShaker}'s rules, which {@link JvmClassSplitter} applies
- * to a {@link ClassDefinition}: each builds the graph from its own form of the code and
- * asks the same questions here.
+ * the graph {@link JvmClassSplitter} shakes a {@link ClassDefinition} by and checks it
+ * against.
  * <p>
  * Identity is by name and descriptor, never by constant-pool index: a pool may hold two
  * entries that spell the same member, and a method is the same method whichever one a

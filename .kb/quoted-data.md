@@ -29,7 +29,7 @@ CONSTANT.
   shared into `WasmAsyncEmit`'s fresh contexts so async resume bodies reach the one
   table.
 - **Trap: the JVM build must stay lazy at the site, not a `<clinit>` initializer.**
-  `JvmClassShaker` runs on every build; with the injected wrapper defuns' package-registry
+  The writer shakes on every build; with the injected wrapper defuns' package-registry
   constants pinned by `<clinit>` a three-defun program grew 5,898 -> 18,978 bytes. Do not
   "simplify" this into the `LayoutPool`/`BigIntPool` `<clinit>` shape. The same holds for
   the table itself: `_qdSet` creates it, so the field and both helpers go with the last
@@ -56,8 +56,10 @@ the runtime's string representation, 907 of them spelling a symbol name that is 
 there bare -- a representation cost, not a site cost), and the 6,131 own-class
 `Methodref`s are one per callee (1,333 `_lambda_N`, 615 `_fx$N`, ...). The 52,000 tripwire
 stays: past 65,534 the class now splits instead of failing (`.kb/jvm-method-size-limits.md`),
-so what it guards is that the corpus keeps covering `JvmClassShaker` rather than the
-splitter.
+so what it guards is that the corpus class stays ONE class, the shape its run-and-compare
+covers; the split's placement is pinned by the split tests. Since 2026-09-29 every level's
+class is written with a pool of its own holding only what its members reference; at
+`--optimize=off` that dropped 35 entries of the corpus class's 44,118 (CLI, the same day).
 
 Other costs of the change:
 

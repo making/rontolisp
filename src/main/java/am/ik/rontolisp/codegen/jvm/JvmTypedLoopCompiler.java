@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -1496,7 +1496,7 @@ final class JvmTypedLoopCompiler {
 				this.ctx.emit(Opcode.ALOAD);
 				this.ctx.emit(excSlot);
 				this.ctx.emit(Opcode.ATHROW);
-				this.ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
+				this.ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
 			}
 			this.ctx.nextLocal = savedNextLocal;
 		}

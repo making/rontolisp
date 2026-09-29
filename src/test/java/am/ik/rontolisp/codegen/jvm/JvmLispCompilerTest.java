@@ -16026,7 +16026,7 @@ class JvmLispCompilerTest {
 	@Test
 	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureSurvivesOptimize() throws Exception {
-		// --optimize (JvmClassShaker) must keep the X509TrustManager methods of the
+		// --optimize (the writer's shake) must keep the X509TrustManager methods of the
 		// generated class: JSSE invokes them through the interface, which the shaker
 		// cannot see as references.
 		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
@@ -17529,7 +17529,28 @@ class JvmLispCompilerTest {
 		// check applies to wrappers too (.kb/adjustable-arrays.md).
 		byte[] classBytes = new JvmLispCompiler("Test")
 			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("(print (+ 1 2))")));
-		assertThat(am.ik.jvm.JvmClassShaker.unresolvedSelfMethods(classBytes)).isEmpty();
+		assertThat(unresolvedOwnCalls(classBytes)).isEmpty();
+	}
+
+	/**
+	 * The own-class methods a class file's code invokes but the class does not declare.
+	 */
+	private static java.util.Set<String> unresolvedOwnCalls(byte[] classBytes) {
+		java.lang.classfile.ClassModel model = java.lang.classfile.ClassFile.of().parse(classBytes);
+		String self = model.thisClass().asInternalName();
+		java.util.Set<String> declared = new java.util.HashSet<>();
+		java.util.Set<String> called = new java.util.TreeSet<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			declared.add(method.methodName().stringValue() + method.methodType().stringValue());
+			method.code().ifPresent(code -> code.forEach(element -> {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& self.equals(invoke.owner().asInternalName())) {
+					called.add(invoke.name().stringValue() + invoke.type().stringValue());
+				}
+			}));
+		}
+		called.removeAll(declared);
+		return called;
 	}
 
 	@Test

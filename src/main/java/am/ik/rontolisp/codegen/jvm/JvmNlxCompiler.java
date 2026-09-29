@@ -3,7 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 import java.util.Objects;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
@@ -319,7 +319,7 @@ final class JvmNlxCompiler {
 		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(resultSlot);
-		ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
+		ctx.exceptionTable.add(new ClassDefinition.Handler(start, end, handler, 0));
 		ctx.nextLocal = savedNextLocal;
 	}
 

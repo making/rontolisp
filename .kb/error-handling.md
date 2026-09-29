@@ -30,16 +30,15 @@ a build that never knew about EH -- unless `--report-locations` asks for the unc
 
 ## Phase 1 -- unwind-protect
 `LispEvaluator.evalUnwindProtect` (try/finally over both Java unwind channels, `LispEvalException`
-and `BlockReturnSignal`); `JvmUnwindProtectCompiler` over `ByteCodeWriter.writeExceptionTable` +
-`ExceptionTableEntry`; `WasmUnwindProtectCompiler` (`block $u (result exnref)` +
+and `BlockReturnSignal`); `JvmUnwindProtectCompiler` over the method's exception table
+(`ClassDefinition.Handler`); `WasmUnwindProtectCompiler` (`block $u (result exnref)` +
 `try_table (catch_all_ref $u)`, landing = cleanups over the exnref then `throw_ref`). A cleanup that
 signals replaces the pending unwind (CL: newer exit wins).
 
-- JVM emitters stay frame-free (raw output is version-50 and verifies handlers without a
-  StackMapTable); version-61 handler frames are synthesized offline by `StackMapFrames`
-  ([stack-map-frames.md](stack-map-frames.md)). Each `Ctx` carries a per-method
-  `exceptionTable` emitted by the four method-writing sites; `JvmClassShaker` is
-  exception-table-aware.
+- JVM emitters stay frame-free; the version-61 handler frames are computed as the class is
+  written ([stack-map-frames.md](stack-map-frames.md)). Each `Ctx` carries a per-method
+  `exceptionTable`, whose ranges the writer turns into labels, and a handler's catch type
+  counts toward the method's pool entries when the class is split.
 - **The `return` channel is a plain GOTO/br and would skip the cleanups**, so `Ctx.unwindScopes`
   records active scopes. JVM: `JvmReturnCompiler` compiles every ESCAPED scope's cleanups inline
   before its GOTO (escaped = `scope.blockDepth >= blockTargets.size()`, innermost first), and those
@@ -536,9 +535,9 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   a direct `JvmLispCompiler.compile` with no recording scope) has no line numbers, no site table,
   no `_where` and its pool in the old order -- the bytes it always had
   (`UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid`). The line numbers
-  survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassSplitter` carries the
-  attribute (no instruction moves there), and `JvmClassShaker` and `StackMapFrames` rewrite the
-  class through `java.lang.classfile`, whose line entries ride the instructions they label.
+  survive the write: `JvmClassSplitter` plays each entry into the `CodeBuilder` at the
+  instruction it starts at, so it rides that instruction when a relaxed branch or a narrowed
+  `ldc` moves it, whichever class the method lands in (`LineNumberTableTest`).
 - **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
   plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
   1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
@@ -2526,7 +2525,7 @@ all, so **`restart-case` alone unblocks nothing real**.
   `conditionNarrowingMarksProgramErrorConstructibleOnlyBehindALandingPad`,
   `establishesLandingPadReadsOperatorPositionOnly`; plus
   `WasmLispCompilerTest.typedErrorWithLambdaReportCompilesOutsideEhMode`,
-  `ByteCodeWriterTest.generateAndRun{TypedCatch,CatchAny}Handler`,
+  `CodeReplayTest.aTypedCatchAndACatchAnyBothLand`,
   `WasmTreeShakerTest.shakesEhModeModules`, `RontoLispCliTest`, `JvmFloatArrayTest`.
 - ci-spec: `condition-objects`, `condition-types`, `condition-report-printing`,
   `signal-runtime-control-string`, `handler-case-catches-typed-and-plain-errors` (+2),

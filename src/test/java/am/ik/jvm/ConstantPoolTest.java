@@ -1,9 +1,12 @@
 package am.ik.jvm;
 
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 class ConstantPoolTest {
 
@@ -23,45 +26,23 @@ class ConstantPoolTest {
 		assertThat(cp.size()).isEqualTo(4);
 	}
 
-	// A pool index is written as a u2 by every emit site, so an entry past 65534 would
-	// have its index truncated: the instruction would silently reference an unrelated
-	// entry, and the damage would surface far downstream (as an operand-stack model
-	// failure, or a class the verifier rejects). The pool must refuse the entry that
-	// crosses the limit instead.
+	// -0.0 == 0.0 in Java, but they are two different constants: a literal -0.0 must not
+	// come back as 0.0 from the pool.
 	@Test
-	void refusesTheEntryThatWouldCrossTheFormatLimit() {
+	void negativeZeroIsItsOwnDoubleConstant() {
 		ConstantPool cp = new ConstantPool();
-		while (cp.size() < ConstantPool.MAX_INDEX) {
-			cp.addInteger(cp.size());
-		}
-		assertThat(cp.size()).isEqualTo(ConstantPool.MAX_INDEX);
-		assertThatIllegalStateException().isThrownBy(() -> cp.addInteger(-1))
-			.withMessageContaining("constant pool overflow");
-		// The refused entry left the pool serializable, at its exact capacity.
-		assertThat(cp.toByteArray()).isNotEmpty();
+		ConstantPool.DoubleConstant zero = cp.addDouble(0.0);
+		ConstantPool.DoubleConstant negativeZero = cp.addDouble(-0.0);
+		assertThat(negativeZero.index()).isNotEqualTo(zero.index());
+		assertThat(Double.doubleToRawLongBits(((DoubleEntry) cp.entryAt(negativeZero.index())).doubleValue()))
+			.isEqualTo(Double.doubleToRawLongBits(-0.0));
 	}
 
-	// A long/double straddles the limit rather than landing on it: the second slot must
-	// be counted before the entry is accepted.
+	// The master pool describes a program too large for one class: it keeps growing past
+	// the format limit, and an entry whose components sit past 65535 still names them.
 	@Test
-	void refusesATwoSlotEntryThatWouldStraddleTheFormatLimit() {
+	void aPoolKeepsFullWidthComponentIndexesPastTheFormatLimit() {
 		ConstantPool cp = new ConstantPool();
-		while (cp.size() < ConstantPool.MAX_INDEX - 1) {
-			cp.addInteger(cp.size());
-		}
-		assertThatIllegalStateException().isThrownBy(() -> cp.addLong(Long.MIN_VALUE))
-			.withMessageContaining("constant pool overflow");
-		// A one-slot entry still fits.
-		assertThat(cp.addInteger(-1).index()).isEqualTo(ConstantPool.MAX_INDEX);
-	}
-
-	// An unbounded pool describes a program too large for one class: it keeps growing,
-	// and an entry whose components sit past 65535 still names them -- a u2-encoded body
-	// would have wrapped them onto unrelated entries, and then deduplicated two different
-	// references into one.
-	@Test
-	void anUnboundedPoolKeepsFullWidthComponentIndexesPastTheFormatLimit() {
-		ConstantPool cp = ConstantPool.unbounded();
 		while (cp.size() < 70_000) {
 			cp.addInteger(cp.size());
 		}
@@ -77,31 +58,44 @@ class ConstantPoolTest {
 		assertThat(cp.secondComponentAt(secondRef.index())).isEqualTo(second.index());
 		assertThat(cp.utf8At(cp.firstComponentAt(ownerClass.index()))).isEqualTo("Owner");
 		assertThat(cp.descriptorOf(secondRef.index())).isEqualTo("()V");
+		assertThat(cp.entryAt(firstRef.index())).isInstanceOf(MethodRefEntry.class);
 		// The same reference added again is still the same entry.
 		assertThat(cp.addMethodref(ownerClass, first).index()).isEqualTo(firstRef.index());
-		// Such a pool is not one class file's pool.
-		assertThatIllegalStateException().isThrownBy(cp::toByteArray).withMessageContaining("constant pool overflow");
 	}
 
-	// Entries are held as data now, so their serialization is pinned against the class
-	// format directly: tag, then the u2 components or the payload, in insertion order.
+	// The test instrument: every index an emitter is handed is one no class file can
+	// carry, and the ones before it are filler nothing references.
 	@Test
-	void serializesEveryEntryKindInInsertionOrder() {
+	void aPoolStartedPastTheFormatLimitHandsOutOnlyIndexesPastIt() {
+		ConstantPool cp = ConstantPool.startingAt(70_000);
+		ConstantPool.StringConstant text = cp.addString("text");
+		assertThat(cp.addUtf8("first").index()).isGreaterThanOrEqualTo(70_000);
+		assertThat(text.index()).isGreaterThan(70_000);
+		assertThat(cp.size()).isGreaterThan(70_000);
+		assertThat(cp.typeAt(1)).as("a filler entry").isEqualTo(ConstantType.UTF8);
+	}
+
+	// A CONSTANT_Utf8 holds 65535 bytes of MODIFIED UTF-8: U+0000 takes two, a
+	// supplementary character its surrogate pair of three each. The pool refuses the
+	// string that crosses it where it is minted.
+	@Test
+	void refusesAUtf8PastItsModifiedUtf8Length() {
 		ConstantPool cp = new ConstantPool();
-		ConstantPool.Utf8Constant name = cp.addUtf8("A");
-		ConstantPool.ClassConstant clazz = cp.addClass(name);
-		cp.addString(name);
-		cp.addInteger(0x01020304);
-		cp.addLong(0x0102030405060708L);
-		cp.addMethodref(clazz, cp.addNameAndType(name, name));
-		assertThat(cp.toByteArray()).containsExactly(0x00, 0x09, // count = 8 entries + 1
-				1, 0x00, 0x01, 'A', // #1 Utf8 "A"
-				7, 0x00, 0x01, // #2 Class #1
-				8, 0x00, 0x01, // #3 String #1
-				3, 0x01, 0x02, 0x03, 0x04, // #4 Integer
-				5, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // #5-6 Long
-				12, 0x00, 0x01, 0x00, 0x01, // #7 NameAndType #1:#1
-				10, 0x00, 0x02, 0x00, 0x07); // #8 Methodref #2.#7
+		String fits = "\u0000".repeat(32_767) + "a";
+		assertThat(cp.addUtf8(fits).entry().stringValue()).isEqualTo(fits);
+		assertThatIllegalArgumentException().isThrownBy(() -> cp.addUtf8("\u0000".repeat(32_768)))
+			.withMessageContaining("65536");
+		assertThatIllegalArgumentException().isThrownBy(() -> cp.addUtf8("💣".repeat(10_923)))
+			.withMessageContaining("65538");
+	}
+
+	@Test
+	void answersWhichStringConstantsItHolds() {
+		ConstantPool cp = new ConstantPool();
+		cp.addUtf8("name-only");
+		cp.addString("loadable");
+		assertThat(cp.hasStringConstant("loadable")).isTrue();
+		assertThat(cp.hasStringConstant("name-only")).as("a Utf8 alone is not a String constant").isFalse();
 	}
 
 }

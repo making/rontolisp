@@ -59,7 +59,19 @@ class JvmLinalgBlasAccelCompilerTest {
 		byte[] classBytes = compiler.compile(program);
 		// The bridges travel beside the class as their own files, where run() loads.
 		TravellingClassFiles.write(compiler, this.tempDir);
+		this.travelling = compiler.runtimeClassFiles();
 		return classBytes;
+	}
+
+	/** The class files the last {@link #compile} shipped beside the class. */
+	private java.util.Map<String, byte[]> travelling = java.util.Map.of();
+
+	/**
+	 * Whether the last {@link #compile} shipped the bridge: the gate's answer, whether or
+	 * not a call site the class kept names it.
+	 */
+	private boolean travelsBlasBridge() {
+		return this.travelling.containsKey(JvmBlasRuntimeBuilder.bridgeName("Test") + ".class");
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -184,9 +196,12 @@ class JvmLinalgBlasAccelCompilerTest {
 		assertThat(callsBridgeMethod(unflagged, "blasMatvec")).isFalse();
 		// A program that never mentions vec: or linalg: keeps the bridge out; any vec:
 		// program pulls it in, because the spliced vec.lisp holds the two GEMV defuns
-		// (the same reason (linalg:eye 2) does above).
+		// (the same reason (linalg:eye 2) does above). The bridge travels; the class
+		// names it only where a call site it kept does, which this one has none of.
 		assertThat(embedsBlasBridge(compile("(print (+ 1 2))", true, false))).isFalse();
-		assertThat(embedsBlasBridge(compile("(print (vec:sum (vec:arange 8)))", true, false))).isTrue();
+		assertThat(travelsBlasBridge()).isFalse();
+		compile("(print (vec:sum (vec:arange 8)))", true, false);
+		assertThat(travelsBlasBridge()).isTrue();
 	}
 
 	@Test

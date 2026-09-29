@@ -1,30 +1,36 @@
 package am.ik.jvm;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.ConstantPoolBuilder;
+import java.lang.classfile.constantpool.DoubleEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.FloatEntry;
+import java.lang.classfile.constantpool.IntegerEntry;
+import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
+import java.lang.classfile.constantpool.LongEntry;
+import java.lang.classfile.constantpool.MemberRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.NameAndTypeEntry;
+import java.lang.classfile.constantpool.PoolEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
 /**
- * JVM class file constant pool builder. Entries are deduplicated by their content: adding
- * the same constant twice returns the first entry instead of appending a duplicate.
- * Because a composite entry (Class/String/NameAndType/refs) is keyed by the indexes of
- * its already-deduplicated components, structural sharing falls out naturally -- two
- * {@code Methodref}s to the same method collapse to one entry. Duplicates are legal in
- * the class format, so this is purely a size optimization, but a decisive one: without it
- * a large generated class wastes roughly half its pool on repeats.
+ * The constant pool a generator mints its entries in: one {@code java.lang.classfile}
+ * {@link ConstantPoolBuilder}, the MASTER pool a whole program's method bodies index
+ * into, wrapped in the typed constants the generators hand around. Entries are
+ * deduplicated by content, so two {@code Methodref}s to the same method are one entry.
  * <p>
- * Entries are held as data (tag, component indexes, payload), never as their u2-encoded
- * bytes, so a pool can describe more entries than one class file may carry without losing
- * which entry a component names. A pool made by {@link #unbounded()} grows past
- * {@link #MAX_INDEX}: its indexes are then only meaningful to an emitter whose every
- * index sink keeps the full value, and the class it describes has to be split over
- * several class files ({@link JvmClassSplitter}). {@link #toByteArray()} serializes a
- * pool that fits one class, and only such a pool.
+ * The master pool is never written as it stands. It may grow past {@link #MAX_INDEX} -- a
+ * class file's limit, not the builder's -- so its indexes are only meaningful to an
+ * emitter whose every index sink keeps the full value (a u2's high part whole). The
+ * writer ({@link JvmClassSplitter}) gives every class it writes a fresh pool holding
+ * exactly the entries that class's members reference, re-minted there from these; one
+ * class, or a class and its {@code $PartN} classes when one pool cannot hold them.
  */
 public final class ConstantPool {
 
@@ -35,71 +41,63 @@ public final class ConstantPool {
 	public static final int MAX_INDEX = 0xFFFE;
 
 	/**
-	 * Whether {@link #add} refuses the entry that would cross {@link #MAX_INDEX}. An
-	 * emitter that writes an index as a u2 needs the refusal: the first symptom of an
-	 * overflowing pool would otherwise be an instruction whose truncated operand points
-	 * at an unrelated entry.
+	 * The most bytes one {@code CONSTANT_Utf8} holds (JVMS 4.4.7): its length is a u2.
 	 */
-	private final boolean bounded;
+	private static final int MAX_UTF8_BYTES = 0xFFFF;
 
-	/**
-	 * The entry at each index: slot 0 and the second slot of every long/double stay null.
-	 */
-	private final List<@Nullable Entry> slots = new ArrayList<>();
+	private final ConstantPoolBuilder entries = ConstantPoolBuilder.of();
 
-	private final Map<Entry, Constant> dedup = new HashMap<>();
+	private final Set<String> stringValues = new HashSet<>();
 
-	private final Map<Integer, String> utf8Values = new HashMap<>();
-
-	private final java.util.Set<String> stringValues = new java.util.HashSet<>();
-
-	private final Map<Integer, String> descriptors = new HashMap<>();
-
-	private int size = 0;
-
-	/** Creates a new empty constant pool that refuses to outgrow one class file. */
+	/** Creates a new empty pool whose first entry takes index 1. */
 	public ConstantPool() {
-		this(true);
-	}
-
-	private ConstantPool(boolean bounded) {
-		this(bounded, 1);
-	}
-
-	private ConstantPool(boolean bounded, int firstIndex) {
-		this.bounded = bounded;
-		while (this.slots.size() < firstIndex) {
-			this.slots.add(null);
-		}
-		this.size = firstIndex - 1;
 	}
 
 	/**
-	 * Creates a new empty constant pool that may grow past {@link #MAX_INDEX}: one whose
-	 * indexes the caller keeps at full width everywhere it writes them, and whose class
-	 * it hands to {@link JvmClassSplitter} when the pool outgrows one class file.
-	 * @return a new unbounded pool
-	 */
-	public static ConstantPool unbounded() {
-		return new ConstantPool(false);
-	}
-
-	/**
-	 * Creates an unbounded pool whose first entry takes {@code firstIndex} instead of 1
-	 * -- a test instrument, never an output shape. Started past 65535, every index the
-	 * emitter hands out is one no class file can carry, so a writer anywhere that cuts an
-	 * operand to 16 bits names an entry that does not exist and the split fails loudly,
+	 * Creates a pool whose first entry takes {@code firstIndex} instead of 1 -- a test
+	 * instrument, never an output shape. Started past 65535, every index the emitter
+	 * hands out is one no class file can carry, so an emitter that cuts an operand to 16
+	 * bits names an entry that is not the one it meant, and the write fails loudly
 	 * instead of calling the wrong method in the one program large enough to reach it.
-	 * {@link #size()} counts the skipped indexes, so such a pool never passes for one
-	 * class's.
+	 * The indexes before it hold filler entries nothing references, which no written
+	 * class carries; {@link #size()} counts them.
 	 * @param firstIndex the index of the first entry added
-	 * @return a new unbounded pool
+	 * @return a new pool
 	 */
-	public static ConstantPool unboundedFrom(int firstIndex) {
+	public static ConstantPool startingAt(int firstIndex) {
 		if (firstIndex < 1) {
 			throw new IllegalArgumentException("a constant pool starts at index 1 or later: " + firstIndex);
 		}
-		return new ConstantPool(false, firstIndex);
+		ConstantPool pool = new ConstantPool();
+		for (int i = 1; i < firstIndex; i++) {
+			pool.entries.utf8Entry("\0filler " + i);
+		}
+		return pool;
+	}
+
+	/**
+	 * @return the master pool itself, for an emitter that works in
+	 * {@code java.lang.classfile} entries
+	 */
+	public ConstantPoolBuilder entries() {
+		return this.entries;
+	}
+
+	/**
+	 * The entry at an index.
+	 * @param index a master-pool index
+	 * @return its entry
+	 * @throws IllegalArgumentException when no entry starts at {@code index}
+	 */
+	public PoolEntry entryAt(int index) {
+		if (index < 1 || index >= this.entries.size()) {
+			throw new IllegalArgumentException("no constant pool entry starts at index " + index);
+		}
+		PoolEntry entry = this.entries.entryByIndex(index);
+		if (entry == null) {
+			throw new IllegalArgumentException("no constant pool entry starts at index " + index);
+		}
+		return entry;
 	}
 
 	/**
@@ -109,49 +107,53 @@ public final class ConstantPool {
 	 * and the descriptor of the pushed value for the {@code ldc}-able constants
 	 * (Integer/Float/Long/Double/String/Class).
 	 * @param index the constant pool index
-	 * @return the descriptor, or {@code null} when the entry has none (or was not added
-	 * through this pool's typed factory methods)
+	 * @return the descriptor, or {@code null} when the entry has none
 	 */
 	public @Nullable String descriptorOf(int index) {
-		return this.descriptors.get(index);
-	}
-
-	private Constant addEntry(Entry entry) {
-		Constant existing = this.dedup.get(entry);
-		if (existing != null) {
-			return existing;
-		}
-		boolean twoSlots = entry.type == ConstantType.LONG || entry.type == ConstantType.DOUBLE;
-		if (this.bounded && this.size + (twoSlots ? 2 : 1) > MAX_INDEX) {
-			// Refuse here rather than at serialization: an index past u2 is truncated by
-			// every emit site that writes one (`(short) index`), so the FIRST symptom of
-			// an overflowing pool is an instruction whose operand points at an unrelated
-			// entry -- diagnosed downstream as a bogus operand-stack model failure.
-			throw new ConstantPoolOverflowException("constant pool overflow: this class needs more than " + MAX_INDEX
-					+ " constant pool entries, the JVM class-format limit; split the program");
-		}
-		Constant constant = new Constant(++this.size, entry.type, entry.bytes());
-		this.slots.add(entry);
-		if (twoSlots) {
-			// Long and double constants take two constant pool entries
-			this.size++;
-			this.slots.add(null);
-		}
-		this.dedup.put(entry, constant);
-		return constant;
+		PoolEntry entry = this.entryAt(index);
+		return switch (entry) {
+			case MemberRefEntry ref -> ref.type().stringValue();
+			case NameAndTypeEntry nameAndType -> nameAndType.type().stringValue();
+			case ClassEntry ignored -> "Ljava/lang/Class;";
+			case StringEntry ignored -> "Ljava/lang/String;";
+			case IntegerEntry ignored -> "I";
+			case FloatEntry ignored -> "F";
+			case LongEntry ignored -> "J";
+			case DoubleEntry ignored -> "D";
+			default -> null;
+		};
 	}
 
 	/**
 	 * Add a UTF-8 string constant.
 	 * @param s the string value
 	 * @return the UTF-8 constant entry
+	 * @throws IllegalArgumentException when the value's modified UTF-8 form exceeds the
+	 * 65535 bytes a {@code CONSTANT_Utf8} can hold
 	 */
 	public Utf8Constant addUtf8(String s) {
-		ByteArrayOutputStream stream = new ByteArrayOutputStream();
-		new ByteCodeWriter(stream).writeUtf8Info(s);
-		Utf8Constant utf8 = new Utf8Constant(this.addEntry(Entry.data(ConstantType.UTF8, stream.toByteArray())));
-		this.utf8Values.put(utf8.index(), s);
-		return utf8;
+		int bytes = modifiedUtf8Length(s);
+		if (bytes > MAX_UTF8_BYTES) {
+			// Refused here, at the site that minted it, rather than when some class
+			// carrying it is written.
+			throw new IllegalArgumentException("CONSTANT_Utf8 exceeds 65535 bytes: " + bytes);
+		}
+		return new Utf8Constant(this.entries.utf8Entry(s));
+	}
+
+	/**
+	 * The length of a string's modified UTF-8 form: U+0000 is two bytes, a supplementary
+	 * character is its surrogate pair of three bytes each.
+	 */
+	private static int modifiedUtf8Length(String s) {
+		int length = s.length();
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == 0 || c > 0x7F) {
+				length += c <= 0x7FF ? 1 : 2;
+			}
+		}
+		return length;
 	}
 
 	/**
@@ -160,9 +162,7 @@ public final class ConstantPool {
 	 * @return the class constant entry
 	 */
 	public ClassConstant addClass(Utf8Constant classUtf8) {
-		ClassConstant clazz = new ClassConstant(this.addEntry(Entry.ref(ConstantType.CLASS, classUtf8.index(), 0)));
-		this.descriptors.put(clazz.index(), "Ljava/lang/Class;");
-		return clazz;
+		return new ClassConstant(this.entries.classEntry(classUtf8.entry()));
 	}
 
 	/**
@@ -172,10 +172,7 @@ public final class ConstantPool {
 	 * @return the name-and-type constant entry
 	 */
 	public NameAndTypeConstant addNameAndType(Utf8Constant nameUtf8, Utf8Constant typeUtf8) {
-		NameAndTypeConstant nameAndType = new NameAndTypeConstant(
-				this.addEntry(Entry.ref(ConstantType.NAME_AND_TYPE, nameUtf8.index(), typeUtf8.index())));
-		this.descriptors.put(nameAndType.index(), this.utf8Values.get(typeUtf8.index()));
-		return nameAndType;
+		return new NameAndTypeConstant(this.entries.nameAndTypeEntry(nameUtf8.entry(), typeUtf8.entry()));
 	}
 
 	/**
@@ -185,10 +182,7 @@ public final class ConstantPool {
 	 * @return the field reference constant entry
 	 */
 	public FieldrefConstant addFieldref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		FieldrefConstant ref = new FieldrefConstant(
-				this.addEntry(Entry.ref(ConstantType.FIELDREF, clazz.index(), nameAndType.index())));
-		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
-		return ref;
+		return new FieldrefConstant(this.entries.fieldRefEntry(clazz.entry(), nameAndType.entry()));
 	}
 
 	/**
@@ -198,10 +192,7 @@ public final class ConstantPool {
 	 * @return the method reference constant entry
 	 */
 	public MethodrefConstant addMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		MethodrefConstant ref = new MethodrefConstant(
-				this.addEntry(Entry.ref(ConstantType.METHODREF, clazz.index(), nameAndType.index())));
-		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
-		return ref;
+		return new MethodrefConstant(this.entries.methodRefEntry(clazz.entry(), nameAndType.entry()));
 	}
 
 	/**
@@ -212,10 +203,7 @@ public final class ConstantPool {
 	 * @return the interface method reference constant entry
 	 */
 	public MethodrefConstant addInterfaceMethodref(ClassConstant clazz, NameAndTypeConstant nameAndType) {
-		MethodrefConstant ref = new MethodrefConstant(
-				this.addEntry(Entry.ref(ConstantType.INTERFACE_METHODREF, clazz.index(), nameAndType.index())));
-		this.descriptors.put(ref.index(), this.descriptors.get(nameAndType.index()));
-		return ref;
+		return new MethodrefConstant(this.entries.interfaceMethodRefEntry(clazz.entry(), nameAndType.entry()));
 	}
 
 	/**
@@ -224,13 +212,8 @@ public final class ConstantPool {
 	 * @return the string constant entry
 	 */
 	public StringConstant addString(Utf8Constant utf8) {
-		StringConstant string = new StringConstant(this.addEntry(Entry.ref(ConstantType.STRING, utf8.index(), 0)));
-		this.descriptors.put(string.index(), "Ljava/lang/String;");
-		String value = this.utf8Values.get(utf8.index());
-		if (value != null) {
-			this.stringValues.add(value);
-		}
-		return string;
+		this.stringValues.add(utf8.entry().stringValue());
+		return new StringConstant(this.entries.stringEntry(utf8.entry()));
 	}
 
 	/**
@@ -260,10 +243,7 @@ public final class ConstantPool {
 	 * @return the integer constant entry
 	 */
 	public IntegerConstant addInteger(int value) {
-		IntegerConstant constant = new IntegerConstant(
-				this.addEntry(Entry.data(ConstantType.INTEGER, ByteBuffer.allocate(4).putInt(value).array())));
-		this.descriptors.put(constant.index(), "I");
-		return constant;
+		return new IntegerConstant(this.entries.intEntry(value));
 	}
 
 	/**
@@ -272,44 +252,50 @@ public final class ConstantPool {
 	 * @return the long constant entry
 	 */
 	public LongConstant addLong(long value) {
-		LongConstant constant = new LongConstant(
-				this.addEntry(Entry.data(ConstantType.LONG, ByteBuffer.allocate(8).putLong(value).array())));
-		this.descriptors.put(constant.index(), "J");
-		return constant;
+		return new LongConstant(this.entries.longEntry(value));
 	}
 
 	/**
-	 * Add a double constant. Takes two constant pool entries.
+	 * Add a double constant. Takes two constant pool entries. {@code -0.0} and
+	 * {@code 0.0} stay distinct entries.
 	 * @param value the double value
 	 * @return the double constant entry
 	 */
 	public DoubleConstant addDouble(double value) {
-		// Key by the serialized bits (doubleToLongBits), so -0.0 and 0.0 stay distinct
-		// entries and every NaN shares the canonical bit pattern it serializes to.
-		long bits = Double.doubleToLongBits(value);
-		DoubleConstant constant = new DoubleConstant(
-				this.addEntry(Entry.data(ConstantType.DOUBLE, ByteBuffer.allocate(8).putLong(bits).array())));
-		this.descriptors.put(constant.index(), "D");
-		return constant;
+		return new DoubleConstant(this.entries.doubleEntry(value));
 	}
 
 	/**
-	 * Return the number of entries in this constant pool -- the highest index taken,
-	 * which is what a class file's {@code constant_pool_count} has to cover.
+	 * Return the highest index taken, which is what a class file's
+	 * {@code constant_pool_count} would have to cover if the pool were written whole.
 	 * @return the entry count
 	 */
 	public int size() {
-		return this.size;
+		return this.entries.size() - 1;
 	}
 
 	/**
 	 * The type of the entry at {@code index}.
 	 * @param index a constant pool index
 	 * @return its type
-	 * @throws IllegalArgumentException when no entry starts at {@code index}
+	 * @throws IllegalArgumentException when no entry starts at {@code index}, or it is of
+	 * a kind the generators never mint
 	 */
 	public ConstantType typeAt(int index) {
-		return this.entryAt(index).type;
+		return switch (this.entryAt(index)) {
+			case Utf8Entry ignored -> ConstantType.UTF8;
+			case IntegerEntry ignored -> ConstantType.INTEGER;
+			case FloatEntry ignored -> ConstantType.FLOAT;
+			case LongEntry ignored -> ConstantType.LONG;
+			case DoubleEntry ignored -> ConstantType.DOUBLE;
+			case ClassEntry ignored -> ConstantType.CLASS;
+			case StringEntry ignored -> ConstantType.STRING;
+			case FieldRefEntry ignored -> ConstantType.FIELDREF;
+			case MethodRefEntry ignored -> ConstantType.METHODREF;
+			case InterfaceMethodRefEntry ignored -> ConstantType.INTERFACE_METHODREF;
+			case NameAndTypeEntry ignored -> ConstantType.NAME_AND_TYPE;
+			case PoolEntry other -> throw new IllegalArgumentException("constant " + index + " is a " + other);
+		};
 	}
 
 	/**
@@ -319,11 +305,13 @@ public final class ConstantPool {
 	 * @return the component's index
 	 */
 	public int firstComponentAt(int index) {
-		Entry entry = this.entryAt(index);
-		if (entry.data != null) {
-			throw new IllegalArgumentException("constant " + index + " (" + entry.type + ") has no component");
-		}
-		return entry.first;
+		return switch (this.entryAt(index)) {
+			case ClassEntry clazz -> clazz.name().index();
+			case StringEntry string -> string.utf8().index();
+			case NameAndTypeEntry nameAndType -> nameAndType.name().index();
+			case MemberRefEntry ref -> ref.owner().index();
+			case PoolEntry other -> throw new IllegalArgumentException("constant " + index + " has no component");
+		};
 	}
 
 	/**
@@ -333,25 +321,12 @@ public final class ConstantPool {
 	 * @return the component's index
 	 */
 	public int secondComponentAt(int index) {
-		Entry entry = this.entryAt(index);
-		if (entry.type == ConstantType.CLASS || entry.type == ConstantType.STRING || entry.data != null) {
-			throw new IllegalArgumentException("constant " + index + " (" + entry.type + ") has no second component");
-		}
-		return entry.second;
-	}
-
-	/**
-	 * The serialized body of a component-free entry: the length-prefixed modified UTF-8
-	 * of a Utf8, the big-endian bits of an Integer/Float/Long/Double.
-	 * @param index a constant pool index
-	 * @return a copy of the body bytes
-	 */
-	public byte[] dataAt(int index) {
-		Entry entry = this.entryAt(index);
-		if (entry.data == null) {
-			throw new IllegalArgumentException("constant " + index + " (" + entry.type + ") is not a data entry");
-		}
-		return entry.data.clone();
+		return switch (this.entryAt(index)) {
+			case NameAndTypeEntry nameAndType -> nameAndType.type().index();
+			case MemberRefEntry ref -> ref.nameAndType().index();
+			case PoolEntry other ->
+				throw new IllegalArgumentException("constant " + index + " has no second component");
+		};
 	}
 
 	/**
@@ -360,130 +335,24 @@ public final class ConstantPool {
 	 * @return its value
 	 */
 	public String utf8At(int index) {
-		String value = this.utf8Values.get(index);
-		if (value == null) {
-			throw new IllegalArgumentException("constant " + index + " is not a Utf8 entry");
+		if (this.entryAt(index) instanceof Utf8Entry utf8) {
+			return utf8.stringValue();
 		}
-		return value;
-	}
-
-	private Entry entryAt(int index) {
-		Entry entry = index > 0 && index < this.slots.size() ? this.slots.get(index) : null;
-		if (entry == null) {
-			throw new IllegalArgumentException("no constant pool entry starts at index " + index);
-		}
-		return entry;
+		throw new IllegalArgumentException("constant " + index + " is not a Utf8 entry");
 	}
 
 	/**
-	 * Serialize this constant pool to a byte array.
-	 * @return the serialized bytes
-	 * @throws IllegalStateException when the pool exceeds the class-format limit of 65534
-	 * entries (the u2 count would silently wrap, producing a corrupt class) -- a bounded
-	 * pool's {@code add} already refuses to cross it, so for one this is a backstop
-	 */
-	public byte[] toByteArray() {
-		if (this.size > MAX_INDEX) {
-			throw new ConstantPoolOverflowException("constant pool overflow: " + this.size
-					+ " entries exceed the JVM class-format limit of " + MAX_INDEX + "; split the program");
-		}
-		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
-		final ByteCodeWriter out = new ByteCodeWriter(stream);
-		out.writeU2(this.size + 1);
-		for (Entry entry : this.slots) {
-			if (entry != null) {
-				out.write(entry.bytes());
-			}
-		}
-		return stream.toByteArray();
-	}
-
-	/**
-	 * One entry as data: its type, and either its component indexes (the reference types)
-	 * or its serialized body (Utf8 and the numeric constants). Equality is by content,
-	 * which is what the pool deduplicates on.
-	 */
-	private static final class Entry {
-
-		private final ConstantType type;
-
-		private final int first;
-
-		private final int second;
-
-		private final byte @Nullable [] data;
-
-		private final int hash;
-
-		private Entry(ConstantType type, int first, int second, byte @Nullable [] data) {
-			this.type = type;
-			this.first = first;
-			this.second = second;
-			this.data = data;
-			this.hash = 31 * (31 * (31 * type.hashCode() + first) + second)
-					+ (data == null ? 0 : java.util.Arrays.hashCode(data));
-		}
-
-		static Entry ref(ConstantType type, int first, int second) {
-			return new Entry(type, first, second, null);
-		}
-
-		static Entry data(ConstantType type, byte[] data) {
-			return new Entry(type, 0, 0, data);
-		}
-
-		/**
-		 * The entry as a class file serializes it: the tag, then the body. Only exact for
-		 * component indexes that fit a u2, which a serialized pool guarantees.
-		 */
-		byte[] bytes() {
-			if (this.data != null) {
-				byte[] bytes = new byte[1 + this.data.length];
-				bytes[0] = (byte) this.type.value();
-				System.arraycopy(this.data, 0, bytes, 1, this.data.length);
-				return bytes;
-			}
-			if (this.type == ConstantType.CLASS || this.type == ConstantType.STRING) {
-				return new byte[] { (byte) this.type.value(), (byte) (this.first >>> 8), (byte) this.first };
-			}
-			return new byte[] { (byte) this.type.value(), (byte) (this.first >>> 8), (byte) this.first,
-					(byte) (this.second >>> 8), (byte) this.second };
-		}
-
-		@Override
-		public boolean equals(Object o) {
-			return o instanceof Entry other && this.type == other.type && this.first == other.first
-					&& this.second == other.second && java.util.Arrays.equals(this.data, other.data);
-		}
-
-		@Override
-		public int hashCode() {
-			return this.hash;
-		}
-
-	}
-
-	/**
-	 * A constant pool entry.
+	 * A constant pool entry: the master-pool entry, by the kind a generator minted it as.
 	 */
 	public static class Constant {
 
-		private final int index;
+		private final PoolEntry entry;
 
 		private final ConstantType type;
 
-		private final byte[] bytes;
-
-		/**
-		 * Create a new constant entry.
-		 * @param index the constant pool index
-		 * @param type the constant type
-		 * @param bytes the raw bytes
-		 */
-		public Constant(int index, ConstantType type, byte[] bytes) {
-			this.index = index;
+		Constant(PoolEntry entry, ConstantType type) {
+			this.entry = entry;
 			this.type = type;
-			this.bytes = bytes;
 		}
 
 		/**
@@ -491,15 +360,7 @@ public final class ConstantPool {
 		 * @return the index
 		 */
 		public int index() {
-			return index;
-		}
-
-		/**
-		 * Return the index as a 2-byte big-endian array.
-		 * @return the index bytes
-		 */
-		public byte[] indexAsU2() {
-			return ByteBuffer.allocate(2).putShort((short) index).array();
+			return this.entry.index();
 		}
 
 		/**
@@ -507,15 +368,14 @@ public final class ConstantPool {
 		 * @return the type
 		 */
 		public ConstantType type() {
-			return type;
+			return this.type;
 		}
 
 		/**
-		 * Return the raw bytes of this constant.
-		 * @return the bytes
+		 * @return the master-pool entry
 		 */
-		public byte[] bytes() {
-			return bytes;
+		public PoolEntry entry() {
+			return this.entry;
 		}
 
 	}
@@ -523,14 +383,15 @@ public final class ConstantPool {
 	/**
 	 * A UTF-8 constant pool entry.
 	 */
-	public static class Utf8Constant extends Constant {
+	public static final class Utf8Constant extends Constant {
 
-		/**
-		 * Create a UTF-8 constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public Utf8Constant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		Utf8Constant(Utf8Entry entry) {
+			super(entry, ConstantType.UTF8);
+		}
+
+		@Override
+		public Utf8Entry entry() {
+			return (Utf8Entry) super.entry();
 		}
 
 	}
@@ -538,14 +399,15 @@ public final class ConstantPool {
 	/**
 	 * A class constant pool entry.
 	 */
-	public static class ClassConstant extends Constant {
+	public static final class ClassConstant extends Constant {
 
-		/**
-		 * Create a class constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public ClassConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		ClassConstant(ClassEntry entry) {
+			super(entry, ConstantType.CLASS);
+		}
+
+		@Override
+		public ClassEntry entry() {
+			return (ClassEntry) super.entry();
 		}
 
 	}
@@ -553,14 +415,15 @@ public final class ConstantPool {
 	/**
 	 * A name-and-type constant pool entry.
 	 */
-	public static class NameAndTypeConstant extends Constant {
+	public static final class NameAndTypeConstant extends Constant {
 
-		/**
-		 * Create a name-and-type constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public NameAndTypeConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		NameAndTypeConstant(NameAndTypeEntry entry) {
+			super(entry, ConstantType.NAME_AND_TYPE);
+		}
+
+		@Override
+		public NameAndTypeEntry entry() {
+			return (NameAndTypeEntry) super.entry();
 		}
 
 	}
@@ -568,29 +431,34 @@ public final class ConstantPool {
 	/**
 	 * A field reference constant pool entry.
 	 */
-	public static class FieldrefConstant extends Constant {
+	public static final class FieldrefConstant extends Constant {
 
-		/**
-		 * Create a field reference constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public FieldrefConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		FieldrefConstant(FieldRefEntry entry) {
+			super(entry, ConstantType.FIELDREF);
+		}
+
+		@Override
+		public FieldRefEntry entry() {
+			return (FieldRefEntry) super.entry();
 		}
 
 	}
 
 	/**
-	 * A method reference constant pool entry.
+	 * A method reference constant pool entry: a {@code Methodref}, or an
+	 * {@code InterfaceMethodref} for {@code invokeinterface} and an interface's static
+	 * methods.
 	 */
-	public static class MethodrefConstant extends Constant {
+	public static final class MethodrefConstant extends Constant {
 
-		/**
-		 * Create a method reference constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public MethodrefConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		MethodrefConstant(MemberRefEntry entry) {
+			super(entry, entry instanceof InterfaceMethodRefEntry ? ConstantType.INTERFACE_METHODREF
+					: ConstantType.METHODREF);
+		}
+
+		@Override
+		public MemberRefEntry entry() {
+			return (MemberRefEntry) super.entry();
 		}
 
 	}
@@ -598,14 +466,15 @@ public final class ConstantPool {
 	/**
 	 * A string constant pool entry.
 	 */
-	public static class StringConstant extends Constant {
+	public static final class StringConstant extends Constant {
 
-		/**
-		 * Create a string constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public StringConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		StringConstant(StringEntry entry) {
+			super(entry, ConstantType.STRING);
+		}
+
+		@Override
+		public StringEntry entry() {
+			return (StringEntry) super.entry();
 		}
 
 	}
@@ -613,14 +482,15 @@ public final class ConstantPool {
 	/**
 	 * An integer constant pool entry.
 	 */
-	public static class IntegerConstant extends Constant {
+	public static final class IntegerConstant extends Constant {
 
-		/**
-		 * Create an integer constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public IntegerConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		IntegerConstant(IntegerEntry entry) {
+			super(entry, ConstantType.INTEGER);
+		}
+
+		@Override
+		public IntegerEntry entry() {
+			return (IntegerEntry) super.entry();
 		}
 
 	}
@@ -628,14 +498,15 @@ public final class ConstantPool {
 	/**
 	 * A long constant pool entry.
 	 */
-	public static class LongConstant extends Constant {
+	public static final class LongConstant extends Constant {
 
-		/**
-		 * Create a long constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public LongConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		LongConstant(LongEntry entry) {
+			super(entry, ConstantType.LONG);
+		}
+
+		@Override
+		public LongEntry entry() {
+			return (LongEntry) super.entry();
 		}
 
 	}
@@ -643,14 +514,15 @@ public final class ConstantPool {
 	/**
 	 * A double constant pool entry.
 	 */
-	public static class DoubleConstant extends Constant {
+	public static final class DoubleConstant extends Constant {
 
-		/**
-		 * Create a double constant from a base constant.
-		 * @param constant the base constant
-		 */
-		public DoubleConstant(Constant constant) {
-			super(constant.index, constant.type(), constant.bytes());
+		DoubleConstant(DoubleEntry entry) {
+			super(entry, ConstantType.DOUBLE);
+		}
+
+		@Override
+		public DoubleEntry entry() {
+			return (DoubleEntry) super.entry();
 		}
 
 	}

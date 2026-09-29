@@ -8,7 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -80,7 +80,7 @@ final class JvmGeomRuntimeBuilder {
 	 * each accelerated member).
 	 */
 	record GeomRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
-			int maxLocals, List<ByteCodeWriter.ExceptionTableEntry> initExceptionTable, Utf8Constant initedFieldName,
+			int maxLocals, List<ClassDefinition.Handler> initExceptionTable, Utf8Constant initedFieldName,
 			Utf8Constant initedFieldDesc, Utf8Constant availableFieldName, Utf8Constant availableFieldDesc,
 			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode, Map<String, MethodrefConstant> ops,
 			Map<String, byte[]> classFiles) {
@@ -162,8 +162,8 @@ final class JvmGeomRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(code, guardPos, code.size());
 		code.add(Opcode.RETURN);
 
-		List<ByteCodeWriter.ExceptionTableEntry> initExceptionTable = List
-			.of(new ByteCodeWriter.ExceptionTableEntry(tryStart, handlerPc, handlerPc, linkageErrorClass.index()));
+		List<ClassDefinition.Handler> initExceptionTable = List
+			.of(new ClassDefinition.Handler(tryStart, handlerPc, handlerPc, linkageErrorClass.index()));
 
 		// --- _geomReady body: return _geomAvailable != 0; ---
 		List<Integer> readyCode = new ArrayList<>();

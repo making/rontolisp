@@ -95,7 +95,7 @@ nothing at all, not even `@Nullable` — so `RontoHashTable.get` takes the absen
 
 - **Tree-shaker root, the third liveness source** beside `main` and the dispatchable-funcId
   set ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)): the wrapper's
-  name joins `JvmClassShaker`'s roots with `main` and `_apply`/`handle`/`run`/`call`, and
+  name joins the shake's roots with `main` and `_apply`/`handle`/`run`/`call`, and
   without one a library shakes to nothing under `--optimize` (ON by default). `--no-prune` is
   the AST splice pruner, a different mechanism.
 - **The top level moves into `<clinit>`** (the `--no-wasi` reactor precedent): `_top$0..N`, the

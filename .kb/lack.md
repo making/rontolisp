@@ -17,7 +17,7 @@ in-memory streams as real Gray streams (`.kb/gray-streams.md`); KEYWORD `:conc-n
 
 ## Notes
 
-- `am.ik.jvm.BranchRelaxer` rewrites out-of-range branches over `goto_w`
+- The class writer places an out-of-range branch in its `goto_w` form
   (`.kb/jvm-method-size-limits.md`); largest body `http-multipart-parse`, 49.7 KB, under the
   65535-byte cap. `ConcatenateForms.resultFamily` resolves a deftype result designator
   (`.kb/concatenate-result-families.md`). The babel package records two babel-encodings members

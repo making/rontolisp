@@ -105,7 +105,7 @@ public final class OperandStack {
 	/**
 	 * The operand values exactly as fed, before the cut to a byte: the high part of a
 	 * constant-pool index past 65535 arrives whole from an emitter whose pool outgrew one
-	 * class file ({@link ConstantPool#unbounded()}), and only the uncut value names the
+	 * class file (the master {@link ConstantPool}), and only the uncut value names the
 	 * entry. The byte view above stays what the class file will carry.
 	 */
 	private final int[] rawOperands = new int[4];

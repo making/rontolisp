@@ -22,9 +22,9 @@ import am.ik.jvm.Opcode;
  * carries ({@code JvmRuntimeBuilder.renderCase}: the arguments, a variadic callee's
  * surplus linked into the rest list, {@code invokestatic}). Two things it saves: the
  * dispatch method's id search at run time, and -- the reason this exists -- the funcId
- * never joins {@code Ctx.valueFuncIds}, so the ladder carries no case for it and
- * {@code JvmClassShaker} stops seeing the ladder's reference to everything that case
- * reaches ({@code .kb/optimize-dead-code-elimination.md}).
+ * never joins {@code Ctx.valueFuncIds}, so the ladder carries no case for it and the
+ * writer's shake stops seeing the ladder's reference to everything that case reaches
+ * ({@code .kb/optimize-dead-code-elimination.md}).
  *
  * <p>
  * Everything else keeps the dispatcher: a computed designator, a name no function

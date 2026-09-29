@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -200,7 +200,7 @@ final class JvmJavaDirectSites {
 	 * @param exceptionTable the handlers
 	 */
 	record Method(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
+			List<ClassDefinition.Handler> exceptionTable) {
 	}
 
 	private final ConstantPool cp;
@@ -1377,10 +1377,10 @@ final class JvmJavaDirectSites {
 
 		Method finish(Utf8Constant name, Utf8Constant desc, int maxStack) {
 			List<Integer> code = this.a.finish();
-			List<ByteCodeWriter.ExceptionTableEntry> handlers = new ArrayList<>();
+			List<ClassDefinition.Handler> handlers = new ArrayList<>();
 			for (int[] pending : this.pendingHandlers) {
-				handlers.add(new ByteCodeWriter.ExceptionTableEntry(pending[0], pending[1], this.a.position(pending[2]),
-						pending[3]));
+				handlers
+					.add(new ClassDefinition.Handler(pending[0], pending[1], this.a.position(pending[2]), pending[3]));
 			}
 			return new Method(name, desc, maxStack, this.nextSlot, code, handlers);
 		}

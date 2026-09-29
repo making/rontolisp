@@ -552,10 +552,10 @@ final class JvmEmitHelper {
 		int offset = targetPos - branchPos;
 		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
 			// Past the signed 16-bit encoding: leave the placeholder bytes and let the
-			// per-method BranchRelaxer pass rewrite this branch over a goto_w
+			// class writer place this branch in its goto_w form
 			// (.kb/jvm-method-size-limits.md). Only the raw-list patchBranch of the
 			// self-budgeted runtime builders still throws.
-			ctx.deferredBranches.add(new int[] { branchPos, targetPos });
+			ctx.deferredBranches.add(new am.ik.jvm.ClassDefinition.Branch(branchPos, targetPos));
 		}
 		else {
 			JvmRuntimeBuilder.patchBranch(ctx.code, branchPos, targetPos);

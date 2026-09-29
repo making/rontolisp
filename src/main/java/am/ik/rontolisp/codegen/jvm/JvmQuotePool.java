@@ -47,12 +47,12 @@ import am.ik.rontolisp.LispVal;
  * <li>{@code _qd} answers null while the table or the slot is empty, so the read path
  * never locks; a racy read of the field sees null (the site builds and {@code _qdSet}
  * settles it under the lock) or an array whose slots are null or wrappers.</li>
- * <li>The table is created in {@code _qdSet}, not in {@code <clinit>}:
- * {@link am.ik.jvm.JvmClassShaker} cannot edit {@code <clinit>}, so an initializer there
- * would pin the field in every class whose quoted datums all sat in dropped wrapper
- * defuns. Behind the helpers, the field and both methods go with the last surviving site.
- * The site's build itself stays inline at the site for the same reason (a quoted table in
- * a dropped wrapper goes with it). A dropped site leaves an empty slot.</li>
+ * <li>The table is created in {@code _qdSet}, not in {@code <clinit>}: the writer's shake
+ * cannot edit {@code <clinit>}, so an initializer there would pin the field in every
+ * class whose quoted datums all sat in dropped wrapper defuns. Behind the helpers, the
+ * field and both methods go with the last surviving site. The site's build itself stays
+ * inline at the site for the same reason (a quoted table in a dropped wrapper goes with
+ * it). A dropped site leaves an empty slot.</li>
  * </ul>
  * A program with no quoted aggregate references none of it and is emitted byte for byte
  * as before.
