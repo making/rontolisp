@@ -7,13 +7,16 @@
 ## REPL からウィンドウを
 
 ```console
-CL-USER> (defvar *win* (appkit:window "counter" :width 420 :height 200))
-CL-USER> (defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
-CL-USER> (defvar *n* 0)
-CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
-    :on-click (lambda ()
-                (setq *n* (+ *n* 1))
-                (appkit:set-text *label* (format nil "clicked ~a time(s)" *n*))))
+(defvar *win* (appkit:window "counter" :width 420 :height 200))
+(defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
+(defvar *n* 0)
+(appkit:button *win* "Click me"
+               :x 20
+               :y 40
+               :on-click (lambda ()
+                           (setq *n* (+ *n* 1))
+                           (appkit:set-text *label*
+                            (format nil "clicked ~a time(s)" *n*))))
 ```
 
 ウィンドウが中央に前面表示され、ボタンをクリックするとクロージャが実行されてラベルが更新されます。その間も REPL は使えます。ウィンドウはプロセスの最初のスレッド上にあり、入力を読むスレッドとは別だからです。ウィンドウを閉じても REPL は終了しません。`examples/macos/counter.lisp` は同じプログラムをスクリプトにしたもので、末尾の `(appkit:wait *win*)` がウィンドウが閉じられるまでブロックします。スクリプトのプロセスは最後のフォームが返ると終了するためです。
@@ -25,16 +28,19 @@ CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
 ウィンドウがまったくなくても構いません。`appkit:status-item` はシステムのメニューバーにタイトルを置き、`appkit:menu` は項目が Lisp のクロージャであるメニューをそこにぶら下げます。`:dock nil` を付けるとプロセスには Dock アイコンもアプリケーションスイッチャの項目もなくなります。これがメニューバープログラムの姿で、そのときの出口が `appkit:quit` です。引数なしの `appkit:wait` はそれが起きるまでブロックします。
 
 ```console
-CL-USER> (defvar *n* 0)
-CL-USER> (defvar *item*
-    (appkit:status-item "λ" :dock nil
-                        :menu (appkit:menu
-                               (list (list "Count" (lambda ()
-                                                     (setq *n* (+ *n* 1))
-                                                     (appkit:set-text *item*
-                                                                      (format nil "λ ~a" *n*))))
-                                     :separator
-                                     (list "Quit" #'appkit:quit "q")))))
+(defvar *n* 0)
+(defvar *item*
+  (appkit:status-item "λ"
+                      :dock nil
+                      :menu (appkit:menu
+                             (list
+                              (list "Count"
+                                    (lambda ()
+                                      (setq *n* (+ *n* 1))
+                                      (appkit:set-text *item*
+                                       (format nil "λ ~a" *n*))))
+                              :separator
+                              (list "Quit" #'appkit:quit "q")))))
 ```
 
 `examples/macos/menubar.lisp` はそこに時計を入れたものです。`appkit:timer` が 1 秒ごとにタイトルを書き替え、メニュー項目の 1 つはウィンドウを開きます。`listener.lisp` と同じ証明を、メニューバーから行うわけです。
@@ -63,27 +69,43 @@ CL-USER> (defvar *item*
 座標系は AppKit のもので、原点はウィンドウの左下です。ラベルは与えられた矩形の中で垂直方向に中央寄せされ、それがタイルの中央に数字を置いてくれます。パネルはそのタイルそのもので、どちらもクリックに応えます:
 
 ```console
-CL-USER> (defvar *board* (appkit:window "tiles" :width 200 :height 200
-                                 :background (appkit:color 26 29 38) :dark t))
-CL-USER> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
-                               :fill (appkit:color 104 116 146) :radius 7))
-CL-USER> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
-                                :size 19 :align :center :bold t))
-CL-USER> (appkit:on-click *tile*
-    (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E34E7600>
-CL-USER> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E346ED00>
+(defvar *board*
+  (appkit:window "tiles"
+                 :width 200
+                 :height 200
+                 :background (appkit:color 26 29 38)
+                 :dark t))
+(defvar *tile*
+  (appkit:panel *board*
+                :x 20
+                :y 20
+                :width 34
+                :height 34
+                :fill (appkit:color 104 116 146)
+                :radius 7))
+(defvar *digit*
+  (appkit:label *board* "3"
+                :x 20
+                :y 20
+                :width 34
+                :height 34
+                :size 19
+                :align :center
+                :bold t))
+(appkit:on-click *tile*
+ (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
+(appkit:timer 1
+              (lambda ()
+                (appkit:set-text *digit* "4")
+                nil))
 ```
 
 すべてのウィジェットはただの Objective-C オブジェクトなので、この層にないものは `objc:invoke` を 1 回呼べば手に入ります:
 
 ```console
-CL-USER> (objc:invoke *win* "setBackgroundColor:"
-    (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
-NIL
-CL-USER> (objc:invoke *win* "frame")
-#(690.0 676.0 420.0 228.0)
+(objc:invoke *win* "setBackgroundColor:"
+ (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
+(objc:invoke *win* "frame") ; => #(690.0 676.0 420.0 228.0)
 ```
 
 ## objc パッケージ
@@ -91,23 +113,16 @@ CL-USER> (objc:invoke *win* "frame")
 `objc` は LispWorks 8.1 の Objective-C インターフェースです。`objc:invoke`、`objc:invoke-bool`、`objc:invoke-into`、`objc:retain` / `objc:release` / `objc:autorelease`、自動解放プール、クラスとセレクタの変換、クラスを定義するマクロを LispWorks の名前とラムダリストのまま持ち、その Foundation 構造体は `cocoa` パッケージが持ちます。LispWorks のマニュアルに沿って書いたコードは、`objc` を use するパッケージの中で、インタプリタ、コンパイル済みクラス、`--native` 実行ファイルのどれでもそのまま動きます。マニュアルの名前に加えて、このパッケージはブロック、Objective-C 自身が報告するものを表すコンディション、そして独自の 4 つの関数 `objc:on-main`、`objc:data`、`objc:bytes`、`objc:objectp` を持ちます。すべての名前は[関数リファレンス](../reference/functions/objc.md)にあります。
 
 ```console
-CL-USER> (defpackage :my-app (:use :cl :objc))
-:MY-APP
-CL-USER> (in-package :my-app)
-:MY-APP
-MY-APP> (defvar *s* (invoke "NSString" "stringWithUTF8String:" "hello world"))
-*S*
-MY-APP> (invoke *s* "rangeOfString:" "world")
-(6 . 5)
-MY-APP> (invoke-bool *s* "hasPrefix:" "hello")
-T
-MY-APP> (invoke-into 'string *s* "uppercaseString")
-"HELLO WORLD"
-MY-APP> (invoke-into 'string "NSString"
-                     '("stringWithFormat:" (objc-object-pointer :int)
-                       :result-type objc-object-pointer :variadic-num-of-fixed 1)
-                     "The integer %d" 42)
-"The integer 42"
+(defvar *s* (objc:invoke "NSString" "stringWithUTF8String:" "hello world"))
+(objc:invoke *s* "rangeOfString:" "world")       ; => (6 . 5)
+(objc:invoke-bool *s* "hasPrefix:" "hello")      ; => T
+(objc:invoke-into 'string *s* "uppercaseString") ; => "HELLO WORLD"
+(objc:invoke-into 'string "NSString"
+                  '("stringWithFormat:" (objc:objc-object-pointer :int)
+                    :result-type objc:objc-object-pointer
+                    :variadic-num-of-fixed 1)
+                  "The integer %d" 42)
+; => "The integer 42"
 ```
 
 `invoke` のレシーバは、オブジェクトポインタ、クラスポインタ、またはクラス名の文字列です。クラス名の文字列に送るとクラスメソッドの呼び出しになります。文字列が `NSString` のレシーバになることはないので、文字列のインスタンスメソッドは `objc:string-to-ns-string` が返す値に送ります。
@@ -119,20 +134,19 @@ Objective-C が実行のその瞬間に決めることは、その瞬間に読�
 か。
 
 ```console
-MY-APP> (invoke-bool *s* "respondsToSelector:" "uppercaseString")
-T
-MY-APP> (objc-class-name (invoke (string-to-ns-string "hi") "class"))
-"NSTaggedPointerString"
-MY-APP> (objc-class-method-signature "NSString" "hasPrefix:")
-(OBJC-OBJECT-POINTER SEL OBJC-OBJECT-POINTER)
-OBJC-C++-BOOL
-"B24@0:8@16"
-MY-APP> (invoke (invoke *s* "valueForKey:" "length") "doubleValue")
-11.0
+(objc:invoke-bool *s* "respondsToSelector:" "uppercaseString") ; => T
+(objc:objc-class-name (objc:invoke (objc:string-to-ns-string "hi") "class"))
+; => "NSTaggedPointerString"
+(objc:objc-class-method-signature "NSString" "hasPrefix:")
+; => (OBJC:OBJC-OBJECT-POINTER OBJC:SEL OBJC:OBJC-OBJECT-POINTER),
+;    OBJC:OBJC-C++-BOOL,
+;    "B24@0:8@16"
+(objc:invoke (objc:invoke *s* "valueForKey:" "length") "doubleValue")
+; => 11.0
 ```
 
-2 行目はクラスクラスタを現行犯で捉えたものです。`string-to-ns-string` は `NSString` を
-求め、値に応じて選ばれた非公開のサブクラスが返っています。3 行目は、メソッドの引数の型
+2 つ目のフォームはクラスクラスタを現行犯で捉えたものです。`string-to-ns-string` は `NSString` を
+求め、値に応じて選ばれた非公開のサブクラスが返っています。3 つ目は、メソッドの引数の型
 (先頭はレシーバとセレクタ)、結果の型、ランタイムが保持するエンコーディングを返します。
 `examples/macos/objc-runtime.lisp` は、この側面のパッケージ全体を 1 つの実行可能なファイル
 にまとめたものです。文字列として持ち回り `respondsToSelector:` で守るセレクタ、辿るクラス
@@ -147,13 +161,13 @@ MY-APP> (invoke (invoke *s* "valueForKey:" "length") "doubleValue")
 してクラスを登録するので、次のフォームからはそのクラス名が解決します。
 
 ```console
-MY-APP> (invoke-bool (invoke "NSBundle" "bundleWithPath:"
-                             "/System/Library/Frameworks/NaturalLanguage.framework")
-                     "load")
-T
-MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
-                     "これは日本語の文章です")
-"ja"
+(objc:invoke-bool (objc:invoke "NSBundle" "bundleWithPath:"
+                   "/System/Library/Frameworks/NaturalLanguage.framework")
+                  "load")
+; => T
+(objc:invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
+                  "これは日本語の文章です")
+; => "ja"
 ```
 
 ここでの依存管理はこれで全部です。マニフェストもクラスパスもダウンロードもありません。
@@ -186,23 +200,22 @@ MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
 結果の `BOOL` は LispWorks と同じく `1` か `0` なので、条件判定には `objc:invoke-bool` を使います。結果の `NSString` はほかのオブジェクトと同じくポインタです。`objc:invoke-into` はさらに変換します。`'string` はそれを Lisp 文字列に、`'array` と `'(array string)` は `NSArray` をベクタにします。第一引数に渡したベクタやコンスには、構造体や配列の要素が格納されます。外部オブジェクトも同様です ([外部オブジェクト](#foreign-objects-the-fli-package))。
 
 ```console
-MY-APP> (invoke *s* "hasPrefix:" "hello")
-1
-MY-APP> (invoke-into 'string *s* "substringWithRange:" (cons 0 5))
-"hello"
-MY-APP> (invoke (invoke "NSValue" "valueWithRect:" #(10 20 300 200)) "rectValue")
-#(10.0 20.0 300.0 200.0)
-MY-APP> (invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
-#("x" "y")
+(objc:invoke *s* "hasPrefix:" "hello")                          ; => 1
+(objc:invoke-into 'string *s* "substringWithRange:" (cons 0 5)) ; => "hello"
+(objc:invoke (objc:invoke "NSValue" "valueWithRect:" #(10 20 300 200))
+             "rectValue")
+; => #(10.0 20.0 300.0 200.0)
+(objc:invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
+; => #("x" "y")
 ```
 
 レシーバにないメソッド、引数の個数違い、宣言型に合わない引数は、何かを送る前に `error` になり、クラッシュにはなりません。メソッドがない場合のメッセージには、ランタイムがレシーバについて答えるクラスが入ります:
 
 ```console
-MY-APP> (invoke *s* "frobnicate")
-Error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
-MY-APP> (invoke *s* "length" 3)
-Error: objc:invoke: length takes 0 argument(s), got 1
+(objc:invoke *s* "frobnicate")
+; error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
+(objc:invoke *s* "length" 3)
+; error: objc:invoke: length takes 0 argument(s), got 1
 ```
 
 `performSelector...` メッセージの答えは捨てられます (その型はターゲットメソッドのもので、エンコーディングには現れません)。ブロックの引数にはブロックを渡します。素の関数は受け付けません (後述の[ブロック](#blocks))。共用体やビットフィールドの引数は、名前を挙げて拒否されます。
@@ -215,11 +228,11 @@ Error: objc:invoke: length takes 0 argument(s), got 1
 そこでこの一群は名前で識別します。nil 終端のコンストラクタ (`arrayWithObjects:`、`initWithObjects:`、`setWithObjects:`、`orderedSetWithObjects:`、`dictionaryWithObjectsAndKeys:`、`initWithObjectsAndKeys:`) と、書式文字列の一族 (`stringWithFormat:`、`initWithFormat:`、`localizedStringWithFormat:`、`stringByAppendingFormat:`、`appendFormat:`、`predicateWithFormat:`、`raise:format:`) です。名前で呼ぶと、いずれも宣言された引数の個数を超えていくつでも引数を取り、それぞれの型は値 (オブジェクト、文字列、整数、浮動小数点数) から決まります。`nil` 終端子はバインディングが付けます。呼び出し側が書くものではありません。
 
 ```console
-MY-APP> (invoke (invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
-3
-MY-APP> (invoke-into 'string "NSString" "stringWithFormat:"
-                     "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
-"cache has 3 items, 62.5% full"
+(objc:invoke (objc:invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
+; => 3
+(objc:invoke-into 'string "NSString" "stringWithFormat:"
+                  "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
+; => "cache has 3 items, 62.5% full"
 ```
 
 それ以外の可変長引数メソッドは、プログラム自身が宣言したものも含めて、上の最初の例の `stringWithFormat:` のようにリスト形式と `:variadic-num-of-fixed` で呼びます。`arrayWithObjects:count:` はそもそも可変長引数ではありません。本物の配列と個数を取る、任意サイズのコレクションを作る固定引数の方法です。
@@ -229,16 +242,11 @@ MY-APP> (invoke-into 'string "NSString" "stringWithFormat:"
 オブジェクトは `objc:objc-object-pointer`、クラスは `objc:objc-class` (オブジェクトポインタでもある)、セレクタは `objc:sel` として返ります。どれも `structure-object` ではありません。一つのオブジェクトに対する二つの答えは `eq`、`eql`、`equal`、`equalp` のいずれでも等しく、どのハッシュテーブルでも互いに見つかります。ポインタは LispWorks と同じく `#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010>` と表示します。表示するのはアドレスだけで、オブジェクトからは何も読みません。`objc:objectp` はクラスを含むすべてのオブジェクトポインタについて真で、セレクタを含むそれ以外のものについては偽です:
 
 ```console
-MY-APP> (eq (invoke *s* "self") *s*)
-T
-MY-APP> (objc:objectp *s*)
-T
-MY-APP> (objc:objectp (coerce-to-objc-class "NSString"))
-T
-MY-APP> (objc:objectp (coerce-to-selector "length"))
-NIL
-MY-APP> (objc:objectp "hello")
-NIL
+(eq (objc:invoke *s* "self") *s*)                     ; => T
+(objc:objectp *s*)                                    ; => T
+(objc:objectp (objc:coerce-to-objc-class "NSString")) ; => T
+(objc:objectp (objc:coerce-to-selector "length"))     ; => NIL
+(objc:objectp "hello")                                ; => NIL
 ```
 
 ### 外部オブジェクト: `fli` パッケージ
@@ -249,17 +257,18 @@ NIL
 (名前のリストで入れ子の構造体の中を指せます)。次はマニュアルそのままの形です。
 
 ```console
-MY-APP> (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
-          (invoke-into rect (invoke (invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
-                       "frame")
-          (fli:foreign-slot-value rect '(:size :width)))
-640.0
-MY-APP> (fli:with-dynamic-foreign-objects ((result-value :int))
-          (invoke (invoke "NSScanner" "scannerWithString:" "42 apples") "scanInt:" result-value)
-          (fli:dereference result-value))
-42
-MY-APP> (fli:size-of 'cocoa:ns-rect)
-32
+(fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+  (objc:invoke-into rect
+   (objc:invoke (objc:invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
+   "frame")
+  (fli:foreign-slot-value rect '(:size :width)))
+; => 640.0
+(fli:with-dynamic-foreign-objects ((result-value :int))
+  (objc:invoke (objc:invoke "NSScanner" "scannerWithString:" "42 apples")
+               "scanInt:" result-value)
+  (fli:dereference result-value))
+; => 42
+(fli:size-of 'cocoa:ns-rect) ; => 32
 ```
 
 外部オブジェクトはその型を取るところならどこにでも渡せます。ポインタとして渡すほか、構造体としても渡せ、その場合は内容がコピーされます。
@@ -274,19 +283,17 @@ Objective-C が返すポインタ (`void *` の結果、コールバックの `B
 すべての送信はメインスレッド上で専用の自動解放プールの中で行われるため、送信が autorelease したオブジェクトは、ポインタ値が先に参照を取らない限り送信から戻った時点で消えています。ポインタ値はオブジェクトの結果すべてについて参照を取り、`alloc` / `new` / `copy` / `mutableCopy` / `init` のメソッドが返す参照はそのまま引き取ります。ポインタ値は、コレクタに回収されるときにまだ保持している参照をメインスレッド上で解放します。つまり保持しているウィンドウや文字列は保持している限り有効で、手で解放するものはありません。`objc:retain` はプログラムが解放すべき参照を加えます。`objc:release` と `objc:autorelease` はポインタが保持する参照を一つ手放し、保持していなければシグナルします。そのため、マニュアルの規則どおり所有するものを解放するコードが、コレクタの解放と二重に解放することはありません。`(objc:invoke p "release")` も同じ計数を通ります。
 
 ```console
-MY-APP> (defvar *o* (alloc-init-object "NSObject"))
-*O*
-MY-APP> (retain-count (retain *o*))
-2
-MY-APP> (release *o*)
-NIL
-MY-APP> (release *o*)
-NIL
-MY-APP> (release *o*)
-Error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
-MY-APP> (with-autorelease-pool ()
-          (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
-"pooled"
+(defvar *o* (objc:alloc-init-object "NSObject"))
+(objc:retain-count (objc:retain *o*)) ; => 2
+(objc:release *o*)
+(objc:release *o*)
+(objc:release *o*)
+; error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+(objc:with-autorelease-pool ()
+  (objc:invoke-into 'string
+                    (objc:autorelease (objc:string-to-ns-string "pooled"))
+                    "description"))
+; => "pooled"
 ```
 
 プールは Lisp 側で管理します。各送信がメインスレッドで自分のプールを積んで降ろすため、本物の `NSAutoreleasePool` は二つの送信にまたがれません。
@@ -301,38 +308,29 @@ MY-APP> (with-autorelease-pool ()
 `(current-super)` に送るメソッドを持つサブクラス、`objc:define-objc-struct` で宣言した構造体を返すメソッドです。
 
 ```console
-MY-APP> (define-objc-class my-object ()
-          ((slot1 :initarg :slot1 :initform nil))
-          (:objc-class-name "MyObject"))
-MY-OBJECT
-MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
-            ((self my-object)
-             (width (:unsigned :int))
-             (height (:unsigned :int)))
-          (* width height))
-"areaOfWidth:height:"
-MY-APP> (define-objc-class my-special-object (my-object)
-          ()
-          (:objc-class-name "MySpecialObject"))
-MY-SPECIAL-OBJECT
-MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
-            ((self my-special-object)
-             (width (:unsigned :int))
-             (height (:unsigned :int)))
-          (* 4 (invoke (current-super) "areaOfWidth:height:" width height)))
-"areaOfWidth:height:"
-MY-APP> (invoke (alloc-init-object "MySpecialObject") "areaOfWidth:height:" 6 7)
-168
-MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
-          (:first :float)
-          (:second :float))
-PAIR
-MY-APP> (define-objc-method ("pair" (:struct pair) result-pair) ((this my-object))
-          (setf (fli:foreign-slot-value result-pair :first) 1f0
-                (fli:foreign-slot-value result-pair :second) 2f0))
-"pair"
-MY-APP> (invoke (alloc-init-object "MyObject") "pair")
-#(1.0 2.0)
+(objc:define-objc-class my-object ()
+  ((slot1 :initarg :slot1 :initform nil))
+  (:objc-class-name "MyObject"))
+(objc:define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+  ((self my-object) (width (:unsigned :int)) (height (:unsigned :int)))
+  (* width height))
+(objc:define-objc-class my-special-object (my-object)
+  ()
+  (:objc-class-name "MySpecialObject"))
+(objc:define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+  ((self my-special-object) (width (:unsigned :int)) (height (:unsigned :int)))
+  (* 4 (objc:invoke (objc:current-super) "areaOfWidth:height:" width height)))
+(objc:invoke (objc:alloc-init-object "MySpecialObject")
+             "areaOfWidth:height:" 6 7)
+; => 168
+(objc:define-objc-struct (pair (:foreign-name "_Pair"))
+  (:first :float)
+  (:second :float))
+(objc:define-objc-method ("pair" (:struct pair) result-pair)
+  ((this my-object))
+  (setf (fli:foreign-slot-value result-pair :first) 1f0
+        (fli:foreign-slot-value result-pair :second) 2f0))
+(objc:invoke (objc:alloc-init-object "MyObject") "pair") ; => #(1.0 2.0)
 ```
 
 メソッドの引数と結果には、宣言で書けるどの型でも使えます。あらゆる幅の整数、`:float` / `:double`、
@@ -358,50 +356,38 @@ MY-APP> (invoke (alloc-init-object "MyObject") "pair")
 Cocoa から Lisp を呼び出すのは、こうしたクラスです。ボタンはアクションをターゲットに送ります。次の例では、ターゲットがインスタンスで、アクションが Lisp のメソッドです:
 
 ```console
-MY-APP> (define-objc-class my-target ()
-          ((clicks :initform 0 :accessor clicks))
-          (:objc-class-name "MyTarget"))
-MY-TARGET
-MY-APP> (define-objc-method ("clicked:" :void) ((self my-target) (sender objc-object-pointer))
-          (incf (clicks self))
-          (format t "clicked ~a~%" (invoke-into 'string sender "title")))
-"clicked:"
-MY-APP> (defvar *target* (make-instance 'my-target))
-*TARGET*
-MY-APP> (defvar *window* (appkit:window "target" :width 200 :height 80))
-*WINDOW*
-MY-APP> (defvar *go* (appkit:button *window* "Go"))
-*GO*
-MY-APP> (invoke *go* "setTarget:" *target*)
-NIL
-MY-APP> (invoke *go* "setAction:" "clicked:")
-NIL
-MY-APP> (appkit:click *go*)
-clicked Go
-NIL
-MY-APP> (clicks *target*)
-1
+(objc:define-objc-class my-target ()
+  ((clicks :initform 0 :accessor clicks))
+  (:objc-class-name "MyTarget"))
+(objc:define-objc-method ("clicked:" :void)
+  ((self my-target) (sender objc:objc-object-pointer))
+  (incf (clicks self))
+  (format t "clicked ~a~%" (objc:invoke-into 'string sender "title")))
+(defvar *target* (make-instance 'my-target))
+(defvar *window* (appkit:window "target" :width 200 :height 80))
+(defvar *go* (appkit:button *window* "Go"))
+(objc:invoke *go* "setTarget:" *target*)
+(objc:invoke *go* "setAction:" "clicked:")
+(appkit:click *go*)
+; prints: clicked Go
+; => NIL
+(clicks *target*) ; => 1
 ```
 
 AppKit はターゲットを弱参照で保持するので、ターゲットを生かしておくのは `*target*` です。`appkit` のウィジェットはまさにこの方法で作られており、`metal` のプログラムや `scene` の描画面も同じです。描画面は `NSView` のサブクラスで、その `mouseDown:` / `mouseDragged:` / `scrollWheel:` が Lisp のメソッドです。通知の監視もメソッドで行います:
 
 ```console
-MY-APP> (define-objc-class watcher ()
-          ((seen :initform nil :accessor seen))
-          (:objc-class-name "Watcher"))
-WATCHER
-MY-APP> (define-objc-method ("noticed:" :void) ((self watcher) (note objc-object-pointer))
-          (push (invoke-into 'string note "name") (seen self)))
-"noticed:"
-MY-APP> (defvar *w* (make-instance 'watcher))
-*W*
-MY-APP> (cocoa:add-observer *w* "noticed:" :name "Ping")
-NIL
-MY-APP> (invoke (invoke "NSNotificationCenter" "defaultCenter")
-                "postNotificationName:object:" "Ping" nil)
-NIL
-MY-APP> (seen *w*)
-("Ping")
+(objc:define-objc-class watcher ()
+  ((seen :initform nil :accessor seen))
+  (:objc-class-name "Watcher"))
+(objc:define-objc-method ("noticed:" :void)
+  ((self watcher) (note objc:objc-object-pointer))
+  (push (objc:invoke-into 'string note "name") (seen self)))
+(defvar *w* (make-instance 'watcher))
+(cocoa:add-observer *w* "noticed:" :name "Ping")
+(objc:invoke (objc:invoke "NSNotificationCenter" "defaultCenter")
+             "postNotificationName:object:" "Ping" nil)
+(seen *w*) ; => ("Ping")
 ```
 
 ### ブロック
@@ -409,76 +395,74 @@ MY-APP> (seen *w*)
 ブロックは Cocoa がクロージャを受け取る形です。比較関数、列挙の関数、完了ハンドラがそうです。`objc:make-objc-block` は Lisp の関数とシグネチャからブロックを作ります。シグネチャは呼ぶ側が示します。メソッドのエンコーディングはブロックを取ることしか表さず、そのブロックが何を取るかは表さないためです。ブロックを渡す場所に素の関数を渡すと、推測せずにシグナルします。シグネチャはリスト形式のメソッドと同じ型で書いた `(result-type (argument-type*))`、または `objc:define-objc-block-type` で付けた名前です。引数はメソッドの本体に渡る引数と同じように変換されて関数に渡り、関数の値は逆向きに変換されます。`objc:with-objc-block` は本体の間だけ有効なブロックを作り、どの脱出でも解放します。非同期の処理にもこれで足ります。ブロックを保持する呼び出し先はコピーを持ち、そのコピーが関数を生かすからです。`objc:call-objc-block` は、誰が作ったブロックでも呼べます。
 
 ```console
-MY-APP> (defvar *words* (invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
-*WORDS*
-MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-pointer))
-                                  (lambda (a b)
-                                    (let ((x (ns-string-to-string a))
-                                          (y (ns-string-to-string b)))
-                                      (cond ((string< x y) -1) ((string> x y) 1) (t 0)))))
-          (invoke-into '(array string) *words* "sortedArrayUsingComparator:" compare))
-#("apple" "fig" "pear")
-MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
-                                        (:pointer objc-c++-bool)))
-                               (lambda (word index stop)
-                                 (format t "~a ~a~%" index (ns-string-to-string word))
-                                 (when (= index 1) (setf (fli:dereference stop) t))))
-          (invoke *words* "enumerateObjectsUsingBlock:" each))
-0 pear
-1 fig
-NIL
-MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
-*ADD*
-MY-APP> (call-objc-block '(:int (:int :int)) *add* 3 4)
-7
-MY-APP> (free-objc-block *add*)
-NIL
+(defvar *words*
+  (objc:invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
+(objc:with-objc-block (compare '(:long-long
+                                 (objc:objc-object-pointer
+                                  objc:objc-object-pointer))
+                               (lambda (a b)
+                                 (let ((x (objc:ns-string-to-string a))
+                                       (y (objc:ns-string-to-string b)))
+                                   (cond ((string< x y) -1)
+                                         ((string> x y) 1)
+                                         (t 0)))))
+  (objc:invoke-into '(array string) *words* "sortedArrayUsingComparator:"
+                    compare))
+; => #("apple" "fig" "pear")
+(objc:with-objc-block (each '(:void
+                              (objc:objc-object-pointer (:unsigned :long-long)
+                               (:pointer objc:objc-c++-bool)))
+                            (lambda (word index stop)
+                              (format t "~a ~a~%" index
+                                      (objc:ns-string-to-string word))
+                              (when (= index 1)
+                                (setf (fli:dereference stop) t))))
+  (objc:invoke *words* "enumerateObjectsUsingBlock:" each))
+; prints:
+;   0 pear
+;   1 fig
+; => NIL
+(defvar *add* (objc:make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
+(objc:call-objc-block '(:int (:int :int)) *add* 3 4) ; => 7
+(objc:free-objc-block *add*)
 ```
 
 C 関数もブロックを取ります (libdispatch の関数など)。このパッケージが持つ LispWorks の外部言語インターフェースの一部、`fli:define-foreign-function` で同じ型を使って宣言します:
 
 ```console
-MY-APP> (fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
-            ((label objc-c-string) (attributes :pointer))
-          :result-type objc-object-pointer)
-DISPATCH-QUEUE-CREATE
-MY-APP> (fli:define-foreign-function (dispatch-async "dispatch_async")
-            ((queue objc-object-pointer) (work objc-at-question-mark))
-          :result-type :void)
-DISPATCH-ASYNC
-MY-APP> (defvar *queue* (dispatch-queue-create "com.example.work" nil))
-*QUEUE*
-MY-APP> (defvar *done* nil)
-*DONE*
-MY-APP> (with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
-          (dispatch-async *queue* work))
-NIL
-MY-APP> (sleep 0.1)
-NIL
-MY-APP> *done*
-T
+(fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+  ((label objc:objc-c-string) (attributes :pointer))
+  :result-type objc:objc-object-pointer)
+(fli:define-foreign-function (dispatch-async "dispatch_async")
+  ((queue objc:objc-object-pointer) (work objc:objc-at-question-mark))
+  :result-type :void)
+(defvar *queue* (dispatch-queue-create "com.example.work" nil))
+(defvar *done* nil)
+(objc:with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
+  (dispatch-async *queue* work))
+(sleep 0.1)
+*done* ; => T
 ```
 
 ブロックは呼んだスレッドで実行されます。Foundation は比較関数や列挙の関数を、送信したスレッドで呼びます。送信はすべてメインスレッドで実行されるため、それはメインスレッドです。シリアルキューは処理を、`NSURLSession` は完了ハンドラを、libdispatch のワーカーでプログラムと並行して実行します。そこでの関数は、スペシャル変数についてプログラムのスレッドの束縛ではなく大域値を見ます (クロージャ自身が捕捉したものは別です)。`rontolisp:make-thread` で始めたスレッドと同じです。`--native` 実行ファイルは別のスレッドで Lisp を実行できません。別のスレッドから呼ばれた `void` のブロックは、プログラムの次の `sleep` を待ってメインスレッドで実行されます。値を返すブロックは拒否され、そのことが表示されて 0 を返します。そのため、ブロックを待つプログラムは次のように `sleep` で待てば、どのターゲットでも同じように動きます:
 
 ```console
-MY-APP> (defvar *status* nil)
-*STATUS*
-MY-APP> (with-objc-block (handler '(:void (objc-object-pointer objc-object-pointer
-                                           objc-object-pointer))
-                                  (lambda (data response error)
-                                    (declare (ignore data error))
-                                    (setq *status* (invoke response "statusCode"))))
-          (invoke (invoke (invoke "NSURLSession" "sharedSession")
-                          "dataTaskWithURL:completionHandler:"
-                          (invoke "NSURL" "URLWithString:" "https://example.com/")
-                          handler)
-                  "resume"))
-NIL
-MY-APP> (loop until *status* do (sleep 0.05))
-NIL
-MY-APP> *status*
-200
+(defvar *status* nil)
+(objc:with-objc-block (handler '(:void
+                                 (objc:objc-object-pointer
+                                  objc:objc-object-pointer
+                                  objc:objc-object-pointer))
+                               (lambda (data response error)
+                                 (declare (ignore data error))
+                                 (setq *status*
+                                       (objc:invoke response "statusCode"))))
+  (objc:invoke (objc:invoke (objc:invoke "NSURLSession" "sharedSession")
+                "dataTaskWithURL:completionHandler:"
+                (objc:invoke "NSURL" "URLWithString:" "https://example.com/")
+                handler)
+               "resume"))
+(loop until *status* do (sleep 0.05))
+*status* ; => 200
 ```
 
 `examples/macos/audio.lisp` は、Apple が選ぶスレッドで呼ばれるブロックの例です。`AVAudioSourceNode` のレンダーブロックが、サンプルごとに時刻の Lisp 関数へ値を問い合わせます。オフラインでレンダリングする場合 (`AVAudioEngine` のマニュアルレンダリングは `renderOffline:toBuffer:error:` の中でグラフを動かします)、ブロックはそのメッセージを送ったスレッド、つまりメインスレッドで、どのターゲットでも呼ばれます。そのため `--native` 実行ファイルでも動き、結果の確認に音声ハードウェアは要りません。ライブで再生する場合、エンジンはリアルタイムのオーディオスレッドでブロックを呼びます。`--native` 実行ファイルはそこでブロックを拒否します。ステータスを返すブロックだからです。インタプリタと JVM では動きますが、メッセージを送ってはいけません。送信はメインスレッドを待ち、メインスレッドの `-[AVAudioEngine stop]` はオーディオスレッドを待つからです。そのためサンプルは `fli:` で書き込みます。
@@ -488,9 +472,11 @@ MY-APP> *status*
 呼び出しの中で送出された Objective-C の例外 (範囲外のインデックス、オブジェクトが必要な位置の `nil`、`raise` を送られた `NSException` など) は、そのスレッドで実行中の最も内側の `objc:invoke` (または C 関数、ブロックの呼び出し) から `objc:objc-exception` としてシグナルされ、プログラムは続行します。`objc:objc-exception-name`、`objc:objc-exception-reason`、`objc:objc-exception-object` は、例外の名前、理由 (なければ `nil`)、送出されたオブジェクトを返します。このオブジェクトの参照はコンディションが保持します:
 
 ```console
-MY-APP> (handler-case (invoke (invoke "NSArray" "array") "objectAtIndex:" 5)
-          (objc-exception (e) (list (objc-exception-name e) (objc-exception-reason e))))
-("NSRangeException" "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
+(handler-case (objc:invoke (objc:invoke "NSArray" "array") "objectAtIndex:" 5)
+  (objc:objc-exception (e)
+    (list (objc:objc-exception-name e) (objc:objc-exception-reason e))))
+; => ("NSRangeException"
+;     "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
 ```
 
 送出から呼び出しまでの間にある Objective-C のフレームは、Objective-C 自身の `@catch` と同じく後始末を実行しながら巻き戻されます。Cocoa が自分で捕捉する例外は Lisp に届きません。Lisp で定義したメソッドやブロックの中で送出され、そこで処理されなかった例外はコールバック内のエラーになり、表示されてメソッドは 0 を返します。
@@ -498,11 +484,11 @@ MY-APP> (handler-case (invoke (invoke "NSArray" "array") "objectAtIndex:" 5)
 最後の引数 `NSError **` で失敗を報告するメソッドは `objc:invoke-with-error` で呼びます。この引数は `objc:invoke-with-error` が渡します。結果が失敗 (`nil`、`NO` または 0) を示し、メソッドがエラーを書き込んだ場合は `objc:ns-error` をシグナルします。そのリーダー `objc:ns-error-domain`、`objc:ns-error-code`、`objc:ns-error-description`、`objc:ns-error-object` は、ドメイン、コード、ローカライズされた説明、`NSError` を返します。それ以外の場合は `objc:invoke` と同じ値を返します:
 
 ```console
-MY-APP> (handler-case
-            (invoke-with-error (invoke "NSFileManager" "defaultManager")
-                               "attributesOfItemAtPath:error:" "/no/such/file")
-          (ns-error (e) (list (ns-error-domain e) (ns-error-code e))))
-("NSCocoaErrorDomain" 260)
+(handler-case (objc:invoke-with-error
+               (objc:invoke "NSFileManager" "defaultManager")
+               "attributesOfItemAtPath:error:" "/no/such/file")
+  (objc:ns-error (e) (list (objc:ns-error-domain e) (objc:ns-error-code e))))
+; => ("NSCocoaErrorDomain" 260)
 ```
 
 ### バイト列: `objc:data` と `objc:bytes`
@@ -510,16 +496,17 @@ MY-APP> (handler-case
 メモリブロックは Cocoa ではありふれたものですが、それに対応する Lisp の値はありません。そこでこのパッケージはメモリブロックを `NSData` にします。`objc:data` は、パックバッファ (任意ランクのパック float 配列、パックされた `(unsigned-byte 8|16|32)` ベクタ) のバイト列、または文字列の UTF-8 を持つ `NSMutableData` を返します。並びは `write-sequence` が書くものとまったく同じで、リトルエンディアンの行優先です。それ以外の値を渡すとシグナルします。あとは `[data bytes]` が `void *` 引数の求めるポインタになり、`[data mutableBytes]` は呼び出し先に渡せる書き込み領域になります。`objc:bytes` は `NSData` の内容を新しい `(unsigned-byte 8)` ベクタとして読み戻します。
 
 ```console
-MY-APP> (objc:bytes (objc:data (make-array 2 :element-type 'single-float
-                                            :initial-contents '(1.0 2.0))))
-#(0 0 128 63 0 0 0 64)
-MY-APP> (objc:bytes (invoke *s* "dataUsingEncoding:" 4))
-#(104 101 108 108 111 32 119 111 114 108 100)
-MY-APP> (handler-case
-            (invoke-with-error "NSJSONSerialization" "JSONObjectWithData:options:error:"
-                               (objc:data "nope") 0)
-          (ns-error (e) (ns-error-description e)))
-"The data couldn’t be read because it isn’t in the correct format."
+(objc:bytes
+ (objc:data
+  (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+; => #(0 0 128 63 0 0 0 64)
+(objc:bytes (objc:invoke *s* "dataUsingEncoding:" 4))
+; => #(104 101 108 108 111 32 119 111 114 108 100)
+(handler-case (objc:invoke-with-error "NSJSONSerialization"
+                                      "JSONObjectWithData:options:error:"
+                                      (objc:data "nope") 0)
+  (objc:ns-error (e) (objc:ns-error-description e)))
+; => "The data couldn’t be read because it isn’t in the correct format."
 ```
 
 バイト列と `invoke-with-error` がそろうと GPU に手が届きます。Metal はほぼ全面が Objective-C の API なので、`objc:invoke` だけで何も足さずに駆動できます。
@@ -533,14 +520,16 @@ MY-APP> (handler-case
 のはシェーダのソース、形状、描画コールです。それらはプログラム側のものです。
 
 ```console
-CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
-CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
-CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
-CL-USER> (metal:run *ctx*
-    (lambda (encoder)
-      (objc:invoke encoder "setRenderPipelineState:" *pipe*)
-      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BBF47A7C0>
+(defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+(defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+(defvar *pipe*
+  (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main"
+                  "fragment_main"))
+(metal:run *ctx*
+           (lambda (encoder)
+             (objc:invoke encoder "setRenderPipelineState:" *pipe*)
+             (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                          metal:+triangle+ 0 3)))
 ```
 
 Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDefaultDevice()` は回避できま
@@ -571,8 +560,7 @@ Metal が必要とするように見える唯一の C 関数 `MTLCreateSystemDef
 AppKit はプロセスの最初のスレッドのものであり、すべての `objc:invoke` は自分でそこへ移動します。移動は同期的なので、値は呼び出し側に返ってきます。複数の送信から成るウィジェットは `objc:on-main` で包むと移動が 1 回で済み、`appkit` の関数はそうしています。`objc:on-main` は関数をメインスレッドで呼んでその値を返し、関数がシグナルしたエラーは呼び出し側で改めてシグナルします。すでにメインスレッド上で動いている関数 (ボタンのハンドラ) は送信をインラインで実行するので、コールバックから自由に GUI を呼び戻せます。
 
 ```console
-MY-APP> (objc:on-main (lambda () (+ 1 2)))
-3
+(objc:on-main (lambda () (+ 1 2))) ; => 3
 ```
 
 最初の `appkit:` 呼び出しは、スレッド 0 を AppKit 自身のイベントループ (`-[NSApplication run]`。誰もブロックせずにそこで開始します) に渡します。ウィンドウがそもそもクリックに応答するのはこれによるもので、プロセスがフォーカスを取りアプリケーションスイッチャに現れるのもこのためです。開始するのは `appkit` 層であり、汎用バインディングである `objc` ではありません。したがって `appkit:` 関数を一度も呼ばないプログラムが生の `objc:invoke` だけで作ったウィンドウは、描画はされても何にも反応しません。ウィンドウは `appkit:window` で作ってください。

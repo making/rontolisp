@@ -20,13 +20,16 @@ repeating timer and a menu bar item.
 ## A window from the REPL
 
 ```console
-CL-USER> (defvar *win* (appkit:window "counter" :width 420 :height 200))
-CL-USER> (defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
-CL-USER> (defvar *n* 0)
-CL-USER> (appkit:button *win* "Click me" :x 20 :y 40
-    :on-click (lambda ()
-                (setq *n* (+ *n* 1))
-                (appkit:set-text *label* (format nil "clicked ~a time(s)" *n*))))
+(defvar *win* (appkit:window "counter" :width 420 :height 200))
+(defvar *label* (appkit:label *win* "no clicks yet" :x 20 :y 120 :width 380))
+(defvar *n* 0)
+(appkit:button *win* "Click me"
+               :x 20
+               :y 40
+               :on-click (lambda ()
+                           (setq *n* (+ *n* 1))
+                           (appkit:set-text *label*
+                            (format nil "clicked ~a time(s)" *n*))))
 ```
 
 The window appears, centered and in front; clicking the button runs the closure,
@@ -56,16 +59,19 @@ bar program looks like, and `appkit:quit` is then the way out. `appkit:wait` wit
 argument blocks until that happens.
 
 ```console
-CL-USER> (defvar *n* 0)
-CL-USER> (defvar *item*
-    (appkit:status-item "λ" :dock nil
-                        :menu (appkit:menu
-                               (list (list "Count" (lambda ()
-                                                     (setq *n* (+ *n* 1))
-                                                     (appkit:set-text *item*
-                                                                      (format nil "λ ~a" *n*))))
-                                     :separator
-                                     (list "Quit" #'appkit:quit "q")))))
+(defvar *n* 0)
+(defvar *item*
+  (appkit:status-item "λ"
+                      :dock nil
+                      :menu (appkit:menu
+                             (list
+                              (list "Count"
+                                    (lambda ()
+                                      (setq *n* (+ *n* 1))
+                                      (appkit:set-text *item*
+                                       (format nil "λ ~a" *n*))))
+                              :separator
+                              (list "Quit" #'appkit:quit "q")))))
 ```
 
 `examples/macos/menubar.lisp` is that program with a clock in it: an `appkit:timer`
@@ -98,28 +104,44 @@ centred vertically in the rectangle it is given, which is what puts a digit in t
 middle of a tile; a panel is the tile itself, and both answer a click:
 
 ```console
-CL-USER> (defvar *board* (appkit:window "tiles" :width 200 :height 200
-                                 :background (appkit:color 26 29 38) :dark t))
-CL-USER> (defvar *tile* (appkit:panel *board* :x 20 :y 20 :width 34 :height 34
-                               :fill (appkit:color 104 116 146) :radius 7))
-CL-USER> (defvar *digit* (appkit:label *board* "3" :x 20 :y 20 :width 34 :height 34
-                                :size 19 :align :center :bold t))
-CL-USER> (appkit:on-click *tile*
-    (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E34E7600>
-CL-USER> (appkit:timer 1 (lambda () (appkit:set-text *digit* "4") nil))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x00000008E346ED00>
+(defvar *board*
+  (appkit:window "tiles"
+                 :width 200
+                 :height 200
+                 :background (appkit:color 26 29 38)
+                 :dark t))
+(defvar *tile*
+  (appkit:panel *board*
+                :x 20
+                :y 20
+                :width 34
+                :height 34
+                :fill (appkit:color 104 116 146)
+                :radius 7))
+(defvar *digit*
+  (appkit:label *board* "3"
+                :x 20
+                :y 20
+                :width 34
+                :height 34
+                :size 19
+                :align :center
+                :bold t))
+(appkit:on-click *tile*
+ (lambda (button) (appkit:set-color *tile* (appkit:color 230 233 241))))
+(appkit:timer 1
+              (lambda ()
+                (appkit:set-text *digit* "4")
+                nil))
 ```
 
 Every widget is a plain Objective-C object, so anything the layer lacks is one
 `objc:invoke` away:
 
 ```console
-CL-USER> (objc:invoke *win* "setBackgroundColor:"
-    (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
-NIL
-CL-USER> (objc:invoke *win* "frame")
-#(690.0 676.0 420.0 228.0)
+(objc:invoke *win* "setBackgroundColor:"
+ (objc:invoke "NSColor" "colorWithRed:green:blue:alpha:" 0.9 0.95 1.0 1.0))
+(objc:invoke *win* "frame") ; => #(690.0 676.0 420.0 228.0)
 ```
 
 ## The objc package
@@ -136,23 +158,16 @@ and four verbs of its own: `objc:on-main`, `objc:data`, `objc:bytes` and
 name.
 
 ```console
-CL-USER> (defpackage :my-app (:use :cl :objc))
-:MY-APP
-CL-USER> (in-package :my-app)
-:MY-APP
-MY-APP> (defvar *s* (invoke "NSString" "stringWithUTF8String:" "hello world"))
-*S*
-MY-APP> (invoke *s* "rangeOfString:" "world")
-(6 . 5)
-MY-APP> (invoke-bool *s* "hasPrefix:" "hello")
-T
-MY-APP> (invoke-into 'string *s* "uppercaseString")
-"HELLO WORLD"
-MY-APP> (invoke-into 'string "NSString"
-                     '("stringWithFormat:" (objc-object-pointer :int)
-                       :result-type objc-object-pointer :variadic-num-of-fixed 1)
-                     "The integer %d" 42)
-"The integer 42"
+(defvar *s* (objc:invoke "NSString" "stringWithUTF8String:" "hello world"))
+(objc:invoke *s* "rangeOfString:" "world")       ; => (6 . 5)
+(objc:invoke-bool *s* "hasPrefix:" "hello")      ; => T
+(objc:invoke-into 'string *s* "uppercaseString") ; => "HELLO WORLD"
+(objc:invoke-into 'string "NSString"
+                  '("stringWithFormat:" (objc:objc-object-pointer :int)
+                    :result-type objc:objc-object-pointer
+                    :variadic-num-of-fixed 1)
+                  "The integer %d" 42)
+; => "The integer 42"
 ```
 
 The receiver of `invoke` is an object pointer, a class pointer, or a string naming a
@@ -166,19 +181,18 @@ whether a receiver answers to a name, which class it really is, what types a met
 declares, what sits under a key.
 
 ```console
-MY-APP> (invoke-bool *s* "respondsToSelector:" "uppercaseString")
-T
-MY-APP> (objc-class-name (invoke (string-to-ns-string "hi") "class"))
-"NSTaggedPointerString"
-MY-APP> (objc-class-method-signature "NSString" "hasPrefix:")
-(OBJC-OBJECT-POINTER SEL OBJC-OBJECT-POINTER)
-OBJC-C++-BOOL
-"B24@0:8@16"
-MY-APP> (invoke (invoke *s* "valueForKey:" "length") "doubleValue")
-11.0
+(objc:invoke-bool *s* "respondsToSelector:" "uppercaseString") ; => T
+(objc:objc-class-name (objc:invoke (objc:string-to-ns-string "hi") "class"))
+; => "NSTaggedPointerString"
+(objc:objc-class-method-signature "NSString" "hasPrefix:")
+; => (OBJC:OBJC-OBJECT-POINTER OBJC:SEL OBJC:OBJC-OBJECT-POINTER),
+;    OBJC:OBJC-C++-BOOL,
+;    "B24@0:8@16"
+(objc:invoke (objc:invoke *s* "valueForKey:" "length") "doubleValue")
+; => 11.0
 ```
 
-The second line catches a class cluster in the act — `string-to-ns-string` asked for an
+The second form catches a class cluster in the act — `string-to-ns-string` asked for an
 `NSString` and got a private subclass chosen for the value. The third answers a method's
 argument types (the receiver and the selector first), its result type and the encoding
 the runtime holds for it. `examples/macos/objc-runtime.lisp` is this whole side of the
@@ -194,13 +208,13 @@ into this process is a single message away: `NSBundle` maps it and registers its
 so from the next form on the class name resolves.
 
 ```console
-MY-APP> (invoke-bool (invoke "NSBundle" "bundleWithPath:"
-                             "/System/Library/Frameworks/NaturalLanguage.framework")
-                     "load")
-T
-MY-APP> (invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
-                     "これは日本語の文章です")
-"ja"
+(objc:invoke-bool (objc:invoke "NSBundle" "bundleWithPath:"
+                   "/System/Library/Frameworks/NaturalLanguage.framework")
+                  "load")
+; => T
+(objc:invoke-into 'string "NLLanguageRecognizer" "dominantLanguageForString:"
+                  "これは日本語の文章です")
+; => "ja"
 ```
 
 That is the whole of dependency management here: no manifest, no classpath, no download.
@@ -241,14 +255,13 @@ further: `'string` turns it into a Lisp string, `'array` and `'(array string)` a
 structure or an array's elements, as a foreign object does ([Foreign objects](#foreign-objects-the-fli-package)).
 
 ```console
-MY-APP> (invoke *s* "hasPrefix:" "hello")
-1
-MY-APP> (invoke-into 'string *s* "substringWithRange:" (cons 0 5))
-"hello"
-MY-APP> (invoke (invoke "NSValue" "valueWithRect:" #(10 20 300 200)) "rectValue")
-#(10.0 20.0 300.0 200.0)
-MY-APP> (invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
-#("x" "y")
+(objc:invoke *s* "hasPrefix:" "hello")                          ; => 1
+(objc:invoke-into 'string *s* "substringWithRange:" (cons 0 5)) ; => "hello"
+(objc:invoke (objc:invoke "NSValue" "valueWithRect:" #(10 20 300 200))
+             "rectValue")
+; => #(10.0 20.0 300.0 200.0)
+(objc:invoke-into '(array string) "NSArray" "arrayWithArray:" #("x" "y"))
+; => #("x" "y")
 ```
 
 A method the receiver does not have, a wrong argument count, or an argument that does
@@ -256,10 +269,10 @@ not fit its declared type is an `error` before anything is sent, never a crash; 
 missing method names the class the runtime answers for the receiver:
 
 ```console
-MY-APP> (invoke *s* "frobnicate")
-Error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
-MY-APP> (invoke *s* "length" 3)
-Error: objc:invoke: length takes 0 argument(s), got 1
+(objc:invoke *s* "frobnicate")
+; error: No method "frobnicate" for object #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000A9ACE43C0>, class "__NSCFString".
+(objc:invoke *s* "length" 3)
+; error: objc:invoke: length takes 0 argument(s), got 1
 ```
 
 The answer of a `performSelector...` message is discarded (its type is the target
@@ -284,11 +297,11 @@ arity, each typed by its value — an object, a string, an integer or a float �
 `nil` terminator is the binding's own, never yours.
 
 ```console
-MY-APP> (invoke (invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
-3
-MY-APP> (invoke-into 'string "NSString" "stringWithFormat:"
-                     "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
-"cache has 3 items, 62.5% full"
+(objc:invoke (objc:invoke "NSArray" "arrayWithObjects:" "a" "b" "c") "count")
+; => 3
+(objc:invoke-into 'string "NSString" "stringWithFormat:"
+                  "%@ has %ld items, %.1f%% full" "cache" 3 62.5)
+; => "cache has 3 items, 62.5% full"
 ```
 
 Any other variadic method, one your own program declares included, is called with the
@@ -307,16 +320,11 @@ read from the object. `objc:objectp` is true for every object pointer, classes i
 and false for anything else, a selector among them:
 
 ```console
-MY-APP> (eq (invoke *s* "self") *s*)
-T
-MY-APP> (objc:objectp *s*)
-T
-MY-APP> (objc:objectp (coerce-to-objc-class "NSString"))
-T
-MY-APP> (objc:objectp (coerce-to-selector "length"))
-NIL
-MY-APP> (objc:objectp "hello")
-NIL
+(eq (objc:invoke *s* "self") *s*)                     ; => T
+(objc:objectp *s*)                                    ; => T
+(objc:objectp (objc:coerce-to-objc-class "NSString")) ; => T
+(objc:objectp (objc:coerce-to-selector "length"))     ; => NIL
+(objc:objectp "hello")                                ; => NIL
 ```
 
 ### Foreign objects: the `fli` package
@@ -328,17 +336,18 @@ and `fli:foreign-slot-value` reads or `setf`s a slot of a structure (a list of n
 into a nested one). These are the manual's own forms:
 
 ```console
-MY-APP> (fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
-          (invoke-into rect (invoke (invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
-                       "frame")
-          (fli:foreign-slot-value rect '(:size :width)))
-640.0
-MY-APP> (fli:with-dynamic-foreign-objects ((result-value :int))
-          (invoke (invoke "NSScanner" "scannerWithString:" "42 apples") "scanInt:" result-value)
-          (fli:dereference result-value))
-42
-MY-APP> (fli:size-of 'cocoa:ns-rect)
-32
+(fli:with-dynamic-foreign-objects ((rect cocoa:ns-rect))
+  (objc:invoke-into rect
+   (objc:invoke (objc:invoke "NSView" "alloc") "initWithFrame:" #(0 0 640 480))
+   "frame")
+  (fli:foreign-slot-value rect '(:size :width)))
+; => 640.0
+(fli:with-dynamic-foreign-objects ((result-value :int))
+  (objc:invoke (objc:invoke "NSScanner" "scannerWithString:" "42 apples")
+               "scanInt:" result-value)
+  (fli:dereference result-value))
+; => 42
+(fli:size-of 'cocoa:ns-rect) ; => 32
 ```
 
 A foreign object is passed wherever its type goes: as a pointer, and as a structure, which
@@ -365,19 +374,17 @@ releases twice what the collector would release once. `(objc:invoke p "release")
 through the same count.
 
 ```console
-MY-APP> (defvar *o* (alloc-init-object "NSObject"))
-*O*
-MY-APP> (retain-count (retain *o*))
-2
-MY-APP> (release *o*)
-NIL
-MY-APP> (release *o*)
-NIL
-MY-APP> (release *o*)
-Error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
-MY-APP> (with-autorelease-pool ()
-          (invoke-into 'string (autorelease (string-to-ns-string "pooled")) "description"))
-"pooled"
+(defvar *o* (objc:alloc-init-object "NSObject"))
+(objc:retain-count (objc:retain *o*)) ; => 2
+(objc:release *o*)
+(objc:release *o*)
+(objc:release *o*)
+; error: objc:release: #<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000600000C04010> holds no reference this program can give up
+(objc:with-autorelease-pool ()
+  (objc:invoke-into 'string
+                    (objc:autorelease (objc:string-to-ns-string "pooled"))
+                    "description"))
+; => "pooled"
 ```
 
 The pools are kept in Lisp: a real `NSAutoreleasePool` could not span two sends,
@@ -396,38 +403,29 @@ are Lisp. The manual's section 1.4 examples run unchanged -- a method over two
 answering a structure `objc:define-objc-struct` declared:
 
 ```console
-MY-APP> (define-objc-class my-object ()
-          ((slot1 :initarg :slot1 :initform nil))
-          (:objc-class-name "MyObject"))
-MY-OBJECT
-MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
-            ((self my-object)
-             (width (:unsigned :int))
-             (height (:unsigned :int)))
-          (* width height))
-"areaOfWidth:height:"
-MY-APP> (define-objc-class my-special-object (my-object)
-          ()
-          (:objc-class-name "MySpecialObject"))
-MY-SPECIAL-OBJECT
-MY-APP> (define-objc-method ("areaOfWidth:height:" (:unsigned :int))
-            ((self my-special-object)
-             (width (:unsigned :int))
-             (height (:unsigned :int)))
-          (* 4 (invoke (current-super) "areaOfWidth:height:" width height)))
-"areaOfWidth:height:"
-MY-APP> (invoke (alloc-init-object "MySpecialObject") "areaOfWidth:height:" 6 7)
-168
-MY-APP> (define-objc-struct (pair (:foreign-name "_Pair"))
-          (:first :float)
-          (:second :float))
-PAIR
-MY-APP> (define-objc-method ("pair" (:struct pair) result-pair) ((this my-object))
-          (setf (fli:foreign-slot-value result-pair :first) 1f0
-                (fli:foreign-slot-value result-pair :second) 2f0))
-"pair"
-MY-APP> (invoke (alloc-init-object "MyObject") "pair")
-#(1.0 2.0)
+(objc:define-objc-class my-object ()
+  ((slot1 :initarg :slot1 :initform nil))
+  (:objc-class-name "MyObject"))
+(objc:define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+  ((self my-object) (width (:unsigned :int)) (height (:unsigned :int)))
+  (* width height))
+(objc:define-objc-class my-special-object (my-object)
+  ()
+  (:objc-class-name "MySpecialObject"))
+(objc:define-objc-method ("areaOfWidth:height:" (:unsigned :int))
+  ((self my-special-object) (width (:unsigned :int)) (height (:unsigned :int)))
+  (* 4 (objc:invoke (objc:current-super) "areaOfWidth:height:" width height)))
+(objc:invoke (objc:alloc-init-object "MySpecialObject")
+             "areaOfWidth:height:" 6 7)
+; => 168
+(objc:define-objc-struct (pair (:foreign-name "_Pair"))
+  (:first :float)
+  (:second :float))
+(objc:define-objc-method ("pair" (:struct pair) result-pair)
+  ((this my-object))
+  (setf (fli:foreign-slot-value result-pair :first) 1f0
+        (fli:foreign-slot-value result-pair :second) 2f0))
+(objc:invoke (objc:alloc-init-object "MyObject") "pair") ; => #(1.0 2.0)
 ```
 
 A method's arguments and result may be of any type the declarations name: integers of
@@ -458,29 +456,22 @@ Such a class is how Cocoa calls back into Lisp. A button sends its action to a t
 here the target is an instance, and the action a Lisp method:
 
 ```console
-MY-APP> (define-objc-class my-target ()
-          ((clicks :initform 0 :accessor clicks))
-          (:objc-class-name "MyTarget"))
-MY-TARGET
-MY-APP> (define-objc-method ("clicked:" :void) ((self my-target) (sender objc-object-pointer))
-          (incf (clicks self))
-          (format t "clicked ~a~%" (invoke-into 'string sender "title")))
-"clicked:"
-MY-APP> (defvar *target* (make-instance 'my-target))
-*TARGET*
-MY-APP> (defvar *window* (appkit:window "target" :width 200 :height 80))
-*WINDOW*
-MY-APP> (defvar *go* (appkit:button *window* "Go"))
-*GO*
-MY-APP> (invoke *go* "setTarget:" *target*)
-NIL
-MY-APP> (invoke *go* "setAction:" "clicked:")
-NIL
-MY-APP> (appkit:click *go*)
-clicked Go
-NIL
-MY-APP> (clicks *target*)
-1
+(objc:define-objc-class my-target ()
+  ((clicks :initform 0 :accessor clicks))
+  (:objc-class-name "MyTarget"))
+(objc:define-objc-method ("clicked:" :void)
+  ((self my-target) (sender objc:objc-object-pointer))
+  (incf (clicks self))
+  (format t "clicked ~a~%" (objc:invoke-into 'string sender "title")))
+(defvar *target* (make-instance 'my-target))
+(defvar *window* (appkit:window "target" :width 200 :height 80))
+(defvar *go* (appkit:button *window* "Go"))
+(objc:invoke *go* "setTarget:" *target*)
+(objc:invoke *go* "setAction:" "clicked:")
+(appkit:click *go*)
+; prints: clicked Go
+; => NIL
+(clicks *target*) ; => 1
 ```
 
 AppKit holds a target weakly; `*target*` is what keeps it alive. The `appkit` widgets are
@@ -489,22 +480,17 @@ built exactly this way, and so is the drawing surface of `metal` programs and `s
 methods. A method is also how an object observes notifications:
 
 ```console
-MY-APP> (define-objc-class watcher ()
-          ((seen :initform nil :accessor seen))
-          (:objc-class-name "Watcher"))
-WATCHER
-MY-APP> (define-objc-method ("noticed:" :void) ((self watcher) (note objc-object-pointer))
-          (push (invoke-into 'string note "name") (seen self)))
-"noticed:"
-MY-APP> (defvar *w* (make-instance 'watcher))
-*W*
-MY-APP> (cocoa:add-observer *w* "noticed:" :name "Ping")
-NIL
-MY-APP> (invoke (invoke "NSNotificationCenter" "defaultCenter")
-                "postNotificationName:object:" "Ping" nil)
-NIL
-MY-APP> (seen *w*)
-("Ping")
+(objc:define-objc-class watcher ()
+  ((seen :initform nil :accessor seen))
+  (:objc-class-name "Watcher"))
+(objc:define-objc-method ("noticed:" :void)
+  ((self watcher) (note objc:objc-object-pointer))
+  (push (objc:invoke-into 'string note "name") (seen self)))
+(defvar *w* (make-instance 'watcher))
+(cocoa:add-observer *w* "noticed:" :name "Ping")
+(objc:invoke (objc:invoke "NSNotificationCenter" "defaultCenter")
+             "postNotificationName:object:" "Ping" nil)
+(seen *w*) ; => ("Ping")
 ```
 
 ### Blocks
@@ -521,30 +507,36 @@ asynchronous work too, since a callee that keeps a block keeps a copy, and the c
 the function alive. `objc:call-objc-block` calls a block, whoever made it.
 
 ```console
-MY-APP> (defvar *words* (invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
-*WORDS*
-MY-APP> (with-objc-block (compare '(:long-long (objc-object-pointer objc-object-pointer))
-                                  (lambda (a b)
-                                    (let ((x (ns-string-to-string a))
-                                          (y (ns-string-to-string b)))
-                                      (cond ((string< x y) -1) ((string> x y) 1) (t 0)))))
-          (invoke-into '(array string) *words* "sortedArrayUsingComparator:" compare))
-#("apple" "fig" "pear")
-MY-APP> (with-objc-block (each '(:void (objc-object-pointer (:unsigned :long-long)
-                                        (:pointer objc-c++-bool)))
-                               (lambda (word index stop)
-                                 (format t "~a ~a~%" index (ns-string-to-string word))
-                                 (when (= index 1) (setf (fli:dereference stop) t))))
-          (invoke *words* "enumerateObjectsUsingBlock:" each))
-0 pear
-1 fig
-NIL
-MY-APP> (defvar *add* (make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
-*ADD*
-MY-APP> (call-objc-block '(:int (:int :int)) *add* 3 4)
-7
-MY-APP> (free-objc-block *add*)
-NIL
+(defvar *words*
+  (objc:invoke "NSArray" "arrayWithObjects:" "pear" "fig" "apple"))
+(objc:with-objc-block (compare '(:long-long
+                                 (objc:objc-object-pointer
+                                  objc:objc-object-pointer))
+                               (lambda (a b)
+                                 (let ((x (objc:ns-string-to-string a))
+                                       (y (objc:ns-string-to-string b)))
+                                   (cond ((string< x y) -1)
+                                         ((string> x y) 1)
+                                         (t 0)))))
+  (objc:invoke-into '(array string) *words* "sortedArrayUsingComparator:"
+                    compare))
+; => #("apple" "fig" "pear")
+(objc:with-objc-block (each '(:void
+                              (objc:objc-object-pointer (:unsigned :long-long)
+                               (:pointer objc:objc-c++-bool)))
+                            (lambda (word index stop)
+                              (format t "~a ~a~%" index
+                                      (objc:ns-string-to-string word))
+                              (when (= index 1)
+                                (setf (fli:dereference stop) t))))
+  (objc:invoke *words* "enumerateObjectsUsingBlock:" each))
+; prints:
+;   0 pear
+;   1 fig
+; => NIL
+(defvar *add* (objc:make-objc-block '(:int (:int :int)) (lambda (a b) (+ a b))))
+(objc:call-objc-block '(:int (:int :int)) *add* 3 4) ; => 7
+(objc:free-objc-block *add*)
 ```
 
 C functions take blocks too -- libdispatch's, for one. `fli:define-foreign-function`, the
@@ -552,25 +544,18 @@ part of LispWorks' foreign language interface this package carries, declares one
 same types:
 
 ```console
-MY-APP> (fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
-            ((label objc-c-string) (attributes :pointer))
-          :result-type objc-object-pointer)
-DISPATCH-QUEUE-CREATE
-MY-APP> (fli:define-foreign-function (dispatch-async "dispatch_async")
-            ((queue objc-object-pointer) (work objc-at-question-mark))
-          :result-type :void)
-DISPATCH-ASYNC
-MY-APP> (defvar *queue* (dispatch-queue-create "com.example.work" nil))
-*QUEUE*
-MY-APP> (defvar *done* nil)
-*DONE*
-MY-APP> (with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
-          (dispatch-async *queue* work))
-NIL
-MY-APP> (sleep 0.1)
-NIL
-MY-APP> *done*
-T
+(fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+  ((label objc:objc-c-string) (attributes :pointer))
+  :result-type objc:objc-object-pointer)
+(fli:define-foreign-function (dispatch-async "dispatch_async")
+  ((queue objc:objc-object-pointer) (work objc:objc-at-question-mark))
+  :result-type :void)
+(defvar *queue* (dispatch-queue-create "com.example.work" nil))
+(defvar *done* nil)
+(objc:with-objc-block (work '(:void ()) (lambda () (setq *done* t)))
+  (dispatch-async *queue* work))
+(sleep 0.1)
+*done* ; => T
 ```
 
 A block runs on the thread that calls it. Foundation calls a comparator or an enumerator
@@ -585,23 +570,22 @@ printed and answered with zero. So a program that waits for a block waits by sle
 as below, and runs the same on every target:
 
 ```console
-MY-APP> (defvar *status* nil)
-*STATUS*
-MY-APP> (with-objc-block (handler '(:void (objc-object-pointer objc-object-pointer
-                                           objc-object-pointer))
-                                  (lambda (data response error)
-                                    (declare (ignore data error))
-                                    (setq *status* (invoke response "statusCode"))))
-          (invoke (invoke (invoke "NSURLSession" "sharedSession")
-                          "dataTaskWithURL:completionHandler:"
-                          (invoke "NSURL" "URLWithString:" "https://example.com/")
-                          handler)
-                  "resume"))
-NIL
-MY-APP> (loop until *status* do (sleep 0.05))
-NIL
-MY-APP> *status*
-200
+(defvar *status* nil)
+(objc:with-objc-block (handler '(:void
+                                 (objc:objc-object-pointer
+                                  objc:objc-object-pointer
+                                  objc:objc-object-pointer))
+                               (lambda (data response error)
+                                 (declare (ignore data error))
+                                 (setq *status*
+                                       (objc:invoke response "statusCode"))))
+  (objc:invoke (objc:invoke (objc:invoke "NSURLSession" "sharedSession")
+                "dataTaskWithURL:completionHandler:"
+                (objc:invoke "NSURL" "URLWithString:" "https://example.com/")
+                handler)
+               "resume"))
+(loop until *status* do (sleep 0.05))
+*status* ; => 200
 ```
 
 `examples/macos/audio.lisp` is a block on a thread Apple chooses: an `AVAudioSourceNode`
@@ -624,9 +608,11 @@ the program goes on. `objc:objc-exception-name`, `objc:objc-exception-reason` an
 thrown object, whose reference the condition holds:
 
 ```console
-MY-APP> (handler-case (invoke (invoke "NSArray" "array") "objectAtIndex:" 5)
-          (objc-exception (e) (list (objc-exception-name e) (objc-exception-reason e))))
-("NSRangeException" "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
+(handler-case (objc:invoke (objc:invoke "NSArray" "array") "objectAtIndex:" 5)
+  (objc:objc-exception (e)
+    (list (objc:objc-exception-name e) (objc:objc-exception-reason e))))
+; => ("NSRangeException"
+;     "*** -[__NSArray0 objectAtIndex:]: index 5 beyond bounds for empty array")
 ```
 
 The Objective-C frames between the raise and the call unwind with their cleanups, as
@@ -642,11 +628,11 @@ and `objc:ns-error-object` answer the domain, the code, the localized descriptio
 the `NSError`; otherwise it answers what `objc:invoke` answers:
 
 ```console
-MY-APP> (handler-case
-            (invoke-with-error (invoke "NSFileManager" "defaultManager")
-                               "attributesOfItemAtPath:error:" "/no/such/file")
-          (ns-error (e) (list (ns-error-domain e) (ns-error-code e))))
-("NSCocoaErrorDomain" 260)
+(handler-case (objc:invoke-with-error
+               (objc:invoke "NSFileManager" "defaultManager")
+               "attributesOfItemAtPath:error:" "/no/such/file")
+  (objc:ns-error (e) (list (objc:ns-error-domain e) (objc:ns-error-code e))))
+; => ("NSCocoaErrorDomain" 260)
 ```
 
 ### Bytes: `objc:data` and `objc:bytes`
@@ -660,16 +646,17 @@ wants, `[data mutableBytes]` is writable scratch to hand a callee, and `objc:byt
 an `NSData`'s contents back as a fresh `(unsigned-byte 8)` vector.
 
 ```console
-MY-APP> (objc:bytes (objc:data (make-array 2 :element-type 'single-float
-                                            :initial-contents '(1.0 2.0))))
-#(0 0 128 63 0 0 0 64)
-MY-APP> (objc:bytes (invoke *s* "dataUsingEncoding:" 4))
-#(104 101 108 108 111 32 119 111 114 108 100)
-MY-APP> (handler-case
-            (invoke-with-error "NSJSONSerialization" "JSONObjectWithData:options:error:"
-                               (objc:data "nope") 0)
-          (ns-error (e) (ns-error-description e)))
-"The data couldn’t be read because it isn’t in the correct format."
+(objc:bytes
+ (objc:data
+  (make-array 2 :element-type 'single-float :initial-contents '(1.0 2.0))))
+; => #(0 0 128 63 0 0 0 64)
+(objc:bytes (objc:invoke *s* "dataUsingEncoding:" 4))
+; => #(104 101 108 108 111 32 119 111 114 108 100)
+(handler-case (objc:invoke-with-error "NSJSONSerialization"
+                                      "JSONObjectWithData:options:error:"
+                                      (objc:data "nope") 0)
+  (objc:ns-error (e) (objc:ns-error-description e)))
+; => "The data couldn’t be read because it isn’t in the correct format."
 ```
 
 Bytes and `invoke-with-error` together are what puts the GPU in reach: Metal is an
@@ -685,14 +672,16 @@ present and commit, plus the shader, pipeline and buffer helpers — is the buil
 the draw calls: those are the program.
 
 ```console
-CL-USER> (defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
-CL-USER> (defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
-CL-USER> (defvar *pipe* (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main" "fragment_main"))
-CL-USER> (metal:run *ctx*
-    (lambda (encoder)
-      (objc:invoke encoder "setRenderPipelineState:" *pipe*)
-      (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:" metal:+triangle+ 0 3)))
-#<Pointer: OBJC:OBJC-OBJECT-POINTER = #x0000000BBF47A7C0>
+(defvar *win* (appkit:window "metal" :width 640 :height 400 :dark t))
+(defvar *ctx* (metal:attach *win* :clear '(0.05 0.06 0.09 1.0) :depth t))
+(defvar *pipe*
+  (metal:pipeline *ctx* (metal:library *ctx* *shaders*) "vertex_main"
+                  "fragment_main"))
+(metal:run *ctx*
+           (lambda (encoder)
+             (objc:invoke encoder "setRenderPipelineState:" *pipe*)
+             (objc:invoke encoder "drawPrimitives:vertexStart:vertexCount:"
+                          metal:+triangle+ 0 3)))
 ```
 
 The one C function Metal appears to need, `MTLCreateSystemDefaultDevice()`, is
@@ -732,8 +721,7 @@ running on the main thread (a button's handler) runs its sends inline, so a call
 call back into the GUI freely.
 
 ```console
-MY-APP> (objc:on-main (lambda () (+ 1 2)))
-3
+(objc:on-main (lambda () (+ 1 2))) ; => 3
 ```
 
 The first `appkit:` call also hands thread 0 to AppKit's own event loop
