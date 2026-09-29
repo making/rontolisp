@@ -604,6 +604,16 @@ MY-APP> *status*
 200
 ```
 
+`examples/macos/audio.lisp` is a block on a thread Apple chooses: an `AVAudioSourceNode`
+whose render block asks a Lisp function of time for every sample. Rendered offline --
+`AVAudioEngine`'s manual rendering, which runs the graph inside `renderOffline:toBuffer:error:`
+-- the block is called on the thread that sent that message, the main thread, on every
+target, so a `--native` executable runs it too and the result needs no sound hardware.
+Played live, the engine calls it on its real-time audio thread. A `--native` executable
+refuses it there, since it answers a status. On the interpreter and the JVM it runs, but it
+must send no message: a send waits for the main thread, and `-[AVAudioEngine stop]` on the
+main thread waits for the audio thread. It writes its samples through `fli:` instead.
+
 ### Exceptions and NSError
 
 An Objective-C exception raised inside a call — an index out of range, a `nil` where

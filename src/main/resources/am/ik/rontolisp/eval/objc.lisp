@@ -1221,9 +1221,12 @@
 
 (defun objc:invoke-with-error (class-or-object-pointer method &rest args)
   (let ((name (if (consp method) (first method) method)))
+    ;; Cocoa names the NSError ** piece "error:", or "Error:" after another word
+    ;; (startAndReturnError:).
     (unless (and (stringp name) (>= (length name) 6)
-                 (string= "error:" name :start2 (- (length name) 6)))
-      (error "objc:invoke-with-error: ~s does not end in \"error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
+                 (or (string= "error:" name :start2 (- (length name) 6))
+                     (string= "Error:" name :start2 (- (length name) 6))))
+      (error "objc:invoke-with-error: ~s does not end in \"error:\" or \"Error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
              name))
     (let ((slot (objc::%calloc 1 8)))
       (unwind-protect (let* ((result

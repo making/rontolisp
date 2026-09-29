@@ -27,10 +27,14 @@
     "newBufferWithBytes:length:options: and drawPrimitives:vertexStart:vertexCount:, and",
     "metal:pixels' readback, MTLTexture's getBytes:bytesPerRow:fromRegion:mipmapLevel: -- an",
     "MTLRegion (six NSUIntegers) by value, the widest struct argument in the table (.kb/geom.md,",
-    "\"How the renderer is tested\"). A selector whose shape is outside this table SIGNALS in the",
-    "binary, naming the entry to add here; the JVM registers nothing ahead of time and binds any",
-    "shape. ObjcNativeImageForeignConfigTest pins the runtime shapes on every machine and the",
-    "shipped layers' selectors on a Mac.",
+    "\"How the renderer is tested\"), and AVFAudio's for examples/macos/audio.lisp, just before",
+    "class_addIvar: initStandardFormatWithSampleRate:channels: (void*(void*,void*,jdouble,jint)),",
+    "enableManualRenderingMode:format:maximumFrameCount:error: (jboolean(void*,void*,jlong,void*,",
+    "jint,void*)), renderOffline:toBuffer:error: (jlong(void*,void*,jint,void*,void*)) and",
+    "initWithPCMFormat:frameCapacity: (void*(void*,void*,void*,jint)). A selector whose shape is",
+    "outside this table SIGNALS in the binary, naming the entry to add here; the JVM registers",
+    "nothing ahead of time and binds any shape. ObjcNativeImageForeignConfigTest pins the runtime",
+    "shapes on every machine and the shipped layers' selectors on a Mac.",
     "The four C shapes just before the variadic entries are the catching trampolines' (ObjcCatch:",
     "mmap, mprotect, sys_icache_invalidate, __unw_add_find_dynamic_unwind_sections); a trampoline",
     "takes the shape of the call it catches, so every send shape above serves it unchanged.",
@@ -71,7 +75,8 @@
     "enumerateObjectsUsingBlock: calls (void(void*,void*,jlong,void*)); its comparator",
     "(jlong(void*,void*,void*)), a work item (void(void*)), a completion handler",
     "(void(void*,void*,void*,void*)) and the copy and dispose helpers every block's descriptor",
-    "carries (void(void*,void*), void(void*)) coincide with the method shapes.",
+    "carries (void(void*,void*), void(void*)) coincide with the method shapes. Last,",
+    "examples/macos/audio.lisp's AVAudioSourceNode render block (jint(void*,void*,void*,jint,void*)).",
     "fli:define-foreign-function's calls are unbound downcalls of the function's shape: the guide's",
     "dispatch_queue_create (void*(void*,void*)) and dispatch_async (void(void*,void*)) are among the",
     "shapes above. A block's literal is malloc'd (void*(jlong)) and freed with free (void(void*)):",
@@ -431,6 +436,10 @@
         "returnType": "void",
         "parameterTypes": ["void*", "void*", "void*", "jlong", "struct(jlong,jlong,jlong,jlong,jlong,jlong)", "jlong"]
       },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "jdouble", "jint"] },
+      { "returnType": "jboolean", "parameterTypes": ["void*", "void*", "jlong", "void*", "jint", "void*"] },
+      { "returnType": "jlong", "parameterTypes": ["void*", "void*", "jint", "void*", "void*"] },
+      { "returnType": "void*", "parameterTypes": ["void*", "void*", "void*", "jint"] },
       { "returnType": "jboolean", "parameterTypes": ["void*", "void*", "jlong", "jbyte", "void*"] },
       { "returnType": "jlong", "parameterTypes": ["void*"] },
       { "returnType": "jint", "parameterTypes": ["void*", "void*", "jint", "jint"] },
@@ -634,6 +643,10 @@
       {
         "returnType": "void",
         "parameterTypes": ["void*", "void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "void*", "jint", "void*"]
       }
     ]
   }

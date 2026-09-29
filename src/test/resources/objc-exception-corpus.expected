@@ -20,6 +20,8 @@ object result, failed: ("NSCocoaErrorDomain" 260 T "NSCocoaErrorDomain")
 object result, succeeded: T
 BOOL result, failed: ("NSCocoaErrorDomain" 4 T "NSCocoaErrorDomain")
 class method, failed: ("NSCocoaErrorDomain" 260 T "NSCocoaErrorDomain")
+an AndReturnError: method, failed: ("NSCocoaErrorDomain" 260 T "NSCocoaErrorDomain")
+an AndReturnError: method, succeeded: 1
 a condition: (T T)
-not an error method: "objc:invoke-with-error: \"attributesOfItemAtPath:\" does not end in \"error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
+not an error method: "objc:invoke-with-error: \"attributesOfItemAtPath:\" does not end in \"error:\" or \"Error:\"; invoke-with-error supplies the NSError ** parameter, which is the last one, itself"
 no such method: (T NIL NIL)

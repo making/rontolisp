@@ -120,6 +120,15 @@
       (ns-error-of (lambda ()
                      (invoke-with-error "NSString" "stringWithContentsOfFile:encoding:error:"
                                         "/no/such/rontolisp/path" 4))))
+;; Cocoa spells the NSError ** piece "error:" or, after another word, "Error:"
+;; (startAndReturnError:, checkResourceIsReachableAndReturnError:).
+(show "an AndReturnError: method, failed"
+      (ns-error-of (lambda ()
+                     (invoke-with-error (invoke "NSURL" "fileURLWithPath:" "/no/such/rontolisp/path")
+                                        "checkResourceIsReachableAndReturnError:"))))
+(show "an AndReturnError: method, succeeded"
+      (invoke-with-error (invoke "NSURL" "fileURLWithPath:" "/")
+                         "checkResourceIsReachableAndReturnError:"))
 (show "a condition"
       (handler-case (invoke-with-error *files* "removeItemAtPath:error:" "/no/such/rontolisp/path")
         (error (e) (list (typep e 'ns-error) (typep e 'error)))))

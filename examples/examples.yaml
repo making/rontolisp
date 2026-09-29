@@ -102,7 +102,8 @@
 # fifth, macos/objc-runtime.lisp and macos/system-frameworks.lisp, open no window
 # at all: they are listed with their output checked and `os: [mac]`, so the RUN
 # legs gate on the platform the Objective-C runtime needs while their compile legs
-# keep running everywhere.
+# keep running everywhere. macos/audio.lisp is a sixth of that kind: its sound is
+# rendered offline, and played only when asked.
 
 examples:
   # --- console: pure, cross-backend algorithms & I/O -------------------------
@@ -726,6 +727,26 @@ examples:
         - "round trip T"
         - "the file has audio in it: T"
         - "nothing was installed, and no window was opened"
+
+  - path: macos/audio.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      a third macos/ example that opens nothing, and the one that makes sound:
+      an AVAudioSourceNode whose render block is a Lisp closure asking an
+      instrument (a function of time) for every sample. It renders OFFLINE --
+      AVAudioEngine's manual rendering, which runs the graph inside the send and
+      so calls the block on the main thread, with no audio device -- which is
+      what makes the output silent, needless of sound hardware and exact: the
+      whole transcript is checked. The numbers are measurements of Apple's
+      graph (the main mixer's 1/sqrt(2) on a mono source; 43 upward zero
+      crossings in 4410 frames of 440 Hz), so a change there fails here on
+      purpose. Live playback (the argument `play`) is not a leg: it needs the
+      speakers, and on the interpreter the block cannot keep up with the
+      device. The --native executable prints the same file (checked by hand;
+      this harness has no --native leg).
+    expect:
+      file: .expected/audio.txt
 
   # --- jvm: a C library through upstream CFFI (JVM family only) ----------------
   - path: jvm/cffi-sqlite.lisp

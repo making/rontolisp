@@ -481,6 +481,8 @@ MY-APP> *status*
 200
 ```
 
+`examples/macos/audio.lisp` は、Apple が選ぶスレッドで呼ばれるブロックの例です。`AVAudioSourceNode` のレンダーブロックが、サンプルごとに時刻の Lisp 関数へ値を問い合わせます。オフラインでレンダリングする場合 (`AVAudioEngine` のマニュアルレンダリングは `renderOffline:toBuffer:error:` の中でグラフを動かします)、ブロックはそのメッセージを送ったスレッド、つまりメインスレッドで、どのターゲットでも呼ばれます。そのため `--native` 実行ファイルでも動き、結果の確認に音声ハードウェアは要りません。ライブで再生する場合、エンジンはリアルタイムのオーディオスレッドでブロックを呼びます。`--native` 実行ファイルはそこでブロックを拒否します。ステータスを返すブロックだからです。インタプリタと JVM では動きますが、メッセージを送ってはいけません。送信はメインスレッドを待ち、メインスレッドの `-[AVAudioEngine stop]` はオーディオスレッドを待つからです。そのためサンプルは `fli:` で書き込みます。
+
 ### 例外と NSError
 
 呼び出しの中で送出された Objective-C の例外 (範囲外のインデックス、オブジェクトが必要な位置の `nil`、`raise` を送られた `NSException` など) は、そのスレッドで実行中の最も内側の `objc:invoke` (または C 関数、ブロックの呼び出し) から `objc:objc-exception` としてシグナルされ、プログラムは続行します。`objc:objc-exception-name`、`objc:objc-exception-reason`、`objc:objc-exception-object` は、例外の名前、理由 (なければ `nil`)、送出されたオブジェクトを返します。このオブジェクトの参照はコンディションが保持します:

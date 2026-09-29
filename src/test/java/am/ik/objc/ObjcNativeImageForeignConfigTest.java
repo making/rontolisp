@@ -171,6 +171,13 @@ class ObjcNativeImageForeignConfigTest {
 	private static final List<String> DOCUMENTED_BLOCKS = List.of("i^vii", "q^v@@", "v^v@Q^B", "v^v", "v^v@@@");
 
 	/**
+	 * The blocks the {@code examples/macos} programs make: {@code audio.lisp}'s
+	 * {@code AVAudioSourceNode} render block, {@code OSStatus (BOOL *isSilence, const
+	 * AudioTimeStamp *, AVAudioFrameCount, AudioBufferList *)}.
+	 */
+	private static final List<String> EXAMPLE_BLOCKS = List.of("i^v^B^vI^v");
+
+	/**
 	 * The C calls the guide's block examples make: the adder called from Lisp
 	 * ({@code call-objc-block}), {@code dispatch_queue_create}, {@code dispatch_async}
 	 * and {@code dlsym}, which finds them.
@@ -181,6 +188,9 @@ class ObjcNativeImageForeignConfigTest {
 	void everyShapeTheDocumentedBlockExamplesUseIsRegistered() {
 		Set<FunctionDescriptor> blocks = new LinkedHashSet<>();
 		for (String types : DOCUMENTED_BLOCKS) {
+			blocks.add(ObjcBlocks.shape(types));
+		}
+		for (String types : EXAMPLE_BLOCKS) {
 			blocks.add(ObjcBlocks.shape(types));
 		}
 		blocks.add(FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
@@ -308,6 +318,25 @@ class ObjcNativeImageForeignConfigTest {
 			cls("NSURL", "fileURLWithPath:"), inst("NSURL", "URLByAppendingPathComponent:"), inst("NSURL", "path"),
 			cls("NSFileManager", "defaultManager"), inst("NSFileManager", "temporaryDirectory"),
 			inst("NSFileManager", "attributesOfItemAtPath:error:"),
+			// examples/macos/audio.lisp: an AVAudioEngine whose source node's render
+			// block is a Lisp closure, rendered offline into a PCM buffer and an
+			// AVAudioFile, and live through the speakers
+			cls("AVAudioEngine", "alloc"), inst("AVAudioEngine", "init"), cls("AVAudioFormat", "alloc"),
+			inst("AVAudioFormat", "initStandardFormatWithSampleRate:channels:"), cls("AVAudioSourceNode", "alloc"),
+			inst("AVAudioSourceNode", "initWithFormat:renderBlock:"), inst("AVAudioEngine", "attachNode:"),
+			inst("AVAudioEngine", "connect:to:format:"), inst("AVAudioEngine", "mainMixerNode"),
+			inst("AVAudioEngine", "enableManualRenderingMode:format:maximumFrameCount:error:"),
+			inst("AVAudioEngine", "startAndReturnError:"), inst("AVAudioEngine", "manualRenderingFormat"),
+			inst("AVAudioEngine", "renderOffline:toBuffer:error:"), inst("AVAudioEngine", "stop"),
+			cls("AVAudioPCMBuffer", "alloc"), inst("AVAudioPCMBuffer", "initWithPCMFormat:frameCapacity:"),
+			inst("AVAudioPCMBuffer", "frameLength"), inst("AVAudioPCMBuffer", "floatChannelData"),
+			inst("AVAudioPCMBuffer", "format"), inst("AVAudioFormat", "settings"), inst("AVAudioFormat", "sampleRate"),
+			cls("AVAudioFile", "alloc"), inst("AVAudioFile", "initForWriting:settings:error:"),
+			inst("AVAudioFile", "writeFromBuffer:error:"), inst("AVAudioFile", "initForReading:error:"),
+			inst("AVAudioFile", "length"), inst("AVAudioFile", "fileFormat"), inst("NSURL", "lastPathComponent"),
+			// invoke-with-error on Cocoa's "...AndReturnError:" spelling (the exception
+			// corpus)
+			inst("NSURL", "checkResourceIsReachableAndReturnError:"),
 			// objc.lisp's own bytes and errors: objc:data / objc:bytes and
 			// invoke-with-error's ns-error send these, so a program that never spells
 			// them still needs them served
@@ -420,12 +449,13 @@ class ObjcNativeImageForeignConfigTest {
 
 	/**
 	 * The frameworks {@code examples/macos/system-frameworks.lisp} maps in with an
-	 * {@code NSBundle} message. None of them is linked into this process either, and
-	 * their classes do not exist until one is: the example's first section IS this step,
-	 * so the test takes it before it resolves anything below AppKit.
+	 * {@code NSBundle} message (and {@code AVFAudio}, which {@code audio.lisp} loads).
+	 * None of them is linked into this process either, and their classes do not exist
+	 * until one is: the example's first section IS this step, so the test takes it before
+	 * it resolves anything below AppKit.
 	 */
 	private static final List<String> FRAMEWORKS = List.of("Vision", "NaturalLanguage", "CoreImage", "Metal",
-			"QuartzCore");
+			"QuartzCore", "AVFAudio");
 
 	private static String[] cls(String name, String selector) {
 		return new String[] { name, selector, "class" };

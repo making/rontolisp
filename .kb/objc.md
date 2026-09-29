@@ -10,7 +10,8 @@
   the interpreter like `linalg.lisp`; **`metal`** (`eval/metal.lisp` + `MetalLibrary`) and
   **`scene`** ([geom.md](geom.md)) ship the same way.
 - Docs: `doc/{en,ja}/guides/objc-appkit.md`. Examples: `examples/macos/*.lisp`, not in
-  `examples.yaml` (whose `os: [mac]` field gates only RUN legs) except the two that open no window.
+  `examples.yaml` (whose `os: [mac]` field gates only RUN legs) except the three that open no
+  window (`objc-runtime`, `system-frameworks`, `audio`).
 
 **Scope**: macOS only, on the interpreter, on JVM class output and in a `--native` executable for
 `macos-aarch64` (below). Every other WASM output REFUSES a program referencing any of the macOS
@@ -430,7 +431,37 @@ so the block names are this package's own; `fli` is a built-in package ("FLI" ab
   Verified by hand (`-Pnative`, 2026-09-28): the guide's adder, comparator, enumerator (on
   thread 0), a `dispatch_async` and an `NSURLSession` completion handler (on a worker) run; the
   corpus stops at its first unregistered shape (`jdouble(void*,jdouble,jdouble)`) with the entry
-  to add.
+  to add. `examples/macos/audio.lisp`'s render block (`jint(void*,void*,void*,jint,void*)`, the
+  test's `EXAMPLE_BLOCKS`) joined them 2026-09-29.
+
+### A block on a real-time thread: `examples/macos/audio.lisp` (2026-09-29)
+An `AVAudioSourceNode` whose render block (`OSStatus (BOOL *, const AudioTimeStamp *, UInt32,
+AudioBufferList *)`) is a Lisp closure. Where it can run is decided by the calling thread,
+measured in the block with `pthread_main_np` (macOS 26, M4 Max):
+
+- **Offline** (`enableManualRenderingMode:` 0, then `renderOffline:toBuffer:error:`): AVFAudio
+  runs the graph INSIDE the send and calls the block on the sending thread -- thread 0 on every
+  target, `--native` included (the block re-enters through `CALLER`). Silent, no device, and the
+  transcript is byte-identical on `java -jar`, the native binary, `-o X.class`, `-o x.jar` and
+  `--native`; `examples.yaml` checks it (no `--native` leg there). A chunk larger than the
+  buffer's `frameCapacity` fails with status -1 and `NSError` -50, not a short render.
+- **Live** (`startAndReturnError:`): the engine's real-time I/O thread, never thread 0.
+  `--native` refuses the value-answering block there (187 refusals in 2 s), so the example skips
+  live on `:rontolisp-native`. Interpreter / JVM: **the block must send nothing** -- a send hops
+  to thread 0 while thread 0 sits in `-[AVAudioEngine stop]`, which waits for the render
+  thread: a deadlock (jstack: thread 0 in `sendRaw` of `stop`, the I/O thread in
+  `MainThread.sync`), which is why the samples go through `fli:` (`%poke`, no hop) and not
+  `objc:data` + `getBytes:length:`. `fli:` C calls (`pthread_main_np`) are fine: they run on the
+  calling thread.
+- **The deadline is ~22.7 us a sample at 44.1 kHz.** Frames rendered in 2 s of live playback
+  (88,200 due): `-o X.class` / `.jar` 88,436; `java -jar` 30,106-42,807
+  (the higher once the block's time was a double, not a ratio); the native binary
+  23,050-28,695.
+  The per-sample `(setf fli:dereference)` costs ~35 us interpreted (JVM class ~0.7 us,
+  `--native` ~1.7 us): `%element` re-derives the element size (`%fli-layout`, ~15 us, which
+  re-parses the encoding) and `%store` re-parses it again (`%parse-type` alone ~8.5 us for "f").
+  Memoizing the two measured 15-19 us -- still near the deadline, so not done; a live render on
+  the interpreter stutters and the example prints the frame count.
 
 Tests: `ObjcBlockTest` (the corpus `objc-block-corpus.lisp` against `.expected`; declarations
 need no runtime; a worker sees the global values), `JvmObjcBaseCompilerTest` (the same bytes
@@ -481,8 +512,10 @@ unwind information, and `std::terminate` runs.
   `NSError` is autoreleased into the pool the hop drains. It signals `ns-error` when the result
   says failed (nil, `NO`, zero, void) AND an error was written -- Foundation's rule: the RESULT
   says whether a call failed, not the slot; a failure with no error answers the result. The
-  method name must end in `error:`. `metal:library` / `metal:pipeline` are written over it, so a
-  bad shader's diagnostics are the condition's description.
+  method name must end in `error:` or `Error:` (Cocoa's `startAndReturnError:` spelling, which
+  `examples/macos/audio.lisp` sends; `error:` alone refused it until 2026-09-29).
+  `metal:library` / `metal:pipeline` are written over it, so a bad shader's diagnostics are the
+  condition's description.
 
 ### Interpreter and JVM class output: machine code written at run time (`am.ik.objc.ObjcCatch`)
 rontolisp ships no native code, and the catching frame must be native and sit between the FFM
@@ -851,7 +884,8 @@ runtime through a hand-written shape table and could ride on `am.ik.objc`; it do
 - No test opens a window (CI has no display; the guide uses `console` fences so `DocExamplesTest`
   cannot hang). **Verified by hand: `counter.lisp` on `java -jar`, the native binary, `-o
   Counter.class` and `-o counter.jar`; `minesweeper-macos.lisp`, `life-macos.lisp` and
-  `menubar.lisp` on `java -jar`, the native binary and `-o Life.class`; every `examples/macos`
+  `menubar.lisp` on `java -jar`, the native binary and `-o Life.class`; `audio.lisp` offline on
+  all five and live on the four that can run it (2026-09-29, above); every `examples/macos`
   program under `--native`** -- what a widget-layer change costs, since it travels into every
   compiled `appkit:` program.
 
