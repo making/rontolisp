@@ -2414,8 +2414,7 @@ final class JvmIntFusionCompiler {
 		a.aload(0);
 		a.areturn();
 		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_ubRead"),
-				cp.addUtf8("(Ljava/lang/Object;JI)Ljava/lang/Object;"), JvmRuntimeBuilder.codeBytes(a), 2, 4,
-				List.of());
+				cp.addUtf8("(Ljava/lang/Object;JI)Ljava/lang/Object;"), a);
 	}
 
 	/**
@@ -2497,8 +2496,7 @@ final class JvmIntFusionCompiler {
 		a.loadConstant(63);
 		a.lshr();
 		a.lreturn();
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"),
-				JvmRuntimeBuilder.codeBytes(a), 5, 7, List.of());
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8("_fxAsh"), cp.addUtf8("(JJ)J"), a);
 	}
 
 }

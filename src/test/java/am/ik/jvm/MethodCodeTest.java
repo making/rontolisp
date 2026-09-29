@@ -184,12 +184,34 @@ class MethodCodeTest {
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 0)).isEqualTo(-1);
 	}
 
+	// A block assembled as a body of its own keeps its branches wherever it is spliced:
+	// the dispatch tables splice their case bodies into a search tree this way.
 	@Test
-	void aFragmentWithABranchWaitingForItsLabelIsNotAppended() {
-		MethodCode fragment = new MethodCode();
-		fragment.iconst_0().ifeq(fragment.newLabel());
-		assertThatIllegalStateException().isThrownBy(() -> new MethodCode().append(fragment))
+	void aSplicedBlockKeepsItsBranches() throws Exception {
+		Fixture f = new Fixture("Splice");
+		// int run(Object x) { return x == null ? -1 : 1; }, the test inside the block
+		MethodCode block = new MethodCode();
+		MethodCode.Label notNull = block.newLabel();
+		block.aload(0).ifnonnull(notNull).iconst_m1().ireturn();
+		block.labelBinding(notNull);
+		block.iconst_1().ireturn();
+		MethodCode c = new MethodCode();
+		c.iconst_0().pop().append(block);
+		assertThat(c.size()).isEqualTo(2 + block.size());
+		f.add("run", "(Ljava/lang/Object;)I", c);
+		assertThat(f.load().getMethod("run", Object.class).invoke(null, (Object) null)).isEqualTo(-1);
+		assertThat(f.load().getMethod("run", Object.class).invoke(null, "x")).isEqualTo(1);
+	}
+
+	@Test
+	void onlyACompleteBlockIsAppendedToAPlainBody() {
+		MethodCode waiting = new MethodCode();
+		waiting.iconst_0().ifeq(waiting.newLabel());
+		assertThatIllegalStateException().isThrownBy(() -> new MethodCode().append(waiting))
 			.withMessageContaining("never bound");
+		MethodCode context = new MethodCode(new ArrayList<>(), new OperandStack(new ConstantPool()), new ArrayList<>(),
+				new ArrayList<>());
+		assertThatIllegalArgumentException().isThrownBy(() -> context.append(new MethodCode().iconst_0()));
 	}
 
 	// Over a compile context's body, every byte reaches its operand-stack model, and a

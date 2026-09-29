@@ -5,13 +5,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
-import am.ik.jvm.Opcode;
+import am.ik.jvm.MethodCode;
 
 /**
  * Builds the gated complex-number runtime helpers of the JVM backend: the {@code _c*}
@@ -193,14 +194,9 @@ final class JvmComplexRuntimeBuilder {
 	 *
 	 * @param nameUtf8 the method name constant
 	 * @param descUtf8 the method descriptor constant
-	 * @param code the method bytecode
-	 * @param maxStack the operand stack size
-	 * @param maxLocals the local variable slot count
-	 * @param exceptionTable the exception table entries, each as {@code {startPc, endPc,
-	 * handlerPc, catchTypeIndex}}
+	 * @param code the body
 	 */
-	record ComplexMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxStack, int maxLocals,
-			List<int[]> exceptionTable) {
+	record ComplexMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
 	}
 
 	/**
@@ -313,221 +309,7 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	// ------------------------------------------------------------------
-	// Emission helpers (raw List<Integer> code, JvmNumericRuntimeBuilder idiom)
-
-	private static void emitU2(List<Integer> c, int index) {
-		JvmRuntimeBuilder.emitU2(c, index);
-	}
-
-	private static void patch(List<Integer> c, int pos) {
-		JvmRuntimeBuilder.patchBranch(c, pos, c.size());
-	}
-
-	private static void emitLdc(List<Integer> c, int index) {
-		JvmRuntimeBuilder.emitLdc(c, index);
-	}
-
-	private static int jump(List<Integer> c, int opcode) {
-		int pos = c.size();
-		c.add(opcode);
-		emitU2(c, 0);
-		return pos;
-	}
-
-	/** Pushes a small int constant (-1..5, byte, short). */
-	private static void emitInt(List<Integer> c, int value) {
-		if (value == -1) {
-			c.add(Opcode.ICONST_M1);
-		}
-		else if (value == 0) {
-			c.add(Opcode.ICONST_0);
-		}
-		else if (value == 1) {
-			c.add(Opcode.ICONST_1);
-		}
-		else if (value == 2) {
-			c.add(Opcode.ICONST_2);
-		}
-		else if (value == 3) {
-			c.add(Opcode.ICONST_3);
-		}
-		else if (value == 4) {
-			c.add(Opcode.ICONST_4);
-		}
-		else if (value == 5) {
-			c.add(Opcode.ICONST_5);
-		}
-		else if (value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE) {
-			c.add(Opcode.BIPUSH);
-			c.add(value & 0xFF);
-		}
-		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			c.add(Opcode.SIPUSH);
-			c.add((value >> 8) & 0xFF);
-			c.add(value & 0xFF);
-		}
-		else {
-			throw new IllegalArgumentException("int constant out of range: " + value);
-		}
-	}
-
-	private static void aload(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.ALOAD_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.ALOAD_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.ALOAD_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.ALOAD_3);
-		}
-		else {
-			c.add(Opcode.ALOAD);
-			c.add(slot);
-		}
-	}
-
-	private static void astore(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.ASTORE_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.ASTORE_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.ASTORE_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.ASTORE_3);
-		}
-		else {
-			c.add(Opcode.ASTORE);
-			c.add(slot);
-		}
-	}
-
-	private static void dload(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.DLOAD_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.DLOAD_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.DLOAD_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.DLOAD_3);
-		}
-		else {
-			c.add(Opcode.DLOAD);
-			c.add(slot);
-		}
-	}
-
-	private static void dstore(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.DSTORE_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.DSTORE_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.DSTORE_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.DSTORE_3);
-		}
-		else {
-			c.add(Opcode.DSTORE);
-			c.add(slot);
-		}
-	}
-
-	private static void iload(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.ILOAD_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.ILOAD_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.ILOAD_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.ILOAD_3);
-		}
-		else {
-			c.add(Opcode.ILOAD);
-			c.add(slot);
-		}
-	}
-
-	private static void istore(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.ISTORE_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.ISTORE_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.ISTORE_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.ISTORE_3);
-		}
-		else {
-			c.add(Opcode.ISTORE);
-			c.add(slot);
-		}
-	}
-
-	private static void lload(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.LLOAD_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.LLOAD_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.LLOAD_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.LLOAD_3);
-		}
-		else {
-			c.add(Opcode.LLOAD);
-			c.add(slot);
-		}
-	}
-
-	private static void lstore(List<Integer> c, int slot) {
-		if (slot == 0) {
-			c.add(Opcode.LSTORE_0);
-		}
-		else if (slot == 1) {
-			c.add(Opcode.LSTORE_1);
-		}
-		else if (slot == 2) {
-			c.add(Opcode.LSTORE_2);
-		}
-		else if (slot == 3) {
-			c.add(Opcode.LSTORE_3);
-		}
-		else {
-			c.add(Opcode.LSTORE);
-			c.add(slot);
-		}
-	}
-
-	/** A self-call to a precomputed helper reference. */
-	private static void call(List<Integer> c, MethodrefConstant ref) {
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, ref.index());
-	}
+	// Emission helpers
 
 	/**
 	 * The transcendentals: {@code StrictMath} on every backend (.kb/transcendentals.md).
@@ -535,11 +317,10 @@ final class JvmComplexRuntimeBuilder {
 	private static final Set<String> STRICT_MATH = Set.of("exp", "log", "log1p", "sin", "cos", "tan", "asin", "acos",
 			"atan", "atan2", "sinh", "cosh", "tanh", "pow", "hypot");
 
-	private static void callMath(List<Integer> c, Refs refs, ConstantPool cp, String name, String desc) {
+	private static void callMath(MethodCode c, Refs refs, ConstantPool cp, String name, String desc) {
 		ClassConstant owner = STRICT_MATH.contains(name) ? cp.addClass(cp.addUtf8("java/lang/StrictMath"))
 				: refs.mathClass();
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))).index());
+		c.invokestatic(cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))).entry());
 	}
 
 	/**
@@ -547,26 +328,23 @@ final class JvmComplexRuntimeBuilder {
 	 * {@code Number.doubleValue}, throwing the interpreter's NUMBER operand-type report
 	 * text for a non-number).
 	 */
-	private static void emitToDouble(List<Integer> c, Refs refs, int slot) {
-		aload(c, slot);
-		call(c, refs.rDbl());
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.numberClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.numDoubleValue().index());
+	private static void emitToDouble(MethodCode c, Refs refs, int slot) {
+		c.aload(slot);
+		c.invokestatic(refs.rDbl().entry());
+		c.checkcast(refs.numberClass().entry());
+		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
 	}
 
 	/** Boxes the raw double on top of the stack. */
-	private static void emitBoxDouble(List<Integer> c, Refs refs) {
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.doubleValueOf().index());
+	private static void emitBoxDouble(MethodCode c, Refs refs) {
+		c.invokestatic(refs.doubleValueOf().entry());
 	}
 
 	/**
 	 * Emits {@code throw _teRaw(value, "NUMBER")} for the value in {@code slot}.
 	 */
-	private static void emitNumberErrThrow(List<Integer> c, Refs refs, int slot) {
-		aload(c, slot);
+	private static void emitNumberErrThrow(MethodCode c, Refs refs, int slot) {
+		c.aload(slot);
 		refs.throwRefs().emitThrowLoaded(c, refs.throwRefs().numberKind());
 	}
 
@@ -575,27 +353,19 @@ final class JvmComplexRuntimeBuilder {
 	 * {@code Long}, {@code BigInteger}, {@code BigInteger[]} or {@code Double}, otherwise
 	 * jumps to {@code onFailure}.
 	 */
-	private static void emitRequireReal(List<Integer> c, Refs refs, int slot, List<Integer> onFailure) {
-		aload(c, slot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.longClass().index());
-		onFailure.add(jumpIfTrue(c));
-		aload(c, slot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.bigClass().index());
-		onFailure.add(jumpIfTrue(c));
-		aload(c, slot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.ratArrClass().index());
-		onFailure.add(jumpIfTrue(c));
-		aload(c, slot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		onFailure.add(jumpIfTrue(c));
-	}
-
-	private static int jumpIfTrue(List<Integer> c) {
-		return jump(c, Opcode.IFNE);
+	private static void emitRequireReal(MethodCode c, Refs refs, int slot, MethodCode.Label onFailure) {
+		c.aload(slot);
+		c.instanceOf(refs.longClass().entry());
+		c.ifne(onFailure);
+		c.aload(slot);
+		c.instanceOf(refs.bigClass().entry());
+		c.ifne(onFailure);
+		c.aload(slot);
+		c.instanceOf(refs.ratArrClass().entry());
+		c.ifne(onFailure);
+		c.aload(slot);
+		c.instanceOf(refs.doubleClass().entry());
+		c.ifne(onFailure);
 	}
 
 	/**
@@ -605,78 +375,71 @@ final class JvmComplexRuntimeBuilder {
 	 * an integer zero (the caller funnels non-reals through the real operators, exactly
 	 * like {@code Environment.complexReal/complexImag}).
 	 */
-	private static void emitExtractParts(List<Integer> c, Refs refs, int paramSlot, int reSlot, int imSlot) {
-		aload(c, paramSlot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int notHolderRe = jump(c, Opcode.IFEQ);
-		aload(c, paramSlot);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		astore(c, reSlot);
-		int doneRe = jump(c, Opcode.GOTO);
-		patch(c, notHolderRe);
-		aload(c, paramSlot);
-		astore(c, reSlot);
-		patch(c, doneRe);
-		aload(c, paramSlot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int notHolderIm = jump(c, Opcode.IFEQ);
-		aload(c, paramSlot);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		astore(c, imSlot);
-		int doneIm = jump(c, Opcode.GOTO);
-		patch(c, notHolderIm);
-		aload(c, paramSlot);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int notDouble = jump(c, Opcode.IFEQ);
-		c.add(Opcode.DCONST_0);
+	private static void emitExtractParts(MethodCode c, Refs refs, int paramSlot, int reSlot, int imSlot) {
+		c.aload(paramSlot);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label notHolderRe = c.newLabel();
+		c.ifeq(notHolderRe);
+		c.aload(paramSlot);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.astore(reSlot);
+		MethodCode.Label doneRe = c.newLabel();
+		c.goto_(doneRe);
+		c.labelBinding(notHolderRe);
+		c.aload(paramSlot);
+		c.astore(reSlot);
+		c.labelBinding(doneRe);
+		c.aload(paramSlot);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label notHolderIm = c.newLabel();
+		c.ifeq(notHolderIm);
+		c.aload(paramSlot);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.astore(imSlot);
+		MethodCode.Label doneIm = c.newLabel();
+		c.goto_(doneIm);
+		c.labelBinding(notHolderIm);
+		c.aload(paramSlot);
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label notDouble = c.newLabel();
+		c.ifeq(notDouble);
+		c.dconst_0();
 		emitBoxDouble(c, refs);
-		astore(c, imSlot);
-		int doneZero = jump(c, Opcode.GOTO);
-		patch(c, notDouble);
-		c.add(Opcode.LCONST_0);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.longValueOf().index());
-		astore(c, imSlot);
-		patch(c, doneZero);
-		patch(c, doneIm);
+		c.astore(imSlot);
+		MethodCode.Label doneZero = c.newLabel();
+		c.goto_(doneZero);
+		c.labelBinding(notDouble);
+		c.lconst_0();
+		c.invokestatic(refs.longValueOf().entry());
+		c.astore(imSlot);
+		c.labelBinding(doneZero);
+		c.labelBinding(doneIm);
 	}
 
 	/**
-	 * Tests whether any of the four parts in the given slots is a {@code Double},
-	 * answering the branch positions to patch to the float path (execution falls through
-	 * to the exact path).
+	 * Tests whether any of the four parts in the given slots is a {@code Double}, jumping
+	 * to {@code toFloat}, the float path, when one is (execution falls through to the
+	 * exact path).
 	 */
-	private static List<Integer> emitFloatTest(List<Integer> c, Refs refs, int[] slots) {
-		List<Integer> toFloat = new ArrayList<>();
+	private static void emitFloatTest(MethodCode c, Refs refs, int[] slots, MethodCode.Label toFloat) {
 		for (int slot : slots) {
-			aload(c, slot);
-			c.add(Opcode.INSTANCEOF);
-			emitU2(c, refs.doubleClass().index());
-			toFloat.add(jump(c, Opcode.IFNE));
+			c.aload(slot);
+			c.instanceOf(refs.doubleClass().entry());
+			c.ifne(toFloat);
 		}
-		return toFloat;
 	}
 
 	/**
 	 * Constructs a holder from the two parts in {@code reSlot}/{@code imSlot}.
 	 */
-	private static void emitNewHolderFromSlots(List<Integer> c, Refs refs, int reSlot, int imSlot) {
-		c.add(Opcode.NEW);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.DUP);
-		aload(c, reSlot);
-		aload(c, imSlot);
-		c.add(Opcode.INVOKESPECIAL);
-		emitU2(c, refs.rcInit().index());
+	private static void emitNewHolderFromSlots(MethodCode c, Refs refs, int reSlot, int imSlot) {
+		c.new_(refs.rcClass().entry());
+		c.dup();
+		c.aload(reSlot);
+		c.aload(imSlot);
+		c.invokespecial(refs.rcInit().entry());
 	}
 
 	// _ccomplex(Object real, Object imag): the canonical value. A non-real part
@@ -685,95 +448,90 @@ final class JvmComplexRuntimeBuilder {
 	// float zero never demotes); a rational zero imaginary part demotes to the
 	// real itself; otherwise a fresh holder.
 	private static ComplexMethod buildComplex(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		List<Integer> realOk = new ArrayList<>();
+		MethodCode c = new MethodCode();
+		MethodCode.Label realOk = c.newLabel();
 		emitRequireReal(c, refs, 0, realOk);
 		emitNumberErrThrow(c, refs, 0);
-		for (int pos : realOk) {
-			patch(c, pos);
-		}
-		List<Integer> imagOk = new ArrayList<>();
+		c.labelBinding(realOk);
+		MethodCode.Label imagOk = c.newLabel();
 		emitRequireReal(c, refs, 1, imagOk);
 		emitNumberErrThrow(c, refs, 1);
-		for (int pos : imagOk) {
-			patch(c, pos);
-		}
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int realIsDouble = jump(c, Opcode.IFNE);
-		aload(c, 1);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int imagIsDouble = jump(c, Opcode.IFNE);
+		c.labelBinding(imagOk);
+		c.aload(0);
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label realIsDouble = c.newLabel();
+		c.ifne(realIsDouble);
+		c.aload(1);
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label imagIsDouble = c.newLabel();
+		c.ifne(imagIsDouble);
 		// Exact path: a rational zero imaginary part demotes to the real.
-		aload(c, 1);
-		c.add(Opcode.LCONST_0);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.longValueOf().index());
-		call(c, refs.rCmp());
-		c.add(Opcode.ICONST_0);
-		int notZero = jump(c, Opcode.IF_ICMPNE);
-		aload(c, 0);
-		c.add(Opcode.ARETURN);
-		patch(c, notZero);
+		c.aload(1);
+		c.lconst_0();
+		c.invokestatic(refs.longValueOf().entry());
+		c.invokestatic(refs.rCmp().entry());
+		c.iconst_0();
+		MethodCode.Label notZero = c.newLabel();
+		c.if_icmpne(notZero);
+		c.aload(0);
+		c.areturn();
+		c.labelBinding(notZero);
 		emitNewHolderFromSlots(c, refs, 0, 1);
-		c.add(Opcode.ARETURN);
+		c.areturn();
 		// Float path: both parts through _dbl (a Double answers as-is).
-		patch(c, realIsDouble);
-		patch(c, imagIsDouble);
-		aload(c, 0);
-		call(c, refs.rDbl());
-		astore(c, 0);
-		aload(c, 1);
-		call(c, refs.rDbl());
-		astore(c, 1);
+		c.labelBinding(realIsDouble);
+		c.labelBinding(imagIsDouble);
+		c.aload(0);
+		c.invokestatic(refs.rDbl().entry());
+		c.astore(0);
+		c.aload(1);
+		c.invokestatic(refs.rDbl().entry());
+		c.astore(1);
 		emitNewHolderFromSlots(c, refs, 0, 1);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 2, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cadd/_csub over real-or-complex operands. All-rational parts compute
 	// exactly through _add/_sub; a float anywhere coerces the step to doubles.
 	// Slots: params 0-1, parts 2-5, boxed results 6-7.
 	private static ComplexMethod buildAdd(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		return buildAddSub(refs, name, desc, Opcode.DADD, JvmNumericRuntimeBuilder.ADD);
+		return buildAddSub(refs, name, desc, MethodCode::dadd, JvmNumericRuntimeBuilder.ADD);
 	}
 
 	private static ComplexMethod buildSub(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		return buildAddSub(refs, name, desc, Opcode.DSUB, JvmNumericRuntimeBuilder.SUB);
+		return buildAddSub(refs, name, desc, MethodCode::dsub, JvmNumericRuntimeBuilder.SUB);
 	}
 
-	private static ComplexMethod buildAddSub(Refs refs, Utf8Constant name, Utf8Constant desc, int doubleOpcode,
-			String exactOp) {
-		List<Integer> c = new ArrayList<>();
+	private static ComplexMethod buildAddSub(Refs refs, Utf8Constant name, Utf8Constant desc,
+			Consumer<MethodCode> doubleOp, String exactOp) {
+		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
-		List<Integer> toFloat = emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 });
-		aload(c, 2);
-		aload(c, 4);
-		call(c, exactOpRef(refs, exactOp));
-		aload(c, 3);
-		aload(c, 5);
-		call(c, exactOpRef(refs, exactOp));
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		for (int pos : toFloat) {
-			patch(c, pos);
-		}
+		MethodCode.Label toFloat = c.newLabel();
+		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
+		c.aload(2);
+		c.aload(4);
+		c.invokestatic(exactOpRef(refs, exactOp).entry());
+		c.aload(3);
+		c.aload(5);
+		c.invokestatic(exactOpRef(refs, exactOp).entry());
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
 		emitToDouble(c, refs, 4);
-		c.add(doubleOpcode);
+		doubleOp.accept(c);
 		emitBoxDouble(c, refs);
-		astore(c, 6);
+		c.astore(6);
 		emitToDouble(c, refs, 3);
 		emitToDouble(c, refs, 5);
-		c.add(doubleOpcode);
+		doubleOp.accept(c);
 		emitBoxDouble(c, refs);
-		astore(c, 7);
+		c.astore(7);
 		emitNewHolderFromSlots(c, refs, 6, 7);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 8, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	private static MethodrefConstant exactOpRef(Refs refs, String exactOp) {
@@ -792,63 +550,61 @@ final class JvmComplexRuntimeBuilder {
 	// _cmul over real-or-complex operands: (a+bi)(c+di) = (ac-bd, ad+bc).
 	// Slots: params 0-1, parts 2-5, boxed results 6-7, doubles 8-15.
 	private static ComplexMethod buildMul(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
-		List<Integer> toFloat = emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 });
-		aload(c, 2);
-		aload(c, 4);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 5);
-		call(c, refs.rMul());
-		call(c, refs.rSub());
-		astore(c, 6);
-		aload(c, 2);
-		aload(c, 5);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 4);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		astore(c, 7);
-		aload(c, 6);
-		aload(c, 7);
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		int end = jump(c, Opcode.GOTO);
-		for (int pos : toFloat) {
-			patch(c, pos);
-		}
+		MethodCode.Label toFloat = c.newLabel();
+		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
+		c.aload(2);
+		c.aload(4);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(5);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rSub().entry());
+		c.astore(6);
+		c.aload(2);
+		c.aload(5);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(4);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.astore(7);
+		c.aload(6);
+		c.aload(7);
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
-		dstore(c, 8);
+		c.dstore(8);
 		emitToDouble(c, refs, 3);
-		dstore(c, 10);
+		c.dstore(10);
 		emitToDouble(c, refs, 4);
-		dstore(c, 12);
+		c.dstore(12);
 		emitToDouble(c, refs, 5);
-		dstore(c, 14);
-		dload(c, 8);
-		dload(c, 12);
-		c.add(Opcode.DMUL);
-		dload(c, 10);
-		dload(c, 14);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DSUB);
+		c.dstore(14);
+		c.dload(8);
+		c.dload(12);
+		c.dmul();
+		c.dload(10);
+		c.dload(14);
+		c.dmul();
+		c.dsub();
 		emitBoxDouble(c, refs);
-		astore(c, 6);
-		dload(c, 8);
-		dload(c, 14);
-		c.add(Opcode.DMUL);
-		dload(c, 10);
-		dload(c, 12);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DADD);
+		c.astore(6);
+		c.dload(8);
+		c.dload(14);
+		c.dmul();
+		c.dload(10);
+		c.dload(12);
+		c.dmul();
+		c.dadd();
 		emitBoxDouble(c, refs);
-		astore(c, 7);
+		c.astore(7);
 		emitNewHolderFromSlots(c, refs, 6, 7);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 16, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cdiv over real-or-complex operands. The exact path divides by the
@@ -858,7 +614,7 @@ final class JvmComplexRuntimeBuilder {
 	// Slots: params 0-1, parts 2-5, temps 6-8, doubles 10-21
 	// (10=a, 12=b, 14=c, 16=d, 18=r, 20=den).
 	private static ComplexMethod buildDiv(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		// Neither operand a holder: a plain real division, which the ungated _div
 		// answers -- exactly, without the c^2+d^2 denominator's two extra roundings
 		// and without manufacturing a zero-imagined float holder the float path
@@ -867,168 +623,168 @@ final class JvmComplexRuntimeBuilder {
 		// divides two logarithms, either of which may have stayed real, and this is
 		// what keeps that quotient EQUAL to (/ (log n) (log base)). The WASM twin
 		// (_c_div's own head) is the same arm.
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int firstIsHolder = jump(c, Opcode.IFNE);
-		aload(c, 1);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int secondIsHolder = jump(c, Opcode.IFNE);
-		aload(c, 0);
-		aload(c, 1);
-		call(c, refs.rDiv());
-		c.add(Opcode.ARETURN);
-		patch(c, firstIsHolder);
-		patch(c, secondIsHolder);
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label firstIsHolder = c.newLabel();
+		c.ifne(firstIsHolder);
+		c.aload(1);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label secondIsHolder = c.newLabel();
+		c.ifne(secondIsHolder);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(refs.rDiv().entry());
+		c.areturn();
+		c.labelBinding(firstIsHolder);
+		c.labelBinding(secondIsHolder);
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
-		List<Integer> toFloat = emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 });
-		aload(c, 4);
-		aload(c, 4);
-		call(c, refs.rMul());
-		aload(c, 5);
-		aload(c, 5);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		astore(c, 6);
-		aload(c, 2);
-		aload(c, 4);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 5);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		aload(c, 6);
-		call(c, refs.rDiv());
-		astore(c, 7);
-		aload(c, 3);
-		aload(c, 4);
-		call(c, refs.rMul());
-		aload(c, 2);
-		aload(c, 5);
-		call(c, refs.rMul());
-		call(c, refs.rSub());
-		aload(c, 6);
-		call(c, refs.rDiv());
-		astore(c, 8);
-		aload(c, 7);
-		aload(c, 8);
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		for (int pos : toFloat) {
-			patch(c, pos);
-		}
+		MethodCode.Label toFloat = c.newLabel();
+		emitFloatTest(c, refs, new int[] { 2, 3, 4, 5 }, toFloat);
+		c.aload(4);
+		c.aload(4);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(5);
+		c.aload(5);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.astore(6);
+		c.aload(2);
+		c.aload(4);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(5);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.aload(6);
+		c.invokestatic(refs.rDiv().entry());
+		c.astore(7);
+		c.aload(3);
+		c.aload(4);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(2);
+		c.aload(5);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rSub().entry());
+		c.aload(6);
+		c.invokestatic(refs.rDiv().entry());
+		c.astore(8);
+		c.aload(7);
+		c.aload(8);
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		c.labelBinding(toFloat);
 		emitToDouble(c, refs, 2);
-		dstore(c, 10);
+		c.dstore(10);
 		emitToDouble(c, refs, 3);
-		dstore(c, 12);
+		c.dstore(12);
 		emitToDouble(c, refs, 4);
-		dstore(c, 14);
+		c.dstore(14);
 		emitToDouble(c, refs, 5);
-		dstore(c, 16);
+		c.dstore(16);
 		// Smith's fold: |c| >= |d| ? -- DCMPL answers -1 for a NaN, so a NaN operand
 		// takes the mirrored arm, exactly what Java's >= does in smithDivide.
-		dload(c, 14);
+		c.dload(14);
 		callMath(c, refs, cp, "abs", "(D)D");
-		dload(c, 16);
+		c.dload(16);
 		callMath(c, refs, cp, "abs", "(D)D");
-		c.add(Opcode.DCMPL);
-		int realFold = jump(c, Opcode.IFGE);
+		c.dcmpl();
+		MethodCode.Label realFold = c.newLabel();
+		c.ifge(realFold);
 		// |c| < |d|: r = c/d, den = c*r + d, re = (a*r + b)/den, im = (b*r - a)/den.
-		dload(c, 14);
-		dload(c, 16);
-		c.add(Opcode.DDIV);
-		dstore(c, 18);
-		dload(c, 14);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		dload(c, 16);
-		c.add(Opcode.DADD);
-		dstore(c, 20);
-		dload(c, 10);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		dload(c, 12);
-		c.add(Opcode.DADD);
-		dload(c, 20);
-		c.add(Opcode.DDIV);
+		c.dload(14);
+		c.dload(16);
+		c.ddiv();
+		c.dstore(18);
+		c.dload(14);
+		c.dload(18);
+		c.dmul();
+		c.dload(16);
+		c.dadd();
+		c.dstore(20);
+		c.dload(10);
+		c.dload(18);
+		c.dmul();
+		c.dload(12);
+		c.dadd();
+		c.dload(20);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		astore(c, 6);
-		dload(c, 12);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		dload(c, 10);
-		c.add(Opcode.DSUB);
-		dload(c, 20);
-		c.add(Opcode.DDIV);
+		c.astore(6);
+		c.dload(12);
+		c.dload(18);
+		c.dmul();
+		c.dload(10);
+		c.dsub();
+		c.dload(20);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		astore(c, 7);
-		int built = jump(c, Opcode.GOTO);
-		patch(c, realFold);
+		c.astore(7);
+		MethodCode.Label built = c.newLabel();
+		c.goto_(built);
+		c.labelBinding(realFold);
 		// |c| >= |d|: r = d/c, den = c + d*r, re = (a + b*r)/den, im = (b - a*r)/den.
 		// A REAL divisor lands here with d zero, so both parts are ONE division.
-		dload(c, 16);
-		dload(c, 14);
-		c.add(Opcode.DDIV);
-		dstore(c, 18);
-		dload(c, 14);
-		dload(c, 16);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DADD);
-		dstore(c, 20);
-		dload(c, 10);
-		dload(c, 12);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DADD);
-		dload(c, 20);
-		c.add(Opcode.DDIV);
+		c.dload(16);
+		c.dload(14);
+		c.ddiv();
+		c.dstore(18);
+		c.dload(14);
+		c.dload(16);
+		c.dload(18);
+		c.dmul();
+		c.dadd();
+		c.dstore(20);
+		c.dload(10);
+		c.dload(12);
+		c.dload(18);
+		c.dmul();
+		c.dadd();
+		c.dload(20);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		astore(c, 6);
-		dload(c, 12);
-		dload(c, 10);
-		dload(c, 18);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DSUB);
-		dload(c, 20);
-		c.add(Opcode.DDIV);
+		c.astore(6);
+		c.dload(12);
+		c.dload(10);
+		c.dload(18);
+		c.dmul();
+		c.dsub();
+		c.dload(20);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		astore(c, 7);
-		patch(c, built);
+		c.astore(7);
+		c.labelBinding(built);
 		emitNewHolderFromSlots(c, refs, 6, 7);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 22, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cneg(Object x): (-re, -im), each part through _neg (which keeps doubles
 	// unboxed-negated, so signed zeros survive exactly like the interpreter's
 	// negateReal/exactNeg).
 	private static ComplexMethod buildNeg(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		emitExtractParts(c, refs, 0, 1, 2);
-		aload(c, 1);
-		call(c, refs.rNeg());
-		aload(c, 2);
-		call(c, refs.rNeg());
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 5, 3, List.of());
+		c.aload(1);
+		c.invokestatic(refs.rNeg().entry());
+		c.aload(2);
+		c.invokestatic(refs.rNeg().entry());
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	/** Pushes a double constant (with the -0.0 guard of the shared emitters). */
-	private static void emitDoubleConst(List<Integer> c, ConstantPool cp, double value) {
+	private static void emitDoubleConst(MethodCode c, ConstantPool cp, double value) {
 		if (value == 0.0 && Double.doubleToRawLongBits(value) == 0L) {
-			c.add(Opcode.DCONST_0);
+			c.dconst_0();
 		}
 		else if (value == 1.0) {
-			c.add(Opcode.DCONST_1);
+			c.dconst_1();
 		}
 		else {
 			ConstantPool.DoubleConstant dc = cp.addDouble(value);
-			c.add(Opcode.LDC2_W);
-			emitU2(c, dc.index());
+			c.ldc(dc.entry());
 		}
 	}
 
@@ -1037,73 +793,78 @@ final class JvmComplexRuntimeBuilder {
 	 * {@code r0Slot}/{@code r1Slot} (using {@code tSlot} for t). A double-zero answers
 	 * its inputs unchanged, like {@code Environment.complexSqrt}.
 	 */
-	private static void emitComplexSqrtInto(List<Integer> c, Refs refs, ConstantPool cp, int reSlot, int imSlot,
+	private static void emitComplexSqrtInto(MethodCode c, Refs refs, ConstantPool cp, int reSlot, int imSlot,
 			int r0Slot, int r1Slot, int tSlot) {
-		dload(c, reSlot);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPL);
-		int compute = jump(c, Opcode.IFNE);
-		dload(c, imSlot);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPL);
-		int compute2 = jump(c, Opcode.IFNE);
-		dload(c, reSlot);
-		dstore(c, r0Slot);
-		dload(c, imSlot);
-		dstore(c, r1Slot);
-		int done = jump(c, Opcode.GOTO);
-		patch(c, compute);
-		patch(c, compute2);
-		dload(c, reSlot);
+		c.dload(reSlot);
+		c.dconst_0();
+		c.dcmpl();
+		MethodCode.Label compute = c.newLabel();
+		c.ifne(compute);
+		c.dload(imSlot);
+		c.dconst_0();
+		c.dcmpl();
+		MethodCode.Label compute2 = c.newLabel();
+		c.ifne(compute2);
+		c.dload(reSlot);
+		c.dstore(r0Slot);
+		c.dload(imSlot);
+		c.dstore(r1Slot);
+		MethodCode.Label done = c.newLabel();
+		c.goto_(done);
+		c.labelBinding(compute);
+		c.labelBinding(compute2);
+		c.dload(reSlot);
 		callMath(c, refs, cp, "abs", "(D)D");
-		dload(c, reSlot);
-		dload(c, imSlot);
+		c.dload(reSlot);
+		c.dload(imSlot);
 		callMath(c, refs, cp, "hypot", "(DD)D");
-		c.add(Opcode.DADD);
+		c.dadd();
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DDIV);
+		c.ddiv();
 		callMath(c, refs, cp, "sqrt", "(D)D");
-		dstore(c, tSlot);
-		dload(c, reSlot);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPL);
-		int negative = jump(c, Opcode.IFLT);
-		dload(c, tSlot);
-		dstore(c, r0Slot);
-		dload(c, imSlot);
-		dload(c, tSlot);
+		c.dstore(tSlot);
+		c.dload(reSlot);
+		c.dconst_0();
+		c.dcmpl();
+		MethodCode.Label negative = c.newLabel();
+		c.iflt(negative);
+		c.dload(tSlot);
+		c.dstore(r0Slot);
+		c.dload(imSlot);
+		c.dload(tSlot);
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DDIV);
-		dstore(c, r1Slot);
-		int done2 = jump(c, Opcode.GOTO);
-		patch(c, negative);
-		dload(c, imSlot);
+		c.dmul();
+		c.ddiv();
+		c.dstore(r1Slot);
+		MethodCode.Label done2 = c.newLabel();
+		c.goto_(done2);
+		c.labelBinding(negative);
+		c.dload(imSlot);
 		callMath(c, refs, cp, "abs", "(D)D");
-		dload(c, tSlot);
+		c.dload(tSlot);
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DDIV);
-		dstore(c, r0Slot);
-		dload(c, tSlot);
-		dload(c, imSlot);
+		c.dmul();
+		c.ddiv();
+		c.dstore(r0Slot);
+		c.dload(tSlot);
+		c.dload(imSlot);
 		callMath(c, refs, cp, "copySign", "(DD)D");
-		dstore(c, r1Slot);
-		patch(c, done2);
-		patch(c, done);
+		c.dstore(r1Slot);
+		c.labelBinding(done2);
+		c.labelBinding(done);
 	}
 
 	/**
 	 * The complex logarithm of the doubles in {@code reSlot}/{@code imSlot}, leaving the
 	 * two result doubles on the stack.
 	 */
-	private static void emitComplexLog(List<Integer> c, Refs refs, ConstantPool cp, int reSlot, int imSlot) {
-		dload(c, reSlot);
-		dload(c, imSlot);
+	private static void emitComplexLog(MethodCode c, Refs refs, ConstantPool cp, int reSlot, int imSlot) {
+		c.dload(reSlot);
+		c.dload(imSlot);
 		callMath(c, refs, cp, "hypot", "(DD)D");
 		callMath(c, refs, cp, "log", "(D)D");
-		dload(c, imSlot);
-		dload(c, reSlot);
+		c.dload(imSlot);
+		c.dload(reSlot);
 		callMath(c, refs, cp, "atan2", "(DD)D");
 	}
 
@@ -1112,59 +873,56 @@ final class JvmComplexRuntimeBuilder {
 	// other real answers Math.sqrt. Slots: param 0, boxed temps 1-2, doubles
 	// 3-8.
 	private static ComplexMethod buildSqrt(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int realPath = jump(c, Opcode.IFEQ);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		astore(c, 1);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		astore(c, 2);
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label realPath = c.newLabel();
+		c.ifeq(realPath);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.astore(1);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.astore(2);
 		emitToDouble(c, refs, 1);
-		dstore(c, 3);
+		c.dstore(3);
 		emitToDouble(c, refs, 2);
-		dstore(c, 5);
+		c.dstore(5);
 		emitComplexSqrtInto(c, refs, cp, 3, 5, 3, 5, 7);
-		dload(c, 3);
+		c.dload(3);
 		emitBoxDouble(c, refs);
-		astore(c, 1);
-		dload(c, 5);
+		c.astore(1);
+		c.dload(5);
 		emitBoxDouble(c, refs);
-		astore(c, 2);
+		c.astore(2);
 		emitNewHolderFromSlots(c, refs, 1, 2);
-		c.add(Opcode.ARETURN);
-		patch(c, realPath);
+		c.areturn();
+		c.labelBinding(realPath);
 		emitToDouble(c, refs, 0);
-		dstore(c, 3);
-		dload(c, 3);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPG);
-		int nonNegative = jump(c, Opcode.IFGE);
-		c.add(Opcode.DCONST_0);
+		c.dstore(3);
+		c.dload(3);
+		c.dconst_0();
+		c.dcmpg();
+		MethodCode.Label nonNegative = c.newLabel();
+		c.ifge(nonNegative);
+		c.dconst_0();
 		emitBoxDouble(c, refs);
-		astore(c, 1);
-		dload(c, 3);
-		c.add(Opcode.DNEG);
+		c.astore(1);
+		c.dload(3);
+		c.dneg();
 		callMath(c, refs, cp, "sqrt", "(D)D");
 		emitBoxDouble(c, refs);
-		astore(c, 2);
+		c.astore(2);
 		emitNewHolderFromSlots(c, refs, 1, 2);
-		c.add(Opcode.ARETURN);
-		patch(c, nonNegative);
-		dload(c, 3);
+		c.areturn();
+		c.labelBinding(nonNegative);
+		c.dload(3);
 		callMath(c, refs, cp, "sqrt", "(D)D");
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 9, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cpow(Object base, Object exp): an int-range integer exponent over
@@ -1173,208 +931,201 @@ final class JvmComplexRuntimeBuilder {
 	// floats. Slots: params 0-1, base parts 2-3, exp parts 4-5, power 6,
 	// accumulators 7-8, temps 9-10, doubles 11-26.
 	private static ComplexMethod buildPow(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int floatPathEarly = jump(c, Opcode.IFNE);
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int baseNotHolder = jump(c, Opcode.IFEQ);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int floatPathEarly2 = jump(c, Opcode.IFNE);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.doubleClass().index());
-		int floatPathEarly3 = jump(c, Opcode.IFNE);
-		patch(c, baseNotHolder);
-		aload(c, 1);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.longClass().index());
-		int floatPathExp = jump(c, Opcode.IFEQ);
-		aload(c, 1);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.longClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.longValue().index());
-		lstore(c, 9);
-		lload(c, 9);
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label floatPathEarly = c.newLabel();
+		c.ifne(floatPathEarly);
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label baseNotHolder = c.newLabel();
+		c.ifeq(baseNotHolder);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label floatPathEarly2 = c.newLabel();
+		c.ifne(floatPathEarly2);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.instanceOf(refs.doubleClass().entry());
+		MethodCode.Label floatPathEarly3 = c.newLabel();
+		c.ifne(floatPathEarly3);
+		c.labelBinding(baseNotHolder);
+		c.aload(1);
+		c.instanceOf(refs.longClass().entry());
+		MethodCode.Label floatPathExp = c.newLabel();
+		c.ifeq(floatPathExp);
+		c.aload(1);
+		c.checkcast(refs.longClass().entry());
+		c.invokevirtual(refs.longValue().methodRefEntry());
+		c.lstore(9);
+		c.lload(9);
 		ConstantPool.LongConstant maxPow = cp.addLong(Integer.MAX_VALUE);
-		c.add(Opcode.LDC2_W);
-		emitU2(c, maxPow.index());
-		c.add(Opcode.LCMP);
-		int floatPathRange = jump(c, Opcode.IFGT);
-		lload(c, 9);
+		c.ldc(maxPow.entry());
+		c.lcmp();
+		MethodCode.Label floatPathRange = c.newLabel();
+		c.ifgt(floatPathRange);
+		c.lload(9);
 		ConstantPool.LongConstant minPow = cp.addLong(-(long) Integer.MAX_VALUE);
-		c.add(Opcode.LDC2_W);
-		emitU2(c, minPow.index());
-		c.add(Opcode.LCMP);
-		int floatPathRange2 = jump(c, Opcode.IFLT);
-		lload(c, 9);
-		c.add(Opcode.L2I);
-		istore(c, 6);
+		c.ldc(minPow.entry());
+		c.lcmp();
+		MethodCode.Label floatPathRange2 = c.newLabel();
+		c.iflt(floatPathRange2);
+		c.lload(9);
+		c.l2i();
+		c.istore(6);
 		// Exact path.
 		emitExtractParts(c, refs, 0, 2, 3);
-		c.add(Opcode.LCONST_1);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.longValueOf().index());
-		astore(c, 7);
-		c.add(Opcode.LCONST_0);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.longValueOf().index());
-		astore(c, 8);
-		iload(c, 6);
-		int noRecip = jump(c, Opcode.IFGE);
-		aload(c, 2);
-		aload(c, 2);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 3);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		astore(c, 9);
-		aload(c, 2);
-		aload(c, 9);
-		call(c, refs.rDiv());
-		astore(c, 2);
-		aload(c, 3);
-		call(c, refs.rNeg());
-		aload(c, 9);
-		call(c, refs.rDiv());
-		astore(c, 3);
-		iload(c, 6);
-		c.add(Opcode.INEG);
-		istore(c, 6);
-		patch(c, noRecip);
-		int loopTop = c.size();
-		iload(c, 6);
-		int loopEnd = jump(c, Opcode.IFLE);
-		iload(c, 6);
-		c.add(Opcode.ICONST_1);
-		c.add(Opcode.IAND);
-		int skipMul = jump(c, Opcode.IFEQ);
-		aload(c, 7);
-		aload(c, 2);
-		call(c, refs.rMul());
-		aload(c, 8);
-		aload(c, 3);
-		call(c, refs.rMul());
-		call(c, refs.rSub());
-		astore(c, 9);
-		aload(c, 7);
-		aload(c, 3);
-		call(c, refs.rMul());
-		aload(c, 8);
-		aload(c, 2);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		astore(c, 8);
-		aload(c, 9);
-		astore(c, 7);
-		patch(c, skipMul);
-		aload(c, 2);
-		aload(c, 2);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 3);
-		call(c, refs.rMul());
-		call(c, refs.rSub());
-		astore(c, 9);
-		aload(c, 2);
-		aload(c, 3);
-		call(c, refs.rMul());
-		aload(c, 3);
-		aload(c, 2);
-		call(c, refs.rMul());
-		call(c, refs.rAdd());
-		astore(c, 3);
-		aload(c, 9);
-		astore(c, 2);
-		iload(c, 6);
-		c.add(Opcode.ICONST_1);
-		c.add(Opcode.ISHR);
-		istore(c, 6);
-		int back = jump(c, Opcode.GOTO);
-		patchAt(c, back, loopTop);
-		patch(c, loopEnd);
-		aload(c, 7);
-		aload(c, 8);
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
+		c.lconst_1();
+		c.invokestatic(refs.longValueOf().entry());
+		c.astore(7);
+		c.lconst_0();
+		c.invokestatic(refs.longValueOf().entry());
+		c.astore(8);
+		c.iload(6);
+		MethodCode.Label noRecip = c.newLabel();
+		c.ifge(noRecip);
+		c.aload(2);
+		c.aload(2);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(3);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.astore(9);
+		c.aload(2);
+		c.aload(9);
+		c.invokestatic(refs.rDiv().entry());
+		c.astore(2);
+		c.aload(3);
+		c.invokestatic(refs.rNeg().entry());
+		c.aload(9);
+		c.invokestatic(refs.rDiv().entry());
+		c.astore(3);
+		c.iload(6);
+		c.ineg();
+		c.istore(6);
+		c.labelBinding(noRecip);
+		MethodCode.Label loopTop = c.newBoundLabel();
+		c.iload(6);
+		MethodCode.Label loopEnd = c.newLabel();
+		c.ifle(loopEnd);
+		c.iload(6);
+		c.iconst_1();
+		c.iand();
+		MethodCode.Label skipMul = c.newLabel();
+		c.ifeq(skipMul);
+		c.aload(7);
+		c.aload(2);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(8);
+		c.aload(3);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rSub().entry());
+		c.astore(9);
+		c.aload(7);
+		c.aload(3);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(8);
+		c.aload(2);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.astore(8);
+		c.aload(9);
+		c.astore(7);
+		c.labelBinding(skipMul);
+		c.aload(2);
+		c.aload(2);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(3);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rSub().entry());
+		c.astore(9);
+		c.aload(2);
+		c.aload(3);
+		c.invokestatic(refs.rMul().entry());
+		c.aload(3);
+		c.aload(2);
+		c.invokestatic(refs.rMul().entry());
+		c.invokestatic(refs.rAdd().entry());
+		c.astore(3);
+		c.aload(9);
+		c.astore(2);
+		c.iload(6);
+		c.iconst_1();
+		c.ishr();
+		c.istore(6);
+		c.goto_(loopTop);
+		c.labelBinding(loopEnd);
+		c.aload(7);
+		c.aload(8);
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
 		// Float path through exp(w*log(z)).
-		int floatPath = c.size();
-		patch(c, floatPathEarly);
-		patch(c, floatPathEarly2);
-		patch(c, floatPathEarly3);
-		patch(c, floatPathExp);
-		patch(c, floatPathRange);
-		patch(c, floatPathRange2);
+		c.labelBinding(floatPathEarly);
+		c.labelBinding(floatPathEarly2);
+		c.labelBinding(floatPathEarly3);
+		c.labelBinding(floatPathExp);
+		c.labelBinding(floatPathRange);
+		c.labelBinding(floatPathRange2);
 		emitExtractParts(c, refs, 0, 2, 3);
 		emitExtractParts(c, refs, 1, 4, 5);
 		emitToDouble(c, refs, 2);
-		dstore(c, 11);
+		c.dstore(11);
 		emitToDouble(c, refs, 3);
-		dstore(c, 13);
+		c.dstore(13);
 		emitToDouble(c, refs, 4);
-		dstore(c, 15);
+		c.dstore(15);
 		emitToDouble(c, refs, 5);
-		dstore(c, 17);
-		dload(c, 11);
-		dload(c, 13);
+		c.dstore(17);
+		c.dload(11);
+		c.dload(13);
 		callMath(c, refs, cp, "hypot", "(DD)D");
 		callMath(c, refs, cp, "log", "(D)D");
-		dstore(c, 19);
-		dload(c, 13);
-		dload(c, 11);
+		c.dstore(19);
+		c.dload(13);
+		c.dload(11);
 		callMath(c, refs, cp, "atan2", "(DD)D");
-		dstore(c, 21);
-		dload(c, 13);
-		dload(c, 11);
+		c.dstore(21);
+		c.dload(13);
+		c.dload(11);
 		callMath(c, refs, cp, "atan2", "(DD)D");
-		dstore(c, 21);
-		dload(c, 15);
-		dload(c, 19);
-		c.add(Opcode.DMUL);
-		dload(c, 17);
-		dload(c, 21);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DSUB);
+		c.dstore(21);
+		c.dload(15);
+		c.dload(19);
+		c.dmul();
+		c.dload(17);
+		c.dload(21);
+		c.dmul();
+		c.dsub();
 		callMath(c, refs, cp, "exp", "(D)D");
-		dstore(c, 23);
-		dload(c, 15);
-		dload(c, 21);
-		c.add(Opcode.DMUL);
-		dload(c, 17);
-		dload(c, 19);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DADD);
-		dstore(c, 25);
-		dload(c, 23);
-		dload(c, 25);
+		c.dstore(23);
+		c.dload(15);
+		c.dload(21);
+		c.dmul();
+		c.dload(17);
+		c.dload(19);
+		c.dmul();
+		c.dadd();
+		c.dstore(25);
+		c.dload(23);
+		c.dload(25);
 		callMath(c, refs, cp, "cos", "(D)D");
-		c.add(Opcode.DMUL);
+		c.dmul();
 		emitBoxDouble(c, refs);
-		astore(c, 7);
-		dload(c, 23);
-		dload(c, 25);
+		c.astore(7);
+		c.dload(23);
+		c.dload(25);
 		callMath(c, refs, cp, "sin", "(D)D");
-		c.add(Opcode.DMUL);
+		c.dmul();
 		emitBoxDouble(c, refs);
-		astore(c, 8);
+		c.astore(8);
 		emitNewHolderFromSlots(c, refs, 7, 8);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 8, 27, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	/**
@@ -1389,61 +1140,60 @@ final class JvmComplexRuntimeBuilder {
 	 * unduplicated. Slots: base 0, exp 1, x 2, y 4, modulus 6, boxed parts 8 and 9.
 	 */
 	private static ComplexMethod buildPowReal(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		emitToDouble(c, refs, 0);
-		dstore(c, 2);
+		c.dstore(2);
 		emitToDouble(c, refs, 1);
-		dstore(c, 4);
+		c.dstore(4);
 		// x < 0 ? -- DCMPG answers 1 for a NaN, which takes the real path with it.
-		dload(c, 2);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPG);
-		int realPathSign = jump(c, Opcode.IFGE);
-		dload(c, 4);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, cp.addMethodref(refs.doubleClass(), cp.addNameAndType(cp.addUtf8("isFinite"), cp.addUtf8("(D)Z")))
-			.index());
-		int realPathInfinite = jump(c, Opcode.IFEQ);
-		dload(c, 4);
-		dload(c, 4);
+		c.dload(2);
+		c.dconst_0();
+		c.dcmpg();
+		MethodCode.Label realPathSign = c.newLabel();
+		c.ifge(realPathSign);
+		c.dload(4);
+		c.invokestatic(
+				cp.addMethodref(refs.doubleClass(), cp.addNameAndType(cp.addUtf8("isFinite"), cp.addUtf8("(D)Z")))
+					.entry());
+		MethodCode.Label realPathInfinite = c.newLabel();
+		c.ifeq(realPathInfinite);
+		c.dload(4);
+		c.dload(4);
 		callMath(c, refs, cp, "rint", "(D)D");
-		c.add(Opcode.DCMPL);
-		int realPathInteger = jump(c, Opcode.IFEQ);
-		dload(c, 2);
-		c.add(Opcode.DNEG);
-		dload(c, 4);
+		c.dcmpl();
+		MethodCode.Label realPathInteger = c.newLabel();
+		c.ifeq(realPathInteger);
+		c.dload(2);
+		c.dneg();
+		c.dload(4);
 		callMath(c, refs, cp, "pow", "(DD)D");
-		dstore(c, 6);
-		dload(c, 4);
+		c.dstore(6);
+		c.dload(4);
 		emitDoubleConst(c, cp, Math.PI);
-		c.add(Opcode.DMUL);
-		dstore(c, 4);
-		dload(c, 6);
-		dload(c, 4);
+		c.dmul();
+		c.dstore(4);
+		c.dload(6);
+		c.dload(4);
 		callMath(c, refs, cp, "cos", "(D)D");
-		c.add(Opcode.DMUL);
+		c.dmul();
 		emitBoxDouble(c, refs);
-		astore(c, 8);
-		dload(c, 6);
-		dload(c, 4);
+		c.astore(8);
+		c.dload(6);
+		c.dload(4);
 		callMath(c, refs, cp, "sin", "(D)D");
-		c.add(Opcode.DMUL);
+		c.dmul();
 		emitBoxDouble(c, refs);
-		astore(c, 9);
+		c.astore(9);
 		emitNewHolderFromSlots(c, refs, 8, 9);
-		c.add(Opcode.ARETURN);
-		patch(c, realPathSign);
-		patch(c, realPathInfinite);
-		patch(c, realPathInteger);
-		aload(c, 0);
-		aload(c, 1);
-		call(c, refs.rPow());
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 10, List.of());
-	}
-
-	private static void patchAt(List<Integer> c, int pos, int target) {
-		JvmRuntimeBuilder.patchBranch(c, pos, target);
+		c.areturn();
+		c.labelBinding(realPathSign);
+		c.labelBinding(realPathInfinite);
+		c.labelBinding(realPathInteger);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(refs.rPow().entry());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	/**
@@ -1454,25 +1204,25 @@ final class JvmComplexRuntimeBuilder {
 	 * {@code 0.0 + im} do: that is what leaves an imaginary zero of EITHER sign on the
 	 * same sheet, so the side of the branch cut is decided by the real part alone.
 	 */
-	private static void emitAsinAcosRootsInto(List<Integer> c, Refs refs, ConstantPool cp, int reSlot, int imSlot,
+	private static void emitAsinAcosRootsInto(MethodCode c, Refs refs, ConstantPool cp, int reSlot, int imSlot,
 			int u0Slot, int u1Slot, int v0Slot, int v1Slot, int tSlot) {
-		c.add(Opcode.DCONST_1);
-		dload(c, reSlot);
-		c.add(Opcode.DSUB);
-		dstore(c, u0Slot);
-		c.add(Opcode.DCONST_0);
-		dload(c, imSlot);
-		c.add(Opcode.DSUB);
-		dstore(c, u1Slot);
+		c.dconst_1();
+		c.dload(reSlot);
+		c.dsub();
+		c.dstore(u0Slot);
+		c.dconst_0();
+		c.dload(imSlot);
+		c.dsub();
+		c.dstore(u1Slot);
 		emitComplexSqrtInto(c, refs, cp, u0Slot, u1Slot, u0Slot, u1Slot, tSlot);
-		c.add(Opcode.DCONST_1);
-		dload(c, reSlot);
-		c.add(Opcode.DADD);
-		dstore(c, v0Slot);
-		c.add(Opcode.DCONST_0);
-		dload(c, imSlot);
-		c.add(Opcode.DADD);
-		dstore(c, v1Slot);
+		c.dconst_1();
+		c.dload(reSlot);
+		c.dadd();
+		c.dstore(v0Slot);
+		c.dconst_0();
+		c.dload(imSlot);
+		c.dadd();
+		c.dstore(v1Slot);
 		emitComplexSqrtInto(c, refs, cp, v0Slot, v1Slot, v0Slot, v1Slot, tSlot);
 	}
 
@@ -1481,62 +1231,57 @@ final class JvmComplexRuntimeBuilder {
 	// double. Slots: params 0-1, rd/d 2-3, id 4-5, t0 6-7, t1 8-9, r0 10-11,
 	// r1 12-13, denom 14-15.
 	private static ComplexMethod buildU1(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int realPath = jump(c, Opcode.IFEQ);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		astore(c, 6);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		astore(c, 8);
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label realPath = c.newLabel();
+		c.ifeq(realPath);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.astore(6);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.astore(8);
 		emitToDouble(c, refs, 6);
-		dstore(c, 2);
+		c.dstore(2);
 		emitToDouble(c, refs, 8);
-		dstore(c, 4);
-		List<Integer> toTail = new ArrayList<>();
+		c.dstore(4);
+		MethodCode.Label toTail = c.newLabel();
 		for (int op = 0; op <= U1_CIS; op++) {
-			int nextArm = -1;
+			MethodCode.Label nextArm = c.newLabel();
 			if (op < U1_CIS) {
-				iload(c, 1);
-				emitInt(c, op);
-				nextArm = jump(c, Opcode.IF_ICMPNE);
+				c.iload(1);
+				c.loadConstant(op);
+				c.if_icmpne(nextArm);
 			}
 			emitComplexArm(c, refs, cp, op);
 			if (op < U1_CIS) {
-				toTail.add(jump(c, Opcode.GOTO));
-				patch(c, nextArm);
+				c.goto_(toTail);
+				c.labelBinding(nextArm);
 			}
 		}
-		for (int i = 0; i < toTail.size(); i++) {
-			patch(c, toTail.get(i));
-		}
-		dstore(c, 12);
-		dstore(c, 10);
-		dload(c, 10);
+		c.labelBinding(toTail);
+		c.dstore(12);
+		c.dstore(10);
+		c.dload(10);
 		emitBoxDouble(c, refs);
-		astore(c, 6);
-		dload(c, 12);
+		c.astore(6);
+		c.dload(12);
 		emitBoxDouble(c, refs);
-		astore(c, 8);
+		c.astore(8);
 		emitNewHolderFromSlots(c, refs, 6, 8);
-		c.add(Opcode.ARETURN);
-		patch(c, realPath);
+		c.areturn();
+		c.labelBinding(realPath);
 		emitToDouble(c, refs, 0);
-		dstore(c, 2);
+		c.dstore(2);
 		String[] mathFns = { "exp", "log", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh" };
 		for (int op = 0; op <= U1_TANH; op++) {
-			iload(c, 1);
-			emitInt(c, op);
-			int next = jump(c, Opcode.IF_ICMPNE);
+			c.iload(1);
+			c.loadConstant(op);
+			MethodCode.Label next = c.newLabel();
+			c.if_icmpne(next);
 			// log of a negative and asin/acos beyond [-1, 1] leave the real line, where
 			// java.lang.Math answers NaN: they run the SAME complex arm at (x, +0.0),
 			// like acosh and atanh below. The tests are written as the conditions that
@@ -1546,97 +1291,102 @@ final class JvmComplexRuntimeBuilder {
 			// INFINITY real: it has no complex value either, and the formula would
 			// manufacture a #C(NaN Infinity). log's -Infinity is a real point of the
 			// plane (#C(Infinity pi)) and escapes like any other negative.
-			List<Integer> toReal = new ArrayList<>();
+			MethodCode.Label toReal = c.newLabel();
+			boolean escapes = op == U1_LOG || op == U1_ASIN || op == U1_ACOS;
 			if (op == U1_LOG) {
-				dload(c, 2);
-				c.add(Opcode.DCONST_0);
-				c.add(Opcode.DCMPG);
-				toReal.add(jump(c, Opcode.IFGE));
+				c.dload(2);
+				c.dconst_0();
+				c.dcmpg();
+				c.ifge(toReal);
 			}
 			else if (op == U1_ASIN || op == U1_ACOS) {
-				dload(c, 2);
+				c.dload(2);
 				callMath(c, refs, cp, "abs", "(D)D");
-				c.add(Opcode.DCONST_1);
-				c.add(Opcode.DCMPG);
-				toReal.add(jump(c, Opcode.IFLE));
-				dload(c, 2);
+				c.dconst_1();
+				c.dcmpg();
+				c.ifle(toReal);
+				c.dload(2);
 				callMath(c, refs, cp, "abs", "(D)D");
 				emitDoubleConst(c, cp, Double.POSITIVE_INFINITY);
-				c.add(Opcode.DCMPG);
-				toReal.add(jump(c, Opcode.IFGE));
+				c.dcmpg();
+				c.ifge(toReal);
 			}
-			if (!toReal.isEmpty()) {
+			if (escapes) {
 				emitRealAsComplex(c, refs, cp, op);
 			}
-			for (int skip : toReal) {
-				patch(c, skip);
-			}
-			dload(c, 2);
+			c.labelBinding(toReal);
+			c.dload(2);
 			callMath(c, refs, cp, mathFns[op], "(D)D");
 			emitBoxDouble(c, refs);
-			c.add(Opcode.ARETURN);
-			patch(c, next);
+			c.areturn();
+			c.labelBinding(next);
 		}
 		// asinh/acosh/atanh have no java.lang.Math counterpart -- the real arms are the
 		// interpreter's formulas, bytecode term for term, so both answer identical bits.
-		iload(c, 1);
-		emitInt(c, U1_ASINH);
-		int notAsinh = jump(c, Opcode.IF_ICMPNE);
+		c.iload(1);
+		c.loadConstant(U1_ASINH);
+		MethodCode.Label notAsinh = c.newLabel();
+		c.if_icmpne(notAsinh);
 		emitAsinhRealF64(c, refs, cp, 2);
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		patch(c, notAsinh);
+		c.areturn();
+		c.labelBinding(notAsinh);
 		// acosh: x >= 1 stays real (a NaN stays a NaN double, like the interpreter's
 		// !(d < 1.0) test -- which is why the compare is DCMPG, whose NaN answers 1);
 		// x < 1 escapes into the plane at (x, +0.0).
-		iload(c, 1);
-		emitInt(c, U1_ACOSH);
-		int notAcosh = jump(c, Opcode.IF_ICMPNE);
-		dload(c, 2);
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DCMPG);
-		int acoshEscape = jump(c, Opcode.IFLT);
+		c.iload(1);
+		c.loadConstant(U1_ACOSH);
+		MethodCode.Label notAcosh = c.newLabel();
+		c.if_icmpne(notAcosh);
+		c.dload(2);
+		c.dconst_1();
+		c.dcmpg();
+		MethodCode.Label acoshEscape = c.newLabel();
+		c.iflt(acoshEscape);
 		emitAcoshRealF64(c, refs, cp, 2);
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		patch(c, acoshEscape);
+		c.areturn();
+		c.labelBinding(acoshEscape);
 		emitRealAsComplex(c, refs, cp, U1_ACOSH);
-		patch(c, notAcosh);
+		c.labelBinding(notAcosh);
 		// atanh: |x| <= 1 stays real (a NaN too, like !(d > 1) && !(d < -1) -- DCMPL for
 		// the > and DCMPG for the <, so a NaN fails both); beyond that it escapes at
 		// (x, +0.0).
-		iload(c, 1);
-		emitInt(c, U1_ATANH);
-		int notAtanh = jump(c, Opcode.IF_ICMPNE);
-		dload(c, 2);
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DCMPL);
-		int atanhEscape = jump(c, Opcode.IFGT);
-		dload(c, 2);
+		c.iload(1);
+		c.loadConstant(U1_ATANH);
+		MethodCode.Label notAtanh = c.newLabel();
+		c.if_icmpne(notAtanh);
+		c.dload(2);
+		c.dconst_1();
+		c.dcmpl();
+		MethodCode.Label atanhEscape = c.newLabel();
+		c.ifgt(atanhEscape);
+		c.dload(2);
 		emitDoubleConst(c, cp, -1.0);
-		c.add(Opcode.DCMPG);
-		int atanhEscape2 = jump(c, Opcode.IFLT);
+		c.dcmpg();
+		MethodCode.Label atanhEscape2 = c.newLabel();
+		c.iflt(atanhEscape2);
 		// (log1p(x) - log1p(-x)) * 0.5
-		dload(c, 2);
+		c.dload(2);
 		callMath(c, refs, cp, "log1p", "(D)D");
-		dload(c, 2);
-		c.add(Opcode.DNEG);
+		c.dload(2);
+		c.dneg();
 		callMath(c, refs, cp, "log1p", "(D)D");
-		c.add(Opcode.DSUB);
+		c.dsub();
 		emitDoubleConst(c, cp, 0.5);
-		c.add(Opcode.DMUL);
+		c.dmul();
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		patch(c, atanhEscape);
-		patch(c, atanhEscape2);
+		c.areturn();
+		c.labelBinding(atanhEscape);
+		c.labelBinding(atanhEscape2);
 		emitRealAsComplex(c, refs, cp, U1_ATANH);
-		patch(c, notAtanh);
+		c.labelBinding(notAtanh);
 		// cis answers a complex for every operand: the +0.0 arm is exact (e^0 = 1, and
 		// 1.0 * is the identity), matching the interpreter's direct (cos x, sin x).
 		emitRealAsComplex(c, refs, cp, U1_CIS);
 		// 12 stack slots: the asin/acos arms hold their finished real part (2) while
 		// the asinh sub-formula runs (8 of its own) before the pair is boxed.
-		return new ComplexMethod(name, desc, c, 12, 16, List.of());
+		return new ComplexMethod(name, desc, c);
 	}
 
 	/**
@@ -1646,48 +1396,52 @@ final class JvmComplexRuntimeBuilder {
 	 * hypot(|x|, 1) beyond (the sum cancels nothing above 1, and the hypot cannot
 	 * overflow), and log |x| + log 2 past 8.5e307, where the SUM would.
 	 */
-	private static void emitAsinhRealF64(List<Integer> c, Refs refs, ConstantPool cp, int slot) {
-		dload(c, slot);
+	private static void emitAsinhRealF64(MethodCode c, Refs refs, ConstantPool cp, int slot) {
+		c.dload(slot);
 		callMath(c, refs, cp, "abs", "(D)D");
-		dstore(c, 6);
-		dload(c, 6);
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DCMPL);
-		int large = jump(c, Opcode.IFGT);
-		dload(c, 6);
-		dload(c, 6);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DCONST_1);
-		dload(c, 6);
-		c.add(Opcode.DCONST_1);
+		c.dstore(6);
+		c.dload(6);
+		c.dconst_1();
+		c.dcmpl();
+		MethodCode.Label large = c.newLabel();
+		c.ifgt(large);
+		c.dload(6);
+		c.dload(6);
+		c.dmul();
+		c.dconst_1();
+		c.dload(6);
+		c.dconst_1();
 		callMath(c, refs, cp, "hypot", "(DD)D");
-		c.add(Opcode.DADD);
-		c.add(Opcode.DDIV);
-		dload(c, 6);
-		c.add(Opcode.DADD);
+		c.dadd();
+		c.ddiv();
+		c.dload(6);
+		c.dadd();
 		callMath(c, refs, cp, "log1p", "(D)D");
-		int sign = jump(c, Opcode.GOTO);
-		patch(c, large);
-		dload(c, 6);
+		MethodCode.Label sign = c.newLabel();
+		c.goto_(sign);
+		c.labelBinding(large);
+		c.dload(6);
 		emitDoubleConst(c, cp, 8.5e307);
-		c.add(Opcode.DCMPL);
-		int huge = jump(c, Opcode.IFGE);
-		dload(c, 6);
-		dload(c, 6);
-		c.add(Opcode.DCONST_1);
+		c.dcmpl();
+		MethodCode.Label huge = c.newLabel();
+		c.ifge(huge);
+		c.dload(6);
+		c.dload(6);
+		c.dconst_1();
 		callMath(c, refs, cp, "hypot", "(DD)D");
-		c.add(Opcode.DADD);
+		c.dadd();
 		callMath(c, refs, cp, "log", "(D)D");
-		int sign2 = jump(c, Opcode.GOTO);
-		patch(c, huge);
-		dload(c, 6);
+		MethodCode.Label sign2 = c.newLabel();
+		c.goto_(sign2);
+		c.labelBinding(huge);
+		c.dload(6);
 		callMath(c, refs, cp, "log", "(D)D");
 		emitDoubleConst(c, cp, 2.0);
 		callMath(c, refs, cp, "log", "(D)D");
-		c.add(Opcode.DADD);
-		patch(c, sign2);
-		patch(c, sign);
-		dload(c, slot);
+		c.dadd();
+		c.labelBinding(sign2);
+		c.labelBinding(sign);
+		c.dload(slot);
 		callMath(c, refs, cp, "copySign", "(DD)D");
 	}
 
@@ -1697,61 +1451,65 @@ final class JvmComplexRuntimeBuilder {
 	 * double bits are correctly rounded across the table), and a bare log(x) + log 2 so
 	 * 2*x cannot overflow.
 	 */
-	private static void emitAcoshRealF64(List<Integer> c, Refs refs, ConstantPool cp, int slot) {
-		dload(c, slot);
+	private static void emitAcoshRealF64(MethodCode c, Refs refs, ConstantPool cp, int slot) {
+		c.dload(slot);
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DCMPL);
-		int mid = jump(c, Opcode.IFGT);
-		dload(c, slot);
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DSUB);
-		dstore(c, 6);
-		dload(c, 6);
-		dload(c, 6);
-		dload(c, slot);
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DADD);
-		c.add(Opcode.DMUL);
+		c.dcmpl();
+		MethodCode.Label mid = c.newLabel();
+		c.ifgt(mid);
+		c.dload(slot);
+		c.dconst_1();
+		c.dsub();
+		c.dstore(6);
+		c.dload(6);
+		c.dload(6);
+		c.dload(slot);
+		c.dconst_1();
+		c.dadd();
+		c.dmul();
 		callMath(c, refs, cp, "sqrt", "(D)D");
-		c.add(Opcode.DADD);
+		c.dadd();
 		callMath(c, refs, cp, "log1p", "(D)D");
-		int done = jump(c, Opcode.GOTO);
-		patch(c, mid);
-		dload(c, slot);
+		MethodCode.Label done = c.newLabel();
+		c.goto_(done);
+		c.labelBinding(mid);
+		c.dload(slot);
 		emitDoubleConst(c, cp, 8.5e307);
-		c.add(Opcode.DCMPL);
-		int huge = jump(c, Opcode.IFGT);
-		dload(c, slot);
+		c.dcmpl();
+		MethodCode.Label huge = c.newLabel();
+		c.ifgt(huge);
+		c.dload(slot);
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DMUL);
+		c.dmul();
 		callMath(c, refs, cp, "log", "(D)D");
-		dstore(c, 8);
-		c.add(Opcode.DCONST_1);
-		dload(c, slot);
-		c.add(Opcode.DDIV);
-		dstore(c, 6);
-		c.add(Opcode.DCONST_1);
-		dload(c, 6);
-		dload(c, 6);
-		c.add(Opcode.DMUL);
-		c.add(Opcode.DSUB);
+		c.dstore(8);
+		c.dconst_1();
+		c.dload(slot);
+		c.ddiv();
+		c.dstore(6);
+		c.dconst_1();
+		c.dload(6);
+		c.dload(6);
+		c.dmul();
+		c.dsub();
 		callMath(c, refs, cp, "sqrt", "(D)D");
-		c.add(Opcode.DCONST_1);
-		c.add(Opcode.DSUB);
+		c.dconst_1();
+		c.dsub();
 		emitDoubleConst(c, cp, 2.0);
-		c.add(Opcode.DDIV);
+		c.ddiv();
 		callMath(c, refs, cp, "log1p", "(D)D");
-		dload(c, 8);
-		c.add(Opcode.DADD);
-		int done2 = jump(c, Opcode.GOTO);
-		patch(c, huge);
-		dload(c, slot);
+		c.dload(8);
+		c.dadd();
+		MethodCode.Label done2 = c.newLabel();
+		c.goto_(done2);
+		c.labelBinding(huge);
+		c.dload(slot);
 		callMath(c, refs, cp, "log", "(D)D");
 		emitDoubleConst(c, cp, 2.0);
 		callMath(c, refs, cp, "log", "(D)D");
-		c.add(Opcode.DADD);
-		patch(c, done2);
-		patch(c, done);
+		c.dadd();
+		c.labelBinding(done2);
+		c.labelBinding(done);
 	}
 
 	/**
@@ -1759,67 +1517,67 @@ final class JvmComplexRuntimeBuilder {
 	 * promoted to (re, +0.0), boxing the pair into a holder and returning it: the
 	 * acosh/atanh domain escape and the always-complex {@code cis}.
 	 */
-	private static void emitRealAsComplex(List<Integer> c, Refs refs, ConstantPool cp, int op) {
-		c.add(Opcode.DCONST_0);
-		dstore(c, 4);
+	private static void emitRealAsComplex(MethodCode c, Refs refs, ConstantPool cp, int op) {
+		c.dconst_0();
+		c.dstore(4);
 		emitComplexArm(c, refs, cp, op);
-		dstore(c, 12);
-		dstore(c, 10);
-		dload(c, 10);
+		c.dstore(12);
+		c.dstore(10);
+		c.dload(10);
 		emitBoxDouble(c, refs);
-		astore(c, 6);
-		dload(c, 12);
+		c.astore(6);
+		c.dload(12);
 		emitBoxDouble(c, refs);
-		astore(c, 8);
+		c.astore(8);
 		emitNewHolderFromSlots(c, refs, 6, 8);
-		c.add(Opcode.ARETURN);
+		c.areturn();
 	}
 
 	/**
 	 * One complex arm of {@link #buildU1}, leaving its two result doubles on the stack.
 	 * Slots: rd 2-3, id 4-5, t0 6-7, t1 8-9, r0 10-11, r1 12-13, denom 14-15.
 	 */
-	private static void emitComplexArm(List<Integer> c, Refs refs, ConstantPool cp, int op) {
+	private static void emitComplexArm(MethodCode c, Refs refs, ConstantPool cp, int op) {
 		if (op == U1_EXP) {
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, "exp", "(D)D");
-			dstore(c, 6);
-			dload(c, 6);
-			dload(c, 4);
+			c.dstore(6);
+			c.dload(6);
+			c.dload(4);
 			callMath(c, refs, cp, "cos", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 6);
-			dload(c, 4);
+			c.dmul();
+			c.dload(6);
+			c.dload(4);
 			callMath(c, refs, cp, "sin", "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else if (op == U1_LOG) {
 			emitComplexLog(c, refs, cp, 2, 4);
 		}
 		else if (op == U1_SIN) {
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, "sin", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "cosh", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 2);
+			c.dmul();
+			c.dload(2);
 			callMath(c, refs, cp, "cos", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "sinh", "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else if (op == U1_COS) {
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, "cos", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "cosh", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 2);
+			c.dmul();
+			c.dload(2);
 			callMath(c, refs, cp, "sin", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "sinh", "(D)D");
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DNEG);
+			c.dmul();
+			c.dneg();
 		}
 		else if (op == U1_TAN || op == U1_TANH) {
 			// s = (hyp1(re)*trig1(im), hyp2(re)*trig2(im)),
@@ -1833,86 +1591,86 @@ final class JvmComplexRuntimeBuilder {
 			String trig1 = op == U1_TAN ? "cosh" : "cos";
 			String cisIm = op == U1_TAN ? "sinh" : "sin";
 			String trig2 = op == U1_TAN ? "sinh" : "sin";
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, hyp1, "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, trig1, "(D)D");
-			c.add(Opcode.DMUL);
-			dstore(c, 6);
-			dload(c, 2);
+			c.dmul();
+			c.dstore(6);
+			c.dload(2);
 			callMath(c, refs, cp, hyp2, "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, trig2, "(D)D");
-			c.add(Opcode.DMUL);
-			dstore(c, 8);
-			dload(c, 2);
+			c.dmul();
+			c.dstore(8);
+			c.dload(2);
 			callMath(c, refs, cp, hyp2, "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, trig1, "(D)D");
-			c.add(Opcode.DMUL);
-			dstore(c, 14);
-			dload(c, 2);
+			c.dmul();
+			c.dstore(14);
+			c.dload(2);
 			callMath(c, refs, cp, hyp1, "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, cisIm, "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 			if (op == U1_TAN) {
-				c.add(Opcode.DNEG);
+				c.dneg();
 			}
-			dstore(c, 2);
+			c.dstore(2);
 			// |c|^2 goes to slot 10, NOT over c.re in slot 14: the quotient below reads
 			// c.re four more times, and writing the modulus there turned both parts into
 			// (s.re*|c|^2 + s.im*c.im)/|c|^2, which degenerates to the NUMERATOR
 			// whenever c.im is zero -- tan of a real answered sin of it (.todo/765).
-			dload(c, 14);
-			dload(c, 14);
-			c.add(Opcode.DMUL);
-			dload(c, 2);
-			dload(c, 2);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DADD);
-			dstore(c, 10);
-			dload(c, 6);
-			dload(c, 14);
-			c.add(Opcode.DMUL);
-			dload(c, 8);
-			dload(c, 2);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DADD);
-			dload(c, 10);
-			c.add(Opcode.DDIV);
-			dload(c, 8);
-			dload(c, 14);
-			c.add(Opcode.DMUL);
-			dload(c, 6);
-			dload(c, 2);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DSUB);
-			dload(c, 10);
-			c.add(Opcode.DDIV);
+			c.dload(14);
+			c.dload(14);
+			c.dmul();
+			c.dload(2);
+			c.dload(2);
+			c.dmul();
+			c.dadd();
+			c.dstore(10);
+			c.dload(6);
+			c.dload(14);
+			c.dmul();
+			c.dload(8);
+			c.dload(2);
+			c.dmul();
+			c.dadd();
+			c.dload(10);
+			c.ddiv();
+			c.dload(8);
+			c.dload(14);
+			c.dmul();
+			c.dload(6);
+			c.dload(2);
+			c.dmul();
+			c.dsub();
+			c.dload(10);
+			c.ddiv();
 		}
 		else if (op == U1_ASIN) {
 			// asin(z) = (atan2(re, Re(u*v)), asinh(Im(conj(u)*v))): the interpreter's
 			// Kahan form, term for term. The asinh argument goes to slot 14 first --
 			// emitAsinhRealF64 keeps its own scratch in slot 6, which is u's real part.
 			emitAsinAcosRootsInto(c, refs, cp, 2, 4, 6, 8, 10, 12, 14);
-			dload(c, 2);
-			dload(c, 6);
-			dload(c, 10);
-			c.add(Opcode.DMUL);
-			dload(c, 8);
-			dload(c, 12);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DSUB);
+			c.dload(2);
+			c.dload(6);
+			c.dload(10);
+			c.dmul();
+			c.dload(8);
+			c.dload(12);
+			c.dmul();
+			c.dsub();
 			callMath(c, refs, cp, "atan2", "(DD)D");
-			dload(c, 6);
-			dload(c, 12);
-			c.add(Opcode.DMUL);
-			dload(c, 8);
-			dload(c, 10);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DSUB);
-			dstore(c, 14);
+			c.dload(6);
+			c.dload(12);
+			c.dmul();
+			c.dload(8);
+			c.dload(10);
+			c.dmul();
+			c.dsub();
+			c.dstore(14);
 			emitAsinhRealF64(c, refs, cp, 14);
 		}
 		else if (op == U1_ACOS) {
@@ -1921,225 +1679,227 @@ final class JvmComplexRuntimeBuilder {
 			// quantity that is exactly 0 or pi on the cut.
 			emitAsinAcosRootsInto(c, refs, cp, 2, 4, 6, 8, 10, 12, 14);
 			emitDoubleConst(c, cp, 2.0);
-			dload(c, 6);
-			dload(c, 10);
+			c.dload(6);
+			c.dload(10);
 			callMath(c, refs, cp, "atan2", "(DD)D");
-			c.add(Opcode.DMUL);
-			dload(c, 10);
-			dload(c, 8);
-			c.add(Opcode.DMUL);
-			dload(c, 12);
-			dload(c, 6);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DSUB);
-			dstore(c, 14);
+			c.dmul();
+			c.dload(10);
+			c.dload(8);
+			c.dmul();
+			c.dload(12);
+			c.dload(6);
+			c.dmul();
+			c.dsub();
+			c.dstore(14);
 			emitAsinhRealF64(c, refs, cp, 14);
 		}
 		else if (op == U1_ATAN) {
 			emitDoubleConst(c, cp, 1.0);
-			dload(c, 4);
-			c.add(Opcode.DADD);
-			dstore(c, 6);
-			dload(c, 2);
-			c.add(Opcode.DNEG);
-			dstore(c, 8);
+			c.dload(4);
+			c.dadd();
+			c.dstore(6);
+			c.dload(2);
+			c.dneg();
+			c.dstore(8);
 			emitComplexLog(c, refs, cp, 6, 8);
-			dstore(c, 8);
-			dstore(c, 6);
-			dload(c, 2);
-			dstore(c, 10);
+			c.dstore(8);
+			c.dstore(6);
+			c.dload(2);
+			c.dstore(10);
 			emitDoubleConst(c, cp, 1.0);
-			dload(c, 4);
-			c.add(Opcode.DSUB);
-			dstore(c, 2);
-			dload(c, 10);
-			dstore(c, 4);
+			c.dload(4);
+			c.dsub();
+			c.dstore(2);
+			c.dload(10);
+			c.dstore(4);
 			emitComplexLog(c, refs, cp, 2, 4);
-			dstore(c, 4);
-			dstore(c, 2);
-			dload(c, 4);
-			dload(c, 8);
-			c.add(Opcode.DSUB);
+			c.dstore(4);
+			c.dstore(2);
+			c.dload(4);
+			c.dload(8);
+			c.dsub();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
-			dload(c, 6);
-			dload(c, 2);
-			c.add(Opcode.DSUB);
+			c.ddiv();
+			c.dload(6);
+			c.dload(2);
+			c.dsub();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
+			c.ddiv();
 		}
 		else if (op == U1_SINH) {
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, "sinh", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "cos", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 2);
+			c.dmul();
+			c.dload(2);
 			callMath(c, refs, cp, "cosh", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "sin", "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else if (op == U1_COSH) {
-			dload(c, 2);
+			c.dload(2);
 			callMath(c, refs, cp, "cosh", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "cos", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 2);
+			c.dmul();
+			c.dload(2);
 			callMath(c, refs, cp, "sinh", "(D)D");
-			dload(c, 4);
+			c.dload(4);
 			callMath(c, refs, cp, "sin", "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else if (op == U1_ASINH) {
 			// asinh(z) = log(z + sqrt(z^2 + 1)) with the interpreter's two
 			// refinements: the +0.0 that normalizes a -0.0 imaginary part of z^2 so
 			// the cut sqrt takes its +i root, and the sheet flip (a |z + s| < 1
 			// answers -log(s - z), whose sum adds without cancellation).
-			dload(c, 2);
-			dload(c, 2);
-			c.add(Opcode.DMUL);
-			dload(c, 4);
-			dload(c, 4);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DSUB);
-			dstore(c, 6);
-			dload(c, 2);
-			dload(c, 4);
-			c.add(Opcode.DMUL);
+			c.dload(2);
+			c.dload(2);
+			c.dmul();
+			c.dload(4);
+			c.dload(4);
+			c.dmul();
+			c.dsub();
+			c.dstore(6);
+			c.dload(2);
+			c.dload(4);
+			c.dmul();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DCONST_0);
-			c.add(Opcode.DADD);
-			dstore(c, 8);
-			dload(c, 6);
-			c.add(Opcode.DCONST_1);
-			c.add(Opcode.DADD);
-			dstore(c, 14);
+			c.dmul();
+			c.dconst_0();
+			c.dadd();
+			c.dstore(8);
+			c.dload(6);
+			c.dconst_1();
+			c.dadd();
+			c.dstore(14);
 			emitComplexSqrtInto(c, refs, cp, 14, 8, 10, 12, 6);
-			dload(c, 2);
-			dload(c, 10);
-			c.add(Opcode.DADD);
-			dstore(c, 6);
-			dload(c, 4);
-			dload(c, 12);
-			c.add(Opcode.DADD);
-			dstore(c, 8);
-			dload(c, 6);
-			dload(c, 6);
-			c.add(Opcode.DMUL);
-			dload(c, 8);
-			dload(c, 8);
-			c.add(Opcode.DMUL);
-			c.add(Opcode.DADD);
-			c.add(Opcode.DCONST_1);
-			c.add(Opcode.DCMPL);
-			int direct = jump(c, Opcode.IFGE);
-			dload(c, 10);
-			dload(c, 2);
-			c.add(Opcode.DSUB);
-			dstore(c, 6);
-			dload(c, 12);
-			dload(c, 4);
-			c.add(Opcode.DSUB);
-			dstore(c, 8);
+			c.dload(2);
+			c.dload(10);
+			c.dadd();
+			c.dstore(6);
+			c.dload(4);
+			c.dload(12);
+			c.dadd();
+			c.dstore(8);
+			c.dload(6);
+			c.dload(6);
+			c.dmul();
+			c.dload(8);
+			c.dload(8);
+			c.dmul();
+			c.dadd();
+			c.dconst_1();
+			c.dcmpl();
+			MethodCode.Label direct = c.newLabel();
+			c.ifge(direct);
+			c.dload(10);
+			c.dload(2);
+			c.dsub();
+			c.dstore(6);
+			c.dload(12);
+			c.dload(4);
+			c.dsub();
+			c.dstore(8);
 			emitComplexLog(c, refs, cp, 6, 8);
-			dstore(c, 8);
-			dstore(c, 6);
-			dload(c, 6);
-			c.add(Opcode.DNEG);
-			dload(c, 8);
-			c.add(Opcode.DNEG);
-			int joined = jump(c, Opcode.GOTO);
-			patch(c, direct);
+			c.dstore(8);
+			c.dstore(6);
+			c.dload(6);
+			c.dneg();
+			c.dload(8);
+			c.dneg();
+			MethodCode.Label joined = c.newLabel();
+			c.goto_(joined);
+			c.labelBinding(direct);
 			emitComplexLog(c, refs, cp, 6, 8);
-			patch(c, joined);
+			c.labelBinding(joined);
 		}
 		else if (op == U1_ACOSH) {
 			// acosh(z) = 2*log(sqrt((z+1)/2) + sqrt((z-1)/2)) -- the ANSI form; the
 			// /2 of the imaginary part keeps its sign, which picks the sheet at the
 			// cut. The second sqrt lands in 8/2 (rd is spent by now), scratch 4.
-			dload(c, 4);
+			c.dload(4);
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
-			dstore(c, 6);
-			dload(c, 2);
-			c.add(Opcode.DCONST_1);
-			c.add(Opcode.DADD);
+			c.ddiv();
+			c.dstore(6);
+			c.dload(2);
+			c.dconst_1();
+			c.dadd();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
-			dstore(c, 14);
+			c.ddiv();
+			c.dstore(14);
 			emitComplexSqrtInto(c, refs, cp, 14, 6, 10, 12, 8);
-			dload(c, 2);
-			c.add(Opcode.DCONST_1);
-			c.add(Opcode.DSUB);
+			c.dload(2);
+			c.dconst_1();
+			c.dsub();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
-			dstore(c, 14);
+			c.ddiv();
+			c.dstore(14);
 			emitComplexSqrtInto(c, refs, cp, 14, 6, 8, 2, 4);
-			dload(c, 10);
-			dload(c, 8);
-			c.add(Opcode.DADD);
-			dstore(c, 6);
-			dload(c, 12);
-			dload(c, 2);
-			c.add(Opcode.DADD);
-			dstore(c, 8);
+			c.dload(10);
+			c.dload(8);
+			c.dadd();
+			c.dstore(6);
+			c.dload(12);
+			c.dload(2);
+			c.dadd();
+			c.dstore(8);
 			emitComplexLog(c, refs, cp, 6, 8);
-			dstore(c, 8);
-			dstore(c, 6);
-			dload(c, 6);
+			c.dstore(8);
+			c.dstore(6);
+			c.dload(6);
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DMUL);
-			dload(c, 8);
+			c.dmul();
+			c.dload(8);
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else if (op == U1_ATANH) {
 			// atanh(z) = (log(1+z) - log(1-z)) / 2, the difference of the principal
 			// logs -- the log of the quotient answers the other edge of the cut.
-			c.add(Opcode.DCONST_1);
-			dload(c, 2);
-			c.add(Opcode.DADD);
-			dstore(c, 6);
+			c.dconst_1();
+			c.dload(2);
+			c.dadd();
+			c.dstore(6);
 			emitComplexLog(c, refs, cp, 6, 4);
-			dstore(c, 8);
-			dstore(c, 6);
-			c.add(Opcode.DCONST_1);
-			dload(c, 2);
-			c.add(Opcode.DSUB);
-			dstore(c, 14);
-			dload(c, 4);
-			c.add(Opcode.DNEG);
-			dstore(c, 4);
+			c.dstore(8);
+			c.dstore(6);
+			c.dconst_1();
+			c.dload(2);
+			c.dsub();
+			c.dstore(14);
+			c.dload(4);
+			c.dneg();
+			c.dstore(4);
 			emitComplexLog(c, refs, cp, 14, 4);
-			dstore(c, 4);
-			dstore(c, 14);
-			dload(c, 6);
-			dload(c, 14);
-			c.add(Opcode.DSUB);
+			c.dstore(4);
+			c.dstore(14);
+			c.dload(6);
+			c.dload(14);
+			c.dsub();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
-			dload(c, 8);
-			dload(c, 4);
-			c.add(Opcode.DSUB);
+			c.ddiv();
+			c.dload(8);
+			c.dload(4);
+			c.dsub();
 			emitDoubleConst(c, cp, 2.0);
-			c.add(Opcode.DDIV);
+			c.ddiv();
 		}
 		else if (op == U1_CIS) {
-			dload(c, 4);
-			c.add(Opcode.DNEG);
+			c.dload(4);
+			c.dneg();
 			callMath(c, refs, cp, "exp", "(D)D");
-			dstore(c, 6);
-			dload(c, 6);
-			dload(c, 2);
+			c.dstore(6);
+			c.dload(6);
+			c.dload(2);
 			callMath(c, refs, cp, "cos", "(D)D");
-			c.add(Opcode.DMUL);
-			dload(c, 6);
-			dload(c, 2);
+			c.dmul();
+			c.dload(6);
+			c.dload(2);
 			callMath(c, refs, cp, "sin", "(D)D");
-			c.add(Opcode.DMUL);
+			c.dmul();
 		}
 		else {
 			throw new IllegalArgumentException("unknown U1 op: " + op);
@@ -2150,31 +1910,31 @@ final class JvmComplexRuntimeBuilder {
 	// interpreter's REAL operand-type report text instead of comparing.
 	private static ComplexMethod buildCCmpBits(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
 		MethodrefConstant rCmpb = self(cp, refs.thisClass(), JvmNumericRuntimeBuilder.CMPB, CMP_DESC);
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int ifAReal = jump(c, Opcode.IFEQ);
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label ifAReal = c.newLabel();
+		c.ifeq(ifAReal);
 		emitRealErrThrow(c, refs, 0);
-		patch(c, ifAReal);
-		aload(c, 1);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int ifBReal = jump(c, Opcode.IFEQ);
+		c.labelBinding(ifAReal);
+		c.aload(1);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label ifBReal = c.newLabel();
+		c.ifeq(ifBReal);
 		emitRealErrThrow(c, refs, 1);
-		patch(c, ifBReal);
-		aload(c, 0);
-		aload(c, 1);
-		call(c, rCmpb);
-		c.add(Opcode.IRETURN);
-		return new ComplexMethod(name, desc, c, 4, 2, List.of());
+		c.labelBinding(ifBReal);
+		c.aload(0);
+		c.aload(1);
+		c.invokestatic(rCmpb.entry());
+		c.ireturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	/**
 	 * Emits {@code throw _teRaw(value, "REAL")} for the value in {@code slot}.
 	 */
-	private static void emitRealErrThrow(List<Integer> c, Refs refs, int slot) {
-		aload(c, slot);
+	private static void emitRealErrThrow(MethodCode c, Refs refs, int slot) {
+		c.aload(slot);
 		refs.throwRefs().emitThrowLoaded(c, refs.throwRefs().realKind());
 	}
 
@@ -2182,49 +1942,42 @@ final class JvmComplexRuntimeBuilder {
 	// real and pi for a negative one. A non-number signals through the _dbl
 	// funnel, like the interpreter's requireReal.
 	private static ComplexMethod buildCPhase(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int ifReal = jump(c, Opcode.IFEQ);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		call(c, refs.rDbl());
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.numberClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.numDoubleValue().index());
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		call(c, refs.rDbl());
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.numberClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.numDoubleValue().index());
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label ifReal = c.newLabel();
+		c.ifeq(ifReal);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.invokestatic(refs.rDbl().entry());
+		c.checkcast(refs.numberClass().entry());
+		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.invokestatic(refs.rDbl().entry());
+		c.checkcast(refs.numberClass().entry());
+		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
 		callMath(c, refs, cp, "atan2", "(DD)D");
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		patch(c, ifReal);
+		c.areturn();
+		c.labelBinding(ifReal);
 		emitToDouble(c, refs, 0);
-		dstore(c, 1);
-		dload(c, 1);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPG);
-		int ifNonNeg = jump(c, Opcode.IFGE);
+		c.dstore(1);
+		c.dload(1);
+		c.dconst_0();
+		c.dcmpg();
+		MethodCode.Label ifNonNeg = c.newLabel();
+		c.ifge(ifNonNeg);
 		emitDoubleConst(c, cp, Math.PI);
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		patch(c, ifNonNeg);
-		c.add(Opcode.DCONST_0);
+		c.areturn();
+		c.labelBinding(ifNonNeg);
+		c.dconst_0();
 		emitBoxDouble(c, refs);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 4, 3, List.of());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _csignum(Object x): the unit vector of a complex holder (re/|z| + (im/|z|)i
@@ -2233,101 +1986,84 @@ final class JvmComplexRuntimeBuilder {
 	// parts). Only the unconditional _signum's gated holder arm calls this, after
 	// its own instanceof, so the argument is always a holder here.
 	private static ComplexMethod buildCSignum(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		// re = _dbl(real), im = _dbl(imag).
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		call(c, refs.rDbl());
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.numberClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.numDoubleValue().index());
-		dstore(c, 1);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		call(c, refs.rDbl());
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.numberClass().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.numDoubleValue().index());
-		dstore(c, 3);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.invokestatic(refs.rDbl().entry());
+		c.checkcast(refs.numberClass().entry());
+		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.dstore(1);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.invokestatic(refs.rDbl().entry());
+		c.checkcast(refs.numberClass().entry());
+		c.invokevirtual(refs.numDoubleValue().methodRefEntry());
+		c.dstore(3);
 		// abs = hypot(re, im); a zero takes the canonicalize-own-parts exit.
-		dload(c, 1);
-		dload(c, 3);
+		c.dload(1);
+		c.dload(3);
 		callMath(c, refs, cp, "hypot", "(DD)D");
-		dstore(c, 5);
-		dload(c, 5);
-		c.add(Opcode.DCONST_0);
-		c.add(Opcode.DCMPG);
-		int ifNonZero = jump(c, Opcode.IFNE);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		patch(c, ifNonZero);
+		c.dstore(5);
+		c.dload(5);
+		c.dconst_0();
+		c.dcmpg();
+		MethodCode.Label ifNonZero = c.newLabel();
+		c.ifne(ifNonZero);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		c.labelBinding(ifNonZero);
 		// _ccomplex(Double(re/abs), Double(im/abs)).
-		dload(c, 1);
-		dload(c, 5);
-		c.add(Opcode.DDIV);
+		c.dload(1);
+		c.dload(5);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		dload(c, 3);
-		dload(c, 5);
-		c.add(Opcode.DDIV);
+		c.dload(3);
+		c.dload(5);
+		c.ddiv();
 		emitBoxDouble(c, refs);
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 6, 7, List.of());
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 	// _cconjugate(Object x): (re, -im) for a holder, the value itself for a
 	// real (signalling NUMBER operand-type report otherwise).
 	private static ComplexMethod buildConjugate(Refs refs, Utf8Constant name, Utf8Constant desc) {
-		List<Integer> c = new ArrayList<>();
-		aload(c, 0);
-		c.add(Opcode.INSTANCEOF);
-		emitU2(c, refs.rcClass().index());
-		int realOnly = jump(c, Opcode.IFEQ);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcReal().index());
-		astore(c, 1);
-		aload(c, 0);
-		c.add(Opcode.CHECKCAST);
-		emitU2(c, refs.rcClass().index());
-		c.add(Opcode.GETFIELD);
-		emitU2(c, refs.rcImag().index());
-		call(c, refs.rNeg());
-		astore(c, 2);
-		aload(c, 1);
-		aload(c, 2);
-		call(c, refs.rCComplex());
-		c.add(Opcode.ARETURN);
-		patch(c, realOnly);
-		List<Integer> realOk = new ArrayList<>();
+		MethodCode c = new MethodCode();
+		c.aload(0);
+		c.instanceOf(refs.rcClass().entry());
+		MethodCode.Label realOnly = c.newLabel();
+		c.ifeq(realOnly);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcReal().entry());
+		c.astore(1);
+		c.aload(0);
+		c.checkcast(refs.rcClass().entry());
+		c.getfield(refs.rcImag().entry());
+		c.invokestatic(refs.rNeg().entry());
+		c.astore(2);
+		c.aload(1);
+		c.aload(2);
+		c.invokestatic(refs.rCComplex().entry());
+		c.areturn();
+		c.labelBinding(realOnly);
+		MethodCode.Label realOk = c.newLabel();
 		emitRequireReal(c, refs, 0, realOk);
 		emitNumberErrThrow(c, refs, 0);
-		for (int pos : realOk) {
-			patch(c, pos);
-		}
-		aload(c, 0);
-		c.add(Opcode.ARETURN);
-		return new ComplexMethod(name, desc, c, 5, 3, List.of());
+		c.labelBinding(realOk);
+		c.aload(0);
+		c.areturn();
+		return new ComplexMethod(name, desc, c);
 	}
 
 }

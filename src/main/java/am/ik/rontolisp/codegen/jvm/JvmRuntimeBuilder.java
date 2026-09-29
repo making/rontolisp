@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
+import java.util.function.Consumer;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -52,8 +53,8 @@ final class JvmRuntimeBuilder {
 	 * bytecodes. Measured on PBKDF2-SHA256 inside the cl-postgres stack, crossing it cost
 	 * 2.8x (`-XX:-DontCompileHugeMethods` recovered exactly that).
 	 * <p>
-	 * It also keeps every branch inside a segment -- the search tree's forward jumps and
-	 * the default arm at its end -- well within the signed 16-bit branch offset.
+	 * The branch offset is no reason for it: a branch past the signed 16 bits is written
+	 * in its {@code goto_w} form ({@link MethodCode}).
 	 */
 	private static final int DISPATCH_SEGMENT_BUDGET = 6_000;
 
@@ -202,7 +203,6 @@ final class JvmRuntimeBuilder {
 		int fvSlot = dispatchArgs + 1;
 		int idSlot = dispatchArgs + 2;
 		int restSlot = dispatchArgs + 3;
-		int maxLocals = dispatchArgs + 4;
 		// The matching callables: named functions plus lambdas (whose closure env is
 		// passed as the first argument). A variadic function (physical params =
 		// required + physical optionals + rest list) matches every dispatch arity >=
@@ -267,7 +267,7 @@ final class JvmRuntimeBuilder {
 			String name = segment == 0 ? dispatcherName(arity, spread)
 					: dispatcherName(arity, spread) + "$" + (segment - 1);
 			Utf8Constant nameUtf8 = cp.addUtf8(name);
-			List<Integer> code = new ArrayList<>();
+			MethodCode code = new MethodCode();
 			if (segment == 0) {
 				// The callee's representation decides, on the path every indirect call
 				// already takes: a function value is an Object[] whose slot 0 is its
@@ -275,166 +275,128 @@ final class JvmRuntimeBuilder {
 				// follow them, so a function value pays nothing it did not pay before.
 				MethodrefConstant notFnRef = cp.addMethodref(thisClass,
 						cp.addNameAndType(cp.addUtf8(NOT_FN_NAME), cp.addUtf8(NOT_FN_DESC)));
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.INSTANCEOF);
-				emitU2(code, objectArrayClass.index());
-				int ifNotArrayPos = code.size();
-				code.add(Opcode.IFEQ);
-				emitU2(code, 0);
+				code.aload(0);
+				code.instanceOf(objectArrayClass.entry());
+				MethodCode.Label ifNotArray = code.newLabel();
+				code.ifeq(ifNotArray);
 				// Object[] fv = (Object[]) funcval;
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.CHECKCAST);
-				emitU2(code, objectArrayClass.index());
-				code.add(Opcode.ASTORE);
-				code.add(fvSlot);
+				code.aload(0);
+				code.checkcast(objectArrayClass.entry());
+				code.astore(fvSlot);
 				// A cons, an instance, an empty vector: no funcId in slot 0.
-				code.add(Opcode.ALOAD);
-				code.add(fvSlot);
-				code.add(Opcode.ARRAYLENGTH);
-				int ifEmptyPos = code.size();
-				code.add(Opcode.IFEQ);
-				emitU2(code, 0);
-				code.add(Opcode.ALOAD);
-				code.add(fvSlot);
-				code.add(Opcode.ICONST_0);
-				code.add(Opcode.AALOAD);
-				code.add(Opcode.INSTANCEOF);
-				emitU2(code, integerClass.index());
-				int ifNoIdPos = code.size();
-				code.add(Opcode.IFEQ);
-				emitU2(code, 0);
-				int toResolvedPos = code.size();
-				code.add(Opcode.GOTO);
-				emitU2(code, 0);
-				patchBranch(code, ifNotArrayPos, code.size());
+				code.aload(fvSlot);
+				code.arraylength();
+				MethodCode.Label ifEmpty = code.newLabel();
+				code.ifeq(ifEmpty);
+				code.aload(fvSlot);
+				code.iconst_0();
+				code.aaload();
+				code.instanceOf(integerClass.entry());
+				MethodCode.Label ifNoId = code.newLabel();
+				code.ifeq(ifNoId);
+				MethodCode.Label toResolved = code.newLabel();
+				code.goto_(toResolved);
+				code.labelBinding(ifNotArray);
 				if (lookupRef != null) {
 					// A String funcval is a SYMBOL used as a function designator (the
 					// interpreter's late binding): resolve it through _lookup, whose
 					// Object[]{funcId, arity} result carries the id in slot 0 exactly
 					// like a function value. A chained segment receives the
 					// already-resolved fv.
-					code.add(Opcode.ALOAD_0);
-					code.add(Opcode.INSTANCEOF);
-					emitU2(code, stringClass.index());
-					int ifNotStringPos = code.size();
-					code.add(Opcode.IFEQ);
-					emitU2(code, 0);
-					code.add(Opcode.ALOAD_0);
-					code.add(Opcode.INVOKESTATIC);
-					emitU2(code, lookupRef.index());
-					code.add(Opcode.ASTORE);
-					code.add(fvSlot);
-					code.add(Opcode.ALOAD);
-					code.add(fvSlot);
-					int ifResolvedPos = code.size();
-					code.add(Opcode.IFNONNULL);
-					emitU2(code, 0);
-					notFnThrowAt(code, notFnRef, ifNotStringPos, ifEmptyPos, ifNoIdPos);
-					patchBranch(code, ifResolvedPos, code.size());
+					code.aload(0);
+					code.instanceOf(stringClass.entry());
+					MethodCode.Label ifNotString = code.newLabel();
+					code.ifeq(ifNotString);
+					code.aload(0);
+					code.invokestatic(lookupRef.entry());
+					code.astore(fvSlot);
+					code.aload(fvSlot);
+					MethodCode.Label ifResolved = code.newLabel();
+					code.ifnonnull(ifResolved);
+					notFnThrowAt(code, notFnRef, ifNotString, ifEmpty, ifNoId);
+					code.labelBinding(ifResolved);
 				}
 				else {
-					notFnThrowAt(code, notFnRef, ifEmptyPos, ifNoIdPos);
+					notFnThrowAt(code, notFnRef, ifEmpty, ifNoId);
 				}
-				patchBranch(code, toResolvedPos, code.size());
+				code.labelBinding(toResolved);
 			}
 			else {
 				// Object[] fv = (Object[]) funcval;
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.CHECKCAST);
-				emitU2(code, objectArrayClass.index());
-				code.add(Opcode.ASTORE);
-				code.add(fvSlot);
+				code.aload(0);
+				code.checkcast(objectArrayClass.entry());
+				code.astore(fvSlot);
 			}
 			// int id = ((Integer) fv[0]).intValue();
-			code.add(Opcode.ALOAD);
-			code.add(fvSlot);
-			code.add(Opcode.ICONST_0);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, integerClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, integerValue.index());
-			code.add(Opcode.ISTORE);
-			code.add(idSlot);
+			code.aload(fvSlot);
+			code.iconst_0();
+			code.aaload();
+			code.checkcast(integerClass.entry());
+			code.invokevirtual(integerValue.methodRefEntry());
+			code.istore(idSlot);
 			// Interpreted closure (funcId == -1, created by the eval runtime's
 			// lambda): delegate to _apply with the arguments collected into a cons
 			// list. Segment 0 only: a chained segment sees the same id.
 			if (segment == 0 && applyRef != null && !spread) {
-				code.add(Opcode.ILOAD);
-				code.add(idSlot);
-				code.add(Opcode.ICONST_M1);
-				int ifPos = code.size();
-				code.add(Opcode.IF_ICMPNE);
-				emitU2(code, 0);
-				code.add(Opcode.ACONST_NULL);
-				code.add(Opcode.ASTORE);
-				code.add(restSlot);
+				code.iload(idSlot);
+				code.iconst_m1();
+				MethodCode.Label compiled = code.newLabel();
+				code.if_icmpne(compiled);
+				code.aconst_null();
+				code.astore(restSlot);
 				for (int j = arity - 1; j >= 0; j--) {
-					code.add(Opcode.ICONST_2);
-					code.add(Opcode.ANEWARRAY);
-					emitU2(code, objectClass.index());
-					code.add(Opcode.DUP);
-					code.add(Opcode.ICONST_0);
-					code.add(Opcode.ALOAD);
-					code.add(j + 1);
-					code.add(Opcode.AASTORE);
-					code.add(Opcode.DUP);
-					code.add(Opcode.ICONST_1);
-					code.add(Opcode.ALOAD);
-					code.add(restSlot);
-					code.add(Opcode.AASTORE);
-					code.add(Opcode.ASTORE);
-					code.add(restSlot);
+					code.iconst_2();
+					code.anewarray(objectClass.entry());
+					code.dup();
+					code.iconst_0();
+					code.aload(j + 1);
+					code.aastore();
+					code.dup();
+					code.iconst_1();
+					code.aload(restSlot);
+					code.aastore();
+					code.astore(restSlot);
 				}
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.ALOAD);
-				code.add(restSlot);
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, applyRef.index());
-				code.add(Opcode.ARETURN);
-				patchBranch(code, ifPos, code.size());
+				code.aload(0);
+				code.aload(restSlot);
+				code.invokestatic(applyRef.entry());
+				code.areturn();
+				code.labelBinding(compiled);
 			}
 			if (routed && segment == 0) {
 				// The router: bisect the segment boundaries and pass the RESOLVED fv on
 				// (so a String-designator lookup happens once) with the arguments
 				// unchanged. An id below the first segment's range, or above the last
 				// one's, lands in a real segment whose tree answers null for it.
-				List<Integer> segmentArgs = new ArrayList<>();
-				segmentArgs.add(Opcode.ALOAD);
-				segmentArgs.add(fvSlot);
-				for (int i = 0; i < dispatchArgs; i++) {
-					segmentArgs.add(Opcode.ALOAD);
-					segmentArgs.add(i + 1);
-				}
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, segmentArgs, segmentRefs);
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, args -> {
+					args.aload(fvSlot);
+					for (int i = 0; i < dispatchArgs; i++) {
+						args.aload(i + 1);
+					}
+				}, segmentRefs);
 			}
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
-				List<Integer> defaultJumps = new ArrayList<>();
-				emitDispatchTree(code, cases, range[0], range[1], idSlot, defaultJumps);
+				MethodCode.Label miss = code.newLabel();
+				emitDispatchTree(code, cases, range[0], range[1], idSlot, miss);
 				// Default: an id no case of this arity claims. For a per-arity
 				// dispatcher that is a CALL with the wrong number of arguments -- the
 				// callee exists, it just has another shape -- so the arm reports it
 				// (ArityReporting). The spread dispatcher carries a case for every
 				// callable, so its default really is an id nothing claims and answers
 				// nil as before.
-				int defaultPos = code.size();
-				for (int jump : defaultJumps) {
-					patchBranch(code, jump, defaultPos);
-				}
+				code.labelBinding(miss);
 				if (!spread && arityReporting.errRef() != null) {
-					code.add(Opcode.ILOAD);
-					code.add(idSlot);
-					emitIntConstStatic(code, arity);
-					code.add(Opcode.INVOKESTATIC);
-					emitU2(code, arityReporting.errRef().index());
+					code.iload(idSlot);
+					code.loadConstant(arity);
+					code.invokestatic(arityReporting.errRef().entry());
 				}
 				else {
-					code.add(Opcode.ACONST_NULL);
+					code.aconst_null();
 				}
-				code.add(Opcode.ARETURN);
+				code.areturn();
 			}
-			segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code, maxLocals));
+			segments.add(new JvmLispCompiler.DispatchMethod(nameUtf8, descUtf8, code));
 		}
 		return segments;
 	}
@@ -467,27 +429,23 @@ final class JvmRuntimeBuilder {
 	/**
 	 * Emits the router's search tree over {@code ranges[lo..hi]}: each internal node
 	 * compares the id against the largest id its left half holds, each leaf loads the
-	 * segment's arguments ({@code segmentArgs}, instructions emitted verbatim) and
-	 * tail-calls that segment.
+	 * segment's arguments ({@code segmentArgs}) and tail-calls that segment.
 	 */
-	private static void emitSegmentRouter(List<Integer> code, List<Case> cases, List<int[]> ranges, int lo, int hi,
-			int idSlot, List<Integer> segmentArgs, List<MethodrefConstant> segmentRefs) {
+	private static void emitSegmentRouter(MethodCode code, List<Case> cases, List<int[]> ranges, int lo, int hi,
+			int idSlot, Consumer<MethodCode> segmentArgs, List<MethodrefConstant> segmentRefs) {
 		if (lo == hi) {
-			code.addAll(segmentArgs);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, segmentRefs.get(lo).index());
-			code.add(Opcode.ARETURN);
+			segmentArgs.accept(code);
+			code.invokestatic(segmentRefs.get(lo).entry());
+			code.areturn();
 			return;
 		}
 		int mid = (lo + hi) >>> 1;
-		code.add(Opcode.ILOAD);
-		code.add(idSlot);
-		emitIntConstStatic(code, cases.get(ranges.get(mid)[1]).funcId());
-		int ifRight = code.size();
-		code.add(Opcode.IF_ICMPGT);
-		emitU2(code, 0);
+		code.iload(idSlot);
+		code.loadConstant(cases.get(ranges.get(mid)[1]).funcId());
+		MethodCode.Label ifRight = code.newLabel();
+		code.if_icmpgt(ifRight);
 		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, segmentArgs, segmentRefs);
-		patchBranch(code, ifRight, code.size());
+		code.labelBinding(ifRight);
 		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, segmentArgs, segmentRefs);
 	}
 
@@ -504,7 +462,7 @@ final class JvmRuntimeBuilder {
 	 * @param lispToString the generated class's {@code _lispToString(Object)}
 	 * @return the method body
 	 */
-	static List<Integer> buildNotFnBody(ConstantPool cp, ClassConstant stringClass, MethodrefConstant lispToString) {
+	static MethodCode buildNotFnBody(ConstantPool cp, ClassConstant stringClass, MethodrefConstant lispToString) {
 		ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
@@ -554,20 +512,19 @@ final class JvmRuntimeBuilder {
 		a.invokevirtual(concat.methodRefEntry());
 		a.invokespecial(exCtor.entry());
 		a.areturn();
-		return a.code();
+		return a;
 	}
 
 	/**
 	 * Binds the given forward branches here and emits {@code throw _notFn(funcval)}.
 	 */
-	private static void notFnThrowAt(List<Integer> code, MethodrefConstant notFnRef, int... branches) {
-		for (int branch : branches) {
-			patchBranch(code, branch, code.size());
+	private static void notFnThrowAt(MethodCode code, MethodrefConstant notFnRef, MethodCode.Label... branches) {
+		for (MethodCode.Label branch : branches) {
+			code.labelBinding(branch);
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, notFnRef.index());
-		code.add(Opcode.ATHROW);
+		code.aload(0);
+		code.invokestatic(notFnRef.entry());
+		code.athrow();
 	}
 
 	private static boolean dispatchMatches(int required, boolean variadic, int arity) {
@@ -674,14 +631,14 @@ final class JvmRuntimeBuilder {
 		List<String> operatorNames = operators.freeze();
 		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
 		methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_MSG_NAME), cp.addUtf8(ARITY_MSG_DESC),
-				buildArityMsgBody(cp, stringClass, operatorNames), operatorNames.isEmpty() ? 4 : 5));
+				buildArityMsgBody(cp, stringClass, operatorNames)));
 		if (withErr) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_ERR_NAME), cp.addUtf8(ARITY_ERR_DESC),
-					buildArityErrBody(shapes, cp, stringClass, runtimeEx, exCtor, msgRef), 3));
+					buildArityErrBody(shapes, cp, stringClass, runtimeEx, exCtor, msgRef)));
 		}
 		if (withChk) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_CHK_NAME), cp.addUtf8(ARITY_CHK_DESC),
-					buildArityChkBody(cp, objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty()), 5));
+					buildArityChkBody(cp, objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty())));
 		}
 		return methods;
 	}
@@ -708,7 +665,7 @@ final class JvmRuntimeBuilder {
 	 * interpreter's spread does. The aligned literal {@code apply} passes its rest tail
 	 * here with the shape {@code (0, variadic)} for that check alone.
 	 */
-	private static List<Integer> buildArityChkBody(ConstantPool cp, ClassConstant objectArrayClass,
+	private static MethodCode buildArityChkBody(ConstantPool cp, ClassConstant objectArrayClass,
 			ClassConstant runtimeEx, MethodrefConstant exCtor, MethodrefConstant msgRef, boolean named) {
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required.
 		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4;
@@ -781,7 +738,7 @@ final class JvmRuntimeBuilder {
 		a.athrow();
 		a.labelBinding(ok);
 		a.return_();
-		return a.code();
+		return a;
 	}
 
 	/**
@@ -792,7 +749,7 @@ final class JvmRuntimeBuilder {
 	 * stands where {@code Function} would; without, the body is the one a build that
 	 * named nothing emitted, byte for byte.
 	 */
-	private static List<Integer> buildArityMsgBody(ConstantPool cp, ClassConstant stringClass,
+	private static MethodCode buildArityMsgBody(ConstantPool cp, ClassConstant stringClass,
 			List<String> operatorNames) {
 		ClassConstant sb = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant sbInit = cp.addMethodref(sb, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
@@ -802,98 +759,85 @@ final class JvmRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("append"), cp.addUtf8("(I)Ljava/lang/StringBuilder;")));
 		MethodrefConstant toString = cp.addMethodref(sb,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		boolean named = !operatorNames.isEmpty();
 		// required = shape >>> 1, the operator bits shifted out first when there are any
-		code.add(Opcode.ILOAD_0);
+		code.iload(0);
 		if (named) {
-			emitIntConstStatic(code, Integer.SIZE - ARITY_OPERATOR_SHIFT);
-			code.add(Opcode.ISHL);
-			emitIntConstStatic(code, Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
+			code.loadConstant(Integer.SIZE - ARITY_OPERATOR_SHIFT);
+			code.ishl();
+			code.loadConstant(Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
 		}
 		else {
-			code.add(Opcode.ICONST_1);
+			code.iconst_1();
 		}
-		code.add(Opcode.IUSHR);
-		code.add(Opcode.ISTORE_3);
-		code.add(Opcode.NEW);
-		emitU2(code, sb.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, sbInit.index());
-		code.add(Opcode.ASTORE_2);
+		code.iushr();
+		code.istore(3);
+		code.new_(sb.entry());
+		code.dup();
+		code.invokespecial(sbInit.entry());
+		code.astore(2);
 		if (named) {
 			// operator = shape >>> ARITY_OPERATOR_SHIFT; 0 reports as "Function"
 			int operator = 4;
-			code.add(Opcode.ILOAD_0);
-			emitIntConstStatic(code, ARITY_OPERATOR_SHIFT);
-			code.add(Opcode.IUSHR);
-			code.add(Opcode.DUP);
-			code.add(Opcode.ISTORE);
-			code.add(operator);
-			int ifNamed = code.size();
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
+			code.iload(0);
+			code.loadConstant(ARITY_OPERATOR_SHIFT);
+			code.iushr();
+			code.dup();
+			code.istore(operator);
+			MethodCode.Label ifNamed = code.newLabel();
+			code.ifne(ifNamed);
 			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_PREFIX);
-			int toJoin = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, ifNamed, code.size());
+			MethodCode.Label toJoin = code.newLabel();
+			code.goto_(toJoin);
+			code.labelBinding(ifNamed);
 			// sb.append(NAMES.split("\n")[operator - 1]).append(" expects ")
-			code.add(Opcode.ALOAD_2);
-			emitLdc(code, cp.addString(String.join(ARITY_OPERATOR_SEPARATOR, operatorNames)).index());
-			emitLdc(code, cp.addString(ARITY_OPERATOR_SEPARATOR).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, cp
+			code.aload(2);
+			code.ldc(cp.addString(String.join(ARITY_OPERATOR_SEPARATOR, operatorNames)).entry());
+			code.ldc(cp.addString(ARITY_OPERATOR_SEPARATOR).entry());
+			code.invokevirtual(cp
 				.addMethodref(stringClass,
 						cp.addNameAndType(cp.addUtf8("split"), cp.addUtf8("(Ljava/lang/String;)[Ljava/lang/String;")))
-				.index());
-			code.add(Opcode.ILOAD);
-			code.add(operator);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.ISUB);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, appendStr.index());
-			code.add(Opcode.POP);
+				.methodRefEntry());
+			code.iload(operator);
+			code.iconst_1();
+			code.isub();
+			code.aaload();
+			code.invokevirtual(appendStr.methodRefEntry());
+			code.pop();
 			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_VERB);
-			patchBranch(code, toJoin, code.size());
+			code.labelBinding(toJoin);
 		}
 		else {
 			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_PREFIX);
 		}
 		// a &rest tail makes the count a lower bound
-		code.add(Opcode.ILOAD_0);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IAND);
-		int notVariadic = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.iload(0);
+		code.iconst_1();
+		code.iand();
+		MethodCode.Label notVariadic = code.newLabel();
+		code.ifeq(notVariadic);
 		emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_AT_LEAST);
-		patchBranch(code, notVariadic, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, appendInt.index());
-		code.add(Opcode.POP);
+		code.labelBinding(notVariadic);
+		code.aload(2);
+		code.iload(3);
+		code.invokevirtual(appendInt.methodRefEntry());
+		code.pop();
 		emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_ARGUMENT);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_1);
-		int singular = code.size();
-		code.add(Opcode.IF_ICMPEQ);
-		emitU2(code, 0);
+		code.iload(3);
+		code.iconst_1();
+		MethodCode.Label singular = code.newLabel();
+		code.if_icmpeq(singular);
 		emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_PLURAL);
-		patchBranch(code, singular, code.size());
+		code.labelBinding(singular);
 		emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_INFIX);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, appendInt.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, toString.index());
-		code.add(Opcode.ARETURN);
+		code.aload(2);
+		code.iload(1);
+		code.invokevirtual(appendInt.methodRefEntry());
+		code.pop();
+		code.aload(2);
+		code.invokevirtual(toString.methodRefEntry());
+		code.areturn();
 		return code;
 	}
 
@@ -905,12 +849,11 @@ final class JvmRuntimeBuilder {
 	private static final String ARITY_OPERATOR_SEPARATOR = "\n";
 
 	/** {@code sb.append(<literal>)} inside {@code _arityMsg}, discarding the builder. */
-	private static void emitArityAppend(List<Integer> code, ConstantPool cp, MethodrefConstant appendStr, String text) {
-		code.add(Opcode.ALOAD_2);
-		emitLdc(code, cp.addString(text).index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, appendStr.index());
-		code.add(Opcode.POP);
+	private static void emitArityAppend(MethodCode code, ConstantPool cp, MethodrefConstant appendStr, String text) {
+		code.aload(2);
+		code.ldc(cp.addString(text).entry());
+		code.invokevirtual(appendStr.methodRefEntry());
+		code.pop();
 	}
 
 	/**
@@ -919,10 +862,10 @@ final class JvmRuntimeBuilder {
 	 * before it reported anything -- such an id can only come from a corrupted function
 	 * value, and a report is not worth turning that into a throw.
 	 */
-	private static List<Integer> buildArityErrBody(SortedMap<Integer, Integer> shapes, ConstantPool cp,
+	private static MethodCode buildArityErrBody(SortedMap<Integer, Integer> shapes, ConstantPool cp,
 			ClassConstant stringClass, ClassConstant runtimeEx, MethodrefConstant exCtor, MethodrefConstant msgRef) {
-		List<Integer> code = new ArrayList<>();
-		List<Integer> nullJumps = new ArrayList<>();
+		MethodCode code = new MethodCode();
+		MethodCode.Label answerNil = code.newLabel();
 		int base = shapes.isEmpty() ? 0 : shapes.firstKey();
 		int span = shapes.isEmpty() ? 0 : shapes.lastKey() - base + 1;
 		if (span > 0 && span <= ARITY_TABLE_MAX_SPAN) {
@@ -934,66 +877,54 @@ final class JvmRuntimeBuilder {
 				named |= cell > ARITY_TABLE_NONE;
 				table.append((char) cell);
 			}
-			code.add(Opcode.ILOAD_0);
+			code.iload(0);
 			if (base != 0) {
-				emitIntConstStatic(code, base);
-				code.add(Opcode.ISUB);
+				code.loadConstant(base);
+				code.isub();
 			}
-			code.add(Opcode.ISTORE_2);
-			code.add(Opcode.ILOAD_2);
-			nullJumps.add(code.size());
-			code.add(Opcode.IFLT);
-			emitU2(code, 0);
-			code.add(Opcode.ILOAD_2);
-			emitIntConstStatic(code, span);
-			nullJumps.add(code.size());
-			code.add(Opcode.IF_ICMPGE);
-			emitU2(code, 0);
-			emitLdc(code, cp.addString(table.toString()).index());
-			code.add(Opcode.ILOAD_2);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code,
-					cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C"))).index());
-			code.add(Opcode.ISTORE_2);
-			code.add(Opcode.ILOAD_2);
-			emitIntConstStatic(code, ARITY_TABLE_NONE);
-			nullJumps.add(code.size());
-			code.add(Opcode.IF_ICMPEQ);
-			emitU2(code, 0);
-			code.add(Opcode.NEW);
-			emitU2(code, runtimeEx.index());
-			code.add(Opcode.DUP);
+			code.istore(2);
+			code.iload(2);
+			code.iflt(answerNil);
+			code.iload(2);
+			code.loadConstant(span);
+			code.if_icmpge(answerNil);
+			code.ldc(cp.addString(table.toString()).entry());
+			code.iload(2);
+			code.invokevirtual(cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")))
+				.methodRefEntry());
+			code.istore(2);
+			code.iload(2);
+			code.loadConstant(ARITY_TABLE_NONE);
+			code.if_icmpeq(answerNil);
+			code.new_(runtimeEx.entry());
+			code.dup();
 			if (named) {
 				// shape = (cell >>> 7) << 16 | ((cell & 0x7F) - 1)
-				code.add(Opcode.ILOAD_2);
-				emitIntConstStatic(code, ARITY_TABLE_OPERATOR_SHIFT);
-				code.add(Opcode.IUSHR);
-				emitIntConstStatic(code, ARITY_OPERATOR_SHIFT);
-				code.add(Opcode.ISHL);
-				code.add(Opcode.ILOAD_2);
-				emitIntConstStatic(code, (1 << ARITY_TABLE_OPERATOR_SHIFT) - 1);
-				code.add(Opcode.IAND);
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ISUB);
-				code.add(Opcode.IOR);
+				code.iload(2);
+				code.loadConstant(ARITY_TABLE_OPERATOR_SHIFT);
+				code.iushr();
+				code.loadConstant(ARITY_OPERATOR_SHIFT);
+				code.ishl();
+				code.iload(2);
+				code.loadConstant((1 << ARITY_TABLE_OPERATOR_SHIFT) - 1);
+				code.iand();
+				code.iconst_1();
+				code.isub();
+				code.ior();
 			}
 			else {
-				code.add(Opcode.ILOAD_2);
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ISUB);
+				code.iload(2);
+				code.iconst_1();
+				code.isub();
 			}
-			code.add(Opcode.ILOAD_1);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, msgRef.index());
-			code.add(Opcode.INVOKESPECIAL);
-			emitU2(code, exCtor.index());
-			code.add(Opcode.ATHROW);
+			code.iload(1);
+			code.invokestatic(msgRef.entry());
+			code.invokespecial(exCtor.entry());
+			code.athrow();
 		}
-		for (int jump : nullJumps) {
-			patchBranch(code, jump, code.size());
-		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.labelBinding(answerNil);
+		code.aconst_null();
+		code.areturn();
 		return code;
 	}
 
@@ -1014,48 +945,44 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * One dispatch target: the funcId to match and the branch-free body that calls it,
-	 * ending in {@code areturn}. The body contains no branches, so it can be spliced at
-	 * any position in the search tree without re-patching.
+	 * One dispatch target: the funcId to match and the body that calls it, ending in
+	 * {@code areturn}. The body is a block of its own whose branches (a spread case's
+	 * nil-passing car/cdr steps) land inside it, so it can be spliced at any position in
+	 * the search tree ({@link MethodCode#append}).
 	 */
-	private record Case(int funcId, List<Integer> body) {
+	private record Case(int funcId, MethodCode body) {
 	}
 
 	/**
 	 * Emits the search tree over {@code cases[lo..hi]} (sorted by funcId): each internal
 	 * node compares the id against the midpoint and jumps to the right half, each leaf
-	 * compares for equality and splices the case body. A leaf's mismatch branch position
-	 * is collected in {@code defaultJumps} for the caller to patch to the default arm.
-	 * This is what keeps an indirect call's cost logarithmic in the number of callables
-	 * of that arity rather than linear in it: the previous if-else chain walked an
-	 * average of half the callables per call, so merely loading another class-defining
-	 * library taxed every hot indirect call in the program.
+	 * compares for equality and splices the case body; a leaf's mismatch jumps to
+	 * {@code miss}, the caller's default arm. This is what keeps an indirect call's cost
+	 * logarithmic in the number of callables of that arity rather than linear in it: the
+	 * previous if-else chain walked an average of half the callables per call, so merely
+	 * loading another class-defining library taxed every hot indirect call in the
+	 * program.
 	 */
-	private static void emitDispatchTree(List<Integer> code, List<Case> cases, int lo, int hi, int idSlot,
-			List<Integer> defaultJumps) {
+	private static void emitDispatchTree(MethodCode code, List<Case> cases, int lo, int hi, int idSlot,
+			MethodCode.Label miss) {
 		if (lo > hi) {
 			return;
 		}
 		if (lo == hi) {
-			code.add(Opcode.ILOAD);
-			code.add(idSlot);
-			emitIntConstStatic(code, cases.get(lo).funcId());
-			defaultJumps.add(code.size());
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
-			code.addAll(cases.get(lo).body());
+			code.iload(idSlot);
+			code.loadConstant(cases.get(lo).funcId());
+			code.if_icmpne(miss);
+			code.append(cases.get(lo).body());
 			return;
 		}
 		int mid = (lo + hi) >>> 1;
-		code.add(Opcode.ILOAD);
-		code.add(idSlot);
-		emitIntConstStatic(code, cases.get(mid).funcId());
-		int ifRight = code.size();
-		code.add(Opcode.IF_ICMPGT);
-		emitU2(code, 0);
-		emitDispatchTree(code, cases, lo, mid, idSlot, defaultJumps);
-		patchBranch(code, ifRight, code.size());
-		emitDispatchTree(code, cases, mid + 1, hi, idSlot, defaultJumps);
+		code.iload(idSlot);
+		code.loadConstant(cases.get(mid).funcId());
+		MethodCode.Label ifRight = code.newLabel();
+		code.if_icmpgt(ifRight);
+		emitDispatchTree(code, cases, lo, mid, idSlot, miss);
+		code.labelBinding(ifRight);
+		emitDispatchTree(code, cases, mid + 1, hi, idSlot, miss);
 	}
 
 	/** The dispatcher method name: per-arity, or the single spread one. */
@@ -1075,7 +1002,7 @@ final class JvmRuntimeBuilder {
 	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi,
 			@org.jspecify.annotations.Nullable String name, int fvSlot, ConstantPool cp, ClassConstant thisClass,
 			ClassConstant objectArrayClass, ArityReporting arityReporting, JvmUnsupplied unsupplied) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		int required = fi.required();
 		int positional = fi.positional();
 		// The count guard. A short list would otherwise BIND nil for the parameters it
@@ -1085,24 +1012,22 @@ final class JvmRuntimeBuilder {
 		// shape carries its operator index, past sipush range: that one constant is
 		// pooled.
 		if (arityReporting.chkRef() != null) {
-			code.add(Opcode.ALOAD_1);
+			code.aload(1);
 			int shape = java.util.Objects.requireNonNull(arityReporting.operators())
 				.shape(required, fi.variadic(), name);
 			if (shape > Short.MAX_VALUE) {
-				emitLdc(code, cp.addInteger(shape).index());
+				code.ldc(cp.addInteger(shape).entry());
 			}
 			else {
-				emitIntConstStatic(code, shape);
+				code.loadConstant(shape);
 			}
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, arityReporting.chkRef().index());
+			code.invokestatic(arityReporting.chkRef().entry());
 		}
 		if (fvSlot >= 0) {
-			code.add(Opcode.ALOAD);
-			code.add(fvSlot);
+			code.aload(fvSlot);
 		}
 		for (int i = 0; i < positional; i++) {
-			code.add(Opcode.ALOAD_1);
+			code.aload(1);
 			for (int step = 0; step < i; step++) {
 				emitCell(code, objectArrayClass, 1);
 			}
@@ -1111,35 +1036,31 @@ final class JvmRuntimeBuilder {
 			}
 			else {
 				// cell == null ? UNSUPPLIED : car(cell), branch-free here
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, unsupplied.optArgRef(cp, thisClass).index());
+				code.invokestatic(unsupplied.optArgRef(cp, thisClass.entry()));
 			}
 		}
 		if (fi.variadic()) {
-			code.add(Opcode.ALOAD_1);
+			code.aload(1);
 			for (int step = 0; step < positional; step++) {
 				emitCell(code, objectArrayClass, 1);
 			}
 		}
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, fi.methodref().index());
-		code.add(Opcode.ARETURN);
+		code.invokestatic(fi.methodref().entry());
+		code.areturn();
 		return new Case(fi.funcId(), code);
 	}
 
 	// Replaces the cons on the stack with its car (field 0) or cdr (field 1); nil passes
 	// through, like the car/cdr built-ins, so a short argument list binds the missing
 	// parameters to nil instead of trapping.
-	private static void emitCell(List<Integer> code, ClassConstant objectArrayClass, int field) {
-		code.add(Opcode.DUP);
-		int ifNullPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(field == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		patchBranch(code, ifNullPos, code.size());
+	private static void emitCell(MethodCode code, ClassConstant objectArrayClass, int field) {
+		code.dup();
+		MethodCode.Label ifNull = code.newLabel();
+		code.ifnull(ifNull);
+		code.checkcast(objectArrayClass.entry());
+		code.loadConstant(field);
+		code.aaload();
+		code.labelBinding(ifNull);
 	}
 
 	// Renders one per-arity dispatch case body: "...; return f(...)". The arguments a
@@ -1149,57 +1070,47 @@ final class JvmRuntimeBuilder {
 	// parameter; fvSlot >= 0 marks a closure whose env array is passed first.
 	private static Case renderCase(JvmLispCompiler.FunctionInfo fi, int arity, int restSlot, int fvSlot,
 			ClassConstant objectClass, ConstantPool cp, ClassConstant thisClass, JvmUnsupplied unsupplied) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		int positional = fi.positional();
 		boolean surplus = fi.variadic() && arity > positional;
 		if (surplus) {
 			// rest = null; for (j = arity-1 .. positional) rest = new Object[]{a_j, rest}
-			code.add(Opcode.ACONST_NULL);
-			code.add(Opcode.ASTORE);
-			code.add(restSlot);
+			code.aconst_null();
+			code.astore(restSlot);
 			for (int j = arity - 1; j >= positional; j--) {
-				code.add(Opcode.ICONST_2);
-				code.add(Opcode.ANEWARRAY);
-				emitU2(code, objectClass.index());
-				code.add(Opcode.DUP);
-				code.add(Opcode.ICONST_0);
-				code.add(Opcode.ALOAD);
-				code.add(j + 1);
-				code.add(Opcode.AASTORE);
-				code.add(Opcode.DUP);
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ALOAD);
-				code.add(restSlot);
-				code.add(Opcode.AASTORE);
-				code.add(Opcode.ASTORE);
-				code.add(restSlot);
+				code.iconst_2();
+				code.anewarray(objectClass.entry());
+				code.dup();
+				code.iconst_0();
+				code.aload(j + 1);
+				code.aastore();
+				code.dup();
+				code.iconst_1();
+				code.aload(restSlot);
+				code.aastore();
+				code.astore(restSlot);
 			}
 		}
 		if (fvSlot >= 0) {
-			code.add(Opcode.ALOAD);
-			code.add(fvSlot);
+			code.aload(fvSlot);
 		}
 		for (int i = 0; i < positional; i++) {
 			if (i < arity) {
-				code.add(Opcode.ALOAD);
-				code.add(i + 1);
+				code.aload(i + 1);
 			}
 			else {
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, unsupplied.ref(cp, thisClass).index());
+				code.invokestatic(unsupplied.ref(cp, thisClass.entry()));
 			}
 		}
 		if (surplus) {
-			code.add(Opcode.ALOAD);
-			code.add(restSlot);
+			code.aload(restSlot);
 		}
 		else if (fi.variadic()) {
 			// nothing past the optionals: the empty rest list
-			code.add(Opcode.ACONST_NULL);
+			code.aconst_null();
 		}
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, fi.methodref().index());
-		code.add(Opcode.ARETURN);
+		code.invokestatic(fi.methodref().entry());
+		code.areturn();
 		return new Case(fi.funcId(), code);
 	}
 
@@ -1207,7 +1118,7 @@ final class JvmRuntimeBuilder {
 	 * Builds bytecode for _lispToString. Handles Long, Double, String, BigInteger[]
 	 * (ratio), Object[] (cons or function), and fallback toString.
 	 */
-	static List<Integer> buildLispToStringBody(ClassConstant longClass, ClassConstant doubleClass,
+	static MethodCode buildLispToStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
 			MethodrefConstant longToString, MethodrefConstant doubleToString, FloatPrint floatPrint,
 			MethodrefConstant objectToString, MethodrefConstant consToStringMethod, ConstantPool.StringConstant nilStr,
@@ -1224,17 +1135,16 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable InstPrint instPrint, MethodrefConstant strEscMethod,
 			@org.jspecify.annotations.Nullable HashPrint hashPrint,
 			@org.jspecify.annotations.Nullable ComplexPrintRefs cplx) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (val == null) return "nil";
-		code.add(Opcode.ALOAD_0);
-		int ifNonnullPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitLdc(code, nilStr.index());
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		MethodCode.Label ifNonnull = code.newLabel();
+		code.ifnonnull(ifNonnull);
+		code.ldc(nilStr.entry());
+		code.areturn();
 
 		// if (val instanceof Long) return ((Long)val).toString();
-		patchBranch(code, ifNonnullPos, code.size());
+		code.labelBinding(ifNonnull);
 		// if (val instanceof CompletableFuture) return "#<FUTURE>"; (only when the
 		// program can create futures)
 		emitFutureBranch(code, futurePrint);
@@ -1246,77 +1156,59 @@ final class JvmRuntimeBuilder {
 		// the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, packedIntPrint, strvMethod, stringClass,
 				null, null, strEscMethod, javaPrint);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, longClass.index());
-		int ifNotLongPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, longToString.index());
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		code.instanceOf(longClass.entry());
+		MethodCode.Label ifNotLong = code.newLabel();
+		code.ifeq(ifNotLong);
+		code.aload(0);
+		code.checkcast(longClass.entry());
+		code.invokevirtual(longToString.methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof Double) return ((Double)val).toString().replace("E", "e");
 		// (the FloatText lowercase-marker spelling, identical on every backend)
-		patchBranch(code, ifNotLongPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, doubleClass.index());
-		int ifNotDoublePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, doubleClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, doubleToString.index());
-		emitLdc(code, floatPrint.upperE().index());
-		emitLdc(code, floatPrint.lowerE().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.stringReplace().index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotLong);
+		code.aload(0);
+		code.instanceOf(doubleClass.entry());
+		MethodCode.Label ifNotDouble = code.newLabel();
+		code.ifeq(ifNotDouble);
+		code.aload(0);
+		code.checkcast(doubleClass.entry());
+		code.invokevirtual(doubleToString.methodRefEntry());
+		code.ldc(floatPrint.upperE().entry());
+		code.ldc(floatPrint.lowerE().entry());
+		code.invokevirtual(floatPrint.stringReplace().methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof Float) return ((Float)val).toString().replace("E", "e");
 		// A Float box exists only transiently while a packed single-float array prints
 		// its elements at their f32 width (_fvToGeneralPrint); no Lisp value holds one.
-		patchBranch(code, ifNotDoublePos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, floatPrint.floatClass().index());
-		int ifNotFloatPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, floatPrint.floatClass().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.floatToString().index());
-		emitLdc(code, floatPrint.upperE().index());
-		emitLdc(code, floatPrint.lowerE().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.stringReplace().index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotDouble);
+		code.aload(0);
+		code.instanceOf(floatPrint.floatClass().entry());
+		MethodCode.Label ifNotFloat = code.newLabel();
+		code.ifeq(ifNotFloat);
+		code.aload(0);
+		code.checkcast(floatPrint.floatClass().entry());
+		code.invokevirtual(floatPrint.floatToString().methodRefEntry());
+		code.ldc(floatPrint.upperE().entry());
+		code.ldc(floatPrint.lowerE().entry());
+		code.invokevirtual(floatPrint.stringReplace().methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof String) return _strEsc((String)val);
 		//
 		// The quote-framed content still needs its embedded " and \ escaped before it can
 		// be read back; _strEsc passes a bare symbol name through untouched (todo 216).
-		patchBranch(code, ifNotFloatPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, stringClass.index());
-		int ifNotStringPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, stringClass.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, strEscMethod.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotFloat);
+		code.aload(0);
+		code.instanceOf(stringClass.entry());
+		MethodCode.Label ifNotString = code.newLabel();
+		code.ifeq(ifNotString);
+		code.aload(0);
+		code.checkcast(stringClass.entry());
+		code.invokestatic(strEscMethod.entry());
+		code.areturn();
 
 		// if (val instanceof int[]) return _charPrin1(((int[])val)[0]);
 		//
@@ -1325,79 +1217,68 @@ final class JvmRuntimeBuilder {
 		// discriminator is INSTANCEOF [I -- disjoint from Object[] (functions/cons),
 		// BigInteger[] (ratios) and the packed double[]/float[] arrays -- so no earlier
 		// branch consumes it.
-		patchBranch(code, ifNotStringPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, charBoxClass.index());
-		int ifNotCharPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, charBoxClass.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.IALOAD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, charPrin1Method.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotString);
+		code.aload(0);
+		code.instanceOf(charBoxClass.entry());
+		MethodCode.Label ifNotChar = code.newLabel();
+		code.ifeq(ifNotChar);
+		code.aload(0);
+		code.checkcast(charBoxClass.entry());
+		code.iconst_0();
+		code.iaload();
+		code.invokestatic(charPrin1Method.entry());
+		code.areturn();
 
 		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
 		// check: a ratio is also an Object[])
-		patchBranch(code, ifNotCharPos, code.size());
-		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
+		code.labelBinding(ifNotChar);
+		MethodCode.Label ifNotRatio = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
 
 		// if (val instanceof RontoComplex) -> "#C(re im)" (complex-capable
 		// programs only, so the travelling class stays out of every other
 		// constant pool)
-		patchBranch(code, ifNotRatioPos, code.size());
+		code.labelBinding(ifNotRatio);
 		if (cplx != null) {
-			patchBranch(code, emitComplexToString(code, cplx, stringConcat), code.size());
+			code.labelBinding(emitComplexToString(code, cplx, stringConcat));
 		}
 
 		// if (val instanceof Object[])
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		int ifNotArrayPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(objectArrayClass.entry());
+		MethodCode.Label ifNotArray = code.newLabel();
+		code.ifeq(ifNotArray);
 		// Cast to Object[] and store in slot 1
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ASTORE_1);
+		code.aload(0);
+		code.checkcast(objectArrayClass.entry());
+		code.astore(1);
 		// Check if arr.length > 0 && arr[0] instanceof Integer -> function value
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifEmptyPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, integerClass.index());
-		int ifNotFuncPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(1);
+		code.arraylength();
+		MethodCode.Label ifEmpty = code.newLabel();
+		code.ifeq(ifEmpty);
+		code.aload(1);
+		code.iconst_0();
+		code.aaload();
+		code.instanceOf(integerClass.entry());
+		MethodCode.Label ifNotFunc = code.newLabel();
+		code.ifeq(ifNotFunc);
 		// It's a function value: #<function NAME> under a name, #<lambda> without one
 		emitFuncValPrint(code, funcPrint);
 		// Not a function: an instance (arr[0] is its String[] layout), else a cons list.
 		// The empty-array escape jumps PAST the instance test, which probes arr[0].
-		patchBranch(code, ifNotFuncPos, code.size());
-		int ifNotInstPos = emitInstanceBranch(code, instPrint, false);
-		if (ifNotInstPos >= 0) {
-			patchBranch(code, ifNotInstPos, code.size());
+		code.labelBinding(ifNotFunc);
+		MethodCode.Label ifNotInst = emitInstanceBranch(code, instPrint, false);
+		if (ifNotInst != null) {
+			code.labelBinding(ifNotInst);
 		}
-		patchBranch(code, ifEmptyPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, consToStringMethod.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifEmpty);
+		code.aload(1);
+		code.invokestatic(consToStringMethod.entry());
+		code.areturn();
 
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
-		patchBranch(code, ifNotArrayPos, code.size());
+		code.labelBinding(ifNotArray);
 		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
@@ -1424,10 +1305,9 @@ final class JvmRuntimeBuilder {
 	 * unchanged in the common case; that fast path matters because {@code _lispToString}
 	 * is also the JVM hash-table runtime's key function, not just the printer.
 	 */
-	static List<Integer> buildStrEscBody(ConstantPool cp, MethodrefConstant stringLength,
-			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringIndexOfFrom,
-			MethodrefConstant stringSubstring, MethodrefConstant stringReplace, MethodrefConstant stringConcat,
-			MethodrefConstant symEscMethod) {
+	static MethodCode buildStrEscBody(ConstantPool cp, MethodrefConstant stringLength, MethodrefConstant stringCharAt,
+			MethodrefConstant stringIndexOf, MethodrefConstant stringIndexOfFrom, MethodrefConstant stringSubstring,
+			MethodrefConstant stringReplace, MethodrefConstant stringConcat, MethodrefConstant symEscMethod) {
 		MethodCode a = new MethodCode();
 		int slotS = 0, slotN = 1;
 		MethodCode.Label framed = a.newLabel();
@@ -1492,7 +1372,7 @@ final class JvmRuntimeBuilder {
 		a.aload(slotS);
 		a.invokestatic(symEscMethod.entry());
 		a.areturn();
-		return codeBytes(a);
+		return a;
 	}
 
 	/**
@@ -1517,9 +1397,9 @@ final class JvmRuntimeBuilder {
 	 * therefore prints unescaped here -- the same known, narrow gap as the interpreter's,
 	 * kept identical on purpose.
 	 */
-	static List<Integer> buildSymEscBody(ConstantPool cp, MethodrefConstant stringLength,
-			MethodrefConstant stringCharAt, MethodrefConstant stringIndexOf, MethodrefConstant stringSubstring,
-			MethodrefConstant stringReplace, MethodrefConstant stringConcat) {
+	static MethodCode buildSymEscBody(ConstantPool cp, MethodrefConstant stringLength, MethodrefConstant stringCharAt,
+			MethodrefConstant stringIndexOf, MethodrefConstant stringSubstring, MethodrefConstant stringReplace,
+			MethodrefConstant stringConcat) {
 		MethodCode a = new MethodCode();
 		// locals: s = 0 (param), n = 1, prefixEnd = 2, i = 3, c = 4, idx = 5 (int),
 		// tmp = 6 (String, the substring/concat scratch).
@@ -1574,8 +1454,8 @@ final class JvmRuntimeBuilder {
 		a.invokevirtual(stringIndexOf.methodRefEntry());
 		a.istore(slotIdx);
 		a.iload(slotIdx);
-		MethodCode.Label idxLePos = a.newLabel();
-		a.ifle(idxLePos);
+		MethodCode.Label idxLe = a.newLabel();
+		a.ifle(idxLe);
 		a.iload(slotIdx);
 		a.loadConstant(1);
 		a.iadd();
@@ -1600,7 +1480,7 @@ final class JvmRuntimeBuilder {
 		a.iadd();
 		a.istore(slotPrefixEnd);
 		a.goto_(havePrefix);
-		a.labelBinding(idxLePos);
+		a.labelBinding(idxLe);
 		a.loadConstant(0);
 		a.istore(slotPrefixEnd);
 		a.labelBinding(havePrefix);
@@ -1661,8 +1541,8 @@ final class JvmRuntimeBuilder {
 		a.invokevirtual(stringConcat.methodRefEntry());
 		a.astore(slotTmp);
 		a.iload(slotPrefixEnd);
-		MethodCode.Label noPrefixPos = a.newLabel();
-		a.ifeq(noPrefixPos);
+		MethodCode.Label noPrefix = a.newLabel();
+		a.ifeq(noPrefix);
 		a.aload(slotS);
 		a.loadConstant(0);
 		a.iload(slotPrefixEnd);
@@ -1670,10 +1550,10 @@ final class JvmRuntimeBuilder {
 		a.aload(slotTmp);
 		a.invokevirtual(stringConcat.methodRefEntry());
 		a.areturn();
-		a.labelBinding(noPrefixPos);
+		a.labelBinding(noPrefix);
 		a.aload(slotTmp);
 		a.areturn();
-		return codeBytes(a);
+		return a;
 	}
 
 	/**
@@ -1684,7 +1564,7 @@ final class JvmRuntimeBuilder {
 	 * a supplementary code point survives — the glyph fallback calls
 	 * {@link Character#toString(int)} which handles surrogate expansion.
 	 */
-	static List<Integer> buildCharPrin1Body(ConstantPool cp, MethodrefConstant stringConcat,
+	static MethodCode buildCharPrin1Body(ConstantPool cp, MethodrefConstant stringConcat,
 			MethodrefConstant characterToString) {
 		MethodCode a = new MethodCode();
 		emitCharNameCase(a, cp, ' ', "#\\Space");
@@ -1701,7 +1581,7 @@ final class JvmRuntimeBuilder {
 		a.invokestatic(characterToString.entry());
 		a.invokevirtual(stringConcat.methodRefEntry());
 		a.areturn();
-		return codeBytes(a);
+		return a;
 	}
 
 	private static void emitCharNameCase(MethodCode a, ConstantPool cp, int ch, String result) {
@@ -1716,97 +1596,78 @@ final class JvmRuntimeBuilder {
 
 	// Emits the ratio branch of _lispToString/_lispToDisplayString: if the value in
 	// slot 0 is a BigInteger[], returns numerator + "/" + denominator. Returns the
-	// branch position to patch to the next type check.
-	private static int emitRatioToString(List<Integer> code, ClassConstant ratioArrayClass,
+	// label to bind at the next type check.
+	private static MethodCode.Label emitRatioToString(MethodCode code, ClassConstant ratioArrayClass,
 			MethodrefConstant objectToString, MethodrefConstant stringConcat, ConstantPool.StringConstant slashStr) {
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, ratioArrayClass.index());
-		int ifNotRatioPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, ratioArrayClass.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectToString.index());
-		emitLdc(code, slashStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectToString.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		code.add(Opcode.ARETURN);
-		return ifNotRatioPos;
+		code.aload(0);
+		code.instanceOf(ratioArrayClass.entry());
+		MethodCode.Label ifNotRatio = code.newLabel();
+		code.ifeq(ifNotRatio);
+		code.aload(0);
+		code.checkcast(ratioArrayClass.entry());
+		code.astore(1);
+		code.aload(1);
+		code.iconst_0();
+		code.aaload();
+		code.invokevirtual(objectToString.methodRefEntry());
+		code.ldc(slashStr.entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.aload(1);
+		code.iconst_1();
+		code.aaload();
+		code.invokevirtual(objectToString.methodRefEntry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.areturn();
+		return ifNotRatio;
 	}
 
 	// Emits the complex branch of _lispToString/_lispToDisplayString: if the value
 	// in slot 0 is a RontoComplex, returns "#C(" + str(real) + " " + str(imag) +
 	// ")", each part through the same renderer (so a ratio part prints as 1/2).
-	// Returns the branch position to patch to the next type check.
-	private static int emitComplexToString(List<Integer> code, ComplexPrintRefs cplx, MethodrefConstant stringConcat) {
+	// Returns the label to bind at the next type check.
+	private static MethodCode.Label emitComplexToString(MethodCode code, ComplexPrintRefs cplx,
+			MethodrefConstant stringConcat) {
 		ClassConstant rcClass = java.util.Objects.requireNonNull(cplx.rcClass());
 		FieldrefConstant rcReal = java.util.Objects.requireNonNull(cplx.rcReal());
 		FieldrefConstant rcImag = java.util.Objects.requireNonNull(cplx.rcImag());
 		// The presence probe first: a lone class run without the travelling file
 		// falls through to the checks below without resolving the holder class
 		// (.todo/757) -- exact, since no holder can exist then.
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, java.util.Objects.requireNonNull(cplx.hasComplex()).index());
-		int ifNoHolderPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, rcClass.index());
-		int ifNotComplexPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, rcClass.index());
-		code.add(Opcode.ASTORE_1);
-		emitLdc(code, cplx.openStr().index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.GETFIELD);
-		emitU2(code, rcReal.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, cplx.selfStr().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		emitLdc(code, cplx.spaceStr().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.GETFIELD);
-		emitU2(code, rcImag.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, cplx.selfStr().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		emitLdc(code, cplx.closeStr().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNoHolderPos, code.size());
-		return ifNotComplexPos;
+		code.getstatic(java.util.Objects.requireNonNull(cplx.hasComplex()).entry());
+		MethodCode.Label ifNoHolder = code.newLabel();
+		code.ifeq(ifNoHolder);
+		code.aload(0);
+		code.instanceOf(rcClass.entry());
+		MethodCode.Label ifNotComplex = code.newLabel();
+		code.ifeq(ifNotComplex);
+		code.aload(0);
+		code.checkcast(rcClass.entry());
+		code.astore(1);
+		code.ldc(cplx.openStr().entry());
+		code.aload(1);
+		code.getfield(rcReal.entry());
+		code.invokestatic(cplx.selfStr().entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.ldc(cplx.spaceStr().entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.aload(1);
+		code.getfield(rcImag.entry());
+		code.invokestatic(cplx.selfStr().entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.ldc(cplx.closeStr().entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.areturn();
+		code.labelBinding(ifNoHolder);
+		return ifNotComplex;
 	}
 
-	static List<Integer> buildConsToStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
+	static MethodCode buildConsToStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
 			ConstantPool.StringConstant dotStr, ClassConstant ratioArrayClass, RenderGuardRefs guard,
 			QuoteAbbrevRefs abbrev) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// The cycle guard (the shared RenderGuardRefs discipline, kept in step by
 		// JvmLispCompilerTest.compileAndRunPrintOfACyclicConsIsFinite): a chain whose
 		// HEAD is already on the current rendering path -- a car reaching back to a
@@ -1825,11 +1686,9 @@ final class JvmRuntimeBuilder {
 		// render of x rather than looping forever. This runs before the general list
 		// loop below and shares its exit through emitRenderGuardExitAndReturn; a value
 		// of any other shape falls through to that loop unchanged.
-		List<Integer> notAbbrevPatches = emitQuoteAbbrevCheck(code, objectArrayClass, ratioArrayClass,
-				lispToStringMethod, guard, abbrev);
-		for (int patchPos : notAbbrevPatches) {
-			patchBranch(code, patchPos, code.size());
-		}
+		MethodCode.Label notAbbrev = code.newLabel();
+		emitQuoteAbbrevCheck(code, objectArrayClass, ratioArrayClass, lispToStringMethod, guard, abbrev, notAbbrev);
+		code.labelBinding(notAbbrev);
 		// The cdr chain is walked ITERATIVELY below, so the path guard alone cannot see
 		// a chain that cycles into itself: Floyd's cycle detection finds the cell where
 		// the cycle begins (into local 5; null for a terminating chain) before anything
@@ -1837,213 +1696,156 @@ final class JvmRuntimeBuilder {
 		// improper tail " . #" -- every element exactly once, then the marker. The
 		// chain-cell test mirrors the loop's own (an Object[] that is not a ratio), so
 		// the two walks agree on where the chain ends.
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ASTORE);
-		code.add(5);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE);
-		code.add(6);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ASTORE);
-		code.add(7);
-		int floydLoop = code.size();
-		List<Integer> floydDonePatches = new ArrayList<>();
-		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDonePatches);
+		code.aconst_null();
+		code.astore(5);
+		code.iconst_0();
+		code.istore(6);
+		code.aload(0);
+		code.astore(2);
+		code.aload(0);
+		code.astore(7);
+		MethodCode.Label floydLoop = code.newBoundLabel();
+		MethodCode.Label floydDone = code.newLabel();
+		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDone);
 		emitCdrStep(code, objectArrayClass, 7);
-		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDonePatches);
+		emitConsCellCheck(code, objectArrayClass, ratioArrayClass, 7, floydDone);
 		emitCdrStep(code, objectArrayClass, 7);
 		emitCdrStep(code, objectArrayClass, 2);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ALOAD);
-		code.add(7);
-		int floydMissPos = code.size();
-		code.add(Opcode.IF_ACMPNE);
-		emitU2(code, 0);
-		patchBranch(code, floydMissPos, floydLoop);
+		code.aload(2);
+		code.aload(7);
+		code.if_acmpne(floydLoop);
 		// A cycle: walk head and the meeting point in step to the cycle-start cell.
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ASTORE_2);
-		int startLoop = code.size();
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ALOAD);
-		code.add(7);
-		int startFoundPos = code.size();
-		code.add(Opcode.IF_ACMPEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.astore(2);
+		MethodCode.Label startLoop = code.newBoundLabel();
+		code.aload(2);
+		code.aload(7);
+		MethodCode.Label startFound = code.newLabel();
+		code.if_acmpeq(startFound);
 		emitCdrStep(code, objectArrayClass, 2);
 		emitCdrStep(code, objectArrayClass, 7);
-		int startAgainPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, startAgainPos, startLoop);
-		patchBranch(code, startFoundPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ASTORE);
-		code.add(5);
-		for (int patchPos : floydDonePatches) {
-			patchBranch(code, patchPos, code.size());
-		}
-		code.add(Opcode.NEW);
-		emitU2(code, stringBuilderClass.index());
-		code.add(Opcode.DUP);
-		emitLdc(code, openParenStr.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, sbInitStr.index());
-		code.add(Opcode.ASTORE_1);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISTORE_3);
-		int loopStart = code.size();
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		int ifNotArrayPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.goto_(startLoop);
+		code.labelBinding(startFound);
+		code.aload(2);
+		code.astore(5);
+		code.labelBinding(floydDone);
+		code.new_(stringBuilderClass.entry());
+		code.dup();
+		code.ldc(openParenStr.entry());
+		code.invokespecial(sbInitStr.entry());
+		code.astore(1);
+		code.aload(0);
+		code.astore(2);
+		code.iconst_1();
+		code.istore(3);
+		MethodCode.Label loopStart = code.newBoundLabel();
+		code.aload(2);
+		code.instanceOf(objectArrayClass.entry());
+		MethodCode.Label ifNotArray = code.newLabel();
+		code.ifeq(ifNotArray);
 		// A ratio (BigInteger[]) is also an Object[]; treat it as an improper tail
 		// (e.g. (1 . 1/2)) rather than walking into it as a cons cell.
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, ratioArrayClass.index());
-		int ifRatioTailPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
+		code.aload(2);
+		code.instanceOf(ratioArrayClass.entry());
+		MethodCode.Label ifRatioTail = code.newLabel();
+		code.ifne(ifRatioTail);
 		// if (current == stop) { if (seen) { sb.append(" . ").append("#"); close; }
 		// seen = 1; } -- the chain's cycle-start cell renders once, and its second
 		// arrival becomes the improper tail marker.
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		int notStopPos = code.size();
-		code.add(Opcode.IF_ACMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ILOAD);
-		code.add(6);
-		int stopUnseenPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, dotStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, guard.depthMarkerStr().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		int stopClosePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, stopUnseenPos, code.size());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISTORE);
-		code.add(6);
-		patchBranch(code, notStopPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		code.add(Opcode.ILOAD_3);
-		int ifFirstPos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, spaceStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		patchBranch(code, ifFirstPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, lispToStringMethod.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE_3);
-		int gotoPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoPos, loopStart);
-		patchBranch(code, ifNotArrayPos, code.size());
-		patchBranch(code, ifRatioTailPos, code.size());
-		code.add(Opcode.ALOAD_2);
-		int ifNullPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, dotStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, lispToStringMethod.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		patchBranch(code, ifNullPos, code.size());
-		patchBranch(code, stopClosePos, code.size());
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, closeParenStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbToString.index());
+		code.aload(2);
+		code.aload(5);
+		MethodCode.Label notStop = code.newLabel();
+		code.if_acmpne(notStop);
+		code.iload(6);
+		MethodCode.Label stopUnseen = code.newLabel();
+		code.ifeq(stopUnseen);
+		code.aload(1);
+		code.ldc(dotStr.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.aload(1);
+		code.ldc(guard.depthMarkerStr().entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		MethodCode.Label stopClose = code.newLabel();
+		code.goto_(stopClose);
+		code.labelBinding(stopUnseen);
+		code.iconst_1();
+		code.istore(6);
+		code.labelBinding(notStop);
+		code.aload(2);
+		code.checkcast(objectArrayClass.entry());
+		code.astore(4);
+		code.iload(3);
+		MethodCode.Label ifFirst = code.newLabel();
+		code.ifne(ifFirst);
+		code.aload(1);
+		code.ldc(spaceStr.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.labelBinding(ifFirst);
+		code.aload(1);
+		code.aload(4);
+		code.iconst_0();
+		code.aaload();
+		code.invokestatic(lispToStringMethod.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.aload(4);
+		code.iconst_1();
+		code.aaload();
+		code.astore(2);
+		code.iconst_0();
+		code.istore(3);
+		code.goto_(loopStart);
+		code.labelBinding(ifNotArray);
+		code.labelBinding(ifRatioTail);
+		code.aload(2);
+		MethodCode.Label ifNull = code.newLabel();
+		code.ifnull(ifNull);
+		code.aload(1);
+		code.ldc(dotStr.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.aload(1);
+		code.aload(2);
+		code.invokestatic(lispToStringMethod.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.labelBinding(ifNull);
+		code.labelBinding(stopClose);
+		code.aload(1);
+		code.ldc(closeParenStr.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.aload(1);
+		code.invokevirtual(sbToString.methodRefEntry());
 		emitRenderGuardExitAndReturn(code, guard);
 		return code;
 	}
 
-	// Emits "if (local is not a cons cell) goto <patched later>": an Object[] that is
-	// not a ratio (BigInteger[]) -- the same test the render loop's chain walk applies,
-	// so Floyd's walk and the render walk agree on where a chain ends.
-	private static void emitConsCellCheck(List<Integer> code, ClassConstant objectArrayClass,
-			ClassConstant ratioArrayClass, int local, List<Integer> notConsPatches) {
-		code.add(Opcode.ALOAD);
-		code.add(local);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		notConsPatches.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(local);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, ratioArrayClass.index());
-		notConsPatches.add(code.size());
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
+	// Emits "if (local is not a cons cell) goto notCons": an Object[] that is not a
+	// ratio (BigInteger[]) -- the same test the render loop's chain walk applies, so
+	// Floyd's walk and the render walk agree on where a chain ends.
+	private static void emitConsCellCheck(MethodCode code, ClassConstant objectArrayClass,
+			ClassConstant ratioArrayClass, int local, MethodCode.Label notCons) {
+		code.aload(local);
+		code.instanceOf(objectArrayClass.entry());
+		code.ifeq(notCons);
+		code.aload(local);
+		code.instanceOf(ratioArrayClass.entry());
+		code.ifne(notCons);
 	}
 
 	// Emits "local = ((Object[]) local)[1]" -- one cdr step of a chain walk. The cast
 	// cannot fail: every cell stepped through has passed emitConsCellCheck (Floyd's
 	// slow cursor and the cycle-start walk only revisit cells the fast cursor checked).
-	private static void emitCdrStep(List<Integer> code, ClassConstant objectArrayClass, int local) {
-		code.add(Opcode.ALOAD);
-		code.add(local);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE);
-		code.add(local);
+	private static void emitCdrStep(MethodCode code, ClassConstant objectArrayClass, int local) {
+		code.aload(local);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_1();
+		code.aaload();
+		code.astore(local);
 	}
 
 	/**
@@ -2051,7 +1853,7 @@ final class JvmRuntimeBuilder {
 	 * from strings (charAt(0)=='"' -> substring(1, length-1)) and renders a symbol as its
 	 * NAME alone -- no package qualifier, no keyword/gensym marker.
 	 */
-	static List<Integer> buildLispToDisplayStringBody(ClassConstant longClass, ClassConstant doubleClass,
+	static MethodCode buildLispToDisplayStringBody(ClassConstant longClass, ClassConstant doubleClass,
 			ClassConstant stringClass, ClassConstant objectArrayClass, ClassConstant integerClass,
 			MethodrefConstant longToString, MethodrefConstant doubleToString, FloatPrint floatPrint,
 			MethodrefConstant objectToString, MethodrefConstant consToDisplayStringMethod,
@@ -2070,17 +1872,16 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable InstPrint instPrint,
 			@org.jspecify.annotations.Nullable HashPrint hashPrint,
 			@org.jspecify.annotations.Nullable ComplexPrintRefs cplx) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (val == null) return "nil";
-		code.add(Opcode.ALOAD_0);
-		int ifNonnullPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitLdc(code, nilStr.index());
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		MethodCode.Label ifNonnull = code.newLabel();
+		code.ifnonnull(ifNonnull);
+		code.ldc(nilStr.entry());
+		code.areturn();
 
 		// if (val instanceof Long) return ((Long)val).toString();
-		patchBranch(code, ifNonnullPos, code.size());
+		code.labelBinding(ifNonnull);
 		// if (val instanceof CompletableFuture) return "#<FUTURE>"; (futures only)
 		emitFutureBranch(code, futurePrint);
 		// if (val instanceof double[]) return
@@ -2091,187 +1892,152 @@ final class JvmRuntimeBuilder {
 		// quotes stripped, like the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, packedIntPrint, strvMethod,
 				stringClass, stringLength, stringSubstring, null, javaPrint);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, longClass.index());
-		int ifNotLongPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, longClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, longToString.index());
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		code.instanceOf(longClass.entry());
+		MethodCode.Label ifNotLong = code.newLabel();
+		code.ifeq(ifNotLong);
+		code.aload(0);
+		code.checkcast(longClass.entry());
+		code.invokevirtual(longToString.methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof Double) return ((Double)val).toString().replace("E", "e");
 		// (the FloatText lowercase-marker spelling, identical on every backend)
-		patchBranch(code, ifNotLongPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, doubleClass.index());
-		int ifNotDoublePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, doubleClass.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, doubleToString.index());
-		emitLdc(code, floatPrint.upperE().index());
-		emitLdc(code, floatPrint.lowerE().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.stringReplace().index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotLong);
+		code.aload(0);
+		code.instanceOf(doubleClass.entry());
+		MethodCode.Label ifNotDouble = code.newLabel();
+		code.ifeq(ifNotDouble);
+		code.aload(0);
+		code.checkcast(doubleClass.entry());
+		code.invokevirtual(doubleToString.methodRefEntry());
+		code.ldc(floatPrint.upperE().entry());
+		code.ldc(floatPrint.lowerE().entry());
+		code.invokevirtual(floatPrint.stringReplace().methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof Float) return ((Float)val).toString().replace("E", "e");
 		// A Float box exists only transiently while a packed single-float array prints
 		// its elements at their f32 width (_fvToGeneralPrint); no Lisp value holds one.
-		patchBranch(code, ifNotDoublePos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, floatPrint.floatClass().index());
-		int ifNotFloatPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, floatPrint.floatClass().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.floatToString().index());
-		emitLdc(code, floatPrint.upperE().index());
-		emitLdc(code, floatPrint.lowerE().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, floatPrint.stringReplace().index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotDouble);
+		code.aload(0);
+		code.instanceOf(floatPrint.floatClass().entry());
+		MethodCode.Label ifNotFloat = code.newLabel();
+		code.ifeq(ifNotFloat);
+		code.aload(0);
+		code.checkcast(floatPrint.floatClass().entry());
+		code.invokevirtual(floatPrint.floatToString().methodRefEntry());
+		code.ldc(floatPrint.upperE().entry());
+		code.ldc(floatPrint.lowerE().entry());
+		code.invokevirtual(floatPrint.stringReplace().methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof String) -> strip quotes if leading '"'
-		patchBranch(code, ifNotFloatPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, stringClass.index());
-		int ifNotStringPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, stringClass.index());
-		code.add(Opcode.ASTORE_1); // store string in slot 1
+		code.labelBinding(ifNotFloat);
+		code.aload(0);
+		code.instanceOf(stringClass.entry());
+		MethodCode.Label ifNotString = code.newLabel();
+		code.ifeq(ifNotString);
+		code.aload(0);
+		code.checkcast(stringClass.entry());
+		code.astore(1); // store string in slot 1
 		// check charAt(0) == '"'
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringCharAt.index());
-		emitIntConstStatic(code, 34); // '"' = 34
-		int ifNotQuotePos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
+		code.aload(1);
+		code.iconst_0();
+		code.invokevirtual(stringCharAt.methodRefEntry());
+		code.loadConstant(34); // '"' = 34
+		MethodCode.Label ifNotQuote = code.newLabel();
+		code.if_icmpne(ifNotQuote);
 		// It's a quoted string: return substring(1, length-1)
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringLength.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringSubstring.index());
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.iconst_1();
+		code.aload(1);
+		code.invokevirtual(stringLength.methodRefEntry());
+		code.iconst_1();
+		code.isub();
+		code.invokevirtual(stringSubstring.methodRefEntry());
+		code.areturn();
 		// Not a quoted string: a symbol. Its display spelling is the symbol NAME with
 		// no package qualifier and no marker (CLHS 22.1.3.3: with *print-escape* false
 		// only the characters of the name are output) -- so QURI:URI princes as URI, a
 		// keyword :KW as KW and a gensym #:G1 as G1. All three are "everything after the
 		// last colon": return s.substring(s.lastIndexOf(':') + 1, s.length()). prin1
 		// keeps the spelling verbatim (_lispToString).
-		patchBranch(code, ifNotQuotePos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD_1);
-		emitIntConstStatic(code, ':');
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringLastIndexOf.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringLength.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringSubstring.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotQuote);
+		code.aload(1);
+		code.aload(1);
+		code.loadConstant(':');
+		code.invokevirtual(stringLastIndexOf.methodRefEntry());
+		code.iconst_1();
+		code.iadd();
+		code.aload(1);
+		code.invokevirtual(stringLength.methodRefEntry());
+		code.invokevirtual(stringSubstring.methodRefEntry());
+		code.areturn();
 
 		// if (val instanceof int[]) return Character.toString(((int[])val)[0]);
 		//
 		// A CHARACTER is a length-1 int[]{codePoint}. Character.toString(int) expands a
 		// supplementary code point to its surrogate pair so a #\U+1F600 princes as its
 		// glyph, not as a lone surrogate.
-		patchBranch(code, ifNotStringPos, code.size());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, charBoxClass.index());
-		int ifNotCharPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, charBoxClass.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.IALOAD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, characterToString.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotString);
+		code.aload(0);
+		code.instanceOf(charBoxClass.entry());
+		MethodCode.Label ifNotChar = code.newLabel();
+		code.ifeq(ifNotChar);
+		code.aload(0);
+		code.checkcast(charBoxClass.entry());
+		code.iconst_0();
+		code.iaload();
+		code.invokestatic(characterToString.entry());
+		code.areturn();
 
 		// if (val instanceof BigInteger[]) -> "num/den" (must precede the Object[]
 		// check: a ratio is also an Object[])
-		patchBranch(code, ifNotCharPos, code.size());
-		int ifNotRatioPos = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
+		code.labelBinding(ifNotChar);
+		MethodCode.Label ifNotRatio = emitRatioToString(code, ratioArrayClass, objectToString, stringConcat, slashStr);
 
 		// if (val instanceof RontoComplex) -> "#C(re im)" (complex-capable
 		// programs only)
-		patchBranch(code, ifNotRatioPos, code.size());
+		code.labelBinding(ifNotRatio);
 		if (cplx != null) {
-			patchBranch(code, emitComplexToString(code, cplx, stringConcat), code.size());
+			code.labelBinding(emitComplexToString(code, cplx, stringConcat));
 		}
 
 		// if (val instanceof Object[])
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		int ifNotArrayPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ASTORE_1);
+		code.aload(0);
+		code.instanceOf(objectArrayClass.entry());
+		MethodCode.Label ifNotArray = code.newLabel();
+		code.ifeq(ifNotArray);
+		code.aload(0);
+		code.checkcast(objectArrayClass.entry());
+		code.astore(1);
 		// Check if arr.length > 0 && arr[0] instanceof Integer -> function value
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifEmptyPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, integerClass.index());
-		int ifNotFuncPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(1);
+		code.arraylength();
+		MethodCode.Label ifEmpty = code.newLabel();
+		code.ifeq(ifEmpty);
+		code.aload(1);
+		code.iconst_0();
+		code.aaload();
+		code.instanceOf(integerClass.entry());
+		MethodCode.Label ifNotFunc = code.newLabel();
+		code.ifeq(ifNotFunc);
 		// Function value: the same naming the readable renderer gives
 		emitFuncValPrint(code, funcPrint);
-		patchBranch(code, ifNotFuncPos, code.size());
-		int ifNotInstPos = emitInstanceBranch(code, instPrint, true);
-		if (ifNotInstPos >= 0) {
-			patchBranch(code, ifNotInstPos, code.size());
+		code.labelBinding(ifNotFunc);
+		MethodCode.Label ifNotInst = emitInstanceBranch(code, instPrint, true);
+		if (ifNotInst != null) {
+			code.labelBinding(ifNotInst);
 		}
-		patchBranch(code, ifEmptyPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, consToDisplayStringMethod.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifEmpty);
+		code.aload(1);
+		code.invokestatic(consToDisplayStringMethod.entry());
+		code.areturn();
 
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
-		patchBranch(code, ifNotArrayPos, code.size());
+		code.labelBinding(ifNotArray);
 		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, ffiPrint);
 
@@ -2282,7 +2048,7 @@ final class JvmRuntimeBuilder {
 	 * Builds bytecode for _consToDisplayString. Same as _consToString but calls
 	 * _lispToDisplayString recursively.
 	 */
-	static List<Integer> buildConsToDisplayStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
+	static MethodCode buildConsToDisplayStringBody(ClassConstant objectArrayClass, ClassConstant stringBuilderClass,
 			MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr, MethodrefConstant sbToString,
 			MethodrefConstant lispToDisplayStringMethod, ConstantPool.StringConstant openParenStr,
 			ConstantPool.StringConstant closeParenStr, ConstantPool.StringConstant spaceStr,
@@ -2304,123 +2070,90 @@ final class JvmRuntimeBuilder {
 	 * no list, or ends dotted, is {@code APPEND}'s {@code LIST} type-error over the atom
 	 * the walk met ({@link JvmOperandTypeRuntime}).
 	 */
-	static List<Integer> buildAppendBody(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
+	static MethodCode buildAppendBody(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
 			ClassConstant objectClass) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// cursor = a; head = null; tail = null
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ASTORE);
-		code.add(3);
-		int loopPos = code.size();
+		code.aload(0);
+		code.astore(4);
+		code.aconst_null();
+		code.astore(2);
+		code.aconst_null();
+		code.astore(3);
+		MethodCode.Label loop = code.newBoundLabel();
 		// if (cursor == null) goto end; if (!(cursor instanceof Object[])) goto notList
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		int endPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		int notListPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(4);
+		MethodCode.Label end = code.newLabel();
+		code.ifnull(end);
+		code.aload(4);
+		code.instanceOf(objectArrayClass.entry());
+		MethodCode.Label notList = code.newLabel();
+		code.ifeq(notList);
 		// fresh = new Object[]{((Object[]) cursor)[0], null}
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, objectClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ASTORE);
-		code.add(5);
+		code.iconst_2();
+		code.anewarray(objectClass.entry());
+		code.dup();
+		code.iconst_0();
+		code.aload(4);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_0();
+		code.aaload();
+		code.aastore();
+		code.astore(5);
 		// if (head == null) head = fresh; else ((Object[]) tail)[1] = fresh
-		code.add(Opcode.ALOAD_2);
-		int headNullPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(3);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		code.add(Opcode.AASTORE);
-		int tailSetPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, headNullPos, code.size());
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		code.add(Opcode.ASTORE_2);
-		patchBranch(code, tailSetPos, code.size());
+		code.aload(2);
+		MethodCode.Label headNull = code.newLabel();
+		code.ifnull(headNull);
+		code.aload(3);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_1();
+		code.aload(5);
+		code.aastore();
+		MethodCode.Label tailSet = code.newLabel();
+		code.goto_(tailSet);
+		code.labelBinding(headNull);
+		code.aload(5);
+		code.astore(2);
+		code.labelBinding(tailSet);
 		// tail = fresh; cursor = ((Object[]) cursor)[1]; goto loop
-		code.add(Opcode.ALOAD);
-		code.add(5);
-		code.add(Opcode.ASTORE);
-		code.add(3);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		int againPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, againPos, loopPos);
-		patchBranch(code, endPos, code.size());
+		code.aload(5);
+		code.astore(3);
+		code.aload(4);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_1();
+		code.aaload();
+		code.astore(4);
+		code.goto_(loop);
+		code.labelBinding(end);
 		// if (head == null) return b
-		code.add(Opcode.ALOAD_2);
-		int nullHeadPos = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
+		code.aload(2);
+		MethodCode.Label nullHead = code.newLabel();
+		code.ifnull(nullHead);
 		// ((Object[]) tail)[1] = b; return head
-		code.add(Opcode.ALOAD);
-		code.add(3);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, nullHeadPos, code.size());
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ARETURN);
+		code.aload(3);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_1();
+		code.aload(1);
+		code.aastore();
+		code.aload(2);
+		code.areturn();
+		code.labelBinding(nullHead);
+		code.aload(1);
+		code.areturn();
 		// notList: throw _opTypeErr(_teRaw(cursor, "LIST"), "APPEND", "LIST")
-		patchBranch(code, notListPos, code.size());
+		code.labelBinding(notList);
 		ConstantPool.StringConstant list = cp.addString(OperandTypes.Kind.LIST.name());
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		emitLdc(code, list.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code,
-				JvmOperandTypeRuntime
-					.self(cp, thisClass, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
-					.index());
-		emitLdc(code, cp.addString(LispNames.APPEND).index());
-		emitLdc(code, list.index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code,
-				JvmOperandTypeRuntime
-					.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
-					.index());
-		code.add(Opcode.ATHROW);
+		code.aload(4);
+		code.ldc(list.entry());
+		code.invokestatic(JvmOperandTypeRuntime
+			.self(cp, thisClass, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
+			.entry());
+		code.ldc(cp.addString(LispNames.APPEND).entry());
+		code.ldc(list.entry());
+		code.invokestatic(JvmOperandTypeRuntime
+			.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
+			.entry());
+		code.athrow();
 		return code;
 	}
 
@@ -2429,57 +2162,44 @@ final class JvmRuntimeBuilder {
 	 * reads a line, and wraps it with '"' prefix/suffix for the internal string format.
 	 * Returns null for EOF.
 	 */
-	static List<Integer> buildReadLineBody(ClassConstant bufferedReaderClass, ClassConstant inputStreamReaderClass,
+	static MethodCode buildReadLineBody(ClassConstant bufferedReaderClass, ClassConstant inputStreamReaderClass,
 			MethodrefConstant brInit, MethodrefConstant brReadLine, MethodrefConstant isrInit,
 			ConstantPool.FieldrefConstant systemIn, ConstantPool.FieldrefConstant stdinReaderField,
 			ConstantPool.StringConstant quoteStr, MethodrefConstant stringConcat) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// if (_stdinReader == null)
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, stdinReaderField.index());
-		int ifNonnullPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
+		code.getstatic(stdinReaderField.entry());
+		MethodCode.Label ifNonnull = code.newLabel();
+		code.ifnonnull(ifNonnull);
 		// _stdinReader = new BufferedReader(new InputStreamReader(System.in))
-		code.add(Opcode.NEW);
-		emitU2(code, bufferedReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.NEW);
-		emitU2(code, inputStreamReaderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, systemIn.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, isrInit.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, brInit.index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, stdinReaderField.index());
+		code.new_(bufferedReaderClass.entry());
+		code.dup();
+		code.new_(inputStreamReaderClass.entry());
+		code.dup();
+		code.getstatic(systemIn.entry());
+		code.invokespecial(isrInit.entry());
+		code.invokespecial(brInit.entry());
+		code.putstatic(stdinReaderField.entry());
 		// end if
-		patchBranch(code, ifNonnullPos, code.size());
+		code.labelBinding(ifNonnull);
 		// String line = _stdinReader.readLine();
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, stdinReaderField.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, brReadLine.index());
-		code.add(Opcode.ASTORE_0);
+		code.getstatic(stdinReaderField.entry());
+		code.invokevirtual(brReadLine.methodRefEntry());
+		code.astore(0);
 		// if (line == null) return null;
-		code.add(Opcode.ALOAD_0);
-		int ifNotNullPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		MethodCode.Label ifNotNull = code.newLabel();
+		code.ifnonnull(ifNotNull);
+		code.aconst_null();
+		code.areturn();
 		// return "\"" + line + "\""
-		patchBranch(code, ifNotNullPos, code.size());
-		emitLdc(code, quoteStr.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		emitLdc(code, quoteStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, stringConcat.index());
-		code.add(Opcode.ARETURN);
+		code.labelBinding(ifNotNull);
+		code.ldc(quoteStr.entry());
+		code.aload(0);
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.ldc(quoteStr.entry());
+		code.invokevirtual(stringConcat.methodRefEntry());
+		code.areturn();
 		return code;
 	}
 
@@ -2685,109 +2405,70 @@ final class JvmRuntimeBuilder {
 	 * a cons cell {@code {x, null}} (a proper 2-element list -- {@code (QUOTE A B)} still
 	 * prints in full) leaves {@code "'"}/{@code "#'"} concatenated with {@code x}'s
 	 * rendering on the stack, ready for {@code emitRenderGuardExitAndReturn}. Anything
-	 * else falls through with an EMPTY stack to the position the caller must patch every
-	 * returned branch site to (the general loop's start) -- the same "return the
-	 * unpatched branch list" idiom {@link #emitConsCellCheck} uses. Locals 8 and 9 are
+	 * else jumps with an EMPTY stack to {@code notAbbrev}, which the caller binds at the
+	 * general loop's start -- the {@link #emitConsCellCheck} idiom. Locals 8 and 9 are
 	 * scratch (the car and cdr/rest candidates in turn).
 	 */
-	private static List<Integer> emitQuoteAbbrevCheck(List<Integer> code, ClassConstant objectArrayClass,
+	private static void emitQuoteAbbrevCheck(MethodCode code, ClassConstant objectArrayClass,
 			ClassConstant ratioArrayClass, MethodrefConstant lispToStringMethod, RenderGuardRefs guard,
-			QuoteAbbrevRefs abbrev) {
-		List<Integer> notAbbrev = new ArrayList<>();
+			QuoteAbbrevRefs abbrev, MethodCode.Label notAbbrev) {
 		// car = ((Object[]) arg)[0]; if (!(car instanceof String)) goto notAbbrev
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE);
-		code.add(8);
-		code.add(Opcode.ALOAD);
-		code.add(8);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, abbrev.stringClass().index());
-		notAbbrev.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_0();
+		code.aaload();
+		code.astore(8);
+		code.aload(8);
+		code.instanceOf(abbrev.stringClass().entry());
+		code.ifeq(notAbbrev);
 		// cdr = ((Object[]) arg)[1]; must be a cons cell (a non-ratio Object[])
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ASTORE);
-		code.add(9);
-		code.add(Opcode.ALOAD);
-		code.add(9);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, objectArrayClass.index());
-		notAbbrev.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(9);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, ratioArrayClass.index());
-		notAbbrev.add(code.size());
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
+		code.aload(0);
+		code.checkcast(objectArrayClass.entry());
+		code.iconst_1();
+		code.aaload();
+		code.astore(9);
+		code.aload(9);
+		code.instanceOf(objectArrayClass.entry());
+		code.ifeq(notAbbrev);
+		code.aload(9);
+		code.instanceOf(ratioArrayClass.entry());
+		code.ifne(notAbbrev);
 		// rest = (Object[]) cdr; if (rest[1] != null) goto notAbbrev -- exactly one
 		// element, so (QUOTE A B) is excluded and falls through to the general loop.
-		code.add(Opcode.ALOAD);
-		code.add(9);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, objectArrayClass.index());
-		code.add(Opcode.ASTORE);
-		code.add(9);
-		code.add(Opcode.ALOAD);
-		code.add(9);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		notAbbrev.add(code.size());
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
+		code.aload(9);
+		code.checkcast(objectArrayClass.entry());
+		code.astore(9);
+		code.aload(9);
+		code.iconst_1();
+		code.aaload();
+		code.ifnonnull(notAbbrev);
 		// carStr = (String) car; tag = carStr.equals("QUOTE") ? "'"
 		// : carStr.equals("FUNCTION") ? "#'" : goto notAbbrev
-		code.add(Opcode.ALOAD);
-		code.add(8);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, abbrev.stringClass().index());
-		code.add(Opcode.ASTORE);
-		code.add(8);
-		code.add(Opcode.ALOAD);
-		code.add(8);
-		emitLdc(code, abbrev.quoteName().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, abbrev.stringEquals().index());
-		int isQuotePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD);
-		code.add(8);
-		emitLdc(code, abbrev.functionName().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, abbrev.stringEquals().index());
-		notAbbrev.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		emitLdc(code, abbrev.functionMark().index());
-		int gotoHaveTag = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, isQuotePos, code.size());
-		emitLdc(code, abbrev.quoteMark().index());
-		patchBranch(code, gotoHaveTag, code.size());
+		code.aload(8);
+		code.checkcast(abbrev.stringClass().entry());
+		code.astore(8);
+		code.aload(8);
+		code.ldc(abbrev.quoteName().entry());
+		code.invokevirtual(abbrev.stringEquals().methodRefEntry());
+		MethodCode.Label isQuote = code.newLabel();
+		code.ifne(isQuote);
+		code.aload(8);
+		code.ldc(abbrev.functionName().entry());
+		code.invokevirtual(abbrev.stringEquals().methodRefEntry());
+		code.ifeq(notAbbrev);
+		code.ldc(abbrev.functionMark().entry());
+		MethodCode.Label gotoHaveTag = code.newLabel();
+		code.goto_(gotoHaveTag);
+		code.labelBinding(isQuote);
+		code.ldc(abbrev.quoteMark().entry());
+		code.labelBinding(gotoHaveTag);
 		// return tag.concat(lispToString(rest[0]))
-		code.add(Opcode.ALOAD);
-		code.add(9);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, lispToStringMethod.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, abbrev.stringConcat().index());
+		code.aload(9);
+		code.iconst_0();
+		code.aaload();
+		code.invokestatic(lispToStringMethod.entry());
+		code.invokevirtual(abbrev.stringConcat().methodRefEntry());
 		emitRenderGuardExitAndReturn(code, guard);
-		return notAbbrev;
 	}
 
 	/**
@@ -2827,7 +2508,7 @@ final class JvmRuntimeBuilder {
 	 * ({@code .kb/emitted-output-determinism.md})
 	 * @return the method body
 	 */
-	static List<Integer> buildInstToStringBody(ClassConstant objectArrayClass, ClassConstant stringArrayClass,
+	static MethodCode buildInstToStringBody(ClassConstant objectArrayClass, ClassConstant stringArrayClass,
 			ClassConstant stringBuilderClass, MethodrefConstant sbInitStr, MethodrefConstant sbAppendStr,
 			MethodrefConstant sbToString, MethodrefConstant objectEquals, MethodrefConstant elementFormatter,
 			ConstantPool.StringConstant structKindStr, ConstantPool.StringConstant openStructStr,
@@ -2836,89 +2517,73 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant spaceStr, ConstantPool.StringConstant pathnameKindStr,
 			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr,
 			ConstantPool.StringConstant opaqueKindStr, RenderGuardRefs guard) {
-		List<Integer> code = new ArrayList<>();
+		MethodCode code = new MethodCode();
 		// layout = (String[]) arr[0]
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, stringArrayClass.index());
-		code.add(Opcode.ASTORE_2);
+		code.aload(0);
+		code.iconst_0();
+		code.aaload();
+		code.checkcast(stringArrayClass.entry());
+		code.astore(2);
 		// A PATHNAME layout short-circuits the slot-name loop entirely (CLHS
 		// 22.1.3.11): prin1 is "#P" + the escaped namestring, princ the bare
 		// namestring -- the element formatter already renders a string both ways.
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.AALOAD);
-		emitLdc(code, pathnameKindStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectEquals.index());
-		int ifNotPathnamePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(2);
+		code.iconst_2();
+		code.aaload();
+		code.ldc(pathnameKindStr.entry());
+		code.invokevirtual(objectEquals.methodRefEntry());
+		MethodCode.Label ifNotPathname = code.newLabel();
+		code.ifeq(ifNotPathname);
 		if (pathnamePrefixStr == null) {
 			// princ: return format(arr[1])
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, elementFormatter.index());
-			code.add(Opcode.ARETURN);
+			code.aload(0);
+			code.iconst_1();
+			code.aaload();
+			code.invokestatic(elementFormatter.entry());
+			code.areturn();
 		}
 		else {
 			// prin1: return new StringBuilder("#P").append(format(arr[1])).toString()
-			code.add(Opcode.NEW);
-			emitU2(code, stringBuilderClass.index());
-			code.add(Opcode.DUP);
-			emitLdc(code, pathnamePrefixStr.index());
-			code.add(Opcode.INVOKESPECIAL);
-			emitU2(code, sbInitStr.index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.AALOAD);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, elementFormatter.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, sbAppendStr.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, sbToString.index());
-			code.add(Opcode.ARETURN);
+			code.new_(stringBuilderClass.entry());
+			code.dup();
+			code.ldc(pathnamePrefixStr.entry());
+			code.invokespecial(sbInitStr.entry());
+			code.aload(0);
+			code.iconst_1();
+			code.aaload();
+			code.invokestatic(elementFormatter.entry());
+			code.invokevirtual(sbAppendStr.methodRefEntry());
+			code.invokevirtual(sbToString.methodRefEntry());
+			code.areturn();
 		}
-		patchBranch(code, ifNotPathnamePos, code.size());
+		code.labelBinding(ifNotPathname);
 		// An OPAQUE layout (the %STREAM value) short-circuits to "#<NAME>" with no slots
 		// in EITHER escape mode: the HANDLE slot is backend-local (a table index here, a
 		// WASI fd there, a wasm linear-memory address) and must never reach the output
 		// (.kb/emitted-output-determinism.md). Same text as the async #<STREAM> tag and
 		// the other two backends; placed before the cycle guard, which its slot-free
 		// rendering cannot need.
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.AALOAD);
-		emitLdc(code, opaqueKindStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectEquals.index());
-		int ifNotOpaquePos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(2);
+		code.iconst_2();
+		code.aaload();
+		code.ldc(opaqueKindStr.entry());
+		code.invokevirtual(objectEquals.methodRefEntry());
+		MethodCode.Label ifNotOpaque = code.newLabel();
+		code.ifeq(ifNotOpaque);
 		// return new StringBuilder("#<").append(layout[1]).append(">").toString()
-		code.add(Opcode.NEW);
-		emitU2(code, stringBuilderClass.index());
-		code.add(Opcode.DUP);
-		emitLdc(code, openClassStr.index());
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, sbInitStr.index());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		emitLdc(code, closeClassStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbToString.index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNotOpaquePos, code.size());
+		code.new_(stringBuilderClass.entry());
+		code.dup();
+		code.ldc(openClassStr.entry());
+		code.invokespecial(sbInitStr.entry());
+		code.aload(2);
+		code.iconst_1();
+		code.aaload();
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.ldc(closeClassStr.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.invokevirtual(sbToString.methodRefEntry());
+		code.areturn();
+		code.labelBinding(ifNotOpaque);
 		// The cycle guard (the shared RenderGuardRefs discipline, kept in step by
 		// JvmLispCompilerTest.compileAndRunPrintOfACyclicInstanceGraphIsFinite): an
 		// instance already on the current rendering path -- a scene graph's
@@ -2931,71 +2596,55 @@ final class JvmRuntimeBuilder {
 		// branch merge with an uninitialized NEW on the operand stack is exactly what
 		// the offline StackMapTable computation should never have to model.
 		emitKindChoice(code, objectEquals, structKindStr, openStructStr, openClassStr);
-		code.add(Opcode.NEW);
-		emitU2(code, stringBuilderClass.index());
-		code.add(Opcode.DUP);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.INVOKESPECIAL);
-		emitU2(code, sbInitStr.index());
-		code.add(Opcode.ASTORE_1);
+		code.new_(stringBuilderClass.entry());
+		code.dup();
+		code.aload(4);
+		code.invokespecial(sbInitStr.entry());
+		code.astore(1);
 		// sb.append(layout[1]) -- the printed type name
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
+		code.aload(1);
+		code.aload(2);
+		code.iconst_1();
+		code.aaload();
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
 		// for (i = 3; i < layout.length; i++) sb.append(" :").append(layout[i])
 		// .append(' ').append(format(arr[i - 2]))
-		code.add(Opcode.ICONST_3);
-		code.add(Opcode.ISTORE_3);
-		int loopStart = code.size();
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ARRAYLENGTH);
-		int ifDonePos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
+		code.iconst_3();
+		code.istore(3);
+		MethodCode.Label loopStart = code.newBoundLabel();
+		code.iload(3);
+		code.aload(2);
+		code.arraylength();
+		MethodCode.Label ifDone = code.newLabel();
+		code.if_icmpge(ifDone);
 		emitAppendConst(code, sbAppendStr, keySepStr);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
+		code.aload(1);
+		code.aload(2);
+		code.iload(3);
+		code.aaload();
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
 		emitAppendConst(code, sbAppendStr, spaceStr);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, elementFormatter.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.IINC);
-		code.add(3);
-		code.add(1);
-		int gotoLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, gotoLoopPos, loopStart);
-		patchBranch(code, ifDonePos, code.size());
+		code.aload(1);
+		code.aload(0);
+		code.iload(3);
+		code.iconst_2();
+		code.isub();
+		code.aaload();
+		code.invokestatic(elementFormatter.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.iinc(3, 1);
+		code.goto_(loopStart);
+		code.labelBinding(ifDone);
 		emitKindChoice(code, objectEquals, structKindStr, closeStructStr, closeClassStr);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ALOAD);
-		code.add(4);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbToString.index());
+		code.aload(1);
+		code.aload(4);
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
+		code.aload(1);
+		code.invokevirtual(sbToString.methodRefEntry());
 		emitRenderGuardExitAndReturn(code, guard);
 		return code;
 	}
@@ -3011,71 +2660,54 @@ final class JvmRuntimeBuilder {
 	 * or the frame past the depth cap, RETURNS {@code "#"} instead of entering. Local 3
 	 * is scratch (an int); callers run this before local 3's own use begins.
 	 */
-	private static void emitRenderGuardEnter(List<Integer> code, RenderGuardRefs guard) {
+	private static void emitRenderGuardEnter(MethodCode code, RenderGuardRefs guard) {
 		// if (_renderPath == null) _renderPath = new Object[256];
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		int ifPathInitedPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitIntConstStatic(code, RENDER_DEPTH_CAP);
-		code.add(Opcode.ANEWARRAY);
-		emitU2(code, guard.objectClass().index());
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.pathField().index());
-		patchBranch(code, ifPathInitedPos, code.size());
+		code.getstatic(guard.pathField().entry());
+		MethodCode.Label ifPathInited = code.newLabel();
+		code.ifnonnull(ifPathInited);
+		code.loadConstant(RENDER_DEPTH_CAP);
+		code.anewarray(guard.objectClass().entry());
+		code.putstatic(guard.pathField().entry());
+		code.labelBinding(ifPathInited);
 		// for (i = 0; i < _renderDepth; i++) if (_renderPath[i] == arg) return "#";
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.ISTORE_3);
-		int scanStart = code.size();
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.depthField().index());
-		int scanDonePos = code.size();
-		code.add(Opcode.IF_ICMPGE);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.ALOAD_0);
-		int scanMissPos = code.size();
-		code.add(Opcode.IF_ACMPNE);
-		emitU2(code, 0);
-		emitLdc(code, guard.depthMarkerStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, scanMissPos, code.size());
-		code.add(Opcode.IINC);
-		code.add(3);
-		code.add(1);
-		int scanLoopPos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, scanLoopPos, scanStart);
-		patchBranch(code, scanDonePos, code.size());
+		code.iconst_0();
+		code.istore(3);
+		MethodCode.Label scanStart = code.newBoundLabel();
+		code.iload(3);
+		code.getstatic(guard.depthField().entry());
+		MethodCode.Label scanDone = code.newLabel();
+		code.if_icmpge(scanDone);
+		code.getstatic(guard.pathField().entry());
+		code.iload(3);
+		code.aaload();
+		code.aload(0);
+		MethodCode.Label scanMiss = code.newLabel();
+		code.if_acmpne(scanMiss);
+		code.ldc(guard.depthMarkerStr().entry());
+		code.areturn();
+		code.labelBinding(scanMiss);
+		code.iinc(3, 1);
+		code.goto_(scanStart);
+		code.labelBinding(scanDone);
 		// i = _renderDepth; if (i >= 256) return "#"; _renderPath[i] = arg;
 		// _renderDepth = i + 1;
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.depthField().index());
-		code.add(Opcode.ISTORE_3);
-		code.add(Opcode.ILOAD_3);
-		emitIntConstStatic(code, RENDER_DEPTH_CAP);
-		int underCapPos = code.size();
-		code.add(Opcode.IF_ICMPLT);
-		emitU2(code, 0);
-		emitLdc(code, guard.depthMarkerStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, underCapPos, code.size());
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.IADD);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.depthField().index());
+		code.getstatic(guard.depthField().entry());
+		code.istore(3);
+		code.iload(3);
+		code.loadConstant(RENDER_DEPTH_CAP);
+		MethodCode.Label underCap = code.newLabel();
+		code.if_icmplt(underCap);
+		code.ldc(guard.depthMarkerStr().entry());
+		code.areturn();
+		code.labelBinding(underCap);
+		code.getstatic(guard.pathField().entry());
+		code.iload(3);
+		code.aload(0);
+		code.aastore();
+		code.iload(3);
+		code.iconst_1();
+		code.iadd();
+		code.putstatic(guard.depthField().entry());
 	}
 
 	/**
@@ -3087,89 +2719,75 @@ final class JvmRuntimeBuilder {
 	 * threads), which may misplace a marker but never index out of the array. Local 3 is
 	 * scratch.
 	 */
-	private static void emitRenderGuardExitAndReturn(List<Integer> code, RenderGuardRefs guard) {
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.depthField().index());
-		code.add(Opcode.ICONST_1);
-		code.add(Opcode.ISUB);
-		code.add(Opcode.ISTORE_3);
-		code.add(Opcode.ILOAD_3);
-		int popClampPos = code.size();
-		code.add(Opcode.IFLT);
-		emitU2(code, 0);
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, guard.pathField().index());
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.AASTORE);
-		code.add(Opcode.ILOAD_3);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.depthField().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, popClampPos, code.size());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.PUTSTATIC);
-		emitU2(code, guard.depthField().index());
-		code.add(Opcode.ARETURN);
+	private static void emitRenderGuardExitAndReturn(MethodCode code, RenderGuardRefs guard) {
+		code.getstatic(guard.depthField().entry());
+		code.iconst_1();
+		code.isub();
+		code.istore(3);
+		code.iload(3);
+		MethodCode.Label popClamp = code.newLabel();
+		code.iflt(popClamp);
+		code.getstatic(guard.pathField().entry());
+		code.iload(3);
+		code.aconst_null();
+		code.aastore();
+		code.iload(3);
+		code.putstatic(guard.depthField().entry());
+		code.areturn();
+		code.labelBinding(popClamp);
+		code.iconst_0();
+		code.putstatic(guard.depthField().entry());
+		code.areturn();
 	}
 
 	// Stores structText or classText into local 4, depending on layout[2].equals("S").
-	private static void emitKindChoice(List<Integer> code, MethodrefConstant objectEquals,
+	private static void emitKindChoice(MethodCode code, MethodrefConstant objectEquals,
 			ConstantPool.StringConstant structKindStr, ConstantPool.StringConstant structText,
 			ConstantPool.StringConstant classText) {
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.ICONST_2);
-		code.add(Opcode.AALOAD);
-		emitLdc(code, structKindStr.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectEquals.index());
-		int ifClassPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		emitLdc(code, structText.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		int gotoDonePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifClassPos, code.size());
-		emitLdc(code, classText.index());
-		code.add(Opcode.ASTORE);
-		code.add(4);
-		patchBranch(code, gotoDonePos, code.size());
+		code.aload(2);
+		code.iconst_2();
+		code.aaload();
+		code.ldc(structKindStr.entry());
+		code.invokevirtual(objectEquals.methodRefEntry());
+		MethodCode.Label ifClass = code.newLabel();
+		code.ifeq(ifClass);
+		code.ldc(structText.entry());
+		code.astore(4);
+		MethodCode.Label gotoDone = code.newLabel();
+		code.goto_(gotoDone);
+		code.labelBinding(ifClass);
+		code.ldc(classText.entry());
+		code.astore(4);
+		code.labelBinding(gotoDone);
 	}
 
 	// sb.append(<constant>); pop
-	private static void emitAppendConst(List<Integer> code, MethodrefConstant sbAppendStr,
+	private static void emitAppendConst(MethodCode code, MethodrefConstant sbAppendStr,
 			ConstantPool.StringConstant text) {
-		code.add(Opcode.ALOAD_1);
-		emitLdc(code, text.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, sbAppendStr.index());
-		code.add(Opcode.POP);
+		code.aload(1);
+		code.ldc(text.entry());
+		code.invokevirtual(sbAppendStr.methodRefEntry());
+		code.pop();
 	}
 
 	// Emits, inside the Object[] branch of a lisp-to-string body, the instance test:
 	// "if (arr[0] instanceof String[]) return _instToString(arr);". A no-op when the
 	// program can build no instance, so its bytes stay out entirely.
-	private static int emitInstanceBranch(List<Integer> code, @org.jspecify.annotations.Nullable InstPrint instPrint,
-			boolean display) {
+	private static MethodCode.@org.jspecify.annotations.Nullable Label emitInstanceBranch(MethodCode code,
+			@org.jspecify.annotations.Nullable InstPrint instPrint, boolean display) {
 		if (instPrint == null) {
-			return -1;
+			return null;
 		}
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, instPrint.stringArrayClass().index());
-		int ifNotInstPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, display ? instPrint.instToDisplayString().index() : instPrint.instToString().index());
-		code.add(Opcode.ARETURN);
-		return ifNotInstPos;
+		code.aload(1);
+		code.iconst_0();
+		code.aaload();
+		code.instanceOf(instPrint.stringArrayClass().entry());
+		MethodCode.Label ifNotInst = code.newLabel();
+		code.ifeq(ifNotInst);
+		code.aload(1);
+		code.invokestatic(display ? instPrint.instToDisplayString().entry() : instPrint.instToString().entry());
+		code.areturn();
+		return ifNotInst;
 	}
 
 	// Emits the function-value arm of the two renderers, at the position where the
@@ -3180,38 +2798,32 @@ final class JvmRuntimeBuilder {
 	// runtime sentinel for interpreted lambdas and prints anonymous. A funcId the table
 	// answers null for is the ONLY route to "#<lambda>" beyond an empty table, so the
 	// two renderers cannot drift on which closures are named. Uses local slot 2.
-	private static void emitFuncValPrint(List<Integer> code, FuncPrint fp) {
+	private static void emitFuncValPrint(MethodCode code, FuncPrint fp) {
 		if (fp.funNameMethod() == null) {
 			// No named function can reach printing: every closure value is anonymous.
-			emitLdc(code, fp.lambdaStr().index());
-			code.add(Opcode.ARETURN);
+			code.ldc(fp.lambdaStr().entry());
+			code.areturn();
 			return;
 		}
-		code.add(Opcode.ALOAD_1);
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, fp.integerClass().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, fp.integerValue().index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, fp.funNameMethod().index());
-		code.add(Opcode.ASTORE_2);
-		code.add(Opcode.ALOAD_2);
-		int ifNamedPos = code.size();
-		code.add(Opcode.IFNONNULL);
-		emitU2(code, 0);
-		emitLdc(code, fp.lambdaStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNamedPos, code.size());
-		emitLdc(code, fp.prefix().index());
-		code.add(Opcode.ALOAD_2);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, fp.stringConcat().index());
-		emitLdc(code, fp.suffix().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, fp.stringConcat().index());
-		code.add(Opcode.ARETURN);
+		code.aload(1);
+		code.iconst_0();
+		code.aaload();
+		code.checkcast(fp.integerClass().entry());
+		code.invokevirtual(fp.integerValue().methodRefEntry());
+		code.invokestatic(fp.funNameMethod().entry());
+		code.astore(2);
+		code.aload(2);
+		MethodCode.Label ifNamed = code.newLabel();
+		code.ifnonnull(ifNamed);
+		code.ldc(fp.lambdaStr().entry());
+		code.areturn();
+		code.labelBinding(ifNamed);
+		code.ldc(fp.prefix().entry());
+		code.aload(2);
+		code.invokevirtual(fp.stringConcat().methodRefEntry());
+		code.ldc(fp.suffix().entry());
+		code.invokevirtual(fp.stringConcat().methodRefEntry());
+		code.areturn();
 	}
 
 	/**
@@ -3236,9 +2848,9 @@ final class JvmRuntimeBuilder {
 			SortedMap<Integer, ConstantPool.StringConstant> entries, ConstantPool cp, ClassConstant thisClass) {
 		List<Case> cases = new ArrayList<>();
 		for (Map.Entry<Integer, ConstantPool.StringConstant> entry : entries.entrySet()) {
-			List<Integer> body = new ArrayList<>();
-			emitLdc(body, entry.getValue().index());
-			body.add(Opcode.ARETURN);
+			MethodCode body = new MethodCode();
+			body.ldc(entry.getValue().entry());
+			body.areturn();
 			cases.add(new Case(entry.getKey(), body));
 		}
 		List<int[]> ranges = partitionCases(cases);
@@ -3254,22 +2866,19 @@ final class JvmRuntimeBuilder {
 		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
 		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
 			String name = segment == 0 ? FUN_NAME_NAME : FUN_NAME_NAME + "$" + (segment - 1);
-			List<Integer> code = new ArrayList<>();
+			MethodCode code = new MethodCode();
 			if (routed && segment == 0) {
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, 0, List.of(Opcode.ILOAD_0), segmentRefs);
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, 0, args -> args.iload(0), segmentRefs);
 			}
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
-				List<Integer> defaultJumps = new ArrayList<>();
-				emitDispatchTree(code, cases, range[0], range[1], 0, defaultJumps);
-				int defaultPos = code.size();
-				for (int jump : defaultJumps) {
-					patchBranch(code, jump, defaultPos);
-				}
-				code.add(Opcode.ACONST_NULL);
-				code.add(Opcode.ARETURN);
+				MethodCode.Label miss = code.newLabel();
+				emitDispatchTree(code, cases, range[0], range[1], 0, miss);
+				code.labelBinding(miss);
+				code.aconst_null();
+				code.areturn();
 			}
-			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(name), descUtf8, code, 1));
+			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(name), descUtf8, code));
 		}
 		return methods;
 	}
@@ -3277,20 +2886,17 @@ final class JvmRuntimeBuilder {
 	// Emits "if (val instanceof CompletableFuture) return "#<FUTURE>";" at the current
 	// position. A no-op when the program cannot create futures, keeping the branch out
 	// of future-free programs.
-	private static void emitFutureBranch(List<Integer> code,
-			@org.jspecify.annotations.Nullable FuturePrint futurePrint) {
+	private static void emitFutureBranch(MethodCode code, @org.jspecify.annotations.Nullable FuturePrint futurePrint) {
 		if (futurePrint == null) {
 			return;
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, futurePrint.futureClass().index());
-		int skip = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		emitLdc(code, futurePrint.futureStr().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, skip, code.size());
+		code.aload(0);
+		code.instanceOf(futurePrint.futureClass().entry());
+		MethodCode.Label skip = code.newLabel();
+		code.ifeq(skip);
+		code.ldc(futurePrint.futureStr().entry());
+		code.areturn();
+		code.labelBinding(skip);
 		emitMarkerPrintBranch(code, futurePrint, true);
 		emitMarkerPrintBranch(code, futurePrint, false);
 	}
@@ -3298,148 +2904,118 @@ final class JvmRuntimeBuilder {
 	// Emits "if (val is Object[3] headed by the stream/read-token marker) return the
 	// opaque label" -- streams print as #<STREAM>, pending stream-read tokens as the
 	// future label. A no-op when the async value machinery is absent.
-	private static void emitMarkerPrintBranch(List<Integer> code, FuturePrint futurePrint, boolean stream) {
+	private static void emitMarkerPrintBranch(MethodCode code, FuturePrint futurePrint, boolean stream) {
 		ConstantPool.StringConstant marker = stream ? futurePrint.streamMarker() : futurePrint.readMarker();
 		ConstantPool.StringConstant label = stream ? futurePrint.streamStr() : futurePrint.futureStr();
 		if (marker == null || label == null || futurePrint.objectArrayClass() == null) {
 			return;
 		}
-		List<Integer> skips = new ArrayList<>();
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, futurePrint.objectArrayClass().index());
-		skips.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, futurePrint.objectArrayClass().index());
-		code.add(Opcode.ARRAYLENGTH);
-		code.add(Opcode.ICONST_3);
-		skips.add(code.size());
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.CHECKCAST);
-		emitU2(code, futurePrint.objectArrayClass().index());
-		code.add(Opcode.ICONST_0);
-		code.add(Opcode.AALOAD);
-		emitLdc(code, marker.index());
-		skips.add(code.size());
-		code.add(Opcode.IF_ACMPNE);
-		emitU2(code, 0);
-		emitLdc(code, label.index());
-		code.add(Opcode.ARETURN);
-		for (int skip : skips) {
-			patchBranch(code, skip, code.size());
-		}
+		MethodCode.Label skips = code.newLabel();
+		code.aload(0);
+		code.instanceOf(futurePrint.objectArrayClass().entry());
+		code.ifeq(skips);
+		code.aload(0);
+		code.checkcast(futurePrint.objectArrayClass().entry());
+		code.arraylength();
+		code.iconst_3();
+		code.if_icmpne(skips);
+		code.aload(0);
+		code.checkcast(futurePrint.objectArrayClass().entry());
+		code.iconst_0();
+		code.aaload();
+		code.ldc(marker.entry());
+		code.if_acmpne(skips);
+		code.ldc(label.entry());
+		code.areturn();
+		code.labelBinding(skips);
 	}
 
 	// Emits "if (val is the compiled hash-table class) return "#<HASH-TABLE :TEST EQUAL
 	// :COUNT ".concat(Integer.toString(map.size())).concat(">")" -- the interpreter's
 	// LispHashTable.print() answer, so all four backends print one table identically. A
 	// no-op in a program that never makes a table.
-	private static void emitHashTableBranch(List<Integer> code, @org.jspecify.annotations.Nullable HashPrint hashPrint,
+	private static void emitHashTableBranch(MethodCode code, @org.jspecify.annotations.Nullable HashPrint hashPrint,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		if (hashPrint == null) {
 			return;
 		}
-		code.add(Opcode.ALOAD_0);
+		code.aload(0);
 		if (javaPrint != null && javaPrint.lispTable() != null) {
 			// A java: call can answer a LinkedHashMap of its own: a host object, printed
 			// by the #<java ...> tail.
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispTable()).index());
+			code.invokestatic(java.util.Objects.requireNonNull(javaPrint.lispTable()));
 		}
 		else {
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, hashPrint.mapClass().index());
+			code.instanceOf(hashPrint.mapClass().entry());
 		}
-		int skip = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		MethodCode.Label skip = code.newLabel();
+		code.ifeq(skip);
 		if (hashPrint.equalpTag() != null && hashPrint.equalpTest() != null && hashPrint.testCode() == null) {
 			// The table says which test it implements: equalp when it folds its keys,
 			// equal otherwise. Only a program that can build one carries the branch.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, hashPrint.equalpTest().index());
-			int notEqualp = code.size();
-			code.add(Opcode.IFNULL);
-			emitU2(code, 0);
-			emitLdc(code, hashPrint.equalpTag().index());
-			int haveTag = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, notEqualp, code.size());
-			emitLdc(code, hashPrint.tag().index());
-			patchBranch(code, haveTag, code.size());
+			code.aload(0);
+			code.invokestatic(hashPrint.equalpTest().entry());
+			MethodCode.Label notEqualp = code.newLabel();
+			code.ifnull(notEqualp);
+			code.ldc(hashPrint.equalpTag().entry());
+			MethodCode.Label haveTag = code.newLabel();
+			code.goto_(haveTag);
+			code.labelBinding(notEqualp);
+			code.ldc(hashPrint.tag().entry());
+			code.labelBinding(haveTag);
 		}
 		else if (hashPrint.testCode() != null && hashPrint.eqlTag() != null && hashPrint.eqTag() != null) {
 			// The table says which of the four tests it implements, read off its test
 			// code. Only a program that can build an identity table carries the
 			// branch; an equalp-only program keeps the two-way shape above.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, hashPrint.testCode().index());
-			code.add(Opcode.ICONST_2);
-			int isEql = code.size();
-			code.add(Opcode.IF_ICMPEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, hashPrint.testCode().index());
-			code.add(Opcode.ICONST_3);
-			int isEq = code.size();
-			code.add(Opcode.IF_ICMPEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, hashPrint.testCode().index());
-			code.add(Opcode.ICONST_1);
-			int isEqualp = code.size();
-			code.add(Opcode.IF_ICMPEQ);
-			emitU2(code, 0);
-			emitLdc(code, hashPrint.tag().index());
-			int haveTag = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, isEql, code.size());
-			emitLdc(code, hashPrint.eqlTag().index());
-			int haveEql = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, isEq, code.size());
-			emitLdc(code, hashPrint.eqTag().index());
-			int haveEq = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			patchBranch(code, isEqualp, code.size());
+			code.aload(0);
+			code.invokestatic(hashPrint.testCode().entry());
+			code.iconst_2();
+			MethodCode.Label isEql = code.newLabel();
+			code.if_icmpeq(isEql);
+			code.aload(0);
+			code.invokestatic(hashPrint.testCode().entry());
+			code.iconst_3();
+			MethodCode.Label isEq = code.newLabel();
+			code.if_icmpeq(isEq);
+			code.aload(0);
+			code.invokestatic(hashPrint.testCode().entry());
+			code.iconst_1();
+			MethodCode.Label isEqualp = code.newLabel();
+			code.if_icmpeq(isEqualp);
+			code.ldc(hashPrint.tag().entry());
+			MethodCode.Label haveTag = code.newLabel();
+			code.goto_(haveTag);
+			code.labelBinding(isEql);
+			code.ldc(hashPrint.eqlTag().entry());
+			MethodCode.Label haveEql = code.newLabel();
+			code.goto_(haveEql);
+			code.labelBinding(isEq);
+			code.ldc(hashPrint.eqTag().entry());
+			MethodCode.Label haveEq = code.newLabel();
+			code.goto_(haveEq);
+			code.labelBinding(isEqualp);
 			if (hashPrint.equalpTag() != null) {
-				emitLdc(code, hashPrint.equalpTag().index());
+				code.ldc(hashPrint.equalpTag().entry());
 			}
 			else {
-				emitLdc(code, hashPrint.tag().index());
+				code.ldc(hashPrint.tag().entry());
 			}
-			patchBranch(code, haveTag, code.size());
-			patchBranch(code, haveEql, code.size());
-			patchBranch(code, haveEq, code.size());
+			code.labelBinding(haveTag);
+			code.labelBinding(haveEql);
+			code.labelBinding(haveEq);
 		}
 		else {
-			emitLdc(code, hashPrint.tag().index());
+			code.ldc(hashPrint.tag().entry());
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, hashPrint.mapSize().index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, hashPrint.intToString().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, hashPrint.stringConcat().index());
-		emitLdc(code, hashPrint.suffix().index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, hashPrint.stringConcat().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, skip, code.size());
+		code.aload(0);
+		code.invokestatic(hashPrint.mapSize().entry());
+		code.invokestatic(hashPrint.intToString().entry());
+		code.invokevirtual(hashPrint.stringConcat().methodRefEntry());
+		code.ldc(hashPrint.suffix().entry());
+		code.invokevirtual(hashPrint.stringConcat().methodRefEntry());
+		code.areturn();
+		code.labelBinding(skip);
 	}
 
 	/**
@@ -3450,29 +3026,25 @@ final class JvmRuntimeBuilder {
 	 * decimal digits.
 	 */
 	/** One guarded bridge print branch of {@link #emitDefaultTail}. */
-	private static void emitBridgePrintHook(List<Integer> code, @org.jspecify.annotations.Nullable BridgePrint hook) {
+	private static void emitBridgePrintHook(MethodCode code, @org.jspecify.annotations.Nullable BridgePrint hook) {
 		if (hook == null) {
 			return;
 		}
-		code.add(Opcode.GETSTATIC);
-		emitU2(code, hook.initedField().index());
-		int notInited = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, hook.print().index());
-		code.add(Opcode.DUP);
-		int notHandled = code.size();
-		code.add(Opcode.IFNULL);
-		emitU2(code, 0);
-		code.add(Opcode.ARETURN);
-		patchBranch(code, notHandled, code.size());
-		code.add(Opcode.POP);
-		patchBranch(code, notInited, code.size());
+		code.getstatic(hook.initedField().entry());
+		MethodCode.Label notInited = code.newLabel();
+		code.ifeq(notInited);
+		code.aload(0);
+		code.invokestatic(hook.print().entry());
+		code.dup();
+		MethodCode.Label notHandled = code.newLabel();
+		code.ifnull(notHandled);
+		code.areturn();
+		code.labelBinding(notHandled);
+		code.pop();
+		code.labelBinding(notInited);
 	}
 
-	private static void emitDefaultTail(List<Integer> code, MethodrefConstant objectToString,
+	private static void emitDefaultTail(MethodCode code, MethodrefConstant objectToString,
 			@org.jspecify.annotations.Nullable JavaPrint javaPrint,
 			@org.jspecify.annotations.Nullable BridgePrint ffiPrint) {
 		// The ffi: print hook: if (_ffiInited != 0)
@@ -3480,34 +3052,24 @@ final class JvmRuntimeBuilder {
 		// java: branch, which would otherwise claim the pointer as a host object.
 		emitBridgePrintHook(code, ffiPrint);
 		if (javaPrint != null) {
-			List<Integer> toStringBranches = new ArrayList<>();
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, javaPrint.bigIntegerClass().index());
-			toStringBranches.add(code.size());
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
+			MethodCode.Label toStringBranches = code.newLabel();
+			code.aload(0);
+			code.instanceOf(javaPrint.bigIntegerClass().entry());
+			code.ifne(toStringBranches);
 			// return "#<java ".concat(val.getClass().getName()).concat(">");
-			emitLdc(code, javaPrint.prefix().index());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.objectGetClass().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.classGetName().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.stringConcat().index());
-			emitLdc(code, javaPrint.suffix().index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.stringConcat().index());
-			code.add(Opcode.ARETURN);
-			for (int branch : toStringBranches) {
-				patchBranch(code, branch, code.size());
-			}
+			code.ldc(javaPrint.prefix().entry());
+			code.aload(0);
+			code.invokevirtual(javaPrint.objectGetClass().methodRefEntry());
+			code.invokevirtual(javaPrint.classGetName().methodRefEntry());
+			code.invokevirtual(javaPrint.stringConcat().methodRefEntry());
+			code.ldc(javaPrint.suffix().entry());
+			code.invokevirtual(javaPrint.stringConcat().methodRefEntry());
+			code.areturn();
+			code.labelBinding(toStringBranches);
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, objectToString.index());
-		code.add(Opcode.ARETURN);
+		code.aload(0);
+		code.invokevirtual(objectToString.methodRefEntry());
+		code.areturn();
 	}
 
 	/**
@@ -3550,25 +3112,20 @@ final class JvmRuntimeBuilder {
 	// f32->f64 inside _fvToGeneral), then the leading #/#nA prefix is rewritten to #d( /
 	// #f(
 	// so the printed form round-trips to a packed array.
-	private static void emitPackedPrintBranch(List<Integer> code, ClassConstant arrayClass,
+	private static void emitPackedPrintBranch(MethodCode code, ClassConstant arrayClass,
 			MethodrefConstant arrayToStringMethod, PackedPrint packedPrint, ConstantPool.StringConstant prefixRepl) {
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, arrayClass.index());
-		int ifNotPackedPos = code.size();
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, packedPrint.fvToGeneralMethod().index());
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, arrayToStringMethod.index());
-		emitLdc(code, packedPrint.prefixRegex().index());
-		emitLdc(code, prefixRepl.index());
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, packedPrint.stringReplaceFirst().index());
-		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNotPackedPos, code.size());
+		code.aload(0);
+		code.instanceOf(arrayClass.entry());
+		MethodCode.Label ifNotPacked = code.newLabel();
+		code.ifeq(ifNotPacked);
+		code.aload(0);
+		code.invokestatic(packedPrint.fvToGeneralMethod().entry());
+		code.invokestatic(arrayToStringMethod.entry());
+		code.ldc(packedPrint.prefixRegex().entry());
+		code.ldc(prefixRepl.entry());
+		code.invokevirtual(packedPrint.stringReplaceFirst().methodRefEntry());
+		code.areturn();
+		code.labelBinding(ifNotPacked);
 	}
 
 	// Emits "if (val instanceof ArrayList) return arrayToString(val);" at the current
@@ -3585,7 +3142,7 @@ final class JvmRuntimeBuilder {
 	// body (stringLength/stringSubstring null) returns the quote-framed _strv result
 	// verbatim, the princ body strips the surrounding quotes with substring like its
 	// String branch.
-	private static void emitArrayBranch(List<Integer> code,
+	private static void emitArrayBranch(MethodCode code,
 			@org.jspecify.annotations.Nullable ClassConstant arrayListClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant arrayToStringMethod,
 			@org.jspecify.annotations.Nullable PackedPrint packedPrint,
@@ -3603,45 +3160,31 @@ final class JvmRuntimeBuilder {
 			// arrayToString(_ivToGeneral(val));
 			// -- a plain #(...) vector, no prefix rewrite. Ahead of the quantized
 			// matrix's byte[] test, which it tells an octet vector from by the tag.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, packedIntPrint.byteArrayClass().index());
-			List<Integer> notOctets = new ArrayList<>();
-			notOctets.add(code.size());
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
+			code.aload(0);
+			code.instanceOf(packedIntPrint.byteArrayClass().entry());
+			MethodCode.Label notOctets = code.newLabel();
+			code.ifeq(notOctets);
 			if (packedIntPrint.quantized()) {
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.CHECKCAST);
-				emitU2(code, packedIntPrint.byteArrayClass().index());
-				code.add(Opcode.ICONST_0);
-				code.add(Opcode.BALOAD);
-				code.add(Opcode.BIPUSH);
-				code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
-				notOctets.add(code.size());
-				code.add(Opcode.IF_ICMPNE);
-				emitU2(code, 0);
+				code.aload(0);
+				code.checkcast(packedIntPrint.byteArrayClass().entry());
+				code.iconst_0();
+				code.baload();
+				code.loadConstant(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				code.if_icmpne(notOctets);
 			}
-			int isPackedIntPos = code.size();
-			code.add(Opcode.GOTO);
-			emitU2(code, 0);
-			for (int pos : notOctets) {
-				patchBranch(code, pos, code.size());
-			}
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, packedIntPrint.longArrayClass().index());
-			int ifNotPackedIntPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			patchBranch(code, isPackedIntPos, code.size());
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, packedIntPrint.ivToGeneralMethod().index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, arrayToStringMethod.index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotPackedIntPos, code.size());
+			MethodCode.Label isPackedInt = code.newLabel();
+			code.goto_(isPackedInt);
+			code.labelBinding(notOctets);
+			code.aload(0);
+			code.instanceOf(packedIntPrint.longArrayClass().entry());
+			MethodCode.Label ifNotPackedInt = code.newLabel();
+			code.ifeq(ifNotPackedInt);
+			code.labelBinding(isPackedInt);
+			code.aload(0);
+			code.invokestatic(packedIntPrint.ivToGeneralMethod().entry());
+			code.invokestatic(arrayToStringMethod.entry());
+			code.areturn();
+			code.labelBinding(ifNotPackedInt);
 		}
 		if (packedPrint != null) {
 			// if (val instanceof double[]) -> #d(...); if (val instanceof float[]) ->
@@ -3657,80 +3200,61 @@ final class JvmRuntimeBuilder {
 				// if (val instanceof byte[]) return _qmToString(val); -- the quantized
 				// matrix's #<quantized-matrix q8-0 (rows cols)>, the same for prin1 and
 				// princ (.kb/quantized-matrix.md).
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.INSTANCEOF);
-				emitU2(code, packedPrint.byteArrayClass().index());
-				int ifNotQuantized = code.size();
-				code.add(Opcode.IFEQ);
-				emitU2(code, 0);
-				code.add(Opcode.ALOAD_0);
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, packedPrint.qmToString().index());
-				code.add(Opcode.ARETURN);
-				patchBranch(code, ifNotQuantized, code.size());
+				code.aload(0);
+				code.instanceOf(packedPrint.byteArrayClass().entry());
+				MethodCode.Label ifNotQuantized = code.newLabel();
+				code.ifeq(ifNotQuantized);
+				code.aload(0);
+				code.invokestatic(packedPrint.qmToString().entry());
+				code.areturn();
+				code.labelBinding(ifNotQuantized);
 			}
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, arrayListClass.index());
-		List<Integer> notArray = new ArrayList<>();
-		notArray.add(code.size());
-		code.add(Opcode.IFEQ);
-		emitU2(code, 0);
+		code.aload(0);
+		code.instanceOf(arrayListClass.entry());
+		MethodCode.Label notArray = code.newLabel();
+		code.ifeq(notArray);
 		if (javaPrint != null) {
 			// A java: call can answer an ArrayList of its own, which is a host object and
 			// falls through to the #<java ...> tail.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispArray()).index());
-			notArray.add(code.size());
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
+			code.aload(0);
+			code.invokestatic(java.util.Objects.requireNonNull(javaPrint.lispArray()));
+			code.ifeq(notArray);
 		}
 		if (strvMethod != null) {
 			// Object s = _strv(val); if (s instanceof String) -> character vector
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, strvMethod.index());
-			code.add(Opcode.ASTORE_1);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, stringClass.index());
-			int ifPlainArrayPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_1);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, stringClass.index());
+			code.aload(0);
+			code.invokestatic(strvMethod.entry());
+			code.astore(1);
+			code.aload(1);
+			code.instanceOf(stringClass.entry());
+			MethodCode.Label ifPlainArray = code.newLabel();
+			code.ifeq(ifPlainArray);
+			code.aload(1);
+			code.checkcast(stringClass.entry());
 			if (stringLength == null || stringSubstring == null) {
 				// prin1: the quote-framed string, escaped exactly like the String branch
-				code.add(Opcode.INVOKESTATIC);
-				emitU2(code, java.util.Objects.requireNonNull(strEscMethod).index());
-				code.add(Opcode.ARETURN);
+				code.invokestatic(java.util.Objects.requireNonNull(strEscMethod).entry());
+				code.areturn();
 			}
 			else {
 				// princ: return s.substring(1, s.length() - 1)
-				code.add(Opcode.ASTORE_1);
-				code.add(Opcode.ALOAD_1);
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ALOAD_1);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, stringLength.index());
-				code.add(Opcode.ICONST_1);
-				code.add(Opcode.ISUB);
-				code.add(Opcode.INVOKEVIRTUAL);
-				emitU2(code, stringSubstring.index());
-				code.add(Opcode.ARETURN);
+				code.astore(1);
+				code.aload(1);
+				code.iconst_1();
+				code.aload(1);
+				code.invokevirtual(stringLength.methodRefEntry());
+				code.iconst_1();
+				code.isub();
+				code.invokevirtual(stringSubstring.methodRefEntry());
+				code.areturn();
 			}
-			patchBranch(code, ifPlainArrayPos, code.size());
+			code.labelBinding(ifPlainArray);
 		}
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INVOKESTATIC);
-		emitU2(code, arrayToStringMethod.index());
-		code.add(Opcode.ARETURN);
-		for (int pos : notArray) {
-			patchBranch(code, pos, code.size());
-		}
+		code.aload(0);
+		code.invokestatic(arrayToStringMethod.entry());
+		code.areturn();
+		code.labelBinding(notArray);
 	}
 
 	static void emitLdc(List<Integer> code, int cpIndex) {

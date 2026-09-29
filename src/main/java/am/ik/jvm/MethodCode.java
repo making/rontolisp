@@ -148,25 +148,28 @@ public final class MethodCode {
 	}
 
 	/**
-	 * Appends a fragment built on a body of its own -- one whose entries had to be minted
-	 * before the point this body reaches it, as {@code <clinit>}'s pieces are. Its
-	 * handlers and long branches move with it; a label bound in it keeps the fragment's
-	 * position and names nothing here.
-	 * @param fragment the complete fragment
+	 * Appends a body assembled apart: a block whose branches all land inside it, or a
+	 * fragment whose entries had to be minted before this body reaches it, as
+	 * {@code <clinit>}'s pieces are. Its handlers and long branches move with it; a label
+	 * bound in it keeps the block's position and names nothing here.
+	 * @param block the block, every label bound
 	 * @return this
-	 * @throws IllegalStateException when a branch in the fragment waits for a label
+	 * @throws IllegalStateException when a branch in the block waits for its label
+	 * @throws IllegalArgumentException when this body feeds an operand-stack model (the
+	 * block's branches never reached it)
 	 */
-	public MethodCode append(MethodCode fragment) {
-		fragment.checkComplete();
-		int base = this.code.size();
-		for (int b : fragment.code) {
-			this.u1(b);
+	public MethodCode append(MethodCode block) {
+		block.checkComplete();
+		if (this.stack != null) {
+			throw new IllegalArgumentException("a block is appended to a plain body only");
 		}
-		for (ClassDefinition.Handler h : fragment.handlers) {
+		int base = this.code.size();
+		this.code.addAll(block.code);
+		for (ClassDefinition.Handler h : block.handlers) {
 			this.handlers.add(new ClassDefinition.Handler(h.startPc() + base, h.endPc() + base, h.handlerPc() + base,
 					h.catchType()));
 		}
-		for (ClassDefinition.Branch b : fragment.longBranches) {
+		for (ClassDefinition.Branch b : block.longBranches) {
 			this.longBranches.add(new ClassDefinition.Branch(b.pc() + base, b.target() + base));
 		}
 		return this;
@@ -719,6 +722,10 @@ public final class MethodCode {
 
 	public MethodCode ddiv() {
 		return this.op(Opcode.DDIV);
+	}
+
+	public MethodCode drem() {
+		return this.op(Opcode.DREM);
 	}
 
 	public MethodCode dneg() {

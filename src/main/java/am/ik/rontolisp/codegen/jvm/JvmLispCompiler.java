@@ -3099,7 +3099,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (!indirectCallArities.isEmpty() || usesApplyRuntime) {
 			dispatchMethods.add(new DispatchMethod(cp.addUtf8(JvmRuntimeBuilder.NOT_FN_NAME),
 					cp.addUtf8(JvmRuntimeBuilder.NOT_FN_DESC),
-					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod), 1));
+					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod)));
 		}
 		for (int arity : indirectCallArities) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
@@ -3402,9 +3402,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// of returning the name verbatim.
 		Utf8Constant symEscName = cp.addUtf8("_symEsc");
 		MethodrefConstant symEscMethod = cp.addMethodref(thisClass, cp.addNameAndType(symEscName, strEscDescUtf));
-		List<Integer> symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
+		MethodCode symEscCode = JvmRuntimeBuilder.buildSymEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringSubstring, stringReplace, stringConcat);
-		List<Integer> strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
+		MethodCode strEscCode = JvmRuntimeBuilder.buildStrEscBody(cp, stringLength, stringCharAt, stringIndexOf,
 				stringIndexOfFrom, stringSubstring, stringReplace, stringConcat, symEscMethod);
 		// The quote/function abbreviation _consToString(Display) applies ahead of the
 		// general list loop (todo 626): a 2-element (QUOTE x)/(FUNCTION x) cell prints
@@ -3441,38 +3441,38 @@ public final class JvmLispCompiler implements LispCompiler {
 				? new JvmRuntimeBuilder.ComplexPrintRefs(rcClass, rcReal, rcImag, lispToDisplayStringMethod,
 						cp.addString("#C("), spaceStr, cp.addString(")"), hasComplexField)
 				: null;
-		List<Integer> ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
+		MethodCode ltsCode = JvmRuntimeBuilder.buildLispToStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToStringMethod, nilStr, funcPrint, ratioArrayClass, stringConcat, slashStr, charBoxClass,
 				charPrin1Method, arrayListClassForPrint, arrayToStringMethod, strvMethod, javaPrint, ffiPrint,
 				futurePrint, packedPrint, packedIntPrint, instPrint, strEscMethod, hashPrint, prin1Complex);
-		List<Integer> ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
+		MethodCode ctsCode = JvmRuntimeBuilder.buildConsToStringBody(objectArrayClass, stringBuilderClass, sbInitStr,
 				sbAppendStr, sbToString, lispToStringMethod, openParenStr, closeParenStr, spaceStr, dotStr,
 				ratioArrayClass, renderGuard, quoteAbbrev);
-		List<Integer> ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
+		MethodCode ltdsCode = JvmRuntimeBuilder.buildLispToDisplayStringBody(longClass, doubleClass, stringClass,
 				objectArrayClass, integerClass, longToString, doubleToString, floatPrint, objectToString,
 				consToDisplayStringMethod, nilStr, funcPrint, stringCharAt, stringLength, stringSubstring,
 				stringLastIndexOf, ratioArrayClass, stringConcat, slashStr, charBoxClass, characterToString,
 				arrayListClassForPrint, arrayToDisplayStringMethod, strvMethod, javaPrint, ffiPrint, futurePrint,
 				packedPrint, packedIntPrint, instPrint, hashPrint, princComplex);
-		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
+		@Nullable MethodCode instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
 				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"),
-				cp.addString("O"), renderGuard) : List.of();
-		List<Integer> instDisplayCode = usesInstances
+				cp.addString("O"), renderGuard) : null;
+		@Nullable MethodCode instDisplayCode = usesInstances
 				? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass, mainCtx.layoutPool.stringArrayClass(cp),
 						stringBuilderClass, sbInitStr, sbAppendStr, sbToString, objectEquals, lispToDisplayStringMethod,
 						cp.addString("S"), cp.addString("#S("), cp.addString("#<"), closeParenStr, cp.addString(">"),
 						cp.addString(" :"), spaceStr, cp.addString("P"), null, cp.addString("O"), renderGuard)
-				: List.of();
-		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
-		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
+				: null;
+		MethodCode charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
+		MethodCode ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
 				dotStr, ratioArrayClass, renderGuard, quoteAbbrev);
-		List<Integer> appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
+		MethodCode appendCode = JvmRuntimeBuilder.buildAppendBody(cp, thisClass, objectArrayClass, objectClass);
 		ConstantPool.StringConstant quoteStr = cp.addString("\"");
-		List<Integer> readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
+		MethodCode readLineCode = JvmRuntimeBuilder.buildReadLineBody(bufferedReaderClass, inputStreamReaderClass,
 				brInit, brReadLine, isrInit, systemIn, stdinReaderField, quoteStr, stringConcat);
 
 		// File-stream runtime (open/close/write-line/read-line with a stream)
@@ -4169,8 +4169,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8);
 		}
 		for (DispatchMethod dm : dispatchMethods) {
-			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, 64,
-					dm.maxLocals, dm.code, List.of());
+			dm.code.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8);
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
@@ -4348,38 +4347,35 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp, thisClass.entry(), mainCtx.conditionChannel.used
 							? Objects.requireNonNull(mainCtx.conditionChannel.condTlField).entry() : null,
 					mainCtx.conditionChannel.condRan != null)) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
-						rm.maxStack(), rm.maxLocals(), rm.code(), List.of());
+				rm.code()
+					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8());
 			}
 		}
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf, 6, 2,
-				strEscCode, List.of());
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf, 4, 7,
-				symEscCode, List.of());
+		strEscCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf);
+		symEscCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf);
 		for (DispatchMethod fm : funNameMethods) {
 			// _funName (and its _funName$k segments): the funcId -> name table behind
 			// #<function NAME>. Emitted only when the gate found a nameable function
 			// value (see above).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.nameUtf8(), fm.descUtf8(), 2,
-					fm.maxLocals(), fm.code(), List.of());
+			fm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.nameUtf8(), fm.descUtf8());
 		}
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf, 3,
-				3, ltsCode, List.of());
+		ltsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName,
+				lispToStringDescUtf);
 		if (usesInstances) {
 			// _instToString / _instToDisplayString: one body builder, two element
 			// formatters, so the readable and display renderings cannot drift.
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-					Objects.requireNonNull(instToStringName), consToStringDescUtf, 5, 5, instCode, List.of());
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-					Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf, 5, 5, instDisplayCode,
-					List.of());
+			Objects.requireNonNull(instCode)
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(instToStringName), consToStringDescUtf);
+			Objects.requireNonNull(instDisplayCode)
+				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf);
 		}
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf, 4,
-				10, ctsCode, List.of());
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf, 5, 6,
-				appendCode, List.of());
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc, 5,
-				1, readLineCode, List.of());
+		ctsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName,
+				consToStringDescUtf);
+		appendCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf);
+		readLineCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName,
+				readLineHelperDesc);
 		for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
 			im.code()
 				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(),
@@ -4607,15 +4603,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			am.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc());
 		}
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
-					nm.maxStack(), nm.maxLocals(), nm.code(), exceptionTable(nm.exceptionTable()));
+			nm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8());
 		}
 		// The gated complex helpers, present only when the program may
 		// create a complex -- a complex-free program keeps its bytes.
 		if (complexRuntime != null) {
 			for (JvmComplexRuntimeBuilder.ComplexMethod cm : complexRuntime.methods()) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8(),
-						cm.maxStack(), cm.maxLocals(), cm.code(), List.of());
+				cm.code()
+					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8());
 			}
 		}
 		// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
@@ -4652,15 +4647,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
-					nm.maxStack(), nm.maxLocals(), nm.code(), List.of());
+			nm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8());
 		}
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
-				lispToStringDescUtf, 4, 3, ltdsCode, List.of());
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
-				consToStringDescUtf, 4, 10, ctdsCode, List.of());
-		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc, 3, 1,
-				charPrin1Code, List.of());
+		ltdsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
+				lispToStringDescUtf);
+		ctdsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
+				consToStringDescUtf);
+		charPrin1Code.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc);
 		for (int g = 0; g < lookupBodies.size(); g++) {
 			Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
 			lookupBodies.get(g).addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc);
@@ -4982,17 +4975,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
-	}
-
-	// A runtime builder's exception table ({startPc, endPc, handlerPc, catchType} rows)
-	// in
-	// the form a class definition carries.
-	private static List<ClassDefinition.Handler> exceptionTable(List<int[]> rows) {
-		List<ClassDefinition.Handler> entries = new ArrayList<>(rows.size());
-		for (int[] e : rows) {
-			entries.add(new ClassDefinition.Handler(e[0], e[1], e[2], e[3]));
-		}
-		return entries;
 	}
 
 	/**
@@ -5709,7 +5691,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			@Nullable String writtenIn) {
 	}
 
-	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxLocals) {
+	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, MethodCode code) {
 	}
 
 	/**
