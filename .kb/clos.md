@@ -321,8 +321,8 @@ true)` lowers an unknown class to a runtime `error` instead of failing the compi
   ones whose names are `cl` symbols. **Trigger**: a plainly-registered class whose name is not.
 - **The COMPILE paths must not inline that dispatch**: its size is proportional to the
   registered-class count, and at cl-postgres scale (165 layouts, ~68 KB of AST per site) three
-  sites overflowed the JVM's signed-16-bit branch offsets (`StackMapAugmenter: Index -31123
-  out of bounds`). `expandTypep(cons, registry, false)` emits `(%typep-runtime value spec)` and
+  sites overflowed the JVM's signed-16-bit branch offsets (the since-removed `StackMapAugmenter`:
+  `Index -31123 out of bounds`). `expandTypep(cons, registry, false)` emits `(%typep-runtime value spec)` and
   `expandTopLevelDefinitions` injects the defun plus the `%typep-tag-table%` data table —
   quoted data mapping each type name's spellings to the tags it accepts, emitted as CHUNKED
   top-level forms (a defvar plus `(setq .. (append 'chunk ..))` continuations, 48 entries

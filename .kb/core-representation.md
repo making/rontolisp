@@ -4,9 +4,9 @@ Encoding and pipeline invariants shared by the interpreter and both compilers.
 
 ## Encoding
 
-- JVM class version 61: emitters write frame-free v50-style code; `am.ik.jvm.StackMapAugmenter`
+- JVM class version 61: emitters write frame-free v50-style code; `am.ik.jvm.StackMapFrames`
   (post-pass at the end of `JvmLispCompiler.compile()`, after the optional shake) adds the
-  frames and stamps the version. [stackmap-augmenter.md](stackmap-augmenter.md).
+  frames and stamps the version. [stack-map-frames.md](stack-map-frames.md).
 - WASM function types stay OUTSIDE the rec group (wasmtime's WASI host needs plain `(func ...)`
   for imports); only the cons struct is in one.
 - symbolp/stringp: quoted symbols and string literals share one representation, split by a
@@ -201,8 +201,7 @@ reference for the SHAPE only.
   themselves.
 - **JVM**: a static `_funName(I)Ljava/lang/String;` built by `JvmRuntimeBuilder.buildFunNameBody`
   over a `SortedMap` of the dispatchable defuns; `_lispToString`/`_lispToDisplayString` emit
-  `emitFuncValPrint` (slot-2 local, so both declare maxLocals 3 -- `StackMapAugmenter` sizes
-  `locals[]` from the header). The method is OMITTED when the map is empty: a program with no
+  `emitFuncValPrint` (slot-2 local, so both declare maxLocals 3). The method is OMITTED when the map is empty: a program with no
   nameable function value is byte-identical to a build that never knew the feature.
 - **JVM** keeps its table on `dispatchableFuncIds`: the registry already spells every one of those
   names in the constant pool, so an extra row is a search branch over strings the class holds

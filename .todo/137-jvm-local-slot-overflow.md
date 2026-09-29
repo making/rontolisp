@@ -4,7 +4,7 @@ Difficulty: Medium
 
 **Status:** open, narrowed. The INDEX half is done (todo-562, 2026-08-29): past
 slot 255 a load or store now takes the `wide` prefix and a two-byte index, so a
-past-255 slot is no longer a wrong answer -- see `.kb/stackmap-augmenter.md`,
+past-255 slot is no longer a wrong answer -- see `.kb/stack-map-frames.md`,
 "The `wide` prefix". What is left here is the COUNT, which is now a SIZE
 question, not a correctness one.
 

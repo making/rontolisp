@@ -25,8 +25,8 @@ divisor, `reduce`, `sort`). Both halves near 4 KB.
   linear chain; past one segment `_invoke_<arity>` becomes a router bisecting segment boundaries
   and tail-calling `_invoke_<arity>$<k>` (`emitSegmentRouter`).
 - A `tableswitch`/`lookupswitch` is deliberately NOT used: the emitters, `JvmClassShaker` and
-  `StackMapAugmenter` would have to decode variable-length instructions
-  (`.kb/stackmap-augmenter.md`, unstarted).
+  `BranchRelaxer` would have to decode variable-length instructions (the frame pass,
+  `.kb/stack-map-frames.md`, already does).
 
 ## The body splitter (`_k$N` tail continuations)
 `JvmBodyOutliner` drives every defun and lambda body from a QUEUE, so the whole TAIL SPINE (its

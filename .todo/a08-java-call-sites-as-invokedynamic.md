@@ -19,7 +19,7 @@ the am.ik.jvm indy infrastructure is this item's alone.
 Plan:
 - am.ik.jvm: add CONSTANT_MethodHandle / CONSTANT_InvokeDynamic entries and the
   BootstrapMethods class attribute; teach JvmClassShaker, JvmClassSplitter
-  (carry bootstrap entries into $PartN) and StackMapAugmenter about them.
+  (carry bootstrap entries into $PartN) about them.
 - Bootstrap in the bridge template: MutableCallSite + guardWithTest on
   (receiver class, argument kinds), fallback relinks through the shared
   selection; per-argument marshal filters and a return filter specialized to

@@ -48,7 +48,8 @@ class ByteCodeWriterTest {
 	// A local slot past 255 has no one-byte operand: the instruction takes the `wide`
 	// prefix and a two-byte index, and every reader of the finished bytes has to measure
 	// it -- BranchRelaxer (which sizes the body to place relaxed branches) and
-	// StackMapAugmenter (which walks it to derive the frames). This pins both at once:
+	// StackMapFrames (whose generator walks it to derive the frames). This pins both at
+	// once:
 	// a `wide astore`/`wide aload` of slot 300 around a branch far enough out to force
 	// relaxation, augmented to version 61 and run.
 	@Test
@@ -110,7 +111,7 @@ class ByteCodeWriterTest {
 			.writeAttributes(a -> {
 			});
 
-		byte[] augmented = StackMapAugmenter.augment(classOut.toByteArray(), 61);
+		byte[] augmented = StackMapFrames.generate(classOut.toByteArray(), 61);
 		Path classFile = tempDir.resolve("WideLocal.class");
 		Files.write(classFile, augmented);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
@@ -196,7 +197,7 @@ class ByteCodeWriterTest {
 	// backend's emitters rely on: version-50 output with a non-empty exception table
 	// verifies and runs WITHOUT a StackMapTable (the type-inference verifier computes
 	// handler frames itself; the shipped version-61 classes get their mandatory frames
-	// from the StackMapAugmenter post-pass, not from the emitters).
+	// from the StackMapFrames post-pass, not from the emitters).
 	@Test
 	void generateAndRunTypedCatchHandler() throws Exception {
 		assertThat(runCatchClass("TypedCatch", true)).isEqualTo("boom");

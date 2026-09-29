@@ -16,7 +16,7 @@ import org.jspecify.annotations.Nullable;
  * full width. The shape is the one every generated class has -- attribute-free fields,
  * one {@code Code} attribute per method whose only sub-attribute is an optional
  * {@code LineNumberTable}, no class attributes -- which is also what
- * {@link JvmClassShaker} and {@link StackMapAugmenter} accept.
+ * {@link JvmClassShaker} and {@link StackMapFrames} accept.
  * <p>
  * A definition whose pool fits one class file is written by {@link #toBytes()}; one whose
  * pool outgrew it is handed to {@link JvmClassSplitter}, which spreads its methods over
@@ -144,7 +144,7 @@ public final class ClassDefinition {
 
 	/**
 	 * Writes the definition as one class file (major version 50, the version the
-	 * generators emit before {@link StackMapAugmenter} raises it).
+	 * generators emit before {@link StackMapFrames} raises it).
 	 * @return the class file
 	 * @throws IllegalStateException when the pool does not fit one class file
 	 * @throws IllegalArgumentException when a method's code exceeds 65535 bytes

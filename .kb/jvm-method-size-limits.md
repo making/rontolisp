@@ -42,8 +42,8 @@ stays the answer for the rest.
   65535 still names its entry. The class is assembled as a `ClassDefinition` (pool, header,
   fields, methods with their code lists); `toBytes()` is the unchanged single-class form.
 - **The decision** (`JvmLispCompiler`, end of `compile`): `cp.size() <= classPoolLimit` (the
-  format limit) takes the old path -- `toBytes`, `JvmClassShaker`, `StackMapAugmenter`. Past it,
-  or when the augmenter's own frame-type entries overflow (`ConstantPoolOverflowException`),
+  format limit) takes the old path -- `toBytes`, `JvmClassShaker`, `StackMapFrames`. Past it,
+  or when the frame pass's own frame-type entries overflow (`ConstantPoolOverflowException`),
   `writeSplit` hands the definition to `am.ik.jvm.JvmClassSplitter`.
 - **The split**: `unresolvedSelfMethods` and the shake are `JvmClassShaker`'s rules on the
   definition (a definition that then fits one class comes out byte-identical to the shaker's
@@ -53,7 +53,7 @@ stays the answer for the rest.
   `RontoFloatArray`'s MethodHandles), plus by the splitter's own rule every instance method and
   initializer, `synchronized` method (monitor = class) and `MethodHandles` caller (lookup =
   class). The rest goes in DECLARATION order into the class while it has room, then into
-  parts; budget `MAX_INDEX - RESERVED_ENTRIES` (4096: the augmenter's Class entries, the
+  parts; budget `MAX_INDEX - RESERVED_ENTRIES` (4096: the frame pass's Class entries, the
   parts' own). A `Methodref` to a moved method is re-pointed to its part at write time; members
   lose `ACC_PRIVATE` (one package). Each class keeps the definition's entry order and appends
   its new Class entries last, so an `ldc`'s one-byte operand stays in range.
@@ -113,7 +113,7 @@ not only under eval. WASM mirrors it.
 `ALOAD`/`ASTORE` once carried a one-byte index, so slot 256 became slot 0 — a wrong answer, not
 a crash, and `AstOutliner`'s 8000-byte `HugeMethodLimit` never fired because `ctx.nextLocal`
 only grows. Past 255 a load/store takes the `wide` prefix
-([stackmap-augmenter.md](stackmap-augmenter.md)); the hard limit is the u2 `max_locals`, which
+([stack-map-frames.md](stack-map-frames.md)); the hard limit is the u2 `max_locals`, which
 `Ctx.allocTemp` refuses to cross. Still open: a temporary's slot is never reused.
 
 ## Pinning tests

@@ -18,9 +18,9 @@ import java.util.Set;
  * The emitter patches an in-range branch directly ({@code JvmRuntimeBuilder.patchBranch}
  * on the caller's side); only an out-of-range patch is deferred to this pass, so a method
  * whose branches all fit is returned untouched, byte for byte. The decoder understands
- * exactly the instruction set the emitters produce -- like {@link StackMapAugmenter},
- * {@code tableswitch}/{@code lookupswitch}/{@code jsr} are rejected loudly rather than
- * mis-measured. The {@code wide} prefix a past-255 local index needs IS measured.
+ * exactly the instruction set the emitters produce -- {@code tableswitch}/
+ * {@code lookupswitch}/{@code jsr} are rejected loudly rather than mis-measured. The
+ * {@code wide} prefix a past-255 local index needs IS measured.
  *
  * <p>
  * The 65535-byte method code limit is NOT lifted by this pass ({@code goto_w} cannot
@@ -207,7 +207,7 @@ public final class BranchRelaxer {
 	}
 
 	/**
-	 * Operand byte count -- the same instruction subset {@link StackMapAugmenter} walks.
+	 * Operand byte count of the instruction subset the emitters produce.
 	 */
 	private static int operandLength(List<Integer> code, int op, int pc) {
 		return switch (op) {

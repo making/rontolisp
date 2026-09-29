@@ -52,9 +52,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code defun} called once with a long loop inside -- then runs in the bytecode
  * interpreter forever. The measured cost when {@code nth} last had that shape was 8.5x
  * the WASM backend on identical source. The check is
- * {@link StackMapAugmenter#osrHostileBackedges}, which reuses the verifier-style dataflow
- * the augmenter already runs; {@code ExamplesE2eTest} runs the same assertion over every
- * example it compiles for the JVM.
+ * {@link StackMapFrames#osrHostileBackedges}, which reads the operand stack of every
+ * branch target off the frames the class ships with; {@code ExamplesE2eTest} runs the
+ * same assertion over every example it compiles for the JVM.
  *
  * <p>
  * <b>Each run gets its own working directory, and the corpus program runs in a SUBPROCESS
@@ -198,7 +198,7 @@ class JvmClassShakerCorpusTest {
 	@ParameterizedTest
 	@EnumSource(value = OptimizeLevel.class, names = { "NONE", "DEFAULT" })
 	void noEmittedLoopHeadCarriesPendingOperands(OptimizeLevel level) {
-		assertThat(StackMapAugmenter.osrHostileBackedges(classAt(level)))
+		assertThat(StackMapFrames.osrHostileBackedges(classAt(level)))
 			.as("backward branches into a non-empty operand stack at " + level
 					+ " -- HotSpot refuses to OSR-compile such a method (.kb/jvm-osr-backedges.md)")
 			.isEmpty();

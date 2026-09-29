@@ -36,8 +36,8 @@ and `BlockReturnSignal`); `JvmUnwindProtectCompiler` over `ByteCodeWriter.writeE
 signals replaces the pending unwind (CL: newer exit wins).
 
 - JVM emitters stay frame-free (raw output is version-50 and verifies handlers without a
-  StackMapTable); version-61 handler frames are synthesized offline by `StackMapAugmenter`
-  ([stackmap-augmenter.md](stackmap-augmenter.md)). Each `Ctx` carries a per-method
+  StackMapTable); version-61 handler frames are synthesized offline by `StackMapFrames`
+  ([stack-map-frames.md](stack-map-frames.md)). Each `Ctx` carries a per-method
   `exceptionTable` emitted by the four method-writing sites; `JvmClassShaker` is
   exception-table-aware.
 - **The `return` channel is a plain GOTO/br and would skip the cleanups**, so `Ctx.unwindScopes`
@@ -513,7 +513,10 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   -- the construct that queued it has returned by then), and a `_k$N` continuation inherits its
   method's. `_where` walks the exception's trace: the innermost frame of this class (or a
   `$PartN`) at a site gives the location and, from the same site, the function. The positions are
-  `SourceProvenance`'s, the same forms the interpreter's reader locates. (A function's methods
+  `SourceProvenance`'s, the same forms the interpreter's reader locates. Code outside any site
+  is numbered `JvmSourceSites.NO_SITE` (0xFFFF, above `MAX_SITES`), never 0: `java.lang.classfile`
+  (the frame pass) drops a line-0 entry, and the code after it then reported the site before
+  (`UncaughtReportParityTest#aComputedConditionTypeReportsTheInitargsTheCallPassed`). (A function's methods
   used to open on a BASE site naming it, for the dynamic rule's outward search; the lexical one
   needs none, 4 bytes a method.)
 - **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
@@ -534,7 +537,7 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   no `_where` and its pool in the old order -- the bytes it always had
   (`UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid`). The line numbers
   survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassShaker`,
-  `JvmClassSplitter` and `StackMapAugmenter` carry the attribute (no instruction moves there).
+  `JvmClassSplitter` and `StackMapFrames` carry the attribute (no instruction moves there).
 - **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
   plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
   1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
@@ -2508,7 +2511,7 @@ all, so **`restart-case` alone unblocks nothing real**.
   `java -jar`), `cli/UncaughtReportParityTest` (both backends, every shape above: tail calls,
   `labels`, macros, a loaded file, library callbacks, methods, nested defuns, async chains,
   fused trees, typed loops, continuations, nothing located), `am.ik.jvm.LineNumberTableTest` (the
-  attribute through the relaxer, shaker, splitter and augmenter).
+  attribute through the relaxer, shaker, splitter and frame pass).
 - Gates in `LispMacroExpanderTest`: `conditionNarrowing*`,
   `anExplicitFormatControlInitargForcesTheRenderer`, `aComputedDatumMakesTheConditionSetUnknowable`,
   `aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer`,

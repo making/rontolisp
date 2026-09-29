@@ -27,8 +27,8 @@ silently, with every functional test green. Same cliff as
   local slots run out (`Ctx.hasRoomToSpillOperandStack`, 255 ceiling).
 
 ## The check
-`StackMapAugmenter.osrHostileBackedges(byte[])` reuses the verifier-style dataflow
-([stackmap-augmenter.md](stackmap-augmenter.md)) and accepts an already-augmented class. It is
+`StackMapFrames.osrHostileBackedges(byte[])` reads the generated `StackMapTable` back
+([stack-map-frames.md](stack-map-frames.md)); a frame-free class is framed first. It is
 a TEST, not a compile-time throw. Hoisting also frees the enclosing method's bytecode budget
 ([jvm-method-size-limits.md](jvm-method-size-limits.md)); with the spill in front of it a
 typed loop ([jvm-typed-loops.md](jvm-typed-loops.md)) reaches argument position too.

@@ -68,19 +68,19 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
-import am.ik.jvm.StackMapAugmenter;
+import am.ik.jvm.StackMapFrames;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles Lisp expressions to JVM .class bytecode, stamped class file version 61 (Java
- * 17) after {@link StackMapAugmenter} computes the mandatory StackMapTable offline.
- * Supports first-class functions, closures, and capture-by-reference semantics.
+ * 17) after {@link StackMapFrames} computes the mandatory StackMapTable offline. Supports
+ * first-class functions, closures, and capture-by-reference semantics.
  */
 public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The class-file major version the finished class is stamped with (61 = Java 17).
-	 * Emission itself stays version-agnostic; {@link StackMapAugmenter} computes the
+	 * Emission itself stays version-agnostic; {@link StackMapFrames} computes the
 	 * StackMapTable that every version above 50 requires and stamps this version as the
 	 * final step of {@link #compile}.
 	 */
@@ -4379,13 +4379,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			// at 10 (outer array, entry, initTexts nested builds each keep a DUP
 			// and an index live), a _genv seed at 8 (outer array plus index under
 			// the inner array build, whose boxed handle is briefly a long).
-			// StackMapAugmenter copies the declared maximum verbatim, so an
-			// under-declaration is a VerifyError at class load, not a compile
-			// error.
 			// A stream-VALUE seed adds its own Object[3] build (array, dup,
 			// index, then a briefly-two-slot long) on top of whichever nest it
-			// sits in, hence the +6 -- an over-declared maximum is free, an
-			// under-declared one is a VerifyError at class load.
+			// sits in, hence the +6. StackMapFrames recomputes the shipped
+			// max_stack from the code, so this is the frame-free class's value only.
 			// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
 			// dup, the decimal string).
 			final int clinitMaxStack = Math.max(
@@ -4493,7 +4490,7 @@ public final class JvmLispCompiler implements LispCompiler {
 						method.exceptionTable());
 			}
 			this.implementationCallbacks = callbacks;
-			this.bridgeClassFiles.putAll(implementations.classFiles(this.classMajorVersion));
+			this.bridgeClassFiles.putAll(implementations.classFiles(this::withFrames));
 		}
 		else {
 			this.implementationCallbacks = Set.of();
@@ -4891,7 +4888,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// shake: the shaker rejects Code sub-attributes and would not rewrite the
 		// constant-pool entries the frames reference.
 		try {
-			return StackMapAugmenter.augment(classBytes, this.classMajorVersion);
+			return this.withFrames(classBytes);
 		}
 		catch (ConstantPoolOverflowException fullPool) {
 			// The frames' own Class entries were the ones that did not fit: a pool within
@@ -4932,10 +4929,23 @@ public final class JvmLispCompiler implements LispCompiler {
 				method -> pinnedNames.contains(cp.utf8At(method.name().index())), budget);
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
-			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), this.classMajorVersion));
+			parts.put(part.getKey() + ".class", this.withFrames(part.getValue()));
 		}
 		this.partClassFiles = Map.copyOf(parts);
-		return StackMapAugmenter.augment(split.mainClass(), this.classMajorVersion);
+		return this.withFrames(split.mainClass());
+	}
+
+	/**
+	 * The class with its StackMapTable, stamped {@link #classMajorVersion}. A
+	 * {@code java:} program's frames merge host types through the class files its sites
+	 * resolved against.
+	 * @param classBytes the finished, frame-free class
+	 * @return the class with its frames
+	 */
+	byte[] withFrames(byte[] classBytes) {
+		JvmClassFileLookup classes = this.javaClasses;
+		return classes == null ? StackMapFrames.generate(classBytes, this.classMajorVersion)
+				: StackMapFrames.generate(classBytes, this.classMajorVersion, classes::classInfo);
 	}
 
 	/**
@@ -7496,7 +7506,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * This method's {@code LineNumberTable}: one entry wherever the site changes, the
 		 * last mark winning where several fall on one instruction, nothing before the
 		 * first site (an instruction before every entry reports no line at all). The
-		 * number is a site id ({@link JvmSourceSites}); 0 marks code outside any site.
+		 * number is a site id ({@link JvmSourceSites}); {@link JvmSourceSites#NO_SITE}
+		 * marks code outside any site.
 		 * @return the entries, in pc order; empty when the method has no site
 		 */
 		private List<ByteCodeWriter.LineNumberEntry> lineNumbers() {
@@ -7510,9 +7521,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (!entries.isEmpty() && entries.getLast().startPc() == pc) {
 					entries.removeLast();
 				}
-				int previous = entries.isEmpty() ? 0 : entries.getLast().lineNumber();
-				if (mark[1] != previous) {
-					entries.add(new ByteCodeWriter.LineNumberEntry(pc, mark[1]));
+				int line = mark[1] == 0 ? JvmSourceSites.NO_SITE : mark[1];
+				int previous = entries.isEmpty() ? JvmSourceSites.NO_SITE : entries.getLast().lineNumber();
+				if (line != previous) {
+					entries.add(new ByteCodeWriter.LineNumberEntry(pc, line));
 				}
 			}
 			return entries;

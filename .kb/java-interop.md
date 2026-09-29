@@ -378,7 +378,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   and `isBmpCodePoint`, quote-framed `String` (length 3 = STRING_1), exact `getClass()` for a host
   kind -- `_jhost` for an `ArrayList`/`LinkedHashMap`/runtime class, a `BigInteger` never a
   host kind) into the bridge's `convert`/`convertLong` arm for (kind, parameter), a `checkcast` to
-  a class parameter after the join (the augmenter merges arms to `Number`/`Object`); then
+  a class parameter after the join (the frame pass may merge arms to `Number`/`Object`); then
   `invokevirtual`/`invokeinterface` (InterfaceMethodref on an interface owner)/`invokestatic`/`new`
   + `invokespecial`/`getfield`/`getstatic` with the static class as OWNER (javac's qualifying type:
   a method of a package-private superclass links through it) and the chosen descriptor (the most

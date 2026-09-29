@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
@@ -17,7 +18,6 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
-import am.ik.jvm.StackMapAugmenter;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaImplementation;
 import am.ik.rontolisp.compiler.JavaImplementations;
@@ -193,17 +193,18 @@ final class JvmJavaImplementations {
 	/**
 	 * The generated classes, written for the program's class-file version, keyed by their
 	 * path within an output tree.
-	 * @param majorVersion the program's class-file major version
+	 * @param withFrames gives a finished, frame-free class its StackMapTable and stamps
+	 * the program's class-file version
 	 * @return the class files
 	 */
-	Map<String, byte[]> classFiles(int majorVersion) {
+	Map<String, byte[]> classFiles(UnaryOperator<byte[]> withFrames) {
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.baseTested || !this.shells.isEmpty()) {
 			String base = this.programInternalName + "$Implementation";
-			files.put(base + ".class", StackMapAugmenter.augment(writeBase(base), majorVersion));
+			files.put(base + ".class", withFrames.apply(writeBase(base)));
 		}
 		for (Shell shell : this.shells.values()) {
-			files.put(shell.internalName() + ".class", StackMapAugmenter.augment(write(shell), majorVersion));
+			files.put(shell.internalName() + ".class", withFrames.apply(write(shell)));
 		}
 		return files;
 	}

@@ -3473,7 +3473,7 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.patchBranch(c, ifFinite, c.size());
 		// The verifier only sees _frat's Object descriptor, so the pair is cast
 		// to its array class before the elements load (a bare aaload on the
-		// merged Object is too lossy for the StackMapAugmenter).
+		// merged Object is too lossy for the verifier).
 		c.add(Opcode.CHECKCAST);
 		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
 		c.add(Opcode.ASTORE_1);

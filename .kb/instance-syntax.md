@@ -200,5 +200,5 @@ specializer in `singleSpecializerTest`, `expandClassOf`, `expandSlotValue` /
 `instance-print-syntax-and-identity` (all four backends) -- the latter the only place the prelude
 `equalp` runs end to end, the backend harnesses not splicing the prelude.
 
-**Every new JVM test must RUN the class**: the printer's `max_stack` is hand-written and
-`StackMapAugmenter` copies it verbatim, so a `VerifyError` only shows at run time.
+**Every new JVM test must RUN the class**: some verifier failures (an over-lossy merge under
+`aaload`) pass the frame pass and only show as a `VerifyError` at run time.

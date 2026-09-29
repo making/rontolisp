@@ -48,7 +48,7 @@ import org.jspecify.annotations.Nullable;
 public final class JvmClassSplitter {
 
 	/**
-	 * Entries every class keeps free below the format limit for {@link StackMapAugmenter}
+	 * Entries every class keeps free below the format limit for {@link StackMapFrames}
 	 * (the {@code StackMapTable} name and a Class entry per frame type it lacks) and for
 	 * the part classes' own Class entries. Generous on purpose: an overestimate costs at
 	 * most one more part class, an underestimate a failed compile.
@@ -62,7 +62,7 @@ public final class JvmClassSplitter {
 
 	/**
 	 * The written classes: the main class and the parts, each ready for
-	 * {@link StackMapAugmenter}.
+	 * {@link StackMapFrames}.
 	 *
 	 * @param mainClass the class under the definition's own name
 	 * @param parts each part class's internal name mapped to its bytes, in part order;

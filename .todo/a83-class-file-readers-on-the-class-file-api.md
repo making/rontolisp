@@ -7,13 +7,15 @@ Difficulty: Medium
 `am.ik.jvm` parses class files by hand in several places: `ClassFileInfo` and `JvmClassPath`
 (the `java:` interop lookup, `.kb/java-interop.md`), `JvmClassShaker` (dead-method removal over
 finished bytes and embedded template classes), and the `wide`-aware readers listed in
-`.kb/stackmap-augmenter.md`, "The `wide` prefix". `java.lang.classfile` (`ClassFile.parse`,
+`.kb/stack-map-frames.md`, "The `wide` prefix". `java.lang.classfile` (`ClassFile.parse`,
 `ClassModel`, `CodeModel`, `ClassTransform`) covers all of it in `java.base`.
 
 ## What is needed
 
-- Do after the stack-map replacement has proved the API works in the `-Pweb` and `native-image`
-  builds; if it did not, this item is cancelled with it.
+- The stack-map replacement proved the API in the `-Pweb` and `native-image` builds on
+  2026-09-29 (`am.ik.jvm.StackMapFrames`; sizes in `.kb/stack-map-frames.md`). Trap it found:
+  the API reads a `LineNumberTable` entry with line 0 as absent and drops it on any
+  parse-and-rewrite (`JvmSourceSites.NO_SITE`).
 - `ClassFileInfo` / `JvmClassPath`: parse through `ClassModel`. `JvmClassFileLookupTest` pins the
   candidates and must stay green unchanged.
 - `JvmClassShaker`: a `ClassTransform` dropping unreached methods. Invocations are read from

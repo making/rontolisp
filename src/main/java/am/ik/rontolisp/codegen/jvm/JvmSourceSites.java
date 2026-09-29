@@ -50,11 +50,21 @@ import org.jspecify.annotations.Nullable;
 final class JvmSourceSites {
 
 	/**
-	 * The most sites one compilation can number: a {@code LineNumberTable} carries its
-	 * number in a u2, and 0 means "no site". Past it a form gets no site, so a report
-	 * from it names the enclosing one -- a degraded answer, never a wrong one.
+	 * The {@code LineNumberTable} number of code outside any site. Not 0, which the
+	 * emitters use for "no site" internally: {@code java.lang.classfile} reads a line 0
+	 * entry as no entry at all and drops it, so the code after it would report the site
+	 * before. No site takes this id ({@link #MAX_SITES}), so the report's bound check
+	 * decodes it as none.
 	 */
-	static final int MAX_SITES = 0xFFFF;
+	static final int NO_SITE = 0xFFFF;
+
+	/**
+	 * The most sites one compilation can number: a {@code LineNumberTable} carries its
+	 * number in a u2, and 0 and {@link #NO_SITE} mean "no site". Past it a form gets no
+	 * site, so a report from it names the enclosing one -- a degraded answer, never a
+	 * wrong one.
+	 */
+	static final int MAX_SITES = NO_SITE - 1;
 
 	/** The largest line a site can carry: the table holds it in one {@code char}. */
 	private static final int MAX_LINE = 0xFFFF;

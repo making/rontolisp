@@ -83,7 +83,7 @@ was **half of the whole `--gpu --simd` decode step** -- 51 ms a forward against 
 and stories15M 449 tok/s against 555. A loop with no array and no assigned free variable is left alone
 (byte-identical). Typed locals are `allocTemp` pairs (long/double take two slots) released at the
 join; a loop pushing `nextLocal` past 250 stays boxed (one-byte slot operands), and
-`StackMapAugmenter` merges the slot kinds to TOP at the join.
+the frame pass (`StackMapFrames`) merges the slot kinds to TOP at the join.
 
 ## Gates and tests
 

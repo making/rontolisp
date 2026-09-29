@@ -175,6 +175,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		return this.release;
 	}
 
+	/**
+	 * The declared shape of a class on this path, for the stack-map frames' merges.
+	 * @param internalName the internal name ({@code java/util/ArrayList})
+	 * @return the class, or {@code null} when the path holds none
+	 */
+	public @Nullable ClassFileInfo classInfo(String internalName) {
+		JvmClassPath.Entry entry = this.classPath.find(internalName);
+		return entry == null ? null : entry.info();
+	}
+
 	@Override
 	public @Nullable JavaType find(String name) {
 		// get + putIfAbsent, not computeIfAbsent: loading an array type finds its

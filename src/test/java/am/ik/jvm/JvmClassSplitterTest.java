@@ -178,8 +178,8 @@ class JvmClassSplitterTest {
 
 	private static Map<String, byte[]> augmented(JvmClassSplitter.Split split) {
 		Map<String, byte[]> classes = new LinkedHashMap<>();
-		classes.put("SplitMe", StackMapAugmenter.augment(split.mainClass(), 61));
-		split.parts().forEach((name, bytes) -> classes.put(name, StackMapAugmenter.augment(bytes, 61)));
+		classes.put("SplitMe", StackMapFrames.generate(split.mainClass(), 61));
+		split.parts().forEach((name, bytes) -> classes.put(name, StackMapFrames.generate(bytes, 61)));
 		return classes;
 	}
 

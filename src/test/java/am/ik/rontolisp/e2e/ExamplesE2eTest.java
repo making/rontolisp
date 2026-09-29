@@ -782,7 +782,7 @@ class ExamplesE2eTest {
 		if (!Files.isRegularFile(classFile)) {
 			return;
 		}
-		assertThat(am.ik.jvm.StackMapAugmenter.osrHostileBackedges(Files.readAllBytes(classFile)))
+		assertThat(am.ik.jvm.StackMapFrames.osrHostileBackedges(Files.readAllBytes(classFile)))
 			.as("[example '" + example.path() + "' on " + leg + "] backward branches into a non-empty "
 					+ "operand stack -- HotSpot refuses to OSR-compile such a method (.kb/jvm-osr-backedges.md)")
 			.isEmpty();

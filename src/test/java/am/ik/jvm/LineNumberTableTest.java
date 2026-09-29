@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * A method's {@code LineNumberTable} through every stage a generated class passes:
  * written by {@link ClassDefinition}, moved by {@link BranchRelaxer}, kept by
- * {@link JvmClassShaker}, {@link JvmClassSplitter} and {@link StackMapAugmenter} -- each
+ * {@link JvmClassShaker}, {@link JvmClassSplitter} and {@link StackMapFrames} -- each
  * checked where it matters, in the line a thrown exception's stack trace reports.
  */
 class LineNumberTableTest {
@@ -32,7 +32,7 @@ class LineNumberTableTest {
 	void aThrowingMethodReportsTheLineItsInstructionMapsTo() throws Exception {
 		Fixture f = new Fixture(true);
 		f.throwing("boom", List.of(new ByteCodeWriter.LineNumberEntry(0, 7)));
-		byte[] bytes = StackMapAugmenter.augment(f.build().toBytes(), 61);
+		byte[] bytes = StackMapFrames.generate(f.build().toBytes(), 61);
 		assertThat(lines(bytes, "boom")).containsExactly(0, 7);
 		assertThat(thrownLine(Map.of(CLASS, bytes), "boom")).isEqualTo(7);
 	}
@@ -86,7 +86,7 @@ class LineNumberTableTest {
 		f.throwing("boom", List.of(new ByteCodeWriter.LineNumberEntry(0, 11)));
 		f.throwing("gone", List.of(new ByteCodeWriter.LineNumberEntry(0, 12)));
 		byte[] definition = f.build().toBytes();
-		byte[] kept = StackMapAugmenter.augment(JvmClassShaker.shake(definition, Set.of("boom")), 61);
+		byte[] kept = StackMapFrames.generate(JvmClassShaker.shake(definition, Set.of("boom")), 61);
 		assertThat(lines(kept, "boom")).containsExactly(0, 11);
 		assertThat(thrownLine(Map.of(CLASS, kept), "boom")).isEqualTo(11);
 		byte[] none = JvmClassShaker.shake(new Fixture(true).throwingAndBuild("boom", List.of()), Set.of("boom"));
@@ -104,8 +104,8 @@ class LineNumberTableTest {
 		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, null, method -> false, 40);
 		assertThat(split.parts()).isNotEmpty();
 		Map<String, byte[]> classes = new HashMap<>();
-		classes.put(CLASS, StackMapAugmenter.augment(split.mainClass(), 61));
-		split.parts().forEach((name, bytes) -> classes.put(name, StackMapAugmenter.augment(bytes, 61)));
+		classes.put(CLASS, StackMapFrames.generate(split.mainClass(), 61));
+		split.parts().forEach((name, bytes) -> classes.put(name, StackMapFrames.generate(bytes, 61)));
 		String part = split.parts().keySet().iterator().next();
 		String moved = firstMethod(java.util.Objects.requireNonNull(classes.get(part)));
 		int k = Integer.parseInt(moved.substring("boom".length()));

@@ -2844,7 +2844,7 @@ class JvmLispCompilerTest {
 		// silently wrong: `flet` wraps its body in a `block`, so JvmBodyOutliner finds
 		// no tail spine to cut and the whole run lands in one frame. The truncated
 		// `astore 0` overwrote the closure environment, which surfaced as "aaload on
-		// non-array type" out of StackMapAugmenter.
+		// non-array type" out of the frame pass then.
 		StringBuilder body = new StringBuilder();
 		for (int i = 0; i < 300; i++) {
 			body.append("                  (setq acc (+ acc 1))\n");

@@ -44,9 +44,9 @@ import org.jspecify.annotations.Nullable;
  * Correctness rests on properties of the rontolisp output that this class verifies by
  * construction: methods carry exactly one {@code Code} attribute whose only permitted
  * sub-attributes are a {@code StackMapTable} (dropped, not preserved -- its frames index
- * the pool being compacted; run {@link StackMapAugmenter} after shaking to restore it)
- * and a {@code LineNumberTable} (kept: it names no pool entry but its own attribute name,
- * and no instruction moves), fields and the class itself carry no attributes (no
+ * the pool being compacted; run {@link StackMapFrames} after shaking to restore it) and a
+ * {@code LineNumberTable} (kept: it names no pool entry but its own attribute name, and
+ * no instruction moves), fields and the class itself carry no attributes (no
  * {@code invokedynamic}), and every constant-pool tag and instruction is in the finite
  * set enumerated here. Anything unrecognized makes the pass throw rather than silently
  * emit a corrupt class. Dynamically-reached methods stay alive the same way they do on
@@ -433,7 +433,7 @@ public final class JvmClassShaker {
 	 * this exists for. The scan reads only what the bytecode references, so a
 	 * constant-pool entry minted speculatively and never emitted is not reported.
 	 * @param classFile a JVM class file as produced by {@link ByteCodeWriter} (before
-	 * {@link StackMapAugmenter} runs; the same structural restrictions as
+	 * {@link StackMapFrames} runs; the same structural restrictions as
 	 * {@link #shake(byte[], Set)} apply)
 	 * @return the unresolved own-class calls, in first-reference order
 	 */
@@ -516,7 +516,7 @@ public final class JvmClassShaker {
 		int lineNumberAttrNameIdx = 0;
 		byte @Nullable [] lineNumberTable = null;
 		for (int i = 0; i < codeAttrCount; i++) {
-			// A StackMapTable (from a prior StackMapAugmenter run) is dropped: its frames
+			// A StackMapTable (from a prior StackMapFrames run) is dropped: its frames
 			// reference constant-pool entries the compaction would invalidate, and the
 			// caller re-augments after shaking anyway. A LineNumberTable is kept as it
 			// is -- pcs and line numbers only. Anything else is unsupported.
