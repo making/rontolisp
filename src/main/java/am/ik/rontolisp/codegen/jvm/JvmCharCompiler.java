@@ -1,9 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -175,10 +175,10 @@ final class JvmCharCompiler {
 	 * Only a string store checks this way, so the site carries the throw rather than a
 	 * wrapper.
 	 */
-	private static void emitSiteTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int ifPass,
+	private static void emitSiteTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Opcode ifPass,
 			OperandTypes.Kind kind) {
 		MethodCode.Label pass = ctx.body.newLabel();
-		JvmEmitHelper.branch(ctx, ifPass, pass);
+		ctx.body.branch(ifPass, pass);
 		JvmEmitHelper.compileUnspelledLiteral(kind.name(), ctx);
 		ctx.body.invokestatic(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
@@ -376,7 +376,7 @@ final class JvmCharCompiler {
 	// and checked before any pair is compared, the lone argument of a one-argument call
 	// included, so a non-character is the comparison's CHARACTER type-error wherever it
 	// stands (.kb/error-handling.md, "One argument is still checked").
-	private static void compileChain(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int failOpcode,
+	private static void compileChain(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Opcode failOpcode,
 			boolean fold, boolean allPairs) {
 		List<LispVal> args = cons.toList();
 		int n = args.size() - 1;
@@ -393,7 +393,7 @@ final class JvmCharCompiler {
 		if (n == 2) {
 			pushCheckedCode(args.get(1), ctx, className, fold);
 			pushCheckedCode(args.get(2), ctx, className, fold);
-			JvmEmitHelper.branch(ctx, failOpcode, fail);
+			ctx.body.branch(failOpcode, fail);
 		}
 		else {
 			int[] codes = new int[n];
@@ -405,7 +405,7 @@ final class JvmCharCompiler {
 			for (int i = 0; i + 1 < n; i++) {
 				for (int j = i + 1; j < (allPairs ? n : i + 2); j++) {
 					ctx.body.iload(codes[i]).iload(codes[j]);
-					JvmEmitHelper.branch(ctx, failOpcode, fail);
+					ctx.body.branch(failOpcode, fail);
 				}
 			}
 		}

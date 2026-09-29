@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.lang.classfile.TypeKind;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -13,7 +14,6 @@ import java.util.Set;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -1727,14 +1727,14 @@ final class JvmTypedLoopCompiler {
 				}
 			}
 			// the branch skips the body when the test (as written) is false
-			int whenFalse = switch (op) {
+			Opcode whenFalse = switch (op) {
 				case LispNames.LT -> Opcode.IFGE;
 				case LispNames.LE -> Opcode.IFGT;
 				case LispNames.GT -> Opcode.IFLE;
 				case LispNames.GE -> Opcode.IFLT;
 				default -> Opcode.IFNE;
 			};
-			int whenTrue = switch (op) {
+			Opcode whenTrue = switch (op) {
 				case LispNames.LT -> Opcode.IFLT;
 				case LispNames.LE -> Opcode.IFLE;
 				case LispNames.GT -> Opcode.IFGT;
@@ -1742,7 +1742,7 @@ final class JvmTypedLoopCompiler {
 				default -> Opcode.IFEQ;
 			};
 			MethodCode.Label out = this.ctx.body.newLabel();
-			JvmEmitHelper.branch(this.ctx, c.negate() ? whenTrue : whenFalse, out);
+			this.ctx.body.branch(c.negate() ? whenTrue : whenFalse, out);
 			return out;
 		}
 

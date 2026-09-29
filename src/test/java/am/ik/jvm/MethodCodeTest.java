@@ -12,6 +12,7 @@ import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongConsumer;
 
 import org.junit.jupiter.api.Test;
 
@@ -22,8 +23,8 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 /**
  * The typed layer: a body written through it is written, and runs, as the class writer
  * makes it -- labels bound before and after their branches, a branch past the 16-bit
- * offset, locals past slot 255, handlers -- and a layer over a compile context's body
- * keeps the context's operand-stack model in step.
+ * offset, locals past slot 255, handlers -- its measure is the written size, and a layer
+ * over a compile context's body keeps the context's operand-stack model in step.
  */
 class MethodCodeTest {
 
@@ -54,50 +55,92 @@ class MethodCodeTest {
 		c.iinc(2, 1).goto_(top);
 		c.labelBinding(done);
 		c.iload(1).ireturn();
+		assertThat(top.position()).isEqualTo(4);
+		assertThat(done.position()).isEqualTo(13);
 		f.add("run", "(I)I", c);
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 10)).isEqualTo(45);
 	}
 
+	// A branch whose offset does not fit 16 bits is written goto_w, and the measure
+	// counts
+	// its long form once the label that shows it is bound: an inverted short branch over
+	// a
+	// goto_w, five bytes more.
 	@Test
-	void aBranchPastTheSignedOffsetIsRecordedLongAndWrittenGotoW() throws Exception {
+	void aBranchPastTheSignedOffsetIsMeasuredLongAndWrittenGotoW() throws Exception {
 		Fixture f = new Fixture("Far");
 		MethodCode c = new MethodCode();
 		MethodCode.Label far = c.newLabel();
 		c.iload(0).ifeq(far);
 		for (int i = 0; i < 40_000; i++) {
-			c.code().add(0x00);
+			c.nop();
 		}
+		assertThat(c.size()).isEqualTo(1 + 3 + 40_000);
 		c.labelBinding(far);
+		assertThat(c.size()).isEqualTo(1 + 8 + 40_000);
 		c.loadConstant(7).ireturn();
-		assertThat(c.longBranches()).singleElement().satisfies(branch -> assertThat(branch.pc()).isEqualTo(2));
 		f.add("run", "(I)I", c);
-		assertThat(opcodes(f.write(), "run")).contains(Opcode.GOTO_W);
+		byte[] written = f.write();
+		assertThat(opcodes(written, "run")).contains(Opcode.GOTO_W);
+		assertThat(codeLength(written, "run")).isEqualTo(c.size());
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 0)).isEqualTo(7);
 	}
 
-	// Past slot 255 a load, a store and an iinc take the wide form, emitted and written.
+	// A backward branch knows its offset at once: a goto_w, two bytes more.
+	@Test
+	void aBackwardBranchPastTheSignedOffsetIsMeasuredLongAtOnce() throws Exception {
+		Fixture f = new Fixture("Back");
+		// int run(int n) { do { n--; } while (n > 0) -- the loop body padded past 32 KB
+		MethodCode c = new MethodCode();
+		MethodCode.Label top = c.newBoundLabel();
+		MethodCode.Label done = c.newLabel();
+		c.iinc(0, -1).iload(0).ifle(done);
+		for (int i = 0; i < 40_000; i++) {
+			c.nop();
+		}
+		int before = c.size();
+		c.goto_(top);
+		assertThat(c.size()).isEqualTo(before + 5);
+		c.labelBinding(done);
+		c.iload(0).ireturn();
+		f.add("run", "(I)I", c);
+		byte[] written = f.write();
+		assertThat(opcodes(written, "run")).contains(Opcode.GOTO_W);
+		assertThat(codeLength(written, "run")).isEqualTo(c.size());
+		assertThat(f.load().getMethod("run", int.class).invoke(null, 3)).isEqualTo(0);
+	}
+
+	// Past slot 255 a load, a store and an iinc take the wide form.
 	@Test
 	void aLocalPastSlot255TakesTheWideForm() throws Exception {
 		Fixture f = new Fixture("Wide");
 		MethodCode c = new MethodCode();
 		c.iload(0).istore(300).iinc(300, 1000).iload(300).ireturn();
-		assertThat(c.code()).startsWith(0x15, 0x00, 0xC4, 0x36, 0x01, 0x2C, 0xC4, 0x84, 0x01, 0x2C, 0x03, 0xE8);
+		assertThat(c.size()).isEqualTo(1 + 4 + 6 + 4 + 1);
 		f.add("run", "(I)I", c);
-		assertThat(opcodes(f.write(), "run")).contains(Opcode.ISTORE_W, Opcode.IINC_W, Opcode.ILOAD_W);
+		byte[] written = f.write();
+		assertThat(opcodes(written, "run")).contains(Opcode.ISTORE_W, Opcode.IINC_W, Opcode.ILOAD_W);
+		assertThat(codeLength(written, "run")).isEqualTo(c.size());
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 5)).isEqualTo(1005);
 	}
 
-	// A local is emitted in the explicit-slot form the byte emitters use, so moving a
-	// sequence onto this layer measures what it measured; the writer writes the
-	// shortest form.
+	// The measure is the written size: a local's load and store in the shortest form for
+	// its slot, an iinc in its narrow form when both operands fit a byte, an int in the
+	// shortest push.
 	@Test
-	void aLowLocalIsEmittedExplicitAndWrittenShortest() {
+	void theMeasureIsTheWrittenSize() {
 		Fixture f = new Fixture("Low");
 		MethodCode c = new MethodCode();
-		c.aload(0).areturn();
-		assertThat(c.code()).containsExactly(0x19, 0x00, 0xB0);
+		c.aload(0).astore(3).aload(3).astore(4).aload(4).astore(255).iconst_0().istore(5);
+		c.iinc(5, -128).iinc(5, 128).loadConstant(-1).loadConstant(100).loadConstant(1000);
+		c.pop().pop().pop().aload(255).areturn();
+		assertThat(c.size()).isEqualTo(1 + 1 + 1 + 2 + 2 + 2 + 1 + 2 + 3 + 6 + 1 + 2 + 3 + 1 + 1 + 1 + 2 + 1);
 		f.add("run", "(Ljava/lang/Object;)Ljava/lang/Object;", c);
-		assertThat(opcodes(f.write(), "run")).containsExactly(Opcode.ALOAD_0, Opcode.ARETURN);
+		byte[] written = f.write();
+		assertThat(codeLength(written, "run")).isEqualTo(c.size());
+		assertThat(opcodes(written, "run")).startsWith(Opcode.ALOAD_0, Opcode.ASTORE_3, Opcode.ALOAD_3, Opcode.ASTORE,
+				Opcode.ALOAD, Opcode.ASTORE, Opcode.ICONST_0, Opcode.ISTORE, Opcode.IINC, Opcode.IINC_W,
+				Opcode.ICONST_M1, Opcode.BIPUSH, Opcode.SIPUSH);
 	}
 
 	@Test
@@ -120,17 +163,22 @@ class MethodCodeTest {
 			.withMessageContaining("ldc");
 	}
 
-	// invokeinterface carries the argument slots, the receiver included; a long takes
-	// two.
+	// invokeinterface's count operand -- the argument slots, the receiver included, a
+	// long taking two -- is derived by the writer from the descriptor.
 	@Test
-	void invokeinterfaceCountsTheArgumentSlots() {
-		ConstantPool cp = new ConstantPool();
+	void invokeinterfaceCountsTheArgumentSlots() throws Exception {
+		Fixture f = new Fixture("Iface");
 		MethodCode c = new MethodCode();
-		c.invokeinterface(cp.interfaceMethodRef("java/util/Map", "put",
-				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
-		c.invokeinterface(cp.interfaceMethodRef("java/util/function/LongConsumer", "accept", "(J)V"));
-		assertThat(c.code().get(3)).isEqualTo(3);
-		assertThat(c.code().get(8)).isEqualTo(3);
+		c.aload(0)
+			.lconst_1()
+			.invokeinterface(f.cp.interfaceMethodRef("java/util/function/LongConsumer", "accept", "(J)V"));
+		c.return_();
+		assertThat(c.size()).isEqualTo(1 + 1 + 5 + 1);
+		f.add("run", "(Ljava/util/function/LongConsumer;)V", c);
+		long[] seen = new long[1];
+		LongConsumer sink = value -> seen[0] = value;
+		f.load().getMethod("run", LongConsumer.class).invoke(null, sink);
+		assertThat(seen[0]).isEqualTo(1L);
 	}
 
 	@Test
@@ -177,30 +225,43 @@ class MethodCodeTest {
 		c.iconst_1().istore(1);
 		c.append(fragment);
 		c.iload(1).ireturn();
-		assertThat(c.handlers()).singleElement().satisfies(h -> assertThat(h.startPc()).isEqualTo(3));
+		assertThat(c.handlers()).singleElement().satisfies(h -> {
+			assertThat(h.start()).isEqualTo(2);
+			assertThat(h.end()).isEqualTo(6);
+			assertThat(h.handler()).isEqualTo(7);
+		});
 		f.add("run", "(I)I", c);
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 5)).isEqualTo(2);
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 1)).isEqualTo(3);
 		assertThat(f.load().getMethod("run", int.class).invoke(null, 0)).isEqualTo(-1);
 	}
 
-	// A block assembled as a body of its own keeps its branches wherever it is spliced:
-	// the dispatch tables splice their case bodies into a search tree this way.
+	// A block assembled as a body of its own keeps its branches wherever it is spliced,
+	// as often as it is: the dispatch tables splice their case bodies into a search tree
+	// this way.
 	@Test
 	void aSplicedBlockKeepsItsBranches() throws Exception {
 		Fixture f = new Fixture("Splice");
-		// int run(Object x) { return x == null ? -1 : 1; }, the test inside the block
+		// int run(Object x, int which) { return x == null ? -1 : 1; }, the test inside
+		// the
+		// block -- spliced twice, `which` choosing the copy that runs
 		MethodCode block = new MethodCode();
 		MethodCode.Label notNull = block.newLabel();
 		block.aload(0).ifnonnull(notNull).iconst_m1().ireturn();
 		block.labelBinding(notNull);
 		block.iconst_1().ireturn();
 		MethodCode c = new MethodCode();
-		c.iconst_0().pop().append(block);
-		assertThat(c.size()).isEqualTo(2 + block.size());
-		f.add("run", "(Ljava/lang/Object;)I", c);
-		assertThat(f.load().getMethod("run", Object.class).invoke(null, (Object) null)).isEqualTo(-1);
-		assertThat(f.load().getMethod("run", Object.class).invoke(null, "x")).isEqualTo(1);
+		MethodCode.Label second = c.newLabel();
+		c.iload(1).ifne(second).append(block);
+		c.labelBinding(second);
+		c.append(block);
+		assertThat(c.size()).isEqualTo(1 + 3 + 2 * block.size());
+		f.add("run", "(Ljava/lang/Object;I)I", c);
+		Class<?> splice = f.load();
+		for (int which = 0; which < 2; which++) {
+			assertThat(splice.getMethod("run", Object.class, int.class).invoke(null, null, which)).isEqualTo(-1);
+			assertThat(splice.getMethod("run", Object.class, int.class).invoke(null, "x", which)).isEqualTo(1);
+		}
 	}
 
 	@Test
@@ -209,25 +270,24 @@ class MethodCodeTest {
 		waiting.iconst_0().ifeq(waiting.newLabel());
 		assertThatIllegalStateException().isThrownBy(() -> new MethodCode().append(waiting))
 			.withMessageContaining("never bound");
-		MethodCode context = new MethodCode(new ArrayList<>(), new OperandStack(new ConstantPool()), new ArrayList<>(),
-				new ArrayList<>());
+		MethodCode context = new MethodCode(new OperandStack());
 		assertThatIllegalArgumentException().isThrownBy(() -> context.append(new MethodCode().iconst_0()));
 	}
 
-	// Over a compile context's body, every byte reaches its operand-stack model, and a
-	// branch patched at its label reconciles the model the way the byte emitter's does.
+	// Over a compile context's body, every instruction reaches its operand-stack model,
+	// and a branch whose label is bound reconciles the model.
 	@Test
 	void aContextLayerKeepsTheOperandStackModelInStep() {
 		ConstantPool cp = new ConstantPool();
-		List<Integer> code = new ArrayList<>();
-		OperandStack stack = new OperandStack(cp);
-		MethodCode c = new MethodCode(code, stack, new ArrayList<>(), new ArrayList<>());
+		OperandStack stack = new OperandStack();
+		MethodCode c = new MethodCode(stack);
 		MethodRefEntry valueOf = cp.methodRef("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
 		c.lconst_1().invokestatic(valueOf);
 		assertThat(stack.snapshot()).containsExactly(OperandStack.Slot.REF);
 		MethodCode.Label other = c.newLabel();
 		MethodCode.Label join = c.newLabel();
 		c.iconst_0().ifeq(other).pop().aconst_null().goto_(join);
+		assertThat(stack.isReachable()).isFalse();
 		c.labelBinding(other);
 		assertThat(stack.snapshot()).as("the branch's shape, established at its label")
 			.containsExactly(OperandStack.Slot.REF);
@@ -235,10 +295,37 @@ class MethodCodeTest {
 		c.labelBinding(join);
 		assertThat(stack.snapshot()).containsExactly(OperandStack.Slot.REF);
 		c.loadLocal(TypeKind.LONG, 2).storeLocal(TypeKind.LONG, 4);
-		assertThat(stack.snapshot()).containsExactly(OperandStack.Slot.REF);
+		c.ldc(cp.entries().doubleEntry(1.5)).ldc(cp.stringEntry("s"));
+		assertThat(stack.snapshot()).containsExactly(OperandStack.Slot.REF, OperandStack.Slot.DOUBLE,
+				OperandStack.Slot.REF);
+		assertThat(stack.maxDepth()).isEqualTo(4);
+	}
+
+	// Two paths reaching one label with different stacks make a class the verifier
+	// rejects: refused where the label is bound.
+	@Test
+	void aJoinReachedWithTwoShapesIsRefused() {
+		MethodCode c = new MethodCode(new OperandStack());
+		MethodCode.Label join = c.newLabel();
+		c.iconst_0().ifeq(join).iconst_1();
+		assertThatIllegalStateException().isThrownBy(() -> c.labelBinding(join)).withMessageContaining("mismatch");
 	}
 
 	private static List<Opcode> opcodes(byte[] classFile, String method) {
+		List<Opcode> opcodes = new ArrayList<>();
+		for (CodeElement element : code(classFile, method).elementList()) {
+			if (element instanceof Instruction instruction && instruction.opcode() != Opcode.NOP) {
+				opcodes.add(instruction.opcode());
+			}
+		}
+		return opcodes;
+	}
+
+	private static int codeLength(byte[] classFile, String method) {
+		return code(classFile, method).codeLength();
+	}
+
+	private static CodeAttribute code(byte[] classFile, String method) {
 		MethodModel model = ClassFile.of()
 			.parse(classFile)
 			.methods()
@@ -246,14 +333,7 @@ class MethodCodeTest {
 			.filter(m -> m.methodName().equalsString(method))
 			.findFirst()
 			.orElseThrow();
-		CodeAttribute code = model.findAttribute(Attributes.code()).orElseThrow();
-		List<Opcode> opcodes = new ArrayList<>();
-		for (CodeElement element : code.elementList()) {
-			if (element instanceof Instruction instruction && instruction.opcode() != Opcode.NOP) {
-				opcodes.add(instruction.opcode());
-			}
-		}
-		return opcodes;
+		return model.findAttribute(Attributes.code()).orElseThrow();
 	}
 
 	/** {@code class <name> extends Object}, its methods written through MethodCode. */
@@ -273,8 +353,8 @@ class MethodCodeTest {
 		}
 
 		void add(String method, String descriptor, MethodCode code) {
-			code.addTo(this.definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(method),
-					this.cp.addUtf8(descriptor));
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(method),
+					this.cp.addUtf8(descriptor), code);
 		}
 
 		byte[] write() {

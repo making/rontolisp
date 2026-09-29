@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -13,7 +14,6 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -476,7 +476,8 @@ final class JvmIntFusionCompiler {
 	 * keep the generic emission unchanged; returns {@code false} (emitting nothing) when
 	 * it does not apply.
 	 */
-	static boolean tryCompileCompareValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int branchOpcode) {
+	static boolean tryCompileCompareValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			Opcode branchOpcode) {
 		if (!emitCompareCall(cons, ctx, className, branchOpcode)) {
 			return false;
 		}
@@ -497,18 +498,19 @@ final class JvmIntFusionCompiler {
 				|| cons.toList().size() != 3) {
 			return false;
 		}
-		int branchOpcode = switch (head.name()) {
+		Opcode branchOpcode = switch (head.name()) {
 			case LispNames.EQ -> Opcode.IFEQ;
 			case LispNames.LT -> Opcode.IFLT;
 			case LispNames.GT -> Opcode.IFGT;
 			case LispNames.LE -> Opcode.IFLE;
 			case LispNames.GE -> Opcode.IFGE;
-			default -> -1;
+			default -> null;
 		};
-		return branchOpcode >= 0 && emitCompareCall(cons, ctx, className, branchOpcode);
+		return branchOpcode != null && emitCompareCall(cons, ctx, className, branchOpcode);
 	}
 
-	private static boolean emitCompareCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int branchOpcode) {
+	private static boolean emitCompareCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			Opcode branchOpcode) {
 		if (!enabled(ctx)) {
 			return false;
 		}
@@ -559,7 +561,7 @@ final class JvmIntFusionCompiler {
 	/** The synthetic root op a compare method's two operand trees hang under. */
 	private static final String CMP_ROOT = "%cmp";
 
-	private static int maskFor(int branchOpcode) {
+	private static int maskFor(Opcode branchOpcode) {
 		// _cmpb's bitmask vocabulary: 1 = lt, 2 = eq, 4 = gt, 0 = unordered -- a NaN
 		// operand fails every operator on the fallback exactly as it does today.
 		return switch (branchOpcode) {
@@ -1758,7 +1760,7 @@ final class JvmIntFusionCompiler {
 				OpNode root = (OpNode) pending.root();
 				emitFastDouble(root.args().get(0), ctx);
 				emitFastDouble(root.args().get(1), ctx);
-				int branchOpcode = branchForMask(pending.cmpMask());
+				Opcode branchOpcode = branchForMask(pending.cmpMask());
 				// javac's NaN rule, which is exactly the bitmask _cmpb answers: DCMPG
 				// for < and <= (unordered falls out as +1, failing IFLT/IFLE), DCMPL
 				// for the rest (unordered falls out as -1, failing IFEQ/IFGT/IFGE).
@@ -1964,15 +1966,15 @@ final class JvmIntFusionCompiler {
 	}
 
 	/** The compare methods' tail: 0 or 1 on the operand stack, returned. */
-	private static void emitCompareResult(int branchOpcode, JvmLispCompiler.Ctx ctx) {
+	private static void emitCompareResult(Opcode branchOpcode, JvmLispCompiler.Ctx ctx) {
 		MethodCode.Label isTrue = ctx.body.newLabel();
-		JvmEmitHelper.branch(ctx, branchOpcode, isTrue);
+		ctx.body.branch(branchOpcode, isTrue);
 		ctx.body.iconst_0().ireturn();
 		ctx.body.labelBinding(isTrue);
 		ctx.body.iconst_1().ireturn();
 	}
 
-	private static int branchForMask(int mask) {
+	private static Opcode branchForMask(int mask) {
 		return switch (mask) {
 			case 0b010 -> Opcode.IFEQ;
 			case 0b001 -> Opcode.IFLT;

@@ -3,16 +3,17 @@ package am.ik.jvm;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.TypeKind;
 import java.lang.classfile.constantpool.ClassEntry;
-import java.lang.classfile.constantpool.DoubleEntry;
 import java.lang.classfile.constantpool.FieldRefEntry;
 import java.lang.classfile.constantpool.InterfaceMethodRefEntry;
 import java.lang.classfile.constantpool.LoadableConstantEntry;
-import java.lang.classfile.constantpool.LongEntry;
 import java.lang.classfile.constantpool.MemberRefEntry;
 import java.lang.classfile.constantpool.MethodRefEntry;
-import java.lang.constant.MethodTypeDesc;
+import java.lang.classfile.constantpool.PoolEntry;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -23,53 +24,72 @@ import org.jspecify.annotations.Nullable;
  * {@link #size()} -- the measure every size budget reads, since a {@code CodeBuilder}
  * exposes none (.kb/jvm-method-size-limits.md).
  * <p>
- * The body is still stored as code bytes, the list the generators not yet on this layer
- * append to directly, so one body can mix the two: a compile context's layer writes into
- * the context's own list and feeds its {@link OperandStack} every byte, exactly as the
- * context's byte emitter does. {@link JvmClassSplitter} plays the bytes into a
- * {@code CodeBuilder} ({@link CodeReplay}), which writes loads, stores and small int
- * constants in their shortest forms however they were emitted, so the written class does
- * not depend on which emitter a sequence came from. Here a local is still encoded in the
- * explicit-slot form the byte emitters use ({@code aload 1}, two bytes), so a sequence
- * moved onto this layer measures what it measured before and no size budget decides
- * differently; {@link #size()} is the written size or a little over.
+ * The body is a list of instruction records -- an opcode and its operand: a local slot,
+ * an int, a master-pool entry or a label -- which {@link JvmClassSplitter} plays into the
+ * class's {@code CodeBuilder} once the split has decided the class ({@link CodeReplay}).
+ * A position is an instruction's index: a label is bound before the instruction at its
+ * position, a handler range and a line entry name positions.
  * <p>
- * A branch to a label is patched when the label is bound, or at once for a bound one; one
- * whose target is past the signed 16-bit offset is recorded as a long branch and written
- * in its {@code goto_w} form. An operand index is written at full width (the high part of
- * a u2 whole), so an entry past 65535 still names itself.
+ * {@link #size()} is the written size: a local's load or store, an {@code iinc} and an
+ * int constant in their shortest forms (as {@code CodeBuilder} writes them), an
+ * {@code ldc} by its constant's master index (the writer re-decides the width by the
+ * index the constant takes in the class it lands in), and a branch this layer knows to be
+ * past the signed 16-bit offset in its long form ({@code goto_w}, or an inverted short
+ * branch over one). A far branch is found where its offset is known -- at its label's
+ * binding, or at once for a bound label; the writer relaxes the method exactly
+ * ({@link CodeReplay}).
+ * <p>
+ * A body over a compile context feeds the context's {@link OperandStack} every
+ * instruction, and reconciles the model where a forward branch's label is bound.
  */
 public final class MethodCode {
 
-	private final List<Integer> code;
+	private static final @Nullable Opcode[] OPCODES = new Opcode[256];
+
+	static {
+		for (Opcode op : Opcode.values()) {
+			if (!op.isWide()) {
+				OPCODES[op.bytecode()] = op;
+			}
+		}
+	}
+
+	private static final int INITIAL_CAPACITY = 16;
+
+	/** Per instruction, its opcode: a local's load or store in its explicit-slot form. */
+	private byte[] ops = new byte[INITIAL_CAPACITY];
+
+	/**
+	 * Per instruction, its operand: a local's slot, an int constant, a {@code newarray}
+	 * type code, an {@code iinc}'s slot (low half) and increment (high half).
+	 */
+	private int[] args = new int[INITIAL_CAPACITY];
+
+	/** Per instruction, its master-pool entry, or the label a branch names. */
+	private @Nullable Object[] refs = new Object[INITIAL_CAPACITY];
+
+	private int count;
+
+	private int size;
 
 	private final @Nullable OperandStack stack;
 
-	private final List<ClassDefinition.Branch> longBranches;
-
-	private final List<ClassDefinition.Handler> handlers;
+	private final List<Handler> handlers = new ArrayList<>();
 
 	/** Branches emitted to a label not bound yet. */
 	private int unbound;
 
-	/** A body of its own: its own code, no operand-stack model. */
+	/** A body of its own, no operand-stack model. */
 	public MethodCode() {
-		this(new ArrayList<>(), null, new ArrayList<>(), new ArrayList<>());
+		this.stack = null;
 	}
 
 	/**
-	 * A layer over a body another emitter also writes.
-	 * @param code the body's code bytes
-	 * @param stack the model fed every byte appended here, or {@code null} for none
-	 * @param longBranches where a branch past the 16-bit offset is recorded
-	 * @param handlers the body's exception table
+	 * A compile context's body, whose every instruction feeds the context's model.
+	 * @param stack the model
 	 */
-	public MethodCode(List<Integer> code, @Nullable OperandStack stack, List<ClassDefinition.Branch> longBranches,
-			List<ClassDefinition.Handler> handlers) {
-		this.code = code;
+	public MethodCode(OperandStack stack) {
 		this.stack = stack;
-		this.longBranches = longBranches;
-		this.handlers = handlers;
 	}
 
 	/**
@@ -77,12 +97,20 @@ public final class MethodCode {
 	 */
 	public static final class Label {
 
+		/** The index of the instruction the label is bound before, -1 until bound. */
 		private int position = -1;
 
-		private final List<Integer> pending = new ArrayList<>(2);
+		/** The byte offset it is bound at, in the measure of {@link #size()}. */
+		private int offset;
+
+		/** The branches waiting for the binding: their index and offset, in pairs. */
+		private int @Nullable [] waiting;
+
+		private int waitingCount;
 
 		/**
-		 * @return the position the label is bound at
+		 * @return the position the label is bound at: the index of the instruction that
+		 * follows it
 		 * @throws IllegalStateException when it is not bound yet
 		 */
 		public int position() {
@@ -92,53 +120,59 @@ public final class MethodCode {
 			return this.position;
 		}
 
+		private void await(int branch, int offset) {
+			int[] pairs = this.waiting;
+			if (pairs == null) {
+				pairs = new int[4];
+			}
+			else if (this.waitingCount == pairs.length) {
+				pairs = Arrays.copyOf(pairs, pairs.length * 2);
+			}
+			pairs[this.waitingCount++] = branch;
+			pairs[this.waitingCount++] = offset;
+			this.waiting = pairs;
+		}
+
 	}
 
 	/**
-	 * @return the byte count of the code so far: the position of the next instruction
+	 * An exception table entry. An exception thrown by an instruction in
+	 * {@code [start, end)} is dispatched to the instruction at {@code handler} when its
+	 * class is (a subclass of) {@code catchType}; a null {@code catchType} catches any
+	 * throwable (the {@code finally} shape).
+	 *
+	 * @param start the position of the first instruction covered
+	 * @param end the position past the last one covered
+	 * @param handler the position of the handler's entry (the operand stack there holds
+	 * only the thrown exception)
+	 * @param catchType the class caught, or {@code null} for any
+	 */
+	public record Handler(int start, int end, int handler, @Nullable ClassEntry catchType) {
+	}
+
+	/**
+	 * @return the byte count of the code so far, as written (see the class comment)
 	 */
 	public int size() {
-		return this.code.size();
+		return this.size;
 	}
 
 	/**
-	 * @return the code bytes
+	 * @return the position the next instruction takes: the count of instructions so far
 	 */
-	public List<Integer> code() {
-		return this.code;
+	public int position() {
+		return this.count;
 	}
 
 	/**
 	 * @return the exception table, in dispatch order
 	 */
-	public List<ClassDefinition.Handler> handlers() {
+	public List<Handler> handlers() {
 		return this.handlers;
 	}
 
 	/**
-	 * @return the branches past the 16-bit offset
-	 */
-	public List<ClassDefinition.Branch> longBranches() {
-		return this.longBranches;
-	}
-
-	/**
-	 * Adds the body to a class as a method without line numbers.
-	 * @param definition the class
-	 * @param access the method's access flags
-	 * @param name its name
-	 * @param descriptor its descriptor
-	 * @throws IllegalStateException when a label a branch names was never bound
-	 */
-	public void addTo(ClassDefinition.Builder definition, int access, ConstantPool.Utf8Constant name,
-			ConstantPool.Utf8Constant descriptor) {
-		this.checkComplete();
-		definition.addMethod(access, name, descriptor, this.code, this.handlers, List.of(), this.longBranches);
-	}
-
-	/**
-	 * Checks that no branch still waits for its label: its placeholder offset would jump
-	 * to itself.
+	 * Checks that no branch still waits for its label.
 	 * @throws IllegalStateException when one does
 	 */
 	public void checkComplete() {
@@ -150,29 +184,158 @@ public final class MethodCode {
 	/**
 	 * Appends a body assembled apart: a block whose branches all land inside it, or a
 	 * fragment whose entries had to be minted before this body reaches it, as
-	 * {@code <clinit>}'s pieces are. Its handlers and long branches move with it; a label
-	 * bound in it keeps the block's position and names nothing here.
+	 * {@code <clinit>}'s pieces are. Its instructions and handlers move with it, every
+	 * label its branches name rebased to where the block lands; a label bound in it names
+	 * nothing here.
 	 * @param block the block, every label bound
 	 * @return this
 	 * @throws IllegalStateException when a branch in the block waits for its label
 	 * @throws IllegalArgumentException when this body feeds an operand-stack model (the
-	 * block's branches never reached it)
+	 * block's instructions never reached it)
 	 */
 	public MethodCode append(MethodCode block) {
 		block.checkComplete();
 		if (this.stack != null) {
 			throw new IllegalArgumentException("a block is appended to a plain body only");
 		}
-		int base = this.code.size();
-		this.code.addAll(block.code);
-		for (ClassDefinition.Handler h : block.handlers) {
-			this.handlers.add(new ClassDefinition.Handler(h.startPc() + base, h.endPc() + base, h.handlerPc() + base,
-					h.catchType()));
+		int base = this.count;
+		int baseOffset = this.size;
+		this.reserve(base + block.count);
+		System.arraycopy(block.ops, 0, this.ops, base, block.count);
+		System.arraycopy(block.args, 0, this.args, base, block.count);
+		Map<Label, Label> rebased = new IdentityHashMap<>();
+		for (int i = 0; i < block.count; i++) {
+			Object ref = block.refs[i];
+			if (ref instanceof Label label) {
+				ref = rebased.computeIfAbsent(label, l -> {
+					Label moved = new Label();
+					moved.position = base + l.position;
+					moved.offset = baseOffset + l.offset;
+					return moved;
+				});
+			}
+			this.refs[base + i] = ref;
 		}
-		for (ClassDefinition.Branch b : block.longBranches) {
-			this.longBranches.add(new ClassDefinition.Branch(b.pc() + base, b.target() + base));
+		this.count = base + block.count;
+		this.size += block.size;
+		for (Handler h : block.handlers) {
+			this.handlers.add(new Handler(h.start() + base, h.end() + base, h.handler() + base, h.catchType()));
 		}
 		return this;
+	}
+
+	// --- the records, for the writer and the splitter's scan
+	// ----------------------------
+
+	/**
+	 * @return the number of instructions
+	 */
+	int count() {
+		return this.count;
+	}
+
+	/**
+	 * @param i an instruction's position
+	 * @return its opcode; a local's load or store in its explicit-slot form
+	 */
+	Opcode opcode(int i) {
+		return opcodeOf(this.ops[i]);
+	}
+
+	/**
+	 * @param i an instruction's position
+	 * @return its operand: a local's slot, an int constant, a {@code newarray} type code,
+	 * or an {@code iinc}'s slot in the low half and its increment in the high half
+	 */
+	int operand(int i) {
+		return this.args[i];
+	}
+
+	/**
+	 * @param i an instruction's position
+	 * @return its master-pool entry, or {@code null} when it names none
+	 */
+	@Nullable PoolEntry entry(int i) {
+		return this.refs[i] instanceof PoolEntry entry ? entry : null;
+	}
+
+	/**
+	 * @param i a branch's position
+	 * @return the position it jumps to
+	 */
+	int target(int i) {
+		return ((Label) java.util.Objects.requireNonNull(this.refs[i])).position;
+	}
+
+	/**
+	 * @param i an instruction's position
+	 * @return the bytes it takes, in the measure of {@link #size()} (a branch in its
+	 * short form)
+	 */
+	int length(int i) {
+		return length(this.ops[i] & 0xFF, this.args[i], this.refs[i]);
+	}
+
+	private static Opcode opcodeOf(byte op) {
+		return java.util.Objects.requireNonNull(OPCODES[op & 0xFF]);
+	}
+
+	/** The bytes an instruction takes as written; a branch in its short form. */
+	private static int length(int op, int arg, @Nullable Object ref) {
+		return switch (op) {
+			// iload..aload, istore..astore: the shortest form for the slot
+			case 0x15, 0x16, 0x17, 0x18, 0x19, 0x36, 0x37, 0x38, 0x39, 0x3A -> arg <= 3 ? 1 : arg <= 0xFF ? 2 : 4;
+			// iinc: wide when the slot or the increment does not fit a byte
+			case 0x84 -> (arg & 0xFFFF) <= 0xFF && (arg >> 16) == (byte) (arg >> 16) ? 3 : 6;
+			// ldc by its master index
+			case 0x12 -> ((PoolEntry) java.util.Objects.requireNonNull(ref)).index() <= 0xFF ? 2 : 3;
+			// bipush, newarray
+			case 0x10, 0xBC -> 2;
+			// invokeinterface
+			case 0xB9 -> 5;
+			// sipush, ldc2_w, the branches, the field accesses, the invocations, new,
+			// anewarray, checkcast, instanceof
+			case 0x11, 0x14, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
+					0xC6, 0xC7, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB, 0xBD, 0xC0, 0xC1 ->
+				3;
+			default -> 1;
+		};
+	}
+
+	private void reserve(int capacity) {
+		if (capacity > this.ops.length) {
+			int grown = Math.max(capacity, this.ops.length * 2);
+			this.ops = Arrays.copyOf(this.ops, grown);
+			this.args = Arrays.copyOf(this.args, grown);
+			this.refs = Arrays.copyOf(this.refs, grown);
+		}
+	}
+
+	private int add(Opcode op, int arg, @Nullable Object ref) {
+		int i = this.count;
+		if (i == this.ops.length) {
+			this.reserve(i + 1);
+		}
+		int bytecode = op.bytecode();
+		this.ops[i] = (byte) bytecode;
+		this.args[i] = arg;
+		this.refs[i] = ref;
+		this.count = i + 1;
+		this.size += length(bytecode, arg, ref);
+		return i;
+	}
+
+	private MethodCode emit(Opcode op, int arg, @Nullable PoolEntry entry) {
+		int i = this.add(op, arg, entry);
+		OperandStack model = this.stack;
+		if (model != null) {
+			model.instruction(i, op, entry);
+		}
+		return this;
+	}
+
+	private MethodCode emit(Opcode op) {
+		return this.emit(op, 0, null);
 	}
 
 	// --- labels, branches, handlers ---------------------------------------------------
@@ -194,8 +357,8 @@ public final class MethodCode {
 	}
 
 	/**
-	 * Binds a label at the current position, patching every branch already waiting for
-	 * it.
+	 * Binds a label at the current position, where every branch already waiting for it
+	 * lands.
 	 * @param label the label
 	 * @return this
 	 * @throws IllegalStateException when the label is already bound
@@ -204,12 +367,22 @@ public final class MethodCode {
 		if (label.position >= 0) {
 			throw new IllegalStateException("label already bound at " + label.position);
 		}
-		label.position = this.code.size();
-		for (int pc : label.pending) {
-			this.patch(pc, label.position);
+		label.position = this.count;
+		label.offset = this.size;
+		int[] waiting = label.waiting;
+		if (waiting != null) {
+			OperandStack model = this.stack;
+			for (int k = 0; k < label.waitingCount; k += 2) {
+				int branch = waiting[k];
+				this.reach(opcodeOf(this.ops[branch]), waiting[k + 1], label.offset);
+				if (model != null) {
+					model.reconcile(branch);
+				}
+			}
+			this.unbound -= label.waitingCount / 2;
+			label.waiting = null;
+			label.waitingCount = 0;
 		}
-		this.unbound -= label.pending.size();
-		label.pending.clear();
 		return this;
 	}
 
@@ -223,32 +396,31 @@ public final class MethodCode {
 		if (op.kind() != Opcode.Kind.BRANCH || op.sizeIfFixed() != 3) {
 			throw new IllegalArgumentException(op + " is not a short branch");
 		}
-		int pc = this.code.size();
-		this.u1(op.bytecode());
-		this.u2(0);
+		int offset = this.size;
+		int i = this.add(op, 0, target);
+		OperandStack model = this.stack;
+		if (model != null) {
+			model.branch(i, op);
+		}
 		if (target.position >= 0) {
-			this.patch(pc, target.position);
+			this.reach(op, offset, target.offset);
 		}
 		else {
-			target.pending.add(pc);
+			target.await(i, offset);
 			this.unbound++;
 		}
 		return this;
 	}
 
-	private void patch(int pc, int target) {
-		int offset = target - pc;
+	/**
+	 * Counts the long form of a branch whose offset does not fit 16 bits: a
+	 * {@code goto_w} for a {@code goto} (2 bytes more), an inverted short branch over one
+	 * for a conditional branch (5 more).
+	 */
+	private void reach(Opcode op, int from, int to) {
+		int offset = to - from;
 		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
-			// The placeholder bytes stay; the writer places the branch in its goto_w
-			// form.
-			this.longBranches.add(new ClassDefinition.Branch(pc, target));
-		}
-		else {
-			this.code.set(pc + 1, (offset >> 8) & 0xFF);
-			this.code.set(pc + 2, offset & 0xFF);
-		}
-		if (this.stack != null) {
-			this.stack.reconcile(pc, target, this.code.size());
+			this.size += op == Opcode.GOTO ? 2 : 5;
 		}
 	}
 
@@ -262,8 +434,7 @@ public final class MethodCode {
 	 * @throws IllegalStateException when a label is not bound yet
 	 */
 	public MethodCode exceptionCatch(Label start, Label end, Label handler, @Nullable ClassEntry catchType) {
-		this.handlers.add(new ClassDefinition.Handler(start.position(), end.position(), handler.position(),
-				catchType == null ? 0 : catchType.index()));
+		this.handlers.add(new Handler(start.position(), end.position(), handler.position(), catchType));
 		return this;
 	}
 
@@ -338,8 +509,12 @@ public final class MethodCode {
 	// --- constants
 	// ----------------------------------------------------------------------
 
+	public MethodCode nop() {
+		return this.emit(Opcode.NOP);
+	}
+
 	public MethodCode aconst_null() {
-		return this.op(Opcode.ACONST_NULL);
+		return this.emit(Opcode.ACONST_NULL);
 	}
 
 	/**
@@ -351,107 +526,88 @@ public final class MethodCode {
 	 */
 	public MethodCode loadConstant(int value) {
 		if (value >= -1 && value <= 5) {
-			return this.op(Opcode.ICONST_0.bytecode() + value);
+			return this.emit(opcodeOf((byte) (Opcode.ICONST_0.bytecode() + value)));
 		}
 		if (value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE) {
-			this.u1(Opcode.BIPUSH.bytecode());
-			this.u1(value & 0xFF);
-			return this;
+			return this.emit(Opcode.BIPUSH, value, null);
 		}
 		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
-			this.u1(Opcode.SIPUSH.bytecode());
-			this.u2(value & 0xFFFF);
-			return this;
+			return this.emit(Opcode.SIPUSH, value, null);
 		}
 		throw new IllegalArgumentException("not a short: " + value + "; load it with ldc");
 	}
 
 	public MethodCode iconst_m1() {
-		return this.op(Opcode.ICONST_M1);
+		return this.emit(Opcode.ICONST_M1);
 	}
 
 	public MethodCode iconst_0() {
-		return this.op(Opcode.ICONST_0);
+		return this.emit(Opcode.ICONST_0);
 	}
 
 	public MethodCode iconst_1() {
-		return this.op(Opcode.ICONST_1);
+		return this.emit(Opcode.ICONST_1);
 	}
 
 	public MethodCode iconst_2() {
-		return this.op(Opcode.ICONST_2);
+		return this.emit(Opcode.ICONST_2);
 	}
 
 	public MethodCode iconst_3() {
-		return this.op(Opcode.ICONST_3);
+		return this.emit(Opcode.ICONST_3);
 	}
 
 	public MethodCode iconst_4() {
-		return this.op(Opcode.ICONST_4);
+		return this.emit(Opcode.ICONST_4);
 	}
 
 	public MethodCode iconst_5() {
-		return this.op(Opcode.ICONST_5);
+		return this.emit(Opcode.ICONST_5);
 	}
 
 	public MethodCode lconst_0() {
-		return this.op(Opcode.LCONST_0);
+		return this.emit(Opcode.LCONST_0);
 	}
 
 	public MethodCode lconst_1() {
-		return this.op(Opcode.LCONST_1);
+		return this.emit(Opcode.LCONST_1);
 	}
 
 	public MethodCode fconst_0() {
-		return this.op(Opcode.FCONST_0);
+		return this.emit(Opcode.FCONST_0);
 	}
 
 	public MethodCode fconst_1() {
-		return this.op(Opcode.FCONST_1);
+		return this.emit(Opcode.FCONST_1);
 	}
 
 	public MethodCode fconst_2() {
-		return this.op(Opcode.FCONST_2);
+		return this.emit(Opcode.FCONST_2);
 	}
 
 	public MethodCode dconst_0() {
-		return this.op(Opcode.DCONST_0);
+		return this.emit(Opcode.DCONST_0);
 	}
 
 	public MethodCode dconst_1() {
-		return this.op(Opcode.DCONST_1);
+		return this.emit(Opcode.DCONST_1);
 	}
 
 	/**
-	 * Loads a constant: {@code ldc2_w} for a long or a double, else {@code ldc} or
-	 * {@code ldc_w} by the entry's index (the writer re-decides by the index the constant
-	 * takes in the class it lands in).
+	 * Loads a constant: {@code ldc2_w} for a long or a double, else {@code ldc} --
+	 * written {@code ldc_w} when the constant's index in the class it lands in needs it.
 	 * @param entry the constant
 	 * @return this
 	 */
 	public MethodCode ldc(LoadableConstantEntry entry) {
-		int index = entry.index();
-		if (entry instanceof LongEntry || entry instanceof DoubleEntry) {
-			this.u1(Opcode.LDC2_W.bytecode());
-			this.u2(index);
-		}
-		else if (index <= 0xFF) {
-			this.u1(Opcode.LDC.bytecode());
-			this.u1(index);
-		}
-		else {
-			this.u1(Opcode.LDC_W.bytecode());
-			this.u2(index);
-		}
-		return this;
+		return this.emit(entry.width() == 2 ? Opcode.LDC2_W : Opcode.LDC, 0, entry);
 	}
 
 	// --- locals
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Loads a local: {@code xload}, or its {@code wide} form past slot 255 (written in
-	 * the shortest form).
+	 * Loads a local: {@code xload}, written in the shortest form for the slot.
 	 * @param kind the local's kind
 	 * @param slot its slot
 	 * @return this
@@ -468,8 +624,7 @@ public final class MethodCode {
 	}
 
 	/**
-	 * Stores a local: {@code xstore}, or its {@code wide} form past slot 255 (written in
-	 * the shortest form).
+	 * Stores a local: {@code xstore}, written in the shortest form for the slot.
 	 * @param kind the local's kind
 	 * @param slot its slot
 	 * @return this
@@ -526,8 +681,8 @@ public final class MethodCode {
 	}
 
 	/**
-	 * Increments an int local, in the {@code wide} form when the slot or the constant
-	 * needs it.
+	 * Increments an int local, written in the {@code wide} form when the slot or the
+	 * constant needs it.
 	 * @param slot the local
 	 * @param value the signed 16-bit increment
 	 * @return this
@@ -537,35 +692,13 @@ public final class MethodCode {
 			throw new IllegalArgumentException("iinc constant past 16 bits: " + value);
 		}
 		checkSlot(slot);
-		if (slot > 0xFF || value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
-			this.u1(0xC4);
-			this.u1(Opcode.IINC.bytecode());
-			this.u2(slot);
-			this.u2(value & 0xFFFF);
-		}
-		else {
-			this.u1(Opcode.IINC.bytecode());
-			this.u1(slot);
-			this.u1(value & 0xFF);
-		}
-		return this;
+		return this.emit(Opcode.IINC, value << 16 | slot, null);
 	}
 
-	// A load or store in its explicit-slot form, wide past 255: base is ILOAD..ALOAD or
-	// ISTORE..ASTORE.
+	// A load or store: base is ILOAD..ALOAD or ISTORE..ASTORE.
 	private MethodCode local(Opcode base, int slot) {
 		checkSlot(slot);
-		int op = base.bytecode();
-		if (slot <= 0xFF) {
-			this.u1(op);
-			this.u1(slot);
-		}
-		else {
-			this.u1(0xC4);
-			this.u1(op);
-			this.u2(slot);
-		}
-		return this;
+		return this.emit(base, slot, null);
 	}
 
 	private static void checkSlot(int slot) {
@@ -578,273 +711,273 @@ public final class MethodCode {
 	// --------------------------------------------------------------------------
 
 	public MethodCode pop() {
-		return this.op(Opcode.POP);
+		return this.emit(Opcode.POP);
 	}
 
 	public MethodCode pop2() {
-		return this.op(Opcode.POP2);
+		return this.emit(Opcode.POP2);
 	}
 
 	public MethodCode dup() {
-		return this.op(Opcode.DUP);
+		return this.emit(Opcode.DUP);
 	}
 
 	public MethodCode dup_x1() {
-		return this.op(Opcode.DUP_X1);
+		return this.emit(Opcode.DUP_X1);
 	}
 
 	public MethodCode dup_x2() {
-		return this.op(Opcode.DUP_X2);
+		return this.emit(Opcode.DUP_X2);
 	}
 
 	public MethodCode dup2() {
-		return this.op(Opcode.DUP2);
+		return this.emit(Opcode.DUP2);
 	}
 
 	public MethodCode dup2_x1() {
-		return this.op(Opcode.DUP2_X1);
+		return this.emit(Opcode.DUP2_X1);
 	}
 
 	public MethodCode swap() {
-		return this.op(Opcode.SWAP);
+		return this.emit(Opcode.SWAP);
 	}
 
 	// --- arithmetic, conversion, comparison
 	// ---------------------------------------------
 
 	public MethodCode iadd() {
-		return this.op(Opcode.IADD);
+		return this.emit(Opcode.IADD);
 	}
 
 	public MethodCode isub() {
-		return this.op(Opcode.ISUB);
+		return this.emit(Opcode.ISUB);
 	}
 
 	public MethodCode imul() {
-		return this.op(Opcode.IMUL);
+		return this.emit(Opcode.IMUL);
 	}
 
 	public MethodCode idiv() {
-		return this.op(Opcode.IDIV);
+		return this.emit(Opcode.IDIV);
 	}
 
 	public MethodCode irem() {
-		return this.op(Opcode.IREM);
+		return this.emit(Opcode.IREM);
 	}
 
 	public MethodCode ineg() {
-		return this.op(Opcode.INEG);
+		return this.emit(Opcode.INEG);
 	}
 
 	public MethodCode iand() {
-		return this.op(Opcode.IAND);
+		return this.emit(Opcode.IAND);
 	}
 
 	public MethodCode ior() {
-		return this.op(Opcode.IOR);
+		return this.emit(Opcode.IOR);
 	}
 
 	public MethodCode ixor() {
-		return this.op(Opcode.IXOR);
+		return this.emit(Opcode.IXOR);
 	}
 
 	public MethodCode ishl() {
-		return this.op(Opcode.ISHL);
+		return this.emit(Opcode.ISHL);
 	}
 
 	public MethodCode ishr() {
-		return this.op(Opcode.ISHR);
+		return this.emit(Opcode.ISHR);
 	}
 
 	public MethodCode iushr() {
-		return this.op(Opcode.IUSHR);
+		return this.emit(Opcode.IUSHR);
 	}
 
 	public MethodCode ladd() {
-		return this.op(Opcode.LADD);
+		return this.emit(Opcode.LADD);
 	}
 
 	public MethodCode lsub() {
-		return this.op(Opcode.LSUB);
+		return this.emit(Opcode.LSUB);
 	}
 
 	public MethodCode lmul() {
-		return this.op(Opcode.LMUL);
+		return this.emit(Opcode.LMUL);
 	}
 
 	public MethodCode ldiv() {
-		return this.op(Opcode.LDIV);
+		return this.emit(Opcode.LDIV);
 	}
 
 	public MethodCode lrem() {
-		return this.op(Opcode.LREM);
+		return this.emit(Opcode.LREM);
 	}
 
 	public MethodCode lneg() {
-		return this.op(Opcode.LNEG);
+		return this.emit(Opcode.LNEG);
 	}
 
 	public MethodCode land() {
-		return this.op(Opcode.LAND);
+		return this.emit(Opcode.LAND);
 	}
 
 	public MethodCode lor() {
-		return this.op(Opcode.LOR);
+		return this.emit(Opcode.LOR);
 	}
 
 	public MethodCode lxor() {
-		return this.op(Opcode.LXOR);
+		return this.emit(Opcode.LXOR);
 	}
 
 	public MethodCode lshl() {
-		return this.op(Opcode.LSHL);
+		return this.emit(Opcode.LSHL);
 	}
 
 	public MethodCode lshr() {
-		return this.op(Opcode.LSHR);
+		return this.emit(Opcode.LSHR);
 	}
 
 	public MethodCode lushr() {
-		return this.op(Opcode.LUSHR);
+		return this.emit(Opcode.LUSHR);
 	}
 
 	public MethodCode dadd() {
-		return this.op(Opcode.DADD);
+		return this.emit(Opcode.DADD);
 	}
 
 	public MethodCode dsub() {
-		return this.op(Opcode.DSUB);
+		return this.emit(Opcode.DSUB);
 	}
 
 	public MethodCode dmul() {
-		return this.op(Opcode.DMUL);
+		return this.emit(Opcode.DMUL);
 	}
 
 	public MethodCode ddiv() {
-		return this.op(Opcode.DDIV);
+		return this.emit(Opcode.DDIV);
 	}
 
 	public MethodCode drem() {
-		return this.op(Opcode.DREM);
+		return this.emit(Opcode.DREM);
 	}
 
 	public MethodCode dneg() {
-		return this.op(Opcode.DNEG);
+		return this.emit(Opcode.DNEG);
 	}
 
 	public MethodCode fadd() {
-		return this.op(Opcode.FADD);
+		return this.emit(Opcode.FADD);
 	}
 
 	public MethodCode fsub() {
-		return this.op(Opcode.FSUB);
+		return this.emit(Opcode.FSUB);
 	}
 
 	public MethodCode fmul() {
-		return this.op(Opcode.FMUL);
+		return this.emit(Opcode.FMUL);
 	}
 
 	public MethodCode fdiv() {
-		return this.op(Opcode.FDIV);
+		return this.emit(Opcode.FDIV);
 	}
 
 	public MethodCode fneg() {
-		return this.op(Opcode.FNEG);
+		return this.emit(Opcode.FNEG);
 	}
 
 	public MethodCode i2l() {
-		return this.op(Opcode.I2L);
+		return this.emit(Opcode.I2L);
 	}
 
 	public MethodCode i2d() {
-		return this.op(Opcode.I2D);
+		return this.emit(Opcode.I2D);
 	}
 
 	public MethodCode i2c() {
-		return this.op(Opcode.I2C);
+		return this.emit(Opcode.I2C);
 	}
 
 	public MethodCode i2b() {
-		return this.op(Opcode.I2B);
+		return this.emit(Opcode.I2B);
 	}
 
 	public MethodCode i2s() {
-		return this.op(Opcode.I2S);
+		return this.emit(Opcode.I2S);
 	}
 
 	public MethodCode i2f() {
-		return this.op(Opcode.I2F);
+		return this.emit(Opcode.I2F);
 	}
 
 	public MethodCode l2f() {
-		return this.op(Opcode.L2F);
+		return this.emit(Opcode.L2F);
 	}
 
 	public MethodCode f2i() {
-		return this.op(Opcode.F2I);
+		return this.emit(Opcode.F2I);
 	}
 
 	public MethodCode f2d() {
-		return this.op(Opcode.F2D);
+		return this.emit(Opcode.F2D);
 	}
 
 	public MethodCode d2f() {
-		return this.op(Opcode.D2F);
+		return this.emit(Opcode.D2F);
 	}
 
 	public MethodCode l2i() {
-		return this.op(Opcode.L2I);
+		return this.emit(Opcode.L2I);
 	}
 
 	public MethodCode l2d() {
-		return this.op(Opcode.L2D);
+		return this.emit(Opcode.L2D);
 	}
 
 	public MethodCode d2i() {
-		return this.op(Opcode.D2I);
+		return this.emit(Opcode.D2I);
 	}
 
 	public MethodCode d2l() {
-		return this.op(Opcode.D2L);
+		return this.emit(Opcode.D2L);
 	}
 
 	public MethodCode lcmp() {
-		return this.op(Opcode.LCMP);
+		return this.emit(Opcode.LCMP);
 	}
 
 	public MethodCode dcmpl() {
-		return this.op(Opcode.DCMPL);
+		return this.emit(Opcode.DCMPL);
 	}
 
 	public MethodCode dcmpg() {
-		return this.op(Opcode.DCMPG);
+		return this.emit(Opcode.DCMPG);
 	}
 
 	public MethodCode fcmpl() {
-		return this.op(Opcode.FCMPL);
+		return this.emit(Opcode.FCMPL);
 	}
 
 	public MethodCode fcmpg() {
-		return this.op(Opcode.FCMPG);
+		return this.emit(Opcode.FCMPG);
 	}
 
 	// --- fields and invocations
 	// ---------------------------------------------------------
 
 	public MethodCode getstatic(FieldRefEntry field) {
-		return this.indexed(Opcode.GETSTATIC, field.index());
+		return this.emit(Opcode.GETSTATIC, 0, field);
 	}
 
 	public MethodCode putstatic(FieldRefEntry field) {
-		return this.indexed(Opcode.PUTSTATIC, field.index());
+		return this.emit(Opcode.PUTSTATIC, 0, field);
 	}
 
 	public MethodCode getfield(FieldRefEntry field) {
-		return this.indexed(Opcode.GETFIELD, field.index());
+		return this.emit(Opcode.GETFIELD, 0, field);
 	}
 
 	public MethodCode putfield(FieldRefEntry field) {
-		return this.indexed(Opcode.PUTFIELD, field.index());
+		return this.emit(Opcode.PUTFIELD, 0, field);
 	}
 
 	/**
@@ -853,11 +986,11 @@ public final class MethodCode {
 	 * @return this
 	 */
 	public MethodCode invokestatic(MemberRefEntry method) {
-		return this.indexed(Opcode.INVOKESTATIC, method.index());
+		return this.emit(Opcode.INVOKESTATIC, 0, method);
 	}
 
 	public MethodCode invokevirtual(MethodRefEntry method) {
-		return this.indexed(Opcode.INVOKEVIRTUAL, method.index());
+		return this.emit(Opcode.INVOKEVIRTUAL, 0, method);
 	}
 
 	/**
@@ -866,30 +999,23 @@ public final class MethodCode {
 	 * @return this
 	 */
 	public MethodCode invokespecial(MemberRefEntry method) {
-		return this.indexed(Opcode.INVOKESPECIAL, method.index());
+		return this.emit(Opcode.INVOKESPECIAL, 0, method);
 	}
 
 	/**
-	 * {@code invokeinterface}, its count operand taken from the descriptor.
+	 * {@code invokeinterface}; the writer derives its count operand from the descriptor.
 	 * @param method the interface method
 	 * @return this
 	 */
 	public MethodCode invokeinterface(InterfaceMethodRefEntry method) {
-		this.indexed(Opcode.INVOKEINTERFACE, method.index());
-		int slots = 1;
-		for (var parameter : MethodTypeDesc.ofDescriptor(method.type().stringValue()).parameterList()) {
-			slots += TypeKind.from(parameter).slotSize();
-		}
-		this.u1(slots);
-		this.u1(0);
-		return this;
+		return this.emit(Opcode.INVOKEINTERFACE, 0, method);
 	}
 
 	// --- objects and arrays
 	// -------------------------------------------------------------
 
 	public MethodCode new_(ClassEntry type) {
-		return this.indexed(Opcode.NEW, type.index());
+		return this.emit(Opcode.NEW, 0, type);
 	}
 
 	/**
@@ -898,73 +1024,71 @@ public final class MethodCode {
 	 * @return this
 	 */
 	public MethodCode newarray(TypeKind kind) {
-		this.u1(Opcode.NEWARRAY.bytecode());
-		this.u1(kind.newarrayCode());
-		return this;
+		return this.emit(Opcode.NEWARRAY, kind.newarrayCode(), null);
 	}
 
 	public MethodCode anewarray(ClassEntry componentType) {
-		return this.indexed(Opcode.ANEWARRAY, componentType.index());
+		return this.emit(Opcode.ANEWARRAY, 0, componentType);
 	}
 
 	public MethodCode checkcast(ClassEntry type) {
-		return this.indexed(Opcode.CHECKCAST, type.index());
+		return this.emit(Opcode.CHECKCAST, 0, type);
 	}
 
 	public MethodCode instanceOf(ClassEntry type) {
-		return this.indexed(Opcode.INSTANCEOF, type.index());
+		return this.emit(Opcode.INSTANCEOF, 0, type);
 	}
 
 	public MethodCode arraylength() {
-		return this.op(Opcode.ARRAYLENGTH);
+		return this.emit(Opcode.ARRAYLENGTH);
 	}
 
 	public MethodCode aaload() {
-		return this.op(Opcode.AALOAD);
+		return this.emit(Opcode.AALOAD);
 	}
 
 	public MethodCode aastore() {
-		return this.op(Opcode.AASTORE);
+		return this.emit(Opcode.AASTORE);
 	}
 
 	public MethodCode iaload() {
-		return this.op(Opcode.IALOAD);
+		return this.emit(Opcode.IALOAD);
 	}
 
 	public MethodCode iastore() {
-		return this.op(Opcode.IASTORE);
+		return this.emit(Opcode.IASTORE);
 	}
 
 	public MethodCode laload() {
-		return this.op(Opcode.LALOAD);
+		return this.emit(Opcode.LALOAD);
 	}
 
 	public MethodCode lastore() {
-		return this.op(Opcode.LASTORE);
+		return this.emit(Opcode.LASTORE);
 	}
 
 	public MethodCode daload() {
-		return this.op(Opcode.DALOAD);
+		return this.emit(Opcode.DALOAD);
 	}
 
 	public MethodCode dastore() {
-		return this.op(Opcode.DASTORE);
+		return this.emit(Opcode.DASTORE);
 	}
 
 	public MethodCode baload() {
-		return this.op(Opcode.BALOAD);
+		return this.emit(Opcode.BALOAD);
 	}
 
 	public MethodCode bastore() {
-		return this.op(Opcode.BASTORE);
+		return this.emit(Opcode.BASTORE);
 	}
 
 	public MethodCode caload() {
-		return this.op(Opcode.CALOAD);
+		return this.emit(Opcode.CALOAD);
 	}
 
 	public MethodCode castore() {
-		return this.op(Opcode.CASTORE);
+		return this.emit(Opcode.CASTORE);
 	}
 
 	/**
@@ -974,7 +1098,7 @@ public final class MethodCode {
 	 * @return this
 	 */
 	public MethodCode arrayStore(TypeKind kind) {
-		return this.op(switch (kind) {
+		return this.emit(switch (kind) {
 			case BOOLEAN, BYTE -> Opcode.BASTORE;
 			case CHAR -> Opcode.CASTORE;
 			case SHORT -> Opcode.SASTORE;
@@ -988,46 +1112,46 @@ public final class MethodCode {
 	}
 
 	public MethodCode faload() {
-		return this.op(Opcode.FALOAD);
+		return this.emit(Opcode.FALOAD);
 	}
 
 	public MethodCode fastore() {
-		return this.op(Opcode.FASTORE);
+		return this.emit(Opcode.FASTORE);
 	}
 
 	public MethodCode saload() {
-		return this.op(Opcode.SALOAD);
+		return this.emit(Opcode.SALOAD);
 	}
 
 	public MethodCode sastore() {
-		return this.op(Opcode.SASTORE);
+		return this.emit(Opcode.SASTORE);
 	}
 
 	// --- returns and throws
 	// -------------------------------------------------------------
 
 	public MethodCode areturn() {
-		return this.op(Opcode.ARETURN);
+		return this.emit(Opcode.ARETURN);
 	}
 
 	public MethodCode ireturn() {
-		return this.op(Opcode.IRETURN);
+		return this.emit(Opcode.IRETURN);
 	}
 
 	public MethodCode lreturn() {
-		return this.op(Opcode.LRETURN);
+		return this.emit(Opcode.LRETURN);
 	}
 
 	public MethodCode dreturn() {
-		return this.op(Opcode.DRETURN);
+		return this.emit(Opcode.DRETURN);
 	}
 
 	public MethodCode freturn() {
-		return this.op(Opcode.FRETURN);
+		return this.emit(Opcode.FRETURN);
 	}
 
 	public MethodCode return_() {
-		return this.op(Opcode.RETURN);
+		return this.emit(Opcode.RETURN);
 	}
 
 	/**
@@ -1036,7 +1160,7 @@ public final class MethodCode {
 	 * @return this
 	 */
 	public MethodCode return_(TypeKind kind) {
-		return this.op(switch (kind) {
+		return this.emit(switch (kind) {
 			case INT, BOOLEAN, BYTE, CHAR, SHORT -> Opcode.IRETURN;
 			case LONG -> Opcode.LRETURN;
 			case FLOAT -> Opcode.FRETURN;
@@ -1047,53 +1171,20 @@ public final class MethodCode {
 	}
 
 	public MethodCode athrow() {
-		return this.op(Opcode.ATHROW);
+		return this.emit(Opcode.ATHROW);
 	}
 
 	public MethodCode monitorenter() {
-		return this.op(Opcode.MONITORENTER);
+		return this.emit(Opcode.MONITORENTER);
 	}
 
 	public MethodCode monitorexit() {
-		return this.op(Opcode.MONITOREXIT);
-	}
-
-	// --- encoding
-	// -----------------------------------------------------------------------
-
-	private MethodCode op(Opcode op) {
-		return this.op(op.bytecode());
-	}
-
-	private MethodCode op(int bytecode) {
-		this.u1(bytecode);
-		return this;
-	}
-
-	private MethodCode indexed(Opcode op, int index) {
-		this.u1(op.bytecode());
-		this.u2(index);
-		return this;
-	}
-
-	private void u1(int b) {
-		this.code.add(b);
-		OperandStack model = this.stack;
-		if (model != null) {
-			model.feed(b);
-		}
-	}
-
-	// The high part whole: a master-pool index past 65535 must reach the writer, and the
-	// operand-stack model, uncut.
-	private void u2(int value) {
-		this.u1(value >> 8);
-		this.u1(value & 0xFF);
+		return this.emit(Opcode.MONITOREXIT);
 	}
 
 	@Override
 	public String toString() {
-		return "MethodCode[" + this.code.size() + " bytes]";
+		return "MethodCode[" + this.count + " instructions, " + this.size + " bytes]";
 	}
 
 }

@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code while} special form. Repeatedly evaluates the body while the test
@@ -33,7 +33,7 @@ final class JvmWhileCompiler {
 		// Evaluate the test; if false, branch out of the loop. A fusable binary
 		// comparison leaves a RAW int truth value (no boxed t/nil per iteration,
 		// .kb/jvm-int-fusion.md); any other test compiles boxed as before.
-		int exitBranchOpcode;
+		Opcode exitBranchOpcode;
 		if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
 			exitBranchOpcode = Opcode.IFEQ;
 		}
@@ -42,7 +42,7 @@ final class JvmWhileCompiler {
 			exitBranchOpcode = Opcode.IFNULL;
 		}
 		MethodCode.Label exit = ctx.body.newLabel();
-		JvmEmitHelper.branch(ctx, exitBranchOpcode, exit);
+		ctx.body.branch(exitBranchOpcode, exit);
 		// Body: every expression leaves a (boxed) reference, which is discarded.
 		for (int i = 2; i < parts.size(); i++) {
 			JvmExprCompiler.compileForEffect(parts.get(i), ctx, className);

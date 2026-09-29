@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles the {@code if} special form.
@@ -26,7 +26,7 @@ final class JvmIfCompiler {
 			compileSuppliedPTest((LispCons) parts.get(1), parts, ctx, className);
 			return;
 		}
-		int falseBranchOpcode;
+		Opcode falseBranchOpcode;
 		if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
 			falseBranchOpcode = Opcode.IFEQ;
 		}
@@ -36,7 +36,7 @@ final class JvmIfCompiler {
 		}
 		MethodCode.Label elseStart = ctx.body.newLabel();
 		MethodCode.Label end = ctx.body.newLabel();
-		JvmEmitHelper.branch(ctx, falseBranchOpcode, elseStart);
+		ctx.body.branch(falseBranchOpcode, elseStart);
 		JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
 		ctx.body.goto_(end);
 		ctx.body.labelBinding(elseStart);

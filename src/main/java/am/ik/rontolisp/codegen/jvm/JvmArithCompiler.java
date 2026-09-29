@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -9,7 +10,6 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles arithmetic operations ({@code +}, {@code -}, {@code *}, {@code /},
@@ -21,7 +21,7 @@ final class JvmArithCompiler {
 	private JvmArithCompiler() {
 	}
 
-	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, Opcode doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
 		if (args.size() == 1) {
 			// (+) is 0 and (*) is 1, the identities (CLHS 12.2); nothing else takes no
@@ -109,7 +109,7 @@ final class JvmArithCompiler {
 	 * ({@link #compileUnboxedOperand}) folds straight into the same expression instead of
 	 * boxing at every interior node.
 	 */
-	private static void compileUnboxed(List<LispVal> args, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode,
+	private static void compileUnboxed(List<LispVal> args, JvmLispCompiler.Ctx ctx, String opKey, Opcode doubleOpcode,
 			String className) {
 		boolean isMod = JvmNumericRuntimeBuilder.MOD.equals(opKey);
 		boolean isRem = JvmNumericRuntimeBuilder.REM.equals(opKey);
@@ -149,7 +149,7 @@ final class JvmArithCompiler {
 	 * @param ctx the compile context
 	 * @param doubleOpcode {@code DADD}, {@code DSUB}, {@code DMUL} or {@code DDIV}
 	 */
-	private static void emitDoubleOp(JvmLispCompiler.Ctx ctx, int doubleOpcode) {
+	private static void emitDoubleOp(JvmLispCompiler.Ctx ctx, Opcode doubleOpcode) {
 		switch (doubleOpcode) {
 			case Opcode.DADD -> ctx.body.dadd();
 			case Opcode.DSUB -> ctx.body.dsub();
@@ -210,7 +210,7 @@ final class JvmArithCompiler {
 			};
 			List<LispVal> parts = nested.toList();
 			if (opKey != null && parts.size() >= 2 && JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
-				int doubleOpcode = switch (head.name()) {
+				Opcode doubleOpcode = switch (head.name()) {
 					case LispNames.ADD -> Opcode.DADD;
 					case LispNames.SUB -> Opcode.DSUB;
 					case LispNames.MUL -> Opcode.DMUL;

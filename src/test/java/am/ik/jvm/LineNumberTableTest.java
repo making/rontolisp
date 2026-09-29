@@ -6,6 +6,8 @@ import java.lang.classfile.ClassModel;
 import java.lang.classfile.CodeModel;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.attribute.LineNumberInfo;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -52,7 +54,7 @@ class LineNumberTableTest {
 		ClassDefinition.Builder builder = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
 				cp.addClass(cp.addUtf8(CLASS)), cp.addClass(cp.addUtf8("java/lang/Object")), cp.addUtf8("Code"));
 		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("m"), cp.addUtf8("()V"),
-				List.of(Opcode.RETURN), List.of(), List.of(new ClassDefinition.Line(0, 1)), List.of());
+				new MethodCode().return_(), List.of(new ClassDefinition.Line(0, 1)));
 		assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("LineNumberTable");
 	}
@@ -60,21 +62,22 @@ class LineNumberTableTest {
 	@Test
 	void relaxingABranchMovesTheLinesAfterIt() throws Exception {
 		// A goto over 40,000 nops to a throw is past the signed 16-bit offset: written as
-		// a goto_w it moves every later instruction two bytes on, and the line starting
-		// at the throw's first instruction with them.
+		// a goto_w it is two bytes longer, and the line starting at the throw's first
+		// instruction starts where that instruction is written.
 		Fixture f = new Fixture(true);
-		int gap = 40_000;
-		List<Integer> code = new ArrayList<>(List.of(Opcode.GOTO, 0, 0));
-		for (int i = 0; i < gap; i++) {
-			code.add(Opcode.NOP);
+		MethodCode code = new MethodCode();
+		MethodCode.Label far = code.newLabel();
+		code.goto_(far);
+		for (int i = 0; i < 40_000; i++) {
+			code.nop();
 		}
-		int throwPc = code.size();
-		code.addAll(f.throwingCode("far"));
+		code.labelBinding(far);
+		int throwAt = code.position();
+		f.throwingCode(code, "far");
 		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("far"), f.cp.addUtf8("()V"),
-				code, List.of(), List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwPc, 2)),
-				List.of(new ClassDefinition.Branch(0, throwPc)));
+				code, List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwAt, 2)));
 		byte[] bytes = write(f.build(), null);
-		assertThat(lines(bytes, "far")).containsExactly(0, 1, throwPc + 2, 2);
+		assertThat(lines(bytes, "far")).containsExactly(0, 1, 5 + 40_000, 2);
 		assertThat(thrownLine(Map.of(CLASS, bytes), "far")).isEqualTo(2);
 	}
 
@@ -166,9 +169,9 @@ class LineNumberTableTest {
 
 		final ClassDefinition.Builder definition;
 
-		final ConstantPool.ClassConstant exception;
+		final ClassEntry exception;
 
-		final ConstantPool.MethodrefConstant init;
+		final MethodRefEntry init;
 
 		Fixture(boolean namesLineNumbers) {
 			this.definition = ClassDefinition.builder(this.cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
@@ -177,37 +180,23 @@ class LineNumberTableTest {
 			if (namesLineNumbers) {
 				this.definition.lineNumberTableName(this.cp.addUtf8("LineNumberTable"));
 			}
-			this.exception = this.cp.addClass(this.cp.addUtf8("java/lang/RuntimeException"));
-			this.init = this.cp.addMethodref(this.exception,
-					this.cp.addNameAndType(this.cp.addUtf8("<init>"), this.cp.addUtf8("(Ljava/lang/String;)V")));
+			this.exception = this.cp.classEntry("java/lang/RuntimeException");
+			this.init = this.cp.methodRef(this.exception, "<init>", "(Ljava/lang/String;)V");
 		}
 
 		void throwing(String name, List<ClassDefinition.Line> lines) {
+			MethodCode code = new MethodCode();
+			this.throwingCode(code, name);
 			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(name),
-					this.cp.addUtf8("()V"), throwingCode(name), List.of(), lines, List.of());
+					this.cp.addUtf8("()V"), code, lines);
 		}
 
-		List<Integer> throwingCode(String name) {
-			ConstantPool.StringConstant message = this.cp.addString("from " + name);
-			List<Integer> code = new ArrayList<>();
-			code.add(Opcode.NEW);
-			u2(code, this.exception.index());
-			code.add(Opcode.DUP);
-			code.add(Opcode.LDC_W);
-			u2(code, message.index());
-			code.add(Opcode.INVOKESPECIAL);
-			u2(code, this.init.index());
-			code.add(Opcode.ATHROW);
-			return code;
+		void throwingCode(MethodCode code, String name) {
+			code.new_(this.exception).dup().ldc(this.cp.stringEntry("from " + name)).invokespecial(this.init).athrow();
 		}
 
 		ClassDefinition build() {
 			return this.definition.build();
-		}
-
-		private static void u2(List<Integer> code, int value) {
-			code.add(value >> 8);
-			code.add(value & 0xFF);
 		}
 
 	}

@@ -24,11 +24,11 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The writer against hand-built definitions, where every entry and every byte is known: a
- * chain of static methods too large for one tiny class spreads over parts and still runs,
- * what cannot move stays, what the roots do not reach is not written, and an unresolved
- * own call is reported. The whole compiler's use of it -- programs, output shapes, the
- * forced split -- is {@code JvmLispCompilerSplitTest}.
+ * The writer against hand-built definitions, where every entry and every instruction is
+ * known: a chain of static methods too large for one tiny class spreads over parts and
+ * still runs, what cannot move stays, what the roots do not reach is not written, and an
+ * unresolved own call is reported. The whole compiler's use of it -- programs, output
+ * shapes, the forced split -- is {@code JvmLispCompilerSplitTest}.
  */
 class JvmClassSplitterTest {
 
@@ -71,8 +71,8 @@ class JvmClassSplitterTest {
 		assertThat(steps).hasSize(CHAIN).doesNotHaveDuplicates();
 	}
 
-	// Started past 65535, every index is one a class file cannot carry: the code keeps
-	// them whole and the writer re-mints each in its class's own pool.
+	// Started past 65535, every index is one a class file cannot carry: the writer
+	// re-mints each entry in its class's own pool.
 	@Test
 	void indexesPastTheFormatLimitAreRepointedIntoEachClassesPool() throws Exception {
 		ClassDefinition definition = chain(ConstantPool.startingAt(70_000));
@@ -92,15 +92,15 @@ class JvmClassSplitterTest {
 		ConstantPool.MethodrefConstant lookup = cp.addMethodref(
 				cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles")),
 				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
-		b.method(AccessFlag.ACC_STATIC, "<clinit>", "()V", new Code().op(Opcode.RETURN));
-		b.method(AccessFlag.ACC_PUBLIC, "instance", "()V", new Code().op(Opcode.RETURN));
+		b.method(AccessFlag.ACC_STATIC, "<clinit>", "()V", new MethodCode().return_());
+		b.method(AccessFlag.ACC_PUBLIC, "instance", "()V", new MethodCode().return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED, "locked", "()V",
-				new Code().op(Opcode.RETURN));
+				new MethodCode().return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "looksUp", "()V",
-				new Code().op(Opcode.INVOKESTATIC).u2(lookup.index()).op(Opcode.POP).op(Opcode.RETURN));
+				new MethodCode().invokestatic(lookup.entry()).pop().return_());
 		for (int i = 0; i < 20; i++) {
 			b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "free" + i, "()V",
-					new Code().ldc(cp.addString("filler-" + i)).op(Opcode.POP).op(Opcode.RETURN));
+					new MethodCode().ldc(cp.stringEntry("filler-" + i)).pop().return_());
 		}
 		JvmClassSplitter.Split split = split(b.build(), null, method -> false, TINY_BUDGET);
 		assertThat(split.parts()).isNotEmpty();
@@ -119,11 +119,11 @@ class JvmClassSplitterTest {
 		Builder b = new Builder(cp);
 		ConstantPool.MethodrefConstant used = b.ref("used", "()V");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new Code().op(Opcode.INVOKESTATIC).u2(used.index()).op(Opcode.RETURN));
+				new MethodCode().invokestatic(used.entry()).return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "used", "()V",
-				new Code().ldc(cp.addString("kept")).op(Opcode.POP).op(Opcode.RETURN));
+				new MethodCode().ldc(cp.stringEntry("kept")).pop().return_());
 		b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "unused", "()V",
-				new Code().ldc(cp.addString("dropped")).op(Opcode.POP).op(Opcode.RETURN));
+				new MethodCode().ldc(cp.stringEntry("dropped")).pop().return_());
 		JvmClassSplitter.Split split = split(b.build(), Set.of("main"), method -> false, ConstantPool.MAX_INDEX);
 		assertThat(split.parts()).isEmpty();
 		assertThat(shape(split.mainClass()))
@@ -141,11 +141,7 @@ class JvmClassSplitterTest {
 		Builder b = new Builder(cp);
 		ConstantPool.MethodrefConstant missing = b.ref("missing", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new Code().op(Opcode.ACONST_NULL)
-					.op(Opcode.INVOKESTATIC)
-					.u2(missing.index())
-					.op(Opcode.POP)
-					.op(Opcode.RETURN));
+				new MethodCode().aconst_null().invokestatic(missing.entry()).pop().return_());
 		assertThat(JvmClassSplitter.unresolvedSelfMethods(b.build())).singleElement().satisfies(unresolved -> {
 			assertThat(unresolved.name()).isEqualTo("missing");
 			assertThat(unresolved.descriptor()).isEqualTo("(Ljava/lang/Object;)Ljava/lang/Object;");
@@ -163,22 +159,20 @@ class JvmClassSplitterTest {
 		b.definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, counterName, intDesc);
 		ConstantPool.FieldrefConstant counter = cp.addFieldref(b.thisClass, cp.addNameAndType(counterName, intDesc));
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "main", "([Ljava/lang/String;)V",
-				new Code().op(Opcode.INVOKESTATIC).u2(b.ref("step0", "()V").index()).op(Opcode.RETURN));
+				new MethodCode().invokestatic(b.ref("step0", "()V").entry()).return_());
 		b.method(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, "result", "()I",
-				new Code().op(Opcode.GETSTATIC).u2(counter.index()).op(Opcode.IRETURN));
+				new MethodCode().getstatic(counter.entry()).ireturn());
 		for (int k = 0; k < CHAIN; k++) {
-			Code code = new Code().ldc(cp.addString("text-" + k))
-				.op(Opcode.POP)
-				.op(Opcode.GETSTATIC)
-				.u2(counter.index())
-				.op(Opcode.ICONST_1)
-				.op(Opcode.IADD)
-				.op(Opcode.PUTSTATIC)
-				.u2(counter.index());
+			MethodCode code = new MethodCode().ldc(cp.stringEntry("text-" + k))
+				.pop()
+				.getstatic(counter.entry())
+				.iconst_1()
+				.iadd()
+				.putstatic(counter.entry());
 			if (k + 1 < CHAIN) {
-				code.op(Opcode.INVOKESTATIC).u2(b.ref("step" + (k + 1), "()V").index());
+				code.invokestatic(b.ref("step" + (k + 1), "()V").entry());
 			}
-			b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "step" + k, "()V", code.op(Opcode.RETURN));
+			b.method(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, "step" + k, "()V", code.return_());
 		}
 		return b.build();
 	}
@@ -254,9 +248,8 @@ class JvmClassSplitterTest {
 			return this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(this.utf8(name), this.utf8(desc)));
 		}
 
-		void method(int access, String name, String desc, Code code) {
-			this.definition.addMethod(access, this.utf8(name), this.utf8(desc), code.bytes, List.of(), List.of(),
-					List.of());
+		void method(int access, String name, String desc, MethodCode code) {
+			this.definition.addMethod(access, this.utf8(name), this.utf8(desc), code, List.of());
 		}
 
 		ClassDefinition build() {
@@ -265,34 +258,6 @@ class JvmClassSplitterTest {
 
 		private ConstantPool.Utf8Constant utf8(String s) {
 			return this.utf8.computeIfAbsent(s, this.cp::addUtf8);
-		}
-
-	}
-
-	/**
-	 * A method body, written the way the generators write one: a u2's high part kept
-	 * whole.
-	 */
-	private static final class Code {
-
-		final List<Integer> bytes = new ArrayList<>();
-
-		Code op(int opcode) {
-			this.bytes.add(opcode);
-			return this;
-		}
-
-		Code u2(int value) {
-			this.bytes.add(value >> 8);
-			this.bytes.add(value & 0xFF);
-			return this;
-		}
-
-		Code ldc(ConstantPool.Constant constant) {
-			if (constant.index() <= 255) {
-				return this.op(Opcode.LDC).op(constant.index());
-			}
-			return this.op(Opcode.LDC_W).u2(constant.index());
 		}
 
 	}

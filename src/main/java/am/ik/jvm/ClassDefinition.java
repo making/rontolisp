@@ -11,15 +11,16 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A class described as data before it is written: its constant pool, header, fields and
- * methods, each method body a list of code bytes whose constant-pool operands are kept at
- * full width. The shape is the one every generated class has -- attribute-free fields,
- * one {@code Code} attribute per method whose only sub-attribute is an optional
- * {@code LineNumberTable}, no class attributes.
+ * methods, each method body the instruction records its emitter left
+ * ({@link MethodCode}), every constant-pool operand an entry of the master pool. The
+ * shape is the one every generated class has -- attribute-free fields, one {@code Code}
+ * attribute per method whose only sub-attribute is an optional {@code LineNumberTable},
+ * no class attributes.
  * <p>
  * {@link JvmClassSplitter} writes it: as one class file when its members' entries fit one
  * pool, else spread over several. Keeping the class as data until that decision is what
- * makes the second outcome possible at all: once written, an operand past 65535 would
- * already have lost the entry it named.
+ * makes the second outcome possible at all: a class's pool is decided only once its
+ * members are.
  */
 public final class ClassDefinition {
 
@@ -150,43 +151,16 @@ public final class ClassDefinition {
 	}
 
 	/**
-	 * An exception table entry. An exception thrown while the pc is in
-	 * {@code [startPc, endPc)} is dispatched to {@code handlerPc} when its class is (a
-	 * subclass of) the {@code catchType} class constant; a {@code catchType} of 0 catches
-	 * any throwable (the {@code finally} shape).
-	 *
-	 * @param startPc the inclusive start of the protected code range
-	 * @param endPc the exclusive end of the protected code range
-	 * @param handlerPc the handler entry point (the operand stack there holds only the
-	 * thrown exception)
-	 * @param catchType the {@code CONSTANT_Class} pool index of the caught type, or 0 for
-	 * any
-	 */
-	public record Handler(int startPc, int endPc, int handlerPc, int catchType) {
-	}
-
-	/**
-	 * A {@code LineNumberTable} entry: the instructions from {@code startPc} up to the
+	 * A {@code LineNumberTable} entry: the instructions from {@code position} up to the
 	 * next entry's belong to {@code lineNumber}. What the number MEANS is the producer's
 	 * business -- the JVM only hands it back through
 	 * {@link StackTraceElement#getLineNumber()}.
 	 *
-	 * @param startPc the offset of the first instruction the entry covers; an instruction
-	 * boundary
+	 * @param position the position of the first instruction the entry covers
+	 * ({@link MethodCode#position()})
 	 * @param lineNumber the u2 number those instructions report
 	 */
-	public record Line(int startPc, int lineNumber) {
-	}
-
-	/**
-	 * A branch whose target is too far for the signed 16-bit offset its instruction
-	 * carries: the offset bytes are placeholders, and the writer places the branch in the
-	 * {@code goto_w} form that reaches.
-	 *
-	 * @param pc the offset of the branch instruction
-	 * @param target the offset it jumps to
-	 */
-	public record Branch(int pc, int target) {
+	public record Line(int position, int lineNumber) {
 	}
 
 	/**
@@ -195,24 +169,18 @@ public final class ClassDefinition {
 	 * @param access its access flags
 	 * @param name its name
 	 * @param descriptor its descriptor
-	 * @param code the body, one element per byte; a constant-pool operand's high part may
-	 * exceed a byte
-	 * @param exceptionTable the handlers, in dispatch order
-	 * @param lineNumbers the {@code LineNumberTable} entries, in ascending pc order;
-	 * empty for a method that carries none
-	 * @param longBranches the branches whose offset did not fit their instruction
+	 * @param body the body, its every label bound
+	 * @param lineNumbers the {@code LineNumberTable} entries, in ascending position
+	 * order; empty for a method that carries none
 	 */
-	public record Method(int access, Utf8Constant name, Utf8Constant descriptor, List<Integer> code,
-			List<Handler> exceptionTable, List<Line> lineNumbers, List<Branch> longBranches) {
+	public record Method(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body,
+			List<Line> lineNumbers) {
 
 		/**
-		 * Copies the body and its tables.
+		 * Copies the line table.
 		 */
 		public Method {
-			code = List.copyOf(code);
-			exceptionTable = List.copyOf(exceptionTable);
 			lineNumbers = List.copyOf(lineNumbers);
-			longBranches = List.copyOf(longBranches);
 		}
 
 	}
@@ -281,20 +249,33 @@ public final class ClassDefinition {
 		}
 
 		/**
+		 * Adds a method without line numbers.
 		 * @param access the method's access flags
 		 * @param name its name
 		 * @param descriptor its descriptor
-		 * @param code the body, one element per byte
-		 * @param exceptionTable the handlers, in dispatch order
-		 * @param lineNumbers the {@code LineNumberTable} entries, in ascending pc order
-		 * (empty for none; any at all needs {@link #lineNumberTableName})
-		 * @param longBranches the branches whose offset did not fit their instruction
+		 * @param body the body, its every label bound
 		 * @return this builder
+		 * @throws IllegalStateException when a branch in the body waits for its label
 		 */
-		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, List<Integer> code,
-				List<Handler> exceptionTable, List<Line> lineNumbers, List<Branch> longBranches) {
-			this.methods.add(new Method(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor), code,
-					exceptionTable, lineNumbers, longBranches));
+		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body) {
+			return this.addMethod(access, name, descriptor, body, List.of());
+		}
+
+		/**
+		 * @param access the method's access flags
+		 * @param name its name
+		 * @param descriptor its descriptor
+		 * @param body the body, its every label bound
+		 * @param lineNumbers the {@code LineNumberTable} entries, in ascending position
+		 * order (empty for none; any at all needs {@link #lineNumberTableName})
+		 * @return this builder
+		 * @throws IllegalStateException when a branch in the body waits for its label
+		 */
+		public Builder addMethod(int access, Utf8Constant name, Utf8Constant descriptor, MethodCode body,
+				List<Line> lineNumbers) {
+			body.checkComplete();
+			this.methods.add(new Method(access, Objects.requireNonNull(name), Objects.requireNonNull(descriptor), body,
+					lineNumbers));
 			return this;
 		}
 

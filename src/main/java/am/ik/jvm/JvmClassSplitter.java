@@ -14,8 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.function.IntFunction;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
@@ -299,17 +299,17 @@ public final class JvmClassSplitter {
 			ConstantPoolBuilder pool = ConstantPoolBuilder.of();
 			ClassEntry thisClass = pool.classEntry(pool.utf8Entry(part.name));
 			ClassEntry[] partClasses = new ClassEntry[this.parts.size()];
-			IntFunction<PoolEntry> operand = index -> {
-				int moved = movedTo[index];
+			UnaryOperator<PoolEntry> operand = entry -> {
+				int moved = movedTo[entry.index()];
 				if (moved == 0) {
-					return master.entryAt(index);
+					return entry;
 				}
 				ClassEntry owner = partClasses[moved];
 				if (owner == null) {
 					owner = pool.classEntry(pool.utf8Entry(this.parts.get(moved).name));
 					partClasses[moved] = owner;
 				}
-				return pool.methodRefEntry(owner, ((MethodRefEntry) master.entryAt(index)).nameAndType());
+				return pool.methodRefEntry(owner, ((MethodRefEntry) entry).nameAndType());
 			};
 			try {
 				return classFile.build(thisClass, pool, clb -> {
@@ -323,12 +323,12 @@ public final class JvmClassSplitter {
 					}
 					for (int m : part.methods) {
 						ClassDefinition.Method method = this.scan.methods.get(m);
-						if (method.code().size() > 0xFFFF) {
+						if (method.body().size() > 0xFFFF) {
 							// A longer body produces a class every JVM rejects with a
 							// message that no longer names the culprit; fail here
 							// instead.
 							throw new IllegalArgumentException("method " + master.utf8At(method.name().index())
-									+ ": method code exceeds the JVM's 65535-byte limit: " + method.code().size());
+									+ ": method code exceeds the JVM's 65535-byte limit: " + method.body().size());
 						}
 						int access = split ? method.access() & ~AccessFlag.ACC_PRIVATE : method.access();
 						clb.withMethod(method.name().entry(), method.descriptor().entry(), access,
@@ -403,7 +403,7 @@ public final class JvmClassSplitter {
 			this.fields = definition.fields();
 			this.thisClass = definition.thisClass().index();
 			for (ClassDefinition.Method method : this.methods) {
-				int[] indexes = operands(method.code());
+				int[] indexes = operands(method.body());
 				this.sites.add(indexes);
 				List<OwnCallGraph.Member> calls = new ArrayList<>();
 				List<OwnCallGraph.Member> fieldUses = new ArrayList<>();
@@ -422,26 +422,20 @@ public final class JvmClassSplitter {
 			this.closures = new BitSet[this.methods.size()];
 		}
 
-		/** The constant-pool operand of every instruction of a body, in order. */
-		private static int[] operands(List<Integer> code) {
+		/**
+		 * The master-pool index of every instruction's constant-pool operand, in order.
+		 */
+		private static int[] operands(MethodCode body) {
 			int[] found = new int[16];
 			int count = 0;
-			int pc = 0;
-			while (pc < code.size()) {
-				int op = code.get(pc) & 0xFF;
-				int index = switch (op) {
-					case 0x12 -> CodeReplay.oneByteIndex(code.get(pc + 1));
-					case 0x13, 0x14, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBB, 0xBD, 0xC0, 0xC1, 0xC5 ->
-						CodeReplay.index(code, pc + 1);
-					default -> 0;
-				};
-				if (index != 0) {
+			for (int i = 0; i < body.count(); i++) {
+				PoolEntry entry = body.entry(i);
+				if (entry != null) {
 					if (count == found.length) {
 						found = java.util.Arrays.copyOf(found, count * 2);
 					}
-					found[count++] = index;
+					found[count++] = entry.index();
 				}
-				pc += CodeReplay.length(code, pc);
 			}
 			return java.util.Arrays.copyOf(found, count);
 		}
@@ -572,9 +566,10 @@ public final class JvmClassSplitter {
 			for (int index : this.sites.get(m)) {
 				this.close(index, into);
 			}
-			for (ClassDefinition.Handler entry : method.exceptionTable()) {
-				if (entry.catchType() != 0) {
-					this.close(entry.catchType(), into);
+			for (MethodCode.Handler handler : method.body().handlers()) {
+				ClassEntry type = handler.catchType();
+				if (type != null) {
+					this.close(type.index(), into);
 				}
 			}
 			if (!method.lineNumbers().isEmpty()) {

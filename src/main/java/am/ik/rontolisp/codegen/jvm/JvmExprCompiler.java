@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
@@ -33,7 +34,6 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
-import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -2318,7 +2318,8 @@ final class JvmExprCompiler {
 	 * Compiles a numeric comparison. The binary form uses the dedicated comparison
 	 * compiler; any other arity is desugared into nested binary comparisons.
 	 */
-	private static void compileComparison(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int branchOpcode) {
+	private static void compileComparison(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			Opcode branchOpcode) {
 		if (isBinaryCall(cons)) {
 			// A comparison whose side is an integer tree fuses into one outlined raw
 			// long compare (.kb/jvm-int-fusion.md); the both-plain shape keeps the

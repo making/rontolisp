@@ -31,7 +31,7 @@ a build that never knew about EH -- unless `--report-locations` asks for the unc
 ## Phase 1 -- unwind-protect
 `LispEvaluator.evalUnwindProtect` (try/finally over both Java unwind channels, `LispEvalException`
 and `BlockReturnSignal`); `JvmUnwindProtectCompiler` over the method's exception table
-(`ClassDefinition.Handler`); `WasmUnwindProtectCompiler` (`block $u (result exnref)` +
+(`MethodCode.exceptionCatch`); `WasmUnwindProtectCompiler` (`block $u (result exnref)` +
 `try_table (catch_all_ref $u)`, landing = cleanups over the exnref then `throw_ref`). A cleanup that
 signals replaces the pending unwind (CL: newer exit wins).
 

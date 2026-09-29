@@ -5,9 +5,13 @@ import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeElement;
 import java.lang.classfile.Instruction;
 import java.lang.classfile.MethodModel;
+import java.lang.classfile.Opcode;
 import java.lang.classfile.attribute.CodeAttribute;
 import java.lang.classfile.attribute.LineNumberInfo;
 import java.lang.classfile.attribute.LineNumberTableAttribute;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,46 +22,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 /**
- * A method body written as code bytes, played into the class-file writer: the branches,
- * handlers and line numbers keep their targets when the writer changes an instruction's
- * width, a {@code wide} local survives, and a body past the format limit is refused
- * naming the method.
+ * A method body's records played into the class-file writer: a branch that does not reach
+ * is written long -- only that one, and one another pushed out of reach -- the handlers
+ * and line numbers keep their instructions when the writer changes a width, a
+ * {@code wide} local survives, and a body past the format limit is refused naming the
+ * method.
  */
 class CodeReplayTest {
 
-	// A branch whose target is past the signed 16-bit reach, recorded as a long branch
-	// with placeholder offset bytes, over a `wide astore`/`wide aload` of slot 300: the
-	// writer places it in its goto_w form, measuring the wide instructions around it, and
-	// a line entry after the branch rides the instruction it labels.
+	// A branch past the signed 16-bit reach over a `wide astore`/`wide aload` of slot
+	// 300: the writer places it in its goto_w form, measuring the wide instructions
+	// around it, and the line entry of the instruction the branch lands on rides that
+	// instruction.
 	@Test
 	void aLongBranchOverWideLocalsIsWrittenInItsGotoWForm() throws Exception {
 		Fixture f = new Fixture("WideLocal");
 		int slot = 300;
-		Code code = new Code().ldc(f.cp.addString("ok")).op(Opcode.WIDE).op(Opcode.ASTORE).u2(slot).op(Opcode.ICONST_0);
-		int branchPc = code.bytes.size();
-		code.op(Opcode.IFEQ).u2(0);
+		MethodCode c = new MethodCode();
+		MethodCode.Label far = c.newLabel();
+		c.ldc(f.cp.stringEntry("ok")).astore(slot).iconst_0().ifeq(far);
 		for (int i = 0; i < 40_000; i++) {
-			code.op(Opcode.NOP);
+			c.nop();
 		}
-		int targetPc = code.bytes.size();
-		code.op(Opcode.WIDE).op(Opcode.ALOAD).u2(slot).op(Opcode.ARETURN);
+		c.labelBinding(far);
+		int target = c.position();
+		c.aload(slot).areturn();
 		f.definition.lineNumberTableName(f.cp.addUtf8("LineNumberTable"));
 		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"),
-				f.cp.addUtf8("()Ljava/lang/Object;"), code.bytes, List.of(),
-				List.of(new ClassDefinition.Line(targetPc, 7)),
-				List.of(new ClassDefinition.Branch(branchPc, targetPc)));
+				f.cp.addUtf8("()Ljava/lang/Object;"), c, List.of(new ClassDefinition.Line(target, 7)));
 		byte[] written = f.write();
 
 		assertThat(f.load(written).getMethod("run").invoke(null)).isEqualTo("ok");
 		CodeAttribute run = code(written, "run");
-		List<java.lang.classfile.Opcode> opcodes = opcodes(run);
-		assertThat(opcodes).contains(java.lang.classfile.Opcode.GOTO_W, java.lang.classfile.Opcode.ALOAD_W,
-				java.lang.classfile.Opcode.ASTORE_W);
-		// The relaxed branch grew the code in front of the target, and the line moved
-		// with it: it still starts at the wide aload.
-		int aload = pcOf(run, java.lang.classfile.Opcode.ALOAD_W);
-		assertThat(aload).isGreaterThan(targetPc);
-		assertThat(lines(run)).extracting(LineNumberInfo::startPc).containsExactly(aload);
+		assertThat(opcodes(run)).contains(Opcode.GOTO_W, Opcode.ALOAD_W, Opcode.ASTORE_W);
+		assertThat(run.codeLength()).isEqualTo(c.size());
+		assertThat(lines(run)).extracting(LineNumberInfo::startPc).containsExactly(pcOf(run, Opcode.ALOAD_W));
 	}
 
 	// The writer's own relaxation would rewrite EVERY forward branch of the method long
@@ -67,59 +66,65 @@ class CodeReplayTest {
 	@Test
 	void onlyTheBranchThatDoesNotReachIsWrittenLong() throws Exception {
 		Fixture f = new Fixture("OnlyFar");
-		Code code = new Code().op(Opcode.ICONST_0);
-		int farPc = code.bytes.size();
-		code.op(Opcode.IFEQ).u2(0);
+		MethodCode c = new MethodCode();
+		MethodCode.Label far = c.newLabel();
+		c.iconst_0().ifeq(far);
 		for (int k = 0; k < 1000; k++) {
-			// iconst_1; ifeq to the next instruction
-			code.op(Opcode.ICONST_1).op(Opcode.IFEQ).u2(3);
+			MethodCode.Label next = c.newLabel();
+			c.iconst_1().ifeq(next);
+			c.labelBinding(next);
 		}
 		for (int i = 0; i < 40_000; i++) {
-			code.op(Opcode.NOP);
+			c.nop();
 		}
-		int targetPc = code.bytes.size();
-		code.op(Opcode.RETURN);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"), f.cp.addUtf8("()V"),
-				code.bytes, List.of(), List.of(), List.of(new ClassDefinition.Branch(farPc, targetPc)));
+		c.labelBinding(far);
+		c.return_();
+		f.add("run", "()V", c);
 		byte[] written = f.write();
 
 		CodeAttribute run = code(written, "run");
-		assertThat(run.codeLength()).as("the one conditional branch grew by five bytes")
-			.isEqualTo(code.bytes.size() + 5);
-		assertThat(opcodes(run)).filteredOn(op -> op == java.lang.classfile.Opcode.GOTO_W).hasSize(1);
+		assertThat(run.codeLength()).as("the one conditional branch grew by five bytes, as measured")
+			.isEqualTo(1 + 8 + 1000 * 4 + 40_000 + 1)
+			.isEqualTo(c.size());
+		assertThat(opcodes(run)).filteredOn(op -> op == Opcode.GOTO_W).hasSize(1);
 		f.load(written).getMethod("run").invoke(null);
 	}
 
 	// Widening moves every later instruction: a branch that reached before a branch
 	// between it and its target was widened may not reach after, and is widened in turn.
+	// The measure counts the first, whose label showed it far; the writer finds the
+	// second.
 	@Test
 	void aBranchPushedOutOfReachByAnotherIsWidenedToo() throws Exception {
 		Fixture f = new Fixture("Cascade");
-		// iload_0; ifne X -- reaching exactly 32767 bytes on as written
-		Code code = new Code().op(Opcode.ILOAD_0);
-		int nearPc = code.bytes.size();
-		code.op(Opcode.IFNE).u2(Short.MAX_VALUE);
-		// Between it and X: iload_0; ifeq FAR, far past X.
-		code.op(Opcode.ILOAD_0);
-		int farPc = code.bytes.size();
-		code.op(Opcode.IFEQ).u2(0);
-		while (code.bytes.size() < nearPc + Short.MAX_VALUE) {
-			code.op(Opcode.NOP);
+		MethodCode c = new MethodCode();
+		MethodCode.Label near = c.newLabel();
+		MethodCode.Label far = c.newLabel();
+		// iload_0; ifne NEAR -- reaching exactly 32767 bytes on as measured
+		c.iload(0);
+		int nearPc = c.size();
+		c.ifne(near);
+		// Between it and NEAR: iload_0; ifeq FAR, far past NEAR.
+		c.iload(0);
+		int farPc = c.size();
+		c.ifeq(far);
+		while (c.size() < nearPc + Short.MAX_VALUE) {
+			c.nop();
 		}
-		while (code.bytes.size() < farPc + 40_000) {
-			code.op(Opcode.NOP);
+		c.labelBinding(near);
+		while (c.size() < farPc + 40_000) {
+			c.nop();
 		}
-		int farTarget = code.bytes.size();
-		code.op(Opcode.RETURN);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"), f.cp.addUtf8("(I)V"),
-				code.bytes, List.of(), List.of(), List.of(new ClassDefinition.Branch(farPc, farTarget)));
+		c.labelBinding(far);
+		c.return_();
+		f.add("run", "(I)V", c);
 		byte[] written = f.write();
 
 		CodeAttribute run = code(written, "run");
-		assertThat(opcodes(run)).filteredOn(op -> op == java.lang.classfile.Opcode.GOTO_W)
+		assertThat(opcodes(run)).filteredOn(op -> op == Opcode.GOTO_W)
 			.as("the far branch, and the one it pushed out of reach")
 			.hasSize(2);
-		assertThat(run.codeLength()).isEqualTo(code.bytes.size() + 5 + 5);
+		assertThat(run.codeLength()).isEqualTo(c.size() + 5);
 		Class<?> cascade = f.load(written);
 		cascade.getMethod("run", int.class).invoke(null, 0);
 		cascade.getMethod("run", int.class).invoke(null, 1);
@@ -139,86 +144,60 @@ class CodeReplayTest {
 	@Test
 	void anLdcWhoseConstantLandsPastIndex255WidensAndTheBranchOverItFollows() throws Exception {
 		Fixture f = new Fixture("Widen");
-		ConstantPool.StringConstant hello = f.cp.addString("hello");
-		ConstantPool.Utf8Constant voidDesc = f.cp.addUtf8("()V");
+		StringEntry hello = f.cp.stringEntry("hello");
 		for (int k = 0; k < 200; k++) {
-			f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("f" + k), voidDesc,
-					new Code().ldc(f.cp.addString("filler-" + k)).op(Opcode.POP).op(Opcode.RETURN).bytes, List.of(),
-					List.of(), List.of());
+			f.add("f" + k, "()V", new MethodCode().ldc(f.cp.stringEntry("filler-" + k)).pop().return_());
 		}
-		// iconst_0; ifne +6 (to aconst_null); ldc hello; areturn; aconst_null; areturn
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"),
-				f.cp.addUtf8("()Ljava/lang/Object;"),
-				new Code().op(Opcode.ICONST_0)
-					.op(Opcode.IFNE)
-					.u2(6)
-					.op(Opcode.LDC)
-					.op(hello.index())
-					.op(Opcode.ARETURN)
-					.op(Opcode.ACONST_NULL)
-					.op(Opcode.ARETURN).bytes,
-				List.of(), List.of(), List.of());
+		// iconst_0; ifne NULL; ldc hello; areturn; NULL: aconst_null; areturn
+		MethodCode c = new MethodCode();
+		MethodCode.Label isNull = c.newLabel();
+		c.iconst_0().ifne(isNull).ldc(hello).areturn();
+		c.labelBinding(isNull);
+		c.aconst_null().areturn();
+		f.add("run", "()Ljava/lang/Object;", c);
 		assertThat(hello.index()).isLessThan(256);
 		byte[] written = f.write();
 
-		assertThat(opcodes(code(written, "run"))).contains(java.lang.classfile.Opcode.LDC_W)
-			.doesNotContain(java.lang.classfile.Opcode.LDC);
+		assertThat(opcodes(code(written, "run"))).contains(Opcode.LDC_W).doesNotContain(Opcode.LDC);
 		assertThat(f.load(written).getMethod("run").invoke(null)).isEqualTo("hello");
 	}
 
-	// ... and the other way: an ldc_w the master pool needed becomes an ldc when its
-	// constant lands below 256 in the class's own pool.
+	// ... and the other way: a constant past index 255 in the master pool becomes an
+	// ldc when it lands below 256 in the class's own pool.
 	@Test
-	void anLdcWWhoseConstantLandsBelowIndex256Narrows() throws Exception {
+	void anLdcWhoseMasterIndexIsPast255NarrowsInTheClass() throws Exception {
 		Fixture f = new Fixture("Narrow");
 		for (int k = 0; k < 300; k++) {
-			f.cp.addUtf8("unreferenced-" + k);
+			f.cp.entries().utf8Entry("unreferenced-" + k);
 		}
-		ConstantPool.StringConstant late = f.cp.addString("late");
+		StringEntry late = f.cp.stringEntry("late");
 		assertThat(late.index()).isGreaterThan(255);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"),
-				f.cp.addUtf8("()Ljava/lang/Object;"), new Code().ldc(late).op(Opcode.ARETURN).bytes, List.of(),
-				List.of(), List.of());
+		MethodCode c = new MethodCode().ldc(late).areturn();
+		assertThat(c.size()).as("measured by the master index").isEqualTo(3 + 1);
+		f.add("run", "()Ljava/lang/Object;", c);
 		byte[] written = f.write();
 
-		assertThat(opcodes(code(written, "run"))).containsExactly(java.lang.classfile.Opcode.LDC,
-				java.lang.classfile.Opcode.ARETURN);
+		assertThat(opcodes(code(written, "run"))).containsExactly(Opcode.LDC, Opcode.ARETURN);
 		assertThat(f.load(written).getMethod("run").invoke(null)).isEqualTo("late");
 	}
 
-	// A local past slot 255 in an iinc takes the wide form with a two-byte increment;
-	// the replay reads both back whole.
+	// A local past slot 255 in an iinc takes the wide form with a two-byte increment.
 	@Test
 	void aWideIincKeepsItsSlotAndIncrement() throws Exception {
 		Fixture f = new Fixture("WideIinc");
 		int slot = 400;
-		Code code = new Code().op(Opcode.ICONST_0)
-			.op(Opcode.WIDE)
-			.op(Opcode.ISTORE)
-			.u2(slot)
-			.op(Opcode.WIDE)
-			.op(Opcode.IINC)
-			.u2(slot)
-			.u2(1000)
-			.op(Opcode.WIDE)
-			.op(Opcode.ILOAD)
-			.u2(slot)
-			.op(Opcode.IRETURN);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("run"), f.cp.addUtf8("()I"),
-				code.bytes, List.of(), List.of(), List.of());
+		f.add("run", "()I", new MethodCode().iconst_0().istore(slot).iinc(slot, 1000).iload(slot).ireturn());
 		assertThat(f.load(f.write()).getMethod("run").invoke(null)).isEqualTo(1000);
 	}
 
 	@Test
 	void aBodyPastTheFormatLimitIsRefusedNamingTheMethod() {
 		Fixture f = new Fixture("Huge");
-		List<Integer> code = new ArrayList<>();
+		MethodCode c = new MethodCode();
 		for (int i = 0; i < 70_000; i++) {
-			code.add(Opcode.NOP);
+			c.nop();
 		}
-		code.add(Opcode.RETURN);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.addUtf8("huge"), f.cp.addUtf8("()V"),
-				code, List.of(), List.of(), List.of());
+		f.add("huge", "()V", c.return_());
 		assertThatIllegalArgumentException().isThrownBy(f::write)
 			.withMessageContaining("method huge")
 			.withMessageContaining("65535-byte limit");
@@ -231,30 +210,18 @@ class CodeReplayTest {
 	private static String runCatch(String name, boolean typed) throws Exception {
 		Fixture f = new Fixture(name);
 		ConstantPool cp = f.cp;
-		ConstantPool.ClassConstant runtimeException = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		ConstantPool.MethodrefConstant ctor = cp.addMethodref(runtimeException,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		ClassEntry runtimeException = cp.classEntry("java/lang/RuntimeException");
+		MethodRefEntry ctor = cp.methodRef(runtimeException, "<init>", "(Ljava/lang/String;)V");
 		// Through Throwable, so the catch-any handler (whose stack top is a Throwable)
 		// passes the receiver check too.
-		ConstantPool.MethodrefConstant getMessage = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/Throwable")),
-				cp.addNameAndType(cp.addUtf8("getMessage"), cp.addUtf8("()Ljava/lang/String;")));
-		// 0: new, 3: dup, 4: ldc_w "boom", 7: invokespecial <init>, 10: athrow,
-		// 11 (handler): invokevirtual getMessage, 14: areturn
-		Code code = new Code().op(Opcode.NEW)
-			.u2(runtimeException.index())
-			.op(Opcode.DUP)
-			.op(Opcode.LDC_W)
-			.u2(cp.addString("boom").index())
-			.op(Opcode.INVOKESPECIAL)
-			.u2(ctor.index())
-			.op(Opcode.ATHROW)
-			.op(Opcode.INVOKEVIRTUAL)
-			.u2(getMessage.index())
-			.op(Opcode.ARETURN);
-		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.addUtf8("run"),
-				cp.addUtf8("()Ljava/lang/String;"), code.bytes,
-				List.of(new ClassDefinition.Handler(0, 11, 11, typed ? runtimeException.index() : 0)), List.of(),
-				List.of());
+		MethodRefEntry getMessage = cp.methodRef("java/lang/Throwable", "getMessage", "()Ljava/lang/String;");
+		MethodCode c = new MethodCode();
+		MethodCode.Label start = c.newBoundLabel();
+		c.new_(runtimeException).dup().ldc(cp.stringEntry("boom")).invokespecial(ctor).athrow();
+		MethodCode.Label handler = c.newBoundLabel();
+		c.invokevirtual(getMessage).areturn();
+		c.exceptionCatch(start, handler, handler, typed ? runtimeException : null);
+		f.add("run", "()Ljava/lang/String;", c);
 		return (String) f.load(f.write()).getMethod("run").invoke(null);
 	}
 
@@ -270,17 +237,17 @@ class CodeReplayTest {
 	}
 
 	/** The instructions' opcodes, the {@code nop} padding left out. */
-	private static List<java.lang.classfile.Opcode> opcodes(CodeAttribute code) {
-		List<java.lang.classfile.Opcode> opcodes = new ArrayList<>();
+	private static List<Opcode> opcodes(CodeAttribute code) {
+		List<Opcode> opcodes = new ArrayList<>();
 		for (CodeElement element : code.elementList()) {
-			if (element instanceof Instruction instruction && instruction.opcode() != java.lang.classfile.Opcode.NOP) {
+			if (element instanceof Instruction instruction && instruction.opcode() != Opcode.NOP) {
 				opcodes.add(instruction.opcode());
 			}
 		}
 		return opcodes;
 	}
 
-	private static int pcOf(CodeAttribute code, java.lang.classfile.Opcode wanted) {
+	private static int pcOf(CodeAttribute code, Opcode wanted) {
 		int pc = 0;
 		for (CodeElement element : code.elementList()) {
 			if (element instanceof Instruction instruction) {
@@ -315,6 +282,11 @@ class CodeReplayTest {
 					this.cp.addUtf8("Code"));
 		}
 
+		void add(String method, String descriptor, MethodCode code) {
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.addUtf8(method),
+					this.cp.addUtf8(descriptor), code);
+		}
+
 		byte[] write() {
 			JvmClassSplitter.Split split = JvmClassSplitter.write(this.definition.build(), null, method -> true,
 					ConstantPool.MAX_INDEX, JvmClassSplitter.Target.of(61));
@@ -324,34 +296,6 @@ class CodeReplayTest {
 
 		Class<?> load(byte[] classFile) throws ClassNotFoundException {
 			return new Loader(Map.of(this.name, classFile)).loadClass(this.name);
-		}
-
-	}
-
-	/**
-	 * A method body, written the way the generators write one: a u2's high part kept
-	 * whole.
-	 */
-	private static final class Code {
-
-		final List<Integer> bytes = new ArrayList<>();
-
-		Code op(int opcode) {
-			this.bytes.add(opcode);
-			return this;
-		}
-
-		Code u2(int value) {
-			this.bytes.add(value >> 8);
-			this.bytes.add(value & 0xFF);
-			return this;
-		}
-
-		Code ldc(ConstantPool.Constant constant) {
-			if (constant.index() <= 255) {
-				return this.op(Opcode.LDC).op(constant.index());
-			}
-			return this.op(Opcode.LDC_W).u2(constant.index());
 		}
 
 	}

@@ -392,7 +392,7 @@ final class JvmJavaImplementations {
 		init.aload(1);
 		init.putfield(pool.fieldRef(selfClass.entry(), "fns", "[Ljava/lang/Object;"));
 		init.return_();
-		init.addTo(definition, 0, initName, pool.addUtf8("([Ljava/lang/Object;)V"));
+		definition.addMethod(0, initName, pool.addUtf8("([Ljava/lang/Object;)V"), init);
 		return definition.build();
 	}
 
@@ -417,7 +417,7 @@ final class JvmJavaImplementations {
 		init.aload(1);
 		init.invokespecial(pool.methodRef(base, "<init>", "([Ljava/lang/Object;)V"));
 		init.return_();
-		init.addTo(definition, AccessFlag.ACC_PRIVATE, initName, initDesc);
+		definition.addMethod(AccessFlag.ACC_PRIVATE, initName, initDesc, init);
 		// static Object of(Object[] fns) { return new Self(fns); }
 		MethodCode factory = new MethodCode();
 		factory.new_(self);
@@ -425,7 +425,7 @@ final class JvmJavaImplementations {
 		factory.aload(0);
 		factory.invokespecial(pool.methodRef(self, "<init>", "([Ljava/lang/Object;)V"));
 		factory.areturn();
-		factory.addTo(definition, AccessFlag.ACC_STATIC, pool.addUtf8(FACTORY), pool.addUtf8(FACTORY_DESC));
+		definition.addMethod(AccessFlag.ACC_STATIC, pool.addUtf8(FACTORY), pool.addUtf8(FACTORY_DESC), factory);
 		ClassEntry program = pool.classEntry(this.programInternalName);
 		List<JavaImplementation.Slot> slots = implementation.slots();
 		for (int i = 0; i < slots.size(); i++) {
@@ -435,8 +435,8 @@ final class JvmJavaImplementations {
 			MethodCode text = new MethodCode();
 			text.ldc(pool.stringEntry(implementation.defaultToString()));
 			text.areturn();
-			text.addTo(definition, AccessFlag.ACC_PUBLIC, pool.addUtf8("toString"),
-					pool.addUtf8("()Ljava/lang/String;"));
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8("toString"), pool.addUtf8("()Ljava/lang/String;"),
+					text);
 		}
 		return definition.build();
 	}
@@ -458,7 +458,7 @@ final class JvmJavaImplementations {
 			a.ldc(pool.stringEntry(JavaImplementation.noImplementation(iface.name(), slot.key())));
 			a.invokespecial(pool.methodRef(unsupported, "<init>", "(Ljava/lang/String;)V"));
 			a.athrow();
-			a.addTo(definition, AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()));
+			definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()), a);
 			return;
 		}
 		a.aload(0);
@@ -480,7 +480,7 @@ final class JvmJavaImplementations {
 		}
 		a.invokestatic(pool.methodRef(program, callback, callbackDescriptor(slot)));
 		a.return_(returnKind(slot.returnType()));
-		a.addTo(definition, AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()));
+		definition.addMethod(AccessFlag.ACC_PUBLIC, pool.addUtf8(slot.name()), pool.addUtf8(desc.toString()), a);
 	}
 
 	private static int width(JavaType type) {

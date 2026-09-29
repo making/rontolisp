@@ -34,3 +34,14 @@ the pool operands are master-pool indexes kept whole in a u2's high part
   `LineNumberTableTest`, `JvmClassSplitterTest` build bodies from bytes) -- rewritten on
   `MethodCode`.
 - Measure against a84's numbers: compile time of the corpus and the mito probe, output size.
+
+## Progress
+
+- Done: the records (`MethodCode`'s three arrays, positions as instruction indexes), the typed
+  `OperandStack` feed, `CodeReplay` playing records with `farBranches` over their written sizes,
+  `ClassDefinition.Method` holding the body (`MethodCode.addTo` became
+  `ClassDefinition.Builder.addMethod(..., body)`), the scan over entries, `am.ik.jvm.Opcode` gone,
+  the byte fixtures on `MethodCode`; byte-identical under `legacy.py`, the measure change measured
+  (`.kb/jvm-method-size-limits.md`, "The records").
+- Left: the pool wrapper types and facades (and `ClassDefinition`'s header on entries), the
+  pool-index-origin instrument, the index accessors the scan no longer needs.

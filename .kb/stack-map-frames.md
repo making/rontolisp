@@ -103,17 +103,15 @@ small program, ~+0.1 s on the corpus) went with it.
 
 ## The `wide` prefix
 
-A local slot past 255 takes a `wide` prefix and a two-byte index. **Every hand-written reader of
-the code must MEASURE it: `wide` is 4 bytes (6 for `iinc`), not 2** -- `CodeReplay.length` (a
-mis-measurement shifts every later instruction and every branch target), `OperandStack.feed`.
-The writer keeps the form: a replayed `wide aload` is written `aload_w` (`Opcode.ALOAD_W`).
-
-EMISSION: every compile context writes on `ctx.body` (`am.ik.jvm.MethodCode`), which encodes
-every local instruction's `wide` form itself, `iinc` included, feeding the model the four- or
-six-byte instruction whole. Until 2026-09-29 the byte emitter `Ctx.emit` rewrote a load or store
-into `wide` after the fact and missed `iinc`, which kept a one-byte slot (the `maphash` and
-`%obj-slots` cursors). What is left writing bytes is the `Jvm*RuntimeBuilder`s, with literal
-slots.
+A local slot past 255 takes a `wide` prefix and a two-byte index: 4 bytes (6 for `iinc`), not 2.
+No code bytes exist before the written class's own: a `MethodCode` record carries the slot
+whole, `MethodCode`'s measure counts the `wide` form (a mis-measurement would shift every later
+instruction and every branch target in `CodeReplay.farBranches`' layout), and the writer picks
+the form (`loadLocal` past 255 is written `aload_w`, `Opcode.ALOAD_W`). Until 2026-09-29 the
+byte emitter `Ctx.emit` rewrote a load or store into `wide` after the fact and missed `iinc`,
+which kept a one-byte slot (the `maphash` and `%obj-slots` cursors); then the code bytes'
+readers (`CodeReplay.length`, `OperandStack.feed`) had to decode the prefix themselves, until the
+records replaced the bytes (a91).
 
 **Trap: truncation is SILENT.** `astore 300` written as `astore 44` is caught by the verifier
 only when the wrapped slot holds a DIFFERENT verification type; when the types agree the program
@@ -128,8 +126,9 @@ grows, so a straight-line body burns a slot per temporary.
   a lookup's superclass, the one-line failure naming the method, the pool overflow, the
   backedge query.
 - `CodeReplayTest.aTypedCatchAndACatchAnyBothLand` -- handlers of both shapes, framed and run.
-- `CodeReplayTest.aLongBranchOverWideLocalsIsWrittenInItsGotoWForm` -- `wide` decoding across a
-  branch the replay must widen, framed and run; `#aWideIincKeepsItsSlotAndIncrement`.
+- `CodeReplayTest.aLongBranchOverWideLocalsIsWrittenInItsGotoWForm` -- `wide` locals measured
+  across a branch the replay must widen, framed and run; `#aWideIincKeepsItsSlotAndIncrement`,
+  `MethodCodeTest.aLocalPastSlot255TakesTheWideForm`.
 - `JvmLispCompilerTest.compileAndRunABodyPastTheOneByteLocalSlotIndex` (silent wrong answer) and
   `#...UnderAnUnsplittableTail` (the verifier notices); all `JvmLispCompilerTest` output is framed;
   `JvmClassShakerTest` + `JvmClassShakerCorpusTest` (the corpus at both levels, run and compared).

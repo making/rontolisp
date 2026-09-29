@@ -4,7 +4,6 @@ import java.lang.classfile.TypeKind;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
-import am.ik.jvm.Opcode;
 import am.ik.jvm.OperandStack;
 
 /**
@@ -456,24 +455,6 @@ final class JvmEmitHelper {
 		ctx.body.labelBinding(ifPos);
 		compileTrue(ctx);
 		ctx.body.labelBinding(gotoEndPos);
-	}
-
-	/**
-	 * A branch whose opcode is chosen at run time, named by its byte ({@link Opcode}):
-	 * the typed layer's short branch of that kind.
-	 * @param ctx the compile context
-	 * @param opcode a conditional branch or {@code goto}
-	 * @param target where it jumps
-	 */
-	static void branch(JvmLispCompiler.Ctx ctx, int opcode, MethodCode.Label target) {
-		for (java.lang.classfile.Opcode op : java.lang.classfile.Opcode.values()) {
-			if (op.bytecode() == opcode && op.kind() == java.lang.classfile.Opcode.Kind.BRANCH
-					&& op.sizeIfFixed() == 3) {
-				ctx.body.branch(op, target);
-				return;
-			}
-		}
-		throw new IllegalArgumentException("not a short branch: " + opcode);
 	}
 
 	/**

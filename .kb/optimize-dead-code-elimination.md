@@ -1101,6 +1101,6 @@ not a registry row. Mechanics and pins: [jvm-export.md](jvm-export.md).
 
 Tests: `JvmClassShakerTest` (structural + behavior, incl. the `_apply` root) and
 `JvmClassShakerCorpusTest` (the whole `ci-spec.yaml` corpus at `off` and default, asserting shrink +
-identical run output -- the decoder-completeness guard for `CodeReplay`, like
+identical run output -- the completeness guard for `CodeReplay`'s record player, like
 `WasmTreeShakerCorpusTest`); `JvmClassSplitterTest#aShakenDefinitionWritesOnlyWhatItsRootsReach`.
 Limitations: README "Optimize".

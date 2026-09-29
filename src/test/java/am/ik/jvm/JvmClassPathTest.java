@@ -112,7 +112,7 @@ class JvmClassPathTest {
 			assertThat(Objects.requireNonNull(path.find("am/ik/jvm/ClassFileInfo")).accessible()).isTrue();
 			assertThat(Objects.requireNonNull(path.find("am/ik/jvm/JvmClassPath")).accessible()).isTrue();
 			assertThat(path.find("java/lang/String")).isNotNull();
-			assertThat(path.find("am/ik/jvm/Opcode")).isNull();
+			assertThat(path.find("am/ik/jvm/MethodCode")).isNull();
 		}
 	}
 

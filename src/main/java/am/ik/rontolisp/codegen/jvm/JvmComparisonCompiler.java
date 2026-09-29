@@ -1,11 +1,11 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.Opcode;
 import java.util.List;
 
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.jvm.Opcode;
 
 /**
  * Compiles comparison operations ({@code =}, {@code <}, {@code >}, {@code <=},
@@ -16,9 +16,9 @@ final class JvmComparisonCompiler {
 	private JvmComparisonCompiler() {
 	}
 
-	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, int branchOpcode, String className) {
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, Opcode branchOpcode, String className) {
 		List<LispVal> args = cons.toList();
-		int branch;
+		Opcode branch;
 		if (JvmLispCompiler.hasComplexOperand(args)) {
 			// A complex operand steers off the double path: = compares
 			// part-wise through _cmpb, every other operator signals through
@@ -66,14 +66,14 @@ final class JvmComparisonCompiler {
 		}
 		MethodCode.Label trueLabel = ctx.body.newLabel();
 		MethodCode.Label endLabel = ctx.body.newLabel();
-		JvmEmitHelper.branch(ctx, branch, trueLabel);
+		ctx.body.branch(branch, trueLabel);
 		ctx.body.aconst_null().goto_(endLabel);
 		ctx.body.labelBinding(trueLabel);
 		JvmEmitHelper.compileTrue(ctx);
 		ctx.body.labelBinding(endLabel);
 	}
 
-	private static int maskFor(int branchOpcode) {
+	private static int maskFor(Opcode branchOpcode) {
 		return switch (branchOpcode) {
 			case Opcode.IFEQ -> 0b010;
 			case Opcode.IFLT -> 0b001;

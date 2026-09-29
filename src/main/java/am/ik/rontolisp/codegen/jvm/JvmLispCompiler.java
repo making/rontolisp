@@ -4094,11 +4094,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mainCtx.quotePool.used()) {
 			JvmQuotePool.Members table = mainCtx.quotePool.members();
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.fieldName(), table.fieldDesc());
-			table.getCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc());
-			table.setCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						table.setName(), table.setDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, table.getName(), table.getDesc(),
+					table.getCode());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					table.setName(), table.setDesc(), table.setCode());
 		}
 		// The UNSUPPLIED marker (JvmUnsupplied): its field and the two helpers that
 		// create it on first use, in a class with a callee that takes physical
@@ -4109,16 +4108,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mainCtx.unsupplied.used()) {
 			JvmUnsupplied.Members marker = mainCtx.unsupplied.members();
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.fieldName(), marker.fieldDesc());
-			marker.accessorCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
-						marker.methodDesc());
-			marker.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						marker.initName(), marker.methodDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, marker.accessorName(),
+					marker.methodDesc(), marker.accessorCode());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					marker.initName(), marker.methodDesc(), marker.initCode());
 			MethodCode optArgCode = marker.optArgCode();
 			if (optArgCode != null) {
-				optArgCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()));
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						Objects.requireNonNull(marker.optArgName()), Objects.requireNonNull(marker.optArgDesc()),
+						optArgCode);
 			}
 		}
 
@@ -4133,7 +4131,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				int access = sm == sizedMain.main() ? AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC
 						: sm == sizedMain.run() ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
 								: AccessFlag.ACC_PUBLIC;
-				sm.code().addTo(definition, access, sm.name(), sm.desc());
+				definition.addMethod(access, sm.name(), sm.desc(), sm.code());
 			}
 		}
 		if (!this.noMain) {
@@ -4148,10 +4146,9 @@ public final class JvmLispCompiler implements LispCompiler {
 					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc);
 		}
 		for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
-			em.code()
-				.addTo(definition,
-						(em.isPublic() ? AccessFlag.ACC_PUBLIC : AccessFlag.ACC_PRIVATE) | AccessFlag.ACC_STATIC,
-						em.name(), em.desc());
+			definition.addMethod(
+					(em.isPublic() ? AccessFlag.ACC_PUBLIC : AccessFlag.ACC_PRIVATE) | AccessFlag.ACC_STATIC, em.name(),
+					em.desc(), em.code());
 		}
 		// The top-level body, split into one or more void chunk methods main()
 		// calls.
@@ -4169,7 +4166,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8);
 		}
 		for (DispatchMethod dm : dispatchMethods) {
-			dm.code.addTo(definition, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8);
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, dm.code);
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || structTableClinitFinal != null
@@ -4330,14 +4327,14 @@ public final class JvmLispCompiler implements LispCompiler {
 							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
 									: standardOutputClinitDesc != null ? standardOutputClinitDesc
 											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
-			clinitCode.addTo(definition, AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf);
+			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitCode);
 		}
 		if (dynVarRuntime != null) {
 			// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
 			// helpers.
 			for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
-				hm.code()
-					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
+						hm.code());
 			}
 		}
 		if (mainCtx.conditionChannel.used || teTlField != null) {
@@ -4347,39 +4344,38 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp, thisClass.entry(), mainCtx.conditionChannel.used
 							? Objects.requireNonNull(mainCtx.conditionChannel.condTlField).entry() : null,
 					mainCtx.conditionChannel.condRan != null)) {
-				rm.code()
-					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.nameUtf8(), rm.descUtf8(),
+						rm.code());
 			}
 		}
-		strEscCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf);
-		symEscCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf, strEscCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf, symEscCode);
 		for (DispatchMethod fm : funNameMethods) {
 			// _funName (and its _funName$k segments): the funcId -> name table behind
 			// #<function NAME>. Emitted only when the gate found a nameable function
 			// value (see above).
-			fm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.nameUtf8(), fm.descUtf8());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.nameUtf8(), fm.descUtf8(),
+					fm.code());
 		}
-		ltsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName,
-				lispToStringDescUtf);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
+				ltsCode);
 		if (usesInstances) {
 			// _instToString / _instToDisplayString: one body builder, two element
 			// formatters, so the readable and display renderings cannot drift.
-			Objects.requireNonNull(instCode)
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-						Objects.requireNonNull(instToStringName), consToStringDescUtf);
-			Objects.requireNonNull(instDisplayCode)
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-						Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					Objects.requireNonNull(instToStringName), consToStringDescUtf, Objects.requireNonNull(instCode));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf,
+					Objects.requireNonNull(instDisplayCode));
 		}
-		ctsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName,
-				consToStringDescUtf);
-		appendCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf);
-		readLineCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName,
-				readLineHelperDesc);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
+				ctsCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf, appendCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc,
+				readLineCode);
 		for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
-			im.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(),
-						im.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
+					im.code());
 		}
 		// The lazy _*Init methods below bind a callback, hand over kernel text or
 		// initialize a bridge behind a plain int guard, and a served program runs
@@ -4393,9 +4389,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// steady state pays one uncontended class monitor per call, which every
 		// one of these paths (reflection, FFM, a kernel) dwarfs.
 		if (javaRuntime != null) {
-			javaRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						javaRuntime.initName(), javaRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					javaRuntime.initName(), javaRuntime.initDesc(), javaRuntime.initCode());
 		}
 		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
 		// helpers they share, made while the bodies above were compiled; then the
@@ -4404,16 +4399,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// and the conversions those use. The classes travel beside the program.
 		if (javaSites != null) {
 			for (JvmJavaDirectSites.Method site : javaSites.direct().methods()) {
-				site.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc(),
+						site.code());
 			}
 			JvmJavaImplementations implementations = javaSites.implementations();
 			Set<String> callbacks = implementations.callbackNames();
 			for (JvmJavaDirectSites.Method method : implementations.methods()) {
 				boolean callback = callbacks.contains(cp.utf8At(method.name().index()));
-				method.code()
-					.addTo(definition,
-							callback ? AccessFlag.ACC_STATIC : AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-							method.name(), method.desc());
+				definition.addMethod(callback ? AccessFlag.ACC_STATIC : AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+						method.name(), method.desc(), method.code());
 			}
 			this.implementationCallbacks = callbacks;
 			this.bridgeClassFiles.putAll(implementations.classFiles(this.writeTarget()));
@@ -4422,19 +4416,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.implementationCallbacks = Set.of();
 		}
 		if (objcRuntime != null) {
-			objcRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						objcRuntime.initName(), objcRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					objcRuntime.initName(), objcRuntime.initDesc(), objcRuntime.initCode());
 		}
 		if (ffiRuntime != null) {
-			ffiRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						ffiRuntime.initName(), ffiRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					ffiRuntime.initName(), ffiRuntime.initDesc(), ffiRuntime.initCode());
 		}
 		if (simdRuntime != null) {
-			simdRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						simdRuntime.initName(), simdRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					simdRuntime.initName(), simdRuntime.initDesc(), simdRuntime.initCode());
 			// _simdReady(): returns whether the bridge linked --
 			// _simdInit must have run first, same as every ops.get(member)
 			// call site. False on a runtime without jdk.incubator.vector, so
@@ -4442,92 +4433,80 @@ public final class JvmLispCompiler implements LispCompiler {
 			// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
 			// instead of resolving a method reference into a bridge class that
 			// cannot link.
-			simdRuntime.readyCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
-						simdRuntime.readyDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
+					simdRuntime.readyDesc(), simdRuntime.readyCode());
 		}
 		if (gpuRuntime != null) {
-			gpuRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						gpuRuntime.initName(), gpuRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					gpuRuntime.initName(), gpuRuntime.initDesc(), gpuRuntime.initCode());
 			// The residency invalidation guard, called from every in-place write
 			// to a packed float array, answering the array to write into
 			// (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
-			gpuRuntime.writtenCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
-						gpuRuntime.writtenDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
+					gpuRuntime.writtenDesc(), gpuRuntime.writtenCode());
 			// Its read-side twin, called before every host read of one and
 			// answering the array to read
 			// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
-			gpuRuntime.materializeCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
-						gpuRuntime.materializeDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
+					gpuRuntime.materializeDesc(), gpuRuntime.materializeCode());
 			// And the one a call site runs over a host rung's answer, per
 			// argument it handed over (JvmGpuRuntimeBuilder.UNSWAP_METHOD).
-			gpuRuntime.unswapCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
-						gpuRuntime.unswapDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
+					gpuRuntime.unswapDesc(), gpuRuntime.unswapCode());
 		}
 		if (geomRuntime != null) {
-			geomRuntime.initCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-						geomRuntime.initName(), geomRuntime.initDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					geomRuntime.initName(), geomRuntime.initDesc(), geomRuntime.initCode());
 			// _geomReady(): whether the bridge define succeeded. False on a JRE
 			// older than the template's class version, so every accelerated call
 			// site declines to the spliced geom.lisp defun instead of resolving a
 			// method reference into a class that was never defined.
-			geomRuntime.readyCode()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
-						geomRuntime.readyDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
+					geomRuntime.readyDesc(), geomRuntime.readyCode());
 		}
 		if (fetchRuntimeBodies != null) {
 			JvmFetchRuntimeBuilder.FetchMethod fm = fetchRuntimeBodies.fetch();
-			fm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(), fm.code());
 		}
 		if (asyncRuntimeBodies != null) {
 			for (JvmAsyncRuntimeBuilder.AsyncMethod am : asyncRuntimeBodies.staticMethods()) {
-				am.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(), am.code());
 			}
 			JvmAsyncRuntimeBuilder.AsyncMethod runBody = asyncRuntimeBodies.runMethod();
-			runBody.code().addTo(definition, AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc());
+			definition.addMethod(AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc(), runBody.code());
 		}
 		if (mvChannel != null && mvChannel.perThread() != null) {
 			JvmMvChannel.PerThread mvPerThread = mvChannel.perThread();
-			mvPerThread.getCode(mvChannel.field())
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
-						mvPerThread.getDesc());
-			mvPerThread.setCode(mvChannel.field())
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
-						mvPerThread.setDesc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
+					mvPerThread.getDesc(), mvPerThread.getCode(mvChannel.field()));
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
+					mvPerThread.setDesc(), mvPerThread.setCode(mvChannel.field()));
 		}
 		if (octetsPackedRuntime != null) {
-			octetsPackedRuntime.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsPackedRuntime.name(),
-						octetsPackedRuntime.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsPackedRuntime.name(),
+					octetsPackedRuntime.desc(), octetsPackedRuntime.code());
 		}
 		if (secureRandomRuntime != null) {
-			secureRandomRuntime.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
-						secureRandomRuntime.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
+					secureRandomRuntime.desc(), secureRandomRuntime.code());
 		}
 		if (argvRuntime != null) {
-			argvRuntime.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(),
-						argvRuntime.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(), argvRuntime.desc(),
+					argvRuntime.code());
 		}
 		for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
-			mm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(), mm.code());
 		}
 		if (threadRuntimeBodies != null) {
 			for (JvmThreadRuntimeBuilder.ThreadMethod tm : threadRuntimeBodies.staticMethods()) {
-				tm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, tm.name(), tm.desc());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, tm.name(), tm.desc(), tm.code());
 			}
 			JvmThreadRuntimeBuilder.ThreadMethod callBody = threadRuntimeBodies.callMethod();
-			callBody.code().addTo(definition, AccessFlag.ACC_PUBLIC, callBody.name(), callBody.desc());
+			definition.addMethod(AccessFlag.ACC_PUBLIC, callBody.name(), callBody.desc(), callBody.code());
 		}
 		if (socketRuntime != null) {
 			for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
-				sm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(), sm.code());
 			}
 		}
 		if (ctorName != null) {
@@ -4541,7 +4520,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			instanceInitCode.aload(0);
 			instanceInitCode.invokespecial(java.util.Objects.requireNonNull(ctorObjectInitRef).methodRefEntry());
 			instanceInitCode.return_();
-			instanceInitCode.addTo(definition, AccessFlag.ACC_PUBLIC, initName, initDesc);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, initName, initDesc, instanceInitCode);
 		}
 		if (usesTlsConnect) {
 			Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
@@ -4551,66 +4530,62 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
 			// X509TrustManager: trust-all client/server checks (empty bodies) and
 			// an empty accepted-issuers array.
-			new MethodCode().return_().addTo(definition, AccessFlag.ACC_PUBLIC, clientName, trustedDesc);
-			new MethodCode().return_().addTo(definition, AccessFlag.ACC_PUBLIC, serverName, trustedDesc);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, new MethodCode().return_());
+			definition.addMethod(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, new MethodCode().return_());
 			MethodCode acceptedIssuersCode = new MethodCode();
 			acceptedIssuersCode.iconst_0();
 			acceptedIssuersCode.anewarray(java.util.Objects.requireNonNull(x509CertificateClass).entry());
 			acceptedIssuersCode.areturn();
-			acceptedIssuersCode.addTo(definition, AccessFlag.ACC_PUBLIC, issuersName, issuersDesc);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc, acceptedIssuersCode);
 		}
 		if (httpHandlerRuntime != null) {
 			// handle(Request): the RontoHttpServer.Handler implementation
 			// adapting each incoming request to the compiled Lisp handler.
 			JvmHttpHandlerRuntimeBuilder.HandleMethod hm = httpHandlerRuntime.handle();
-			hm.code().addTo(definition, AccessFlag.ACC_PUBLIC, hm.name(), hm.desc());
+			definition.addMethod(AccessFlag.ACC_PUBLIC, hm.name(), hm.desc(), hm.code());
 		}
 		{
-			lengthMethodBody.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lengthMethodBody.name(),
-						lengthMethodBody.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lengthMethodBody.name(),
+					lengthMethodBody.desc(), lengthMethodBody.code());
 		}
 		{
-			nthcdrMethodBody.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
-						nthcdrMethodBody.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
+					nthcdrMethodBody.desc(), nthcdrMethodBody.code());
 		}
 		{
-			eltCellMethodBody.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, eltCellMethodBody.name(),
-						eltCellMethodBody.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, eltCellMethodBody.name(),
+					eltCellMethodBody.desc(), eltCellMethodBody.code());
 		}
 		{
-			aritySurplusMethodBody.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
-						aritySurplusMethodBody.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
+					aritySurplusMethodBody.desc(), aritySurplusMethodBody.code());
 		}
 		{
-			arityMissingMethodBody.code()
-				.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, arityMissingMethodBody.name(),
-						arityMissingMethodBody.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, arityMissingMethodBody.name(),
+					arityMissingMethodBody.desc(), arityMissingMethodBody.code());
 		}
 		for (JvmStringIndexRuntimeBuilder.StringIndexMethod sm : stringIndexMethods) {
-			sm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(), sm.code());
 		}
 		for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
-			rm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(), rm.code());
 		}
 		for (JvmHashRuntimeBuilder.HashMethod hm : hashMethods) {
-			hm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc(), hm.code());
 		}
 		for (JvmArrayRuntimeBuilder.ArrayMethod am : arrayMethods) {
-			am.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(), am.code());
 		}
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
-			nm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+					nm.code());
 		}
 		// The gated complex helpers, present only when the program may
 		// create a complex -- a complex-free program keeps its bytes.
 		if (complexRuntime != null) {
 			for (JvmComplexRuntimeBuilder.ComplexMethod cm : complexRuntime.methods()) {
-				cm.code()
-					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8(),
+						cm.code());
 			}
 		}
 		// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
@@ -4642,30 +4617,33 @@ public final class JvmLispCompiler implements LispCompiler {
 				reportMethods.add(JvmUncaughtHandler.buildAsyncAwaited(cp));
 			}
 			for (JvmUncaughtHandler.Built built : reportMethods) {
-				built.code()
-					.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, built.name(), built.desc());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, built.name(), built.desc(),
+						built.code());
 			}
 		}
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
-			nm.code().addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+					nm.code());
 		}
-		ltdsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
-				lispToStringDescUtf);
-		ctdsCode.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
-				consToStringDescUtf);
-		charPrin1Code.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
+				lispToStringDescUtf, ltdsCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
+				consToStringDescUtf, ctdsCode);
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc,
+				charPrin1Code);
 		for (int g = 0; g < lookupBodies.size(); g++) {
 			Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
-			lookupBodies.get(g).addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc,
+					lookupBodies.get(g));
 		}
 		if (usesApplyRuntime) {
-			applyBody.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc, applyBody);
 		}
 		if (usesEval) {
-			envLookupBody.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName,
-					envLookupDesc);
-			evalBody.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc);
-			storeBody.addTo(definition, AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
+					envLookupBody);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc, evalBody);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc, storeBody);
 		}
 
 		// --java-static: every site that would have needed the bridge, at once, before
@@ -7111,9 +7089,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		int siteCurrent;
 
 		/**
-		 * The {@code {pc, site}} marks emission left, in pc order: where the innermost
-		 * located form changes. {@link #lineNumbers} turns them into the method's
-		 * {@code LineNumberTable}.
+		 * The {@code {position, site}} marks emission left, in position order: where the
+		 * innermost located form changes ({@link am.ik.jvm.MethodCode#position()}).
+		 * {@link #lines} turns them into the method's {@code LineNumberTable}.
 		 */
 		private final List<int[]> siteMarks = new ArrayList<>();
 
@@ -7212,8 +7190,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.rawGlobals = builder.rawGlobals;
 			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
-			this.stack = new OperandStack(this.cp);
-			this.body = new am.ik.jvm.MethodCode(new ArrayList<>(), this.stack, new ArrayList<>(), new ArrayList<>());
+			this.stack = new OperandStack();
+			this.body = new am.ik.jvm.MethodCode(this.stack);
 			this.bodyStart = this.body.newBoundLabel();
 			this.systemOut = Objects.requireNonNull(builder.systemOut);
 			this.printlnStr = Objects.requireNonNull(builder.printlnStr);
@@ -7330,7 +7308,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.siteOwner = from.siteOwner;
 			this.siteCurrent = from.siteCurrent;
 			if (this.siteCurrent != 0) {
-				this.siteMarks.add(new int[] { this.body.size(), this.siteCurrent });
+				this.siteMarks.add(new int[] { this.body.position(), this.siteCurrent });
 			}
 		}
 
@@ -7352,7 +7330,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			int saved = this.siteCurrent;
 			this.siteCurrent = site;
-			this.siteMarks.add(new int[] { this.body.size(), site });
+			this.siteMarks.add(new int[] { this.body.position(), site });
 			return saved;
 		}
 
@@ -7366,7 +7344,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				return;
 			}
 			this.siteCurrent = saved;
-			this.siteMarks.add(new int[] { this.body.size(), saved });
+			this.siteMarks.add(new int[] { this.body.position(), saved });
 		}
 
 		/**
@@ -7378,7 +7356,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		void restoreSite(int site) {
 			if (site != this.siteCurrent) {
 				this.siteCurrent = site;
-				this.siteMarks.add(new int[] { this.body.size(), site });
+				this.siteMarks.add(new int[] { this.body.position(), site });
 			}
 		}
 
@@ -7390,9 +7368,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * @param descriptor its descriptor
 		 */
 		void addTo(ClassDefinition.Builder definition, int access, Utf8Constant name, Utf8Constant descriptor) {
-			this.body.checkComplete();
-			definition.addMethod(access, name, descriptor, this.body.code(), this.body.handlers(), this.lines(),
-					this.body.longBranches());
+			definition.addMethod(access, name, descriptor, this.body, this.lines());
 		}
 
 		/**
@@ -7402,23 +7378,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * number is a site id ({@link JvmSourceSites}); {@link JvmSourceSites#NO_SITE}
 		 * marks code outside any site. The writer moves an entry along with the
 		 * instruction it starts at when a relaxed branch grows the code before it.
-		 * @return the entries, in pc order; empty when the method has no site
+		 * @return the entries, in position order; empty when the method has no site
 		 */
 		List<ClassDefinition.Line> lines() {
 			List<ClassDefinition.Line> entries = new ArrayList<>();
-			int end = this.body.size();
+			int end = this.body.position();
 			for (int[] mark : this.siteMarks) {
-				int pc = mark[0];
-				if (pc >= end) {
+				int position = mark[0];
+				if (position >= end) {
 					break;
 				}
-				if (!entries.isEmpty() && entries.getLast().startPc() == pc) {
+				if (!entries.isEmpty() && entries.getLast().position() == position) {
 					entries.removeLast();
 				}
 				int line = mark[1] == 0 ? JvmSourceSites.NO_SITE : mark[1];
 				int previous = entries.isEmpty() ? JvmSourceSites.NO_SITE : entries.getLast().lineNumber();
 				if (line != previous) {
-					entries.add(new ClassDefinition.Line(pc, line));
+					entries.add(new ClassDefinition.Line(position, line));
 				}
 			}
 			return entries;

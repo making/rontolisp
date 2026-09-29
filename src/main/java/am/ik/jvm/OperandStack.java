@@ -1,5 +1,10 @@
 package am.ik.jvm;
 
+import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.LoadableConstantEntry;
+import java.lang.classfile.constantpool.MemberRefEntry;
+import java.lang.classfile.constantpool.PoolEntry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -8,31 +13,27 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * An operand-stack model maintained while a method body is emitted. Every byte written
- * into the {@code Code} attribute is also fed to {@link #feed(int)}, which decodes the
- * instruction stream (opcode plus its operand bytes) and applies each instruction's
- * effect to a stack of computational types -- reference, int, float, long, double, the
- * same granularity the JVM verifier uses. The model answers two questions a code
- * generator cannot otherwise answer about its own output: what is live on the operand
- * stack right now (so a value can be spilled to a local and reloaded), and how deep did
- * the stack ever get (so {@code max_stack} can be a computed number rather than a guess).
+ * An operand-stack model maintained while a method body is emitted. Every instruction a
+ * compile context's {@link MethodCode} records is applied here, and its effect on a stack
+ * of computational types -- reference, int, float, long, double, the same granularity the
+ * JVM verifier uses -- is kept. The model answers two questions a code generator cannot
+ * otherwise answer about its own output: what is live on the operand stack right now (so
+ * a value can be spilled to a local and reloaded), and how deep did the stack ever get
+ * (so {@code max_stack} can be a computed number rather than a guess).
  *
  * <p>
- * Control flow is tracked through the same back-patching the emitter already performs. A
- * branch records the stack shape at its jump; when the branch is patched, the target
- * position adopts that shape ({@link #reconcile}), and a second branch to the same target
- * must agree -- a disagreement is exactly what the verifier would reject, so it is raised
- * here as a compiler bug instead of being written into an unverifiable class. After an
- * unconditional transfer ({@code goto}, {@code athrow}, a return) the model is
- * <em>unreachable</em> and instruction effects are ignored until a label or an exception
- * handler entry ({@link #enterHandler()}, whose stack holds only the thrown exception)
- * re-establishes a shape.
+ * Control flow is tracked through the labels. A branch records the stack shape at its
+ * jump; when its label is bound, the position adopts that shape ({@link #reconcile}), and
+ * a second branch to the same target must agree -- a disagreement is exactly what the
+ * verifier would reject, so it is raised here as a compiler bug instead of being written
+ * into an unverifiable class. After an unconditional transfer ({@code goto},
+ * {@code athrow}, a return) the model is <em>unreachable</em> and instruction effects are
+ * ignored until a label or an exception handler entry ({@link #enterHandler()}, whose
+ * stack holds only the thrown exception) re-establishes a shape.
  *
  * <p>
- * The model is exact for the instruction set an emitter can produce through this library;
- * an instruction it cannot model ({@code tableswitch}/{@code lookupswitch}/{@code jsr})
- * raises rather than silently desynchronizing. The {@code wide} prefix IS modelled: a
- * local index past 255 has no other encoding.
+ * The model is exact for the instruction set {@link MethodCode} records; an instruction
+ * it cannot model raises rather than silently desynchronizing.
  */
 public final class OperandStack {
 
@@ -75,89 +76,22 @@ public final class OperandStack {
 
 	}
 
-	private final ConstantPool cp;
-
 	private final List<Slot> stack = new ArrayList<>();
 
+	/** The shape each branch jumped with, by the branch's position. */
 	private final Map<Integer, List<Slot>> branchShapes = new HashMap<>();
 
 	private boolean reachable = true;
 
-	private int pc = 0;
-
 	private int maxDepth = 0;
 
-	private int opcode = -1;
+	/** The position of the instruction being applied, for the messages. */
+	private int at;
 
-	private int opcodePc = 0;
+	private @Nullable Opcode opcode;
 
-	private final int[] operands = new int[4];
-
-	/**
-	 * The operand values exactly as fed, before the cut to a byte: the high part of a
-	 * constant-pool index past 65535 arrives whole from an emitter whose pool outgrew one
-	 * class file (the master {@link ConstantPool}), and only the uncut value names the
-	 * entry. The byte view above stays what the class file will carry.
-	 */
-	private final int[] rawOperands = new int[4];
-
-	private int operandCount = 0;
-
-	private int operandsExpected = 0;
-
-	/** True between a {@code wide} prefix and the opcode it widens. */
-	private boolean pendingWide = false;
-
-	/**
-	 * Creates a model for a method body whose constants come from the given pool (the
-	 * pool resolves the descriptors of {@code invoke*}, the field ops and {@code ldc}).
-	 * @param cp the constant pool the emitted code indexes into
-	 */
-	public OperandStack(ConstantPool cp) {
-		this.cp = cp;
-	}
-
-	/**
-	 * Feeds one emitted code byte to the model: an opcode, or one of the operand bytes of
-	 * the opcode last fed. The instruction's effect is applied once its last operand byte
-	 * arrives.
-	 * @param b the byte written into the code array (only the low 8 bits are used)
-	 */
-	public void feed(int b) {
-		int value = b & 0xFF;
-		this.pc++;
-		if (this.operandsExpected > 0) {
-			if (this.operandCount < this.operands.length) {
-				this.operands[this.operandCount] = value;
-				this.rawOperands[this.operandCount] = b;
-			}
-			this.operandCount++;
-			if (--this.operandsExpected == 0) {
-				this.apply();
-			}
-			return;
-		}
-		if (this.pendingWide) {
-			// The opcode a `wide` prefix widens: the same instruction with a two-byte
-			// local index (four operand bytes for `iinc`, whose constant widens too).
-			this.pendingWide = false;
-			this.opcode = value;
-			this.opcodePc = this.pc - 2;
-			this.operandCount = 0;
-			this.operandsExpected = value == Opcode.IINC ? 4 : 2;
-			return;
-		}
-		if (value == Opcode.WIDE) {
-			this.pendingWide = true;
-			return;
-		}
-		this.opcode = value;
-		this.opcodePc = this.pc - 1;
-		this.operandCount = 0;
-		this.operandsExpected = operandBytes(value);
-		if (this.operandsExpected == 0) {
-			this.apply();
-		}
+	/** Creates a model for an empty method body. */
+	public OperandStack() {
 	}
 
 	/**
@@ -194,38 +128,6 @@ public final class OperandStack {
 	}
 
 	/**
-	 * Reconciles the model with a back-patched branch: the target position is reached
-	 * with the shape the branch had at its jump. Called when a forward branch emitted at
-	 * {@code branchPos} is patched to {@code targetPos}, which is the position about to
-	 * be emitted.
-	 * @param branchPos the position of the branch instruction
-	 * @param targetPos the position it jumps to
-	 * @param currentPos the position about to be emitted
-	 * @throws IllegalStateException when two paths reach the target with different
-	 * operand stacks -- a code-generator bug that would produce a class the verifier
-	 * rejects
-	 */
-	public void reconcile(int branchPos, int targetPos, int currentPos) {
-		List<Slot> shape = this.branchShapes.get(branchPos);
-		if (shape == null || targetPos != currentPos) {
-			// A backward branch (a loop's back edge) jumps to code already emitted, whose
-			// shape is fixed; nothing to establish here.
-			return;
-		}
-		if (!this.reachable) {
-			this.stack.clear();
-			this.stack.addAll(shape);
-			this.reachable = true;
-			this.record();
-			return;
-		}
-		if (!this.stack.equals(shape)) {
-			throw new IllegalStateException("operand stack mismatch at branch target " + targetPos + ": fall-through "
-					+ this.stack + " vs branch from " + branchPos + " " + shape);
-		}
-	}
-
-	/**
 	 * Marks the position about to be emitted as a join point the code generator knows is
 	 * reached with the given operand-stack shape -- a label targeted by branches that may
 	 * be emitted before or after this point (a backward jump's target has no recorded
@@ -246,154 +148,206 @@ public final class OperandStack {
 		this.record();
 	}
 
-	private void apply() {
-		int op = this.opcode;
+	/**
+	 * Reconciles the model with a forward branch whose label is bound at the position
+	 * about to be emitted: the position is reached with the shape the branch had at its
+	 * jump.
+	 * @param branch the branch's position
+	 * @throws IllegalStateException when two paths reach the target with different
+	 * operand stacks -- a code-generator bug that would produce a class the verifier
+	 * rejects
+	 */
+	void reconcile(int branch) {
+		List<Slot> shape = this.branchShapes.get(branch);
+		if (shape == null) {
+			// A branch emitted where the code was unreachable carries no shape.
+			return;
+		}
+		if (!this.reachable) {
+			this.stack.clear();
+			this.stack.addAll(shape);
+			this.reachable = true;
+			this.record();
+			return;
+		}
+		if (!this.stack.equals(shape)) {
+			throw new IllegalStateException("operand stack mismatch at a branch target: fall-through " + this.stack
+					+ " vs branch from " + branch + " " + shape);
+		}
+	}
+
+	/**
+	 * Applies a branch: its operands are popped and the shape its target is reached with
+	 * recorded; the code after a {@code goto} is unreachable.
+	 * @param position the branch's position
+	 * @param op a conditional branch or {@code goto}
+	 */
+	void branch(int position, Opcode op) {
+		if (!this.reachable) {
+			return;
+		}
+		this.at = position;
+		this.opcode = op;
+		switch (op) {
+			case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE, IFNULL, IFNONNULL -> this.pop();
+			case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE, IF_ACMPEQ, IF_ACMPNE -> {
+				this.pop();
+				this.pop();
+			}
+			case GOTO -> {
+			}
+			default -> throw new IllegalStateException("operand-stack model: " + op + " is not a short branch");
+		}
+		this.branchShapes.put(position, List.copyOf(this.stack));
+		if (op == Opcode.GOTO) {
+			this.reachable = false;
+		}
+	}
+
+	/**
+	 * Applies one instruction that is not a branch.
+	 * @param position its position
+	 * @param op its opcode (a local's load or store in its explicit-slot form)
+	 * @param entry the master-pool entry it names, or {@code null}
+	 */
+	void instruction(int position, Opcode op, @Nullable PoolEntry entry) {
 		if (!this.reachable) {
 			// Between an unconditional transfer and the next label the model has no
 			// shape; the label (or handler entry) re-establishes one.
 			return;
 		}
+		this.at = position;
+		this.opcode = op;
 		switch (op) {
-			case Opcode.NOP, Opcode.INEG, Opcode.LNEG, Opcode.FNEG, Opcode.DNEG, Opcode.IINC, Opcode.I2B, Opcode.I2C,
-					Opcode.I2S, Opcode.CHECKCAST ->
-				{
-				}
-			case Opcode.ACONST_NULL -> this.push(Slot.REF);
-			case Opcode.NEW -> this.push(Slot.UNINIT);
-			case Opcode.ICONST_M1, Opcode.ICONST_0, Opcode.ICONST_1, Opcode.ICONST_2, Opcode.ICONST_3, Opcode.ICONST_4,
-					Opcode.ICONST_5, Opcode.BIPUSH, Opcode.SIPUSH ->
+			case NOP, INEG, LNEG, FNEG, DNEG, IINC, I2B, I2C, I2S, CHECKCAST -> {
+			}
+			case ACONST_NULL -> this.push(Slot.REF);
+			case NEW -> this.push(Slot.UNINIT);
+			case ICONST_M1, ICONST_0, ICONST_1, ICONST_2, ICONST_3, ICONST_4, ICONST_5, BIPUSH, SIPUSH ->
 				this.push(Slot.INT);
-			case Opcode.LCONST_0, Opcode.LCONST_1 -> this.push(Slot.LONG);
-			case Opcode.FCONST_0, Opcode.FCONST_1, Opcode.FCONST_2 -> this.push(Slot.FLOAT);
-			case Opcode.DCONST_0, Opcode.DCONST_1 -> this.push(Slot.DOUBLE);
-			case Opcode.LDC, Opcode.LDC_W, Opcode.LDC2_W -> this.push(this.constantSlot());
-			case Opcode.ILOAD, Opcode.ILOAD_0, Opcode.ILOAD_1, Opcode.ILOAD_2, Opcode.ILOAD_3 -> this.push(Slot.INT);
-			case Opcode.LLOAD, Opcode.LLOAD_0, Opcode.LLOAD_1, Opcode.LLOAD_2, Opcode.LLOAD_3 -> this.push(Slot.LONG);
-			case Opcode.FLOAD, Opcode.FLOAD_0, Opcode.FLOAD_1, Opcode.FLOAD_2, Opcode.FLOAD_3 -> this.push(Slot.FLOAT);
-			case Opcode.DLOAD, Opcode.DLOAD_0, Opcode.DLOAD_1, Opcode.DLOAD_2, Opcode.DLOAD_3 -> this.push(Slot.DOUBLE);
-			case Opcode.ALOAD, Opcode.ALOAD_0, Opcode.ALOAD_1, Opcode.ALOAD_2, Opcode.ALOAD_3 -> this.push(Slot.REF);
-			case Opcode.ISTORE, Opcode.ISTORE_0, Opcode.ISTORE_1, Opcode.ISTORE_2, Opcode.ISTORE_3, Opcode.LSTORE,
-					Opcode.LSTORE_0, Opcode.LSTORE_1, Opcode.LSTORE_2, Opcode.LSTORE_3, Opcode.FSTORE, Opcode.FSTORE_0,
-					Opcode.FSTORE_1, Opcode.FSTORE_2, Opcode.FSTORE_3, Opcode.DSTORE, Opcode.DSTORE_0, Opcode.DSTORE_1,
-					Opcode.DSTORE_2, Opcode.DSTORE_3, Opcode.ASTORE, Opcode.ASTORE_0, Opcode.ASTORE_1, Opcode.ASTORE_2,
-					Opcode.ASTORE_3, Opcode.POP ->
-				this.pop();
-			case Opcode.IALOAD, Opcode.BALOAD, Opcode.CALOAD, Opcode.SALOAD -> this.replaceArrayLoad(Slot.INT);
-			case Opcode.LALOAD -> this.replaceArrayLoad(Slot.LONG);
-			case Opcode.FALOAD -> this.replaceArrayLoad(Slot.FLOAT);
-			case Opcode.DALOAD -> this.replaceArrayLoad(Slot.DOUBLE);
-			case Opcode.AALOAD -> this.replaceArrayLoad(Slot.REF);
-			case Opcode.IASTORE, Opcode.LASTORE, Opcode.FASTORE, Opcode.DASTORE, Opcode.AASTORE, Opcode.BASTORE,
-					Opcode.CASTORE, Opcode.SASTORE -> {
+			case LCONST_0, LCONST_1 -> this.push(Slot.LONG);
+			case FCONST_0, FCONST_1, FCONST_2 -> this.push(Slot.FLOAT);
+			case DCONST_0, DCONST_1 -> this.push(Slot.DOUBLE);
+			case LDC, LDC2_W -> this.push(switch (((LoadableConstantEntry) this.named(entry)).typeKind()) {
+				case LONG -> Slot.LONG;
+				case DOUBLE -> Slot.DOUBLE;
+				case FLOAT -> Slot.FLOAT;
+				case INT -> Slot.INT;
+				default -> Slot.REF;
+			});
+			case ILOAD -> this.push(Slot.INT);
+			case LLOAD -> this.push(Slot.LONG);
+			case FLOAD -> this.push(Slot.FLOAT);
+			case DLOAD -> this.push(Slot.DOUBLE);
+			case ALOAD -> this.push(Slot.REF);
+			case ISTORE, LSTORE, FSTORE, DSTORE, ASTORE, POP -> this.pop();
+			case IALOAD, BALOAD, CALOAD, SALOAD -> this.replaceArrayLoad(Slot.INT);
+			case LALOAD -> this.replaceArrayLoad(Slot.LONG);
+			case FALOAD -> this.replaceArrayLoad(Slot.FLOAT);
+			case DALOAD -> this.replaceArrayLoad(Slot.DOUBLE);
+			case AALOAD -> this.replaceArrayLoad(Slot.REF);
+			case IASTORE, LASTORE, FASTORE, DASTORE, AASTORE, BASTORE, CASTORE, SASTORE -> {
 				this.pop();
 				this.pop();
 				this.pop();
 			}
-			case Opcode.POP2 -> this.popSlots(2);
-			case Opcode.DUP -> this.duplicate(1, 0);
-			case Opcode.DUP_X1 -> this.duplicate(1, 1);
-			case Opcode.DUP_X2 -> this.duplicate(1, 2);
-			case Opcode.DUP2 -> this.duplicate(2, 0);
-			case Opcode.DUP2_X1 -> this.duplicate(2, 1);
-			case Opcode.DUP2_X2 -> this.duplicate(2, 2);
-			case Opcode.SWAP -> {
+			case POP2 -> this.popSlots(2);
+			case DUP -> this.duplicate(1, 0);
+			case DUP_X1 -> this.duplicate(1, 1);
+			case DUP_X2 -> this.duplicate(1, 2);
+			case DUP2 -> this.duplicate(2, 0);
+			case DUP2_X1 -> this.duplicate(2, 1);
+			case DUP2_X2 -> this.duplicate(2, 2);
+			case SWAP -> {
 				Slot top = this.pop();
 				Slot below = this.pop();
 				this.push(top);
 				this.push(below);
 			}
-			case Opcode.IADD, Opcode.ISUB, Opcode.IMUL, Opcode.IDIV, Opcode.IREM, Opcode.IAND, Opcode.IOR, Opcode.IXOR,
-					Opcode.ISHL, Opcode.ISHR, Opcode.IUSHR, Opcode.LSHL, Opcode.LSHR, Opcode.LUSHR ->
+			case IADD, ISUB, IMUL, IDIV, IREM, IAND, IOR, IXOR, ISHL, ISHR, IUSHR, LSHL, LSHR, LUSHR -> this.pop();
+			case LADD, LSUB, LMUL, LDIV, LREM, LAND, LOR, LXOR, FADD, FSUB, FMUL, FDIV, FREM, DADD, DSUB, DMUL, DDIV,
+					DREM ->
 				this.pop();
-			case Opcode.LADD, Opcode.LSUB, Opcode.LMUL, Opcode.LDIV, Opcode.LREM, Opcode.LAND, Opcode.LOR, Opcode.LXOR,
-					Opcode.FADD, Opcode.FSUB, Opcode.FMUL, Opcode.FDIV, Opcode.FREM, Opcode.DADD, Opcode.DSUB,
-					Opcode.DMUL, Opcode.DDIV, Opcode.DREM ->
-				this.pop();
-			case Opcode.I2L -> this.convert(Slot.LONG);
-			case Opcode.I2F -> this.convert(Slot.FLOAT);
-			case Opcode.I2D -> this.convert(Slot.DOUBLE);
-			case Opcode.L2I -> this.convert(Slot.INT);
-			case Opcode.L2F -> this.convert(Slot.FLOAT);
-			case Opcode.L2D -> this.convert(Slot.DOUBLE);
-			case Opcode.F2I -> this.convert(Slot.INT);
-			case Opcode.F2L -> this.convert(Slot.LONG);
-			case Opcode.F2D -> this.convert(Slot.DOUBLE);
-			case Opcode.D2I -> this.convert(Slot.INT);
-			case Opcode.D2L -> this.convert(Slot.LONG);
-			case Opcode.D2F -> this.convert(Slot.FLOAT);
-			case Opcode.LCMP, Opcode.FCMPL, Opcode.FCMPG, Opcode.DCMPL, Opcode.DCMPG -> {
+			case I2L -> this.convert(Slot.LONG);
+			case I2F -> this.convert(Slot.FLOAT);
+			case I2D -> this.convert(Slot.DOUBLE);
+			case L2I -> this.convert(Slot.INT);
+			case L2F -> this.convert(Slot.FLOAT);
+			case L2D -> this.convert(Slot.DOUBLE);
+			case F2I -> this.convert(Slot.INT);
+			case F2L -> this.convert(Slot.LONG);
+			case F2D -> this.convert(Slot.DOUBLE);
+			case D2I -> this.convert(Slot.INT);
+			case D2L -> this.convert(Slot.LONG);
+			case D2F -> this.convert(Slot.FLOAT);
+			case LCMP, FCMPL, FCMPG, DCMPL, DCMPG -> {
 				this.pop();
 				this.pop();
 				this.push(Slot.INT);
 			}
-			case Opcode.IFEQ, Opcode.IFNE, Opcode.IFLT, Opcode.IFGE, Opcode.IFGT, Opcode.IFLE, Opcode.IFNULL,
-					Opcode.IFNONNULL -> {
-				this.pop();
-				this.recordBranch();
-			}
-			case Opcode.IF_ICMPEQ, Opcode.IF_ICMPNE, Opcode.IF_ICMPLT, Opcode.IF_ICMPGE, Opcode.IF_ICMPGT,
-					Opcode.IF_ICMPLE, Opcode.IF_ACMPEQ, Opcode.IF_ACMPNE -> {
-				this.pop();
-				this.pop();
-				this.recordBranch();
-			}
-			case Opcode.GOTO -> {
-				this.recordBranch();
-				this.reachable = false;
-			}
-			case Opcode.IRETURN, Opcode.LRETURN, Opcode.FRETURN, Opcode.DRETURN, Opcode.ARETURN, Opcode.ATHROW -> {
+			case IRETURN, LRETURN, FRETURN, DRETURN, ARETURN, ATHROW -> {
 				this.pop();
 				this.reachable = false;
 			}
-			case Opcode.RETURN -> this.reachable = false;
-			case Opcode.GETSTATIC -> this.push(fieldSlot(this.descriptor()));
-			case Opcode.PUTSTATIC -> this.pop();
-			case Opcode.GETFIELD -> {
+			case RETURN -> this.reachable = false;
+			case GETSTATIC -> this.push(fieldSlot(this.fieldDescriptor(entry)));
+			case PUTSTATIC -> this.pop();
+			case GETFIELD -> {
 				this.pop();
-				this.push(fieldSlot(this.descriptor()));
+				this.push(fieldSlot(this.fieldDescriptor(entry)));
 			}
-			case Opcode.PUTFIELD -> {
+			case PUTFIELD -> {
 				this.pop();
 				this.pop();
 			}
-			case Opcode.INVOKEVIRTUAL, Opcode.INVOKEINTERFACE -> this.invoke(true);
-			case Opcode.INVOKESPECIAL -> {
+			case INVOKEVIRTUAL, INVOKEINTERFACE -> this.invoke(entry, true);
+			case INVOKESPECIAL -> {
 				// The constructor call that initializes what `new` allocated: every copy
 				// of the receiver (the `dup` the caller left below the arguments) becomes
 				// an ordinary reference.
-				boolean constructing = this.invoke(true) == Slot.UNINIT;
+				boolean constructing = this.invoke(entry, true) == Slot.UNINIT;
 				if (constructing) {
 					this.stack.replaceAll(slot -> slot == Slot.UNINIT ? Slot.REF : slot);
 				}
 			}
-			case Opcode.INVOKESTATIC -> this.invoke(false);
-			case Opcode.NEWARRAY, Opcode.ANEWARRAY -> {
+			case INVOKESTATIC -> this.invoke(entry, false);
+			case NEWARRAY, ANEWARRAY -> {
 				this.pop();
 				this.push(Slot.REF);
 			}
-			case Opcode.ARRAYLENGTH, Opcode.INSTANCEOF -> {
+			case ARRAYLENGTH, INSTANCEOF -> {
 				this.pop();
 				this.push(Slot.INT);
 			}
-			default -> throw new IllegalStateException(
-					"operand-stack model: unsupported opcode 0x" + Integer.toHexString(op) + " at " + this.opcodePc);
+			default -> throw new IllegalStateException("operand-stack model: unsupported " + op + " at " + position);
 		}
+	}
+
+	private PoolEntry named(@Nullable PoolEntry entry) {
+		if (entry == null) {
+			throw new IllegalStateException(
+					"operand-stack model: the " + this.opcode + " at " + this.at + " names no constant-pool entry");
+		}
+		return entry;
+	}
+
+	private String fieldDescriptor(@Nullable PoolEntry entry) {
+		if (!(this.named(entry) instanceof FieldRefEntry field)) {
+			throw new IllegalStateException(
+					"operand-stack model: the " + this.opcode + " at " + this.at + " names " + entry + ", not a field");
+		}
+		return field.type().stringValue();
 	}
 
 	/**
 	 * {@return the receiver the invoked method was called on, null when it is static}
 	 */
-	private @Nullable Slot invoke(boolean hasReceiver) {
-		String descriptor = this.descriptor();
-		if (!descriptor.startsWith("(")) {
-			// The operand names an entry that is not a method: the emitted index is
-			// corrupt (a u2 that was truncated, a wrong constant handed to the emitter),
-			// and reading a field descriptor as an argument list would report the damage
-			// as an operand-stack underflow instead.
-			throw new IllegalStateException(
-					"operand-stack model: the invoke at " + this.opcodePc + " references the constant-pool entry "
-							+ this.poolIndex() + ", whose descriptor " + descriptor + " is not a method descriptor");
+	private @Nullable Slot invoke(@Nullable PoolEntry entry, boolean hasReceiver) {
+		if (!(this.named(entry) instanceof MemberRefEntry method) || method instanceof FieldRefEntry) {
+			throw new IllegalStateException("operand-stack model: the " + this.opcode + " at " + this.at + " names "
+					+ entry + ", not a method");
 		}
+		String descriptor = method.type().stringValue();
 		for (int i = 0; i < argumentCount(descriptor); i++) {
 			this.pop();
 		}
@@ -403,38 +357,6 @@ public final class OperandStack {
 			this.push(returned);
 		}
 		return receiver;
-	}
-
-	/**
-	 * {@return the constant-pool index a two-byte operand names} The high part is read
-	 * uncut, so an index past 65535 -- which the class file itself can never carry, and
-	 * only an unbounded pool hands out -- still names its own entry here.
-	 */
-	private int poolIndex() {
-		return (this.rawOperands[0] << 8) | this.operands[1];
-	}
-
-	/**
-	 * {@return the descriptor of the constant-pool entry this instruction references}
-	 */
-	private String descriptor() {
-		int index = this.poolIndex();
-		String descriptor = this.cp.descriptorOf(index);
-		if (descriptor == null) {
-			throw new IllegalStateException("operand-stack model: no descriptor for the constant-pool entry " + index
-					+ " referenced at " + this.opcodePc);
-		}
-		return descriptor;
-	}
-
-	private Slot constantSlot() {
-		int index = this.opcode == Opcode.LDC ? this.rawOperands[0] : this.poolIndex();
-		String descriptor = this.cp.descriptorOf(index);
-		if (descriptor == null) {
-			throw new IllegalStateException("operand-stack model: no descriptor for the constant loaded at "
-					+ this.opcodePc + " (pool index " + index + ")");
-		}
-		return fieldSlot(descriptor);
 	}
 
 	private void push(Slot slot) {
@@ -455,8 +377,7 @@ public final class OperandStack {
 
 	private Slot pop() {
 		if (this.stack.isEmpty()) {
-			throw new IllegalStateException("operand-stack model: underflow at " + this.opcodePc + " (opcode 0x"
-					+ Integer.toHexString(this.opcode) + ")");
+			throw new IllegalStateException("operand-stack model: underflow at " + this.at + " (" + this.opcode + ")");
 		}
 		return this.stack.remove(this.stack.size() - 1);
 	}
@@ -508,10 +429,6 @@ public final class OperandStack {
 		this.push(to);
 	}
 
-	private void recordBranch() {
-		this.branchShapes.put(this.opcodePc, List.copyOf(this.stack));
-	}
-
 	/** Notes the current depth against the high-water mark {@code max_stack} reports. */
 	private void record() {
 		int depth = this.depth();
@@ -560,32 +477,6 @@ public final class OperandStack {
 			case 'I', 'Z', 'B', 'C', 'S' -> Slot.INT;
 			case 'L', '[' -> Slot.REF;
 			default -> throw new IllegalStateException("operand-stack model: bad descriptor " + descriptor);
-		};
-	}
-
-	/**
-	 * {@return the number of operand bytes the given opcode carries}
-	 */
-	private static int operandBytes(int opcode) {
-		return switch (opcode) {
-			case Opcode.BIPUSH, Opcode.LDC, Opcode.ILOAD, Opcode.LLOAD, Opcode.FLOAD, Opcode.DLOAD, Opcode.ALOAD,
-					Opcode.ISTORE, Opcode.LSTORE, Opcode.FSTORE, Opcode.DSTORE, Opcode.ASTORE, Opcode.NEWARRAY ->
-				1;
-			case Opcode.SIPUSH, Opcode.LDC_W, Opcode.LDC2_W, Opcode.IINC, Opcode.IFEQ, Opcode.IFNE, Opcode.IFLT,
-					Opcode.IFGE, Opcode.IFGT, Opcode.IFLE, Opcode.IF_ICMPEQ, Opcode.IF_ICMPNE, Opcode.IF_ICMPLT,
-					Opcode.IF_ICMPGE, Opcode.IF_ICMPGT, Opcode.IF_ICMPLE, Opcode.IF_ACMPEQ, Opcode.IF_ACMPNE,
-					Opcode.GOTO, Opcode.GETSTATIC, Opcode.PUTSTATIC, Opcode.GETFIELD, Opcode.PUTFIELD,
-					Opcode.INVOKEVIRTUAL, Opcode.INVOKESPECIAL, Opcode.INVOKESTATIC, Opcode.NEW, Opcode.ANEWARRAY,
-					Opcode.CHECKCAST, Opcode.INSTANCEOF, Opcode.IFNULL, Opcode.IFNONNULL ->
-				2;
-			case Opcode.MULTIANEWARRAY -> 3;
-			case Opcode.INVOKEINTERFACE, Opcode.INVOKEDYNAMIC, Opcode.GOTO_W, Opcode.JSR_W -> 4;
-			// `wide` never reaches here: feed() consumes the prefix and sizes the widened
-			// instruction from the opcode that follows it.
-			case Opcode.TABLESWITCH, Opcode.LOOKUPSWITCH, Opcode.JSR, Opcode.RET ->
-				throw new IllegalStateException("operand-stack model: opcode 0x" + Integer.toHexString(opcode)
-						+ " has a variable length and is not modelled");
-			default -> 0;
 		};
 	}
 

@@ -8,12 +8,11 @@ the write phase's time and every written class's size and pool count.
 
 ## The four format limits
 - **Branch offset, signed 16 bits** — a branch that does not reach is written in its long form
-  (`goto_w`, or an inverted short branch over one) by `am.ik.jvm.CodeReplay.Layout`, a fixpoint
-  over the method (widening one branch moves every later instruction). The emitters feed it
-  through `MethodCode`'s labels -> `MethodCode.longBranches` (placeholder offset bytes, true
-  target recorded); every emitter branches through them (the raw-list `patchBranch`, which
-  threw, is gone). NOT the writer's
-  own relaxation: see "Emission on java.lang.classfile" below.
+  (`goto_w`, or an inverted short branch over one) by `am.ik.jvm.CodeReplay.farBranches`, a
+  fixpoint over the method's records (widening one branch moves every later instruction). Every
+  emitter branches to a `MethodCode` label; the branch record names the label, so no offset is
+  ever encoded (the raw-list `patchBranch`, which threw, is gone). NOT the writer's own
+  relaxation: see "Emission on java.lang.classfile" below.
 - **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `JvmClassSplitter` rejects the emitted body
   loudly, naming the method, and the API rejects a written one the relaxation grew past it. A
   single enormous USER defun cannot be outlined.
@@ -29,30 +28,28 @@ the write phase's time and every written class's size and pool count.
 
 ## How a class is written
 The class is assembled as data, `am.ik.jvm.ClassDefinition` (header, fields, methods whose
-bodies are the emitters' code lists with their handler, line and long-branch tables), and
+bodies are the emitters' `MethodCode` records, with their line tables), and
 `am.ik.jvm.JvmClassSplitter.write` writes it -- every class the backend generates, the
 `java:` interface implementations included:
 
 - **One master pool.** `ConstantPool` wraps one `java.lang.classfile` `ConstantPoolBuilder`
-  for the whole program; the emitters' u2 operands are its indexes, kept whole past 65535 (every
-  u2 writer keeps the high part: `MethodCode`'s, the one left; `OperandStack` reads a pool
-  operand uncut). The builder refuses nothing as entries
-  are added -- only a pool being WRITTEN is held to 65535 (`Constant pool is too large`).
-- **The scan** (`JvmClassSplitter.Scan`) reads every body's pool operands once: the own-call
+  for the whole program; an instruction record names its master entry itself, so no index is
+  ever encoded and none can be cut. The builder refuses nothing as entries are added -- only a
+  pool being WRITTEN is held to 65535 (`Constant pool is too large`).
+- **The scan** (`JvmClassSplitter.Scan`) reads every body's entries once: the own-call
   graph (`OwnCallGraph`) answers `unresolvedSelfMethods` (the gate check, on every build) and
   the shake (every `--optimize` level but `off`), and each method's closure of master entries
   is what placement counts.
 - **Each class is built with a pool of its own** (`ClassFile.build`, a fresh
   `ConstantPoolBuilder`), holding exactly the entries its members reference in write order --
-  so `--optimize=off` output is compacted too. `CodeReplay` plays every body into the
-  `CodeBuilder` instruction by instruction: branch targets and handler ranges become labels,
-  a master entry is re-minted in the class's pool as its operand is written (an `ldc` takes the
-  width its index there needs, both ways), and the frames, `max_stack` and `max_locals` come
-  from `StackMapsOption.GENERATE_STACK_MAPS` over `StackMapFrames.resolver`
-  ([stack-map-frames.md](stack-map-frames.md)). A local's load/store, an `iinc` and a small int
-  constant are written in their SHORTEST form whatever form was emitted (`aload 2` ->
-  `aload_2`, `bipush 3` -> `iconst_3`, as `CodeBuilder` writes them); every other instruction
-  keeps its form. One pass: no written bytes are parsed again.
+  so `--optimize=off` output is compacted too. `CodeReplay` plays every body's records into
+  the `CodeBuilder`: branch targets and handler ranges become labels, a master entry is re-minted
+  in the class's pool as its instruction is written (an `ldc` takes the width its index there
+  needs, both ways), a local's load/store, an `iinc` and an int constant take their SHORTEST
+  form (as `CodeBuilder` writes them), and the frames, `max_stack` and `max_locals` come from
+  `StackMapsOption.GENERATE_STACK_MAPS` over `StackMapFrames.resolver`
+  ([stack-map-frames.md](stack-map-frames.md)). Nothing is decoded: no code bytes exist before
+  the class's own.
 - **The decision**: what the class keeps (after the shake) summed over master-entry closures;
   within `classPoolLimit` (the format limit) it is written as one class. Past it, or when the
   frames' own entries overflow a class that fit, it is split.
@@ -113,23 +110,55 @@ the first raw lists (a86); every other expression compiler (a90), so `Ctx.emit`/
 operand-type runtimes (a87); and the small builders with `JvmLispCompiler`'s own code (a88), so
 `JvmRuntimeBuilder`'s shared raw-list helpers (`emitU2`/`emitLdc`/`emitIntConstStatic`/
 `patchBranch`), `codeBytes` and the `ClassDefinition.Builder.addMethod` overload taking a
-declared max_stack/max_locals are gone. No emitter writes code bytes of its own; `MethodCode`
-still stores them, which `CodeReplay` decodes. The remaining slice is `.todo/a91`: `MethodCode`
-storing instruction records so the code bytes, their decoders and `am.ik.jvm.Opcode` go.
+declared max_stack/max_locals are gone. Since a91 `MethodCode` stores instruction records, so no
+code bytes exist before the written class's own: the decoders and `am.ik.jvm.Opcode` are gone
+("The records" below).
 
 **The layer** (`MethodCode`): typed instructions over master-pool entries
 (`ConstantPool.entries()`, plus `classEntry`/`methodRef`/`interfaceMethodRef`/`fieldRef`/
 `stringEntry` for an emitter building from names), `size()`, labels (a branch to an unbound
-label waits for `labelBinding`; one past the 16-bit offset is recorded as a long branch;
-`checkComplete` refuses a branch left waiting -- its placeholder would jump to itself),
-`exceptionCatch` over bound labels, `append` (a body built apart with every label bound: the
-dispatch tables' case bodies, `<clinit>`'s pieces; its handlers and long branches rebased; never
-onto a body feeding an operand-stack model), and `addTo(definition, ...)`. Until
-a91 it stores code bytes; over a compile context it feeds `Ctx.stack` every byte and reconciles
-the model where a forward branch's label is bound. It encodes a local in the explicit-slot form
-the byte emitters used (`aload 1`, two bytes; `wide` past 255) and an int in the shortest, so a sequence
-moved onto it MEASURES what it measured and no budget decides differently; the writer's
-shortest forms make the class the same either way.
+label waits for `labelBinding`; `checkComplete` refuses a branch left waiting), `exceptionCatch`
+over bound labels, `append` (a body built apart with every label bound: the dispatch tables' case
+bodies, `<clinit>`'s pieces; its records copied, the labels its branches name and its handlers
+rebased; never onto a body feeding an operand-stack model), and
+`ClassDefinition.Builder.addMethod(access, name, desc, body)` to add it -- the layer names no class
+definition (a `MethodCode.addTo` made the pair a class cycle, `PackageCycleTest`). Over a compile
+context it feeds `Ctx.stack` every typed instruction and reconciles the model where a forward
+branch's label is bound. `size()` is the WRITTEN size: a local's load or store, an `iinc` and an int
+in their shortest forms, an `ldc` by its master index (the writer re-decides the width by the
+class's index), and a branch the layer knows to be far -- its offset is known at its label's
+binding, or at once for a bound label -- in its long form (+2 for a `goto`, +5 for a conditional
+branch). A far branch the layer did not see (one pushed out of reach by another's widening) is
+the writer's to find: the measure is the truth but for that cascade and the `ldc` widths.
+
+**The records** (a91, 2026-09-29): one record per instruction -- its opcode (a local's load or
+store in its explicit-slot form, `LDC` for any one-slot constant), an int (a slot, a constant, a
+`newarray` code, an `iinc`'s slot and increment in one int), and a master entry or the label a
+branch names -- in three parallel arrays. A position (a label's, a handler range's, a line
+entry's -- `MethodCode.position()`, `ClassDefinition.Line`) is an instruction's index. Everything
+that decoded bytes reads records: `CodeReplay` plays them, `CodeReplay.farBranches` lays them out
+by their written sizes, the scan collects their entries, `OperandStack` applies each typed
+instruction. Gone: the decoder (`CodeReplay.length`/`index`), `OperandStack`'s byte state machine
+and its `wide` handling, `MethodCode.longBranches` with `ClassDefinition.Branch` and
+`ClassDefinition.Handler` (`MethodCode.Handler` is over positions), `am.ik.jvm.Opcode` (a branch
+chosen at run time is a `java.lang.classfile.Opcode`, `JvmEmitHelper.branch` with it).
+Byte-identical under a temporary patch measuring as the bytes did (a local in its explicit-slot
+form, a far branch short; `legacy.py` in
+`.todo/artefacts/a91-methodcode-stores-instructions-and-the-code-bytes-go/`): the 4,857 programs
+(4,269 compiled on both sides, identical; the rest failed alike), every CLI compile above, the gate
+programs. Then the written measure alone, against the same jar:
+
+| program | `_invoke_v` segments | `_top$` chunks | methods | class bytes |
+|---|---|---|---|---|
+| ci-spec corpus | 47 -> 45 | 56 -> 54 | 6,232 -> 6,221 | 7,522,623 -> 7,530,635 |
+| mito probe | 75 -> 72 | same | 8,480 + 489 -> 8,469 + 487 | 9,045,792 + 2,758,018 -> 9,042,408 + 2,757,894 |
+
+Every dispatch family loses a segment or two, `_lookup` (21 -> 20 corpus, 47 -> 45 in mito's
+`$Part1`) and the outlined continuations (`_k$`, corpus 5 -> 4) too; a defun whose emitted size
+was past `HUGE_METHOD_LIMIT` but whose written size is not is no longer cut by `AstOutliner`
+(mito: one lambda fewer); methods over 8,000 bytes 61 -> 58 corpus, 19 -> 18 mito. The corpus
+class is 8,012 B larger, all of it frames (1,908,453 -> 1,916,574 B; code +460 B): fewer, longer
+methods carry more locals in each frame, since a temporary's slot is never reused ("Local slots").
 
 **The first slice** (`JvmHashRuntimeBuilder` from `JvmAsm`, most of it by a regex pass, and
 `JvmHashTableCompiler` from `ctx.emit`/`patchBranch`) came out BYTE-IDENTICAL: the ci-spec
@@ -302,10 +331,10 @@ program's output unchanged.
    below index 256 in its class), none longer; ci-spec corpus 6,214 -- 6,213 equal, 1 shorter
    by 2. With the writer's shortest forms: mito 163 equal, 8,777 shorter (up to 862 bytes,
    6,166,021 -> 5,910,137 in all), none longer; corpus 322 equal, 5,892 shorter (up to 2,384).
-   The methods over 8,000 bytes are the same COUNT either way (20 mito, 62 corpus). The written
-   length can exceed the emitted one only by a relaxed branch (+2 / +5) or an `ldc` whose
-   constant landed past 255 (+1): a budget measured on the buffer holds, a little pessimistic
-   until a91 counts the shortest forms.
+   The methods over 8,000 bytes are the same COUNT either way (20 mito, 62 corpus). Since a91 the
+   buffer is records and its measure the written size ("The records"): it can fall short of the
+   written length only by a branch pushed out of reach by another's widening (+2 / +5) or an
+   `ldc` whose constant landed past 255 (+1).
 2. **The lossless over-limit pool.** The master pool is a `ConstantPoolBuilder`, which grows
    past 65535 without complaint (checked only when written), so the split keeps its design:
    placement over master-entry closures, and re-pointing as a call is written into a class whose
@@ -317,10 +346,10 @@ short jump of a method overflows, the API throws the method away and re-emits it
 forward branch in its long form (+5 per conditional, +2 per `goto`). The jose test suite's
 `JSON::DECODE-JSON-ARRAY` (7,038 branches, one of them past the reach) came out at 82,541
 bytes -- past the limit -- where `BranchRelaxer`'s fixpoint wrote 59,751. The replay widens only
-the branches that do not reach (`CodeReplay.Layout`, the same fixpoint, allowing one byte per
-`ldc` for the widths the writer picks): 57,909 bytes, one `goto_w`. The writer runs under
-`FAIL_ON_SHORT_JUMPS`, so a branch the fixpoint missed is a loud compile error rather than a
-method grown by a third. A typed layer relaxing in its own records keeps this rule.
+the branches that do not reach (`CodeReplay.farBranches`, the same fixpoint over the records'
+written sizes, allowing one byte per two-byte `ldc` for the widths the writer picks): 57,909 bytes,
+one `goto_w`. The writer runs under `FAIL_ON_SHORT_JUMPS`, so a branch the fixpoint missed is a
+loud compile error rather than a method grown by a third.
 
 **Measured 2026-09-29** (JDK 25.0.4, cold CLI runs, `-o X.class`, default `--optimize`), the byte
 writer (`toBytes`, then the shaker's parse+write, then the frame pass's parse+write; or the
@@ -392,15 +421,16 @@ is never reused.
   `#aMaphashWhoseCounterLandsPastSlot255IncrementsItsOwnLocal`,
   `#anObjSlotsWalkWhoseCursorLandsPastSlot255DecrementsItsOwnLocal`,
   `.compileCharBeyondBmpCodePoint`
-- The layer: `am.ik.jvm.MethodCodeTest` (labels both ways, a long branch, `wide` locals and
-  `iinc`, explicit emitted/shortest written forms, an unbound label refused, `invokeinterface`'s
-  count, a handler, the operand-stack model kept in step, an array store and a return chosen
-  by kind, a spliced block and what cannot be spliced)
+- The layer: `am.ik.jvm.MethodCodeTest` (labels both ways, a far branch measured long forward
+  and backward, `wide` locals and `iinc`, the measure as the written size, an unbound label
+  refused, `invokeinterface`'s count, a handler, the operand-stack model kept in step and a join
+  reached with two shapes refused, an array store and a return chosen by kind, a block spliced
+  twice and what cannot be spliced)
 - The writer: `am.ik.jvm.CodeReplayTest` (a long branch over wide locals, only the branch that
-  does not reach widened, a widening cascade, handlers, `ldc` widened and narrowed by the
-  class's pool, wide `iinc`, a body past the limit), `LineNumberTableTest` (lines through the
-  shake, a relaxed branch and a part), `ConstantPoolTest` (indexes past the limit, `-0.0`,
-  the Utf8 cap), and `JoseTestSuiteE2eTest` (the real 57,909-byte method)
+  does not reach widened, a widening cascade past the measure, handlers, `ldc` widened and
+  narrowed by the class's pool, wide `iinc`, a body past the limit), `LineNumberTableTest` (lines
+  through the shake, a relaxed branch and a part), `ConstantPoolTest` (indexes past the limit,
+  `-0.0`, the Utf8 cap), and `JoseTestSuiteE2eTest` (the real 57,909-byte method)
 - The split: `am.ik.jvm.JvmClassSplitterTest` (parts run, what cannot move stays, indexes past
   65535, the shake, unresolved own calls), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
   class for real, forced splits at both optimize levels, an export library),
