@@ -61,6 +61,10 @@ final class JvmRuntimeBuilder {
 	 */
 	private static final int DISPATCH_CASE_OVERHEAD = 24;
 
+	static final String FUN_NAME_NAME = "_funName";
+
+	static final String FUN_NAME_DESC = "(I)Ljava/lang/String;";
+
 	static List<JvmLispCompiler.DispatchMethod> buildDispatchMethods(int arity,
 			Map<String, JvmLispCompiler.FunctionInfo> functions, List<JvmLispCompiler.LambdaInfo> lambdaDecls,
 			List<JvmLispCompiler.FunctionInfo> lambdaFuncInfos, ConstantPool cp, ClassConstant thisClass,
@@ -393,7 +397,14 @@ final class JvmRuntimeBuilder {
 				// (so a String-designator lookup happens once) with the arguments
 				// unchanged. An id below the first segment's range, or above the last
 				// one's, lands in a real segment whose tree answers null for it.
-				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, fvSlot, dispatchArgs, segmentRefs);
+				List<Integer> segmentArgs = new ArrayList<>();
+				segmentArgs.add(Opcode.ALOAD);
+				segmentArgs.add(fvSlot);
+				for (int i = 0; i < dispatchArgs; i++) {
+					segmentArgs.add(Opcode.ALOAD);
+					segmentArgs.add(i + 1);
+				}
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, idSlot, segmentArgs, segmentRefs);
 			}
 			else {
 				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
@@ -453,18 +464,14 @@ final class JvmRuntimeBuilder {
 
 	/**
 	 * Emits the router's search tree over {@code ranges[lo..hi]}: each internal node
-	 * compares the id against the largest id its left half holds, each leaf tail-calls
-	 * that segment.
+	 * compares the id against the largest id its left half holds, each leaf loads the
+	 * segment's arguments ({@code segmentArgs}, instructions emitted verbatim) and
+	 * tail-calls that segment.
 	 */
 	private static void emitSegmentRouter(List<Integer> code, List<Case> cases, List<int[]> ranges, int lo, int hi,
-			int idSlot, int fvSlot, int arity, List<MethodrefConstant> segmentRefs) {
+			int idSlot, List<Integer> segmentArgs, List<MethodrefConstant> segmentRefs) {
 		if (lo == hi) {
-			code.add(Opcode.ALOAD);
-			code.add(fvSlot);
-			for (int i = 0; i < arity; i++) {
-				code.add(Opcode.ALOAD);
-				code.add(i + 1);
-			}
+			code.addAll(segmentArgs);
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, segmentRefs.get(lo).index());
 			code.add(Opcode.ARETURN);
@@ -477,9 +484,9 @@ final class JvmRuntimeBuilder {
 		int ifRight = code.size();
 		code.add(Opcode.IF_ICMPGT);
 		emitU2(code, 0);
-		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, fvSlot, arity, segmentRefs);
+		emitSegmentRouter(code, cases, ranges, lo, mid, idSlot, segmentArgs, segmentRefs);
 		patchBranch(code, ifRight, code.size());
-		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, fvSlot, arity, segmentRefs);
+		emitSegmentRouter(code, cases, ranges, mid + 1, hi, idSlot, segmentArgs, segmentRefs);
 	}
 
 	/**
@@ -3203,29 +3210,63 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the body of {@code _funName}: a static {@code (I)Ljava/lang/String;}
-	 * linear-scan table from funcId to the name it was defined under, or null for a
-	 * funcId with no name (the runtime sentinel, and any funcId the gate dropped). The
-	 * reverse direction of the {@code _lookup} registry, gated on the same funcId set so
-	 * the two agree on which functions carry names at run time.
+	 * Builds {@code _funName}: a static {@code (I)Ljava/lang/String;} table from funcId
+	 * to the name it was defined under, or null for a funcId with no name (the runtime
+	 * sentinel, and any funcId the gate dropped). The reverse direction of the
+	 * {@code _lookup} registry, gated on the same funcId set so the two agree on which
+	 * functions carry names at run time.
+	 * <p>
+	 * The rows go through the dispatch tables' machinery: cut into segments under
+	 * {@link #DISPATCH_SEGMENT_BUDGET} (one linear chain of 2,138 rows was 23 KB, past
+	 * HotSpot's HugeMethodLimit), each searched by {@link #emitDispatchTree}; past one
+	 * segment {@code _funName} is a router ({@link #emitSegmentRouter}) tail-calling
+	 * {@code _funName$k}. Cutting the rows also bounds the pool references any one method
+	 * holds, which the class splitter cannot divide.
 	 * @param entries funcId to name string constant, in ascending funcId order
-	 * @return the bytecode body
+	 * @param cp the constant pool
+	 * @param thisClass the generated class
+	 * @return the methods, {@code _funName} first
 	 */
-	static List<Integer> buildFunNameBody(SortedMap<Integer, ConstantPool.StringConstant> entries) {
-		List<Integer> code = new ArrayList<>();
+	static List<JvmLispCompiler.DispatchMethod> buildFunNameMethods(
+			SortedMap<Integer, ConstantPool.StringConstant> entries, ConstantPool cp, ClassConstant thisClass) {
+		List<Case> cases = new ArrayList<>();
 		for (Map.Entry<Integer, ConstantPool.StringConstant> entry : entries.entrySet()) {
-			code.add(Opcode.ILOAD_0);
-			emitIntConstStatic(code, entry.getKey());
-			int skip = code.size();
-			code.add(Opcode.IF_ICMPNE);
-			emitU2(code, 0);
-			emitLdc(code, entry.getValue().index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, skip, code.size());
+			List<Integer> body = new ArrayList<>();
+			emitLdc(body, entry.getValue().index());
+			body.add(Opcode.ARETURN);
+			cases.add(new Case(entry.getKey(), body));
 		}
-		code.add(Opcode.ACONST_NULL);
-		code.add(Opcode.ARETURN);
-		return code;
+		List<int[]> ranges = partitionCases(cases);
+		boolean routed = ranges.size() > 1;
+		Utf8Constant descUtf8 = cp.addUtf8(FUN_NAME_DESC);
+		List<MethodrefConstant> segmentRefs = new ArrayList<>();
+		if (routed) {
+			for (int k = 0; k < ranges.size(); k++) {
+				segmentRefs
+					.add(cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(FUN_NAME_NAME + "$" + k), descUtf8)));
+			}
+		}
+		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
+		for (int segment = 0; segment <= (routed ? ranges.size() : 0); segment++) {
+			String name = segment == 0 ? FUN_NAME_NAME : FUN_NAME_NAME + "$" + (segment - 1);
+			List<Integer> code = new ArrayList<>();
+			if (routed && segment == 0) {
+				emitSegmentRouter(code, cases, ranges, 0, ranges.size() - 1, 0, List.of(Opcode.ILOAD_0), segmentRefs);
+			}
+			else {
+				int[] range = routed ? ranges.get(segment - 1) : new int[] { 0, cases.size() - 1 };
+				List<Integer> defaultJumps = new ArrayList<>();
+				emitDispatchTree(code, cases, range[0], range[1], 0, defaultJumps);
+				int defaultPos = code.size();
+				for (int jump : defaultJumps) {
+					patchBranch(code, jump, defaultPos);
+				}
+				code.add(Opcode.ACONST_NULL);
+				code.add(Opcode.ARETURN);
+			}
+			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(name), descUtf8, code, 1));
+		}
+		return methods;
 	}
 
 	// Emits "if (val instanceof CompletableFuture) return "#<FUTURE>";" at the current

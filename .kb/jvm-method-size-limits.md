@@ -87,8 +87,8 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
   quoted-datum table and the later shakes.
 - **Still bounded**: all fields stay in the class, so fields plus the kept methods must fit one
   pool (`the class's fixed part ... needs N`); one method's own references must fit one pool
-  (`_funName`'s name table is the first to grow with the program: 2 entries per nameable
-  function).
+  (`_funName`'s name table grows with the program, 2 entries per nameable function, but is cut
+  into `_funName$k` segments, so no one method holds them all).
 - **Test instruments** (system properties, also `Builder` methods):
   `-Drontolisp.jvm.class-pool-limit=N` forces the split onto small programs;
   `-Drontolisp.jvm.pool-index-origin=70000` starts every index past 65535

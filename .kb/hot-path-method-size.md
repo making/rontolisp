@@ -28,6 +28,11 @@ divisor, `reduce`, `sort`). Both halves near 4 KB.
   would have to measure a variable-length instruction whose padding depends on its absolute
   position. Emitting on `java.lang.classfile` ([jvm-method-size-limits.md](jvm-method-size-limits.md),
   "Emission on java.lang.classfile") removes that obstacle: the writer lays the switch out.
+- `_funName` (funcId -> name, behind `#<function NAME>`) uses the same partition, tree and
+  router (`buildFunNameMethods`); it was one linear chain, 23,386 B on clack/ningle (2,138 rows).
+  Measured 2026-09-29 on `examples/net/httpbin-ningle.lisp`: `_funName` 23,386 -> 113 B (router)
+  + 10 segments; `H.class` 3,630,061 -> 3,645,551 B, pool 28,373 -> 28,403, methods 3,740 ->
+  3,750. The tree costs ~20 B a row against the chain's 11; a lookup is logarithmic.
 
 ## The body splitter (`_k$N` tail continuations)
 `JvmBodyOutliner` drives every defun and lambda body from a QUEUE, so the whole TAIL SPINE (its
@@ -113,9 +118,9 @@ run once per AST node at COMPILE time and stay over.
 ## Tests
 - `LispEvaluatorHotMethodSizeTest`; `JvmLibraryMethodSizeTest` (ironclad compile, plus a
   clack/ningle case via `JvmSourceCompiler` gated on `RONTOLISP_NINGLE_E2E=1`). **Neither case
-  allows a method by name**; only `_top$0` / `_top$1` / `<clinit>` are over. Measured 2026-09-29,
-  the gated case FAILS on `_funName` (23,386 B: 2,138 rows of one linear funcId -> name chain,
-  the one funcId table without a segment budget; a pre-a83 jar the same), `.todo/a92`.
+  allows a method by name**; only `_top$0` / `_top$1` / `<clinit>` are over.
+- `JvmLispCompilerTest.aFunctionNameTablePastTheMethodSizeBudgetIsSegmented` (1000 nameable
+  function values).
 - `JvmLispCompilerTest.aBranchArmPastTheMethodSizeBudgetBecomesItsOwnMethod`,
   `.aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations`,
   `.aSplitFunctionBodyCarriesItsUnboxedLocalsAcross`.

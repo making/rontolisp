@@ -4868,6 +4868,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aFunctionNameTablePastTheMethodSizeBudgetIsSegmented() throws Exception {
+		// _funName is the funcId -> name table behind #<function NAME>: one 11-byte row
+		// per
+		// function that is taken as a value. 1000 of them is 11,000 bytes as one chain,
+		// past
+		// HotSpot's HugeMethodLimit, so the rows are cut into segments behind a router
+		// (.kb/hot-path-method-size.md). The program pins that the first, a middle, one
+		// on
+		// each side of a segment boundary and the last function still print their own
+		// name.
+		int functions = 1000;
+		StringBuilder sb = new StringBuilder();
+		for (int k = 0; k < functions; k++) {
+			sb.append("(defun fn").append(k).append(" (x) (+ x ").append(k).append("))\n");
+		}
+		sb.append("(defvar *fs* (list");
+		for (int k = 0; k < functions; k++) {
+			sb.append(" #'fn").append(k);
+		}
+		sb.append("))\n");
+		int[] probes = { 0, 1, 499, 500, 998, 999 };
+		StringBuilder expected = new StringBuilder();
+		for (int probe : probes) {
+			sb.append("(print (nth ").append(probe).append(" *fs*))\n");
+			expected.append("#<function FN").append(probe).append(">\n");
+		}
+		sb.append("(print (funcall (nth 999 *fs*) 1))\n");
+		expected.append("1000");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes).as("the name table is emitted").containsKey("_funName");
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no method that runs per printed function crosses the limit").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo(expected.toString());
+	}
+
+	@Test
 	void aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations() throws Exception {
 		// A defun body that would compile past HotSpot's 8000-bytecode HugeMethodLimit
 		// is split into _k$N tail continuations (.kb/hot-path-method-size.md). The

@@ -3359,8 +3359,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				funNameEntries.put(entry.getValue().funcId(), cp.addString(entry.getKey()));
 			}
 		}
-		Utf8Constant funNameName = funNameEntries.isEmpty() ? null : cp.addUtf8("_funName");
-		Utf8Constant funNameDescUtf = funNameEntries.isEmpty() ? null : cp.addUtf8("(I)Ljava/lang/String;");
+		Utf8Constant funNameName = funNameEntries.isEmpty() ? null : cp.addUtf8(JvmRuntimeBuilder.FUN_NAME_NAME);
+		Utf8Constant funNameDescUtf = funNameEntries.isEmpty() ? null : cp.addUtf8(JvmRuntimeBuilder.FUN_NAME_DESC);
 		final JvmRuntimeBuilder.FuncPrint funcPrint = new JvmRuntimeBuilder.FuncPrint(
 				funNameName == null ? null
 						: cp.addMethodref(thisClass,
@@ -3368,8 +3368,8 @@ public final class JvmLispCompiler implements LispCompiler {
 										Objects.requireNonNull(funNameDescUtf))),
 				integerClass, integerValue, stringConcat, cp.addString("#<function "), cp.addString(">"),
 				cp.addString("#<lambda>"));
-		List<Integer> funNameCode = funNameEntries.isEmpty() ? List.of()
-				: JvmRuntimeBuilder.buildFunNameBody(funNameEntries);
+		List<DispatchMethod> funNameMethods = funNameEntries.isEmpty() ? List.of()
+				: JvmRuntimeBuilder.buildFunNameMethods(funNameEntries, cp, thisClass);
 
 		// Instances print as #S(NAME :SLOT v ...) / #<NAME :SLOT v ...>. Every constant
 		// is minted here, AFTER the body passes have interned whatever layouts the
@@ -4389,11 +4389,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				strEscCode, List.of());
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf, 4, 7,
 				symEscCode, List.of());
-		if (!funNameCode.isEmpty()) {
-			// _funName: the funcId -> name table behind #<function NAME>. Emitted
-			// only when the gate found a nameable function value (see above).
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, Objects.requireNonNull(funNameName),
-					Objects.requireNonNull(funNameDescUtf), 2, 1, funNameCode, List.of());
+		for (DispatchMethod fm : funNameMethods) {
+			// _funName (and its _funName$k segments): the funcId -> name table behind
+			// #<function NAME>. Emitted only when the gate found a nameable function
+			// value (see above).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.nameUtf8(), fm.descUtf8(), 2,
+					fm.maxLocals(), fm.code(), List.of());
 		}
 		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf, 3,
 				3, ltsCode, List.of());
