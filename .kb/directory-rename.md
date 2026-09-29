@@ -160,7 +160,7 @@ consequence from a rename.
 ./mvnw spring-javaformat:apply
 ```
 
-Then the Lisp half, from `CLAUDE.md`'s "After Task Completion" -- a renamed directory under
+Then the Lisp half, from `.kb/session-workflow.md`'s "After task completion" -- a renamed directory under
 `examples/` is inside that command's argument list.
 
 ### 4. A fixture LOOKUP anchored at the path, and the skip count that reports it

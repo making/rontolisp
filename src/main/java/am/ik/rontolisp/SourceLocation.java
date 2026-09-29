@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * It lives in the AST's own package rather than in {@code reader} because both consumers
  * need it and the frontend passes ({@code compiler}, {@code codegen.*}) may not import
- * {@code reader} -- see the package-dependency rules in {@code CLAUDE.md}.
+ * {@code reader} -- see the package-dependency rules in {@code .kb/architecture.md}.
  *
  * @param file the origin file, or {@code null} when unknown (a REPL buffer, a runtime
  * {@code read} of a string, ...)

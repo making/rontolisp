@@ -6,7 +6,7 @@ package am.ik.rontolisp.format;
  * <p>
  * Positions are computed here rather than through {@code am.ik.rontolisp.SourceLocation}
  * so the {@code format} package stays free of dependencies -- see the package-dependency
- * rules in {@code CLAUDE.md}.
+ * rules in {@code .kb/architecture.md}.
  */
 public final class FormatException extends RuntimeException {
 

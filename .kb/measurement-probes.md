@@ -61,7 +61,7 @@ to ship (force every head accepted; rewrite an operand to the matching width).
 
 ## Rule 3: an A/B whose baseline moved is not an A/B
 **When several sessions push to `develop`, the arm you are NOT changing can be changed under
-you** -- not rule 1, and not the semantic conflict CLAUDE.md warns about. A pair measured
+you** -- not rule 1, and not the semantic conflict `.kb/session-workflow.md` warns about. A pair measured
 9.2% was wrong by 5x because a commit landing mid-run moved the untouched DECLINE arm.
 
 **What to do**: take both arms from ONE tree, re-take the baseline after any merge that lands

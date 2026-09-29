@@ -17,7 +17,7 @@ guards (`JvmClassShakerCorpusTest` / `WasmTreeShakerCorpusTest`) and the real-li
 `asdf:load-system` E2Es (`AsdfLibraryE2eSupport`'s subclasses) alike, through
 `CompileFrontendAccess` or, for a JVM target, `JvmSourceCompiler`. Both families used to
 run their own copy of the chain: the guards drifted ten passes behind, and the E2Es ran
-six of them -- see CLAUDE.md's `CompileFrontend` bullet.
+six of them -- see `.kb/architecture.md`, "Package rules".
 
 - **Part 1 — rontolisp's own libraries**: top-level `defun`/`defparameter`/`defvar`/
   `defconstant` whose name is defined by linalg, torch, vec, json (+ its `#'` wrapper defuns),

@@ -26,8 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The package dependency graph must stay a DAG. A cycle between two packages means
  * neither one can be read, moved or tested without the other, and it silently breaks the
- * direction CLAUDE.md declares; this test pins the mechanical half of that rule -- no
- * cycles at all -- over every Java source root in the repository.
+ * direction .kb/architecture.md declares; this test pins the mechanical half of that rule
+ * -- no cycles at all -- over every Java source root in the repository.
  *
  * <p>
  * The CLASS graph is held to the same rule with a stated exception: a reference cycle is

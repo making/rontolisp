@@ -37,7 +37,7 @@ only under `-Pnative`; the FFM binding stays what `java -jar` and every compiled
 - **`./mvnw test` compiles none of this.** `NativeSubstitutionsTest` reads each `Target_*.java`
   and checks every `@Alias` field, `@Alias` method and `@Substitute` method against the target
   class by reflection -- the NAMES and parameter types, which is what a rename in the main tree
-  breaks; the bodies are verified on the built binary (`CLAUDE.md`, "After Task Completion").
+  breaks; the bodies are verified on the built binary (`.kb/session-workflow.md`, "After task completion").
 
 ## What took the route: `--blas` (2026-09-10, `.todo/729`)
 

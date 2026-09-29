@@ -44511,9 +44511,9 @@ public final class LispMacroExpander {
 	 * driven directly -- unit tests and the browser playground -- rather than by the CLI,
 	 * which knows the exact target set (a {@code --component} build carries
 	 * {@code :rontolisp-component} too) and passes it to {@link #injectMvSpillGlobal}.
-	 * The codegen packages may not import {@code reader} (see CLAUDE.md's
-	 * package-dependency direction) and the expander may, so the names are handed down
-	 * from here rather than spelled a second time per backend.
+	 * The codegen packages may not import {@code reader} (see the package-dependency
+	 * direction in .kb/architecture.md) and the expander may, so the names are handed
+	 * down from here rather than spelled a second time per backend.
 	 * @param wasm whether the target is a WASM backend rather than the JVM
 	 * @return the feature names, without the leading colon
 	 */
