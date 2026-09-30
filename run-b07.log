@@ -1,0 +1,1809 @@
+[INFO] Scanning for projects...
+[INFO] Inspecting build with total of 1 modules
+[INFO] Installing Central Publishing features
+[INFO] [nullability] Configuring ErrorProne 2.50.0 and NullAway 0.14.1 for rontolisp (checking=TESTS)
+[INFO] 
+[INFO] ---------------------< am.ik.rontolisp:rontolisp >----------------------
+[INFO] Building rontolisp 0.1.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- clean:3.2.0:clean (default-clean) @ rontolisp ---
+[INFO] Deleting /tmp/opencode/rontolisp-b07/target
+[INFO] 
+[INFO] --- spring-javaformat:0.0.48:apply (default-cli) @ rontolisp ---
+[INFO] 
+[INFO] --- spring-javaformat:0.0.48:validate (default) @ rontolisp ---
+[INFO] 
+[INFO] --- git-commit-id:10.0.1:revision (get-git-info) @ rontolisp ---
+[INFO] 
+[INFO] --- nullability:0.5.1:configure (default) @ rontolisp ---
+[INFO] 
+[INFO] --- nullability:0.5.1:generate-package-info (default) @ rontolisp ---
+[INFO] [nullability] Generated @NullMarked package-info.java for: [am.ik.jvm, am.ik.wasm, am.ik.objc, am.ik.ffi, am.ik.rontolisp, am.ik.rontolisp.codegen.jvm, am.ik.rontolisp.codegen.wasm, am.ik.rontolisp.format, am.ik.rontolisp.macro, am.ik.rontolisp.reader, am.ik.rontolisp.scheme, am.ik.rontolisp.eval, am.ik.rontolisp.clojure, am.ik.rontolisp.cli, am.ik.rontolisp.runtime, am.ik.rontolisp.compiler, am.ik.wit, am.ik.gpu]
+[INFO] [nullability] Generated @NullMarked test package-info.java for: [am.ik.jvm, am.ik.wasm, am.ik.objc, am.ik.ffi, am.ik.rontolisp.codegen.jvm, am.ik.rontolisp.codegen.wasm, am.ik.rontolisp.format, am.ik.rontolisp, am.ik.rontolisp.macro, am.ik.rontolisp.reader, am.ik.rontolisp.scheme, am.ik.rontolisp.e2e, am.ik.rontolisp.eval, am.ik.rontolisp.clojure, am.ik.rontolisp.cli, am.ik.rontolisp.runtime, am.ik.rontolisp.ansi, am.ik.rontolisp.testsupport, am.ik.rontolisp.compiler, am.ik.wit, am.ik.gpu]
+[INFO] 
+[INFO] --- antrun:3.2.0:run (gen-build-info) @ rontolisp ---
+[INFO] Executing tasks
+[INFO] Executed tasks
+[INFO] 
+[INFO] --- antrun:3.2.0:run (native-shims) @ rontolisp ---
+[INFO] Executing tasks
+[INFO] Executed tasks
+[INFO] 
+[INFO] --- build-helper:3.6.2:add-resource (add-generated-resources) @ rontolisp ---
+[INFO] 
+[INFO] --- resources:3.4.0:resources (default-resources) @ rontolisp ---
+[INFO] Copying 107 resources from src/main/resources to target/classes
+[INFO] Copying 1 resource from target/generated-resources/version to target/classes
+[INFO] skip non existing resourceDirectory /tmp/opencode/rontolisp-b07/rontolisp-native/target/resources
+[INFO] 
+[INFO] --- compiler:3.16.0:compile (default-compile) @ rontolisp ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 831 source files with javac [forked debug release 25] to target/classes
+[INFO] 
+[INFO] --- resources:3.4.0:testResources (default-testResources) @ rontolisp ---
+[INFO] Copying 388 resources from src/test/resources to target/test-classes
+[INFO] 
+[INFO] --- compiler:3.16.0:testCompile (default-testCompile) @ rontolisp ---
+[INFO] Recompiling the module because of changed dependency.
+[INFO] Compiling 419 source files with javac [forked debug release 25] to target/test-classes
+[INFO] Some input files use or override a deprecated API.
+[INFO] Recompile with -Xlint:deprecation for details.
+[INFO] 
+[INFO] --- build-helper:3.6.2:bsh-property (size-test-forks) @ rontolisp ---
+[rontolisp] surefire forkCount = 7 (availableProcessors = 64, load average = 5.94580078125)
+[INFO] 
+[INFO] --- surefire:3.6.0:test (default-test) @ rontolisp ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: Using incubator modules: jdk.incubator.vector
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.jvm.JvmDeadMethodEliminationCorpusTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.jvm.CodeReplayTest
+[INFO] Running am.ik.jvm.LineNumberTableTest
+[INFO] Running am.ik.jvm.MethodCodeTest
+[INFO] Running am.ik.jvm.JvmClassPathTest
+[INFO] Running am.ik.jvm.ConstantPoolTest
+[INFO] Running am.ik.jvm.JvmClassSplitterTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.189 s -- in am.ik.jvm.ConstantPoolTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.266 s -- in am.ik.jvm.LineNumberTableTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.jvm.JvmDeadMethodEliminationTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.jvm.StackMapFramesTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.305 s -- in am.ik.jvm.JvmClassSplitterTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmRefTypeFolderTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.397 s -- in am.ik.jvm.MethodCodeTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.427 s -- in am.ik.jvm.CodeReplayTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.428 s -- in am.ik.jvm.JvmClassPathTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmPeepholeTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.UnsynchronizedByteArrayOutputStreamTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.RecTypeDefTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.023 s -- in am.ik.wasm.RecTypeDefTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.028 s -- in am.ik.wasm.UnsynchronizedByteArrayOutputStreamTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmLocalOrderTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.054 s -- in am.ik.wasm.WasmPeepholeTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmWriterEhTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmCarriedLocalsTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.028 s -- in am.ik.wasm.WasmLocalOrderTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.253 s -- in am.ik.jvm.StackMapFramesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmTreeShakerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmWriterEncodingTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.070 s -- in am.ik.wasm.WasmWriterEhTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.025 s -- in am.ik.wasm.WasmWriterEncodingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmInlinerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmBodyFolderTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.389 s -- in am.ik.wasm.WasmInlinerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmCallForwardingTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in am.ik.wasm.WasmCallForwardingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmExportsTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.019 s -- in am.ik.wasm.WasmExportsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmLocalSinkTest
+[INFO] Tests run: 17, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.321 s -- in am.ik.wasm.WasmLocalSinkTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.WasmTreeShakerCorpusTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.666 s -- in am.ik.wasm.WasmCarriedLocalsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.ComponentImportBlockTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.835 s -- in am.ik.wasm.WasmBodyFolderTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.256 s -- in am.ik.wasm.ComponentImportBlockTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.objc.TypeEncodingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.wasm.ComponentWriterTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.052 s -- in am.ik.objc.TypeEncodingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.objc.ObjcNativeImageForeignConfigTest
+[INFO] Tests run: 26, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.092 s -- in am.ik.wasm.ComponentWriterTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.ffi.FfiNativeImageForeignConfigTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.394 s -- in am.ik.wasm.WasmRefTypeFolderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.ffi.FfiTypeTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.034 s -- in am.ik.ffi.FfiTypeTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.rontolisp.PackageResolverTest
+[WARNING] Tests run: 8, Failures: 0, Errors: 0, Skipped: 3, Time elapsed: 0.492 s -- in am.ik.objc.ObjcNativeImageForeignConfigTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.527 s -- in am.ik.ffi.FfiNativeImageForeignConfigTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmObjcBaseCompilerTest
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmLinalgGpuAccelCompilerTest
+[INFO] Tests run: 106, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.596 s -- in am.ik.rontolisp.PackageResolverTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSimdVectorTemplateQ8Test
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.344 s -- in am.ik.rontolisp.codegen.jvm.JvmSimdVectorTemplateQ8Test
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 7.96)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmLinalgBlasAccelCompilerTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.814 s -- in am.ik.jvm.JvmDeadMethodEliminationTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 13.49)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmMutexTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.237 s -- in am.ik.rontolisp.codegen.jvm.JvmMutexTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 13.49)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmRuntimeGroupNamesTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.011 s -- in am.ik.rontolisp.codegen.jvm.JvmRuntimeGroupNamesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 13.49)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmThrowableRecordsTest
+warning: the function READ is undefined; compiled as a call-time error
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.808 s -- in am.ik.rontolisp.codegen.jvm.JvmThrowableRecordsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 15.37)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JavaBridgeTemplateParityTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.395 s -- in am.ik.rontolisp.codegen.jvm.JavaBridgeTemplateParityTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 15.37)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmGeomKernelCompilerTest
+[INFO] Tests run: 34, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 11.83 s -- in am.ik.wasm.WasmTreeShakerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 15.37)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmExportTest
+[WARNING] Tests run: 13, Failures: 0, Errors: 0, Skipped: 6, Time elapsed: 9.855 s -- in am.ik.rontolisp.codegen.jvm.JvmObjcBaseCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 15.37)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmFloatArrayTest
+Unhandled condition: (SETF AREF): The value "x" is not of type REAL
+Unhandled condition: boom at load
+[WARNING] Tests run: 44, Failures: 0, Errors: 0, Skipped: 26, Time elapsed: 13.08 s -- in am.ik.rontolisp.codegen.jvm.JvmLinalgGpuAccelCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 17.91)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSimdParallelCompilerTest
+Unhandled condition: (SETF AREF): The value "x" is not of type REAL
+[INFO] Tests run: 33, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.874 s -- in am.ik.rontolisp.codegen.jvm.JvmFloatArrayTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 17.91)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmBFloat16ArrayTest
+Unhandled condition: (SETF AREF): The value "x" is not of type REAL
+[INFO] Tests run: 31, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.622 s -- in am.ik.rontolisp.codegen.jvm.JvmExportTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 17.91)
+[INFO] Running am.ik.rontolisp.codegen.jvm.GpuOfferDifferentialTest
+[WARNING] Tests run: 2, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.504 s -- in am.ik.rontolisp.codegen.jvm.GpuOfferDifferentialTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 17.91)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmJavaInteropCompilerTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 15.81 s -- in am.ik.rontolisp.codegen.jvm.JvmLinalgBlasAccelCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmHashRuntimeBuilderTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.014 s -- in am.ik.rontolisp.codegen.jvm.JvmHashRuntimeBuilderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmRuntimeClassFilesTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.022 s -- in am.ik.rontolisp.codegen.jvm.JvmRuntimeClassFilesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmLispCompilerTest
+Unhandled condition: %aset: a packed integer vector stores integers
+warning: GET-UNIVERSAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: GET-INTERNAL-REAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: SLEEP is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module imports no timer, and its clock cannot advance while a call is running, so no interval could elapse and this signals
+warning: WITH-OPEN-FILE is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: OPEN is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: LOAD is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: READ is reachable from a top-level form of this --no-wasi module (a top-level form -> PM-INPUT-DESIGNATORS), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no standard input, and the fd_read slot TRAPS rather than signalling -- the one refusal no handler can cover, and there is no host hook for it
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: AREF: The value 5 is not of type (INTEGER 0 (2))
+Unhandled condition: VECTOR-PUSH: The value #(0 0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))
+Unhandled condition: java:call: argument 1 is not a java.util.Collection, got 5
+Unhandled condition: No matching method java.lang.Math.max with 2 argument(s)
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 11.47 s -- in am.ik.rontolisp.codegen.jvm.JvmGeomKernelCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSizedMainTest
+Unhandled condition: boom
+Unhandled condition: ECASE: no clause matches 9
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: ECASE: no clause matches 9
+Unhandled condition: bad value: 3
+[INFO] Tests run: 30, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.768 s -- in am.ik.rontolisp.codegen.jvm.JvmBFloat16ArrayTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmFfiInteropCompilerTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.562 s -- in am.ik.rontolisp.codegen.jvm.JvmSimdParallelCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmExportExampleTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.342 s -- in am.ik.rontolisp.codegen.jvm.JvmExportExampleTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 26.24)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmAsyncCompilerTest
+Unhandled condition: boom
+Unhandled condition: it broke
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: The assertion (= 1 2) failed.
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+corpus class constant-pool entries: 43989 / 65534
+Unhandled condition: x must be positive, got 0
+Unhandled condition: java:call: the receiver is not a java.util.Collection, got #<java java.lang.StringBuilder>
+Unhandled condition: java:call: the receiver is not a java.lang.StringBuilder, got #<java java.util.ArrayList>
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.139 s -- in am.ik.rontolisp.codegen.jvm.JvmFfiInteropCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 29.35)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmQuantizedMatrixTest
+Unhandled condition: bad value 42
+Unhandled condition: java:static: argument 1 is not a java.lang.String, got 42
+[WARNING] Tests run: 10, Failures: 0, Errors: 0, Skipped: 2, Time elapsed: 5.285 s -- in am.ik.rontolisp.codegen.jvm.JvmSizedMainTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 29.35)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmHttpHandlerTravellingRuntimeTest
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: ERROR expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: RONTOLISP:QUANTIZE expects 2 arguments, got 0; compiled as a call-time program-error
+Unhandled condition: boom
+Unhandled condition: java.net.ConnectException
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.542 s -- in am.ik.rontolisp.codegen.jvm.JvmHttpHandlerTravellingRuntimeTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSimdModuleFallbackTest
+Unhandled condition: COMPLEX: The value #C(1 2) is not of type REAL
+Unhandled condition: COMPLEX: The value "a" is not of type REAL
+warning: the function NO-SUCH-FUNCTION-XYZ is undefined; compiled as a call-time error
+[INFO] Tests run: 37, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.596 s -- in am.ik.rontolisp.codegen.jvm.JvmAsyncCompilerTest
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: POSITION expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: MAKE-STRING-OUTPUT-STREAM expects keyword arguments :ELEMENT-TYPE, got: 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmThreadTest
+warning: the function NO-SUCH-FUNCTION-XYZ is undefined; compiled as a call-time error
+Unhandled condition: PULL is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.239 s -- in am.ik.rontolisp.codegen.jvm.JvmSimdModuleFallbackTest
+Unhandled condition: java:field: field java.awt.Point.x is not static
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmLispCompilerSplitTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.376 s -- in am.ik.rontolisp.codegen.jvm.JvmThreadTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSimdVectorTemplateBf16Test
+Unhandled condition: error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: "x"
+Unhandled condition: error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1
+Unhandled condition: ADD is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.810 s -- in am.ik.rontolisp.codegen.jvm.JvmSimdVectorTemplateBf16Test
+Unhandled condition: No matching method java.lang.StringBuilder.noSuchMethod with 3 argument(s)
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmClassFileLookupTest
+Unhandled condition: The value of N is "5", which is not of type INTEGER.
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: LENGTH expects 1 argument, got 2; compiled as a call-time program-error
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.658 s -- in am.ik.rontolisp.codegen.jvm.JvmClassFileLookupTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 32.04)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmSimdAccelCompilerTest
+Unhandled condition: No such package: RT-NO-SUCH-PKG
+Unhandled condition: vec:matvec-into: out must not be the same array as w or x (each out element folds over all of x)
+Unhandled condition: No such class: no.such.Class
+Unhandled condition: The function RT-NOPE is undefined
+Unhandled condition: Condition (MY-COND-ERR :V 42) was signalled.
+Unhandled condition: REALPART: The value NIL is not of type NUMBER
+Unhandled condition: ETYPECASE: no clause matches SYM
+Unhandled condition: java:proxy expects an interface, got java.lang.String
+Unhandled condition: error calling java.util.Iterator.next: java.lang.UnsupportedOperationException: java:reify: no implementation of java.util.Iterator.next()
+Unhandled condition: aref: expected 3 subscripts, got 2
+Unhandled condition: java:reify: cannot return "x" as int from java.util.function.IntSupplier.getAsInt
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: aref: expected 3 subscripts, got 2
+warning: GET-UNIVERSAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: GET-INTERNAL-REAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: SLEEP is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module imports no timer, and its clock cannot advance while a call is running, so no interval could elapse and this signals
+warning: WITH-OPEN-FILE is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: OPEN is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: LOAD is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: READ is reachable from a top-level form of this --no-wasi module (a top-level form -> PM-INPUT-DESIGNATORS), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no standard input, and the fd_read slot TRAPS rather than signalling -- the one refusal no handler can cover, and there is no host hook for it
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: aref: expected 3 subscripts, got 2
+Unhandled condition: The variable NOPE is unbound
+Unhandled condition: java:reify: interface java.util.Comparator has no method nope
+warning: TLS-CONNECT expects 2 or 4 arguments, got 1; compiled as a call-time program-error
+warning: TLS-CONNECT expects 2 or 4 arguments, got 3; compiled as a call-time program-error
+warning: TLS-LISTEN expects at least 3 arguments, got 2; compiled as a call-time program-error
+warning: TLS-UPGRADE expects 2 or 4 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: aref: expected 2 subscripts, got 0
+Unhandled condition: aref: expected 1 subscripts, got 2
+Unhandled condition: java:reify: append names more than one method of java.lang.Appendable: append(char), append(java.lang.CharSequence), append(java.lang.CharSequence,int,int)
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: java:reify: java.util.Iterator.next() is implemented twice
+Unhandled condition: java:reify expects an interface, got java.lang.String
+warning: GET-UNIVERSAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: GET-INTERNAL-REAL-TIME is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The module imports no clock: its time is whatever the host writes through the exported __ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize -- until something does, reading it signals
+warning: SLEEP is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module imports no timer, and its clock cannot advance while a call is running, so no interval could elapse and this signals
+warning: WITH-OPEN-FILE is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: OPEN is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: LOAD is reachable from a top-level form of this --no-wasi module (a top-level form), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no filesystem, so this signals
+warning: READ is reachable from a top-level form of this --no-wasi module (a top-level form -> PM-INPUT-DESIGNATORS), so it can run while the module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. A --no-wasi module has no standard input, and the fd_read slot TRAPS rather than signalling -- the one refusal no handler can cover, and there is no host hook for it
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: 'CI-PE-BAD; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: ZEROP expects 1 argument, got 2; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: CONJUGATE expects 1 argument, got 2; compiled as a call-time program-error
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MAKE-RANDOM-STATE expects at most 1 argument, got 2; compiled as a call-time program-error
+warning: RATIONALP expects 1 argument, got 0; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: upgraded-complex-part-type cannot upgrade COMPLEX
+Unhandled condition: No matching method java.lang.String.length with 0 argument(s)
+Unhandled condition: No matching method java.util.Collections.max with 1 argument(s)
+Unhandled condition: java:call expects a java object as the first argument, got 42
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.422 s -- in am.ik.rontolisp.codegen.jvm.JvmLispCompilerSplitTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 37.27)
+[INFO] Running am.ik.rontolisp.codegen.jvm.ShippedBridgeClassFilesTest
+Unhandled condition: malformed parameter tag in "max(long"
+diag
+Unhandled condition: ETYPECASE: no clause matches SYM
+Unhandled condition: java:new: argument 1 is not an implementation of java.lang.Runnable, got #<java java.lang.Thread>
+Unhandled condition: The value of 5 is 5, which is not of type COMPLEX.
+Unhandled condition: fetch: unsupported method
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 40.51 s -- in am.ik.wasm.WasmTreeShakerCorpusTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 37.27)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmBlasTemplateNativeImageTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.189 s -- in am.ik.rontolisp.codegen.jvm.JvmBlasTemplateNativeImageTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 37.27)
+[INFO] Running am.ik.rontolisp.codegen.jvm.JvmLinalgSimdAccelCompilerTest
+warning: TCP-CONNECT expects 2 arguments, got 1; compiled as a call-time program-error
+warning: TCP-LISTEN expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: TCP-LISTEN expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: TCP-ACCEPT expects 1 argument, got 0; compiled as a call-time program-error
+warning: TCP-LOCAL-PORT expects 1 argument, got 2; compiled as a call-time program-error
+warning: TCP-PEER-ADDRESS expects 1 argument, got 0; compiled as a call-time program-error
+warning: TCP-PEER-PORT expects 1 argument, got 2; compiled as a call-time program-error
+warning: TCP-LOCAL-ADDRESS expects 1 argument, got 0; compiled as a call-time program-error
+Unhandled condition: not applicable to a packed float array
+Unhandled condition: not applicable to a packed float array
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 16.46 s -- in am.ik.rontolisp.codegen.jvm.JvmQuantizedMatrixTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 37.27)
+[INFO] Running am.ik.rontolisp.codegen.wasm.SchubfachTablesTest
+Unhandled condition: linalg: shape mismatch
+WARNING: x 1
+warning: READ-SEQUENCE expects keyword arguments :START/:END, got: :FOO; compiled as a call-time program-error
+warning: WRITE-SEQUENCE expects keyword arguments :START/:END, got: :FOO; compiled as a call-time program-error
+Unhandled condition: linalg: expects a square matrix
+Unhandled condition: linalg: reshape size mismatch
+Unhandled condition: MAPCAR: The value "abc" is not of type LIST
+Unhandled condition: MAPC: The value "abc" is not of type LIST
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: EXPORT expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+Unhandled condition: MAPCAN: The value "abc" is not of type LIST
+Unhandled condition: MAPLIST: The value "abc" is not of type LIST
+Unhandled condition: MAPCON: The value "abc" is not of type LIST
+warning: CLOSE expects 1 or 3 arguments, got 2; compiled as a call-time program-error
+warning: CLOSE expects 1 argument, got 3; compiled as a call-time program-error
+[INFO] Tests run: 80, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 28.44 s -- in am.ik.rontolisp.codegen.jvm.JvmJavaInteropCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WitCanonicalAbiTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.061 s -- in am.ik.rontolisp.codegen.wasm.WitCanonicalAbiTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmReactorBodyE2eTest
+warning: (defun LENGTH ...) redefines the COMMON-LISP function LENGTH, but a (LENGTH ...) call site here compiles to the standard operator, so the definition is not what runs (a #'LENGTH function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.835 s -- in am.ik.rontolisp.codegen.wasm.SchubfachTablesTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 8.571 s -- in am.ik.rontolisp.codegen.jvm.ShippedBridgeClassFilesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmImportCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.NoGcWasmCompilerTest
+warning: FETCH expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: FETCH expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: AWAIT expects 1 argument, got 0; compiled as a call-time program-error
+:async t: this module imports env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.508 s -- in am.ik.rontolisp.codegen.wasm.WasmReactorBodyE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmLispCompilerTest
+[INFO] Tests run: 164, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.759 s -- in am.ik.rontolisp.codegen.wasm.NoGcWasmCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.NoGcWasmComponentImportE2eTest
+[INFO] Tests run: 1422, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 27.70 s -- in am.ik.rontolisp.codegen.jvm.JvmLispCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 39.57)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmBytesBoundaryE2eTest
+warning: the function STRING< is undefined; compiled as a call-time error
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.507 s -- in am.ik.rontolisp.codegen.wasm.NoGcWasmComponentImportE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.21)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmExportCompilerTest
+warning: (defun REVERSE ...) redefines the COMMON-LISP function REVERSE, but a (REVERSE ...) call site here compiles to the standard operator, so the definition is not what runs (a #'REVERSE function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+Unhandled condition: linalg: transpose axes must be a permutation of the axes
+warning: the function STRING< is undefined; compiled as a call-time error
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.239 s -- in am.ik.rontolisp.codegen.wasm.WasmBytesBoundaryE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.21)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmToplevelChunkingTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function VEC:MATVEC is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+:async t: this module imports env.readResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: run
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+[INFO] Tests run: 40, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 17.85 s -- in am.ik.rontolisp.codegen.jvm.JvmSimdAccelCompilerTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.21)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmHostFetchBodyE2eTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: TCP-PEER-ADDRESS expects 1 argument, got 2; compiled as a call-time program-error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+Unhandled condition: linalg: shape mismatch
+Unhandled condition: Unknown keyword argument: :AXES
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+:async t: this module imports env.readResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: reply, codes, headOnly, caught, superseded
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+warning: the function STRING< is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function STRING< is undefined; compiled as a call-time error
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.319 s -- in am.ik.rontolisp.codegen.wasm.WasmHostFetchBodyE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.21)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmSocketsRewriteTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.020 s -- in am.ik.rontolisp.codegen.wasm.WasmSocketsRewriteTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.21)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmStringStreamArenaE2eTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+:async t: this module imports env.readResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: run
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.791 s -- in am.ik.rontolisp.codegen.wasm.WasmStringStreamArenaE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmReentrantE2eTest
+[INFO] Tests run: 91, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.064 s -- in am.ik.rontolisp.codegen.wasm.WasmLispCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmComponentImportCompilerTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(reply-id, ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+warning: the function RONTOLISP::%HTTP-SERVE-REQUEST is undefined; compiled as a call-time error
+warning: (defun SUBSEQ ...) redefines the COMMON-LISP function SUBSEQ, but a (SUBSEQ ...) call site here compiles to the standard operator, so the definition is not what runs (a #'SUBSEQ function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+warning: (defun SUBSEQ ...) redefines the COMMON-LISP function SUBSEQ, but a (SUBSEQ ...) call site here compiles to the standard operator, so the definition is not what runs (a #'SUBSEQ function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+:async t: this module imports env.pause, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: work
+:async t: this module imports env.fetchWord, env.fillBuf, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: greet, pump
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(reply-id, ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+warning: (defun STRING-UPCASE ...) redefines the COMMON-LISP function STRING-UPCASE, but a (STRING-UPCASE ...) call site here compiles to the standard operator, so the definition is not what runs (a #'STRING-UPCASE function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+[INFO] Tests run: 34, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.858 s -- in am.ik.rontolisp.codegen.wasm.WasmComponentImportCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmLinearMemoryHeadroomTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.115 s -- in am.ik.rontolisp.codegen.wasm.WasmLinearMemoryHeadroomTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmReactorStreamingHostE2eTest
+warning: (defun COPY-SEQ ...) redefines the COMMON-LISP function COPY-SEQ, but a (COPY-SEQ ...) call site here compiles to the standard operator, so the definition is not what runs (a #'COPY-SEQ function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+warning: (defun STRING-TRIM ...) redefines the COMMON-LISP function STRING-TRIM, but a (STRING-TRIM ...) call site here compiles to the standard operator, so the definition is not what runs (a #'STRING-TRIM function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.470 s -- in am.ik.rontolisp.codegen.wasm.WasmReentrantE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmReactorResponseBodyE2eTest
+:async t: this module imports env.slow, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+warning: the function RONTOLISP::%HTTP-SERVE-REQUEST is undefined; compiled as a call-time error
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.627 s -- in am.ik.rontolisp.codegen.wasm.WasmReactorStreamingHostE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WitEmitterTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.019 s -- in am.ik.rontolisp.codegen.wasm.WitEmitterTest
+[INFO] Tests run: 41, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.48 s -- in am.ik.rontolisp.codegen.wasm.WasmImportCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmRatioRuntimeBuilderTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.codegen.wasm.WasmRatioRuntimeBuilderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmComponentHelperModulesTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.016 s -- in am.ik.rontolisp.codegen.wasm.WasmComponentHelperModulesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 44.00)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmGcHeapPregrowTest
+:async t: this module imports env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+[INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 9.824 s -- in am.ik.rontolisp.codegen.wasm.WasmExportCompilerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.NoGcWasmExportStringParamE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmLispCompilerIntegrationTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.320 s -- in am.ik.rontolisp.codegen.wasm.WasmReactorResponseBodyE2eTest
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: check 1
+eo-diag 1
+eo-line
+WARNING: eo-warn
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmHostGlueE2eTest
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.205 s -- in am.ik.rontolisp.codegen.wasm.WasmGcHeapPregrowTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmDispatchPagingTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.038 s -- in am.ik.rontolisp.codegen.wasm.WasmDispatchPagingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmReentrantCompilerTest
+:async t: this module imports env.readRequestBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.583 s -- in am.ik.rontolisp.codegen.wasm.NoGcWasmExportStringParamE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmRefTypeFoldHostSuppliedValuesE2eTest
+:async t: this module imports env.ask, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+warning: the function NO-SUCH-FUNCTION-XYZ is undefined; compiled as a call-time error
+:async t: this module imports env.ask, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.ask, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.slow, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.two, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.one, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.readRequestBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.slow, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+:async t: this module imports env.slow, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: poke
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.727 s -- in am.ik.rontolisp.codegen.wasm.WasmReentrantCompilerTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.709 s -- in am.ik.rontolisp.codegen.wasm.WasmRefTypeFoldHostSuppliedValuesE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmStringParamBoundaryE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmFdlibmRuntimeBuilderTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.two, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: goTwo, pump
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.265 s -- in am.ik.rontolisp.codegen.wasm.WasmFdlibmRuntimeBuilderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasiWitDefinitionsTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.008 s -- in am.ik.rontolisp.codegen.wasm.WasiWitDefinitionsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WasmHostStreamE2eTest
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.nextChunk, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.373 s -- in am.ik.rontolisp.codegen.wasm.WasmHostStreamE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.WitOracleE2eTest
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: check 1
+eo-diag 1
+eo-line
+WARNING: eo-warn
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 61.84 s -- in am.ik.jvm.JvmDeadMethodEliminationCorpusTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.codegen.wasm.NoGcWasmImportE2eTest
+warning: (defun SUBSEQ ...) redefines the COMMON-LISP function SUBSEQ, but a (SUBSEQ ...) call site here compiles to the standard operator, so the definition is not what runs (a #'SUBSEQ function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.181 s -- in am.ik.rontolisp.codegen.wasm.WasmStringParamBoundaryE2eTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.format.LispFormatterTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.706 s -- in am.ik.rontolisp.codegen.wasm.WasmHostGlueE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.SourceLanguageSeamTest
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by net.bytebuddy.dynamic.loading.ClassInjector$UsingUnsafe$Dispatcher$CreationAction (file:/home/administrator/.m2/repository/net/bytebuddy/byte-buddy/1.18.11/byte-buddy-1.18.11.jar)
+WARNING: Please consider reporting this to the maintainers of class net.bytebuddy.dynamic.loading.ClassInjector$UsingUnsafe$Dispatcher$CreationAction
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+warning: the function NO-SUCH-FUNCTION-XYZ is undefined; compiled as a call-time error
+warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warning: Function expects 2 arguments, got 3; compiled as a call-time program-error
+warning: Function expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: Function expects 1 argument, got 2; compiled as a call-time program-error
+warning: LENGTH expects 1 argument, got 2; compiled as a call-time program-error
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.746 s -- in am.ik.rontolisp.codegen.wasm.NoGcWasmImportE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.LispTreesTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.029 s -- in am.ik.rontolisp.LispTreesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.macro.PureBuiltinFolderTest
+warning: the function STRING< is undefined; compiled as a call-time error
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.110 s -- in am.ik.rontolisp.macro.PureBuiltinFolderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.macro.LispMacroExpanderTest
+[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 1.446 s <<< FAILURE! -- in am.ik.rontolisp.SourceLanguageSeamTest
+[ERROR] am.ik.rontolisp.SourceLanguageSeamTest.userSourceReachesFormsOnlyThroughTheSeam -- Time elapsed: 0.454 s <<< FAILURE!
+java.lang.AssertionError: 
+[A class reads user source without going through SourceLanguage. Either route it through the seam, or -- when it reads shipped library source, runtime data or system metadata instead of user source -- add it to EXEMPT with its reason.] 
+Expecting empty but was: ["am.ik.rontolisp.eval.ClojureLibrary <- LispReader.readAllFromString"]
+	at am.ik.rontolisp.SourceLanguageSeamTest.userSourceReachesFormsOnlyThroughTheSeam(SourceLanguageSeamTest.java:139)
+
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.macro.StreamElementTypeTest
+[INFO] Tests run: 50, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.340 s -- in am.ik.rontolisp.macro.LispMacroExpanderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.macro.FormatRendererTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.622 s -- in am.ik.rontolisp.codegen.wasm.WitOracleE2eTest
+[INFO] Tests run: 30, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.211 s -- in am.ik.rontolisp.macro.StreamElementTypeTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.macro.SpecialVarCollectorTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in am.ik.rontolisp.macro.SpecialVarCollectorTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.reader.LispLexerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.reader.LispReaderTest
+[INFO] Tests run: 30, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.088 s -- in am.ik.rontolisp.reader.LispLexerTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.LispConsTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in am.ik.rontolisp.LispConsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 42.71)
+[INFO] Running am.ik.rontolisp.DocExamplesTest
+[INFO] Tests run: 134, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.302 s -- in am.ik.rontolisp.reader.LispReaderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeValueCountTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.016 s -- in am.ik.rontolisp.scheme.SchemeValueCountTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeLoweringTest
+[INFO] Tests run: 60, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.916 s -- in am.ik.rontolisp.macro.FormatRendererTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeReaderTest
+[INFO] Tests run: 26, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.089 s -- in am.ik.rontolisp.scheme.SchemeReaderTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeSessionTest
+[INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.421 s -- in am.ik.rontolisp.scheme.SchemeLoweringTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeCharactersTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.101 s -- in am.ik.rontolisp.scheme.SchemeSessionTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeCondExpandTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.111 s -- in am.ik.rontolisp.scheme.SchemeCondExpandTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeNamesTest
+[INFO] Tests run: 64, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.142 s -- in am.ik.rontolisp.scheme.SchemeNamesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeReferenceTest
+:async t: this module imports host.add, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: plus
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.184 s -- in am.ik.rontolisp.scheme.SchemeReferenceTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeLibrariesTest
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.096 s -- in am.ik.rontolisp.scheme.SchemeLibrariesTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.scheme.SchemeBuiltinsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 15.77 s -- in am.ik.rontolisp.codegen.wasm.WasmToplevelChunkingTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.e2e.ClWhoE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[INFO] Tests run: 22, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.413 s -- in am.ik.rontolisp.scheme.SchemeBuiltinsTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.e2e.NativeOutputE2eTest
+[INFO] Tests run: 1139, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.348 s -- in am.ik.rontolisp.format.LispFormatterTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 43.38)
+[INFO] Running am.ik.rontolisp.e2e.RoveTestCommandE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+[WARNING] Tests run: 8, Failures: 0, Errors: 0, Skipped: 8, Time elapsed: 3.225 s -- in am.ik.rontolisp.e2e.NativeOutputE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.IroncladE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.848 s -- in am.ik.rontolisp.e2e.ClWhoE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.ExamplesE2eTest
+:async t: this module imports host.add, host.scale, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.853 s -- in am.ik.rontolisp.e2e.ExamplesE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.FastIoCircularStreamsE2eTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.549 s -- in am.ik.rontolisp.scheme.SchemeCharactersTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.ServeMethodCaseComponentE2eTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.015 s -- in am.ik.rontolisp.e2e.ServeMethodCaseComponentE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.JarMavenConsumerE2eTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.004 s -- in am.ik.rontolisp.e2e.JarMavenConsumerE2eTest
+[rontolisp] JUnit parallelism = 16 (availableProcessors = 64, load average = 45.51)
+[INFO] Running am.ik.rontolisp.e2e.TinyRoutesLiteE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+warning: NTH expects 2 arguments, got 1; compiled as a call-time program-error
+warning: CONS expects 2 arguments, got 1; compiled as a call-time program-error
+warning: MINUSP expects 1 argument, got 2; compiled as a call-time program-error
+warning: 1+ expects 1 argument, got 0; compiled as a call-time program-error
+warning: FLOOR expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GETHASH expects at least 2 arguments, got 1; compiled as a call-time program-error
+warning: ERROR expects at least 1 argument, got 0; compiled as a call-time program-error
+warning: CLOSE expects 1 or 3 arguments, got 2; compiled as a call-time program-error
+warning: CLOSE expects 1 argument, got 3; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: FIND expects a value after :KEY; compiled as a call-time program-error
+warning: REMOVE-DUPLICATES expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BAD; compiled as a call-time program-error
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.820 s -- in am.ik.rontolisp.e2e.FastIoCircularStreamsE2eTest
+[rontolisp] JUnit parallelism = 13 (availableProcessors = 64, load average = 50.92)
+[INFO] Running am.ik.rontolisp.e2e.LoadContextE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.707 s -- in am.ik.rontolisp.e2e.LoadContextE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.ClJsonE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.747 s -- in am.ik.rontolisp.e2e.TinyRoutesLiteE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.ParseNumberE2eTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.368 s -- in am.ik.rontolisp.e2e.ParseNumberE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.BabelMappingE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.623 s -- in am.ik.rontolisp.e2e.ClJsonE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.PostmodernE2eTest
+[WARNING] Tests run: 14, Failures: 0, Errors: 0, Skipped: 14, Time elapsed: 0.001 s -- in am.ik.rontolisp.e2e.PostmodernE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.SplitSequenceE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.289 s -- in am.ik.rontolisp.e2e.BabelMappingE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.EsrapE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.008 s -- in am.ik.rontolisp.e2e.SplitSequenceE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.PackageInferredSystemE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.098 s -- in am.ik.rontolisp.e2e.PackageInferredSystemE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.40)
+[INFO] Running am.ik.rontolisp.e2e.ClojureSpecE2eTest
+/tmp/opencode/rontolisp-b07/src/test/resources/esrap/src/interface.lisp:358:18: warning: the function ESRAP::BREAK is undefined; compiled as a call-time error
+warning: the function ESRAP::BREAK is undefined; compiled as a call-time error
+warning: the function ESRAP::BREAK is undefined; compiled as a call-time error
+warning: the function JAVA:CALL is undefined; compiled as a call-time error
+warning: the function JAVA:CALL is undefined; compiled as a call-time error
+warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+:async t: this module imports host.add, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: plus
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.758 s -- in am.ik.rontolisp.e2e.EsrapE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.68)
+[INFO] Running am.ik.rontolisp.e2e.ClMustacheSpecE2eTest
+[INFO] Tests run: 252, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.846 s -- in am.ik.rontolisp.e2e.ClojureSpecE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.68)
+[INFO] Running am.ik.rontolisp.e2e.SchemeSpecE2eTest
+warning: BOUNDP expects 1 argument, got 0; compiled as a call-time program-error
+warning: EXPORT expects at most 2 arguments, got 3; compiled as a call-time program-error
+warning: GET-UNIVERSAL-TIME expects 0 arguments, got 1; compiled as a call-time program-error
+warning: ROW-MAJOR-AREF expects 2 arguments, got 1; compiled as a call-time program-error
+warning: CHAR-NAME expects 1 argument, got 0; compiled as a call-time program-error
+warning: FIND-CLASS expects at most 3 arguments, got 4; compiled as a call-time program-error
+warning: VERSION expects 0 arguments, got 1; compiled as a call-time program-error
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+[INFO] Tests run: 37, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 52.16 s -- in am.ik.rontolisp.codegen.jvm.JvmLinalgSimdAccelCompilerTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.68)
+[INFO] Running am.ik.rontolisp.e2e.Uax15E2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.94 s -- in am.ik.rontolisp.e2e.ClMustacheSpecE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 81.60)
+[INFO] Running am.ik.rontolisp.e2e.JzonE2eTest
+warning: the function NO-SUCH-FUNCTION-XYZ is undefined; compiled as a call-time error
+warning: (defun ENDP ...) redefines the COMMON-LISP function ENDP, but a (ENDP ...) call site here compiles to the standard operator, so the definition is not what runs (a #'ENDP function value still names it). Defining a function on a COMMON-LISP symbol has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package of your own
+warning: the function RONTOLISP:RANDOM-BYTES is undefined; compiled as a call-time error
+warning: the function RONTOLISP:RANDOM-BYTES is undefined; compiled as a call-time error
+warning: the function RONTOLISP:RANDOM-BYTES is undefined; compiled as a call-time error
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.396 s -- in am.ik.rontolisp.e2e.JzonE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 83.87)
+[INFO] Running am.ik.rontolisp.e2e.ClPostgresE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 20.39 s -- in am.ik.rontolisp.e2e.Uax15E2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 84.79)
+[INFO] Running am.ik.rontolisp.e2e.IterateE2eTest
+[WARNING] Tests run: 1737, Failures: 0, Errors: 0, Skipped: 5, Time elapsed: 59.58 s -- in am.ik.rontolisp.codegen.wasm.WasmLispCompilerIntegrationTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 84.79)
+[INFO] Running am.ik.rontolisp.e2e.ShippedBridgeNativeImageE2eTest
+[WARNING] Tests run: 10, Failures: 0, Errors: 0, Skipped: 10, Time elapsed: 0.025 s -- in am.ik.rontolisp.e2e.ShippedBridgeNativeImageE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 84.79)
+[INFO] Running am.ik.rontolisp.e2e.NativeObjcE2eTest
+[WARNING] Tests run: 12, Failures: 0, Errors: 0, Skipped: 12, Time elapsed: 0.001 s -- in am.ik.rontolisp.e2e.NativeObjcE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 84.79)
+[INFO] Running am.ik.rontolisp.e2e.JoseTestSuiteE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.504 s -- in am.ik.rontolisp.e2e.IterateE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.ChipzE2eTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 55.61 s -- in am.ik.rontolisp.e2e.RoveTestCommandE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.SicpCorpusE2eTest
+[WARNING] Tests run: 3, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.011 s -- in am.ik.rontolisp.e2e.SicpCorpusE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.LackEcosystemWasmE2eTest
+[WARNING] Tests run: 6, Failures: 0, Errors: 0, Skipped: 6, Time elapsed: 0 s -- in am.ik.rontolisp.e2e.LackEcosystemWasmE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.ServeConditionCatchComponentE2eTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.003 s -- in am.ik.rontolisp.e2e.ServeConditionCatchComponentE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.ClBase64E2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.173 s -- in am.ik.rontolisp.e2e.ChipzE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 80.81)
+[INFO] Running am.ik.rontolisp.e2e.MitoE2eTest
+[WARNING] Tests run: 9, Failures: 0, Errors: 0, Skipped: 9, Time elapsed: 0.001 s -- in am.ik.rontolisp.e2e.MitoE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 77.22)
+[INFO] Running am.ik.rontolisp.e2e.Md5E2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.867 s -- in am.ik.rontolisp.e2e.ClBase64E2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 77.22)
+[INFO] Running am.ik.rontolisp.e2e.SxqlE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.336 s -- in am.ik.rontolisp.e2e.Md5E2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 77.22)
+[INFO] Running am.ik.rontolisp.e2e.ClMustacheE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.552 s -- in am.ik.rontolisp.e2e.ClMustacheE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 79.68)
+[INFO] Running am.ik.rontolisp.e2e.ClackE2eTest
+[WARNING] Tests run: 9, Failures: 0, Errors: 0, Skipped: 9, Time elapsed: 0.001 s -- in am.ik.rontolisp.e2e.ClackE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 79.68)
+[INFO] Running am.ik.rontolisp.e2e.AsdfMetaobjectsE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.562 s -- in am.ik.rontolisp.e2e.AsdfMetaobjectsE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 79.68)
+[INFO] Running am.ik.rontolisp.e2e.TriviaE2eTest
+style-warning: Calling #<function TRIVIA-E2E::POINT-X> failed, but not by program-error (TYPE-ERROR).
+Trivia probed candidate function #<function TRIVIA-E2E::POINT-X> by calling it with 
+a single dummy argument 42. The call may fail due to various reasons,
+but program-error is a strong indication of not being unary.
+ In order to disable this probing, run (SETF *ARITY-CHECK-BY-TEST-CALL* NIL) .
+
+Note: This style warning is shown only once.
+style-warning: Found slots WIDTH but they are not EQ to WIDTH.
+/tmp/opencode/rontolisp-b07/src/test/resources/lisp-namespace/src/package.lisp:58:5: warning: the function WRITE is undefined; compiled as a call-time error
+/tmp/opencode/rontolisp-b07/src/test/resources/lisp-namespace/src/package.lisp:55:3: warning: the function WRITE is undefined; compiled as a call-time error
+style-warning: Calling #<function TRIVIA-E2E::POINT-X> failed, but not by program-error (TYPE-ERROR).
+Trivia probed candidate function #<function TRIVIA-E2E::POINT-X> by calling it with 
+a single dummy argument 42. The call may fail due to various reasons,
+but program-error is a strong indication of not being unary.
+ In order to disable this probing, run (SETF *ARITY-CHECK-BY-TEST-CALL* NIL) .
+
+Note: This style warning is shown only once.
+style-warning: Found slots WIDTH but they are not EQ to WIDTH.
+[WARNING] Tests run: 3181, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 69.58 s -- in am.ik.rontolisp.DocExamplesTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 79.68)
+[INFO] Running am.ik.rontolisp.e2e.ClPpcreE2eTest
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+/tmp/opencode/rontolisp-b07/src/test/resources/lisp-namespace/src/package.lisp:58:5: warning: the function WRITE is undefined; compiled as a call-time error
+/tmp/opencode/rontolisp-b07/src/test/resources/lisp-namespace/src/package.lisp:55:3: warning: the function WRITE is undefined; compiled as a call-time error
+warning: the function WRITE is undefined; compiled as a call-time error
+warning: the function WRITE is undefined; compiled as a call-time error
+style-warning: Calling #<function TRIVIA-E2E::POINT-X> failed, but not by program-error (TYPE-ERROR).
+Trivia probed candidate function #<function TRIVIA-E2E::POINT-X> by calling it with 
+a single dummy argument 42. The call may fail due to various reasons,
+but program-error is a strong indication of not being unary.
+ In order to disable this probing, run (SETF *ARITY-CHECK-BY-TEST-CALL* NIL) .
+
+Note: This style warning is shown only once.
+style-warning: Found slots WIDTH but they are not EQ to WIDTH.
+WARNING: Calling #<function TRIVIA-E2E::POINT-X> failed, but not by program-error (TYPE-ERROR).
+Trivia probed candidate function #<function TRIVIA-E2E::POINT-X> by calling it with 
+a single dummy argument 42. The call may fail due to various reasons,
+but program-error is a strong indication of not being unary.
+ In order to disable this probing, run (SETF *ARITY-CHECK-BY-TEST-CALL* NIL) .
+
+Note: This style warning is shown only once.
+WARNING: Found slots WIDTH but they are not EQ to WIDTH.
+warning: the function WRITE is undefined; compiled as a call-time error
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.04 s -- in am.ik.rontolisp.e2e.TriviaE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.ClUtilitiesE2eTest
+warning: the function WRITE is undefined; compiled as a call-time error
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.302 s -- in am.ik.rontolisp.e2e.ClUtilitiesE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.TinyRoutesLiteUpstreamParityTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.465 s -- in am.ik.rontolisp.e2e.TinyRoutesLiteUpstreamParityTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.JvmLibraryMethodSizeTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 19.03 s -- in am.ik.rontolisp.e2e.SxqlE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.UnclosedOutputFileE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.26 s -- in am.ik.rontolisp.e2e.ClPpcreE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.LackEcosystemE2eTest
+[WARNING] Tests run: 10, Failures: 0, Errors: 0, Skipped: 10, Time elapsed: 0 s -- in am.ik.rontolisp.e2e.LackEcosystemE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.NingleE2eTest
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 4, Time elapsed: 0.001 s -- in am.ik.rontolisp.e2e.NingleE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 74.70)
+[INFO] Running am.ik.rontolisp.e2e.TinyRoutesE2eTest
+[WARNING] Tests run: 2, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 1.061 s -- in am.ik.rontolisp.e2e.JvmLibraryMethodSizeTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 71.44)
+[INFO] Running am.ik.rontolisp.e2e.FetchSpecE2eTest
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+WARNING: DEPRECATED-FUNCTION-STYLE-WARNING
+[INFO] Tests run: 32, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.262 s -- in am.ik.rontolisp.e2e.UnclosedOutputFileE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 71.44)
+[INFO] Running am.ik.rontolisp.e2e.AlexandriaE2eTest
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME STATUS-RESPONSE) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME HEADER-RESPONSE) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME HEADERS-RESPONSE) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME BODY-RESPONSE) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME HEADERS-RESPONSE-APPEND) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME BODY-MAPPER-RESPONSE) was signalled.
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.467 s -- in am.ik.rontolisp.e2e.TinyRoutesE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 69.16)
+[INFO] Running am.ik.rontolisp.e2e.JoseE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.285 s -- in am.ik.rontolisp.e2e.AlexandriaE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 69.16)
+[INFO] Running am.ik.rontolisp.e2e.AssocUtilsE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.821 s -- in am.ik.rontolisp.e2e.AssocUtilsE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 69.16)
+[INFO] Running am.ik.rontolisp.e2e.RoveE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 35.22 s -- in am.ik.rontolisp.e2e.JoseTestSuiteE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.e2e.AssocUtilsUpcaseE2eTest
+[WARNING] Tests run: 76, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 9.768 s -- in am.ik.rontolisp.e2e.FetchSpecE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.e2e.ReadAllHeapBoundE2eTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.618 s -- in am.ik.rontolisp.e2e.AssocUtilsUpcaseE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.e2e.CiSpecE2eTest
+[INFO] Tests run: 0, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in am.ik.rontolisp.e2e.CiSpecE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.e2e.WarE2eTest
+[WARNING] Tests run: 5, Failures: 0, Errors: 0, Skipped: 5, Time elapsed: 0.026 s -- in am.ik.rontolisp.e2e.WarE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.eval.EnvironmentTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.036 s -- in am.ik.rontolisp.eval.EnvironmentTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.eval.HttpLibraryTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.065 s -- in am.ik.rontolisp.eval.HttpLibraryTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.eval.LinalgBfloat16Test
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.817 s -- in am.ik.rontolisp.eval.LinalgBfloat16Test
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.eval.EnvironmentLibraryTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.008 s -- in am.ik.rontolisp.eval.EnvironmentLibraryTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 65.23)
+[INFO] Running am.ik.rontolisp.eval.LinalgGpuDeclineTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 8.333 s -- in am.ik.rontolisp.e2e.ReadAllHeapBoundE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.25)
+[INFO] Running am.ik.rontolisp.eval.WitImportInlinerTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.735 s -- in am.ik.rontolisp.eval.WitImportInlinerTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.25)
+[INFO] Running am.ik.rontolisp.eval.LinalgBlasDeclineTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.076 s -- in am.ik.rontolisp.eval.LinalgBlasDeclineTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.25)
+[INFO] Running am.ik.rontolisp.eval.UiopLibraryTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.050 s -- in am.ik.rontolisp.eval.UiopLibraryTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 64.25)
+[INFO] Running am.ik.rontolisp.eval.QuantizedMatrixTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 12.42 s -- in am.ik.rontolisp.e2e.RoveE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.ClUnicodeTablesTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 95.06 s -- in am.ik.rontolisp.e2e.IroncladE2eTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.LispFloatArrayTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.707 s -- in am.ik.rontolisp.eval.ClUnicodeTablesTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.VecSimdQ8KernelsTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.314 s -- in am.ik.rontolisp.eval.VecSimdQ8KernelsTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.VecSimdBf16KernelsTest
+[INFO] Tests run: 34, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.873 s -- in am.ik.rontolisp.eval.LispFloatArrayTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.JavaInteropTest
+[INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.212 s -- in am.ik.rontolisp.eval.VecSimdBf16KernelsTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.ObjcBlockTest
+[WARNING] Tests run: 3, Failures: 0, Errors: 0, Skipped: 2, Time elapsed: 0.079 s -- in am.ik.rontolisp.eval.ObjcBlockTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.VecSimdTest
+[INFO] Tests run: 64, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.130 s -- in am.ik.rontolisp.eval.JavaInteropTest
+[rontolisp] JUnit parallelism = 2 (availableProcessors = 64, load average = 61.74)
+[INFO] Running am.ik.rontolisp.eval.LinalgSimdTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.533 s -- in am.ik.rontolisp.eval.QuantizedMatrixTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.UiopCoverageTest
+uiop coverage: 366/435 exports
+    31/31   UIOP/PACKAGE
+     3/3    UIOP/PACKAGE-LOCAL-NICKNAMES
+     3/3    UIOP/PACKAGE*
+    68/68   UIOP/UTILITY
+    15/15   UIOP/VERSION
+    22/22   UIOP/OS
+    50/50   UIOP/PATHNAME
+    32/32   UIOP/FILESYSTEM
+    66/66   UIOP/STREAM
+    30/30   UIOP/IMAGE
+     0/19   UIOP/LAUNCH-PROGRAM
+     0/7    UIOP/RUN-PROGRAM
+    44/44   UIOP/LISP-BUILD
+     0/38   UIOP/CONFIGURATION
+     2/7    UIOP/BACKWARD-DRIVER
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.090 s -- in am.ik.rontolisp.eval.UiopCoverageTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.LibraryDefunPrunerTest
+[INFO] Tests run: 44, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.433 s -- in am.ik.rontolisp.eval.VecSimdTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.LispEvaluatorQuicklispTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.039 s -- in am.ik.rontolisp.eval.LispEvaluatorQuicklispTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.PlaygroundReplTest
+[INFO] Tests run: 73, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.519 s -- in am.ik.rontolisp.eval.LibraryDefunPrunerTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.SimdParallelTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.235 s -- in am.ik.rontolisp.eval.PlaygroundReplTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.ThreadTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.889 s -- in am.ik.rontolisp.eval.ThreadTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.MutexTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.271 s -- in am.ik.rontolisp.eval.MutexTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.00)
+[INFO] Running am.ik.rontolisp.eval.HttpHandlerJvmTest
+[INFO] Tests run: 51, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.418 s -- in am.ik.rontolisp.eval.LinalgSimdTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.SafetensorsLibraryTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.449 s -- in am.ik.rontolisp.eval.SafetensorsLibraryTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.GrayStreamsLibraryTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.618 s -- in am.ik.rontolisp.eval.GrayStreamsLibraryTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.LinalgBlasTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.821 s -- in am.ik.rontolisp.eval.SimdParallelTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.AsyncEvalTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.800 s -- in am.ik.rontolisp.eval.LinalgBlasTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.HostFetchLibraryTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.015 s -- in am.ik.rontolisp.eval.HostFetchLibraryTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.HttpReactorInlinerTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.014 s -- in am.ik.rontolisp.eval.HttpReactorInlinerTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.007 s -- in am.ik.rontolisp.eval.HttpHandlerJvmTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.ClojureLibraryTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.eval.ClojureLibraryTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.SourceLanguageTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.eval.SourceLanguageTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.CffiSystemTest
+[INFO] Tests run: 53, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.725 s -- in am.ik.rontolisp.eval.AsyncEvalTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.AsdfSystemsTest
+[INFO] Tests run: 114, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.096 s -- in am.ik.rontolisp.eval.AsdfSystemsTest
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 60.80)
+[INFO] Running am.ik.rontolisp.eval.SceneLibraryTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.LispEvaluatorTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.481 s -- in am.ik.rontolisp.eval.CffiSystemTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.FfiTest
+ffi: error in a callback: boom
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.141 s -- in am.ik.rontolisp.eval.FfiTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.UserMacroExpanderTest
+warning: skipping macro-time evaluation of DEFVAR *BROKEN*: The function NO-SUCH-FUNCTION-HERE is undefined
+[INFO] Tests run: 44, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.077 s -- in am.ik.rontolisp.eval.UserMacroExpanderTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.WaitForLibraryTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.eval.WaitForLibraryTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.SceneOffscreenRenderTest
+[WARNING] Tests run: 18, Failures: 0, Errors: 0, Skipped: 18, Time elapsed: 0.001 s -- in am.ik.rontolisp.eval.SceneOffscreenRenderTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.GeomKernelsTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.262 s -- in am.ik.rontolisp.eval.SceneLibraryTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.MacroTimeWarningsTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.042 s -- in am.ik.rontolisp.eval.MacroTimeWarningsTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.LinalgWidthWireTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.059 s -- in am.ik.rontolisp.eval.LinalgWidthWireTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.ObjcLibraryTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.eval.ObjcLibraryTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.PackedFloatReachabilityTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.067 s -- in am.ik.rontolisp.eval.PackedFloatReachabilityTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.HttpHandlerTest
+HTTP-HANDLER: handler failed: am.ik.rontolisp.eval.LispEvalException: HTTP-HANDLER: a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.860 s -- in am.ik.rontolisp.eval.GeomKernelsTest
+[INFO] Tests run: 25, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.713 s -- in am.ik.rontolisp.eval.HttpHandlerTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.AppKitLibraryTest
+[rontolisp] JUnit parallelism = 4 (availableProcessors = 64, load average = 60.02)
+[INFO] Running am.ik.rontolisp.eval.TokenizersLibraryTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.156 s -- in am.ik.rontolisp.eval.AppKitLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.DistClientTest
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.103 s -- in am.ik.rontolisp.eval.DistClientTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.MetalLibraryTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.635 s -- in am.ik.rontolisp.eval.MetalLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.Uax15TablesTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.025 s -- in am.ik.rontolisp.eval.Uax15TablesTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.ObjcBaseTest
+[INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.598 s -- in am.ik.rontolisp.eval.TokenizersLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.LispPreludeLibraryTest
+[INFO] Tests run: 17, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.095 s -- in am.ik.rontolisp.eval.LispPreludeLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.LispEvaluatorHotMethodSizeTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.027 s -- in am.ik.rontolisp.eval.LispEvaluatorHotMethodSizeTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.LinalgGpuTest
+[WARNING] Tests run: 45, Failures: 0, Errors: 0, Skipped: 45, Time elapsed: 0.002 s -- in am.ik.rontolisp.eval.LinalgGpuTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.ObjcExceptionTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.003 s -- in am.ik.rontolisp.eval.ObjcExceptionTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.SchemeLibraryTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.100 s -- in am.ik.rontolisp.eval.SchemeLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.StdinLibraryTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.027 s -- in am.ik.rontolisp.eval.StdinLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.WitExportInlinerTest
+[WARNING] Tests run: 9, Failures: 0, Errors: 0, Skipped: 5, Time elapsed: 1.063 s -- in am.ik.rontolisp.eval.ObjcBaseTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.ObjcClassTest
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.050 s -- in am.ik.rontolisp.eval.ObjcClassTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.GeomLibraryTest
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+warning: the function %STREAM-TARGET is undefined; compiled as a call-time error
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.124 s -- in am.ik.rontolisp.eval.WitExportInlinerTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.QuriEtldTablesTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.eval.QuriEtldTablesTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.ObjcNativeLibraryTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.eval.ObjcNativeLibraryTest
+[rontolisp] JUnit parallelism = 6 (availableProcessors = 64, load average = 58.09)
+[INFO] Running am.ik.rontolisp.eval.GgufLibraryTest
+[INFO] Tests run: 21, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.104 s -- in am.ik.rontolisp.eval.GgufLibraryTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.eval.LispEvaluatorAsdfTest
+[INFO] Tests run: 37, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.548 s -- in am.ik.rontolisp.eval.LispEvaluatorAsdfTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.eval.IroncladNativeTest
+[INFO] Tests run: 22, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.941 s -- in am.ik.rontolisp.eval.IroncladNativeTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.NativeSubstitutionsTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.008 s -- in am.ik.rontolisp.NativeSubstitutionsTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.PathCitationTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.839 s -- in am.ik.rontolisp.PathCitationTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.BFloat16Test
+[INFO] Tests run: 83, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.953 s -- in am.ik.rontolisp.eval.GeomLibraryTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.LispFloatArrayInitTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.425 s -- in am.ik.rontolisp.BFloat16Test
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.FloatWidthTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in am.ik.rontolisp.FloatWidthTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.PackageCycleTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.258 s -- in am.ik.rontolisp.LispFloatArrayInitTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.NativeImageResourceConfigTest
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.017 s <<< FAILURE! -- in am.ik.rontolisp.NativeImageResourceConfigTest
+[ERROR] am.ik.rontolisp.NativeImageResourceConfigTest.everyBundledResourceIsRegistered -- Time elapsed: 0.016 s <<< FAILURE!
+java.lang.AssertionError: 
+[bundled resources with no matching pattern in src/main/resources/META-INF/native-image/am.ik.rontolisp/rontolisp/resource-config.json -- they load on the JVM but are absent from the native binary] 
+Expecting empty but was: ["am/ik/rontolisp/eval/clojure.lisp"]
+	at am.ik.rontolisp.NativeImageResourceConfigTest.everyBundledResourceIsRegistered(NativeImageResourceConfigTest.java:65)
+
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.ClosRegistryTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.ClosRegistryTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.PackageRegistryTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.PackageRegistryTest
+[rontolisp] JUnit parallelism = 7 (availableProcessors = 64, load average = 56.57)
+[INFO] Running am.ik.rontolisp.JavadocLinkTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.463 s -- in am.ik.rontolisp.PackageCycleTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.60)
+[INFO] Running am.ik.rontolisp.LambdaListsTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.018 s -- in am.ik.rontolisp.LambdaListsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.60)
+[INFO] Running am.ik.rontolisp.HugeMethodTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.119 s -- in am.ik.rontolisp.HugeMethodTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.60)
+[INFO] Running am.ik.rontolisp.clojure.ClojureLoweringTest
+[INFO] Tests run: 39, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.144 s -- in am.ik.rontolisp.clojure.ClojureLoweringTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.60)
+[INFO] Running am.ik.rontolisp.clojure.ClojureInteropTest
+Exception in thread "Thread-7" am.ik.rontolisp.eval.LispEvalException: SLEEP was interrupted
+	at am.ik.rontolisp.eval.Environment.lambda$registerMath$33(Environment.java:3302)
+	at am.ik.rontolisp.eval.LispEvaluator.apply(LispEvaluator.java:13382)
+	at am.ik.rontolisp.eval.LispEvaluator.evalCons(LispEvaluator.java:7235)
+	at am.ik.rontolisp.eval.LispEvaluator.eval(LispEvaluator.java:5525)
+	at am.ik.rontolisp.eval.LispEvaluator.eval(LispEvaluator.java:5217)
+	at am.ik.rontolisp.eval.LispEvaluatorTest.lambda$aMemoizedBuiltinMacroDoesNotHoldTheMemoWhileItsExpansionRuns$0(LispEvaluatorTest.java:23081)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.515 s -- in am.ik.rontolisp.clojure.ClojureInteropTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.03)
+[INFO] Running am.ik.rontolisp.clojure.ClojureReaderTest
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.015 s -- in am.ik.rontolisp.clojure.ClojureReaderTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.03)
+[INFO] Running am.ik.rontolisp.clojure.ClojureSessionTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in am.ik.rontolisp.clojure.ClojureSessionTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 53.03)
+[INFO] Running am.ik.rontolisp.cli.WasmReportLocationsTest
+WARNING: NIL
+WARNING: NIL
+WARNING: NIL
+WARNING: NIL
+WARNING: NIL
+WARNING: NIL
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 10.89 s -- in am.ik.rontolisp.JavadocLinkTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 52.79)
+[INFO] Running am.ik.rontolisp.cli.CompileIndependenceTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 57.33 s -- in am.ik.rontolisp.e2e.JoseE2eTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 52.79)
+[INFO] Running am.ik.rontolisp.cli.NativeFetchTest
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 1.104 s -- in am.ik.rontolisp.cli.NativeFetchTest
+[rontolisp] JUnit parallelism = 11 (availableProcessors = 64, load average = 52.79)
+[INFO] Running am.ik.rontolisp.cli.LoadInlinerTest
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+warning: the function NAMESTRING is undefined; compiled as a call-time error
+[INFO] Tests run: 65, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.660 s -- in am.ik.rontolisp.cli.LoadInlinerTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 52.00)
+[INFO] Running am.ik.rontolisp.cli.NativeToolchainTest
+[WARNING] Tests run: 12, Failures: 0, Errors: 0, Skipped: 6, Time elapsed: 0.080 s -- in am.ik.rontolisp.cli.NativeToolchainTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 52.00)
+[INFO] Running am.ik.rontolisp.cli.RontoLispCliTest
+rontolisp: warning: --gpu: libcuda.so.1 is not present: this machine has no NVIDIA driver; running the linalg: kernels unaccelerated.
+:async t: this module imports net.pull, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: grab
+warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+:async t: this module imports env.readRequestBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: handle
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(reply-id, ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+[INFO] Tests run: 22, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 14.66 s -- in am.ik.rontolisp.cli.WasmReportLocationsTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 52.00)
+[INFO] Running am.ik.rontolisp.cli.JvmArtifactOptionsTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.009 s -- in am.ik.rontolisp.cli.JvmArtifactOptionsTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 52.00)
+[INFO] Running am.ik.rontolisp.cli.CliOptionsTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.cli.CliOptionsTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.UncaughtReportParityTest
+[INFO] Tests run: 107, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.612 s -- in am.ik.rontolisp.cli.RontoLispCliTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.JLineReplTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.254 s -- in am.ik.rontolisp.cli.JLineReplTest
+Sep 30, 2026 5:41:46 PM org.jline.utils.Log log
+WARNING: Error in output pump
+java.io.IOException: Input/output error
+	at java.base/java.io.FileInputStream.read0(Native Method)
+	at java.base/java.io.FileInputStream.read(FileInputStream.java:201)
+	at org.jline.terminal.impl.PosixPtyTerminal.pumpOut(PosixPtyTerminal.java:276)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.JvmSourceCompilerTest
+warned.lisp:2:19: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+warned.lisp:2:19: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.483 s -- in am.ik.rontolisp.cli.JvmSourceCompilerTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.NativeFeatureTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.006 s -- in am.ik.rontolisp.cli.NativeFeatureTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.RontoLispCliStreamsTest
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.681 s -- in am.ik.rontolisp.cli.UncaughtReportParityTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.LlmChatModeWithoutTemplateTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.134 s -- in am.ik.rontolisp.cli.LlmChatModeWithoutTemplateTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.MavenCoordinatesTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.010 s -- in am.ik.rontolisp.cli.MavenCoordinatesTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.BuiltinCallArityCompileTest
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+[INFO] Tests run: 492, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 126.3 s -- in am.ik.rontolisp.e2e.SchemeSpecE2eTest
+[rontolisp] JUnit parallelism = 12 (availableProcessors = 64, load average = 51.68)
+[INFO] Running am.ik.rontolisp.cli.NativeCallArityCompileTest
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME DEP-A) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME DEP-B) was signalled.
+WARNING: Condition (UIOP/VERSION:DEPRECATED-FUNCTION-STYLE-WARNING :NAME DEP-C) was signalled.
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.173 s -- in am.ik.rontolisp.cli.NativeCallArityCompileTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.WideListStackTest
+warning: the function %FMT-RENDER is undefined; compiled as a call-time error
+[INFO] Tests run: 40, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.888 s -- in am.ik.rontolisp.cli.RontoLispCliStreamsTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.HttpHandlerInlinerTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.001 s -- in am.ik.rontolisp.cli.HttpHandlerInlinerTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.WitScaffolderTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.239 s -- in am.ik.rontolisp.cli.WitScaffolderTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.NativeExecutableTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.cli.NativeExecutableTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.SafetensorsBfloat16CompilePathTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.793 s -- in am.ik.rontolisp.cli.SafetensorsBfloat16CompilePathTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.cli.FormatCommandTest
+rontolisp: format: no file or directory given (try: rontolisp format --help)
+rontolisp: format: unknown option '--bogus' (try: rontolisp format --help)
+rontolisp: format: --width needs a number, got 'nope'
+rontolisp: format: no such file or directory: /tmp/junit-16690412987053335805/nope.lisp
+rontolisp: format: no .lisp/.asd/.scm files found
+rontolisp: format: /tmp/junit-17164235500613388702/a-broken.lisp: 1:1: unterminated '(': no matching ')'
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.029 s -- in am.ik.rontolisp.cli.FormatCommandTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.runtime.RontoFetchTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.runtime.RontoFetchTest
+[rontolisp] JUnit parallelism = 8 (availableProcessors = 64, load average = 55.79)
+[INFO] Running am.ik.rontolisp.runtime.RontoFloatArrayTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 116.1 s -- in am.ik.rontolisp.e2e.ClPostgresE2eTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.runtime.RontoHashTableTombstoneTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.002 s -- in am.ik.rontolisp.runtime.RontoHashTableTombstoneTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.runtime.RontoHashTableEqualpKeyTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.012 s -- in am.ik.rontolisp.runtime.RontoHashTableEqualpKeyTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.ansi.AnsiChapterRunnerTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.017 s -- in am.ik.rontolisp.ansi.AnsiChapterRunnerTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.ansi.TopLevelSplitterTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.ansi.TopLevelSplitterTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.SourceProvenanceTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.SourceProvenanceTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.testsupport.ProcessScratchTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.160 s -- in am.ik.rontolisp.testsupport.ProcessScratchTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.testsupport.CliStackTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.071 s -- in am.ik.rontolisp.testsupport.CliStackTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.testsupport.ThreadStdioTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in am.ik.rontolisp.testsupport.ThreadStdioTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.testsupport.CoreCountParallelismStrategyTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[rontolisp] JUnit parallelism = 3 (availableProcessors = 64, load average = 54.93)
+[rontolisp] JUnit parallelism = 5 (availableProcessors = 64, load average = 54.93)
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.099 s -- in am.ik.rontolisp.testsupport.CoreCountParallelismStrategyTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.DefinedCallArityTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.DefinedCallArityTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.NoWasiFilesystemStubsTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.NoWasiFilesystemStubsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.JavaDeclarationsTest
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.033 s -- in am.ik.rontolisp.compiler.JavaDeclarationsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ShadowedBuiltinsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.782 s -- in am.ik.rontolisp.compiler.ShadowedBuiltinsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.BuiltinFunctionWrapperCatalogTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.030 s -- in am.ik.rontolisp.compiler.BuiltinFunctionWrapperCatalogTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.CompileTimeBoundpTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.012 s -- in am.ik.rontolisp.compiler.CompileTimeBoundpTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.OptimizeLevelTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.006 s -- in am.ik.rontolisp.compiler.OptimizeLevelTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.HostGlueEmitterTest
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+:async t: this module imports net.pull, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: the exports that can reach a suspending import -- enter each through WebAssembly.promising: grab
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 22.78 s -- in am.ik.rontolisp.cli.CompileIndependenceTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ClRedefinitionWarningsTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+--host-fetch: this module imports env.fetch(request-json) -> response-json, and every rontolisp:fetch crosses it whole -- the reply's body rides the head's own "body" key (--host-boundary=envelope). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.593 s -- in am.ik.rontolisp.compiler.ClRedefinitionWarningsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.CompileWarningsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.compiler.CompileWarningsTest
+:async t: this module imports env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.JavaSiteResolverTest
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.125 s -- in am.ik.rontolisp.compiler.JavaSiteResolverTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.BuiltinCallArityTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.009 s -- in am.ik.rontolisp.compiler.BuiltinCallArityTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.WitTypeMapperTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.compiler.WitTypeMapperTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.DeadTypeBranchPrunerTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.compiler.DeadTypeBranchPrunerTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(reply-id, ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.WitExportDirectiveTest
+[INFO] Tests run: 36, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.023 s -- in am.ik.rontolisp.compiler.WitExportDirectiveTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ReactorEnvelopeTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.ReactorEnvelopeTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.FetchResponseShapeTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.rontolisp.compiler.FetchResponseShapeTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.SuspendingImportsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.375 s -- in am.ik.rontolisp.compiler.SuspendingImportsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.WitImportDirectiveTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(reply-id, ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and may OVERLAP calls (--reentrant: the module owns its per-call state; a :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with __ronto_park_free)
+[INFO] Tests run: 51, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.045 s -- in am.ik.rontolisp.compiler.WitImportDirectiveTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.JavaImplementationsTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.010 s -- in am.ik.rontolisp.compiler.JavaImplementationsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.LinalgKernelCallLayoutTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.002 s -- in am.ik.rontolisp.compiler.LinalgKernelCallLayoutTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.FixedDecimalTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in am.ik.rontolisp.compiler.FixedDecimalTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.SequenceIoNarrowingTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.rontolisp.compiler.SequenceIoNarrowingTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.AstOutlinerTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.018 s -- in am.ik.rontolisp.compiler.AstOutlinerTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ToplevelStatementsTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in am.ik.rontolisp.compiler.ToplevelStatementsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.NoWasiLoadPathRefusalsTest
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+:async t: this module imports env.readResponseBody, env.readRequestBody, env.writeResponseBody, declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the exports that can reach one through WebAssembly.promising, and serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls); a host that answers synchronously is equally valid -- the call then returns an already-settled future either way
+:async t: a function that can reach a suspending import is taken as a value (#'name), so ANY export may reach one -- enter every export through WebAssembly.promising
+--host-fetch: this module imports env.fetch(request-json) -> response-head-json and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a negative count = the transfer failed mid-body). A host may answer synchronously; a host whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through WebAssembly.promising, and must serialise calls (a suspended module can be re-entered; a re-entered export refuses with a trap instead of corrupting both calls)
+[WARNING] Tests run: 17, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 3.267 s -- in am.ik.rontolisp.compiler.HostGlueEmitterTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ClackEnvTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.ClackEnvTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.DesignatorSpellingsTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.DesignatorSpellingsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.FreeVarAnalyzerCaptureTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.002 s -- in am.ik.rontolisp.compiler.FreeVarAnalyzerCaptureTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.ParallelLetStagingTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.ParallelLetStagingTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.GlImportObjectTest
+[WARNING] Tests run: 2, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.007 s -- in am.ik.rontolisp.compiler.GlImportObjectTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.rontolisp.compiler.LetBoundDesignatorsTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.003 s -- in am.ik.rontolisp.compiler.LetBoundDesignatorsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.wit.WitEscapingTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in am.ik.wit.WitEscapingTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.wit.WitLocationsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in am.ik.wit.WitLocationsTest
+[rontolisp] JUnit parallelism = 9 (availableProcessors = 64, load average = 54.93)
+[INFO] Running am.ik.wit.WitResolverTest
+[INFO] Tests run: 21, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.021 s -- in am.ik.wit.WitResolverTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.wit.WitRoundTripTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.071 s -- in am.ik.wit.WitRoundTripTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.gpu.GpuTest
+[WARNING] Tests run: 62, Failures: 0, Errors: 0, Skipped: 62, Time elapsed: 0.003 s -- in am.ik.gpu.GpuTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.gpu.GpuDeclineTest
+[INFO] Tests run: 28, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.125 s -- in am.ik.gpu.GpuDeclineTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.gpu.DeviceResidencyPressureTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.011 s -- in am.ik.gpu.DeviceResidencyPressureTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.gpu.MetalGpuTest
+[WARNING] Tests run: 54, Failures: 0, Errors: 0, Skipped: 54, Time elapsed: 0.003 s -- in am.ik.gpu.MetalGpuTest
+[rontolisp] JUnit parallelism = 10 (availableProcessors = 64, load average = 53.81)
+[INFO] Running am.ik.gpu.NativeImageForeignConfigTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.262 s -- in am.ik.rontolisp.compiler.NoWasiLoadPathRefusalsTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.204 s -- in am.ik.gpu.NativeImageForeignConfigTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 9.597 s -- in am.ik.rontolisp.runtime.RontoFloatArrayTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 18.49 s -- in am.ik.rontolisp.cli.BuiltinCallArityCompileTest
+[INFO] Tests run: 1649, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 58.44 s -- in am.ik.rontolisp.eval.LispEvaluatorTest
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 29.35 s -- in am.ik.rontolisp.cli.WideListStackTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 135.9 s -- in am.ik.rontolisp.eval.LinalgGpuDeclineTest
+[INFO] 
+[INFO] Results:
+[INFO] 
+[ERROR] Failures: 
+[ERROR]   NativeImageResourceConfigTest.everyBundledResourceIsRegistered:65 [bundled resources with no matching pattern in src/main/resources/META-INF/native-image/am.ik.rontolisp/rontolisp/resource-config.json -- they load on the JVM but are absent from the native binary] 
+Expecting empty but was: ["am/ik/rontolisp/eval/clojure.lisp"]
+[ERROR]   SourceLanguageSeamTest.userSourceReachesFormsOnlyThroughTheSeam:139 [A class reads user source without going through SourceLanguage. Either route it through the seam, or -- when it reads shipped library source, runtime data or system metadata instead of user source -- add it to EXEMPT with its reason.] 
+Expecting empty but was: ["am.ik.rontolisp.eval.ClojureLibrary <- LispReader.readAllFromString"]
+[INFO] 
+[ERROR] Tests run: 14413, Failures: 2, Errors: 0, Skipped: 334
+[INFO] 
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  06:29 min
+[INFO] Finished at: 2026-09-30T17:43:07Z
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.6.0:test (default-test) on project rontolisp: There are test failures.
+[ERROR] 
+[ERROR] See /tmp/opencode/rontolisp-b07/target/surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException

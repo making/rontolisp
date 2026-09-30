@@ -291,6 +291,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/clojure\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"
