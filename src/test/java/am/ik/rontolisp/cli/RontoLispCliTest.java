@@ -1845,4 +1845,57 @@ class RontoLispCliTest {
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
+	@Test
+	void dumpIrShowsTheExpandedCoreFormsAndRoundTrips() {
+		// A user macro is expanded by the front end: the dump must show the expansion's
+		// output, not the call site -- and feeding the dump back in must run the same
+		// program to the same output.
+		String program = """
+				(defmacro inc (v) `(+ ,v 1))
+				(defun classify (n)
+				  (cond ((< n 0) 'negative)
+				        ((= n 0) 'zero)
+				        (t 'positive)))
+				(print (inc 41))
+				(print (classify 5))
+				""";
+		String ran = runCli("", "-e", program);
+		String dump = runCli("", "-e", program, "--dump-ir");
+		// One top-level form per line, in source order.
+		assertThat(dump.lines().count()).isEqualTo(3);
+		// The macro call site is gone, expanded to the core-form call.
+		assertThat(dump).contains("(PRINT (+ 41 1))").doesNotContain("INC");
+		// The dump is Common Lisp the CLI reads back: same output as running the source.
+		assertThat(runCli("", "-e", dump)).isEqualTo(ran);
+	}
+
+	@Test
+	void dumpIrRejectsAnOutputPath() {
+		assertThatThrownBy(() -> runCli("", "-e", "(print 1)", "--dump-ir", "-o", "out.class"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--dump-ir");
+	}
+
+	@Test
+	void dumpIrDumpsTheLoweredSchemeForms() throws Exception {
+		// The scheme frontend lowers to the same core forms; the dump proves the lowering
+		// is visible through the same flag -- and the dump still runs, scheme output and
+		// all, re-read as Common Lisp.
+		Path program = this.tempDir.resolve("prog.scm");
+		Files.writeString(program, "(define (square x) (* x x))\n(display (square 7))\n(newline)\n");
+		String dump = runCli("", program.toString(), "--dump-ir");
+		assertThat(dump).contains("|square|").doesNotContain("DEFINE (");
+		assertThat(runCli("", "-e", dump, "--source-language", "common-lisp")).isEqualTo("49\n");
+	}
+
+	@Test
+	void dumpIrPrintsNothingButTheDump() {
+		// The program never runs, so its own output is absent: the dump is the whole
+		// stdout, one form per line.
+		String dump = runCli("", "-e", "(progn (print 1) (print 2))", "--dump-ir");
+		// The front end splits a top-level progn; whatever it yields, the dump is the
+		// whole stdout and nothing ran.
+		assertThat(dump).isEqualTo("(PRINT 1)\n(PRINT 2)\n");
+	}
+
 }

@@ -67,10 +67,22 @@ public record LispSymbol(String name) implements LispVal {
 			return "#:" + (member.indexOf(':') >= 0 ? forceEscape(member) : escape(member));
 		}
 		int colon = qualifierEnd(this.name);
-		if (colon > 0) {
+		if (colon > 0 && !isInstanceTag(this.name)) {
 			return this.name.substring(0, colon) + escape(this.name.substring(colon));
 		}
 		return escape(this.name);
+	}
+
+	/**
+	 * Whether the name is an instance tag ({@code %struct-PKG::NAME} /
+	 * {@code %class-PKG::NAME}, {@link LispLayout}): one token over an already-canonical
+	 * name, not a package-qualified symbol -- its embedded {@code ::} must not print as a
+	 * qualifier, or the reader reads the tag's prefix as a package name
+	 * ({@code %struct-RONTOLISP}) and the re-read symbol is not the tag the program
+	 * registered.
+	 */
+	private static boolean isInstanceTag(String name) {
+		return name.startsWith(LispLayout.STRUCT_TAG_PREFIX) || name.startsWith(LispLayout.CLASS_TAG_PREFIX);
 	}
 
 	/**

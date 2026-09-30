@@ -27,6 +27,8 @@ sections:
         title: Dynamic (Late Binding)
       - file: compiling/warnings.md
         title: Compile-Time Warnings
+      - file: compiling/ir-dump.md
+        title: Dumping the IR (`--dump-ir`)
       - file: compiling/self-hosted-repl.md
         title: Self-Hosted REPL
   - title: Language Reference

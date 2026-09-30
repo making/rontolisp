@@ -18,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
@@ -41,6 +42,7 @@ import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
 
@@ -206,6 +208,22 @@ public final class RontoLispCli {
 			baseDir = inputFile == null ? null : SourceLoader.parentDir(inputFile);
 		}
 
+		// --dump-ir prints the compile path's final form -- the post-expansion IR, what
+		// the
+		// backends would consume -- one top-level form per line, and exits without
+		// compiling or running. Backend-independent by construction: the front end runs
+		// with no target's flags, before any backend is chosen, so the dump is the shared
+		// core-form contract itself. Its output is ordinary Common Lisp: printed with the
+		// reader-faithful printer, a dump fed back to the CLI runs the same program.
+		if (options.contains("--dump-ir")) {
+			if (options.contains("-o")) {
+				throw new UnsupportedOperationException(
+						"--dump-ir prints the IR and exits: it compiles nothing, so it takes no -o");
+			}
+			dumpIr(source, baseDir, systemPath, dists, features, inputFile, sourceLanguage, standards,
+					options.contains("--dynamic"), options.contains("--no-prune"));
+			return;
+		}
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			// --emit-js-glue is a boolean and stays one: it writes a file, where
@@ -576,6 +594,42 @@ public final class RontoLispCli {
 		argv.add(inputFile == null ? "rontolisp" : inputFile);
 		argv.addAll(arguments);
 		return List.copyOf(argv);
+	}
+
+	// The whole front end, up to and not including any backend: the same
+	// CompileFrontend.run the compilers take, with no target's flags set, so the dump
+	// is the program as the backends receive it -- load-inlined, macro-expanded,
+	// library-spliced. Printed with LispVal.print, whose output the reader reads back
+	// (the round trip: rontolisp prog.lisp --dump-ir > ir.lisp; rontolisp ir.lisp runs
+	// the same program). Warnings surface as on a compile, via CompileDiagnostics.
+	private void dumpIr(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
+			List<String> declaredFeatures, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards, boolean dynamic, boolean noPrune) {
+		CompileDiagnostics.recording(dists, () -> {
+			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
+				.source(source)
+				.entryFile(entryFile)
+				.sourceLanguage(sourceLanguage)
+				.standards(standards)
+				.systemPath(systemPath)
+				.dists(dists)
+				.declaredFeatures(declaredFeatures)
+				.options(CompileFrontend.Options.builder().baseDir(baseDir).dynamic(dynamic).noPrune(noPrune).build())
+				.build());
+			for (LispVal form : frontend.program()) {
+				// A (%struct-definition (defstruct ...)) marker is compile-path
+				// bookkeeping
+				// the BACKENDS consume (LispMacroExpander.expandTopLevelDefinitions); the
+				// interpreter knows only the defstruct itself, whose generated defuns
+				// already ride the stream. The dump carries the payload, so the output
+				// runs as it stands.
+				this.out.println(
+						(LispMacroExpander.structDefinitionPayload(form) instanceof LispCons payload ? payload : form)
+							.print());
+			}
+			return null;
+		});
+		this.out.flush();
 	}
 
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
@@ -1239,6 +1293,10 @@ public final class RontoLispCli {
 		this.out.println("                     every flag below; it cannot be given beside an input file.");
 		this.out.println("                     A relative (load \"...\") resolves against the working");
 		this.out.println("                     directory, there being no file to resolve against");
+		this.out.println("  --dump-ir          Print the program's IR -- every top-level form after");
+		this.out.println("                     macro expansion and library splicing, the core forms");
+		this.out.println("                     the backends consume -- one per line, as readable");
+		this.out.println("                     Common Lisp, and exit without running or compiling");
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
 		this.out.println("  --component        Emit a WASI 0.3 component (run with: wasmtime run)");
