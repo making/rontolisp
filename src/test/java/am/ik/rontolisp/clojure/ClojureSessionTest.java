@@ -13,9 +13,9 @@ class ClojureSessionTest {
 	void aLaterBufferCallsWhatAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		assertThat(session.read("(defn twice [x] (* 2 x))").get(0).forms().stream().map(LispVal::print).toList())
-			.containsExactly("(DEFUN C%TWICE (C%X) (* 2 C%X))");
+			.containsExactly("(DEFUN |c%twice| (|c%x|) (* 2 |c%x|))");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
-		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly("(C%TWICE 21)");
+		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly("(|c%twice| 21)");
 	}
 
 	@Test

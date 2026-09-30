@@ -25,7 +25,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 | Clojure | lowers to | why |
 |---|---|---|
-| identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; `:` -> `%c`, `%` -> `%%` keeps the map injective |
+| identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
 | `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name, so a definition may use one below it |
 | `def` | top-level `setq` of the mangled name | |
 | `fn` / `#(...)` | `lambda` | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`) |
@@ -77,9 +77,17 @@ the Common Lisp printer, and decides completeness by bracket counting over `()[]
 
 ## Tests
 
-`ClojureReaderTest`, `ClojureLoweringTest`, `ClojureSessionTest`, `ClojureE2eTest`
-(the interpreter, the JVM and both WASM backends on one corpus -- the `demo.clj`
-seed), `SourceLanguageTest` (the `.clj` pick, the `clojure`/`clj` override),
-`RontoLispCliTest` (the `.clj` file pick, the `clojure>` REPL transcript, the
-`--no-gc` refusal), `PackageCycleTest` (the `clojure` package sees only the AST types
-and `reader`).
+`ClojureReaderTest`, `ClojureLoweringTest`, `ClojureSessionTest`,
+`ClojureSpecE2eTest` (the interpreter, the JVM and both WASM backends over
+`src/test/resources/clojure-spec.yaml` -- one case per lowering-table row and per
+builtin group, concatenated into one program and sliced back per case, the
+`ci-spec.yaml` idea), `SourceLanguageTest` (the `.clj` pick, the `clojure`/`clj`
+override), `RontoLispCliTest` (the `.clj` file pick, the `clojure>` REPL
+transcript, the `--no-gc` refusal), `PackageCycleTest` (the `clojure` package
+sees only the AST types and `reader`). `examples/clojure/demo.clj` stays the
+user-facing smoke test, pinned by `examples.yaml` (`ExamplesE2eTest`); the old
+inline `ClojureE2eTest` over the same program was removed when the spec arrived.
+`nth` takes the collection first (`(nth coll i)` -> `(NTH i coll)`), `quot` is
+`truncate`, an `(ns ...)` form defines nothing (the file-level skip used to
+match only a bare `ns` symbol), and identifiers keep their case behind the
+prefix (`Foo` and `foo` no longer fold into one symbol).

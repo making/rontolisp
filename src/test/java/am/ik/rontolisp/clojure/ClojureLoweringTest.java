@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The lowering table of {@code .kb/clojure-frontend.md}, row by row, as the Common Lisp
  * the front end emits. What the emitted forms DO on each backend is
- * {@code ClojureE2eTest}'s business.
+ * {@code ClojureSpecE2eTest}'s business.
  */
 class ClojureLoweringTest {
 
@@ -24,20 +24,20 @@ class ClojureLoweringTest {
 
 	@Test
 	void everyIdentifierManglesBehindThePrefix() {
-		assertThat(lowered("(def x 1) x")).isEqualTo("(SETQ C%X 1)\nC%X");
+		assertThat(lowered("(def x 1) x")).isEqualTo("(SETQ |c%x| 1)\n|c%x|");
 		assertThat(ClojureLowering.mangle("a:b")).isEqualTo("c%a%cb");
 		assertThat(ClojureLowering.mangle("a%b")).isEqualTo("c%a%%b");
 	}
 
 	@Test
 	void defnIsADefunCalledDirectly() {
-		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo("(DEFUN C%F (C%X) C%X)\n(C%F 1)");
-		assertThat(lowered("(defn f [x] x) f")).isEqualTo("(DEFUN C%F (C%X) C%X)\n#'C%F");
+		assertThat(lowered("(defn f [x] x) (f 1)")).isEqualTo("(DEFUN |c%f| (|c%x|) |c%x|)\n(|c%f| 1)");
+		assertThat(lowered("(defn f [x] x) f")).isEqualTo("(DEFUN |c%f| (|c%x|) |c%x|)\n#'|c%f|");
 	}
 
 	@Test
 	void letIsSequentialAndLoopIsALabelsSelfCall() {
-		assertThat(lowered("(let [x 1 y x] y)")).isEqualTo("(LET* ((C%X 1) (C%Y C%X)) C%Y)");
+		assertThat(lowered("(let [x 1 y x] y)")).isEqualTo("(LET* ((|c%x| 1) (|c%y| |c%x|)) |c%y|)");
 		assertThat(lowered("(loop [a 0] (recur 1))")).contains("LABELS");
 		assertThatThrownBy(() -> Clojure.read("(recur 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("recur outside loop");
@@ -45,7 +45,8 @@ class ClojureLoweringTest {
 
 	@Test
 	void fnAndAnonFnAreLambdas() {
-		assertThat(lowered("((fn [a b] (+ a b)) 1 2)")).isEqualTo("(FUNCALL (LAMBDA (C%A C%B) (+ C%A C%B)) 1 2)");
+		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
+			.isEqualTo("(FUNCALL (LAMBDA (|c%a| |c%b|) (+ |c%a| |c%b|)) 1 2)");
 		assertThat(lowered("(map #(* % %) '(1 2))")).contains("MAPCAR").contains("NTH");
 		assertThatThrownBy(() -> Clojure.read("%", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("outside the anon form");
@@ -63,7 +64,7 @@ class ClojureLoweringTest {
 	@Test
 	void vectorsQuotesAndKeywords() {
 		assertThat(lowered("[1 :a]")).isEqualTo("(VECTOR 1 :A)");
-		assertThat(lowered("'a")).isEqualTo("'C%A");
+		assertThat(lowered("'a")).isEqualTo("'|c%a|");
 		assertThat(lowered(":a")).isEqualTo(":A");
 		assertThat(lowered("(str \"a\" 1)")).contains("CONCATENATE");
 	}
@@ -80,6 +81,23 @@ class ClojureLoweringTest {
 	void falseFoldsIntoNil() {
 		assertThat(lowered("false")).isEqualTo("NIL");
 		assertThat(lowered("true")).isEqualTo("T");
+	}
+
+	@Test
+	void nsDefinesNothing() {
+		assertThat(lowered("(ns foo) (def x 1) x")).isEqualTo("(SETQ |c%x| 1)\n|c%x|");
+		assertThat(lowered("(ns foo (:require [clojure.string :as s])) (def x 1) x"))
+			.isEqualTo("(SETQ |c%x| 1)\n|c%x|");
+	}
+
+	@Test
+	void nthTakesTheCollectionFirst() {
+		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo("(NTH 1 '(1 2 3))");
+	}
+
+	@Test
+	void quotTruncatesTowardZero() {
+		assertThat(lowered("(quot 7 2)")).isEqualTo("(TRUNCATE 7 2)");
 	}
 
 }

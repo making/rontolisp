@@ -1482,12 +1482,12 @@ class RontoLispCliTest {
 				(def x 1)
 				(+ x 41)
 				""";
-		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("C%TWICE\n42\n1\n42\n");
+		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("|c%twice|\n42\n1\n42\n");
 	}
 
 	@Test
 	void theClojureReplContinuesAnIncompleteForm() {
-		assertThat(runCli("(defn f [x]\n (* x 2))\n(f 21)\n", "--source-language", "clojure")).isEqualTo("C%F\n42\n");
+		assertThat(runCli("(defn f [x]\n (* x 2))\n(f 21)\n", "--source-language", "clojure")).isEqualTo("|c%f|\n42\n");
 	}
 
 	@Test

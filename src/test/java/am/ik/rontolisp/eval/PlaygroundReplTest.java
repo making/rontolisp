@@ -63,7 +63,7 @@ class PlaygroundReplTest {
 	@Test
 	void theClojurePickReadsClojureAndKeepsItsSessionAcrossBuffers() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
-		assertThat(repl.eval("(defn twice [x] (* 2 x))")).isEqualTo("C%TWICE");
+		assertThat(repl.eval("(defn twice [x] (* 2 x))")).isEqualTo("|c%twice|");
 		assertThat(repl.eval("(twice 21)")).isEqualTo("42");
 		assertThat(repl.eval("(def x 1) (+ x 41)")).isEqualTo("42");
 	}

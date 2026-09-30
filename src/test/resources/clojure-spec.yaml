@@ -1,0 +1,221 @@
+# The corpus of the EXPERIMENTAL Clojure front end (ClojureSpecE2eTest): one case per
+# row of the lowering table in .kb/clojure-frontend.md and per builtin group of the
+# subset. Cases run IN ORDER, concatenated into one .clj program per backend (shared
+# global state), and the output is sliced back per case -- the ci-spec.yaml idea.
+# Every case must print the same text on the interpreter, the JVM, wasm and the
+# component. Divergences from real Clojure are the documented deviations in
+# .kb/clojure-frontend.md, not failures: what is pinned here is that every backend
+# agrees. Where the oracle (Clojure CLI 1.12) answers differently, a comment says so.
+cases:
+  - name: identifiers-keep-their-case-and-mangle-behind-the-prefix
+    source: |
+      (def cid-Foo 1)
+      (def cid-foo 2)
+      (def cid-FOO 3)
+      (println cid-Foo cid-foo cid-FOO)
+    expected: |
+      123
+  - name: a-definition-may-use-a-name-defined-below-it
+    source: |
+      (defn fwd-a [] (fwd-b))
+      (defn fwd-b [] 42)
+      (println (fwd-a))
+    expected: |
+      42
+  - name: defn-with-docstring-and-variadic-rest
+    source: |
+      (defn vrest "a docstring" [x & xs] xs)
+      (println (vrest 1 2 3))
+    expected: |
+      (2 3)
+  - name: fn-and-anon-fn-are-lambdas
+    source: |
+      (println ((fn [a b] (+ (* a 10) b)) 4 2))
+      (println (map #(* % %) '(1 2 3)))
+      (println (#(+ %1 %2) 10 20))
+      (println ((fn [x & xs] xs) 1 2 3))
+    expected: |
+      42
+      (1 4 9)
+      30
+      (2 3)
+  - name: let-is-sequential
+    source: |
+      (println (let [x 1 y x] y))
+      (let [lx 10 ly (+ lx 5)]
+        (println lx ly))
+    expected: |
+      1
+      1015
+  - name: loop-recur-is-a-self-call
+    source: |
+      (defn fib10 [n]
+        (loop [a 0 b 1 i 0]
+          (if (= i n) a (recur b (+ a b) (inc i)))))
+      (println (fib10 10))
+      (println (loop [i 0] (if (= i 3) i (recur (inc i)))))
+    expected: |
+      55
+      3
+  - name: if-when-cond-do-and-or
+    # Clojure rejects the odd trailing arm (cond requires an even number of forms);
+    # here it is the default, per .kb/clojure-frontend.md.
+    source: |
+      (println (cond (= 1 2) :one (= 1 1) :two :else :other))
+      (println (cond (= 1 2) :one :fallback))
+      (println (list (and 1 2 3) (or nil nil 3) (not nil) (not 1)))
+      (println (do 1 2 3))
+      (println (when true 1 2))
+    expected: |
+      TWO
+      FALLBACK
+      (3 3 T NIL)
+      3
+      2
+  - name: arithmetic-and-comparison
+    source: |
+      (println (list (+ 1 2 3) (- 10 4) (* 2 3 4) (/ 7 2)))
+      (println (list (max 3 9 4) (min 3 9 4) (rem 7 2) (mod -7 2) (quot 7 2) (quot -7 2) (abs -5) (expt 2 10)))
+      (println (list (inc 5) (dec 5)))
+      (println (list (= 1 1) (= 1 2) (not= 1 2) (< 1 2) (> 2 1) (<= 2 2) (>= 3 4)))
+    expected: |
+      (6 6 24 7/2)
+      (9 3 1 1 3 -3 5 1024)
+      (6 4)
+      (T NIL T T T T NIL)
+  - name: seq-ops-run-over-lists
+    source: |
+      (println (map #(* % %) '(1 2 3)))
+      (println (filter odd? '(1 2 3 4)))
+      (println (reduce + 0 '(1 2 3)))
+      (println (reduce + '(1 2 3)))
+      (println (apply max '(3 9 4)))
+      (println (concat '(1 2) '(3 4)))
+      (println (list (first '(1 2)) (rest '(1 2 3)) (nth '(10 20 30) 1) (count '(1 2 3)) (cons 0 '(1 2)) (reverse '(1 2 3))))
+    expected: |
+      (1 4 9)
+      (1 3)
+      6
+      6
+      9
+      (1 2 3 4)
+      (1 (2 3) 20 3 (0 1 2) (3 2 1))
+  - name: predicates
+    source: |
+      (println (list (even? 4) (odd? 3) (zero? 0) (pos? 5) (neg? -2) (vector? [1]) (vector? '(1)) (empty? '()) (empty? '(1)) (nil? nil) (some? 0)))
+    expected: |
+      (T T T T T T NIL T NIL T T)
+  - name: vectors-print-in-common-lisp-notation
+    # Clojure prints [1 :a s]; here a vector prints as #(1 A s).
+    source: |
+      (println [1 :a "s"])
+      (println (count [10 20 30]))
+      (println (vector 1 2))
+      (println (list (vector? [1]) (vector? '(1))))
+    expected: |
+      #(1 A s)
+      3
+      #(1 2)
+      (T NIL)
+  - name: quote-mangles-symbols-and-re-emits-vectors
+    source: |
+      (println 'qi-a)
+      (println '(1 2 qi-b))
+      (println '[1 :a])
+    expected: |
+      c%qi-a
+      (1 2 c%qi-b)
+      #(1 A)
+  - name: keywords-are-upcased-and-collide-case-insensitively
+    # Clojure prints :a :A distinctly and (= :a :A) is false; here both print A and
+    # compare equal, per .kb/clojure-frontend.md.
+    source: |
+      (println :a)
+      (println (= :a :a))
+      (println (= :a :A))
+    expected: |
+      A
+      T
+      T
+  - name: false-folds-into-nil
+    # Clojure prints true/false/nil, (= false nil) is false and (nil? false) is
+    # false; here false is nil, per .kb/clojure-frontend.md.
+    source: |
+      (println true)
+      (println false)
+      (println nil)
+      (println (= false nil))
+      (println (nil? false))
+      (println (list true false nil))
+    expected: |
+      T
+      NIL
+      NIL
+      T
+      T
+      (T NIL NIL)
+  - name: str-print-println-and-newline
+    # Clojure separates println parts with spaces; here they concatenate with no
+    # separator, per .kb/clojure-frontend.md.
+    source: |
+      (println (str))
+      (println (str "a" 1))
+      (println (str "x=" 42))
+      (print "a" "b")
+      (newline)
+      (println "x" "y")
+    expected: |
+
+      a1
+      x=42
+      ab
+      xy
+  - name: numbers
+    source: |
+      (println (list 42 -17 1/2 1.5 1e3))
+      (println (list 1M 2N))
+    expected: |
+      (42 -17 1/2 1.5 1000.0)
+      (1.0 2)
+  - name: reader-comments-commas-discard-and-string-escapes
+    source: |
+      ;; a comment line
+      (println 1) ; a trailing comment
+      (println [1, 2, 3])
+      (println #_skip-me 42)
+      (println "a\nb")
+    expected: |
+      1
+      #(1 2 3)
+      42
+      a
+      b
+  - name: ns-defines-nothing
+    source: |
+      (ns corpus-ns)
+      (println "after-ns")
+    expected: |
+      after-ns
+  - name: def-without-a-value-is-nil-and-defn-is-called-directly
+    source: |
+      (def dv-no-val)
+      (println dv-no-val)
+      (defn dv-twice [x] (* 2 x))
+      (println (dv-twice 21))
+    expected: |
+      NIL
+      42
+  - name: higher-order-compose-over-map-filter-reduce
+    source: |
+      (defn comp-sq [coll]
+        (reduce + 0 (map #(* % %) (filter odd? coll))))
+      (println (comp-sq '(1 2 3 4 5 6 7)))
+    expected: |
+      84
+  - name: recursion-fact
+    source: |
+      (defn fact-r [n]
+        (if (< n 2) 1 (* n (fact-r (- n 1)))))
+      (println (fact-r 10))
+    expected: |
+      3628800

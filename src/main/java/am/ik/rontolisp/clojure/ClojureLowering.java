@@ -69,7 +69,7 @@ final class ClojureLowering {
 		lowering.declare(datums);
 		// pass two: lower
 		for (LispVal datum : datums) {
-			if (isSymbolNamed(datum, "ns")) {
+			if (isNsForm(datum)) {
 				continue; // a namespace declaration defines nothing
 			}
 			lowering.forms.add(lowering.topLevel(datum));
@@ -91,7 +91,7 @@ final class ClojureLowering {
 		declare(datums);
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
-			if (isSymbolNamed(datum, "ns")) {
+			if (isNsForm(datum)) {
 				continue; // a namespace declaration defines nothing
 			}
 			out.add(new ClojureTopLevel(List.of(topLevel(datum)), true));
@@ -188,7 +188,7 @@ final class ClojureLowering {
 			}
 			String target = this.loop;
 			List<LispVal> out = new ArrayList<>();
-			out.add(sym(target));
+			out.add(new LispSymbol(target));
 			for (int i = 1; i < items.size(); i++) {
 				out.add(lower(items.get(i)));
 			}
@@ -202,7 +202,7 @@ final class ClojureLowering {
 		String name = plainName(items.get(1), "def");
 		this.globals.put(name, Kind.VARIABLE);
 		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
-		return list(sym("setq"), sym(mangle(name)), value);
+		return list(sym("setq"), idSym(name), value);
 	}
 
 	private LispVal defun(List<LispVal> items) {
@@ -214,7 +214,7 @@ final class ClojureLowering {
 		String name = plainName(items.get(1), "defn");
 		this.globals.put(name, Kind.FUNCTION);
 		LispVal lambda = lambda(items.get(at), items.subList(at + 1, items.size()));
-		return new LispCons(sym("defun"), new LispCons(sym(mangle(name)), ((LispCons) lambda).cdr()));
+		return new LispCons(sym("defun"), new LispCons(idSym(name), ((LispCons) lambda).cdr()));
 	}
 
 	private LispVal fn(List<LispVal> items) {
@@ -225,7 +225,7 @@ final class ClojureLowering {
 			String outer = this.anonArgs;
 			this.anonArgs = mangle("anon-args");
 			try {
-				return list(sym("lambda"), list(AMPERSAND_REST, sym(this.anonArgs)), lower(form));
+				return list(sym("lambda"), list(AMPERSAND_REST, new LispSymbol(this.anonArgs)), lower(form));
 			}
 			finally {
 				this.anonArgs = outer;
@@ -250,7 +250,7 @@ final class ClojureLowering {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = plainName(bindings.get(i), "let");
-				pairs.add(list(sym(mangle(name)), lower(bindings.get(i + 1))));
+				pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
 				scope.put(name, Kind.VARIABLE);
 			}
 			form = list(sym("let*"), list(pairs), body(items, 2));
@@ -271,7 +271,7 @@ final class ClojureLowering {
 		List<LispVal> inits = new ArrayList<>();
 		for (int i = 0; i < bindings.size(); i += 2) {
 			String binding = plainName(bindings.get(i), "loop");
-			paramSyms.add(sym(mangle(binding)));
+			paramSyms.add(idSym(binding));
 			inits.add(lower(bindings.get(i + 1)));
 			scope.put(binding, Kind.VARIABLE);
 		}
@@ -281,8 +281,9 @@ final class ClojureLowering {
 		try {
 			LispVal lambdaBody = body(items, 2);
 			// a labels binding is a named function: (name (params...) body...)
-			LispVal binding = new LispCons(sym(name), new LispCons(list(paramSyms), cons(lambdaBody, List.of())));
-			return list(sym("labels"), list(binding), new LispCons(sym(name), list(inits)));
+			LispVal binding = new LispCons(new LispSymbol(name),
+					new LispCons(list(paramSyms), cons(lambdaBody, List.of())));
+			return list(sym("labels"), list(binding), new LispCons(new LispSymbol(name), list(inits)));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
@@ -326,7 +327,7 @@ final class ClojureLowering {
 		}
 		isTrue(known(name), "unknown name: " + name);
 		List<LispVal> out = new ArrayList<>();
-		out.add(sym(mangle(name)));
+		out.add(idSym(name));
 		for (int i = 1; i < items.size(); i++) {
 			out.add(lower(items.get(i)));
 		}
@@ -337,9 +338,14 @@ final class ClojureLowering {
 	private @Nullable LispVal builtin(String name, List<LispVal> items) {
 		int n = items.size() - 1;
 		switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "quot", "abs", "cons", "list", "nth", "expt",
-					"reverse", "apply":
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "reverse", "apply":
 				return plain(name, items);
+			case "quot":
+				isTrue(n == 2, "quot takes two arguments");
+				return list(sym("truncate"), lower(items.get(1)), lower(items.get(2)));
+			case "nth":
+				isTrue(n == 2, "nth takes a collection and an index");
+				return list(sym("nth"), lower(items.get(2)), lower(items.get(1)));
 			case "and":
 				return plain("and", items);
 			case "or":
@@ -428,9 +434,9 @@ final class ClojureLowering {
 	private LispVal fnValue(LispVal form) {
 		if (form instanceof LispSymbol s && known(s.name())) {
 			if (isFunction(s.name())) {
-				return list(sym("function"), sym(mangle(s.name())));
+				return list(sym("function"), idSym(s.name()));
 			}
-			return sym(mangle(s.name()));
+			return idSym(s.name());
 		}
 		return lower(form);
 	}
@@ -508,12 +514,12 @@ final class ClojureLowering {
 				paramSyms.add(AMPERSAND_REST);
 				String rest = plainName(names.get(++i), "the parameter vector of");
 				scope.put(rest, Kind.VARIABLE);
-				paramSyms.add(sym(mangle(rest)));
+				paramSyms.add(idSym(rest));
 				continue;
 			}
 			String param = plainName(names.get(i), "the parameter vector of");
 			scope.put(param, Kind.VARIABLE);
-			paramSyms.add(sym(mangle(param)));
+			paramSyms.add(idSym(param));
 		}
 		return inScope(scope, () -> list(sym("lambda"), list(paramSyms), bodyOf(bodyForms)));
 	}
@@ -546,7 +552,7 @@ final class ClojureLowering {
 			String args = this.anonArgs;
 			int oneBased = name.equals("%") ? 1 : Integer.parseInt(name.substring(1));
 			isTrue(oneBased <= 9, "the anon form #(...) takes at most 9 arguments");
-			return list(sym("nth"), new LispInteger(oneBased - 1), sym(args));
+			return list(sym("nth"), new LispInteger(oneBased - 1), new LispSymbol(args));
 		}
 		if (!known(name)) {
 			String cl = builtinValue(name);
@@ -556,17 +562,17 @@ final class ClojureLowering {
 			return list(sym("function"), sym(cl));
 		}
 		if (isFunction(name)) {
-			return list(sym("function"), sym(mangle(name)));
+			return list(sym("function"), idSym(name));
 		}
-		return sym(mangle(name));
+		return idSym(name);
 	}
 
 	/** The Common Lisp function a core name names as a value, or null. */
 	private static @Nullable String builtinValue(String name) {
 		return switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "quot", "abs", "cons", "list", "nth", "expt",
-					"reverse", "apply", "=", "<", ">", "<=", ">=", "not", "length", "car", "cdr", "equal", "evenp",
-					"oddp", "zerop", "plusp", "minusp", "vector", "vectorp" ->
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "reverse", "apply", "=",
+					"<", ">", "<=", ">=", "not", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp",
+					"minusp", "vector", "vectorp" ->
 				name;
 			case "empty?", "nil?" -> "null";
 			case "even?" -> "evenp";
@@ -594,7 +600,7 @@ final class ClojureLowering {
 			if (name.startsWith(":")) {
 				return list(sym("quote"), sym(name));
 			}
-			return list(sym("quote"), sym(mangle(name)));
+			return list(sym("quote"), idSym(name));
 		}
 		if (datum instanceof LispCons) {
 			List<LispVal> items = items(datum, List.of());
@@ -703,6 +709,14 @@ final class ClojureLowering {
 		return val instanceof LispSymbol s && s.name().equals(name);
 	}
 
+	private static boolean isNsForm(LispVal val) {
+		if (isSymbolNamed(val, "ns")) {
+			return true;
+		}
+		List<LispVal> items = items(val);
+		return items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "ns");
+	}
+
 	private static List<LispVal> items(LispVal val, List<LispVal> ifNone) {
 		List<LispVal> items = items(val);
 		return items == null ? ifNone : items;
@@ -733,6 +747,15 @@ final class ClojureLowering {
 
 	private static LispSymbol sym(String name) {
 		return new LispSymbol(name.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	/**
+	 * A user identifier as a symbol: mangled behind the prefix but otherwise
+	 * case-preserved, so {@code Foo} and {@code foo} stay apart. The prefix holds a
+	 * lowercase letter, so no result can collide with a core form or built-in.
+	 */
+	private static LispSymbol idSym(String identifier) {
+		return new LispSymbol(mangle(identifier));
 	}
 
 	private static LispVal list(List<LispVal> items) {
