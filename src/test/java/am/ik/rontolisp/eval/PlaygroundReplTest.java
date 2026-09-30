@@ -61,6 +61,14 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void theClojurePickReadsClojureAndKeepsItsSessionAcrossBuffers() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("(defn twice [x] (* 2 x))")).isEqualTo("C%TWICE");
+		assertThat(repl.eval("(twice 21)")).isEqualTo("42");
+		assertThat(repl.eval("(def x 1) (+ x 41)")).isEqualTo("42");
+	}
+
+	@Test
 	void aFailureCarriesTheConditionsOwnText() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
 		assertThatThrownBy(() -> repl.eval("(3 4)")).hasMessageContaining("The object is not applicable: 3");

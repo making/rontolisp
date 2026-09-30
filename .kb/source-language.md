@@ -96,9 +96,18 @@ one step, with no `#.` and no reader features -- and everything downstream is un
 `--no-gc`. `defaultExtension()` is per language; `fileNameForModule` and the
 package-inferred sub-system file stay Common Lisp.
 
+## The third language: `CLOJURE` (experimental)
+
+`.clj`, or `--source-language clojure` (`clj`). `read` hands the text to
+`am.ik.rontolisp.clojure.Clojure.read` -- a case-sensitive reader plus a lowering to
+core forms in one step, with no `#.` and no reader features -- and everything
+downstream is unchanged (`.kb/clojure-frontend.md`). `CompileFrontend.run` refuses the
+entry language under `--no-gc`, like Scheme. `defaultExtension()` is per language;
+`fileNameForModule` and the package-inferred sub-system file stay Common Lisp.
+
 ## Tests
 
 `SourceLanguageSeamTest` (no class outside the seam reads user source through
 `LispReader` directly; no stale exemptions), `RontoLispCliTest` (the `repl...` and
-`theSchemeRepl...` transcripts),
+`theSchemeRepl...` transcripts, the `.clj` pick and the `clojure>` REPL transcript),
 `JvmSourceCompilerTest`.

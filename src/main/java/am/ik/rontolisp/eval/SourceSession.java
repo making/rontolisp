@@ -7,6 +7,8 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureSession;
+import am.ik.rontolisp.clojure.ClojureTopLevel;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeSession;
@@ -45,6 +47,8 @@ public final class SourceSession {
 
 	private final @Nullable SchemeSession scheme;
 
+	private final @Nullable ClojureSession clojure;
+
 	/**
 	 * Starts a session read against every language's default standard.
 	 * @param language the language typed at the prompt
@@ -73,6 +77,7 @@ public final class SourceSession {
 		this.language = language;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
+		this.clojure = language == SourceLanguage.CLOJURE ? am.ik.rontolisp.clojure.Clojure.session() : null;
 	}
 
 	/**
@@ -81,7 +86,13 @@ public final class SourceSession {
 	 * @return {@code false} when a form is still open
 	 */
 	public boolean isComplete(String buffer) {
-		return this.scheme != null ? SchemeSession.isComplete(buffer) : isBalanced(buffer);
+		if (this.scheme != null) {
+			return SchemeSession.isComplete(buffer);
+		}
+		if (this.clojure != null) {
+			return ClojureSession.isComplete(buffer);
+		}
+		return isBalanced(buffer);
 	}
 
 	/**
@@ -101,6 +112,12 @@ public final class SourceSession {
 			}
 			return steps;
 		}
+		if (this.clojure != null) {
+			for (ClojureTopLevel topLevel : this.clojure.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
 		for (LispVal form : this.language.read(buffer, features, null)) {
 			steps.add(new Step(List.of(form), true));
 		}
@@ -115,7 +132,13 @@ public final class SourceSession {
 	 * @return the prompt, trailing space included
 	 */
 	public String prompt(LispEvaluator evaluator) {
-		return this.scheme != null ? "scheme> " : evaluator.currentPackageName() + "> ";
+		if (this.scheme != null) {
+			return "scheme> ";
+		}
+		if (this.clojure != null) {
+			return "clojure> ";
+		}
+		return evaluator.currentPackageName() + "> ";
 	}
 
 	/**
@@ -128,7 +151,10 @@ public final class SourceSession {
 	 * @return the text, or {@code null} when the value is not shown
 	 */
 	public @Nullable String echo(LispVal value, LispEvaluator evaluator) {
-		if (this.scheme == null) {
+		if (this.scheme == null && this.clojure == null) {
+			return evaluator.prin1ToStringRouted(value);
+		}
+		if (this.clojure != null) {
 			return evaluator.prin1ToStringRouted(value);
 		}
 		try {

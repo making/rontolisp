@@ -233,6 +233,12 @@ examples:
     expect:
       file: .expected/scheme-collatz.txt
 
+  # --- clojure: the experimental Clojure front end (.clj) --------------------
+  - path: clojure/demo.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/clojure-demo.txt
+
   # --- ml: numerical computing & machine learning ----------------------------
   - path: ml/deep-digits.lisp
     backends: [interpreter, jvm, wasm]

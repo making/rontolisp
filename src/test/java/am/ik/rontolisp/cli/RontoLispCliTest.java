@@ -1456,6 +1456,41 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theHelpSaysClojureIsExperimental() {
+		assertThat(runCli("", "-h")).contains("clojure (.clj) is EXPERIMENTAL");
+	}
+
+	@Test
+	void aClojureFileIsPickedByItsExtension() throws Exception {
+		Path program = this.tempDir.resolve("hello.clj");
+		Files.writeString(program, "(defn greet [name] (str \"hello, \" name)) (println (greet \"clojure\"))\n");
+		assertThat(runCli("", program.toString())).isEqualTo("hello, clojure\n");
+	}
+
+	@Test
+	void sourceLanguageClojureReadsAnyExtensionAsClojure() throws Exception {
+		Path program = this.tempDir.resolve("hello.txt");
+		Files.writeString(program, "(println (+ 1 2))\n");
+		assertThat(runCli("", program.toString(), "--source-language=clojure")).isEqualTo("3\n");
+	}
+
+	@Test
+	void theClojureReplDefinesAndCallsAcrossPrompts() {
+		String program = """
+				(defn twice [x] (* 2 x))
+				(twice 21)
+				(def x 1)
+				(+ x 41)
+				""";
+		assertThat(runCli(program, "--source-language", "clojure")).isEqualTo("C%TWICE\n42\n1\n42\n");
+	}
+
+	@Test
+	void theClojureReplContinuesAnIncompleteForm() {
+		assertThat(runCli("(defn f [x]\n (* x 2))\n(f 21)\n", "--source-language", "clojure")).isEqualTo("C%F\n42\n");
+	}
+
+	@Test
 	void theTestSubcommandHasItsOwnHelp() {
 		assertThat(runCli("", "test", "--help")).contains("Usage: rontolisp test")
 			.contains("--reporter")

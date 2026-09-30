@@ -1,0 +1,11 @@
+hello, clojure on rontolisp!
+3628800
+6765
+84
+9
+#(A B vec)
+3
+TNILTT
+FALLBACK
+x+y=15
+42

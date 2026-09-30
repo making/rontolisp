@@ -22,7 +22,9 @@ the jar stays Common Lisp and keeps its direct reads, as do the runtime data rea
 `load` under the existing graph. The second language is `scheme` -- an EXPERIMENTAL R7RS-small
 subset for `.scm`, lowered to the same core forms so no backend learns a Scheme name; its
 run-time helpers are Common Lisp source spliced like any other library
-(`.kb/scheme-frontend.md`).
+(`.kb/scheme-frontend.md`). The third language is `clojure` -- an EXPERIMENTAL small subset
+for `.clj`, lowered to the same core forms so no backend learns a Clojure name
+(`.kb/clojure-frontend.md`).
 
 ## Language-independent libraries
 
@@ -54,8 +56,9 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, scheme, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
+eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
 scheme -> reader, rontolisp (AST types only)
+clojure -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)

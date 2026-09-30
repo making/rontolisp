@@ -218,3 +218,7 @@ sections:
             title: "(scheme r5rs)"
           - file: scheme/reference/library-sicp.md
             title: "SICP Names"
+  - title: Clojure (experimental)
+    pages:
+      - file: clojure/index.md
+        title: Overview

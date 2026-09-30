@@ -218,3 +218,7 @@ sections:
             title: "(scheme r5rs)"
           - file: scheme/reference/library-sicp.md
             title: "SICP 互換の名前"
+  - title: Clojure（実験的）
+    pages:
+      - file: clojure/index.md
+        title: 概要

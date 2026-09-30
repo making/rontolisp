@@ -678,6 +678,17 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aClojureProgramIsRefusedByTheScalarBackend() throws Exception {
+		Path program = this.tempDir.resolve("scalar.clj");
+		Files.writeString(program, "(defn f [x] (* x 2))\n");
+		String[] result = runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(),
+				"--no-gc");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: Cannot compile: a Clojure program needs the GC backend --"
+				+ " --no-gc has no cons cell, no symbol and no closure (drop --no-gc)");
+	}
+
+	@Test
 	void anUncaughtSchemeErrorReportsItsMessageAndIrritants() throws Exception {
 		// The message is built under a rebound *standard-output*, inside a helper the
 		// interpreter loads lazily: loaded without registering its special bindings,

@@ -13,6 +13,7 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 
@@ -60,7 +61,14 @@ public enum SourceLanguage {
 	 * ({@code .kb/scheme-frontend.md}). Partial conformance by design, no compatibility
 	 * promise. It has no {@code #.} and no reader features.
 	 */
-	SCHEME(".scm");
+	SCHEME(".scm"),
+
+	/**
+	 * Clojure, EXPERIMENTAL SPIKE: a small subset read case-sensitively and lowered to
+	 * the same core forms by the {@code clojure} package. A feasibility probe; no subset
+	 * or compatibility promise yet.
+	 */
+	CLOJURE(".clj");
 
 	private final String extension;
 
@@ -123,6 +131,9 @@ public enum SourceLanguage {
 		if (this == SCHEME) {
 			return refuseCircularLists(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)), source,
 					file);
+		}
+		if (this == CLOJURE) {
+			return refuseCircularLists(Clojure.read(source, file), source, file);
 		}
 		return refuseCircularLists(
 				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
@@ -215,6 +226,9 @@ public enum SourceLanguage {
 		if (this == SCHEME) {
 			return read(source, features, null, SourceStandards.DEFAULT, loader);
 		}
+		if (this == CLOJURE) {
+			return read(source, features, null, SourceStandards.DEFAULT, loader);
+		}
 		return LispReader.readAllFromString(source, features);
 	}
 
@@ -234,6 +248,9 @@ public enum SourceLanguage {
 		}
 		if (path != null && path.endsWith(SCHEME.defaultExtension())) {
 			return SCHEME;
+		}
+		if (path != null && path.endsWith(CLOJURE.defaultExtension())) {
+			return CLOJURE;
 		}
 		return COMMON_LISP;
 	}
@@ -258,7 +275,8 @@ public enum SourceLanguage {
 	 * @return {@code true} when the target names a source file
 	 */
 	public static boolean isSourceFile(String path) {
-		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension());
+		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension())
+				|| path.endsWith(CLOJURE.defaultExtension());
 	}
 
 	/**
@@ -286,8 +304,11 @@ public enum SourceLanguage {
 		if (name.equals("scheme") || name.equals("scm")) {
 			return SCHEME;
 		}
+		if (name.equals("clojure") || name.equals("clj")) {
+			return CLOJURE;
+		}
 		throw new IllegalArgumentException("--source-language '" + override
-				+ "' names no language this build reads (try common-lisp, or the experimental scheme)");
+				+ "' names no language this build reads (try common-lisp, or the experimental scheme, clojure)");
 	}
 
 }

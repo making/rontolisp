@@ -196,4 +196,34 @@ public final class CompileFrontendAccess {
 		return new Program(result.program(), result.features());
 	}
 
+	/**
+	 * Compiles a CLOJURE source text through the whole front end, the way the CLI does
+	 * for a {@code .clj} entry file.
+	 * @param source the Clojure program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program clojure(String source, boolean wasm, boolean component) {
+		return clojure(source, null, wasm, component);
+	}
+
+	/**
+	 * {@link #clojure(String, boolean, boolean)} read from a file.
+	 * @param source the Clojure program text
+	 * @param entryFile the path the text was read from, or {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program clojure(String source, @Nullable String entryFile, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.sourceLanguage("clojure")
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
 }

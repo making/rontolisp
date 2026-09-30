@@ -83,6 +83,10 @@ class PackageCycleTest {
 		assertThat(graph.getOrDefault("am.ik.rontolisp.scheme", Set.of())).containsOnly("am.ik.rontolisp",
 				"am.ik.rontolisp.reader");
 		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.scheme");
+		// The Clojure front end is the same shape: core forms only, through the seam.
+		assertThat(graph.getOrDefault("am.ik.rontolisp.clojure", Set.of())).containsOnly("am.ik.rontolisp",
+				"am.ik.rontolisp.reader");
+		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.clojure");
 	}
 
 	/**

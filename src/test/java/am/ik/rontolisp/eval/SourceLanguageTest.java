@@ -59,6 +59,21 @@ class SourceLanguageTest {
 	}
 
 	@Test
+	void clojureClaimsItsExtension() {
+		assertThat(SourceLanguage.forFile("hello.clj", null)).isEqualTo(SourceLanguage.CLOJURE);
+		assertThat(SourceLanguage.forFile("hello.lisp", "clojure")).isEqualTo(SourceLanguage.CLOJURE);
+		assertThat(SourceLanguage.forFile("hello.lisp", "clj")).isEqualTo(SourceLanguage.CLOJURE);
+		assertThat(SourceLanguage.forFile("hello.clj", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(SourceLanguage.isSourceFile("foo.clj")).isTrue();
+		assertThat(SourceLanguage.CLOJURE.defaultExtension()).isEqualTo(".clj");
+		// The seam's read is the whole front end: read and lower to core forms.
+		assertThat(SourceLanguage.CLOJURE.read("(defn f [x] x)", Features.INTERPRETER, null)
+			.stream()
+			.map(LispVal::print)
+			.toList()).containsExactly("(DEFUN C%F (C%X) C%X)");
+	}
+
+	@Test
 	void theOverrideNamesTheEntryLanguage() {
 		assertThat(SourceLanguage.forFile("hello.lisp", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
 		assertThat(SourceLanguage.forFile("hello.lisp", "cl")).isEqualTo(SourceLanguage.COMMON_LISP);
