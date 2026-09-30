@@ -1011,3 +1011,17 @@ cases:
       (1 NIL)
       (m nope)
       2
+  - name: memfn-calls-a-method-on-its-target
+    # memfn is a function of a target and the named arguments calling the method
+    # on it; string receivers take the mapped core operation, like any instance
+    # call, so this case runs on all four backends.
+    source: |
+      (println ((memfn toUpperCase) "hi"))
+      (println ((memfn substring s e) "hello" 1 2))
+      (println (map (memfn length) ["a" "bb"]))
+      (println (apply (memfn substring s e) "hello" [1 2]))
+    expected: |
+      HI
+      e
+      (1 2)
+      e

@@ -54,6 +54,20 @@ class ClojureInteropTest {
 		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
 	}
 
+	@Test
+	void memfnCallsHostMethods() throws Exception {
+		assertBothEqual("(println (.toString ((memfn append x) (StringBuilder. \"a\") \"b\")))", "ab\n");
+		assertBothEqual("(println (map (memfn toString) [(StringBuilder. \"a\")]))", "(a)\n");
+	}
+
+	@Test
+	void proxyImplementsASingleInterface() throws Exception {
+		assertBothEqual("(println (.get (proxy [java.util.function.Supplier] [] (get [] 42))))", "42\n");
+		assertBothEqual("(println (.get (proxy [java.util.function.Supplier] [] (get [] (+ 40 2)))))", "42\n");
+		assertBothEqual("(println (let [p (proxy [java.util.function.Supplier] [] (get [] \"hi\"))] (.get p)))",
+				"hi\n");
+	}
+
 	private static void assertBothEqual(String source, String expected) throws Exception {
 		assertThat(interpret(source)).isEqualTo(expected);
 		assertThat(runOnJvm(source)).isEqualTo(expected);

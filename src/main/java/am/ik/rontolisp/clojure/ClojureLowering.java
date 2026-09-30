@@ -453,7 +453,7 @@ final class ClojureLowering {
 		if (isSymbolNamed(head, "defprotocol") || isSymbolNamed(head, "defrecord") || isSymbolNamed(head, "deftype")
 				|| isSymbolNamed(head, "definterface") || isSymbolNamed(head, "reify")
 				|| isSymbolNamed(head, "extend-protocol") || isSymbolNamed(head, "extend-type")
-				|| isSymbolNamed(head, "extend") || isSymbolNamed(head, "satisfies?") || isSymbolNamed(head, "proxy")
+				|| isSymbolNamed(head, "extend") || isSymbolNamed(head, "satisfies?")
 				|| isSymbolNamed(head, "gen-class") || isSymbolNamed(head, "gen-interface")) {
 			throw new LispReadException("protocols are not supported yet: " + ((LispSymbol) head).name());
 		}
@@ -536,7 +536,10 @@ final class ClojureLowering {
 			throw new LispReadException("set! is not supported yet: mutable fields need a design");
 		}
 		if (isSymbolNamed(head, "memfn")) {
-			throw new LispReadException("memfn is not supported yet: use an anonymous function instead");
+			return memfnOf(items);
+		}
+		if (isSymbolNamed(head, "proxy")) {
+			return proxyOf(items);
 		}
 		if (isSymbolNamed(head, "new")) {
 			return newOf(items);
@@ -4289,6 +4292,8 @@ final class ClojureLowering {
 
 	private static final LispSymbol JAVA_FIELD = new LispSymbol("JAVA:FIELD");
 
+	private static final LispSymbol JAVA_PROXY = new LispSymbol("JAVA:PROXY");
+
 	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
@@ -4419,6 +4424,89 @@ final class ClojureLowering {
 	}
 
 	/**
+	 * {@code (memfn name arg...)}: a function of a target and the named arguments calling
+	 * the method on it -- the oracle's expansion, so {@code ((memfn toUpperCase) "hi")}
+	 * answers {@code "HI"}. String receivers take the mapped core operation, like any
+	 * other instance call.
+	 */
+	private LispVal memfnOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "memfn takes a method name and argument names");
+		String method = plainName(items.get(1), "memfn");
+		Map<String, Kind> scope = new HashMap<>();
+		Set<String> seen = new HashSet<>();
+		List<LispVal> params = new ArrayList<>();
+		LispSymbol recv = freshTemp();
+		params.add(recv);
+		List<LispVal> argForms = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			String pname = plainName(items.get(i), "memfn");
+			isTrue(seen.add(pname), "memfn argument names must be distinct: " + pname);
+			scope.put(pname, Kind.VARIABLE);
+			params.add(idSym(pname));
+			argForms.add(idSym(pname));
+		}
+		return inScope(scope, () -> list(sym("lambda"), list(params), instanceCallLowered(recv, method, argForms)));
+	}
+
+	/**
+	 * {@code (proxy [interface] [] (method [params...] body...)...)}: a single interface
+	 * implemented through {@code java:proxy} with a name-dispatching lambda. A
+	 * superclass, constructor arguments and multi-arity methods are refused by name; the
+	 * methods take the Java arguments only (no {@code this}, which has no binding to
+	 * close over). Interpreter and JVM only, like all interop.
+	 */
+	private LispVal proxyOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "proxy takes a class vector, an argument vector and methods");
+		List<LispVal> classes = items(items.get(1));
+		if (classes == null || classes.isEmpty() || classes.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("proxy takes a class vector, not " + items.get(1).print());
+		}
+		if (classes.size() != 2 || !(classes.get(1) instanceof LispSymbol)) {
+			throw new LispReadException("proxy takes a single interface, not " + items.get(1).print());
+		}
+		LispSymbol className = (LispSymbol) classes.get(1);
+		List<LispVal> argv = items(items.get(2));
+		if (argv == null || argv.size() != 1) {
+			throw new LispReadException("proxy constructor arguments are not supported yet: " + items.get(2).print());
+		}
+		String iface = resolveClass(className.name());
+		LispSymbol all = freshTemp();
+		LispSymbol got = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispVal miss = list(sym("error"),
+				list(sym("concatenate"), quoted("string"), LispString.literal("no proxy method: "), got));
+		LispVal dispatch = miss;
+		for (int i = items.size() - 1; i >= 3; i--) {
+			List<LispVal> meth = items(items.get(i));
+			if (meth == null || meth.size() < 3 || !(meth.get(0) instanceof LispSymbol)) {
+				throw new LispReadException("a proxy method names a method, a parameter vector and a body");
+			}
+			String methodName = ((LispSymbol) meth.get(0)).name();
+			List<LispVal> params = items(meth.get(1));
+			if (params == null || params.isEmpty() || params.get(0) != ClojureReader.VECTOR) {
+				throw new LispReadException("a proxy method takes a parameter vector, not " + meth.get(1).print());
+			}
+			Map<String, Kind> scope = new HashMap<>();
+			Set<String> seen = new HashSet<>();
+			List<LispVal> fnParams = new ArrayList<>();
+			for (int j = 1; j < params.size(); j++) {
+				String pname = plainName(params.get(j), "proxy");
+				isTrue(seen.add(pname), "proxy parameter names must be distinct: " + pname);
+				scope.put(pname, Kind.VARIABLE);
+				fnParams.add(idSym(pname));
+			}
+			Map<String, Kind> use = new HashMap<>(scope);
+			LispVal run = inScope(use, () -> list(sym("apply"),
+					list(sym("lambda"), list(fnParams), bodyOf(meth.subList(2, meth.size()))), rest));
+			LispVal test = list(sym("equal"), got, LispString.literal(methodName));
+			dispatch = list(sym("if"), test, run, dispatch);
+		}
+		LispVal callable = list(sym("lambda"), list(List.of(AMPERSAND_REST, all)), list(sym("let"),
+				list(List.of(list(got, list(sym("car"), all)), list(rest, list(sym("cdr"), all)))), dispatch));
+		return cons(JAVA_PROXY, List.of(LispString.literal(iface), callable));
+	}
+
+	/**
 	 * An instance call: the receiver runs once, behind a temporary; a string receiver
 	 * answers the mapped core operation (a Lisp string is not a host object, so the
 	 * {@code java:} surface cannot take it), anything else goes to {@code java:call}
@@ -4429,6 +4517,15 @@ final class ClojureLowering {
 		for (LispVal arg : argDatums) {
 			args.add(lower(arg));
 		}
+		return instanceCallLowered(receiver, method, args);
+	}
+
+	/**
+	 * An instance call over already-lowered forms: the receiver runs once, behind a
+	 * temporary; a string receiver answers the mapped core operation, anything else goes
+	 * to {@code java:call} directly.
+	 */
+	private LispVal instanceCallLowered(LispVal receiver, String method, List<LispVal> args) {
 		LispSymbol recv = freshTemp();
 		List<LispVal> direct = new ArrayList<>();
 		direct.add(recv);

@@ -457,6 +457,14 @@ class ClojureLoweringTest {
 		assertThat(lowered("(String. \"hi\")")).contains("JAVA:NEW").contains("java.lang.String");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD");
 		assertThat(lowered("(new String \"hi\")")).contains("JAVA:NEW");
+		assertThat(lowered("((memfn toUpperCase) \"hi\")")).contains("LAMBDA").contains("toUpperCase");
+		assertThatThrownBy(() -> Clojure.read("(memfn toUpperCase 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("memfn needs a plain name, not 1");
+		assertThat(lowered("(proxy [java.util.function.Supplier] [] (get [] 42))")).contains("JAVA:PROXY")
+			.contains("java.util.function.Supplier");
+		assertThatThrownBy(() -> Clojure.read("(proxy [A B] [] (get [] 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy takes a single interface");
 		assertThatThrownBy(() -> Clojure.read("(set! x 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! is not supported yet");
 	}
