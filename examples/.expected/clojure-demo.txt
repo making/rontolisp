@@ -5,7 +5,7 @@ hello, clojure on rontolisp!
 9
 #(A B vec)
 3
-TNILTT
+truefalsetruetrue
 FALLBACK
 x+y=15
 42

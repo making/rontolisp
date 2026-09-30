@@ -31,8 +31,16 @@ import org.jspecify.annotations.Nullable;
  * (Clojure's let is sequential); {@code loop}/{@code recur} a {@code labels} self call
  * (the interpreter's tail calls make it constant-stack). Collections: a vector literal is
  * a {@code vector} call, the seq functions run over LISTS ({@code car}/{@code cdr}); a
- * map or set literal is refused. {@code false} folds into {@code nil} (both falsey), so
- * nothing can tell them apart.
+ * map or set literal is refused. {@code false} is a DISTINCT non-{@code NIL} object --
+ * the value of {@code rontolisp::%clojure-false}, bound before anything else runs, a
+ * symbol spelled {@code false} -- so {@code (= false nil)} is false and {@code (nil?
+ * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
+ * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
+ * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,
+ * {@code not}, the {@code ?} predicates) answers {@code T} or the false object. Printing
+ * spells the three values out: {@code println}/{@code print} show
+ * {@code true}/{@code false}/{@code nil}, {@code str} shows {@code true}/{@code false}
+ * and {@code ""} for {@code nil}.
  */
 final class ClojureLowering {
 
@@ -40,6 +48,17 @@ final class ClojureLowering {
 	 * What every mangled identifier starts with. Contains a lowercase letter on purpose.
 	 */
 	static final String PREFIX = "c%";
+
+	/**
+	 * The variable holding the Clojure false value, as spelled in the emitted program --
+	 * the distinct-object treatment {@code scheme.lisp}'s {@code #f} uses: a dedicated
+	 * object, distinct from {@code NIL}, bound before anything else runs, so no backend
+	 * learns a Clojure name.
+	 */
+	static final String FALSE_VARIABLE = "RONTOLISP::%CLOJURE-FALSE";
+
+	/** The false value's own spelling: a symbol, so it prints as {@code false}. */
+	static final String FALSE_VALUE_NAME = "false";
 
 	private static final LispVal NIL_CONST = LispNil.INSTANCE;
 
@@ -64,9 +83,16 @@ final class ClojureLowering {
 	/** The rest parameter of the {@code #(...)} being lowered, or null outside one. */
 	private @Nullable String anonArgs;
 
+	/** The false value, referenced (never rebuilt) wherever {@code false} lowers. */
+	private final LispSymbol falseVariable = new LispSymbol(FALSE_VARIABLE);
+
+	/** Whether the session already emitted the false binding (files always emit it). */
+	private boolean falseBound;
+
 	static List<LispVal> lower(List<LispVal> datums) {
 		ClojureLowering lowering = new ClojureLowering();
 		lowering.declare(datums);
+		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
 		for (LispVal datum : datums) {
 			if (isNsForm(datum)) {
@@ -95,6 +121,16 @@ final class ClojureLowering {
 				continue; // a namespace declaration defines nothing
 			}
 			out.add(new ClojureTopLevel(List.of(topLevel(datum)), true));
+		}
+		if (!this.falseBound && !out.isEmpty()) {
+			// The session's first datum carries the false binding ahead of itself,
+			// like a file's first form; a buffer that failed to lower binds nothing.
+			ClojureTopLevel first = out.get(0);
+			List<LispVal> forms = new ArrayList<>();
+			forms.add(falseBinding());
+			forms.addAll(first.forms());
+			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
+			this.falseBound = true;
 		}
 		return out;
 	}
@@ -169,12 +205,15 @@ final class ClojureLowering {
 		}
 		if (isSymbolNamed(head, "if")) {
 			isTrue(items.size() == 3 || items.size() == 4, "if takes a condition, a then and an optional else");
+			LispVal test = lower(items.get(1));
+			LispVal then = lower(items.get(2));
 			LispVal elseForm = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
-			return list(sym("if"), lower(items.get(1)), lower(items.get(2)), elseForm);
+			return ifFalsey(test, then, elseForm);
 		}
 		if (isSymbolNamed(head, "when")) {
 			isTrue(items.size() >= 3, "when needs a condition and a body");
-			return list(sym("when"), lower(items.get(1)), body(items, 2));
+			LispVal test = lower(items.get(1));
+			return ifFalsey(test, body(items, 2), NIL_CONST);
 		}
 		if (isSymbolNamed(head, "cond")) {
 			return condOf(items);
@@ -299,7 +338,7 @@ final class ClojureLowering {
 			out = lower(items.get(items.size() - 1));
 		}
 		for (int i = pairsEnd - 2; i >= 1; i -= 2) {
-			out = list(sym("if"), condTest(items.get(i)), lower(items.get(i + 1)), out);
+			out = ifFalsey(condTest(items.get(i)), lower(items.get(i + 1)), out);
 		}
 		return out;
 	}
@@ -309,6 +348,77 @@ final class ClojureLowering {
 			return TRUE_CONST;
 		}
 		return lower(test);
+	}
+
+	/**
+	 * Binds the false value before anything else runs: a quoted symbol, so every
+	 * occurrence spells the same name and {@code eq} holds on every backend.
+	 */
+	private LispVal falseBinding() {
+		return list(sym("SETQ"), this.falseVariable, list(sym("QUOTE"), new LispSymbol(FALSE_VALUE_NAME)));
+	}
+
+	/**
+	 * A Clojure conditional over an already-lowered test: falsey when {@code NIL} or the
+	 * false object, truthy otherwise. The test runs once, behind a temporary no user
+	 * identifier can spell (user names always start with the prefix).
+	 * @param test the lowered test
+	 * @param whenTrue the lowered then form
+	 * @param whenFalse the lowered else form
+	 * @return the form
+	 */
+	private LispVal ifFalsey(LispVal test, LispVal whenTrue, LispVal whenFalse) {
+		LispSymbol temp = freshTemp();
+		return list(sym("LET"), list(list(temp, test)), list(sym("IF"), isFalsey(temp), whenFalse, whenTrue));
+	}
+
+	/** Whether the bound test value is falsey: {@code NIL} or the false object. */
+	private LispVal isFalsey(LispSymbol temp) {
+		return list(sym("OR"), list(sym("NULL"), temp), list(sym("EQ"), temp, this.falseVariable));
+	}
+
+	/**
+	 * A temporary no user identifier can spell: user names always start with the prefix.
+	 */
+	private LispSymbol freshTemp() {
+		return new LispSymbol("__clojure_" + (this.counter++));
+	}
+
+	/**
+	 * A boolean-answering builtin's Clojure value: {@code T} or the false object, so
+	 * printing spells it out. The raw form answers a Common Lisp boolean and appears
+	 * once, so its values run once.
+	 * @param raw the raw form
+	 * @return the form
+	 */
+	private LispVal booleanAnswer(LispVal raw) {
+		return list(sym("IF"), raw, TRUE_CONST, this.falseVariable);
+	}
+
+	/** {@code (and a b ...)} answers the first falsey value or the last value. */
+	private LispVal andOf(List<LispVal> args) {
+		if (args.isEmpty()) {
+			return TRUE_CONST; // (and) is true
+		}
+		if (args.size() == 1) {
+			return lower(args.get(0));
+		}
+		LispSymbol temp = freshTemp();
+		return list(sym("LET"), list(list(temp, lower(args.get(0)))),
+				list(sym("IF"), isFalsey(temp), temp, andOf(args.subList(1, args.size()))));
+	}
+
+	/** {@code (or a b ...)} answers the first truthy value or the last value. */
+	private LispVal orOf(List<LispVal> args) {
+		if (args.isEmpty()) {
+			return NIL_CONST; // (or) is nil
+		}
+		if (args.size() == 1) {
+			return lower(args.get(0));
+		}
+		LispSymbol temp = freshTemp();
+		return list(sym("LET"), list(list(temp, lower(args.get(0)))),
+				list(sym("IF"), isFalsey(temp), orOf(args.subList(1, args.size())), temp));
 	}
 
 	// calls
@@ -347,15 +457,15 @@ final class ClojureLowering {
 				isTrue(n == 2, "nth takes a collection and an index");
 				return list(sym("nth"), lower(items.get(2)), lower(items.get(1)));
 			case "and":
-				return plain("and", items);
+				return andOf(items.subList(1, items.size()));
 			case "or":
-				return plain("or", items);
+				return orOf(items.subList(1, items.size()));
 			case "=":
-				return plain("equal", items);
+				return booleanAnswer(plain("equal", items));
 			case "not=":
-				return list(sym("not"), plain("equal", items));
+				return booleanAnswer(list(sym("not"), plain("equal", items)));
 			case "<", ">", "<=", ">=":
-				return plain(name, items);
+				return booleanAnswer(plain(name, items));
 			case "inc":
 				isTrue(n == 1, "inc takes one argument");
 				return list(sym("+"), lower(items.get(1)), new LispInteger(1));
@@ -363,7 +473,9 @@ final class ClojureLowering {
 				isTrue(n == 1, "dec takes one argument");
 				return list(sym("-"), lower(items.get(1)), new LispInteger(1));
 			case "not":
-				return plain("null", items);
+				isTrue(n == 1, "not takes one argument");
+				LispSymbol notTemp = freshTemp();
+				return list(sym("LET"), list(list(notTemp, lower(items.get(1)))), booleanAnswer(isFalsey(notTemp)));
 			case "str":
 				return strCall(items);
 			case "println":
@@ -380,24 +492,35 @@ final class ClojureLowering {
 			case "rest":
 				return plain("cdr", items);
 			case "empty?", "nil?":
-				return plain("null", items);
+				return booleanAnswer(plain("null", items));
 			case "some?":
 				isTrue(n == 1, "some? takes one argument");
-				return list(sym("not"), list(sym("null"), lower(items.get(1))));
+				return booleanAnswer(list(sym("not"), list(sym("null"), lower(items.get(1)))));
 			case "even?":
-				return plain("evenp", items);
+				return booleanAnswer(plain("evenp", items));
 			case "odd?":
-				return plain("oddp", items);
+				return booleanAnswer(plain("oddp", items));
 			case "zero?":
-				return plain("zerop", items);
+				return booleanAnswer(plain("zerop", items));
 			case "pos?":
-				return plain("plusp", items);
+				return booleanAnswer(plain("plusp", items));
 			case "neg?":
-				return plain("minusp", items);
+				return booleanAnswer(plain("minusp", items));
+			case "false?":
+				isTrue(n == 1, "false? takes one argument");
+				return booleanAnswer(list(sym("EQ"), lower(items.get(1)), this.falseVariable));
+			case "true?":
+				isTrue(n == 1, "true? takes one argument");
+				return booleanAnswer(list(sym("EQ"), lower(items.get(1)), TRUE_CONST));
+			case "boolean?":
+				isTrue(n == 1, "boolean? takes one argument");
+				LispSymbol booleanTemp = freshTemp();
+				return list(sym("LET"), list(list(booleanTemp, lower(items.get(1)))), booleanAnswer(list(sym("OR"),
+						list(sym("EQ"), booleanTemp, TRUE_CONST), list(sym("EQ"), booleanTemp, this.falseVariable))));
 			case "vector":
 				return plain("vector", items);
 			case "vector?":
-				return plain("vectorp", items);
+				return booleanAnswer(plain("vectorp", items));
 			case "map":
 				isTrue(n == 2, "map takes one function and one collection");
 				return list(sym("mapcar"), fnValue(items.get(1)), lower(items.get(2)));
@@ -438,36 +561,79 @@ final class ClojureLowering {
 			}
 			return idSym(s.name());
 		}
+		if (form instanceof LispSymbol s) {
+			LispVal predicate = predicateValue(s.name());
+			if (predicate != null) {
+				return predicate;
+			}
+		}
 		return lower(form);
+	}
+
+	/**
+	 * A predicate as a first-class value: a lambda answering a Common Lisp boolean, so a
+	 * sequence function called with it keeps testing raw truthiness. A call answers the
+	 * Clojure {@code T}-or-false instead, for printing; null when not a predicate.
+	 * @param name the Clojure name
+	 * @return the lambda, or null
+	 */
+	private @Nullable LispVal predicateValue(String name) {
+		LispSymbol arg = new LispSymbol(mangle("pred"));
+		return switch (name) {
+			case "false?" -> list(sym("LAMBDA"), list(arg), list(sym("EQ"), arg, this.falseVariable));
+			case "true?" -> list(sym("LAMBDA"), list(arg), list(sym("EQ"), arg, TRUE_CONST));
+			case "boolean?" -> list(sym("LAMBDA"), list(arg),
+					list(sym("OR"), list(sym("EQ"), arg, TRUE_CONST), list(sym("EQ"), arg, this.falseVariable)));
+			default -> null;
+		};
 	}
 
 	private LispVal strCall(List<LispVal> items) {
 		if (items.size() == 1) {
 			return LispString.literal("");
 		}
-		List<LispVal> parts = new ArrayList<>();
-		for (int i = 1; i < items.size(); i++) {
-			parts.add(list(sym("princ-to-string"), lower(items.get(i))));
-		}
-		return new LispCons(sym("concatenate"), new LispCons(list(sym("quote"), sym("string")), list(parts)));
+		return concat(stringParts(items, LispString.literal("")));
 	}
 
 	private LispVal printCall(List<LispVal> items, boolean newline) {
-		if (!newline) {
-			return list(sym("princ"), items.size() == 1 ? LispString.literal("") : strCall(items));
+		if (!newline && items.size() == 1) {
+			return list(sym("princ"), LispString.literal(""));
 		}
 		// one concatenate whose last part is the newline: no separate newline call
-		List<LispVal> parts = new ArrayList<>();
-		pairs(items, parts);
-		parts.add(LispString.literal("\n"));
-		LispVal text = new LispCons(sym("concatenate"), new LispCons(list(sym("quote"), sym("string")), list(parts)));
-		return list(sym("princ"), text);
+		List<LispVal> parts = stringParts(items, LispString.literal("nil"));
+		if (newline) {
+			parts.add(LispString.literal("\n"));
+		}
+		return list(sym("princ"), concat(parts));
 	}
 
-	private void pairs(List<LispVal> items, List<LispVal> parts) {
+	private LispVal concat(List<LispVal> parts) {
+		return new LispCons(sym("concatenate"), new LispCons(list(sym("quote"), sym("string")), list(parts)));
+	}
+
+	private List<LispVal> stringParts(List<LispVal> items, LispVal nilReplacement) {
+		List<LispVal> parts = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			parts.add(list(sym("princ-to-string"), lower(items.get(i))));
+			parts.add(printPart(lower(items.get(i)), nilReplacement));
 		}
+		return parts;
+	}
+
+	/**
+	 * One printed part's string: {@code "false"} for the false object, {@code "true"} for
+	 * {@code T}, the replacement for {@code NIL} ({@code ""} in {@code str},
+	 * {@code "nil"} in {@code print}/{@code println}), else {@code princ-to-string}. The
+	 * value runs once, behind a temporary no user identifier can spell.
+	 * @param value the lowered value
+	 * @param nilReplacement the string {@code NIL} prints as
+	 * @return the form
+	 */
+	private LispVal printPart(LispVal value, LispVal nilReplacement) {
+		LispSymbol temp = freshTemp();
+		return list(sym("LET"), list(list(temp, value)),
+				list(sym("IF"), list(sym("EQ"), temp, this.falseVariable), LispString.literal("false"), list(sym("IF"),
+						list(sym("EQ"), temp, TRUE_CONST), LispString.literal("true"),
+						list(sym("IF"), list(sym("NULL"), temp), nilReplacement, list(sym("princ-to-string"), temp)))));
 	}
 
 	private LispVal bodyOf(List<LispVal> forms) {
@@ -537,7 +703,7 @@ final class ClojureLowering {
 			case "true":
 				return TRUE_CONST;
 			case "false":
-				return NIL_CONST; // the spike folds false into nil: both are falsey
+				return this.falseVariable;
 			default:
 				break;
 		}
@@ -594,8 +760,11 @@ final class ClojureLowering {
 			if (name.equals("nil")) {
 				return list(sym("quote"), NIL_CONST);
 			}
-			if (name.equals("true") || name.equals("false")) {
+			if (name.equals("true")) {
 				return list(sym("quote"), TRUE_CONST);
+			}
+			if (name.equals("false")) {
+				return list(sym("quote"), new LispSymbol(FALSE_VALUE_NAME));
 			}
 			if (name.startsWith(":")) {
 				return list(sym("quote"), sym(name));

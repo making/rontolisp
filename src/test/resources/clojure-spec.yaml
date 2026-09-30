@@ -69,7 +69,7 @@ cases:
     expected: |
       TWO
       FALLBACK
-      (3 3 T NIL)
+      (3 3 T false)
       3
       2
   - name: arithmetic-and-comparison
@@ -82,7 +82,7 @@ cases:
       (6 6 24 7/2)
       (9 3 1 1 3 -3 5 1024)
       (6 4)
-      (T NIL T T T T NIL)
+      (T false T T T T false)
   - name: seq-ops-run-over-lists
     source: |
       (println (map #(* % %) '(1 2 3)))
@@ -104,7 +104,7 @@ cases:
     source: |
       (println (list (even? 4) (odd? 3) (zero? 0) (pos? 5) (neg? -2) (vector? [1]) (vector? '(1)) (empty? '()) (empty? '(1)) (nil? nil) (some? 0)))
     expected: |
-      (T T T T T T NIL T NIL T T)
+      (T T T T T T false T false T T)
   - name: vectors-print-in-common-lisp-notation
     # Clojure prints [1 :a s]; here a vector prints as #(1 A s).
     source: |
@@ -116,7 +116,7 @@ cases:
       #(1 A s)
       3
       #(1 2)
-      (T NIL)
+      (T false)
   - name: quote-mangles-symbols-and-re-emits-vectors
     source: |
       (println 'qi-a)
@@ -135,25 +135,61 @@ cases:
       (println (= :a :A))
     expected: |
       A
-      T
-      T
-  - name: false-folds-into-nil
+      true
+      true
+  - name: false-is-distinct-from-nil
     # Clojure prints true/false/nil, (= false nil) is false and (nil? false) is
-    # false; here false is nil, per .kb/clojure-frontend.md.
+    # false; false is a distinct object from nil here too.
     source: |
       (println true)
       (println false)
       (println nil)
       (println (= false nil))
+      (println (= false false))
       (println (nil? false))
-      (println (list true false nil))
+      (println (nil? nil))
+      (println (false? false))
+      (println (false? nil))
+      (println (true? true))
+      (println (true? 1))
+      (println (boolean? false))
+      (println (boolean? nil))
+      (println (boolean? 0))
+      (println (str nil))
+      (println (str false))
+      (println (str true))
+      (println (str "a" nil false true))
+      (println (if false 1 2))
+      (println (if nil 1 2))
+      (println (and false 1))
+      (println (or nil false))
+      (println (not false))
+      (println (not nil))
     expected: |
-      T
-      NIL
-      NIL
-      T
-      T
-      (T NIL NIL)
+      true
+      false
+      nil
+      false
+      true
+      false
+      true
+      true
+      false
+      true
+      false
+      true
+      false
+      false
+
+      false
+      true
+      afalsetrue
+      2
+      2
+      false
+      false
+      true
+      true
   - name: str-print-println-and-newline
     # Clojure separates println parts with spaces; here they concatenate with no
     # separator, per .kb/clojure-frontend.md.
@@ -203,7 +239,7 @@ cases:
       (defn dv-twice [x] (* 2 x))
       (println (dv-twice 21))
     expected: |
-      NIL
+      nil
       42
   - name: higher-order-compose-over-map-filter-reduce
     source: |

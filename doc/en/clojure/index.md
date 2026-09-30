@@ -53,8 +53,12 @@ clojure> (twice 21)
 
 ## Deviations
 
-`false` folds into `nil` (both falsey); keywords print upcased (`:A` for `:a`) and
+`false` is a distinct object from `nil` (both are falsey, so `if`/`when`/`cond`/`and`/
+`or`/`not` treat them alike, while `=` and `nil?` tell them apart); `false?`/`true?`/
+`boolean?` answer accordingly. `println`/`print` spell the three values `true`/`false`/
+`nil` and `str` spells them `true`/`false`/`""`, but parts are still concatenated with
+no separator; collections print in Common Lisp notation (`#(A B)` for `[:a :b]`, with
+`T`/`NIL` for a nested `true`/`nil`). Keywords print upcased (`:A` for `:a`) and
 collide case-insensitively; map and set literals are refused; the seq family runs over
-lists only; `println` concatenates its parts with no separator and collections print
-in Common Lisp notation (`#(A B)` for `[:a :b]`). Destructuring, threading macros,
+lists only. Destructuring, threading macros,
 `atom`, lazy seqs, metadata and `var` are absent. Errors carry no source position yet.

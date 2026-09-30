@@ -70,7 +70,7 @@ class SourceLanguageTest {
 		assertThat(SourceLanguage.CLOJURE.read("(defn f [x] x)", Features.INTERPRETER, null)
 			.stream()
 			.map(LispVal::print)
-			.toList()).containsExactly("(DEFUN |c%f| (|c%x|) |c%x|)");
+			.toList()).containsExactly("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%f| (|c%x|) |c%x|)");
 	}
 
 	@Test

@@ -31,23 +31,25 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `fn` / `#(...)` | `lambda` | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`) |
 | `let` | `let*` | Clojure's `let` is sequential |
 | `loop`/`recur` | `labels` self call | the interpreter's tail calls make it constant-stack |
-| `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true |
+| `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
+| `not` | an explicit null-or-false check answering `T`-or-false | |
+| `=`/`not=`/`<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
+| `nil?`/`empty?` | `null`, answering `T`-or-false | `(nil? false)` is false |
+| `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false; as values, lambdas answering a Common Lisp boolean | |
 | `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` | `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` is the 2-arity only (`(apply f args)`) |
 | a vector literal | a `vector` call | |
 | `first`/`rest`/`count` | `car`/`cdr`/`length` | the seq family runs over LISTS only, except these three which take any sequence |
-| `str` | `concatenate 'string` over `princ-to-string` parts | `(str)` is `""` |
-| `println`/`print` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted; collections print in CL notation; parts are concatenated with NO separator (Clojure separates with spaces) |
+| `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, anything else through `princ-to-string` |
+| `println`/`print` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted; collections print in CL notation; parts are concatenated with NO separator (Clojure separates with spaces); each part maps like `str` except `nil` prints as `nil` |
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
-| `nil`/`false` | `NIL` | both falsey; folded together (see "Deviations") |
+| `nil` | `NIL` | falsey |
+| `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
 | a keyword `:foo` | the symbol `:FOO` verbatim (upcased) | data, never called; collides case-insensitively and prints upcased (see "Deviations") |
 | `ns` | nothing | a namespace declaration defines nothing |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | |
 
 ## Deviations (each a real work item)
 
-- `false` is folded into `nil`. Both are falsey so tests behave, but `(false? x)`
-  cannot distinguish them and `(= false nil)` is true. Clojure-distinct booleans need
-  the distinct-object treatment `scheme.lisp`'s false value uses.
 - Keywords are the symbols `:foo` verbatim and the printer upcases them (`:A` prints
   for `:a`), so `:a` and `:A` collide and printed keywords are the wrong case.
 - Map and set literals are refused by name (`a map literal is not supported yet`); a
@@ -64,7 +66,8 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   `.kb/source-positions.md` -- the spike just never threads the reader's line/column
   into the lowering's errors).
 - Printing: `pr`/`prn`/`print-method`/`pprint` are absent; `println` concatenates with
-  no separator and booleans/keywords print as `T`/`NIL`/upcased keywords.
+  no separator, and a boolean nested in a collection prints in Common Lisp notation
+  (`T`/`NIL` for `true`/`nil`) while the false object spells `false`.
 
 ## A session
 
