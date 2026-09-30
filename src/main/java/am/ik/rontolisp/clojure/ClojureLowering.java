@@ -40,13 +40,18 @@ import org.jspecify.annotations.Nullable;
  * ({@code car}/{@code cdr}). {@code false} is a DISTINCT non-{@code NIL} object -- the
  * value of {@code rontolisp::%clojure-false}, bound before anything else runs, a symbol
  * spelled {@code false} -- so {@code (= false nil)} is false and {@code (nil?
- * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
- * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
- * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,
- * {@code not}, the {@code ?} predicates) answers {@code T} or the false object. Printing
- * spells the three values out: {@code println}/{@code print} show
- * {@code true}/{@code false}/{@code nil}, {@code str} shows {@code true}/{@code false}
- * and {@code ""} for {@code nil}. Transients ({@code transient}, {@code persistent!},
+ * false)} is false. A keyword {@code :foo} is the list {@code (:C%KEYWORD "foo")} holding
+ * its spelling verbatim (case-preserved, so {@code :a} and {@code :A} stay apart and
+ * compare unequal); {@code println}/{@code print}/{@code str} spell it with its colon,
+ * and a keyword in call position {@code (:k m)} (or with a default {@code (:k m dflt)})
+ * is the same table-aware read {@code get} lowers to. It is falsey in every conditional:
+ * {@code if}/{@code when}/ {@code cond}/{@code and}/{@code or}/{@code not} lower their
+ * tests to an explicit null-or-false check, and every boolean-answering builtin
+ * ({@code =}, the comparisons, {@code not}, the {@code ?} predicates) answers {@code T}
+ * or the false object. Printing spells the three values out:
+ * {@code println}/{@code print} show {@code true}/{@code false}/{@code nil}, {@code str}
+ * shows {@code true}/{@code false} and {@code ""} for {@code nil}. Transients
+ * ({@code transient}, {@code persistent!},
  * {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are refused by name: there
  * is no transient runtime behind the tables.
  */
@@ -440,7 +445,7 @@ final class ClojureLowering {
 		}
 		String name = op.name();
 		if (name.startsWith(":")) {
-			throw new LispReadException("a keyword cannot be called: " + name);
+			return keywordCall(name, items);
 		}
 		LispVal special = builtin(name, items);
 		if (special != null) {
@@ -583,6 +588,57 @@ final class ClojureLowering {
 	/** The tag heading a wrapped set: a set is {@code (LIST :C%SET table)}. */
 	private static final LispSymbol SET_TAG = new LispSymbol(":C%SET");
 
+	/**
+	 * The tag heading a keyword value: a keyword is {@code (LIST :C%KEYWORD name)}
+	 * holding its spelling verbatim (without the colon, case-preserved), so {@code :a}
+	 * and {@code :A} stay apart. A cons keys an {@code equal} table structurally, so
+	 * keywords key structurally and never collide with strings; {@code equal} compares
+	 * two spellings case-sensitively through the same shape.
+	 */
+	private static final LispSymbol KEYWORD_TAG = new LispSymbol(":C%KEYWORD");
+
+	/** A keyword's spelling as data: {@code (:C%KEYWORD "name")}, for quoted forms. */
+	private static LispVal keywordDatum(String spelling) {
+		return new LispCons(KEYWORD_TAG, new LispCons(new LispString(spelling), NIL_CONST));
+	}
+
+	/** A keyword's construction: {@code (LIST :C%KEYWORD "name")}. */
+	private static LispVal keywordForm(String spelling) {
+		return list(sym("list"), KEYWORD_TAG, LispString.literal(spelling));
+	}
+
+	/**
+	 * Refuses what a keyword spelling cannot be: {@code ::}-auto-resolve has no namespace
+	 * to resolve against (an {@code ns} form defines nothing), and a bare {@code :} names
+	 * nothing. A namespaced {@code :a/b} is opaque data otherwise -- its spelling prints
+	 * and compares whole, like the oracle's.
+	 */
+	private static void validateKeyword(String name) {
+		if (name.startsWith("::")) {
+			throw new LispReadException("auto-resolved keywords are not supported yet: " + name);
+		}
+		isTrue(name.length() > 1, "a keyword needs a name: " + name);
+	}
+
+	/**
+	 * A keyword in call position: the map lookup {@code (:k m)} (or with a default
+	 * {@code (:k m dflt)}), over the same table-aware read {@code get} lowers to, so sets
+	 * answer their member and vectors and strings their indexed element too.
+	 */
+	private LispVal keywordCall(String name, List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, name + " takes a collection and an optional default");
+		validateKeyword(name);
+		List<LispVal> getForm = new ArrayList<>();
+		getForm.add(new LispSymbol("get"));
+		getForm.add(items.get(1));
+		getForm.add(items.get(0));
+		if (n == 2) {
+			getForm.add(items.get(2));
+		}
+		return getOf(getForm);
+	}
+
 	/** {@code (RONTOLISP:PLIST-HASH-TABLE plist :TEST 'EQUAL)}: a fresh equal table. */
 	private static LispVal tableFromPlist(LispVal plist) {
 		return list(sym("rontolisp:plist-hash-table"), plist, sym(":test"), list(sym("quote"), sym("equal")));
@@ -692,13 +748,24 @@ final class ClojureLowering {
 		LispSymbol dflt = freshTemp();
 		List<LispVal> bindings = List.of(list(coll, lower(items.get(1))), list(key, lower(items.get(2))),
 				list(dflt, n == 3 ? lower(items.get(3)) : NIL_CONST));
+		return list(sym("let"), list(bindings), cons(sym("cond"), getBranches(coll, key, dflt)));
+	}
+
+	/**
+	 * The branches of a table-aware read over an already-bound collection, key and
+	 * default: a set answers its member, a map its value, a vector or a string its
+	 * indexed element, anything else the default. The three arrive as side-effect-free
+	 * forms (bound temporaries, a lambda parameter), so the branches may name them more
+	 * than once.
+	 */
+	private List<LispVal> getBranches(LispVal coll, LispVal key, LispVal dflt) {
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("gethash"), key, setInner(coll), dflt)));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("gethash"), key, coll, dflt)));
 		branches.add(list(indexForm(coll, key, true), list(sym("elt"), coll, key)));
 		branches.add(list(indexForm(coll, key, false), list(sym("char"), coll, key)));
 		branches.add(list(TRUE_CONST, dflt));
-		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
+		return branches;
 	}
 
 	private LispVal containsOf(List<LispVal> items) {
@@ -1075,8 +1142,16 @@ final class ClojureLowering {
 		return out;
 	}
 
-	/** A function in argument position: a known defn, a local binding, a lambda. */
+	/**
+	 * A function in argument position: a known defn, a local binding, a lambda, a
+	 * keyword.
+	 */
 	private LispVal fnValue(LispVal form) {
+		if (form instanceof LispSymbol s && s.name().startsWith(":")) {
+			// no scope can bind a keyword (plainName refuses one), so this is data
+			validateKeyword(s.name());
+			return keywordFn(form);
+		}
 		if (form instanceof LispSymbol s && known(s.name())) {
 			if (isFunction(s.name())) {
 				return list(sym("function"), idSym(s.name()));
@@ -1090,6 +1165,21 @@ final class ClojureLowering {
 			}
 		}
 		return lower(form);
+	}
+
+	/**
+	 * A keyword as a function value: the lookup over one argument, so
+	 * {@code (map :k coll)} reads the key out of each member. The key lowers once, behind
+	 * a temporary; the collection is the lambda's parameter, named once per branch by
+	 * {@link #getBranches}.
+	 * @param keyDatum the keyword datum
+	 * @return the form
+	 */
+	private LispVal keywordFn(LispVal keyDatum) {
+		LispSymbol coll = freshTemp();
+		LispSymbol key = freshTemp();
+		return list(sym("lambda"), list(coll), list(sym("let"), list(List.of(list(key, lower(keyDatum)))),
+				cons(sym("cond"), getBranches(coll, key, NIL_CONST))));
 	}
 
 	/**
@@ -1144,8 +1234,9 @@ final class ClojureLowering {
 	/**
 	 * One printed part's string: {@code "false"} for the false object, {@code "true"} for
 	 * {@code T}, the replacement for {@code NIL} ({@code ""} in {@code str},
-	 * {@code "nil"} in {@code print}/{@code println}), else {@code princ-to-string}. The
-	 * value runs once, behind a temporary no user identifier can spell.
+	 * {@code "nil"} in {@code print}/{@code println}), the colon spelling for a keyword,
+	 * else {@code princ-to-string}. The value runs once, behind a temporary no user
+	 * identifier can spell.
 	 * @param value the lowered value
 	 * @param nilReplacement the string {@code NIL} prints as
 	 * @return the form
@@ -1153,9 +1244,24 @@ final class ClojureLowering {
 	private LispVal printPart(LispVal value, LispVal nilReplacement) {
 		LispSymbol temp = freshTemp();
 		return list(sym("LET"), list(list(temp, value)),
-				list(sym("IF"), list(sym("EQ"), temp, this.falseVariable), LispString.literal("false"), list(sym("IF"),
-						list(sym("EQ"), temp, TRUE_CONST), LispString.literal("true"),
-						list(sym("IF"), list(sym("NULL"), temp), nilReplacement, list(sym("princ-to-string"), temp)))));
+				list(sym("IF"), list(sym("EQ"), temp, this.falseVariable), LispString.literal("false"),
+						list(sym("IF"), list(sym("EQ"), temp, TRUE_CONST), LispString.literal("true"),
+								list(sym("IF"), list(sym("NULL"), temp), nilReplacement, keywordOrString(temp)))));
+	}
+
+	/**
+	 * A keyword prints with its leading colon ({@code :a}); anything else prints through
+	 * {@code princ-to-string}. The tag test names the wrapper, and the string test keeps
+	 * a user list that happens to share the tag's head from reaching the colon path with
+	 * a non-string tail.
+	 * @param temp the bound part value
+	 * @return the form
+	 */
+	private LispVal keywordOrString(LispSymbol temp) {
+		LispVal isKeyword = list(sym("AND"), list(sym("CONSP"), temp),
+				list(sym("EQ"), list(sym("CAR"), temp), KEYWORD_TAG), list(sym("STRINGP"), list(sym("CADR"), temp)));
+		LispVal spelled = concat(List.of(LispString.literal(":"), list(sym("CADR"), temp)));
+		return list(sym("IF"), isKeyword, spelled, list(sym("princ-to-string"), temp));
 	}
 
 	private LispVal bodyOf(List<LispVal> forms) {
@@ -1230,7 +1336,9 @@ final class ClojureLowering {
 				break;
 		}
 		if (name.startsWith(":")) {
-			return sym(name); // a keyword is data
+			validateKeyword(name);
+			return keywordForm(name.substring(1)); // a keyword is its spelling,
+													// case-preserved
 		}
 		if (name.equals("%") || name.length() > 1 && name.charAt(0) == '%'
 				&& name.substring(1).chars().allMatch(Character::isDigit)) {
@@ -1289,7 +1397,8 @@ final class ClojureLowering {
 				return list(sym("quote"), new LispSymbol(FALSE_VALUE_NAME));
 			}
 			if (name.startsWith(":")) {
-				return list(sym("quote"), sym(name));
+				validateKeyword(name);
+				return list(sym("quote"), keywordDatum(name.substring(1)));
 			}
 			return list(sym("quote"), idSym(name));
 		}
@@ -1334,12 +1443,26 @@ final class ClojureLowering {
 	private LispVal quotedCollection(List<LispVal> items) {
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			quoted.add(quotedConstant(items.get(i)));
+			quoted.add(quotedElement(items.get(i)));
 		}
 		if (isSymbolNamed(items.get(0), "%hash-map")) {
 			return mapBuild(quoted);
 		}
 		return setBuild(quoted);
+	}
+
+	/**
+	 * One element of a quoted map or set construction: the construction RUNS, so its
+	 * elements are forms, not data -- a keyword travels as its construction (its datum in
+	 * a {@code (LIST ...)} element would call the tag as a function); anything else
+	 * quotes as usual.
+	 */
+	private LispVal quotedElement(LispVal datum) {
+		if (datum instanceof LispSymbol s && s.name().startsWith(":")) {
+			validateKeyword(s.name());
+			return keywordForm(s.name().substring(1));
+		}
+		return quotedConstant(datum);
 	}
 
 	// names

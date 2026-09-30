@@ -67,8 +67,8 @@ cases:
       (println (do 1 2 3))
       (println (when true 1 2))
     expected: |
-      TWO
-      FALLBACK
+      :two
+      :fallback
       (3 3 T false)
       3
       2
@@ -106,14 +106,15 @@ cases:
     expected: |
       (T T T T T T false T false T T)
   - name: vectors-print-in-common-lisp-notation
-    # Clojure prints [1 :a s]; here a vector prints as #(1 A s).
+    # Clojure prints [1 :a s]; here a vector prints as #(1 (C%KEYWORD a) s): a
+    # keyword nested in a collection shows its wrapper, like a set does.
     source: |
       (println [1 :a "s"])
       (println (count [10 20 30]))
       (println (vector 1 2))
       (println (list (vector? [1]) (vector? '(1))))
     expected: |
-      #(1 A s)
+      #(1 (C%KEYWORD a) s)
       3
       #(1 2)
       (T false)
@@ -125,18 +126,41 @@ cases:
     expected: |
       c%qi-a
       (1 2 c%qi-b)
-      #(1 A)
-  - name: keywords-are-upcased-and-collide-case-insensitively
-    # Clojure prints :a :A distinctly and (= :a :A) is false; here both print A and
-    # compare equal, per .kb/clojure-frontend.md.
+      #(1 (C%KEYWORD a))
+  - name: keywords-are-case-sensitive-and-print-with-colon
+    # Clojure prints :a :A distinctly and (= :a :A) is false; a keyword in call
+    # position is the map lookup, per .kb/clojure-frontend.md. println parts still
+    # concatenate with no separator, so multi-keyword lines read without spaces.
     source: |
       (println :a)
+      (println :A)
       (println (= :a :a))
       (println (= :a :A))
+      (println (str :a))
+      (println (:a {:a 1}))
+      (println (:b {:a 1}))
+      (println (:b {:a 1} 9))
+      (println (str :a/b))
+      (println (:a/b {:a/b 1}))
+      (println (= :a/b :a/b))
+      (println (= :a "a"))
+      (println (map :a (list {:a 1} {:a 2})))
+      (println (:a #{:a}))
     expected: |
-      A
+      :a
+      :A
       true
+      false
+      :a
+      1
+      nil
+      9
+      :a/b
+      1
       true
+      false
+      (1 2)
+      :a
   - name: false-is-distinct-from-nil
     # Clojure prints true/false/nil, (= false nil) is false and (nil? false) is
     # false; false is a distinct object from nil here too.
@@ -267,7 +291,7 @@ cases:
       #<HASH-TABLE :TEST EQUAL :COUNT 0>
       #<HASH-TABLE :TEST EQUAL :COUNT 1>
   - name: set-literals-print-wrapped
-    # The wrapper prints as written; keywords print without their colon, like :A.
+    # The wrapper prints as written.
     source: |
       (println #{1 2})
       (println #{})
@@ -317,15 +341,15 @@ cases:
     expected: |
       1
       nil
-      DFLT
+      :dflt
       nil
       20
-      D
+      :d
       b
-      D
-      D
+      :d
+      :d
       2
-      D
+      :d
   - name: contains-checks-maps-sets-and-indexes
     source: |
       (println (list (contains? {:a 1} :a) (contains? {:a 1} :b) (contains? nil :a)))
@@ -345,7 +369,7 @@ cases:
       (println (count (keys {:a 1 :b 2})))
       (println (count (vals {:a 1 :b 2})))
     expected: |
-      (A)
+      ((C%KEYWORD a))
       (1)
       nil
       2

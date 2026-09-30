@@ -61,20 +61,45 @@ class ClojureLoweringTest {
 		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE");
 		assertThat(lowered("(= 1 1)")).contains("LABELS").contains("(EQUAL");
 		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
-		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":FALLBACK");
+		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":C%KEYWORD").contains("fallback");
 	}
 
 	@Test
 	void vectorsQuotesAndKeywords() {
-		assertThat(lowered("[1 :a]")).isEqualTo(FALSE_BINDING + "(VECTOR 1 :A)");
+		assertThat(lowered("[1 :a]")).isEqualTo(FALSE_BINDING + "(VECTOR 1 (LIST :C%KEYWORD \"a\"))");
 		assertThat(lowered("'a")).isEqualTo(FALSE_BINDING + "'|c%a|");
-		assertThat(lowered(":a")).isEqualTo(FALSE_BINDING + ":A");
+		assertThat(lowered(":a")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a\")");
+		assertThat(lowered(":A")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"A\")");
 		assertThat(lowered("(str \"a\" 1)")).contains("CONCATENATE");
 	}
 
 	@Test
+	void keywordsKeepTheirCaseAndPrintWithColon() {
+		assertThat(lowered("(= :a :A)")).contains("(EQUAL").contains(":C%KEYWORD");
+		assertThat(lowered("(str :a)")).contains("(CONCATENATE 'STRING \":\"");
+		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
+		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
+		assertThatThrownBy(() -> Clojure.read("::foo", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("auto-resolved keywords are not supported yet: ::foo");
+		assertThatThrownBy(() -> Clojure.read(":", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a keyword needs a name");
+	}
+
+	@Test
+	void keywordsInCallPositionAreMapLookups() {
+		String prelude = "(def m {:a 1}) ";
+		assertThat(lowered(prelude + "(:a m)")).contains("GETHASH").contains("COND");
+		assertThat(lowered(prelude + "(:a m 9)")).contains("GETHASH").contains("9");
+		assertThat(lowered("(map :a '({:a 1}))")).contains("MAPCAR").contains("LAMBDA").contains("GETHASH");
+		assertThatThrownBy(() -> Clojure.read("(:a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining(":a takes a collection and an optional default");
+		assertThatThrownBy(() -> Clojure.read("(::foo m)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("auto-resolved keywords are not supported yet: ::foo");
+	}
+
+	@Test
 	void mapsAndSetsBuildTables() {
-		assertThat(lowered("{:a 1}")).contains("PLIST-HASH-TABLE").contains(":A");
+		assertThat(lowered("{:a 1}")).contains("PLIST-HASH-TABLE").contains(":C%KEYWORD");
 		assertThat(lowered("{}")).contains("PLIST-HASH-TABLE");
 		assertThat(lowered("#{1 2}")).contains(":C%SET").contains("GETHASH");
 		assertThat(lowered("#{ }")).contains(":C%SET");
@@ -120,7 +145,7 @@ class ClojureLoweringTest {
 	@Test
 	void printAndStrSpellTrueFalseNil() {
 		assertThat(lowered("(str nil)")).isEqualTo(FALSE_BINDING
-				+ "(CONCATENATE 'STRING (LET ((|__clojure_0| NIL)) (IF (EQ |__clojure_0| RONTOLISP::%CLOJURE-FALSE) \"false\" (IF (EQ |__clojure_0| T) \"true\" (IF (NULL |__clojure_0|) \"\" (PRINC-TO-STRING |__clojure_0|))))))");
+				+ "(CONCATENATE 'STRING (LET ((|__clojure_0| NIL)) (IF (EQ |__clojure_0| RONTOLISP::%CLOJURE-FALSE) \"false\" (IF (EQ |__clojure_0| T) \"true\" (IF (NULL |__clojure_0|) \"\" (IF (AND (CONSP |__clojure_0|) (EQ (CAR |__clojure_0|) :C%KEYWORD) (STRINGP (CADR |__clojure_0|))) (CONCATENATE 'STRING \":\" (CADR |__clojure_0|)) (PRINC-TO-STRING |__clojure_0|)))))))");
 		assertThat(lowered("(println true)")).contains("(PRINC (CONCATENATE 'STRING")
 			.contains("\"true\"")
 			.contains("PRINC-TO-STRING");
@@ -173,8 +198,10 @@ class ClojureLoweringTest {
 
 	@Test
 	void quotedMapsAndSetsBuildTables() {
-		assertThat(lowered("'{:a 1}")).contains("PLIST-HASH-TABLE").contains(":A");
+		assertThat(lowered("'{:a 1}")).contains("PLIST-HASH-TABLE").contains(":C%KEYWORD");
 		assertThat(lowered("'#{1 2}")).contains(":C%SET").contains("GETHASH");
+		assertThat(lowered("'{:a 1}")).contains("(LIST :C%KEYWORD \"a\")");
+		assertThat(lowered("'#{:a}")).contains(":C%SET").contains("(LIST :C%KEYWORD \"a\")");
 	}
 
 	@Test

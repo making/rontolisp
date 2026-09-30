@@ -3,10 +3,10 @@ hello, clojure on rontolisp!
 6765
 84
 9
-#(A B vec)
+#((C%KEYWORD a) (C%KEYWORD b) vec)
 3
 truefalsetruetrue
-FALLBACK
+:fallback
 x+y=15
 42
 2

@@ -41,9 +41,13 @@ an `equal` hash table (never mutated in place -- every verb builds a fresh one, 
 persistence holds observably), a set literal the same table with each member stored
 under itself, the seq
 functions list operations (`map`/`filter`/`reduce`/`apply`/`concat` to
-`mapcar`/`remove-if-not`/`reduce`/`apply`/`append`). `count`/`empty?`/`=` reach maps
+`mapcar`/`remove-if-not`/`reduce`/`apply`/`append`). A keyword is its spelling
+wrapped as `(:C%KEYWORD name)`, case-preserved, so `:a` and `:A` stay apart; it
+prints with its colon, and in call position (`(:k m)`, with an optional default)
+it is the map lookup. `count`/`empty?`/`=` reach maps
 and sets; `get` takes an optional default; transients (`assoc!` and friends) are
-refused.
+refused. `::`-auto-resolve is refused; a namespaced `:a/b` is opaque data that
+prints and compares whole.
 
 ## REPL
 
@@ -64,9 +68,10 @@ clojure> (twice 21)
 `or`/`not` treat them alike, while `=` and `nil?` tell them apart); `false?`/`true?`/
 `boolean?` answer accordingly. `println`/`print` spell the three values `true`/`false`/
 `nil` and `str` spells them `true`/`false`/`""`, but parts are still concatenated with
-no separator; collections print in Common Lisp notation (`#(A B)` for `[:a :b]`, with
-`T`/`NIL` for a nested `true`/`nil`). Keywords print upcased (`:A` for `:a`) and
-collide case-insensitively; maps print as `#<HASH-TABLE :TEST EQUAL :COUNT n>` and
+no separator; a keyword prints with its colon (`:a`), case-preserved. Collections
+print in Common Lisp notation (`#((C%KEYWORD a) (C%KEYWORD b))` for `[:a :b]`, with
+`T`/`NIL` for a nested `true`/`nil`); a keyword nested in a collection shows its
+`(:C%KEYWORD name)` wrapper, like a set shows its wrapper. Maps print as `#<HASH-TABLE :TEST EQUAL :COUNT n>` and
 sets as `(C%SET #<HASH-TABLE ...>)`; vector and table keys compare by identity, so a
 vector key misses a lookup its oracle answers; a repeated set-literal element is
 refused by spelling; the seq family runs over

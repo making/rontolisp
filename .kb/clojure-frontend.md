@@ -57,7 +57,10 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
 | `nil` | `NIL` | falsey |
 | `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
-| a keyword `:foo` | the symbol `:FOO` verbatim (upcased) | data, never called; collides case-insensitively and prints upcased (see "Deviations") |
+| a keyword `:foo` | the list `(:C%KEYWORD "foo")` holding its spelling verbatim (case-preserved) | data, compared by `equal` through the cons shape; `:a` and `:A` stay apart; `println`/`print`/`str` spell it with its colon; a keyword nested in a printed collection shows the wrapper |
+| a keyword in call position `(:k m)` / `(:k m dflt)` | the same table-aware read `get` lowers to | the idiomatic map lookup, over b02's map runtime (sets answer their member, vectors/strings their element) |
+| a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a one-argument lambda over the same read | `(map :k coll)` reads the key out of each member |
+| a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole; `::`-auto-resolve is refused by name (there is no namespace to resolve against) |
 | `ns` | nothing | a namespace declaration defines nothing |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
@@ -65,11 +68,13 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 ## Deviations (each a real work item)
 
-- Keywords are the symbols `:foo` verbatim and the printer upcases them (`:A` prints
-  for `:a`), so `:a` and `:A` collide and printed keywords are the wrong case.
+- A keyword nested in a printed collection shows its `(:C%KEYWORD name)` wrapper
+  (e.g. `#((C%KEYWORD a) (C%KEYWORD b))` for `[:a :b]`), like a set shows its
+  wrapper; only `println`/`print`/`str` of the keyword itself spell the colon. The
+  REPL echo goes through the Common Lisp printer, so it shows the wrapper too.
 - Maps and sets print in the runtime's notation, like vectors print in CL notation: a
   map prints `#<HASH-TABLE :TEST EQUAL :COUNT n>`, a set `(C%SET #<HASH-TABLE ...>)`
-  (keywords print without their colon, so the wrapper reads `C%SET`). The runtime is
+  (the wrapper reads `C%SET` because `princ` strips a keyword's colon). The runtime is
   the shared hash-table runtime (`.kb/hash-tables.md`), decided 2026-09-30 (b02): an
   `equal` table per map/set, copy-on-write for every verb, so the persistent semantics
   holds observably on all four backends with no new runtime and no per-backend code. A
@@ -131,4 +136,8 @@ shared hash-table runtime (b02): literals, `assoc`/`dissoc`/`get` (with default)
 `contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/`hash-map`/`array-map`,
 map/set-aware `count`/`empty?`/`=`, quoted maps/sets, and the transient refusals --
 each pinned in `clojure-spec.yaml` (run on all four backends) or, for the refusals,
-in `ClojureLoweringTest`.
+in `ClojureLoweringTest`. Keywords lower to the case-preserving `(:C%KEYWORD
+spelling)` wrapper (b01): printing with the colon through `println`/`print`/`str`,
+keyword-as-function call and function value over the table-aware read, `:a/b` as
+opaque data and the `::` refusal -- each pinned in `clojure-spec.yaml` (run on all
+four backends) or, for the refusals, in `ClojureLoweringTest`.
