@@ -11,12 +11,13 @@ LOWERED to the Common Lisp core forms, exactly the Scheme front end's shape
 `ClojureReader.java`, `ClojureLowering.java`) -- move the directory back to
 `src/main/java/am/ik/rontolisp/clojure/` to resume.
 
-Verified end to end on 2026-09-30 with `/tmp/clj-demo/demo.clj` (recursion with mutual
+Verified end to end on 2026-09-30 with `demo.clj` (recursion with mutual
 reference, `loop`/`recur`, `#(...)`, higher-order `map`/`filter`/`reduce`, vector and
 keyword literals, `cond`/`:else`, `let`, a directly called `fn`): every form answered the
 same value on the interpreter AND on the JVM-compiled class, and the seam tests
 (`SourceLanguageSeamTest`, `RontoLispCliTest`, `JvmSourceCompilerTest`, 108 tests) stayed
-green with the seam change in place.
+green with the seam change in place. The verification program lives beside the sources
+(`.todo/artefacts/a97-clojure-frontend/demo.clj`).
 
 ## The seam diff the spike carried
 
