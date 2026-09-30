@@ -14,7 +14,7 @@ cases:
       (def cid-FOO 3)
       (println cid-Foo cid-foo cid-FOO)
     expected: |
-      123
+      1 2 3
   - name: a-definition-may-use-a-name-defined-below-it
     source: |
       (defn fwd-a [] (fwd-b))
@@ -46,7 +46,7 @@ cases:
         (println lx ly))
     expected: |
       1
-      1015
+      10 15
   - name: loop-recur-is-a-self-call
     source: |
       (defn fib10 [n]
@@ -201,6 +201,26 @@ cases:
       20
       3
       (1 3)
+  - name: builtins-in-value-position
+    # inc/dec/str and the seq verbs name function values, so map/filter take them
+    # bare; apply spreads leading arguments over the seq-coerced last one, like the
+    # oracle; =/not= compare chains of neighbours.
+    source: |
+      (println (map inc '(1 2)))
+      (println (map inc [1 2 3]))
+      (println (map str [1 :a false]))
+      (println (filter first [[1] [] [2 3]]))
+      (println (apply + 1 2 [3 4]))
+      (println (apply concat [[1 2] [3]]))
+      (println (list (= 1 1 1) (= 1 1 2) (not= 1 2 1)))
+    expected: |
+      (2 3)
+      (2 3 4)
+      (1 :a false)
+      (#(1) #(2 3))
+      10
+      (1 2 3)
+      (T false T)
   - name: predicates
     source: |
       (println (list (even? 4) (odd? 3) (zero? 0) (pos? 5) (neg? -2) (vector? [1]) (vector? '(1)) (empty? '()) (empty? '(1)) (nil? nil) (some? 0)))
@@ -230,8 +250,7 @@ cases:
       #(1 (C%KEYWORD a))
   - name: keywords-are-case-sensitive-and-print-with-colon
     # Clojure prints :a :A distinctly and (= :a :A) is false; a keyword in call
-    # position is the map lookup, per .kb/clojure-frontend.md. println parts still
-    # concatenate with no separator, so multi-keyword lines read without spaces.
+    # position is the map lookup, per .kb/clojure-frontend.md.
     source: |
       (println :a)
       (println :A)
@@ -318,21 +337,33 @@ cases:
       true
       true
   - name: str-print-println-and-newline
-    # Clojure separates println parts with spaces; here they concatenate with no
-    # separator, per .kb/clojure-frontend.md.
+    # println/print/pr/prn separate their parts with spaces, like the oracle; str
+    # concatenates with no separator; pr/prn convert readably, so strings print
+    # quoted. (println (str nil)) prints the empty string and a newline.
     source: |
       (println (str))
       (println (str "a" 1))
       (println (str "x=" 42))
+      (println (str nil))
       (print "a" "b")
       (newline)
       (println "x" "y")
+      (pr "a" 1 :k)
+      (newline)
+      (prn "x" "y")
+      (prn [1 2])
+      (prn nil true false)
     expected: |
 
       a1
       x=42
-      ab
-      xy
+
+      a b
+      x y
+      "a" 1 :k
+      "x" "y"
+      #(1 2)
+      nil true false
   - name: numbers
     source: |
       (println (list 42 -17 1/2 1.5 1e3))

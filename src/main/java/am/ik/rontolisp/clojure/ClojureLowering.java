@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -62,7 +63,11 @@ import org.jspecify.annotations.Nullable;
  * {@code not}, the {@code ?} predicates) answers {@code T} or the false object. Printing
  * spells the three values out: {@code println}/{@code print} show
  * {@code true}/{@code false}/{@code nil}, {@code str} shows {@code true}/{@code false}
- * and {@code ""} for {@code nil}. Transients ({@code transient}, {@code persistent!},
+ * and {@code ""} for {@code nil}; {@code println}/{@code print} join their parts with a
+ * single space (like the oracle) while {@code str} concatenates bare, and
+ * {@code pr}/{@code prn} are the readable arms (strings print quoted). A lowering error
+ * names the innermost form's position ({@code file:line:column} when the file is known)
+ * through the reader's offsets. Transients ({@code transient}, {@code persistent!},
  * {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are refused by name: there
  * is no transient runtime behind the tables.
  */
@@ -113,8 +118,16 @@ final class ClojureLowering {
 	/** Whether the session already emitted the false binding (files always emit it). */
 	private boolean falseBound;
 
+	/** The reader the datums came out of, for error positions; null when unknown. */
+	private @Nullable ClojureReader reader;
+
 	static List<LispVal> lower(List<LispVal> datums) {
+		return lower(datums, null);
+	}
+
+	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader) {
 		ClojureLowering lowering = new ClojureLowering();
+		lowering.reader = reader;
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
@@ -137,6 +150,7 @@ final class ClojureLowering {
 	 * @return the lowered datums, in order
 	 */
 	List<ClojureTopLevel> interact(ClojureReader buffer) {
+		this.reader = buffer;
 		List<LispVal> datums = buffer.readAll();
 		declare(datums);
 		List<ClojureTopLevel> out = new ArrayList<>();
@@ -162,16 +176,25 @@ final class ClojureLowering {
 	private void declare(List<LispVal> datums) {
 		// pass one: every top-level name, so a definition may use one below it
 		for (LispVal datum : datums) {
-			List<LispVal> items = items(datum);
-			if (items == null || items.size() < 2) {
-				continue;
+			try {
+				declareOne(datum);
 			}
-			if (isSymbolNamed(items.get(0), "def")) {
-				this.globals.put(plainName(items.get(1), "def"), Kind.VARIABLE);
+			catch (LispReadException ex) {
+				throw positioned(ex, datum);
 			}
-			else if (isSymbolNamed(items.get(0), "defn")) {
-				this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
-			}
+		}
+	}
+
+	private void declareOne(LispVal datum) {
+		List<LispVal> items = items(datum);
+		if (items == null || items.size() < 2) {
+			return;
+		}
+		if (isSymbolNamed(items.get(0), "def")) {
+			this.globals.put(plainName(items.get(1), "def"), Kind.VARIABLE);
+		}
+		else if (isSymbolNamed(items.get(0), "defn")) {
+			this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
 		}
 	}
 
@@ -180,14 +203,50 @@ final class ClojureLowering {
 	}
 
 	private LispVal topLevel(LispVal form) {
-		List<LispVal> items = items(form);
-		if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defn")) {
-			return defun(items);
+		try {
+			List<LispVal> items = items(form);
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defn")) {
+				return defun(items);
+			}
+			return lower(form);
 		}
-		return lower(form);
+		catch (LispReadException ex) {
+			throw positioned(ex, form);
+		}
 	}
 
+	/**
+	 * One datum lowered, positioned: a lowering error names the innermost form's
+	 * {@code file:line:column} (through the reader's offsets), so {@code unknown name}
+	 * and arity errors point at the call. An error that already carries a position -- a
+	 * reader error, or one an inner form attached -- passes through untouched.
+	 */
 	private LispVal lower(LispVal form) {
+		try {
+			return lowerInner(form);
+		}
+		catch (LispReadException ex) {
+			throw positioned(ex, form);
+		}
+	}
+
+	/**
+	 * The datum's position, or the error untouched when neither the datum nor the reader
+	 * knows one.
+	 */
+	private LispReadException positioned(LispReadException ex, LispVal datum) {
+		if (ex.location() != null || this.reader == null) {
+			return ex;
+		}
+		SourceLocation at = this.reader.locate(datum);
+		if (at == null) {
+			return ex;
+		}
+		String message = ex.getMessage();
+		return new LispReadException(message != null ? message : ex.toString(), at);
+	}
+
+	private LispVal lowerInner(LispVal form) {
 		if (!(form instanceof LispCons)) {
 			return atom(form);
 		}
@@ -508,6 +567,10 @@ final class ClojureLowering {
 				return printCall(items, true);
 			case "print":
 				return printCall(items, false);
+			case "prn":
+				return prCall(items, true);
+			case "pr":
+				return prCall(items, false);
 			case "newline":
 				isTrue(n == 0, "newline takes no argument");
 				return list(sym("princ"), LispString.literal("\n"));
@@ -572,8 +635,7 @@ final class ClojureLowering {
 				return list(sym("reduce"), fnValue(items.get(1)), seqForm(lower(items.get(3))), sym(":initial-value"),
 						lower(items.get(2)));
 			case "apply":
-				isTrue(n == 2, "apply takes one function and one argument list");
-				return list(sym("apply"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
+				return applyOf(items);
 			case "concat":
 				if (items.size() == 1) {
 					return NIL_CONST;
@@ -1052,6 +1114,11 @@ final class ClojureLowering {
 
 	private LispVal countOf(List<LispVal> items) {
 		isTrue(items.size() == 2, "count takes one collection");
+		return countForm(lower(items.get(1)));
+	}
+
+	/** The count of an already-lowered collection: tables by entries, else length. */
+	private LispVal countForm(LispVal lowered) {
 		LispSymbol coll = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("hash-table-count"), setInner(coll))));
@@ -1059,11 +1126,16 @@ final class ClojureLowering {
 		// the false object counts as empty, like the oracle; anything else takes length
 		branches.add(list(list(sym("eq"), coll, this.falseVariable), new LispInteger(0)));
 		branches.add(list(TRUE_CONST, list(sym("length"), coll)));
-		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))))), cons(sym("cond"), branches));
+		return list(sym("let"), list(List.of(list(coll, lowered))), cons(sym("cond"), branches));
 	}
 
 	private LispVal emptyOf(List<LispVal> items) {
 		isTrue(items.size() == 2, "empty? takes one collection");
+		return emptyForm(lower(items.get(1)));
+	}
+
+	/** Whether an already-lowered collection is empty, answering raw. */
+	private LispVal emptyForm(LispVal lowered) {
 		LispSymbol coll = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("zerop"), list(sym("hash-table-count"), setInner(coll)))));
@@ -1071,7 +1143,7 @@ final class ClojureLowering {
 		branches.add(list(list(sym("vectorp"), coll), list(sym("zerop"), list(sym("length"), coll))));
 		branches.add(list(list(sym("stringp"), coll), list(sym("zerop"), list(sym("length"), coll))));
 		branches.add(list(TRUE_CONST, list(sym("null"), coll)));
-		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))))), cons(sym("cond"), branches));
+		return list(sym("let"), list(List.of(list(coll, lowered))), cons(sym("cond"), branches));
 	}
 
 	/**
@@ -1162,9 +1234,197 @@ final class ClojureLowering {
 		return list(sym("lambda"), list(List.of(first, second)), list(sym("truncate"), first, second));
 	}
 
+	/**
+	 * A builtin as a function value: a lambda with the Clojure argument order and the
+	 * Clojure coercions, so {@code (map inc ...)} runs what a call would run. Only the
+	 * builtins whose call lowering is more than a direct Common Lisp call need an entry
+	 * here -- a direct call's {@code #'name} in {@link #builtinValue} already answers the
+	 * same function. Null when the name has no value form.
+	 * @param name the Clojure name
+	 * @return the lambda, or null
+	 */
+	private @Nullable LispVal valueOf(String name) {
+		return switch (name) {
+			case "inc", "dec" -> incValue(name);
+			case "str" -> strValue();
+			case "seq" -> seqValue();
+			case "first" -> firstValue();
+			case "rest", "next" -> restValue();
+			case "cons" -> consValue();
+			case "count" -> countValue();
+			case "empty?" -> emptyValue();
+			case "map" -> mapValue();
+			case "filter" -> filterValue();
+			case "reduce" -> reduceValue();
+			case "concat" -> concatValue();
+			case "take" -> takeValue();
+			case "drop" -> dropValue();
+			case "range" -> rangeValue();
+			default -> null;
+		};
+	}
+
+	/** {@code inc}/{@code dec} as a value: a one-argument lambda over the primitive. */
+	private LispVal incValue(String name) {
+		LispSymbol x = new LispSymbol(mangle("inc-x"));
+		return list(sym("lambda"), list(x), list(sym(name.equals("inc") ? "+" : "-"), x, new LispInteger(1)));
+	}
+
+	/**
+	 * {@code str} as a value: over any number of arguments, each converted like a
+	 * {@code str} part ({@code ""} for {@code nil}) and concatenated. The parts map over
+	 * the rest list and spread back through {@code apply}.
+	 */
+	private LispVal strValue() {
+		LispSymbol args = new LispSymbol(mangle("str-args"));
+		LispSymbol one = new LispSymbol(mangle("str-one"));
+		LispVal oneFn = list(sym("lambda"), list(one), printPartBody(one, LispString.literal(""), false));
+		return list(sym("lambda"), list(AMPERSAND_REST, args),
+				list(sym("apply"), list(sym("function"), sym("concatenate")), list(sym("quote"), sym("string")),
+						list(sym("mapcar"), oneFn, args)));
+	}
+
+	/** {@code seq} as a value: the seq view as a one-argument lambda. */
+	private LispVal seqValue() {
+		LispSymbol coll = new LispSymbol(mangle("seq-coll"));
+		return list(sym("lambda"), list(coll), seqForm(coll));
+	}
+
+	/** {@code first} as a value: the head of the seq view. */
+	private LispVal firstValue() {
+		LispSymbol coll = new LispSymbol(mangle("first-coll"));
+		return list(sym("lambda"), list(coll), list(sym("car"), seqForm(coll)));
+	}
+
+	/** {@code rest}/{@code next} as a value: the tail of the seq view. */
+	private LispVal restValue() {
+		LispSymbol coll = new LispSymbol(mangle("rest-coll"));
+		return list(sym("lambda"), list(coll), list(sym("cdr"), seqForm(coll)));
+	}
+
+	/** {@code cons} as a value: the item over the seq view. */
+	private LispVal consValue() {
+		LispSymbol item = new LispSymbol(mangle("cons-item"));
+		LispSymbol coll = new LispSymbol(mangle("cons-coll"));
+		return list(sym("lambda"), list(List.of(item, coll)), list(sym("cons"), item, seqForm(coll)));
+	}
+
+	/** {@code count} as a value: the table-aware count. */
+	private LispVal countValue() {
+		LispSymbol coll = new LispSymbol(mangle("count-coll"));
+		return list(sym("lambda"), list(coll), countForm(coll));
+	}
+
+	/** {@code empty?} as a value: the table-aware emptiness test, answering raw. */
+	private LispVal emptyValue() {
+		LispSymbol coll = new LispSymbol(mangle("empty-coll"));
+		return list(sym("lambda"), list(coll), emptyForm(coll));
+	}
+
+	/** {@code map} as a value: {@code mapcar} over the seq view. */
+	private LispVal mapValue() {
+		LispSymbol fn = new LispSymbol(mangle("map-fn"));
+		LispSymbol coll = new LispSymbol(mangle("map-coll"));
+		return list(sym("lambda"), list(List.of(fn, coll)), list(sym("mapcar"), fn, seqForm(coll)));
+	}
+
+	/** {@code filter} as a value: {@code remove-if-not} over the seq view. */
+	private LispVal filterValue() {
+		LispSymbol pred = new LispSymbol(mangle("filter-pred"));
+		LispSymbol coll = new LispSymbol(mangle("filter-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), list(sym("remove-if-not"), pred, seqForm(coll)));
+	}
+
+	/**
+	 * {@code reduce} as a value: over a function and a collection, or a function, a value
+	 * and a collection -- the two call shapes, dispatched on the rest count. Any other
+	 * count signals, like a call's arity refusal.
+	 */
+	private LispVal reduceValue() {
+		LispSymbol fn = new LispSymbol(mangle("reduce-fn"));
+		LispSymbol args = new LispSymbol(mangle("reduce-args"));
+		LispVal two = list(sym("reduce"), fn, seqForm(list(sym("car"), args)));
+		LispVal three = list(sym("reduce"), fn, seqForm(list(sym("car"), list(sym("cdr"), args))),
+				sym(":initial-value"), list(sym("car"), args));
+		LispVal arity = list(sym("error"),
+				LispString.literal("reduce takes a function, an optional value and a collection"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), two),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), three), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, args)), body);
+	}
+
+	/** {@code concat} as a value: every argument's seq view appended. */
+	private LispVal concatValue() {
+		LispSymbol colls = new LispSymbol(mangle("concat-colls"));
+		return list(sym("lambda"), list(AMPERSAND_REST, colls),
+				list(sym("apply"), list(sym("function"), sym("append")), list(sym("mapcar"), seqValue(), colls)));
+	}
+
+	/** {@code take} as a value: the strict prefix over the seq view. */
+	private LispVal takeValue() {
+		LispSymbol count = new LispSymbol(mangle("take-count"));
+		LispSymbol coll = new LispSymbol(mangle("take-coll"));
+		return list(sym("lambda"), list(List.of(count, coll)), takeForm(count, seqForm(coll)));
+	}
+
+	/** {@code drop} as a value: the seq view past the strict prefix. */
+	private LispVal dropValue() {
+		LispSymbol count = new LispSymbol(mangle("drop-count"));
+		LispSymbol coll = new LispSymbol(mangle("drop-coll"));
+		return list(sym("lambda"), list(List.of(count, coll)), dropForm(count, seqForm(coll)));
+	}
+
+	/**
+	 * {@code range} as a value: the one-, two- and three-argument call shapes over the
+	 * rest list. Any other count signals, like a call's arity refusal.
+	 */
+	private LispVal rangeValue() {
+		LispSymbol args = new LispSymbol(mangle("range-args"));
+		LispVal second = list(sym("car"), list(sym("cdr"), args));
+		LispVal third = list(sym("car"), list(sym("cdr"), list(sym("cdr"), args)));
+		LispVal one = rangeForm(new LispInteger(0), list(sym("car"), args), new LispInteger(1));
+		LispVal two = rangeForm(list(sym("car"), args), second, new LispInteger(1));
+		LispVal three = rangeForm(list(sym("car"), args), second, third);
+		LispVal arity = list(sym("error"),
+				LispString.literal("range takes an end, or a start, an end and an optional step"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), list(sym("cdr"), args)))), three),
+				list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code apply} over any leading arguments: each but the last passes through, the
+	 * last answers its seq view -- CL {@code apply}'s own shape, so
+	 * {@code (apply f x args)} spreads like the oracle's.
+	 */
+	private LispVal applyOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "apply takes a function and an argument list");
+		List<LispVal> out = new ArrayList<>();
+		out.add(sym("apply"));
+		out.add(fnValue(items.get(1)));
+		for (int i = 2; i < items.size() - 1; i++) {
+			out.add(lower(items.get(i)));
+		}
+		out.add(seqForm(lower(items.get(items.size() - 1))));
+		return list(out);
+	}
+
 	/** {@code take}: the first {@code n} of the seq view, strictly. */
 	private LispVal takeOf(List<LispVal> items) {
 		isTrue(items.size() == 3, "take takes a count and a collection");
+		return takeForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+	}
+
+	/**
+	 * The first {@code count} of an already-lowered seq view, strictly: a labels self
+	 * call accumulating in reverse. Both arrive bound (a temporary, a lambda parameter),
+	 * so the walk names them more than once.
+	 */
+	private LispVal takeForm(LispVal count, LispVal seqView) {
 		String name = mangle("take-") + (this.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol left = freshTemp();
@@ -1178,16 +1438,21 @@ final class ClojureLowering {
 		LispVal step = list(sym("if"),
 				list(sym("or"), list(sym("<="), walked, new LispInteger(0)), list(sym("null"), cell)), done, more);
 		LispVal binding = new LispCons(self, new LispCons(list(List.of(walked, cell, grown)), cons(step, List.of())));
-		return list(sym("let"), list(List.of(list(left, lower(items.get(1))), list(seq, seqForm(lower(items.get(2)))))),
+		return list(sym("let"), list(List.of(list(left, count), list(seq, seqView))),
 				list(sym("labels"), list(List.of(binding)), list(self, left, seq, NIL_CONST)));
 	}
 
 	/** {@code drop}: the seq view past the first {@code n}, strictly. */
 	private LispVal dropOf(List<LispVal> items) {
 		isTrue(items.size() == 3, "drop takes a count and a collection");
+		return dropForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+	}
+
+	/** The already-lowered seq view past the first {@code count}. */
+	private LispVal dropForm(LispVal count, LispVal seqView) {
 		LispSymbol left = freshTemp();
 		LispSymbol seq = freshTemp();
-		return list(sym("let"), list(List.of(list(left, lower(items.get(1))), list(seq, seqForm(lower(items.get(2)))))),
+		return list(sym("let"), list(List.of(list(left, count), list(seq, seqView))),
 				list(sym("if"), list(sym("<="), left, new LispInteger(0)), seq, list(sym("nthcdr"), left, seq)));
 	}
 
@@ -1205,6 +1470,11 @@ final class ClojureLowering {
 		LispVal start = n >= 2 ? lower(items.get(1)) : new LispInteger(0);
 		LispVal end = n >= 2 ? lower(items.get(2)) : lower(items.get(1));
 		LispVal step = n == 3 ? lower(items.get(3)) : new LispInteger(1);
+		return rangeForm(start, end, step);
+	}
+
+	/** The strict list from {@code start} below {@code end} stepping by {@code step}. */
+	private LispVal rangeForm(LispVal start, LispVal end, LispVal step) {
 		String name = mangle("range-") + (this.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol from = freshTemp();
@@ -1389,7 +1659,7 @@ final class ClojureLowering {
 		if (items.size() == 1) {
 			return LispString.literal("");
 		}
-		return concat(stringParts(items, LispString.literal("")));
+		return concat(stringParts(items, LispString.literal(""), false, false));
 	}
 
 	private LispVal printCall(List<LispVal> items, boolean newline) {
@@ -1397,7 +1667,23 @@ final class ClojureLowering {
 			return list(sym("princ"), LispString.literal(""));
 		}
 		// one concatenate whose last part is the newline: no separate newline call
-		List<LispVal> parts = stringParts(items, LispString.literal("nil"));
+		List<LispVal> parts = stringParts(items, LispString.literal("nil"), false, true);
+		if (newline) {
+			parts.add(LispString.literal("\n"));
+		}
+		return list(sym("princ"), concat(parts));
+	}
+
+	/**
+	 * {@code pr}/{@code prn}: the readable arms of {@code print}/{@code println} -- same
+	 * space separator, same newline folding, but every part converts through
+	 * {@code prin1-to-string}, so strings print quoted like the oracle's.
+	 */
+	private LispVal prCall(List<LispVal> items, boolean newline) {
+		if (!newline && items.size() == 1) {
+			return list(sym("princ"), LispString.literal(""));
+		}
+		List<LispVal> parts = stringParts(items, LispString.literal("nil"), true, true);
 		if (newline) {
 			parts.add(LispString.literal("\n"));
 		}
@@ -1408,10 +1694,18 @@ final class ClojureLowering {
 		return new LispCons(sym("concatenate"), new LispCons(list(sym("quote"), sym("string")), list(parts)));
 	}
 
-	private List<LispVal> stringParts(List<LispVal> items, LispVal nilReplacement) {
+	/**
+	 * Every argument's string, joined with a single space when asked (what
+	 * {@code print}/{@code println}/{@code pr}/{@code prn} separate with, like the
+	 * oracle) or concatenated bare (what {@code str} has always done).
+	 */
+	private List<LispVal> stringParts(List<LispVal> items, LispVal nilReplacement, boolean readable, boolean spaced) {
 		List<LispVal> parts = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
-			parts.add(printPart(lower(items.get(i)), nilReplacement));
+			if (spaced && i > 1) {
+				parts.add(LispString.literal(" "));
+			}
+			parts.add(printPart(lower(items.get(i)), nilReplacement, readable));
 		}
 		return parts;
 	}
@@ -1419,34 +1713,46 @@ final class ClojureLowering {
 	/**
 	 * One printed part's string: {@code "false"} for the false object, {@code "true"} for
 	 * {@code T}, the replacement for {@code NIL} ({@code ""} in {@code str},
-	 * {@code "nil"} in {@code print}/{@code println}), the colon spelling for a keyword,
-	 * else {@code princ-to-string}. The value runs once, behind a temporary no user
-	 * identifier can spell.
+	 * {@code "nil"} in {@code print}/{@code println}/{@code pr}/{@code prn}), the colon
+	 * spelling for a keyword, else {@code princ-to-string} (or {@code prin1-to-string}
+	 * for the readable arms). The value runs once, behind a temporary no user identifier
+	 * can spell.
 	 * @param value the lowered value
 	 * @param nilReplacement the string {@code NIL} prints as
+	 * @param readable whether the fallback conversion reads back
 	 * @return the form
 	 */
-	private LispVal printPart(LispVal value, LispVal nilReplacement) {
+	private LispVal printPart(LispVal value, LispVal nilReplacement, boolean readable) {
 		LispSymbol temp = freshTemp();
-		return list(sym("LET"), list(list(temp, value)),
-				list(sym("IF"), list(sym("EQ"), temp, this.falseVariable), LispString.literal("false"),
-						list(sym("IF"), list(sym("EQ"), temp, TRUE_CONST), LispString.literal("true"),
-								list(sym("IF"), list(sym("NULL"), temp), nilReplacement, keywordOrString(temp)))));
+		return list(sym("LET"), list(list(temp, value)), printPartBody(temp, nilReplacement, readable));
+	}
+
+	/**
+	 * The string of an already-bound value: the {@code IF} chain inside
+	 * {@link #printPart}, shared with the {@code str} function value (whose argument is
+	 * its lambda's parameter, so there is no temporary to bind).
+	 */
+	private LispVal printPartBody(LispVal value, LispVal nilReplacement, boolean readable) {
+		return list(sym("IF"), list(sym("EQ"), value, this.falseVariable), LispString.literal("false"),
+				list(sym("IF"), list(sym("EQ"), value, TRUE_CONST), LispString.literal("true"),
+						list(sym("IF"), list(sym("NULL"), value), nilReplacement, keywordOrString(value, readable))));
 	}
 
 	/**
 	 * A keyword prints with its leading colon ({@code :a}); anything else prints through
-	 * {@code princ-to-string}. The tag test names the wrapper, and the string test keeps
-	 * a user list that happens to share the tag's head from reaching the colon path with
-	 * a non-string tail.
-	 * @param temp the bound part value
+	 * {@code princ-to-string} (or {@code prin1-to-string} for the readable arms). The tag
+	 * test names the wrapper, and the string test keeps a user list that happens to share
+	 * the tag's head from reaching the colon path with a non-string tail.
+	 * @param value the bound part value
+	 * @param readable whether the fallback conversion reads back
 	 * @return the form
 	 */
-	private LispVal keywordOrString(LispSymbol temp) {
-		LispVal isKeyword = list(sym("AND"), list(sym("CONSP"), temp),
-				list(sym("EQ"), list(sym("CAR"), temp), KEYWORD_TAG), list(sym("STRINGP"), list(sym("CADR"), temp)));
-		LispVal spelled = concat(List.of(LispString.literal(":"), list(sym("CADR"), temp)));
-		return list(sym("IF"), isKeyword, spelled, list(sym("princ-to-string"), temp));
+	private LispVal keywordOrString(LispVal value, boolean readable) {
+		LispVal isKeyword = list(sym("AND"), list(sym("CONSP"), value),
+				list(sym("EQ"), list(sym("CAR"), value), KEYWORD_TAG), list(sym("STRINGP"), list(sym("CADR"), value)));
+		LispVal spelled = concat(List.of(LispString.literal(":"), list(sym("CADR"), value)));
+		String converter = readable ? "prin1-to-string" : "princ-to-string";
+		return list(sym("IF"), isKeyword, spelled, list(sym(converter), value));
 	}
 
 	private LispVal bodyOf(List<LispVal> forms) {
@@ -1541,6 +1847,10 @@ final class ClojureLowering {
 			}
 			if (name.equals("quot")) {
 				return quotValue();
+			}
+			LispVal synth = valueOf(name);
+			if (synth != null) {
+				return synth;
 			}
 			String cl = builtinValue(name);
 			if (cl == null) {

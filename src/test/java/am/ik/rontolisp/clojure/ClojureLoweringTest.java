@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /**
  * The lowering table of {@code .kb/clojure-frontend.md}, row by row, as the Common Lisp
@@ -264,6 +265,49 @@ class ClojureLoweringTest {
 	void quotTruncatesTowardZero() {
 		assertThat(lowered("(quot 7 2)")).isEqualTo(FALSE_BINDING + "(TRUNCATE 7 2)");
 		assertThat(lowered("quot")).contains("(LAMBDA").contains("TRUNCATE");
+	}
+
+	@Test
+	void errorsCarryTheReadersPosition() {
+		LispReadException unknown = catchThrowableOfType(() -> Clojure.read("(nope 1)", "prog.clj"),
+				LispReadException.class);
+		assertThat(unknown.getMessage()).isEqualTo("prog.clj:1:1: unknown name: nope");
+		assertThat(unknown.location()).isNotNull();
+		assertThat(unknown.location().line()).isEqualTo(1);
+		assertThat(unknown.location().column()).isEqualTo(1);
+		LispReadException secondLine = catchThrowableOfType(() -> Clojure.read("(def x 1)\n  (take 1)", "prog.clj"),
+				LispReadException.class);
+		assertThat(secondLine.getMessage()).isEqualTo("prog.clj:2:3: take takes a count and a collection");
+		LispReadException nested = catchThrowableOfType(() -> Clojure.read("(let [x 1] (nope x))", "prog.clj"),
+				LispReadException.class);
+		assertThat(nested.getMessage()).isEqualTo("prog.clj:1:12: unknown name: nope");
+		// without a file the message stays bare but the position is still recorded
+		LispReadException bare = catchThrowableOfType(() -> Clojure.read("(nope 1)", null), LispReadException.class);
+		assertThat(bare.getMessage()).isEqualTo("unknown name: nope");
+		assertThat(bare.location()).isNotNull();
+		assertThat(bare.location().line()).isEqualTo(1);
+		assertThat(bare.location().column()).isEqualTo(1);
+	}
+
+	@Test
+	void printPartsAreSpaceSeparatedAndPrIsReadable() {
+		assertThat(lowered("(println \"x\" \"y\")")).contains("\" \"");
+		assertThat(lowered("(print \"a\" \"b\")")).contains("\" \"");
+		assertThat(lowered("(println \"x\")")).doesNotContain("\" \"");
+		assertThat(lowered("(str \"a\" \"b\")")).doesNotContain("\" \"");
+		assertThat(lowered("(pr \"a\" 1)")).contains("PRIN1-TO-STRING").contains("\" \"");
+		assertThat(lowered("(prn :a)")).contains("PRIN1-TO-STRING").contains("(PRINC");
+	}
+
+	@Test
+	void builtinsNameFunctionValues() {
+		assertThat(lowered("(map inc '(1 2))")).contains("MAPCAR").contains("(LAMBDA").contains("(+");
+		assertThat(lowered("(map dec [1 2])")).contains("MAPCAR").contains("(-");
+		assertThat(lowered("(map str [1 2])")).contains("MAPCAR").contains("CONCATENATE");
+		assertThat(lowered("(map count [[1]])")).contains("MAPCAR").contains("LENGTH");
+		assertThat(lowered("(filter first [[1] []])")).contains("REMOVE-IF-NOT").contains("(CAR");
+		assertThat(lowered("inc")).contains("(LAMBDA").contains("(+");
+		assertThat(lowered("(apply + 1 '(2 3))")).contains("APPLY").contains("#'+");
 	}
 
 }

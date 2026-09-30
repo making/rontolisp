@@ -28,7 +28,8 @@ public final class Clojure {
 	 * @return the top-level forms
 	 */
 	public static List<LispVal> read(String source, @Nullable String file) {
-		return ClojureLowering.lower(new ClojureReader(source, file).readAll());
+		ClojureReader reader = new ClojureReader(source, file);
+		return ClojureLowering.lower(reader.readAll(), reader);
 	}
 
 	/**

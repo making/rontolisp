@@ -5,7 +5,7 @@ hello, clojure on rontolisp!
 9
 #((C%KEYWORD a) (C%KEYWORD b) vec)
 3
-truefalsetruetrue
+true false true true
 :fallback
 x+y=15
 42

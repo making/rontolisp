@@ -36,7 +36,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
 | `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
 | `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false; as values, lambdas answering a Common Lisp boolean | |
-| `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` over the seq view | lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` is the 2-arity only (`(apply f args)`); `(concat)` is nil |
+| `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` over the seq view | lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
 | `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over the seq view, the view itself, `cons` onto the view | a seq IS a strict list view (decided 2026-09-30, b03): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; no laziness, chunking or memoisation -- the only sequence all four backends already share is the cons list, so a lazy struct would add a representation every backend prints, hashes and compares (the b02 argument against a persistent-map library) |
 | `nth` (2/3-arity) | the seq view indexed, past the end the default | the 2-arity answers nil past the end where the oracle throws; as a VALUE a lambda with the Clojure order (`(lambda (c i) ...)`), since a bare `#'NTH` takes the index first |
 | `quot` | `truncate` | as a VALUE a two-argument lambda over `truncate` |
@@ -59,7 +59,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `disj` | a fresh set minus the members | of nil, nil; of a map, refused |
 | `set`/`hash-map`/`array-map` | a set from a collection, a map from key/value pairs | `set` takes lists, vectors, maps (entry vectors) and sets; odd constructor pairs are refused |
 | `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, anything else through `princ-to-string` |
-| `println`/`print` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted; collections print in CL notation; parts are concatenated with NO separator (Clojure separates with spaces); each part maps like `str` except `nil` prints as `nil` |
+| `println`/`print`/`pr`/`prn` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted (`pr`/`prn` convert readably, so strings print quoted); collections print in CL notation; parts are joined with a single space, like Clojure; each part maps like `str` except `nil` prints as `nil` |
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
 | `nil` | `NIL` | falsey |
 | `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
@@ -109,12 +109,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   backquote, `~` into marked lists the lowering refuses.
 - `defn` inside a body works only in statement position; `declare` is absent. `def`
   inside a body mutates the global at run time, unreviewed.
-- Errors carry no source position: the reader's `LispReadException`s are
-  position-less (the plumbing for `file:line:column` exists --
-  `.kb/source-positions.md` -- the spike just never threads the reader's line/column
-  into the lowering's errors).
-- Printing: `pr`/`prn`/`print-method`/`pprint` are absent; `println` concatenates with
-  no separator, and a boolean nested in a collection prints in Common Lisp notation
+- Errors name the innermost form's source position: the reader's `LispReadException`s
+  are prefixed (`file:line:column` when the file is known), and the lowering
+  re-reports its own errors (`unknown name`, arity refusals, ...) against the
+  reader's per-datum offsets, innermost first (`.kb/source-positions.md`).
+- Printing: `print-method`/`pprint` are absent; `pr`/`prn` are the readable arms of
+  `print`/`println`, and a boolean nested in a collection prints in Common Lisp notation
   (`T`/`NIL` for `true`/`nil`) while the false object spells `false`.
 
 ## A session
@@ -155,4 +155,8 @@ four backends) or, for the refusals, in `ClojureLoweringTest`. Seqs over every
 collection lower to strict list views (b03): `first`/`rest`/`next`/`seq`/`cons`/
 `concat`/`map`/`filter`/`reduce`/`apply`/`take`/`drop`/finite `range`, each pinned
 in `clojure-spec.yaml` (run on all four backends) or, for the lazy refusals, in
-`ClojureLoweringTest`.
+`ClojureLoweringTest`. Printing joins `println`/`print` parts with a space and
+`pr`/`prn` convert readably (b06); `inc`/`dec`/`str` and the seq verbs name lambdas
+as values and `apply` spreads leading arguments, each pinned in `clojure-spec.yaml`
+(run on all four backends); lowering errors name the innermost form's position,
+pinned in `ClojureLoweringTest`.

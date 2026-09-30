@@ -6,7 +6,7 @@
 `nth` と end 付き `take`/`drop`/`range`、ベクター・キーワード・マップ・セットの
 リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
-`hash-map`/`array-map`、`println`/`print`/`str` --
+`hash-map`/`array-map`、`println`/`print`/`pr`/`prn`/`str` --
 を読み込み、すべてのバックエンドで実行できます。部分的な準拠が設計であり、サブセットや
 互換性の約束はまだありません。JVM や WebAssembly で Clojure プログラムを試すために
 使い、維持が必要なものは Common Lisp で書いてください。
@@ -51,7 +51,10 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 end 付き `range` は strict なリストを作ります。end のない `range`
 や `lazy-seq`（`cycle`/`repeat`/`repeatedly`/`iterate` とともに）は拒否されます --
 ここに遅延 seq はありません。値位置の `nth`/`quot` は Clojure の引数順の lambda
-です。`count`/`empty?`/`=` はマップとセットに届きます。`get`
+です。`inc`/`dec`/`str` と seq 動詞（`seq`/`first`/`rest`/`cons`/`count`/`map`/
+`filter`/`reduce`/`concat`/`take`/`drop`/`range`）も同様に値位置の lambda なので、
+高階呼び出しはそれらを裸で取れます。`apply` は先行引数を seq 化した末尾引数の上に
+展開します。`count`/`empty?`/`=` はマップとセットに届きます。`get`
 は省略可能なデフォルトを取ります。transient（`assoc!` など）は拒否されます。
 `::` 自動解決は拒否されます。名前空間付きの `:a/b` は不透明なデータとして全体で
 印字・比較されます。
@@ -74,8 +77,10 @@ clojure> (twice 21)
 `false` は `nil` とは別のオブジェクトです（どちらも偽値なので `if`/`when`/`cond`/
 `and`/`or`/`not` は同じく扱いますが、`=` や `nil?` は区別します）。`false?`/
 `true?`/`boolean?` もそれに応じて答えます。`println`/`print` は3つの値を
-`true`/`false`/`nil` と表記し、`str` は `true`/`false`/`""` と表記しますが、各部分は
-相変わらず区切りなしで連結されます。キーワードはコロン付きで印字され（`:a`）、
+`true`/`false`/`nil` と表記し、`str` は `true`/`false`/`""` と表記します。
+`println`/`print` の各部分は1つの空白で区切られ（Clojure と同じ）、`str`
+は区切りなしで連結されます。`pr`/`prn` は読み戻し可能な側面で、文字列は引用符付きで
+印字されます。キーワードはコロン付きで印字され（`:a`）、
 大文字小文字を保持します。コレクションは Common Lisp 記法で印字されます
 （`[:a :b]` に対して `#((C%KEYWORD a) (C%KEYWORD b))`、入れ子の `true`/`nil` は
 `T`/`NIL`）。コレクションに入れ子になったキーワードは `(:C%KEYWORD name)`
@@ -89,4 +94,5 @@ clojure> (twice 21)
 答えます。マップ/セットの seq 順はテーブルの走査順で未規定です。文字列は文字に
 seq され Common Lisp 記法で印字されます）。分割束縛、
 スレッディングマクロ、`atom`、遅延 seq、メタデータ、`var` は
-ありません。エラーにはまだソース位置が付きません。
+ありません。 lowering エラーは最も内側のフォームの位置を名指しします（ファイルが
+既知の場合は `file:line:column`）。

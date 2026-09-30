@@ -2,7 +2,9 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispBigInteger;
@@ -14,6 +16,7 @@ import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -52,9 +55,29 @@ final class ClojureReader {
 
 	private int column = 1;
 
+	/**
+	 * Where each datum starts, by identity: the offset of its first character, so the
+	 * lowering can position its errors at the offending form. The innermost read wins (a
+	 * {@code #_}-discarded prefix keeps the surviving datum's own start).
+	 */
+	private final Map<LispVal, Integer> offsets = new IdentityHashMap<>();
+
 	ClojureReader(String source, @Nullable String file) {
 		this.source = source;
 		this.file = file;
+	}
+
+	/**
+	 * Where the datum starts, or null when it did not come out of this read.
+	 * @param datum the datum
+	 * @return the position
+	 */
+	@Nullable SourceLocation locate(LispVal datum) {
+		Integer offset = this.offsets.get(datum);
+		if (offset == null) {
+			return null;
+		}
+		return SourceLocation.at(this.file, offset, this.source);
 	}
 
 	List<LispVal> readAll() {
@@ -71,8 +94,9 @@ final class ClojureReader {
 		if (this.pos >= this.source.length()) {
 			throw error("unexpected end of input");
 		}
+		int start = this.pos;
 		char c = peek();
-		return switch (c) {
+		LispVal datum = switch (c) {
 			case '(' -> readList(')');
 			case ')' -> throw error("unexpected ')'");
 			case '[' -> readVector();
@@ -115,6 +139,8 @@ final class ClojureReader {
 			case '#' -> readDispatch();
 			default -> readAtom();
 		};
+		this.offsets.putIfAbsent(datum, start);
+		return datum;
 	}
 
 	private LispVal readDispatch() {
