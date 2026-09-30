@@ -17,14 +17,15 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * <b>Why this class exists.</b> Every caller here used to spell the pass pipeline out by
- * hand, and every copy fell behind. The corpus guards ({@code JvmClassShakerCorpusTest},
- * {@code WasmTreeShakerCorpusTest}) were eight passes short when a {@code tokenizer:}
- * case joined the corpus and went red, and ten short when that was fixed -- plus
- * {@link am.ik.rontolisp.eval.VecLibrary} applied in a DIFFERENT POSITION, which no
- * census of pass names could have caught. The {@code asdf:load-system} library E2Es
- * ({@code AsdfLibraryE2eSupport}, {@code JvmLibraryMethodSizeTest}) carried a third and a
- * fourth copy, stopped at six passes: the coverage for compiling a real third-party tree
- * was compiling a program no user could build. A fifth survived all of that unnoticed --
+ * hand, and every copy fell behind. The corpus guards
+ * ({@code JvmDeadMethodEliminationCorpusTest}, {@code WasmTreeShakerCorpusTest}) were
+ * eight passes short when a {@code tokenizer:} case joined the corpus and went red, and
+ * ten short when that was fixed -- plus {@link am.ik.rontolisp.eval.VecLibrary} applied
+ * in a DIFFERENT POSITION, which no census of pass names could have caught. The
+ * {@code asdf:load-system} library E2Es ({@code AsdfLibraryE2eSupport},
+ * {@code JvmLibraryMethodSizeTest}) carried a third and a fourth copy, stopped at six
+ * passes: the coverage for compiling a real third-party tree was compiling a program no
+ * user could build. A fifth survived all of that unnoticed --
  * {@code JvmOsrBackedgeCorpusTest}, found on 2026-09-19 still building its own corpus,
  * eleven splices behind and printing ten {@code TOKENIZER:... is undefined} warnings to
  * the console on every green run, which is verbatim the shape .todo/688 was opened for.

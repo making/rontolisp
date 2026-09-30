@@ -34,6 +34,6 @@ a TEST, not a compile-time throw. Hoisting also frees the enclosing method's byt
 typed loop ([jvm-typed-loops.md](jvm-typed-loops.md)) reaches argument position too.
 
 ## Tests
-- `JvmClassShakerCorpusTest#noEmittedLoopHeadCarriesPendingOperands` -- whole `ci-spec.yaml` at
+- `JvmDeadMethodEliminationCorpusTest#noEmittedLoopHeadCarriesPendingOperands` -- whole `ci-spec.yaml` at
   `OptimizeLevel.NONE` and `DEFAULT`, over the same two compiles the class-shaker guards use.
 - `ExamplesE2eTest` -- same assertion on every `jvm` / `jvm-compile` leg.

@@ -34,9 +34,9 @@ import java.util.stream.Stream;
  * orphaned one -- makes the program's OUTPUT depend on that other party
  * ({@code .kb/test-execution.md}, "A test that runs a program in the project root").
  * {@code CiSpecE2eTest} runs every leg in its {@code @TempDir};
- * {@code JvmClassShakerCorpusTest} runs the program in a subprocess for the same reason,
- * one fresh directory per run. Neither has anything to clean up afterwards, which is why
- * the snapshot-and-delete pair that used to live here is gone.
+ * {@code JvmDeadMethodEliminationCorpusTest} runs the program in a subprocess for the
+ * same reason, one fresh directory per run. Neither has anything to clean up afterwards,
+ * which is why the snapshot-and-delete pair that used to live here is gone.
  */
 public final class CorpusFixtures {
 

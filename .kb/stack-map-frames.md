@@ -85,12 +85,11 @@ class, no written bytes parsed again) took the corpus write phase from 2,785-2,9
 
 ## The readers on the API (2026-09-29)
 
-`ClassFileInfo.parse` reads a `ClassModel`. The byte-level `JvmClassShaker` that also moved onto
-the API that day is gone the same day: the writer shakes the definition before writing
-(`OwnCallGraph`, [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)), as the
-a83 measurement predicted ("one transform doing the shake and the frames ... the move of emission
-onto CodeBuilder makes moot"). Its own cost over the hand compactor it replaced (+3-12 ms on a
-small program, ~+0.1 s on the corpus) went with it.
+`ClassFileInfo.parse` reads a `ClassModel`. The byte-level `JvmClassShaker` that shared the old
+parse-and-rewrite pipeline is gone with it (2026-09-29): the writer shakes the definition before
+writing (`OwnCallGraph`, [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)),
+as the a83 measurement predicted ("one transform doing the shake and the frames ... the move of
+emission onto CodeBuilder makes moot").
 
 - **A fresh pool is laid out in write order**, not the master pool's: a constant below index 256
   can land above it and the other way, so an `ldc` is written `ldc` or `ldc_w` by where its
@@ -107,11 +106,9 @@ A local slot past 255 takes a `wide` prefix and a two-byte index: 4 bytes (6 for
 No code bytes exist before the written class's own: a `MethodCode` record carries the slot
 whole, `MethodCode`'s measure counts the `wide` form (a mis-measurement would shift every later
 instruction and every branch target in `CodeReplay.farBranches`' layout), and the writer picks
-the form (`loadLocal` past 255 is written `aload_w`, `Opcode.ALOAD_W`). Until 2026-09-29 the
-byte emitter `Ctx.emit` rewrote a load or store into `wide` after the fact and missed `iinc`,
-which kept a one-byte slot (the `maphash` and `%obj-slots` cursors); then the code bytes'
-readers (`CodeReplay.length`, `OperandStack.feed`) had to decode the prefix themselves, until the
-records replaced the bytes (a91).
+the form (`loadLocal` past 255 is written `aload_w`, `Opcode.ALOAD_W`). The one-byte-slot bugs
+this replaced (the byte emitters' `wide` rewrite missing `iinc`, the `maphash` and `%obj-slots`
+cursors) are dated history; the record carries the slot whole, so there is nothing to rewrite.
 
 **Trap: truncation is SILENT.** `astore 300` written as `astore 44` is caught by the verifier
 only when the wrapped slot holds a DIFFERENT verification type; when the types agree the program
@@ -131,4 +128,4 @@ grows, so a straight-line body burns a slot per temporary.
   `MethodCodeTest.aLocalPastSlot255TakesTheWideForm`.
 - `JvmLispCompilerTest.compileAndRunABodyPastTheOneByteLocalSlotIndex` (silent wrong answer) and
   `#...UnderAnUnsplittableTail` (the verifier notices); all `JvmLispCompilerTest` output is framed;
-  `JvmClassShakerTest` + `JvmClassShakerCorpusTest` (the corpus at both levels, run and compared).
+  `JvmDeadMethodEliminationTest` + `JvmDeadMethodEliminationCorpusTest` (the corpus at both levels, run and compared).

@@ -29,18 +29,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The guards that need the whole {@code ci-spec.yaml} corpus (the cross-backend feature
  * catalogue) compiled for the JVM, sharing ONE front-end run and ONE compile per
- * optimization level: the class shaker's decoder completeness and behavior preservation,
- * the constant-pool headroom, and the OSR-entry invariant. A corpus compile is the
- * expensive part of each (~13 s), and the OSR guard used to be a class of its own that
- * compiled the identical program at the identical two levels a second time.
+ * optimization level: the write-time shake's coverage of every instruction and
+ * constant-pool entry the code generator emits, its behavior preservation, the
+ * constant-pool headroom, and the OSR-entry invariant. A corpus compile is the expensive
+ * part of each (~13 s), and the OSR guard used to be a class of its own that compiled the
+ * identical program at the identical two levels a second time.
  *
  * <p>
- * <b>The class shaker.</b> The JVM counterpart of {@code WasmTreeShakerCorpusTest}. The
- * shaker has to walk every instruction and constant-pool tag the code generator emits;
- * anything it does not recognize makes {@link JvmClassShaker#shake} throw (the safe
- * failure), and a compaction bug would produce a class the JVM verifier rejects or that
- * misbehaves. So: shaking never throws, strictly shrinks the class, and the optimized
- * class runs with output identical to the unoptimized one.
+ * <b>The dead-method elimination.</b> The JVM counterpart of
+ * {@code WasmTreeShakerCorpusTest}. The write-time shake ({@code OwnCallGraph} over every
+ * body's records, applied by {@code JvmClassSplitter} as it writes) has to see every
+ * instruction and constant-pool entry the code generator emits; a missed root would drop
+ * a live method, and a write bug would produce a class the JVM verifier rejects or that
+ * misbehaves. So: the shake never drops a reachable member, strictly shrinks the class,
+ * and the optimized class runs with output identical to the unoptimized one.
  *
  * <p>
  * <b>The OSR entry.</b> Pins the emitter invariant behind
@@ -90,7 +92,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Execution(ExecutionMode.CONCURRENT)
-class JvmClassShakerCorpusTest {
+class JvmDeadMethodEliminationCorpusTest {
 
 	private final AtomicInteger runs = new AtomicInteger();
 
@@ -163,7 +165,7 @@ class JvmClassShakerCorpusTest {
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool
 		// ceiling. Past it the compile now splits into $PartN classes instead of failing
 		// (.kb/jvm-method-size-limits.md), so the tripwire guards this class's coverage:
-		// a split corpus would take the splitter's shake, not JvmClassShaker's, and the
+		// a split corpus would take the splitter's shake either way, and the
 		// decoder check in this class would stop covering the corpus. Measured 51,945
 		// before the quoted-datum table, 43,694 after (.kb/quoted-data.md).
 		int constantPoolEntries = (((plain[8] & 0xff) << 8) | (plain[9] & 0xff)) - 1;

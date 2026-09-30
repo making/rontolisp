@@ -39,7 +39,7 @@ CONSTANT.
 ## The JVM table
 Until 2026-09-27 each datum was a volatile static field `_qd$N`, three constant-pool
 entries apiece (`Fieldref`, `NameAndType`, name). Those were the one per-SITE pool cost in
-the ci-spec corpus class (`JvmClassShakerCorpusTest`, `--optimize=off`), whose 52,000
+the ci-spec corpus class (`JvmDeadMethodEliminationCorpusTest`, `--optimize=off`), whose 52,000
 tripwire kept forcing ci-spec rows to be cut. Measured 2026-09-27, linux-x64, JDK 25:
 
 | corpus class | fields | table |

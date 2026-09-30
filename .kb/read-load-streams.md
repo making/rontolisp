@@ -1234,7 +1234,7 @@ character is 3).
   literal folds (`:start` -> 0, `:end` -> `file-length`); a COMPUTED position is bound and
   resolved at run time, because the Gray streams dispatcher and `#'file-position` pass the
   designator down as a value -- the literal-only first cut threw `ClassCastException`
-  (String -> Long) inside `_filePosition` in `JvmClassShakerCorpusTest`, whose corpus
+  (String -> Long) inside `_filePosition` in `JvmDeadMethodEliminationCorpusTest`, whose corpus
   splices gray.lisp. `:end` introduces a `file-length` call the source never names, so the
   JVM's `FileMeta.fileLength` gate also keys on `filePositionMayNeedLength`.
 - **`:io :append` only STARTS the cursor at the end** on the interpreter/JVM (one cursor

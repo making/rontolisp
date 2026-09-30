@@ -7099,7 +7099,7 @@ cases:
   # the gaussian draws are pinned through truncate), and the
   # indexing/selection/comparison helpers. All values are exact doubles. Kept
   # lean on purpose: the whole ci-spec corpus compiles into ONE class
-  # (JvmClassShakerCorpusTest) whose constant pool is near the 65535
+  # (JvmDeadMethodEliminationCorpusTest) whose constant pool is near the 65535
   # class-format ceiling (see .kb/library-defun-pruning.md for the library
   # pruning + constant-pool deduplication that keep it under). The wider
   # per-function coverage lives in the LispEvaluatorTest / compiler / SIMD
@@ -13936,7 +13936,7 @@ cases:
       ;; the outer pair ran twice on all four backends (the raw failure handled in a
       ;; cleanup: on the interpreter). SBCL's output. One row per mechanism and no
       ;; define-condition, for the JVM corpus class's constant pool
-      ;; (JvmClassShakerCorpusTest): the backend suites run every row, a report that
+      ;; (JvmDeadMethodEliminationCorpusTest): the backend suites run every row, a report that
       ;; handles an error of its own included, over am.ik.rontolisp.HandlersRunOnceFixture.
       (defvar *ci-hr-log* nil)
       (defun ci-hr-bad (x) (car x))
@@ -17813,7 +17813,7 @@ cases:
       ;; at all. The walk half is pinned ANCHORED, not filtered: a `**/` anchored at
       ;; the run directory is :wild-inferiors over EVERYTHING below the process CWD
       ;; -- fine in the E2E temp dir, a walk of every directory in the project on
-      ;; the in-process corpus runs (JvmClassShakerCorpusTest runs in the project
+      ;; the in-process corpus runs (JvmDeadMethodEliminationCorpusTest runs in the project
       ;; root, where a box carrying agent checkouts under .claude/worktrees/ turned
       ;; one print into thousands of directories and ~10k files). A test that reads
       ;; the filesystem bounds what it reads by CONSTRUCTION; filtering afterwards

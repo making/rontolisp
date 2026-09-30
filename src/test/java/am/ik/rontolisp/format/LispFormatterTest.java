@@ -962,7 +962,8 @@ class LispFormatterTest {
 
 	// The corpus walks the LIVE working directory while the rest of the suite is
 	// running in it, and other tests write scratch files into the project root and
-	// delete them again (JvmClassShakerCorpusTest's CORPUS_SCRATCH_FILES: bin.dat,
+	// delete them again (JvmDeadMethodEliminationCorpusTest's CORPUS_SCRATCH_FILES:
+	// bin.dat,
 	// ci-stream-value.txt, ci-model.gguf, ...). A file that disappears between being
 	// listed and being stat'd makes Files.walk throw UncheckedIOException, which failed
 	// the whole suite on develop 2026-09-06 with

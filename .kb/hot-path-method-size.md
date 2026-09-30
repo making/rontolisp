@@ -27,7 +27,7 @@ divisor, `reduce`, `sort`). Both halves near 4 KB.
 - A `tableswitch`/`lookupswitch` is not used: the byte emitters would have had to measure a
   variable-length instruction whose padding depends on its absolute position. Since `MethodCode`
   stores records and the writer lays the code out, that obstacle is gone
-  ([jvm-method-size-limits.md](jvm-method-size-limits.md), "The records"); a switch is untried.
+  ([jvm-method-size-limits.md](jvm-method-size-limits.md), "Emission on `java.lang.classfile`"); a switch is untried.
 - `_funName` (funcId -> name, behind `#<function NAME>`) uses the same partition, tree and
   router (`buildFunNameMethods`); it was one linear chain, 23,386 B on clack/ningle (2,138 rows).
   Measured 2026-09-29 on `examples/net/httpbin-ningle.lisp`: `_funName` 23,386 -> 113 B (router)

@@ -468,11 +468,11 @@ final class CompileFrontend {
 	 * that is correct.
 	 * <p>
 	 * <b>This method exists to have exactly one copy of that order.</b> The corpus guards
-	 * ({@code JvmClassShakerCorpusTest}, {@code WasmTreeShakerCorpusTest}) compile the
-	 * whole {@code ci-spec.yaml} catalogue and claim to decode "exactly the class the
-	 * real CLI emits", so they have to run this pipeline rather than restate it -- and
-	 * they did restate it, and drifted: on 2026-09-03 a {@code tokenizer:} case joined
-	 * the corpus and went red because their copies had never gained
+	 * ({@code JvmDeadMethodEliminationCorpusTest}, {@code WasmTreeShakerCorpusTest})
+	 * compile the whole {@code ci-spec.yaml} catalogue and claim to decode "exactly the
+	 * class the real CLI emits", so they have to run this pipeline rather than restate it
+	 * -- and they did restate it, and drifted: on 2026-09-03 a {@code tokenizer:} case
+	 * joined the corpus and went red because their copies had never gained
 	 * {@link am.ik.rontolisp.eval.TokenizersLibrary}, which was one of EIGHT passes they
 	 * were missing. Membership is not the whole hazard either: a copy that applies every
 	 * pass in a different ORDER is wrong in a way no census can see (theirs ran

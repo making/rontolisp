@@ -95,290 +95,64 @@ since 2026-09-27 (`.kb/quoted-data.md`, "The JVM table"): by arithmetic, not re-
   to 16 bits named a filler entry) went with the last index sink (a91): no index is encoded.
 
 ## Emission on `java.lang.classfile`
-**Where it stands (2026-09-29):** every class is WRITTEN by the API (above). Every method body
-has a typed, `CodeBuilder`-shaped layer, `am.ik.jvm.MethodCode` (`Ctx.body` for a compile
-context; a builder makes its own). On it: the hash-table slice, every builder that had an
-assembler of its own -- `JvmAsm` and the private `Asm` copies (eval, async, thread, fetch,
-HTTP handler, sized main) are gone, and the blocks `Ctx.emitBlock` spliced write on
-`ctx.body` (`emitBlock` and `OperandStack.appendOpaque` are gone); the largest expression
-compilers (a89: the 19 with 63+ `ctx.emit` sites, `JvmEmitHelper` among them, plus the
-predicates sharing its exclusion helpers); the I/O and socket runtimes with `_flushStreams`,
-the first raw lists (a86); every other expression compiler (a90), so `Ctx.emit`/`emitU2`,
-`Ctx.code` and `JvmEmitHelper.patchBranch` are gone; the core runtime builders --
-`JvmRuntimeBuilder` (printers, dispatch tables, arity reporters) and the numeric, complex and
-operand-type runtimes (a87); and the small builders with `JvmLispCompiler`'s own code (a88), so
-`JvmRuntimeBuilder`'s shared raw-list helpers (`emitU2`/`emitLdc`/`emitIntConstStatic`/
-`patchBranch`), `codeBytes` and the `ClassDefinition.Builder.addMethod` overload taking a
-declared max_stack/max_locals are gone. Since a91 `MethodCode` stores instruction records, so no
-code bytes exist before the written class's own: the decoders and `am.ik.jvm.Opcode` are gone
-("The records" below), and every emitter holds `java.lang.classfile` entries ("The pool wrappers
-go").
+Every class is WRITTEN by the API ("How a class is written" above), and no method body exists as
+bytes before the written class's own. What replaces the byte emitters is three stages:
 
-**The layer** (`MethodCode`): typed instructions over master-pool entries
-(`ConstantPool.entries()`, plus `utf8Entry`/`classEntry`/`methodRef`/`interfaceMethodRef`/
-`fieldRef`/`stringEntry` for an emitter building from names or Utf8 entries), `size()`, labels (a branch to an unbound
-label waits for `labelBinding`; `checkComplete` refuses a branch left waiting), `exceptionCatch`
-over bound labels, `append` (a body built apart with every label bound: the dispatch tables' case
-bodies, `<clinit>`'s pieces; its records copied, the labels its branches name and its handlers
-rebased; never onto a body feeding an operand-stack model), and
-`ClassDefinition.Builder.addMethod(access, name, desc, body)` to add it -- the layer names no class
-definition (a `MethodCode.addTo` made the pair a class cycle, `PackageCycleTest`). Over a compile
-context it feeds `Ctx.stack` every typed instruction and reconciles the model where a forward
-branch's label is bound. `size()` is the WRITTEN size: a local's load or store, an `iinc` and an int
-in their shortest forms, an `ldc` by its master index (the writer re-decides the width by the
-class's index), and a branch the layer knows to be far -- its offset is known at its label's
-binding, or at once for a bound label -- in its long form (+2 for a `goto`, +5 for a conditional
-branch). A far branch the layer did not see (one pushed out of reach by another's widening) is
-the writer's to find: the measure is the truth but for that cascade and the `ldc` widths.
+**Recorded -- `MethodCode`.** Every body is `am.ik.jvm.MethodCode` (`Ctx.body` on a compile
+context; a builder makes its own): typed instruction records in three parallel arrays -- the
+opcode (a local's load or store in its explicit-slot form, `LDC` for any one-slot constant), one
+int (a slot, a constant, a `newarray` code, an `iinc`'s slot and increment), and the master-pool
+entry or the label a branch names. A position -- a label's, a handler range's, a line entry's
+(`MethodCode.position()`, `ClassDefinition.Line`) -- is an instruction's index, so nothing is ever
+recomputed from offsets. Labels bind (`newLabel`/`labelBinding`; a branch to an unbound label
+waits, `checkComplete` refuses one left waiting), `exceptionCatch` takes bound labels, and
+`append` splices a body built apart with every label bound (the dispatch tables' case bodies,
+`<clinit>`'s pieces; records copied, labels and handlers rebased; never onto a body feeding an
+operand-stack model). `ClassDefinition.Builder.addMethod(access, name, desc, body)` adds it; the
+layer names no class definition (a `MethodCode.addTo` made the pair a class cycle,
+`PackageCycleTest`). Over a compile context it feeds `Ctx.stack` every typed instruction and
+reconciles the operand-stack model where a forward branch's label is bound. The emitters hold
+`java.lang.classfile` entries directly (`ConstantPool.entries()`, plus `utf8Entry`/`classEntry`/
+`methodRef`/`interfaceMethodRef`/`fieldRef`/`stringEntry` for one built from names); the former
+wrapper types and `add*` facades are gone (2026-09-29), as are `JvmAsm`, the private `Asm` copies,
+`Ctx.emit`/`emitU2`/`code` and `JvmEmitHelper.patchBranch` -- every emitter, builder and spliced
+block writes records.
 
-**The records** (a91, 2026-09-29): one record per instruction -- its opcode (a local's load or
-store in its explicit-slot form, `LDC` for any one-slot constant), an int (a slot, a constant, a
-`newarray` code, an `iinc`'s slot and increment in one int), and a master entry or the label a
-branch names -- in three parallel arrays. A position (a label's, a handler range's, a line
-entry's -- `MethodCode.position()`, `ClassDefinition.Line`) is an instruction's index. Everything
-that decoded bytes reads records: `CodeReplay` plays them, `CodeReplay.farBranches` lays them out
-by their written sizes, the scan collects their entries, `OperandStack` applies each typed
-instruction. Gone: the decoder (`CodeReplay.length`/`index`), `OperandStack`'s byte state machine
-and its `wide` handling, `MethodCode.longBranches` with `ClassDefinition.Branch` and
-`ClassDefinition.Handler` (`MethodCode.Handler` is over positions), `am.ik.jvm.Opcode` (a branch
-chosen at run time is a `java.lang.classfile.Opcode`, `JvmEmitHelper.branch` with it).
-Byte-identical under a temporary patch measuring as the bytes did (a local in its explicit-slot
-form, a far branch short; `legacy.py` in
-`.todo/artefacts/a91-methodcode-stores-instructions-and-the-code-bytes-go/`): the 4,857 programs
-(4,269 compiled on both sides, identical; the rest failed alike), every CLI compile above, the gate
-programs. Then the written measure alone, against the same jar:
+**Measured -- `size()` is the written size.** A local's load or store, an `iinc` and an int
+constant in their shortest forms, an `ldc` by its master index, and a branch in its long form once
+the layer knows it far (+2 `goto`, +5 conditional; its offset is known at its label's binding, or
+at once for a bound one). The measure can fall short of the written length only where the writer
+knows better: a branch pushed out of reach by ANOTHER's widening (+2/+5) or an `ldc` whose
+constant landed past 255 in the class's own pool (+1). Every size budget reads this measure --
+`chunkCodeBudget` 24,000 (Pass 2b), `JvmBodyOutliner.CODE_BUDGET`, `AstOutliner`'s
+bytes-per-node, `DISPATCH_SEGMENT_BUDGET`, `debug-method-sizes` -- because `CodeBuilder` cannot:
+it exists only inside the `ClassFile.build` callback of the class the method lands in, which the
+split decides after every body is emitted, and the API re-runs a handler to relax a branch, which
+emission's side effects would not survive. So a body is BUFFERED and the budgets measure the
+buffer. Measured 2026-09-29, the buffer against the written `CodeAttribute` length per kept
+method, forms as emitted: mito probe 8,940 methods -- 8,844 equal, 96 shorter, none longer; corpus
+6,214 -- 6,213 equal, 1 shorter. With the writer's shortest forms: mito 8,777 shorter (up to 862 B,
+6,166,021 -> 5,910,137 in all), corpus 5,892 shorter (up to 2,384); the methods over 8,000 bytes
+are the same COUNT either way (20 mito, 62 corpus).
 
-| program | `_invoke_v` segments | `_top$` chunks | methods | class bytes |
-|---|---|---|---|---|
-| ci-spec corpus | 47 -> 45 | 56 -> 54 | 6,232 -> 6,221 | 7,522,623 -> 7,530,635 |
-| mito probe | 75 -> 72 | same | 8,480 + 489 -> 8,469 + 487 | 9,045,792 + 2,758,018 -> 9,042,408 + 2,757,894 |
+**Written -- `CodeReplay`.** It plays every body's records into the class's `CodeBuilder`:
+branch targets and handler ranges become labels, a master entry is re-minted in the class's pool
+as its instruction is written (an `ldc` takes the width its index there needs, both ways), a
+local's load/store, an `iinc` and an int constant take their shortest form, and the frames,
+`max_stack` and `max_locals` come from `StackMapsOption.GENERATE_STACK_MAPS` over
+`StackMapFrames.resolver` ([stack-map-frames.md](stack-map-frames.md)). Far branches are
+`CodeReplay.farBranches`, a fixpoint over the records' written sizes: the branch record names a
+label, so no offset is ever encoded, and only the branches that do not reach are widened
+(`JvmClassSplitter` runs under `FAIL_ON_SHORT_JUMPS`, so a branch the fixpoint missed is a loud
+compile error). That replaced the API's own `FIX_SHORT_JUMPS` relaxation, which is not minimal --
+premise overturned by measurement: once ONE short jump overflows it re-emits the method with
+EVERY forward branch long, and the jose suite's `JSON::DECODE-JSON-ARRAY` (7,038 branches, one
+past reach) came out 82,541 B -- past the limit -- where the fixpoint wrote 59,751; on the
+records' written sizes, 57,909 B, one `goto_w` (`JoseTestSuiteE2eTest` pins it).
 
-Every dispatch family loses a segment or two, `_lookup` (21 -> 20 corpus, 47 -> 45 in mito's
-`$Part1`) and the outlined continuations (`_k$`, corpus 5 -> 4) too; a defun whose emitted size
-was past `HUGE_METHOD_LIMIT` but whose written size is not is no longer cut by `AstOutliner`
-(mito: one lambda fewer); methods over 8,000 bytes 61 -> 58 corpus, 19 -> 18 mito. The corpus
-class is 8,012 B larger, all of it frames (1,908,453 -> 1,916,574 B; code +460 B): fewer, longer
-methods carry more locals in each frame, since a temporary's slot is never reused ("Local slots").
-
-**The pool wrappers go** (a91): `ConstantPool` is the master `ConstantPoolBuilder` and the entry
-facades (`utf8Entry` refusing a string past the Utf8 cap, `classEntry`, `methodRef`/
-`interfaceMethodRef`/`fieldRef` over names or Utf8 entries, `stringEntry`, `entryAt` for the
-`%dyn-restore` form's key); the wrapper types (`Utf8Constant` .. `DoubleConstant`), the `add*`
-facades, the index readers the scan used (`typeAt`, `firstComponentAt`, `secondComponentAt`,
-`utf8At`, `descriptorOf`) and `ConstantType` are gone, and `ClassDefinition` names its header,
-fields and methods by entries. Every emitter holds entries: 133 files by `pool2.py` (the add
-facades to the entry facades in the same minting order, the types renamed), `unentry2.py` over
-javac's errors and `refold.py` (`.todo/artefacts/a91-methodcode-stores-instructions-and-the-code-bytes-go/`);
-by hand, three interface references typed and a helper the renaming made a duplicate dropped.
-Byte-identical to the records alone by the same comparisons (the 4,857 programs, every CLI
-compile above, the gate programs).
-
-**Measured 2026-09-29** (cold CLI `-o P.class`, default `--optimize`; the jars made alike by
-a87's `mkjar.sh`; the machine's load varied, so the whole-compile ranges overlap):
-
-| program | write phase | whole compile | output |
-|---|---|---|---|
-| ci-spec corpus | 1,646-1,737 ms -> 1,448-1,531 ms | 15.3-15.6 s -> 14.7-15.4 s | 7,522,623 -> 7,530,635 B |
-| mito probe (split) | 1,718-2,165 ms -> 1,551-1,692 ms | 33.3-35.4 s -> 32.6-35.4 s | 9,045,792 + 2,758,018 -> 9,042,408 + 2,757,894 B |
-
-Against a84's (the table below): the write phase 1,632-1,639 -> 1,448-1,531 ms (corpus) and
-1,666-1,829 -> 1,551-1,692 ms (mito), the whole compile within its noise, the outputs smaller by
-the shortest forms (a91's own cut of them: "The records").
-
-**The first slice** (`JvmHashRuntimeBuilder` from `JvmAsm`, most of it by a regex pass, and
-`JvmHashTableCompiler` from `ctx.emit`/`patchBranch`) came out BYTE-IDENTICAL: the ci-spec
-corpus class, the mito probe and its `$Part1`, the jose test suite program and six examples,
-compiled with the jar before and after, differ only in the jar build timestamp
-`uiop/os:lisp-version-string` embeds. So size and compile time are unchanged by the move itself;
-a slice is verified by that comparison plus the suite (tools:
-`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`). It found one bug
-class: the byte emitters wrote `iinc` with a one-byte slot (`Ctx.emit`'s `wide` rewrite sees
-loads and stores only), so past slot 255 `maphash`'s counter and `%obj-slots`'s cursor named
-another local -- a `VerifyError` when that slot held a reference, an endless loop when it held
-an int. `MethodCode.iinc` widens; both sites moved onto it.
-
-**The assembler slice** (2026-09-29): every builder on `JvmAsm` or a private `Asm`, and the
-three spliced blocks, came out byte-identical too -- 4,857 programs extracted from the JVM-side
-tests (text blocks and one-line sources) compiled in process with both jars, plus the CLI
-compiles of the corpus (`default`, `off`, `--dynamic`), the mito probe with its `$Part1`, the
-jose suite and 28 example compiles (`java:` interop, jvm-export with and without `--simd`,
-`--gpu`, served, clack/ningle, asdf systems); every difference is the build's
-commit id in a version string (`lisp-implementation-version`, `uiop/os:lisp-version-string`,
-the `rontolisp:fetch` user agent).
-
-**The large expression compilers** (a89, 2026-09-29): ~2,500 `ctx.emit`/`emitU2` sites in 25
-files, byte-identical by the same comparison (the 4,857 programs; corpus at three levels, mito
-with `$Part1`, jose, 28 examples) -- the build timestamp in the version string aside. Two
-emitted forms changed without changing a class: `emitIntConst(-1)` is `iconst_m1` (was
-`bipush -1`) and a helper body's `aload_0` is `aload 0`; the writer writes both shortest.
-
-**The first raw-list slice** (2026-09-29): `JvmIoRuntimeBuilder`, `JvmSocketRuntimeBuilder` and
-`JvmFlushStreamsBuilder`, byte-identical by the same comparisons (the 4,857 programs and every
-CLI compile above; the difference is the build timestamp in the version strings) plus programs
-switching on every gate of the two runtimes at once. The raw lists wrote the one-byte local
-forms (`aload_1`) the layer writes as `aload 1`, so these bodies measure a little LARGER than
-they did; no budget reads a runtime helper, and the written class is the same. The premise
-"a position read can be a source, a target or a handler bound" measured on the three files:
-203 reads, 192 branch sources patched to the current position, 4 backward-branch targets, 6
-handler bounds, one shared join (`_flushStreams`'s `next`), plus 6 positions held in an
-`int p = -1` sentinel and 7 lists of positions each patched by one loop.
-
-**The rest of the expression compilers** (a90, 2026-09-29): ~1,600 sites in 121 files, plus the
-position designs they shared -- a block's exit (`BlockTarget.exit`), a tagbody's tags
-(`TagbodyScope.labels`), the unwind holes (`UnwindScope.holes`, label pairs, one sweep in
-`UnwindScope.catchAny` for `unwind-protect` and `handler-case`), the uncaught handler's and
-the async crossing's whole-body entries (`Ctx.bodyStart`). Byte-identical by the same
-comparisons (the 4,857 programs, every CLI compile above). Emitted forms changed without
-changing a class: `main`'s `aload_0` is `aload 0` and
-the `_cu1` selector's `bipush 0..5` is `iconst_<n>`.
-
-**The core runtime slice** (a87, 2026-09-29): `JvmRuntimeBuilder`, `JvmNumericRuntimeBuilder`,
-`JvmComplexRuntimeBuilder` and `JvmOperandTypeRuntime` (11,900 lines); `DispatchMethod`,
-`NumericMethod` and `ComplexMethod` carry the body, a numeric helper's try range is its own
-`exceptionCatch`. The builders keep the pool wrappers as parameters (`.entry()` at each typed
-call, as a85 left the rest of these files), so no entry is minted in another order.
-Byte-identical over the 4,857 programs and every CLI compile above plus a86's gate programs,
-with two deliberate differences held back by a temporary patch and then measured alone:
-
-- A dispatch case is a size a budget READS (`partitionCases` sums the case bodies against
-  `DISPATCH_SEGMENT_BUDGET`). A spread case's `aload 1` was the one-byte raw `aload_1` and is
-  two bytes on the layer, so a large program's `_invoke_v` is cut into a few more segments --
-  mito probe 72 -> 75, corpus 45 -> 47, jose 35 -> 37 (the mito class +293 B of 9,045,499) --
-  and no other method changes. a91's written-size `size()` puts the cut back.
-- `_cmul` carried a `goto` the raw list never patched (offset 0), dead after its exact arm's
-  `areturn` and written as `nop nop athrow`; `checkComplete` refused it, and it is gone.
-
-The jars compared were made in seconds, not by a package run: the packaged jar with the
-worktree's classes, compiled by plain javac, put over it -- both sides alike, so not even the
-version strings differ.
-
-**The small builders and the compiler's own code** (a88, 2026-09-29): the dyn-var, quote-pool,
-UNSUPPLIED, `%mv-spill`, SecureRandom and mutex runtimes, the `java:`/`objc:`/`ffi:`/`--simd`/
-`--gpu`/`geom` bridges' init and guard bodies, and `JvmLispCompiler`'s `<clinit>`, instance
-`<init>` and TLS trust stubs -- byte-identical by the same comparisons (the 4,857 programs, every
-CLI compile above) plus programs reaching `%random-byte`, `tls-connect :insecure` and a
-`<clinit>` with every piece at once; this time not even a version string differed. `<clinit>`
-is one `MethodCode`; its pieces minted before the class assembly (the layout and bignum
-initializers, the reader's struct directory, the `_d$` ThreadLocals) are fragments built apart
-and `append`ed, because the MINT order decides every pool index and so the bytes. The `_hasComplex`
-probe's handler is labels. The bridge builders' `ops` maps and the `ffi:` bridge's refs stay
-pool wrappers, as a87's builders keep theirs (they join `Ctx` beside the BLAS, numeric and math
-maps, and `JvmRuntimeBuilder.BridgePrint` takes the `ffi:` ones): `.entry()` at each typed call.
-With the last byte writers gone, so are `JvmRuntimeBuilder`'s shared `emitU2`/`emitLdc`/
-`emitIntConstStatic`/`patchBranch`, `codeBytes`, and the sized `addMethod`.
-`emitStreamDefault`'s "LDC_W, not the narrow LDC" pin is gone too: the writer re-decides `ldc` by
-the index, so the form emitted never reached the class.
-
-**How a slice moves** (the recipe every slice used; tools in
-`.todo/artefacts/a85-jvm-runtime-builders-on-jvmasm-move-onto-methodcode/`, for a raw list
-`.todo/artefacts/a86-jvm-io-and-socket-runtime-code-lists-move-onto-methodcode/` and
-`.todo/artefacts/a87-jvm-core-runtime-code-lists-move-onto-methodcode/`, each with a
-`README.md`):
-
-- Calls map one to one: `label()`/`bind` -> `newLabel()`/`labelBinding`, `branch(Opcode.X, l)`
-  -> `x(l)`, `op(Opcode.X)` -> `x()`, `op(X); u2(e.index())` -> the typed call on `e`, `iconst`
-  -> `loadConstant`, every `ldc` flavour -> `ldc(entry)`, `newarray(atype)` ->
-  `newarray(TypeKind)`, an opcode chosen at run time -> `arrayStore(TypeKind)`/
-  `return_(TypeKind)`. `mig.py` does ~95% of a file; `fix.py` reads javac's errors and adds
-  `.entry()` (`.methodRefEntry()`/`.interfaceMethodRefEntry()` where a `MethodrefConstant`
-  must be a `Methodref`/`InterfaceMethodref`) at the boundary to code still on the wrappers.
-- Pool wrappers become `java.lang.classfile` entries (`ConstantPool.classEntry`/`methodRef`/
-  `interfaceMethodRef`/`fieldRef`/`stringEntry`, each over names or `Utf8Entry`s), minted in
-  the same order, so every `ldc` index -- and so every measured size -- is what it was.
-- A handler range is labels: `newBoundLabel()` where a position was read, then
-  `exceptionCatch` once the handler's label is bound. A method record carries the body
-  (`record XMethod(name, desc, MethodCode code)`) and `code.addTo(definition, access, name,
-  desc)` adds it; the declared max_stack/max_locals go. A piece of another body (a dispatch
-  case, a `<clinit>` fragment) is a `MethodCode` of its own, `append`ed where it goes.
-- A trap the pass does not see: an operand byte written with `op(n)` after an opcode
-  (`op(Opcode.LSTORE); op(1)`) is NOT an instruction; a pass that reads `op(1)` as
-  `aconst_null` compiles and emits the wrong code. javac catches the opcode half
-  (`lstore()` has no zero-argument form) -- fix the pair by hand.
-- A raw list: `raw.py` rewrites the instructions (a pool operand loses its `.index()`), a
-  position read right before a branch to a label bound where `patchBranch(code, p,
-  code.size())` stood, a list of positions patched by one loop to one label, and a backward
-  branch to a label bound at its target (`newBoundLabel()`). Left to a hand: a handler bound
-  (`newBoundLabel()`, then `exceptionCatch`), a sentinel `int p = -1` (a `@Nullable` label),
-  an opcode passed as a value (pass the slot: `emitStderrBranch`'s `aload`). `pool.py` moves
-  the wrappers to entries, `records.py` drops the declared sizes, `unentry.py` the `.entry()`
-  code already on the layer called on a field that became an entry. A file spelling the
-  helpers qualified (`JvmRuntimeBuilder.emitU2`) went through a88's `prep.py` first
-  (`.todo/artefacts/a88-jvm-small-runtime-builders-and-the-compilers-own-code-move-onto-methodcode/`,
-  with its gate programs); a builder whose exported refs feed code still on the wrappers skips
-  `pool.py`.
-- A raw list through helpers of its own (the numeric and complex runtimes): `rawx.py` rewrites
-  them into raw.py's idiom first (`int p = branch(c, op)`, `patch(c, p)`, `aload(c, s)`,
-  `invoke(c, op, ref)`, a join `int t = c.size()` and its patches) and runs it. An operation
-  the caller picks is a method reference (`Consumer<MethodCode>`: `MethodCode::dadd`; a branch,
-  `BiConsumer<MethodCode, Label>`: `MethodCode::ifle`), a load it picks the slot, and a helper
-  that answered positions (two guards' `int[]`, a list it filled) takes the label to jump to.
-  `labels.py` names the labels no `labelBinding` in their method binds (a returned or passed
-  one is fine). Check every `bipush` operand: raw.py turns `add(BIPUSH); add(x & 0xFF)` into
-  `loadConstant(x & 0xFF)`, a negative constant made positive.
-- A size a budget reads may change its measure on the layer (a one-byte raw `aload_1`): keep a
-  temporary patch that reproduces the old measure (a87's `phase1.py`) until the bytes compare,
-  then measure the change alone.
-- An expression compiler (tools in `.todo/artefacts/a89-jvm-large-expression-compilers-move-onto-ctx-body/`):
-  `ctxmig.py` maps `ctx.emit(Opcode.X)` + operands one to one (a `bipush`/`sipush` becomes
-  `loadConstant` only where that is the same bytes) and turns a position into a label where it
-  is used only as `int v = ctx.code.size()` + placeholder branch + `patchBranch(ctx, v,
-  ctx.code.size())`, a list of such positions patched in one loop, a file's own
-  `branch(ctx, op)` helper, or a backward `goto` `(v - w) & 0xFFFF`; `listlabel.py` turns
-  named `List<Integer>` position lists (and parameters) into labels. The rest is by hand: a
-  helper answering positions takes the label to jump to instead (`emitNoHolderJump`,
-  `emitOctetTestOnStack`, `emitInstanceExclusion`), several branches patched at one place
-  share one label, an opcode chosen at run time goes through `JvmEmitHelper.branch(ctx, int,
-  label)` or an `if` over the typed calls. Handler ranges are labels. `intidx.py` turns a pool
-  operand held as an `int` index into its constant so `ctxmig.py` maps its uses.
-- Verify by bytes, not only by tests: `Cmp.java` compiles a directory of programs with both
-  jars in process (`extract.py` pulls them out of the tests, `runchunks.sh` runs chunks in
-  parallel, ~4 min for the 4,857), `cmpcli.sh` the CLI programs; `MethodDiff.java` names what
-  differs. Both jars from ONE compiler: classes `jc.sh` compiled put over a maven-built jar
-  differ from maven's in every travelling runtime and template class a program copies, so put
-  the baseline's own `jc.sh` classes (sources from `git archive`) over the same jar.
-
-**The shortest forms, measured 2026-09-29** (the writer's canonical loads, stores and ints,
-against the forms emitted): ci-spec corpus class 7,687,513 -> 7,498,301 B (code 4,545,371 ->
-4,357,115, -4.1%), mito probe 9,192,449 + 2,826,457 -> 9,008,889 + 2,755,146 B; the corpus
-program's output unchanged.
-
-**The two designs that depended on byte positions, and why they survive:**
-
-1. **Size budgets** (`chunkCodeBudget` 24,000 in Pass 2b, `JvmBodyOutliner.CODE_BUDGET`,
-   `AstOutliner`'s measured bytes-per-node, `debug-method-sizes`). `CodeBuilder` exposes no bci,
-   and cannot be what a body is emitted into: it exists only inside the `ClassFile.build`
-   callback of the class the method lands in, which the split decides after every body is
-   emitted, and the API re-runs a method's handler to relax a branch, which emission's side
-   effects (lambdas registered, bodies outlined, entries minted) would not survive. So a body is
-   BUFFERED and the budgets measure the buffer. Measured 2026-09-29, emitted byte count against
-   the written `CodeAttribute` length, per kept method, with the forms as emitted: mito probe
-   8,940 methods -- 8,844 equal, 96 shorter by 1-188 bytes (an `ldc_w` whose constant landed
-   below index 256 in its class), none longer; ci-spec corpus 6,214 -- 6,213 equal, 1 shorter
-   by 2. With the writer's shortest forms: mito 163 equal, 8,777 shorter (up to 862 bytes,
-   6,166,021 -> 5,910,137 in all), none longer; corpus 322 equal, 5,892 shorter (up to 2,384).
-   The methods over 8,000 bytes are the same COUNT either way (20 mito, 62 corpus). Since a91 the
-   buffer is records and its measure the written size ("The records"): it can fall short of the
-   written length only by a branch pushed out of reach by another's widening (+2 / +5) or an
-   `ldc` whose constant landed past 255 (+1).
-2. **The lossless over-limit pool.** The master pool is a `ConstantPoolBuilder`, which grows
-   past 65535 without complaint (checked only when written), so the split keeps its design:
-   placement over master-entry closures, and re-pointing as a call is written into a class whose
-   builder re-mints the entry. Nothing had to be kept symbolic beyond what the definition
-   already was.
-
-**`FIX_SHORT_JUMPS` is not a minimal relaxation -- premise overturned by measurement.** Once ONE
-short jump of a method overflows, the API throws the method away and re-emits it with EVERY
-forward branch in its long form (+5 per conditional, +2 per `goto`). The jose test suite's
-`JSON::DECODE-JSON-ARRAY` (7,038 branches, one of them past the reach) came out at 82,541
-bytes -- past the limit -- where `BranchRelaxer`'s fixpoint wrote 59,751. The replay widens only
-the branches that do not reach (`CodeReplay.farBranches`, the same fixpoint over the records'
-written sizes, allowing one byte per two-byte `ldc` for the widths the writer picks): 57,909 bytes,
-one `goto_w`. The writer runs under `FAIL_ON_SHORT_JUMPS`, so a branch the fixpoint missed is a
-loud compile error rather than a method grown by a third.
-
-**Measured 2026-09-29** (JDK 25.0.4, cold CLI runs, `-o X.class`, default `--optimize`), the byte
-writer (`toBytes`, then the shaker's parse+write, then the frame pass's parse+write; or the
-split's writer then frames per class) against one `ClassFile.build` per class:
+**Why, in numbers** (2026-09-29, JDK 25.0.4, cold CLI `-o X.class`, default `--optimize`; the
+byte writer -- `toBytes`, then the shaker's parse+write, then the frame pass's parse+write, or the
+split's writer then frames per class -- against one `ClassFile.build` per class):
 
 | program | write phase | whole compile | output |
 |---|---|---|---|
@@ -387,11 +161,28 @@ split's writer then frames per class) against one `ClassFile.build` per class:
 | jose test suite | -- | -- | 5,146,274 -> 5,125,198 B |
 
 The write phase is timed from the class complete as data to the bytes (gate check, shake,
-placement, write); the old one parsed the class three times. The outputs are before the
-shortest forms above. `am.ik.jvm` lost `BranchRelaxer`, `ByteCodeWriter` and its section DSL
-(`MethodsDef`, `AttributesDef`, `CountingDef`), `JvmClassShaker`, `ClassDefinition.toBytes`, the
-splitter's byte writer and the pool's own storage: main source 4,993 -> 4,280 lines, 433 of them
-`CodeReplay`, the decoder a91 retires; `MethodCode` then added 931 (5,265).
+placement, write); the old one parsed the class three times. The outputs above predate the
+shortest forms, which took the corpus class to 7,498,301 B (code 4,545,371 -> 4,357,115, -4.1%)
+and the mito probe to 9,008,889 + 2,755,146 B, the program's output unchanged; the corpus compile
+then reached 14.7-15.4 s with a write phase of 1,448-1,531 ms once the records carried the
+written measure (2026-09-29). Each stage landed byte-identical over 4,857 programs extracted from
+the JVM-side tests plus the CLI compiles of the corpus (three levels, `--dynamic`), the mito probe
+with `$Part1`, the jose suite and 28 example compiles -- the build timestamp in the version
+strings the only difference, and two deliberate form changes without one (`iconst_m1` for
+`bipush -1`, `aload 0` for `aload_0`) measured alone. The move retired `BranchRelaxer`,
+`ByteCodeWriter` and its section DSL, `JvmClassShaker`, `ClassDefinition.toBytes`, the splitter's
+byte writer and the pool's own storage: `am.ik.jvm` main source 4,993 -> 4,280 lines, 433 of them
+the byte decoder, and `MethodCode` added 931 over it (5,265). Per-slice history and the
+conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
+
+**The two designs that depended on byte positions, and why they survive:**
+
+1. **Size budgets** -- the measure above; a record buffer, not a byte stream, is what they read.
+2. **The lossless over-limit pool.** The master pool is a `ConstantPoolBuilder`, which grows past
+   65535 without complaint (checked only when written), so the split keeps its design: placement
+   over master-entry closures, and re-pointing as a call is written into a class whose builder
+   re-mints the entry. Nothing had to be kept symbolic beyond what the definition already was.
+
 
 ## Bodies bounded by construction
 - Registry-proportional expansions (computed `typep` 37 KB/site, runtime `subtypep` 59 KB,

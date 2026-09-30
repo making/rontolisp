@@ -11,7 +11,7 @@
   `SchemeSpecE2eTest`, `UnclosedOutputFileE2eTest`, `eval.LinalgGpuDeclineTest` (its
   flag-on runs take a lock when a device answered the probe: `DeviceResidency` is not
   thread-safe), `WasmLispCompilerTest`, `cli/RontoLispCliTest`, `WasmTreeShakerCorpusTest`,
-  `JvmClassShakerCorpusTest` ("Concurrent methods" below) and the in-process JVM-backend
+  `JvmDeadMethodEliminationCorpusTest` ("Concurrent methods" below) and the in-process JVM-backend
   classes of "Running a compiled class in process, concurrently". The price of admission
   is that no two legs share a file, a table or a process-global: a compiled `main` run in
   process goes through `ThreadStdio`; the `ql:quickload` cache every `ClPostgresE2eTest`
@@ -167,7 +167,7 @@ The working directory is a shared constant too, and the worst one: a Java proces
 change its own, so a test that runs a program IN PROCESS runs it in the project root, where
 both surefire forks, every other build on the box and every orphaned one already live.
 
-**Measured 2026-09-19** on `JvmClassShakerCorpusTest`, which compiled the ci-spec corpus twice
+**Measured 2026-09-19** on `JvmDeadMethodEliminationCorpusTest`, which compiled the ci-spec corpus twice
 and compared the two runs' stdout:
 
 - **One in-process corpus run writes 37 top-level entries into the project root** (`dls-a.txt`,
@@ -192,7 +192,7 @@ and compared the two runs' stdout:
 
 **The rule: a test that RUNS a program gives it a working directory that run owns.** In
 process that is impossible, so the program goes in a SUBPROCESS with `ProcessBuilder#directory`
--- which is what `JvmClassShakerCorpusTest` now does, one fresh `@TempDir` child per run
+-- which is what `JvmDeadMethodEliminationCorpusTest` now does, one fresh `@TempDir` child per run
 (`CiSpecE2eTest` always did). Both runs then start from the same staged state instead of the
 second inheriting the first's scratch files, the verifier check is a real JVM launch rather
 than a `URLClassLoader`, and there is nothing to clean up: the class asserts the project root
@@ -207,7 +207,7 @@ Measured alone on this box (64 cores, shared with other builds), before -> after
 | Class | Before | After | What changed |
 |---|---|---|---|
 | `WasmTreeShakerCorpusTest` | 91-100 s | 30 s | a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..3) and every `wasm-tools` check is its own child process |
-| `JvmClassShakerCorpusTest` + `JvmOsrBackedgeCorpusTest` | 69-73 s + 37-39 s | 40 s | merged: the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory) |
+| `JvmDeadMethodEliminationCorpusTest` + `JvmOsrBackedgeCorpusTest` | 69-73 s + 37-39 s | 40 s | merged: the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory) |
 | `DocExamplesTest` | 75 s | 34 s | `scheme/eval.md` looped 100,000 times inside Scheme `eval` on the interpreter, 20 s per language (`scheme-spec.yaml` pins the 100,000 on all four backends); plus `PackageRegistry` below |
 | `cli/RontoLispCliTest` | 15-17 s | 6 s + 5 s | concurrent; the 30 methods that capture `System.err`/`System.out` moved to `cli/RontoLispCliStreamsTest`, which stays sequential |
 | `WasmLispCompilerTest` | 26-29 s | 9 s | concurrent (in-memory compiles only) |

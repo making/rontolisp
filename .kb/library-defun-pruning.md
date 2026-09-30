@@ -13,7 +13,7 @@
 `CliOptions`, `--no-prune` in `noValueKeys`) and `RontoPlayground.compileJvm`/`compileWasm`.
 NOT the interpreter nor the per-library compiler tests. Every TEST that wants the pruned
 program reaches it through `CompileFrontend.expand` like everything else -- the corpus
-guards (`JvmClassShakerCorpusTest` / `WasmTreeShakerCorpusTest`) and the real-library
+guards (`JvmDeadMethodEliminationCorpusTest` / `WasmTreeShakerCorpusTest`) and the real-library
 `asdf:load-system` E2Es (`AsdfLibraryE2eSupport`'s subclasses) alike, through
 `CompileFrontendAccess` or, for a JVM target, `JvmSourceCompiler`. Both families used to
 run their own copy of the chain: the guards drifted ten passes behind, and the E2Es ran

@@ -27,9 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * fields are gone, the class still loads (the JVM verifier is the well-formedness check)
  * and behaves identically, and dynamically-reached methods and the reflective
  * {@code _apply} root survive. The whole cross-backend feature corpus is exercised by
- * {@code JvmClassShakerCorpusTest}.
+ * {@code JvmDeadMethodEliminationCorpusTest}.
  */
-class JvmClassShakerTest {
+class JvmDeadMethodEliminationTest {
 
 	@TempDir
 	Path tempDir;

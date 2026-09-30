@@ -576,7 +576,7 @@ dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
 `testsupport/JavaInteropPrograms`; the reify/proxy programs, callback signals included, through
 `testsupport/JavaImplementationPrograms`),
 `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`,
-`JvmClassShakerTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,
+`JvmDeadMethodEliminationTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,
 `ShippedBridgeNativeImageE2eTest`. `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the
 same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,life-gui}.lisp`;
 `doc/{en,ja}/guides/java-interop.md` + six `reference/functions/java-*.md` (a GUI form hangs

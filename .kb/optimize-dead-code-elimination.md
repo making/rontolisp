@@ -100,7 +100,7 @@ narrows -- the interpreter, `ShadowedBuiltins`, `--dynamic` and `NONE` pass a nu
   whose every head-position reference sits inside such bodies, may be dead; everything else is live
   with UNKNOWN parameters. An `apply` with a literal target is a CALL SITE (leading arguments
   only), not an escape.
-- Pinned by `JvmClassShakerTest.anUnselectableGenericBranchAndItsMethodShakeOut`, its
+- Pinned by `JvmDeadMethodEliminationTest.anUnselectableGenericBranchAndItsMethodShakeOut`, its
   `WasmTreeShakerTest` twin, and a program in `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`.
   Unfinished: async programs are declined wholesale; an EQL specializer is never ruled out; a
   struct-name specializer is undecided in the lattice.
@@ -945,7 +945,7 @@ arming rows for slot names, the printer prologue's `"-"`/`"/"` and the JVM layou
 - Pins: `widenedProbesApplyOnlyWithASymbolBuilderPresent`,
   `theCompilersOwnInternShapesDoNotWidenTheProbes`, `aFramedSpellingWithoutABuilderDoesNotHoldARow`,
   `aCompilerInternedTableNameDoesNotArmTheDispatchGate`,
-  `aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate` and their `JvmClassShakerTest` twins.
+  `aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate` and their `JvmDeadMethodEliminationTest` twins.
   Debug: `-Drontolisp.debug.dispatchgate=true` prints `name-armed <defun> by <spelling>` and names
   the operator that turned the gate off.
 
@@ -1099,8 +1099,8 @@ what makes a compiled LIBRARY survive `--optimize`. The wasm side has no equival
 wasm export IS a module export the shaker already treats as a root; an export root keeps a method,
 not a registry row. Mechanics and pins: [jvm-export.md](jvm-export.md).
 
-Tests: `JvmClassShakerTest` (structural + behavior, incl. the `_apply` root) and
-`JvmClassShakerCorpusTest` (the whole `ci-spec.yaml` corpus at `off` and default, asserting shrink +
+Tests: `JvmDeadMethodEliminationTest` (structural + behavior, incl. the `_apply` root) and
+`JvmDeadMethodEliminationCorpusTest` (the whole `ci-spec.yaml` corpus at `off` and default, asserting shrink +
 identical run output -- the completeness guard for `CodeReplay`'s record player, like
 `WasmTreeShakerCorpusTest`); `JvmClassSplitterTest#aShakenDefinitionWritesOnlyWhatItsRootsReach`.
 Limitations: README "Optimize".

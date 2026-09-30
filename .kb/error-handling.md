@@ -1622,7 +1622,7 @@ datum-less cast failure on the JVM and a trap on wasm.
   `pi_approx`, `dom_reactor` byte-identical. A program using thirteen sequence operators without a
   handler: wasm 26,857 -> 28,723, JVM 51,246 -> 53,043. The shaker corpus class's constant pool
   stood at 51,893 of its 52,000 tripwire after this item's ci-spec rows
-  (`JvmClassShakerCorpusTest`), which is why the ci-spec case holds one row per mechanism.
+  (`JvmDeadMethodEliminationCorpusTest`), which is why the ci-spec case holds one row per mechanism.
 - **The array-shape accessors** (2026-09-27, `.todo/a57`; they reported unnamed interpreted, a
   datum-less cast failure on the JVM -- `array-element-type`, `adjustable-array-p` and
   `array-has-fill-pointer-p` answered `T`/`NIL` there -- and trapped on wasm): the rows are
@@ -1702,7 +1702,7 @@ datum-less cast failure on the JVM and a trap on wasm.
   -> 188,109; `hello_world`, `pi_approx`, `dom_reactor` byte-identical on wasm, and `hello_world`,
   `pi_approx` on the JVM. A `vector-push-extend`/`vector-pop` loop (200k x20, JDK 25, 8 interleaved
   runs on 4 pinned cores): 391-467 ms before, 355-425 after -- noise; its class +524 B (`_ckArr`
-  and the wrappers). Corpus class constant pool 43,845 of 52,000 (`JvmClassShakerCorpusTest`).
+  and the wrappers). Corpus class constant pool 43,845 of 52,000 (`JvmDeadMethodEliminationCorpusTest`).
 - Pinned by `WrongTypeArgumentFixture` through `sequenceAndAccessorOperatorsNameTheirWrongTypeArgument`
   (`LispEvaluatorTest`, `WasmLispCompilerIntegrationTest`) and
   `compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument` (`JvmLispCompilerTest`), and
