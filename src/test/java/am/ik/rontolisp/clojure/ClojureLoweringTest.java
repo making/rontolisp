@@ -59,7 +59,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map + '(1 2))")).isEqualTo(FALSE_BINDING + "(MAPCAR #'+ '(1 2))");
 		assertThat(lowered("(filter odd? '(1 2 3))")).contains("REMOVE-IF-NOT");
 		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE");
-		assertThat(lowered("(= 1 1)")).isEqualTo(FALSE_BINDING + "(IF (EQUAL 1 1) T RONTOLISP::%CLOJURE-FALSE)");
+		assertThat(lowered("(= 1 1)")).contains("LABELS").contains("(EQUAL");
+		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":FALLBACK");
 	}
 
@@ -72,9 +73,11 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void mapsAndUnknownNamesAreRefusedByName() {
-		assertThatThrownBy(() -> Clojure.read("{:a 1}", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("map literal");
+	void mapsAndSetsBuildTables() {
+		assertThat(lowered("{:a 1}")).contains("PLIST-HASH-TABLE").contains(":A");
+		assertThat(lowered("{}")).contains("PLIST-HASH-TABLE");
+		assertThat(lowered("#{1 2}")).contains(":C%SET").contains("GETHASH");
+		assertThat(lowered("#{ }")).contains(":C%SET");
 		assertThatThrownBy(() -> Clojure.read("(nope 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name");
 	}
@@ -121,6 +124,57 @@ class ClojureLoweringTest {
 		assertThat(lowered("(println true)")).contains("(PRINC (CONCATENATE 'STRING")
 			.contains("\"true\"")
 			.contains("PRINC-TO-STRING");
+	}
+
+	@Test
+	void mapVerbsLowerToTableOperations() {
+		String prelude = "(def m {:a 1}) (def v [1]) (def s #{1}) (def c '(1)) ";
+		assertThat(lowered(prelude + "(assoc m :a 1)")).contains("PLIST-HASH-TABLE").contains("APPEND");
+		assertThat(lowered(prelude + "(dissoc m :a)")).contains("REMHASH");
+		assertThat(lowered(prelude + "(get m :a)")).contains("GETHASH");
+		assertThat(lowered(prelude + "(get m :a 9)")).contains("GETHASH");
+		assertThat(lowered(prelude + "(contains? m :a)")).contains("GETHASH").contains("COND");
+		assertThat(lowered(prelude + "(keys m)")).contains("MAPHASH");
+		assertThat(lowered(prelude + "(vals m)")).contains("MAPHASH");
+		assertThat(lowered(prelude + "(merge m m)")).contains("APPEND").contains("PLIST-HASH-TABLE");
+		assertThat(lowered("(merge)")).isEqualTo(FALSE_BINDING + "NIL");
+		assertThat(lowered(prelude + "(conj v 1)")).contains("COND").contains("COERCE");
+		assertThat(lowered(prelude + "(disj s 1)")).contains("REMHASH").contains(":C%SET");
+		assertThat(lowered(prelude + "(set c)")).contains("DOLIST").contains(":C%SET");
+		assertThat(lowered(prelude + "(hash-map :a 1)")).contains("PLIST-HASH-TABLE");
+		assertThat(lowered(prelude + "(array-map :a 1)")).contains("PLIST-HASH-TABLE");
+		assertThat(lowered(prelude + "(count m)")).contains("HASH-TABLE-COUNT").contains("LENGTH");
+		assertThat(lowered(prelude + "(empty? m)")).contains("HASH-TABLE-COUNT").contains("NULL");
+	}
+
+	@Test
+	void mapVerbsRefuseBadShapesByName() {
+		assertThatThrownBy(() -> Clojure.read("(assoc m :a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("assoc takes a map and key/value pairs");
+		assertThatThrownBy(() -> Clojure.read("(get m)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("get takes a map");
+		assertThatThrownBy(() -> Clojure.read("(hash-map :a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("hash-map takes key/value pairs");
+		assertThatThrownBy(() -> Clojure.read("(conj)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("conj takes a collection and items");
+		assertThatThrownBy(() -> Clojure.read("(count a b)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("count takes one collection");
+	}
+
+	@Test
+	void transientsAreRefusedByName() {
+		assertThatThrownBy(() -> Clojure.read("(assoc! m :a 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transients are not supported yet: assoc!");
+		assertThatThrownBy(() -> Clojure.read("(transient {})", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transients are not supported yet: transient");
+		assertThatThrownBy(() -> Clojure.read("(conj! t 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transients are not supported yet: conj!");
+	}
+
+	@Test
+	void quotedMapsAndSetsBuildTables() {
+		assertThat(lowered("'{:a 1}")).contains("PLIST-HASH-TABLE").contains(":A");
+		assertThat(lowered("'#{1 2}")).contains(":C%SET").contains("GETHASH");
 	}
 
 	@Test

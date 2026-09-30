@@ -255,3 +255,203 @@ cases:
       (println (fact-r 10))
     expected: |
       3628800
+  - name: map-literals-print-as-hash-tables
+    # A map is an equal hash table, so it prints in hash-table notation, like
+    # vectors print in CL notation (see .kb/clojure-frontend.md).
+    source: |
+      (println {:a 1})
+      (println {})
+      (println {:a {:b [1 2]}})
+    expected: |
+      #<HASH-TABLE :TEST EQUAL :COUNT 1>
+      #<HASH-TABLE :TEST EQUAL :COUNT 0>
+      #<HASH-TABLE :TEST EQUAL :COUNT 1>
+  - name: set-literals-print-wrapped
+    # The wrapper prints as written; keywords print without their colon, like :A.
+    source: |
+      (println #{1 2})
+      (println #{})
+    expected: |
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 2>)
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 0>)
+  - name: assoc-builds-a-fresh-map
+    source: |
+      (def mm-base {:a 1})
+      (println (get (assoc mm-base :b 2) :b))
+      (println (get mm-base :b))
+      (println (get (assoc mm-base :a 9 :c 3) :c))
+      (println (get (assoc nil :a 1) :a))
+      (println (get {:a false} :a :d))
+      (println (contains? {:a false} :a))
+    expected: |
+      2
+      nil
+      3
+      1
+      false
+      true
+  - name: dissoc-removes-keys
+    source: |
+      (println (get (dissoc {:a 1 :b 2} :a) :a))
+      (println (count (dissoc {:a 1 :b 2} :a :b)))
+      (println (dissoc nil :a))
+      (println (get (dissoc {:a 1} :zz) :a))
+    expected: |
+      nil
+      0
+      nil
+      1
+  - name: get-with-and-without-a-default
+    source: |
+      (println (get {:a 1} :a))
+      (println (get {:a 1} :b))
+      (println (get {:a 1} :b :dflt))
+      (println (get {:a false} :b))
+      (println (get [10 20 30] 1))
+      (println (get [10 20 30] 5 :d))
+      (println (get "abc" 1))
+      (println (get '(1 2) 0 :d))
+      (println (get nil :a :d))
+      (println (get #{1 2} 2))
+      (println (get #{1 2} 9 :d))
+    expected: |
+      1
+      nil
+      DFLT
+      nil
+      20
+      D
+      b
+      D
+      D
+      2
+      D
+  - name: contains-checks-maps-sets-and-indexes
+    source: |
+      (println (list (contains? {:a 1} :a) (contains? {:a 1} :b) (contains? nil :a)))
+      (println (list (contains? #{1 2} 2) (contains? #{1 2} 9)))
+      (println (list (contains? [:a :b] 1) (contains? [:a :b] 5) (contains? "abc" 0)))
+      (println (contains? #{false} false))
+    expected: |
+      (T false false)
+      (T false)
+      (T false T)
+      true
+  - name: keys-and-vals
+    source: |
+      (println (keys {:a 1}))
+      (println (vals {:a 1}))
+      (println (keys nil))
+      (println (count (keys {:a 1 :b 2})))
+      (println (count (vals {:a 1 :b 2})))
+    expected: |
+      (A)
+      (1)
+      nil
+      2
+      2
+  - name: merge-combines-maps
+    source: |
+      (println (count (merge {:a 1} {:b 2})))
+      (println (get (merge {:a 1} {:a 2 :b 3}) :a))
+      (println (merge))
+      (println (get (merge nil {:a 1}) :a))
+      (println (get (merge {:a 1}) :a))
+    expected: |
+      2
+      2
+      nil
+      1
+      1
+  - name: conj-adds-to-every-collection
+    source: |
+      (println (conj [1 2] 3))
+      (println (conj '(1 2) 3))
+      (println (conj nil 1))
+      (println (get (conj {:a 1} [:b 2]) :b))
+      (println (get (conj {:a 1} {:b 2} [:c 3]) :c))
+      (println (count (conj #{1 2} 3)))
+      (println (contains? (conj #{1} 2) 2))
+      (println (contains? (conj #{1} false) false))
+    expected: |
+      #(1 2 3)
+      (3 1 2)
+      (1)
+      2
+      3
+      3
+      true
+      true
+  - name: disj-removes-set-members
+    source: |
+      (println (count (disj #{1 2 3} 2)))
+      (println (contains? (disj #{1 2 3} 2) 2))
+      (println (count (disj #{1 2} 9)))
+      (println (disj nil 1))
+    expected: |
+      2
+      false
+      2
+      nil
+  - name: set-hash-map-and-array-map-construct
+    source: |
+      (println (count (set [1 2 2 3])))
+      (println (contains? (set [1 2 2 3]) 2))
+      (println (count (set nil)))
+      (println (get (hash-map :a 1 :b 2) :b))
+      (println (count (array-map)))
+      (println (count (hash-map)))
+    expected: |
+      3
+      true
+      0
+      2
+      0
+      0
+  - name: count-and-empty-reach-maps-and-sets
+    source: |
+      (println (count {:a 1 :b 2}))
+      (println (count #{1 2 3}))
+      (println (count {}))
+      (println (count #{}))
+      (println (count false))
+      (println (list (empty? {}) (empty? #{}) (empty? {:a 1}) (empty? []) (empty? [1]) (empty? false)))
+    expected: |
+      2
+      3
+      0
+      0
+      0
+      (T T false T false false)
+  - name: equality-reaches-maps-and-sets
+    source: |
+      (println (= {:a 1} {:a 1}))
+      (println (= {:a 1} {:a 2}))
+      (println (= {:a {:b 2}} {:a {:b 2}}))
+      (println (= #{1 2} #{2 1}))
+      (println (= {:a 1} #{:a}))
+      (println (= {:a false} {:a false}))
+      (println (= {:a false} {:a nil}))
+      (println (= 1 1 1))
+      (println (= {:a 1} {:a 1} {:a 1}))
+      (println (not= {:a 1} {:a 2}))
+    expected: |
+      true
+      false
+      true
+      true
+      false
+      true
+      false
+      true
+      true
+      true
+  - name: quoted-maps-and-sets-build-tables
+    source: |
+      (println (get '{:a 1} :a))
+      (println (count '#{1 2}))
+      (println (count '{:a {:b 2}}))
+    expected: |
+      1
+      2
+      1

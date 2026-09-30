@@ -2,7 +2,9 @@
 
 **Experimental.** rontolisp reads a small subset of Clojure -- `def`/`defn`, `fn` and
 `#(...)`, `let`/`loop`/`recur`, `if`/`when`/`cond`/`do`/`and`/`or`, `map`/`filter`/
-`reduce`/`apply`/`concat`, vector and keyword literals, `println`/`print`/`str` -- just
+`reduce`/`apply`/`concat`, vector, keyword, map and set literals, `assoc`/`dissoc`/
+`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/`hash-map`/`array-map`,
+`println`/`print`/`str` -- just
 large enough to run a Clojure-shaped program on every backend. Conformance is partial
 by design and nothing here is a subset or compatibility promise. Use it to try a
 Clojure program on the JVM or WebAssembly; write Common Lisp for anything you need to
@@ -34,9 +36,14 @@ rontolisp prog.txt --source-language clojure       # any extension
 Every identifier mangles behind `c%`, so no Clojure name can collide with a core form
 or built-in. `defn` is a `defun` (direct call), `def` a top-level `setq`, `fn` and
 `#(...)` a `lambda` (the `#(...)` arguments travel as one rest list), `let` a `let*`,
-`loop`/`recur` a `labels` self call, a vector literal a `vector` call, the seq
+`loop`/`recur` a `labels` self call, a vector literal a `vector` call, a map literal
+an `equal` hash table (never mutated in place -- every verb builds a fresh one, so
+persistence holds observably), a set literal the same table with each member stored
+under itself, the seq
 functions list operations (`map`/`filter`/`reduce`/`apply`/`concat` to
-`mapcar`/`remove-if-not`/`reduce`/`apply`/`append`).
+`mapcar`/`remove-if-not`/`reduce`/`apply`/`append`). `count`/`empty?`/`=` reach maps
+and sets; `get` takes an optional default; transients (`assoc!` and friends) are
+refused.
 
 ## REPL
 
@@ -59,6 +66,9 @@ clojure> (twice 21)
 `nil` and `str` spells them `true`/`false`/`""`, but parts are still concatenated with
 no separator; collections print in Common Lisp notation (`#(A B)` for `[:a :b]`, with
 `T`/`NIL` for a nested `true`/`nil`). Keywords print upcased (`:A` for `:a`) and
-collide case-insensitively; map and set literals are refused; the seq family runs over
+collide case-insensitively; maps print as `#<HASH-TABLE :TEST EQUAL :COUNT n>` and
+sets as `(C%SET #<HASH-TABLE ...>)`; vector and table keys compare by identity, so a
+vector key misses a lookup its oracle answers; a repeated set-literal element is
+refused by spelling; the seq family runs over
 lists only. Destructuring, threading macros,
 `atom`, lazy seqs, metadata and `var` are absent. Errors carry no source position yet.

@@ -1,7 +1,9 @@
 package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -20,11 +22,12 @@ import org.jspecify.annotations.Nullable;
  * datum is an ordinary {@link LispVal} the lowering walks: an identifier a
  * {@link LispSymbol} holding its spelling verbatim, a keyword a symbol whose name starts
  * with {@code :}, the empty list {@link LispNil}, a vector the marked list
- * {@code (%vector ...)} and a map the marked list {@code (%hash-map ...)}: markers the
- * lowering consumes and no identifier can spell (user identifiers are mangled behind
- * {@code ClojureLowering.PREFIX}). {@code nil} / {@code true} / {@code false} stay
- * symbols; the lowering decides what they mean. A {@code #(...)} anonymous function reads
- * as {@code (fn %anon ...)}: {@link #FN_ANON} stands for the parameter vector.
+ * {@code (%vector ...)}, a map the marked list {@code (%hash-map ...)} and a set the
+ * marked list {@code (%hash-set ...)}: markers the lowering consumes and no identifier
+ * can spell (user identifiers are mangled behind {@code ClojureLowering.PREFIX}).
+ * {@code nil} / {@code true} / {@code false} stay symbols; the lowering decides what they
+ * mean. A {@code #(...)} anonymous function reads as {@code (fn %anon ...)}:
+ * {@link #FN_ANON} stands for the parameter vector.
  */
 final class ClojureReader {
 
@@ -34,6 +37,8 @@ final class ClojureReader {
 	static final LispSymbol VECTOR = new LispSymbol("%vector");
 
 	private static final LispSymbol HASH_MAP = new LispSymbol("%hash-map");
+
+	private static final LispSymbol HASH_SET = new LispSymbol("%hash-set");
 
 	private static final String DELIMS = " \t\n\r\f,()[]{}\";'@^`~#";
 
@@ -132,9 +137,9 @@ final class ClojureReader {
 		if (peek() == '(') {
 			return readAnonFn();
 		}
-		if (peek() == '{') { // set: read as a marked list; the lowering refuses it
+		if (peek() == '{') { // set: its own marked list, so the lowering names it
 			next();
-			return marked(HASH_MAP, readSeq('}'));
+			return readSet();
 		}
 		throw error("unsupported reader form #");
 	}
@@ -156,6 +161,24 @@ final class ClojureReader {
 			throw error("a map literal needs an even number of forms");
 		}
 		return marked(HASH_MAP, items);
+	}
+
+	/**
+	 * One set literal: the items as read, refusing a repeated element by its spelling.
+	 * The spelling check is what makes the common duplicate ({@code #{1 1}}) fail like
+	 * the oracle's {@code Duplicate key}; two differently-spelled elements that happen to
+	 * be equal at run time still dedupe silently.
+	 */
+	private LispVal readSet() {
+		List<LispVal> items = readSeq('}');
+		Set<String> seen = new HashSet<>();
+		for (LispVal item : items) {
+			String spelling = item.print();
+			if (!seen.add(spelling)) {
+				throw error("Duplicate key: " + spelling);
+			}
+		}
+		return marked(HASH_SET, items);
 	}
 
 	private List<LispVal> readSeq(char close) {

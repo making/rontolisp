@@ -33,12 +33,25 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `loop`/`recur` | `labels` self call | the interpreter's tail calls make it constant-stack |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
 | `not` | an explicit null-or-false check answering `T`-or-false | |
-| `=`/`not=`/`<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
-| `nil?`/`empty?` | `null`, answering `T`-or-false | `(nil? false)` is false |
+| `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
+| `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
 | `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false; as values, lambdas answering a Common Lisp boolean | |
 | `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` | `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` is the 2-arity only (`(apply f args)`) |
 | a vector literal | a `vector` call | |
-| `first`/`rest`/`count` | `car`/`cdr`/`length` | the seq family runs over LISTS only, except these three which take any sequence |
+| `first`/`rest` | `car`/`cdr` | the seq family runs over LISTS only, except these two which take any sequence |
+| `count` | a table-aware length | maps and sets answer `hash-table-count`, everything else `length` |
+| `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/vector/string are empty |
+| `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; anything else is `equal` |
+| `{k v ..}` | `rontolisp:plist-hash-table` over the lowered pairs | an `equal` table, never mutated in place: every verb builds a fresh one |
+| `#{..}` | an `equal` table holding each member under itself, wrapped as `(:C%SET table)` | the wrapper tells verbs a set from a map; a repeated literal element is refused by spelling (`Duplicate key`) |
+| `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused |
+| `get` | `gethash` with the default, or a bounds-checked `elt`/`char` | takes maps, sets (answering the member), vectors, strings and nil; a list answers the default |
+| `contains?` | a sentinel-`gethash` presence test, or a bounds check | takes maps, sets, vectors and strings; anything else answers false |
+| `keys`/`vals` | a `maphash` accumulation into a list | the order is the table's walk order, unspecified; of nil, nil |
+| `merge` | one fresh table over every argument's pairs | later maps win; `(merge)` is nil; of all nil, nil |
+| `conj` | a member onto a set, entries onto a map, at the end of a vector, at the front of a list | a set conjoined onto a map contributes its members one level deep; anything else conjoined onto a map is refused |
+| `disj` | a fresh set minus the members | of nil, nil; of a map, refused |
+| `set`/`hash-map`/`array-map` | a set from a collection, a map from key/value pairs | `set` takes lists, vectors, maps (entry vectors) and sets; odd constructor pairs are refused |
 | `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, anything else through `princ-to-string` |
 | `println`/`print` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted; collections print in CL notation; parts are concatenated with NO separator (Clojure separates with spaces); each part maps like `str` except `nil` prints as `nil` |
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
@@ -46,16 +59,36 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
 | a keyword `:foo` | the symbol `:FOO` verbatim (upcased) | data, never called; collides case-insensitively and prints upcased (see "Deviations") |
 | `ns` | nothing | a namespace declaration defines nothing |
-| `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | |
+| `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements |
+| `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
+| transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
 
 ## Deviations (each a real work item)
 
 - Keywords are the symbols `:foo` verbatim and the printer upcases them (`:A` prints
   for `:a`), so `:a` and `:A` collide and printed keywords are the wrong case.
-- Map and set literals are refused by name (`a map literal is not supported yet`); a
-  map needs the hash-table runtime (`.kb/hash-tables.md`).
+- Maps and sets print in the runtime's notation, like vectors print in CL notation: a
+  map prints `#<HASH-TABLE :TEST EQUAL :COUNT n>`, a set `(C%SET #<HASH-TABLE ...>)`
+  (keywords print without their colon, so the wrapper reads `C%SET`). The runtime is
+  the shared hash-table runtime (`.kb/hash-tables.md`), decided 2026-09-30 (b02): an
+  `equal` table per map/set, copy-on-write for every verb, so the persistent semantics
+  holds observably on all four backends with no new runtime and no per-backend code. A
+  persistent-map library spliced like `scheme.lisp` was the alternative; it would have
+  added a representation every backend prints, hashes and compares, for no measured
+  user beyond what the table already does.
+- Vector and table keys compare by identity, not structurally: the runtime's `equal`
+  on an array or a table IS identity (`.kb/hash-tables.md`), so
+  `(get {[:a] 1} [:a])` misses here and answers `1` there, and a vector member never
+  finds its set. Lists, strings, numbers and keywords key structurally.
+- A set literal refuses a repeated element BY SPELLING (`Duplicate key: 1`): two
+  differently-spelled elements that are equal at run time still dedupe silently, and
+  the spelling names the datum as the reader prints it.
+- Verbs assume the right collection kind; misuse is unspecified and may signal the
+  CL-level type error instead of the oracle's (e.g. `dissoc` of a set, `keys` of a
+  vector). `conj` of a set onto a map goes one level deep; anything else conjoined
+  onto a map signals. `(empty? false)` answers false where the oracle signals.
 - The seq family runs over LISTS only (`first`=`car`, `rest`=`cdr`,
-  `count`=`length` being the exceptions). Vectors-as-seqs need real design.
+  `count`/`empty?` being the map/set-aware exceptions). Vectors-as-seqs need real design.
 - Destructuring, `->`/`->>`, `defmulti`/`defmethod`, protocols, `atom`/`swap!`/`deref`,
   lazy seqs, metadata `^`, `var`/`#'`: all absent. The reader parses `@x`, `^meta`,
   backquote, `~` into marked lists the lowering refuses.
@@ -93,4 +126,9 @@ inline `ClojureE2eTest` over the same program was removed when the spec arrived.
 `nth` takes the collection first (`(nth coll i)` -> `(NTH i coll)`), `quot` is
 `truncate`, an `(ns ...)` form defines nothing (the file-level skip used to
 match only a bare `ns` symbol), and identifiers keep their case behind the
-prefix (`Foo` and `foo` no longer fold into one symbol).
+prefix (`Foo` and `foo` no longer fold into one symbol). Maps and sets lower to the
+shared hash-table runtime (b02): literals, `assoc`/`dissoc`/`get` (with default)/
+`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/`hash-map`/`array-map`,
+map/set-aware `count`/`empty?`/`=`, quoted maps/sets, and the transient refusals --
+each pinned in `clojure-spec.yaml` (run on all four backends) or, for the refusals,
+in `ClojureLoweringTest`.

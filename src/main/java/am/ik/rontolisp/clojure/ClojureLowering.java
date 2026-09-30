@@ -30,17 +30,25 @@ import org.jspecify.annotations.Nullable;
  * {@code #(...)} arguments travel as one rest list); {@code let} a {@code let*}
  * (Clojure's let is sequential); {@code loop}/{@code recur} a {@code labels} self call
  * (the interpreter's tail calls make it constant-stack). Collections: a vector literal is
- * a {@code vector} call, the seq functions run over LISTS ({@code car}/{@code cdr}); a
- * map or set literal is refused. {@code false} is a DISTINCT non-{@code NIL} object --
- * the value of {@code rontolisp::%clojure-false}, bound before anything else runs, a
- * symbol spelled {@code false} -- so {@code (= false nil)} is false and {@code (nil?
+ * a {@code vector} call; a map literal is an {@code equal} hash table built by
+ * {@code rontolisp:plist-hash-table} (lists and nested maps key structurally; vectors and
+ * tables key by identity, like the runtime), never mutated in place -- every verb that
+ * "changes" a map builds a fresh table, which is what keeps the persistent semantics
+ * observable; a set literal is the same table with each member stored under itself,
+ * wrapped as {@code (:C%SET table)} so a verb can tell a set from a map (the wrapper
+ * prints as written, like vectors in CL notation); the seq functions run over LISTS
+ * ({@code car}/{@code cdr}). {@code false} is a DISTINCT non-{@code NIL} object -- the
+ * value of {@code rontolisp::%clojure-false}, bound before anything else runs, a symbol
+ * spelled {@code false} -- so {@code (= false nil)} is false and {@code (nil?
  * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
  * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
  * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,
  * {@code not}, the {@code ?} predicates) answers {@code T} or the false object. Printing
  * spells the three values out: {@code println}/{@code print} show
  * {@code true}/{@code false}/{@code nil}, {@code str} shows {@code true}/{@code false}
- * and {@code ""} for {@code nil}.
+ * and {@code ""} for {@code nil}. Transients ({@code transient}, {@code persistent!},
+ * {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are refused by name: there
+ * is no transient runtime behind the tables.
  */
 final class ClojureLowering {
 
@@ -201,7 +209,10 @@ final class ClojureLowering {
 			return cons(sym("vector"), lowers(items, 1));
 		}
 		if (isSymbolNamed(head, "%hash-map")) {
-			throw new LispReadException("a map literal is not supported yet");
+			return mapBuild(lowers(items, 1));
+		}
+		if (isSymbolNamed(head, "%hash-set")) {
+			return setBuild(lowers(items, 1));
 		}
 		if (isSymbolNamed(head, "if")) {
 			isTrue(items.size() == 3 || items.size() == 4, "if takes a condition, a then and an optional else");
@@ -461,9 +472,9 @@ final class ClojureLowering {
 			case "or":
 				return orOf(items.subList(1, items.size()));
 			case "=":
-				return booleanAnswer(plain("equal", items));
+				return booleanAnswer(equalityRaw(items));
 			case "not=":
-				return booleanAnswer(list(sym("not"), plain("equal", items)));
+				return booleanAnswer(list(sym("not"), equalityRaw(items)));
 			case "<", ">", "<=", ">=":
 				return booleanAnswer(plain(name, items));
 			case "inc":
@@ -486,12 +497,14 @@ final class ClojureLowering {
 				isTrue(n == 0, "newline takes no argument");
 				return list(sym("princ"), LispString.literal("\n"));
 			case "count":
-				return plain("length", items);
+				return countOf(items);
 			case "first":
 				return plain("car", items);
 			case "rest":
 				return plain("cdr", items);
-			case "empty?", "nil?":
+			case "empty?":
+				return booleanAnswer(emptyOf(items));
+			case "nil?":
 				return booleanAnswer(plain("null", items));
 			case "some?":
 				isTrue(n == 1, "some? takes one argument");
@@ -536,9 +549,518 @@ final class ClojureLowering {
 						lower(items.get(2)));
 			case "concat":
 				return cons(sym("append"), lowers(items, 1));
+			case "assoc":
+				return assocOf(items);
+			case "dissoc":
+				return dissocOf(items);
+			case "get":
+				return getOf(items);
+			case "contains?":
+				return containsOf(items);
+			case "keys":
+				return keysOf(items);
+			case "vals":
+				return valsOf(items);
+			case "merge":
+				return mergeOf(items);
+			case "conj":
+				return conjOf(items);
+			case "disj":
+				return disjOf(items);
+			case "set":
+				return setOf(items);
+			case "hash-map":
+				return mapConstructorOf(items, "hash-map");
+			case "array-map":
+				return mapConstructorOf(items, "array-map");
+			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
+				throw new LispReadException("transients are not supported yet: " + name);
 			default:
 				return null;
 		}
+	}
+
+	/** The tag heading a wrapped set: a set is {@code (LIST :C%SET table)}. */
+	private static final LispSymbol SET_TAG = new LispSymbol(":C%SET");
+
+	/** {@code (RONTOLISP:PLIST-HASH-TABLE plist :TEST 'EQUAL)}: a fresh equal table. */
+	private static LispVal tableFromPlist(LispVal plist) {
+		return list(sym("rontolisp:plist-hash-table"), plist, sym(":test"), list(sym("quote"), sym("equal")));
+	}
+
+	/** {@code (RONTOLISP:HASH-TABLE-PLIST table)}. */
+	private static LispVal tablePlist(LispVal table) {
+		return list(sym("rontolisp:hash-table-plist"), table);
+	}
+
+	/** {@code (MAKE-HASH-TABLE :TEST 'EQUAL)}. */
+	private static LispVal makeTable() {
+		return list(sym("make-hash-table"), sym(":test"), list(sym("quote"), sym("equal")));
+	}
+
+	/**
+	 * Whether the form holds a wrapped set: a cons headed by the tag over a table. The
+	 * full shape check keeps user data from misfiring the test.
+	 */
+	private static LispVal isSetForm(LispVal form) {
+		return list(sym("and"), list(sym("consp"), form), list(sym("eq"), list(sym("car"), form), SET_TAG),
+				list(sym("hash-table-p"), list(sym("cadr"), form)));
+	}
+
+	/** The table inside a wrapped set: {@code (CADR form)}. */
+	private static LispVal setInner(LispVal form) {
+		return list(sym("cadr"), form);
+	}
+
+	/** {@code (LIST :C%SET table)}: the set wrapper. */
+	private static LispVal wrapSet(LispVal table) {
+		return list(sym("list"), SET_TAG, table);
+	}
+
+	/**
+	 * A map construction over lowered key/value pairs: an equal table, so vector keys and
+	 * nested maps compare structurally. The pairs evaluate once each, left to right.
+	 */
+	private static LispVal mapBuild(List<LispVal> pairs) {
+		return tableFromPlist(cons(sym("list"), pairs));
+	}
+
+	/**
+	 * A set construction over lowered elements: an equal table holding each member under
+	 * itself, wrapped so verbs tell it from a map. Each element is bound once, so a
+	 * side-effecting element runs once.
+	 */
+	private LispVal setBuild(List<LispVal> elements) {
+		LispSymbol table = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(table, makeTable()));
+		List<LispVal> body = new ArrayList<>();
+		for (LispVal element : elements) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, element));
+			body.add(list(sym("setf"), list(sym("gethash"), one, table), one));
+		}
+		body.add(wrapSet(table));
+		return letForm(bindings, body);
+	}
+
+	/** {@code (LET bindings body...)}: a let over a computed body, spliced flat. */
+	private static LispVal letForm(List<LispVal> bindings, List<LispVal> body) {
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(list(bindings));
+		forms.addAll(body);
+		return cons(sym("let"), forms);
+	}
+
+	private LispVal assocOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 3 && n % 2 == 1, "assoc takes a map and key/value pairs");
+		LispSymbol map = freshTemp();
+		LispVal grown = cons(sym("append"),
+				List.of(list(sym("if"), map, tablePlist(map), NIL_CONST), cons(sym("list"), lowers(items, 2))));
+		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))), tableFromPlist(grown));
+	}
+
+	private LispVal dissocOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "dissoc takes a map and keys");
+		LispSymbol map = freshTemp();
+		LispSymbol copy = freshTemp();
+		List<LispVal> body = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			body.add(list(sym("remhash"), lower(items.get(i)), copy));
+		}
+		body.add(copy);
+		LispVal rebuilt = letForm(List.of(list(copy, tableFromPlist(tablePlist(map)))), body);
+		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
+				list(sym("if"), map, rebuilt, NIL_CONST));
+	}
+
+	/**
+	 * The bounds check of an indexed read: a vector for {@code get}, either for the rest.
+	 */
+	private static LispVal indexForm(LispVal coll, LispVal key, boolean vector) {
+		return list(sym("and"), list(sym(vector ? "vectorp" : "stringp"), coll), list(sym("integerp"), key),
+				list(sym(">="), key, new LispInteger(0)), list(sym("<"), key, list(sym("length"), coll)));
+	}
+
+	private LispVal getOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "get takes a map, a key and an optional default");
+		LispSymbol coll = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol dflt = freshTemp();
+		List<LispVal> bindings = List.of(list(coll, lower(items.get(1))), list(key, lower(items.get(2))),
+				list(dflt, n == 3 ? lower(items.get(3)) : NIL_CONST));
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isSetForm(coll), list(sym("gethash"), key, setInner(coll), dflt)));
+		branches.add(list(list(sym("hash-table-p"), coll), list(sym("gethash"), key, coll, dflt)));
+		branches.add(list(indexForm(coll, key, true), list(sym("elt"), coll, key)));
+		branches.add(list(indexForm(coll, key, false), list(sym("char"), coll, key)));
+		branches.add(list(TRUE_CONST, dflt));
+		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
+	}
+
+	private LispVal containsOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "contains? takes a collection and a key");
+		LispSymbol coll = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol miss = freshTemp();
+		List<LispVal> bindings = List.of(list(coll, lower(items.get(1))), list(key, lower(items.get(2))),
+				list(miss, list(sym("list"), NIL_CONST)));
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isSetForm(coll), booleanAnswer(
+				list(sym("not"), list(sym("eq"), list(sym("gethash"), key, setInner(coll), miss), miss)))));
+		branches.add(list(list(sym("hash-table-p"), coll),
+				booleanAnswer(list(sym("not"), list(sym("eq"), list(sym("gethash"), key, coll, miss), miss)))));
+		branches.add(list(indexForm(coll, key, true), TRUE_CONST));
+		branches.add(list(indexForm(coll, key, false), TRUE_CONST));
+		branches.add(list(TRUE_CONST, this.falseVariable));
+		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
+	}
+
+	private LispVal keysOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "keys takes one map");
+		return tableKeysOf(items, true);
+	}
+
+	private LispVal valsOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "vals takes one map");
+		return tableKeysOf(items, false);
+	}
+
+	/**
+	 * {@code keys} (or {@code vals}): the table's keys (or values) accumulated into a
+	 * list. The order is the table's walk order, unspecified like the oracle's.
+	 */
+	private LispVal tableKeysOf(List<LispVal> items, boolean keys) {
+		LispSymbol map = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal take = keys ? key : val;
+		LispVal drop = keys ? val : key;
+		LispVal collect = list(sym("maphash"), list(sym("lambda"), list(List.of(key, val)),
+				list(sym("declare"), list(sym("ignore"), drop)), list(sym("setq"), acc, list(sym("cons"), take, acc))),
+				map);
+		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
+				list(sym("if"), map, list(sym("let"), list(List.of(list(acc, NIL_CONST))), collect, acc), NIL_CONST));
+	}
+
+	private LispVal mergeOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 0) {
+			return NIL_CONST;
+		}
+		if (n == 1) {
+			return lower(items.get(1));
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> present = new ArrayList<>();
+		List<LispVal> plists = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, lower(items.get(i))));
+			present.add(one);
+			plists.add(list(sym("if"), one, tablePlist(one), NIL_CONST));
+		}
+		return list(sym("let"), list(bindings),
+				list(sym("if"), cons(sym("or"), present), tableFromPlist(cons(sym("append"), plists)), NIL_CONST));
+	}
+
+	private LispVal conjOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "conj takes a collection and items");
+		LispVal acc = lower(items.get(1));
+		for (int i = 2; i < items.size(); i++) {
+			acc = conjTwo(acc, items.get(i));
+		}
+		return acc;
+	}
+
+	/**
+	 * One conjoined item: a set gains a member, a map gains the item's entries, a vector
+	 * gains at the end, a list or nil at the front. Anything else signals, like the
+	 * oracle's.
+	 */
+	private LispVal conjTwo(LispVal coll, LispVal itemDatum) {
+		LispSymbol collSym = freshTemp();
+		LispSymbol item = freshTemp();
+		List<LispVal> bindings = List.of(list(collSym, coll), list(item, lower(itemDatum)));
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isSetForm(collSym), setAdd(collSym, item)));
+		branches.add(list(list(sym("hash-table-p"), collSym),
+				tableFromPlist(cons(sym("append"), List.of(tablePlist(collSym), entryPlist(item))))));
+		branches.add(list(list(sym("vectorp"), collSym),
+				list(sym("coerce"),
+						list(sym("append"), list(sym("coerce"), collSym, quoted("list")), list(sym("list"), item)),
+						quoted("vector"))));
+		branches.add(list(list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
+				list(sym("cons"), item, collSym)));
+		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("conj needs a collection and an item"))));
+		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
+	}
+
+	/** {@code (QUOTE name)} over a lower-case name, for a coerce designator. */
+	private static LispVal quoted(String name) {
+		return list(sym("quote"), sym(name));
+	}
+
+	/**
+	 * The entries one conjoined item adds to a map, as a plist: a map's own pairs, a
+	 * two-vector's or two-list's pair, or a set's members each as an entry.
+	 */
+	private LispVal entryPlist(LispVal item) {
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("hash-table-p"), item), tablePlist(item)));
+		branches.add(list(
+				list(sym("and"), list(sym("vectorp"), item),
+						list(sym("eql"), list(sym("length"), item), new LispInteger(2))),
+				list(sym("list"), list(sym("elt"), item, new LispInteger(0)),
+						list(sym("elt"), item, new LispInteger(1)))));
+		branches.add(list(
+				list(sym("and"), list(sym("consp"), item), list(sym("not"), isSetForm(item)),
+						list(sym("consp"), list(sym("cdr"), item)), list(sym("null"), list(sym("cddr"), item))),
+				list(sym("list"), list(sym("car"), item), list(sym("cadr"), item))));
+		branches.add(list(isSetForm(item), membersPlist(item)));
+		branches.add(list(TRUE_CONST, list(sym("error"),
+				LispString.literal("conj needs a map entry: a map, a [k v] vector or a (k v) list"))));
+		return cons(sym("cond"), branches);
+	}
+
+	/**
+	 * The entries of a set conjoined onto a map, as a plist: each member is itself an
+	 * entry, one level deep. A set nested in the set is refused: entries nest one level.
+	 */
+	private LispVal membersPlist(LispVal item) {
+		LispSymbol grown = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal collect = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+						list(sym("setq"), grown, list(sym("append"), grown, memberEntryPlist(key)))),
+				setInner(item));
+		return list(sym("let"), list(List.of(list(grown, NIL_CONST))), collect, grown);
+	}
+
+	/**
+	 * One set member's entries as a plist: a map's pairs, a two-vector's or two-list's
+	 * pair. Unlike {@link #entryPlist}, this never recurses, so the Java construction
+	 * terminates; a set nested in the conjoined set is refused at run time instead.
+	 */
+	private static LispVal memberEntryPlist(LispVal key) {
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("hash-table-p"), key), tablePlist(key)));
+		branches.add(list(
+				list(sym("and"), list(sym("vectorp"), key),
+						list(sym("eql"), list(sym("length"), key), new LispInteger(2))),
+				list(sym("list"), list(sym("elt"), key, new LispInteger(0)),
+						list(sym("elt"), key, new LispInteger(1)))));
+		branches.add(list(
+				list(sym("and"), list(sym("consp"), key), list(sym("not"), isSetForm(key)),
+						list(sym("consp"), list(sym("cdr"), key)), list(sym("null"), list(sym("cddr"), key))),
+				list(sym("list"), list(sym("car"), key), list(sym("cadr"), key))));
+		branches.add(list(TRUE_CONST, list(sym("error"),
+				LispString.literal("conj needs a map entry: a map, a [k v] vector or a (k v) list"))));
+		return cons(sym("cond"), branches);
+	}
+
+	/** One member added to a set: a fresh table over the old members plus the member. */
+	private LispVal setAdd(LispVal coll, LispVal item) {
+		LispSymbol table = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal copy = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+						list(sym("setf"), list(sym("gethash"), key, table), key)),
+				setInner(coll));
+		return list(sym("let"), list(List.of(list(table, makeTable()))), copy,
+				list(sym("setf"), list(sym("gethash"), item, table), item), wrapSet(table));
+	}
+
+	private LispVal disjOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "disj takes a set and members");
+		LispSymbol set = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal copy = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+						list(sym("setf"), list(sym("gethash"), key, table), key)),
+				setInner(set));
+		List<LispVal> body = new ArrayList<>();
+		body.add(list(table, makeTable()));
+		LispVal kept = list(sym("let"), list(body), copy, remhashes(items, table), wrapSet(table));
+		LispVal needSet = list(sym("error"), LispString.literal("disj needs a set"));
+		return list(sym("let"), list(List.of(list(set, lower(items.get(1))))),
+				list(sym("if"), set, list(sym("if"), isSetForm(set), kept, needSet), NIL_CONST));
+	}
+
+	/**
+	 * The {@code remhash} of each of {@code items}' keys from {@code table}, in order.
+	 */
+	private LispVal remhashes(List<LispVal> items, LispSymbol table) {
+		if (items.size() == 2) {
+			return table;
+		}
+		List<LispVal> drops = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			drops.add(list(sym("remhash"), lower(items.get(i)), table));
+		}
+		drops.add(table);
+		return cons(sym("progn"), drops);
+	}
+
+	private LispVal setOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "set takes one collection");
+		LispSymbol coll = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol entry = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("vectorp"), coll),
+				list(sym("dolist"), list(List.of(one, list(sym("coerce"), coll, quoted("list")))),
+						list(sym("setf"), list(sym("gethash"), one, table), one))));
+		branches.add(list(list(sym("hash-table-p"), coll),
+				list(sym("maphash"),
+						list(sym("lambda"), list(List.of(key, val)),
+								list(sym("let"), list(List.of(list(entry, list(sym("vector"), key, val)))),
+										list(sym("setf"), list(sym("gethash"), entry, table), entry))),
+						coll)));
+		branches.add(list(isSetForm(coll),
+				list(sym("maphash"),
+						list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+								list(sym("setf"), list(sym("gethash"), key, table), key)),
+						setInner(coll))));
+		branches.add(list(TRUE_CONST, list(sym("dolist"), list(List.of(one, coll)),
+				list(sym("setf"), list(sym("gethash"), one, table), one))));
+		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))), list(table, makeTable()))),
+				cons(sym("cond"), branches), wrapSet(table));
+	}
+
+	private LispVal mapConstructorOf(List<LispVal> items, String what) {
+		isTrue((items.size() - 1) % 2 == 0, what + " takes key/value pairs");
+		return mapBuild(lowers(items, 1));
+	}
+
+	private LispVal countOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "count takes one collection");
+		LispSymbol coll = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isSetForm(coll), list(sym("hash-table-count"), setInner(coll))));
+		branches.add(list(list(sym("hash-table-p"), coll), list(sym("hash-table-count"), coll)));
+		// the false object counts as empty, like the oracle; anything else takes length
+		branches.add(list(list(sym("eq"), coll, this.falseVariable), new LispInteger(0)));
+		branches.add(list(TRUE_CONST, list(sym("length"), coll)));
+		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))))), cons(sym("cond"), branches));
+	}
+
+	private LispVal emptyOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "empty? takes one collection");
+		LispSymbol coll = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isSetForm(coll), list(sym("zerop"), list(sym("hash-table-count"), setInner(coll)))));
+		branches.add(list(list(sym("hash-table-p"), coll), list(sym("zerop"), list(sym("hash-table-count"), coll))));
+		branches.add(list(list(sym("vectorp"), coll), list(sym("zerop"), list(sym("length"), coll))));
+		branches.add(list(list(sym("stringp"), coll), list(sym("zerop"), list(sym("length"), coll))));
+		branches.add(list(TRUE_CONST, list(sym("null"), coll)));
+		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))))), cons(sym("cond"), branches));
+	}
+
+	/**
+	 * {@code =} over any arity: pairs of neighbours compared with the map- and set-aware
+	 * two-form below, {@code AND}ed. Zero arguments is true; one evaluates its argument
+	 * and is true. The answer is raw ({@code T} or {@code NIL}); the call sites wrap it
+	 * in {@link #booleanAnswer} for the Clojure {@code T}-or-false.
+	 */
+	private LispVal equalityRaw(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 0) {
+			return TRUE_CONST;
+		}
+		if (n == 1) {
+			return list(sym("progn"), lower(items.get(1)), TRUE_CONST);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> names = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, lower(items.get(i))));
+			names.add(one);
+		}
+		if (n == 2) {
+			return list(sym("let"), list(bindings), equalityTwo(names.get(0), names.get(1)));
+		}
+		List<LispVal> pairs = new ArrayList<>();
+		for (int i = 0; i + 1 < names.size(); i++) {
+			pairs.add(equalityTwo(names.get(i), names.get(i + 1)));
+		}
+		return list(sym("let"), list(bindings), cons(sym("and"), pairs));
+	}
+
+	/**
+	 * Two values compared the Clojure way: two wrapped sets by membership both ways
+	 * (order-free, deep in the members), two tables entry by entry (deep in the values),
+	 * anything else with {@code equal}. The comparison is a labels self call, so nested
+	 * maps and sets compare all the way down.
+	 */
+	private LispVal equalityTwo(LispVal first, LispVal second) {
+		LispSymbol eq = freshTemp();
+		LispSymbol left = freshTemp();
+		LispSymbol right = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("and"), isSetForm(left), isSetForm(right)), setEquality(left, right, eq)));
+		branches.add(list(list(sym("and"), list(sym("hash-table-p"), left), list(sym("hash-table-p"), right)),
+				mapEquality(left, right, eq)));
+		branches.add(list(TRUE_CONST, list(sym("equal"), left, right)));
+		LispVal test = cons(sym("cond"), branches);
+		LispVal binding = new LispCons(eq, new LispCons(list(List.of(left, right)), cons(test, List.of())));
+		return list(sym("labels"), list(List.of(binding)), new LispCons(eq, list(List.of(first, second))));
+	}
+
+	/** Two tables are equal when they hold the same count and every entry agrees. */
+	private LispVal mapEquality(LispVal left, LispVal right, LispVal eq) {
+		LispSymbol ok = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal walk = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)),
+						list(sym("when"),
+								list(sym("or"), list(sym("eq"), list(sym("gethash"), key, right, miss), miss),
+										list(sym("not"), list(eq, val, list(sym("gethash"), key, right)))),
+								list(sym("setq"), ok, NIL_CONST))),
+				left);
+		return list(sym("and"),
+				list(sym("eql"), list(sym("hash-table-count"), left), list(sym("hash-table-count"), right)),
+				list(sym("let"), list(List.of(list(ok, TRUE_CONST), list(miss, list(sym("list"), NIL_CONST)))), walk,
+						ok));
+	}
+
+	/**
+	 * Two wrapped sets are equal when they hold the same count and every member agrees.
+	 */
+	private LispVal setEquality(LispVal left, LispVal right, LispVal eq) {
+		LispSymbol ok = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol found = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal walk = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+						list(sym("when"),
+								list(sym("or"), list(sym("eq"), list(sym("gethash"), key, found, miss), miss),
+										list(sym("not"), list(eq, key, list(sym("gethash"), key, found)))),
+								list(sym("setq"), ok, NIL_CONST))),
+				setInner(left));
+		return list(sym("and"),
+				list(sym("eql"), list(sym("hash-table-count"), setInner(left)),
+						list(sym("hash-table-count"), setInner(right))),
+				list(sym("let"), list(List.of(list(ok, TRUE_CONST), list(miss, list(sym("list"), NIL_CONST)),
+						list(found, setInner(right)))), walk, ok));
 	}
 
 	private LispVal plain(String clName, List<LispVal> items) {
@@ -781,6 +1303,10 @@ final class ClojureLowering {
 				}
 				return list(out);
 			}
+			if (!items.isEmpty()
+					&& (isSymbolNamed(items.get(0), "%hash-map") || isSymbolNamed(items.get(0), "%hash-set"))) {
+				return quotedCollection(items);
+			}
 			LispVal tail = NIL_CONST;
 			for (int i = items.size() - 1; i >= 0; i--) {
 				tail = new LispCons(quotedConstant(items.get(i)), tail);
@@ -798,6 +1324,22 @@ final class ClojureLowering {
 			return inner.car();
 		}
 		return quoted;
+	}
+
+	/**
+	 * A quoted map or set literal: the construction over the quoted elements, so
+	 * {@code '{:a x}} builds a table holding the symbol. Markers never reach the
+	 * per-element path -- they are skipped here, not quoted.
+	 */
+	private LispVal quotedCollection(List<LispVal> items) {
+		List<LispVal> quoted = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			quoted.add(quotedConstant(items.get(i)));
+		}
+		if (isSymbolNamed(items.get(0), "%hash-map")) {
+			return mapBuild(quoted);
+		}
+		return setBuild(quoted);
 	}
 
 	// names

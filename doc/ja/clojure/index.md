@@ -2,7 +2,9 @@
 
 **Experimental.** rontolisp は Clojure の小さなサブセット -- `def`/`defn`、`fn` と
 `#(...)`、`let`/`loop`/`recur`、`if`/`when`/`cond`/`do`/`and`/`or`、`map`/`filter`/
-`reduce`/`apply`/`concat`、ベクターとキーワードリテラル、`println`/`print`/`str` --
+`reduce`/`apply`/`concat`、ベクター・キーワード・マップ・セットのリテラル、
+`assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
+`hash-map`/`array-map`、`println`/`print`/`str` --
 を読み込み、すべてのバックエンドで実行できます。部分的な準拠が設計であり、サブセットや
 互換性の約束はまだありません。JVM や WebAssembly で Clojure プログラムを試すために
 使い、維持が必要なものは Common Lisp で書いてください。
@@ -34,7 +36,11 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 組み込みと衝突しません。`defn` は `defun`（直接呼び出し）、`def` はトップレベルの
 `setq`、`fn` と `#(...)` は `lambda`（`#(...)` の引数は1つの rest リストで運ばれる）、
 `let` は `let*`、`loop`/`recur` は `labels` の自己呼び出し、ベクターリテラルは
-`vector` 呼び出し、seq 関数はリスト操作です。
+`vector` 呼び出し、マップリテラルは `equal` ハッシュテーブル（インプレースでは
+決して変更されません -- すべての動詞が新しいテーブルを作るため、永続性が観測可能に
+保たれます）、セットリテラルは各メンバーを自分自身の下に格納した同じテーブル、
+seq 関数はリスト操作です。`count`/`empty?`/`=` はマップとセットに届きます。`get`
+は省略可能なデフォルトを取ります。transient（`assoc!` など）は拒否されます。
 
 ## REPL
 
@@ -57,7 +63,10 @@ clojure> (twice 21)
 `true`/`false`/`nil` と表記し、`str` は `true`/`false`/`""` と表記しますが、各部分は
 相変わらず区切りなしで連結されます。コレクションは Common Lisp 記法で印字されます
 （`[:a :b]` に対して `#(A B)`、入れ子の `true`/`nil` は `T`/`NIL`）。キーワードは
-大文字で印字され（`:a` に対して `:A`）、大文字小文字を区別せず衝突します。マップと
-セットのリテラルは拒否されます。seq 系はリストに対してのみ動作します。分割束縛、
+大文字で印字され（`:a` に対して `:A`）、大文字小文字を区別せず衝突します。マップは
+`#<HASH-TABLE :TEST EQUAL :COUNT n>` と印字され、セットは
+`(C%SET #<HASH-TABLE ...>)` と印字されます。ベクターとテーブルのキーは同一性で
+比較されるため、オラクルが答えるベクターキーの参照は外れます。セットリテラルの
+重複要素は綴りで拒否されます。seq 系はリストに対してのみ動作します。分割束縛、
 スレッディングマクロ、`atom`、遅延 seq、メタデータ、`var` は
 ありません。エラーにはまだソース位置が付きません。

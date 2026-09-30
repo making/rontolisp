@@ -44,9 +44,12 @@ class ClojureReaderTest {
 	}
 
 	@Test
-	void vectorsMapsAndQuotes() {
+	void vectorsMapsSetsAndQuotes() {
 		assertThat(printed("[1 :a]")).isEqualTo("[(|%vector| 1 :|a|)]");
 		assertThat(printed("{:a 1}")).isEqualTo("[(|%hash-map| :|a| 1)]");
+		assertThat(printed("#{1 2}")).isEqualTo("[(|%hash-set| 1 2)]");
+		assertThat(printed("'{}")).isEqualTo("[(|quote| (|%hash-map|))]");
+		assertThat(printed("'#{1}")).isEqualTo("[(|quote| (|%hash-set| 1))]");
 		assertThat(printed("'(1 2)")).isEqualTo("[(|quote| (1 2))]");
 	}
 
@@ -71,6 +74,14 @@ class ClojureReaderTest {
 			.hasMessageContaining("even number");
 		assertThatThrownBy(() -> read("(a b")).isInstanceOf(LispReadException.class);
 		assertThatThrownBy(() -> read("\"abc")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void aRepeatedSetElementIsAnErrorNamingTheKey() {
+		assertThatThrownBy(() -> read("#{1 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: 1");
+		assertThat(read("#{1 2}")).hasSize(1);
+		assertThat(read("#{}")).hasSize(1);
 	}
 
 }

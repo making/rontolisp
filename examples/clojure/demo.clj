@@ -27,3 +27,8 @@
       y (+ x 5)]
   (println (str "x+y=" y)))
 (println ((fn [a b] (+ (* a 10) b)) 4 2))
+(println (get {:a 1 :b 2} :b))
+(println (count (merge {:a 1} {:b 2} {:c 3})))
+(println (conj [1 2] 3))
+(println (contains? #{1 2 3} 2))
+(println (= {:a {:b 1}} {:a {:b 1}}))
