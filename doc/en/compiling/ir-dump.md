@@ -19,6 +19,14 @@ That makes the flag a diff tool for the front end -- what a macro expansion or t
 lowering really produced is one `diff` away, without reading bytecode or adding temporary
 prints.
 
+The last expansion happens in the dump itself: a built-in macro call (`cond`, `setf`,
+`unless`, ...) is lowered to the core forms beneath it, the same expansion the interpreter
+performs at eval time and the compilers at codegen -- so what a built-in macro did is one
+diff too. A call whose name a local `flet`/`macrolet`/`symbol-macrolet` shadows, and a
+call whose lowering is the compile path's own runtime machinery (the condition designators,
+the definition forms), prints as it stands for the consumer to expand; quoted data is never
+entered. The lowered dump runs identically -- the CLI suite round-trips one.
+
 The dump happens before any backend is chosen, so it is the same for every target; `-o`
 is refused beside the flag, the dump compiling nothing. The library
 splices a program triggers ride the dump too, so a dump of a program using `scheme` or

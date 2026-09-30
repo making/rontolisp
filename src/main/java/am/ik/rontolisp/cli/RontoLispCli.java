@@ -42,6 +42,7 @@ import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.macro.BuiltinMacroLowering;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
@@ -623,9 +624,9 @@ public final class RontoLispCli {
 				// interpreter knows only the defstruct itself, whose generated defuns
 				// already ride the stream. The dump carries the payload, so the output
 				// runs as it stands.
-				this.out.println(
-						(LispMacroExpander.structDefinitionPayload(form) instanceof LispCons payload ? payload : form)
-							.print());
+				this.out.println(BuiltinMacroLowering
+					.lower(LispMacroExpander.structDefinitionPayload(form) instanceof LispCons payload ? payload : form)
+					.print());
 			}
 			return null;
 		});

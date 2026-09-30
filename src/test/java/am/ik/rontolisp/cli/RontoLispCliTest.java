@@ -1889,6 +1889,63 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void dumpIrLowersBuiltinMacroCalls() {
+		// The dump is the form AFTER the last expansion too: a built-in macro call the
+		// backends would lower at codegen (unless/when/cond/setf) comes out lowered to
+		// if/setq -- while quoted data keeps its call shape, and the dump still runs to
+		// the same output.
+		String program = """
+				(print (if t (unless nil (let ((x 1)) (setf x (+ x 1)) x)) 'kept))
+				(print '(unless 1 2))
+				""";
+		String ran = runCli("", "-e", program);
+		String dump = runCli("", "-e", program, "--dump-ir");
+		assertThat(dump).contains("(SETQ").contains("(IF");
+		// The quoted call stays a call: quote data is none of the pass's business.
+		assertThat(dump).contains("UNLESS 1 2");
+		// The first form's unless/when are lowered away from it entirely.
+		assertThat(dump.lines().findFirst()).hasValueSatisfying(line -> {
+			assertThat(line).contains("(IF").doesNotContain("UNLESS");
+		});
+		assertThat(runCli("", "-e", dump)).isEqualTo(ran);
+	}
+
+	@Test
+	void dumpIrLeavesShadowedAndUnlowerableFormsAlone() {
+		// A macrolet-local name shadows the built-in of the same name: the dump keeps the
+		// local macro's semantics, here its body evaluated twice. And a call the
+		// context-free pass does not lower -- stable-sort, expanded by the interpreter
+		// beyond LispMacroExpander's dispatch (the SpecialVarCollector try/catch stance:
+		// never throw, leave the form for the consumer) -- dumps as it stands. Both
+		// round-trip.
+		String program = """
+				(macrolet ((when (c b) `(progn ,b ,b)))
+				  (when t (print 7)))
+				(print (stable-sort (list 2 1) #'<))
+				""";
+		String ran = runCli("", "-e", program);
+		String dump = runCli("", "-e", program, "--dump-ir");
+		assertThat(runCli("", "-e", dump)).isEqualTo(ran).endsWith("7\n7\n(1 2)\n");
+		assertThat(dump).contains("(PROGN (PRINT 7) (PRINT 7))").contains("STABLE-SORT");
+	}
+
+	@Test
+	void imageFunctionsResolveFromAForeignPackageSpelling() {
+		// The reader canonicalizes a symbol to pkg::member outside cl-user, while the
+		// image's own functions (%princ-piece and family, the names the expansions and
+		// a lowered dump carry) are defined under their bare member: the function
+		// resolution falls back to it, or every %helper call spelled in another package
+		// is unbounded.
+		String program = """
+				(defpackage :img-fn (:use :cl))
+				(in-package :img-fn)
+				(print (%princ-piece 5))
+				(in-package :cl-user)
+				""";
+		assertThat(runCli("", "-e", program)).isEqualTo("\"5\"\n");
+	}
+
+	@Test
 	void dumpIrPrintsNothingButTheDump() {
 		// The program never runs, so its own output is absent: the dump is the whole
 		// stdout, one form per line.

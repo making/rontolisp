@@ -10588,6 +10588,21 @@ public final class LispEvaluator {
 				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
 				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 			}
+			// Last resort, past every lazy load: a shared image function spelled from
+			// another package. The reader canonicalizes the symbol to pkg::member, while
+			// the function table keys the image-wide helpers the expansions name
+			// (%princ-piece and family) by their bare member -- a CL-USER spelling
+			// canonifies to bare and resolves, a foreign one must reach the same entry
+			// here, where the qualified lazy loads above have all declined. The user
+			// defuns this fallback could shadow live under their own qualified keys,
+			// which the lookup at the top already missed.
+			PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+			if (qualified != null) {
+				LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
+				if (bare != null) {
+					return bare;
+				}
+			}
 			throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
 					ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
 							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
