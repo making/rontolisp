@@ -26,7 +26,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | Clojure | lowers to | why |
 |---|---|---|
 | identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
-| `defn` | `defun` of the mangled name, called directly; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
+| `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name (a parameter, a `let`/`loop` binding, a `def`'d variable) is a `funcall` of the value cell instead (so higher-order `defn` parameters run; a `declare`d-but-never-defined name keeps its direct-call error); several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
 | `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites |
@@ -149,8 +149,10 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   zero-argument static method spells `(. Class m)`); non-string receivers go to
   `java:call` and fail there (kept, b08: only strings get the mapped core
   operation); `proxy` methods take the Java arguments only (no `this`, kept b08:
-  nothing to close over); calling a function parameter or a `def`'d lambda in head
-  position is not a `funcall` (pre-existing: `The function c%f is undefined`).
+  nothing to close over); a head-position call to a `VARIABLE`-kind name (a
+  parameter, a `let`/`loop` binding, a `def`'d variable) is a `funcall` of the
+  value cell (decided 2026-09-30, b09: `defn` names stay direct and a
+  `declare`d-but-never-defined name keeps its direct-call error).
 - `def` inside a body sets the global when the body runs (decided 2026-09-30, b04:
   keep the `setq`, document it). `defn` inside a body works only in statement
   position, and a multi-arity one only at the top level (several `defun`s cannot
@@ -237,4 +239,10 @@ in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
 (`proxy`, host-object `memfn`, literal `String/split`), in `ClojureInteropTest`;
 what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
 backquote, `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
-stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`.
+stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
+`VARIABLE`-kind names lower to `funcall` (b09): a `defn` parameter, a `let`
+binding and a `def`'d variable each call through the value cell (so higher-order
+`defn` parameters run), while a `defn` name stays a direct call and a
+`declare`d-but-never-defined name keeps its direct-call error -- pinned in
+`clojure-spec.yaml` (run on all four backends) and in `ClojureLoweringTest` (the
+lowered shape).

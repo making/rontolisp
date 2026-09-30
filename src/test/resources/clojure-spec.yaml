@@ -408,6 +408,22 @@ cases:
       (println (comp-sq '(1 2 3 4 5 6 7)))
     expected: |
       84
+  - name: head-position-calls-reach-the-value-cell
+    # A head-position call to a VARIABLE-kind name (a defn parameter, a let
+    # binding, a def'd variable) is a funcall of the value cell, while a defn
+    # name stays a direct call.
+    source: |
+      (defn hoc-call-it [f x] (f x))
+      (println (hoc-call-it inc 41))
+      (println (let [lf inc] (lf 41)))
+      (def hoc-to-up (memfn toUpperCase))
+      (println (hoc-to-up "hey"))
+      (println (get (ex-data ((fn [mk] (mk "v" {:code 7})) ex-info)) :code))
+    expected: |
+      42
+      42
+      HEY
+      7
   - name: recursion-fact
     source: |
       (defn fact-r [n]

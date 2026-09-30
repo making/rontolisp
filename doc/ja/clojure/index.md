@@ -50,7 +50,8 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 
 すべての識別子は `c%` の背後にマングルされるため、Clojure の名前がコアフォームや
 組み込みと衝突しません。`defn` は `defun`（直接呼び出し）、`def` はトップレベルの
-`setq`、`fn` と `#(...)` は `lambda`（`#(...)` の引数は1つの rest リストで運ばれる）、
+`setq` ですが、引数・`let`/`loop` 束縛・`def` で定義した変数の先頭位置の呼び出しは
+値セルの `funcall` です（`(defn call-it [f x] (f x))` が動きます）、`fn` と `#(...)` は `lambda`（`#(...)` の引数は1つの rest リストで運ばれる）、
 `let` は `let*`、`loop`/`recur` は `labels` の自己呼び出し、ベクターリテラルは
 `vector` 呼び出し、マップリテラルは `equal` ハッシュテーブル（インプレースでは
 決して変更されません -- すべての動詞が新しいテーブルを作るため、永続性が観測可能に

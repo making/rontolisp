@@ -27,17 +27,20 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Binding model: every identifier mangles behind {@link #PREFIX} ({@code c%}), so no user
  * name collides with a core form, a built-in or the reader's markers. {@code defn} is a
- * {@code defun} (the direct call and the tree shaker keep working); a multi-arity
- * {@code defn} is one {@code defun} per arity plus a dispatch {@code defun} picking by
- * argument count (like {@code case-lambda}); {@code declare} registers forward names in
- * the pre-scan and lowers to {@code nil}; {@code def} a top-level {@code setq} (inside a
- * body it still sets the global when the body runs); {@code fn} and {@code #(...)} a
- * {@code lambda} (the {@code #(...)} arguments travel as one rest list), a multi-arity
- * {@code fn} a single {@code lambda} over {@code &rest} dispatching per arity, a named
- * {@code fn} a {@code labels} self-binding; {@code let} a {@code let*} (Clojure's let is
- * sequential); {@code loop}/{@code recur} a {@code labels} self call (the interpreter's
- * tail calls make it constant-stack). Binding patterns destructure: a vector pattern
- * binds positionally through the seq view ({@code nth}, {@code &} the rest as a seq,
+ * {@code defun} (the direct call and the tree shaker keep working); a head-position call
+ * to a {@code VARIABLE}-kind name (a parameter, a {@code let}/{@code loop} binding, a
+ * {@code def}'d variable) is a {@code funcall} of the value cell, while a {@code defn}
+ * name stays a direct call; a multi-arity {@code defn} is one {@code defun} per arity
+ * plus a dispatch {@code defun} picking by argument count (like {@code case-lambda});
+ * {@code declare} registers forward names in the pre-scan and lowers to {@code nil};
+ * {@code def} a top-level {@code setq} (inside a body it still sets the global when the
+ * body runs); {@code fn} and {@code #(...)} a {@code lambda} (the {@code #(...)}
+ * arguments travel as one rest list), a multi-arity {@code fn} a single {@code lambda}
+ * over {@code &rest} dispatching per arity, a named {@code fn} a {@code labels}
+ * self-binding; {@code let} a {@code let*} (Clojure's let is sequential);
+ * {@code loop}/{@code recur} a {@code labels} self call (the interpreter's tail calls
+ * make it constant-stack). Binding patterns destructure: a vector pattern binds
+ * positionally through the seq view ({@code nth}, {@code &} the rest as a seq,
  * {@code :as} the whole), a map pattern through the table-aware read
  * ({@code :keys}/{@code :syms}/{@code :strs}, explicit locals, {@code :as}, {@code :or}
  * defaults) -- in {@code let}, {@code loop} and {@code fn}/ {@code defn} parameters
@@ -1469,11 +1472,24 @@ final class ClojureLowering {
 		if (referred != null) {
 			return stringCall(referred.var(), items);
 		}
+		List<LispVal> args = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			args.add(lower(items.get(i)));
+		}
+		if (!isFunction(name)) {
+			// a parameter, a let/loop binding or a def'd variable holds the
+			// function in the VALUE cell (Lisp-2): a direct call would read the
+			// function cell and miss, so call through funcall instead. A defn
+			// (and a declare, which keeps its current error) stays direct.
+			List<LispVal> funcall = new ArrayList<>();
+			funcall.add(sym("FUNCALL"));
+			funcall.add(idSym(name));
+			funcall.addAll(args);
+			return list(funcall);
+		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(idSym(name));
-		for (int i = 1; i < items.size(); i++) {
-			out.add(lower(items.get(i)));
-		}
+		out.addAll(args);
 		return list(out);
 	}
 
