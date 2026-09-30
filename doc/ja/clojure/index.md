@@ -1,8 +1,11 @@
 # Clojure (experimental)
 
-**Experimental.** rontolisp は Clojure の小さなサブセット -- `def`/`defn`、`fn` と
-`#(...)`、`let`/`loop`/`recur`、`if`/`when`/`cond`/`do`/`and`/`or`、`first`/`rest`/
-`next`/`seq`/`cons`/`map`/`filter`/`reduce`/`apply`/`concat`、省略可能なデフォルト付き
+**Experimental.** rontolisp は Clojure の小さなサブセット -- `def`/`defn`（単一・多
+アリティ）と `declare`、`fn`（名前付き、多アリティ）と `#(...)`、`let`/`loop`/
+`recur`（シーケンシャル・マップの分割束縛付き）、`if`/`when`/`cond`/`do`/`and`/
+`or`、スレッディング（`->`/`->>`/`as->`/`doto`/`cond->`/`cond->>`/`some->`/
+`some->>`）、`first`/`rest`/
+`next`/`seq`/`cons`/`list*`/`map`/`filter`/`reduce`/`apply`/`concat`、省略可能なデフォルト付き
 `nth` と end 付き `take`/`drop`/`range`、ベクター・キーワード・マップ・セットの
 リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
@@ -59,6 +62,20 @@ end 付き `range` は strict なリストを作ります。end のない `range
 `::` 自動解決は拒否されます。名前空間付きの `:a/b` は不透明なデータとして全体で
 印字・比較されます。
 
+複数のアリティを持つ `defn` はアリティごとの `defun` 1つと引数の個数で選ぶ
+ディスパッチ `defun` です（単一の可変長節は固定引数を超える任意の個数を取ります）。
+それ以外の個数での呼び出しはシグナルします。複数アリティの `fn` は同じく
+ディスパッチする1つの `lambda` で、名前付き `fn` は自己呼び出しのために自分自身を
+束縛します。`declare` は後で定義されるものを宣言します。ベクターの束縛パターンは
+seq ビューを経由して位置で束縛され（`&` は残りを seq として、`:as` は全体を）、
+マップのパターンはテーブル対応の読み出しを経由します（`:keys`/`:syms`/
+`:strs`、明示的なローカル、`:as`、`:or` デフォルト）-- `let`、`loop`、
+`fn`/`defn` の引数いずれでもです。`->`/`->>` は値を2番目/最後に挿入し、`as->`
+は名前を段階的に束縛し直し、`doto` は（不変の）対象を答え、`cond->`/`cond->>`
+は真値のテストでのみスレッドし、`some->`/`some->>` は `nil` で止まります（`false`
+では止まりません）。`list*` は seq ビュー上の `cons` の右畳み込みです。
+`doseq`/`dotimes`/`for` と `defmulti`/`defmethod` は名前付きで拒否されます。
+
 ## REPL
 
 ファイルなしで `--source-language clojure` を付けると Clojure REPL（`clojure> `
@@ -92,7 +109,11 @@ clojure> (twice 21)
 リストビューで動作します（リストはそのまま渡されます。空の結果は `nil` で、
 オラクルの `()` とは異なります。範囲外の `nth` は投げる代わりにデフォルトを
 答えます。マップ/セットの seq 順はテーブルの走査順で未規定です。文字列は文字に
-seq され Common Lisp 記法で印字されます）。分割束縛、
-スレッディングマクロ、`atom`、遅延 seq、メタデータ、`var` は
-ありません。 lowering エラーは最も内側のフォームの位置を名指しします（ファイルが
+seq され Common Lisp 記法で印字されます）。`doseq`/`dotimes`/`for` の内包と
+ループ、`defmulti`/`defmethod`、`atom`、遅延 seq、メタデータ、`var` は
+ありません。ボディ内の `def` はボディの実行時にグローバルを設定します。ボディ内の
+`defn` は文の位置でのみ動作します（複数アリティはトップレベルのみ）。`cond` は
+寛容な読みを保ちます。末尾の奇数アームはデフォルトであり、Clojure がシグナルする
+箇所です。コレクションリテラルをまたぐスレッディングの段階はシグナルします
+（ここではコレクションは関数ではありません）。 lowering エラーは最も内側のフォームの位置を名指しします（ファイルが
 既知の場合は `file:line:column`）。

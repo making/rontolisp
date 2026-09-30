@@ -310,4 +310,82 @@ class ClojureLoweringTest {
 		assertThat(lowered("(apply + 1 '(2 3))")).contains("APPLY").contains("#'+");
 	}
 
+	@Test
+	void destructuringBindsSequentialPatterns() {
+		assertThat(lowered("(let [[a b] [1 2]] a)")).contains("LET*").contains("(NTH").contains("|c%a|");
+		assertThat(lowered("(let [[a & r] [1 2 3]] r)")).contains("NTHCDR");
+		assertThat(lowered("(let [[a :as v] [1 2]] v)")).contains("LET*");
+		assertThat(lowered("(let [{:keys [a b] :as m :or {a 9}} {:a 1}] a)")).contains("GETHASH")
+			.contains(":C%KEYWORD");
+		assertThat(lowered("(let [{s :s} {:s 1}] s)")).contains("GETHASH");
+		assertThat(lowered("(let [{:strs [s]} {:s 1}] s)")).contains("GETHASH");
+		assertThat(lowered("(loop [[a b] [1 2]] a)")).contains("LABELS").contains("(NTH");
+		assertThat(lowered("((fn [[a b]] a) [1 2])")).contains("(NTH");
+		assertThat(lowered("((fn [{:keys [a]}] a) {:a 1})")).contains("GETHASH");
+		assertThatThrownBy(() -> Clojure.read("(let [[a &] [1]] a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
+		assertThatThrownBy(() -> Clojure.read("(let [{:keys a} {:a 1}] a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a map pattern :keys takes a vector of plain names");
+	}
+
+	@Test
+	void threadingIsADatumRewriteAroundOneTemporary() {
+		assertThat(lowered("(-> 5 inc)")).isEqualTo(FALSE_BINDING + "(+ 5 1)");
+		assertThat(lowered("(->> 5 (conj [1]))")).contains("COERCE").contains("(VECTOR 1)");
+		assertThat(lowered("(-> {:a 1} :a)")).contains("GETHASH");
+		assertThat(lowered("(as-> 5 x (inc x))")).contains("LET*");
+		assertThat(lowered("(doto 5 (inc))")).contains("(LET");
+		assertThat(lowered("(cond-> 5 true inc)")).contains("(IF");
+		assertThat(lowered("(some-> nil (inc))")).contains("NULL");
+		assertThat(lowered("(list* 1 [2 3])")).contains("(CONS").contains("COERCE");
+		assertThatThrownBy(() -> Clojure.read("(->)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("-> takes a value and forms");
+		assertThatThrownBy(() -> Clojure.read("(cond-> 5 true)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cond-> takes a value and test/form pairs");
+	}
+
+	@Test
+	void multiArityDefnDispatchesByCount() {
+		assertThat(lowered("(defn mar-f ([x] x) ([x y] (+ x y)))")).contains("(DEFUN")
+			.contains("LENGTH")
+			.contains("wrong number of arguments passed to: mar-f");
+		assertThat(lowered("(defn mar-g ([x & xs] xs))")).contains("NTHCDR");
+		assertThatThrownBy(() -> Clojure.read("(defn bad ([x] x) ([y] y))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("two clauses for arity 1");
+		assertThatThrownBy(() -> Clojure.read("(defn bad ([x & a] x) ([y & b] y))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("at most one variadic clause");
+		assertThatThrownBy(() -> Clojure.read("(let [x 1] (defn bad ([y] y) ([z w] z)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a multi-arity defn is only allowed at the top level");
+	}
+
+	@Test
+	void namedAndMultiArityFn() {
+		assertThat(lowered("((fn myfn [x] x) 1)")).contains("LABELS").contains("#'|c%myfn|");
+		assertThat(lowered("((fn ([x] x) ([x y] y)) 1)")).contains("LENGTH").contains("(NTH");
+		assertThatThrownBy(() -> Clojure.read("(fn)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("fn needs a parameter vector and a body");
+	}
+
+	@Test
+	void declareRegistersForwardNames() {
+		assertThat(lowered("(declare dcl-f) (defn dcl-g [] (dcl-f 1))")).contains("NIL").contains("|c%dcl-f|");
+	}
+
+	@Test
+	void iterationAndMultimethodsAreRefusedByName() {
+		assertThatThrownBy(() -> Clojure.read("(doseq [x [1]] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("iteration forms are not supported yet: doseq");
+		assertThatThrownBy(() -> Clojure.read("(dotimes [i 2] i)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("iteration forms are not supported yet: dotimes");
+		assertThatThrownBy(() -> Clojure.read("(for [x [1]] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("iteration forms are not supported yet: for");
+		assertThatThrownBy(() -> Clojure.read("(defmulti area :shape)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("multimethods are not supported yet: defmulti");
+		assertThatThrownBy(() -> Clojure.read("(defmethod area :circle [m] 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("multimethods are not supported yet: defmethod");
+	}
+
 }

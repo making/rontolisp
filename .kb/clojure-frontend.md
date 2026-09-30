@@ -26,11 +26,17 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | Clojure | lowers to | why |
 |---|---|---|
 | identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
-| `defn` | `defun` of the mangled name, called directly | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name, so a definition may use one below it |
-| `def` | top-level `setq` of the mangled name | |
-| `fn` / `#(...)` | `lambda` | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`) |
+| `defn` | `defun` of the mangled name, called directly; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
+| `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
+| `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it) |
+| `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites |
+| destructuring (`let`/`loop`/`fn`/`defn` patterns) | `let*` pairs over one temporary per pattern | a vector pattern binds positionally through the seq view (`nth`, past the end nil; `&` the rest as a seq, itself a pattern; `:as` the whole); a map pattern through the table-aware read (`:keys` binding the short name when qualified, `:syms` from quoted symbols, `:strs` from strings, explicit locals from key expressions, `:as`, `:or` defaults); nested patterns recurse. Malformed shapes are named refusals |
 | `let` | `let*` | Clojure's `let` is sequential |
-| `loop`/`recur` | `labels` self call | the interpreter's tail calls make it constant-stack |
+| `loop`/`recur` | `labels` self call | the interpreter's tail calls make it constant-stack; inits are sequential and parameters destructure, like `let` (decided 2026-09-30, b04) |
+| `->`/`->>`/`as->` | the threaded call, rewritten as datums | `->` inserts second, `->>` last; a bare name or keyword calls/reads with the value; `as->` is nested `let`s, so shadowing matches the oracle. A step over a collection literal signals (collections are not functions here) |
+| `doto`/`cond->`/`cond->>`/`some->`/`some->>` | the threaded calls around one temporary | `doto` answers its (unchanged) target; `cond->` threads only on truthy tests; `some->` stops at `nil` but not at `false`, like the oracle |
+| `list*` | a right fold of `cons` over the seq view | of one argument, just its seq (signalling for a non-collection, like the oracle) |
+| `doseq`/`dotimes`/`for`, `defmulti`/`defmethod` | refused by name | `iteration forms are not supported yet` / `multimethods are not supported yet`; multimethods belong to b05 |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
 | `not` | an explicit null-or-false check answering `T`-or-false | |
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
@@ -104,11 +110,15 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   throwing; a map/set seq's order is the table's walk order, unspecified; strings seq
   to characters, which print in Common Lisp notation; there is no laziness, chunking
   or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
-- Destructuring, `->`/`->>`, `defmulti`/`defmethod`, protocols, `atom`/`swap!`/`deref`,
+- `doseq`/`dotimes`/`for`, `defmulti`/`defmethod`, protocols, `atom`/`swap!`/`deref`,
   metadata `^`, `var`/`#'`: all absent. The reader parses `@x`, `^meta`,
   backquote, `~` into marked lists the lowering refuses.
-- `defn` inside a body works only in statement position; `declare` is absent. `def`
-  inside a body mutates the global at run time, unreviewed.
+- `def` inside a body sets the global when the body runs (decided 2026-09-30, b04:
+  keep the `setq`, document it). `defn` inside a body works only in statement
+  position, and a multi-arity one only at the top level (several `defun`s cannot
+  splice into expression position -- a named refusal). `cond` keeps the lenient
+  reading (an odd trailing arm is the default), deviating from the oracle, pinned by
+  the spec's `if-when-cond-do-and-or` case (decided 2026-09-30, b04).
 - Errors name the innermost form's source position: the reader's `LispReadException`s
   are prefixed (`file:line:column` when the file is known), and the lowering
   re-reports its own errors (`unknown name`, arity refusals, ...) against the
@@ -159,4 +169,11 @@ in `clojure-spec.yaml` (run on all four backends) or, for the lazy refusals, in
 `pr`/`prn` convert readably (b06); `inc`/`dec`/`str` and the seq verbs name lambdas
 as values and `apply` spreads leading arguments, each pinned in `clojure-spec.yaml`
 (run on all four backends); lowering errors name the innermost form's position,
-pinned in `ClojureLoweringTest`.
+pinned in `ClojureLoweringTest`. Binding and control forms lower the same way (b04):
+sequential and map destructuring in `let`/`loop`/`fn`/`defn` parameters, the
+threading family as datum rewrites around one temporary, multi-arity `defn` as
+per-arity `defun`s plus a count dispatch (multi-arity `fn` through one `lambda`,
+named `fn` through `labels`), `declare` as a pre-scan forward declaration,
+`list*` as a `cons` fold -- each pinned in `clojure-spec.yaml` (run on all four
+backends) or, for the refusals (`doseq`/`dotimes`/`for`, `defmulti`/`defmethod`,
+malformed patterns and arities), in `ClojureLoweringTest`.

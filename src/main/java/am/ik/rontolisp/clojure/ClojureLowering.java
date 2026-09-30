@@ -26,22 +26,36 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Binding model: every identifier mangles behind {@link #PREFIX} ({@code c%}), so no user
  * name collides with a core form, a built-in or the reader's markers. {@code defn} is a
- * {@code defun} (the direct call and the tree shaker keep working); {@code def} a
- * top-level {@code setq}; {@code fn} and {@code #(...)} a {@code lambda} (the
- * {@code #(...)} arguments travel as one rest list); {@code let} a {@code let*}
- * (Clojure's let is sequential); {@code loop}/{@code recur} a {@code labels} self call
- * (the interpreter's tail calls make it constant-stack). Collections: a vector literal is
- * a {@code vector} call; a map literal is an {@code equal} hash table built by
- * {@code rontolisp:plist-hash-table} (lists and nested maps key structurally; vectors and
- * tables key by identity, like the runtime), never mutated in place -- every verb that
- * "changes" a map builds a fresh table, which is what keeps the persistent semantics
- * observable; a set literal is the same table with each member stored under itself,
- * wrapped as {@code (:C%SET table)} so a verb can tell a set from a map (the wrapper
- * prints as written, like vectors in CL notation); a seq is a STRICT list view -- lists
- * pass through untouched, vectors and strings coerce, maps contribute one two-vector per
- * entry and sets one member per element (both in the table's walk order, unspecified),
- * nil and the false object are empty, anything else signals -- so
- * {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
+ * {@code defun} (the direct call and the tree shaker keep working); a multi-arity
+ * {@code defn} is one {@code defun} per arity plus a dispatch {@code defun} picking by
+ * argument count (like {@code case-lambda}); {@code declare} registers forward names in
+ * the pre-scan and lowers to {@code nil}; {@code def} a top-level {@code setq} (inside a
+ * body it still sets the global when the body runs); {@code fn} and {@code #(...)} a
+ * {@code lambda} (the {@code #(...)} arguments travel as one rest list), a multi-arity
+ * {@code fn} a single {@code lambda} over {@code &rest} dispatching per arity, a named
+ * {@code fn} a {@code labels} self-binding; {@code let} a {@code let*} (Clojure's let is
+ * sequential); {@code loop}/{@code recur} a {@code labels} self call (the interpreter's
+ * tail calls make it constant-stack). Binding patterns destructure: a vector pattern
+ * binds positionally through the seq view ({@code nth}, {@code &} the rest as a seq,
+ * {@code :as} the whole), a map pattern through the table-aware read
+ * ({@code :keys}/{@code :syms}/{@code :strs}, explicit locals, {@code :as}, {@code :or}
+ * defaults) -- in {@code let}, {@code loop} and {@code fn}/ {@code defn} parameters
+ * alike. Threading ({@code ->}/{@code ->>}/{@code as->}) is a pure datum rewrite;
+ * {@code doto}/{@code cond->}/{@code cond->>}/ {@code some->}/{@code some->>} thread
+ * around one temporary; {@code list*} is a right fold of {@code cons} over the seq view.
+ * Multimethods ({@code defmulti}/{@code defmethod}) and the imperative loops and
+ * comprehensions ({@code doseq}/{@code dotimes}/{@code for}) are refused by name.
+ * Collections: a vector literal is a {@code vector} call; a map literal is an
+ * {@code equal} hash table built by {@code rontolisp:plist-hash-table} (lists and nested
+ * maps key structurally; vectors and tables key by identity, like the runtime), never
+ * mutated in place -- every verb that "changes" a map builds a fresh table, which is what
+ * keeps the persistent semantics observable; a set literal is the same table with each
+ * member stored under itself, wrapped as {@code (:C%SET table)} so a verb can tell a set
+ * from a map (the wrapper prints as written, like vectors in CL notation); a seq is a
+ * STRICT list view -- lists pass through untouched, vectors and strings coerce, maps
+ * contribute one two-vector per entry and sets one member per element (both in the
+ * table's walk order, unspecified), nil and the false object are empty, anything else
+ * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
  * stays a no-copy identity. There is no laziness, chunking or memoisation:
@@ -135,7 +149,7 @@ final class ClojureLowering {
 			if (isNsForm(datum)) {
 				continue; // a namespace declaration defines nothing
 			}
-			lowering.forms.add(lowering.topLevel(datum));
+			lowering.forms.addAll(lowering.topLevels(datum));
 		}
 		return lowering.forms;
 	}
@@ -158,7 +172,7 @@ final class ClojureLowering {
 			if (isNsForm(datum)) {
 				continue; // a namespace declaration defines nothing
 			}
-			out.add(new ClojureTopLevel(List.of(topLevel(datum)), true));
+			out.add(new ClojureTopLevel(topLevels(datum), true));
 		}
 		if (!this.falseBound && !out.isEmpty()) {
 			// The session's first datum carries the false binding ahead of itself,
@@ -196,19 +210,26 @@ final class ClojureLowering {
 		else if (isSymbolNamed(items.get(0), "defn")) {
 			this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
 		}
+		else if (isSymbolNamed(items.get(0), "declare")) {
+			// a forward declaration: later buffers (and later forms) may call
+			// what is only defined below; a real definition still wins
+			for (int i = 1; i < items.size(); i++) {
+				this.globals.putIfAbsent(plainName(items.get(i), "declare"), Kind.FUNCTION);
+			}
+		}
 	}
 
 	ClojureLowering() {
 		this.scopes.add(new HashMap<>()); // locals; globals live in globals
 	}
 
-	private LispVal topLevel(LispVal form) {
+	private List<LispVal> topLevels(LispVal form) {
 		try {
 			List<LispVal> items = items(form);
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defn")) {
-				return defun(items);
+				return defuns(items);
 			}
-			return lower(form);
+			return List.of(lower(form));
 		}
 		catch (LispReadException ex) {
 			throw positioned(ex, form);
@@ -266,7 +287,11 @@ final class ClojureLowering {
 			return def(items);
 		}
 		if (isSymbolNamed(head, "defn")) {
-			return defun(items);
+			// in a body: a single defun, like ever; several arities cannot splice
+			// into expression position
+			List<LispVal> forms = defuns(items);
+			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
+			return forms.get(0);
 		}
 		if (head == ClojureReader.FN_ANON || isSymbolNamed(head, "fn")) {
 			return fn(items);
@@ -276,6 +301,42 @@ final class ClojureLowering {
 		}
 		if (isSymbolNamed(head, "loop")) {
 			return loop(items);
+		}
+		if (isSymbolNamed(head, "declare")) {
+			return declareForm(items);
+		}
+		if (isSymbolNamed(head, "->")) {
+			return threadFirst(items);
+		}
+		if (isSymbolNamed(head, "->>")) {
+			return threadLast(items);
+		}
+		if (isSymbolNamed(head, "as->")) {
+			return threadAs(items);
+		}
+		if (isSymbolNamed(head, "doto")) {
+			return dotoOf(items);
+		}
+		if (isSymbolNamed(head, "cond->")) {
+			return condThread(items, false);
+		}
+		if (isSymbolNamed(head, "cond->>")) {
+			return condThread(items, true);
+		}
+		if (isSymbolNamed(head, "some->")) {
+			return someThread(items, false);
+		}
+		if (isSymbolNamed(head, "some->>")) {
+			return someThread(items, true);
+		}
+		if (isSymbolNamed(head, "list*")) {
+			return listStar(items);
+		}
+		if (isSymbolNamed(head, "doseq") || isSymbolNamed(head, "dotimes") || isSymbolNamed(head, "for")) {
+			throw new LispReadException("iteration forms are not supported yet: " + ((LispSymbol) head).name());
+		}
+		if (isSymbolNamed(head, "defmulti") || isSymbolNamed(head, "defmethod")) {
+			throw new LispReadException("multimethods are not supported yet: " + ((LispSymbol) head).name());
 		}
 		if (head instanceof LispCons) {
 			return cons(sym("funcall"), lowers(items, 0)); // ((fn ...) args)
@@ -330,20 +391,174 @@ final class ClojureLowering {
 		return list(sym("setq"), idSym(name), value);
 	}
 
-	private LispVal defun(List<LispVal> items) {
+	private LispVal declareForm(List<LispVal> items) {
+		for (int i = 1; i < items.size(); i++) {
+			this.globals.putIfAbsent(plainName(items.get(i), "declare"), Kind.FUNCTION);
+		}
+		return NIL_CONST;
+	}
+
+	/**
+	 * One parameter vector lowered: the real lambda-list items, the destructuring
+	 * prologue (flat {@code (symbol init)} pairs, sequential) and the shape facts a
+	 * dispatch needs. Plain names are registered in {@code scope}; generated temporaries
+	 * need no registration (nothing looks them up by name).
+	 */
+	private record Clause(List<LispVal> params, List<LispVal> prologue, LispVal body, boolean variadic, int fixed) {
+
+		LispVal wrapped() {
+			if (this.prologue.isEmpty()) {
+				return this.body;
+			}
+			return list(sym("let*"), list(this.prologue), this.body);
+		}
+
+	}
+
+	private List<LispVal> defuns(List<LispVal> items) {
 		int at = 2;
 		if (items.size() > at && items.get(at) instanceof LispString) {
 			at++; // the docstring
 		}
-		isTrue(items.size() > at + 1, "defn needs a parameter vector and a body");
+		isTrue(items.size() > at + 1 || items.size() == at + 1 && items.get(at) instanceof LispCons,
+				"defn needs a parameter vector and a body");
 		String name = plainName(items.get(1), "defn");
 		this.globals.put(name, Kind.FUNCTION);
-		LispVal lambda = lambda(items.get(at), items.subList(at + 1, items.size()));
-		return new LispCons(sym("defun"), new LispCons(idSym(name), ((LispCons) lambda).cdr()));
+		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+			return multiDefun(name, items.subList(at, items.size()));
+		}
+		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()));
+		return List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped()));
+	}
+
+	/** Whether the datum is a `[...]` vector (its marker head), not an arity clause. */
+	private static boolean isVectorDatum(LispVal form) {
+		List<LispVal> parts = items(form);
+		return parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR;
+	}
+
+	/**
+	 * A multi-arity {@code defn}: one {@code defun} per arity plus a dispatch
+	 * {@code defun} picking by argument count, the shape {@code case-lambda} takes. Each
+	 * clause keeps its own parameters (a variadic clause its {@code &rest}); the dispatch
+	 * hands each its arguments positionally. A name no identifier mangles to (a single
+	 * {@code %} outside the {@code :} escape) keeps the helpers apart from user
+	 * definitions.
+	 */
+	private List<LispVal> multiDefun(String name, List<LispVal> clauses) {
+		List<Clause> parsed = arityClauses(clauses, "defn");
+		List<LispVal> forms = new ArrayList<>();
+		LispVal args = freshTemp();
+		LispVal count = freshTemp();
+		List<LispVal> helpers = new ArrayList<>();
+		for (Clause clause : parsed) {
+			LispSymbol helper = new LispSymbol(PREFIX + name + "%" + (clause.variadic() ? "*" : clause.fixed()));
+			helpers.add(helper);
+			// the dispatch hands a variadic clause its rest pre-built as a list,
+			// so the helper takes it as an ordinary parameter, not &rest
+			List<LispVal> helperParams = new ArrayList<>(clause.params());
+			helperParams.remove(AMPERSAND_REST);
+			forms.add(list(sym("defun"), helper, list(helperParams), clause.wrapped()));
+		}
+		List<LispVal> arms = new ArrayList<>();
+		for (int i = 0; i < parsed.size(); i++) {
+			Clause clause = parsed.get(i);
+			LispSymbol helper = (LispSymbol) helpers.get(i);
+			List<LispVal> call = new ArrayList<>();
+			call.add(helper);
+			for (int p = 0; p < clause.fixed(); p++) {
+				call.add(list(sym("NTH"), new LispInteger(p), args));
+			}
+			if (clause.variadic()) {
+				call.add(list(sym("NTHCDR"), new LispInteger(clause.fixed()), args));
+			}
+			LispVal test = clause.variadic() ? list(sym(">="), count, new LispInteger(clause.fixed()))
+					: list(sym("="), count, new LispInteger(clause.fixed()));
+			arms.add(list(test, list(call)));
+		}
+		arms.add(list(TRUE_CONST,
+				list(sym("error"), LispString.literal("wrong number of arguments passed to: " + name))));
+		forms.add(list(sym("defun"), idSym(name), list(List.of(AMPERSAND_REST, args)),
+				list(sym("let"), list(List.of(list(count, list(sym("length"), args)))), cons(sym("cond"), arms))));
+		return forms;
+	}
+
+	/**
+	 * The arity clauses of a multi-arity {@code defn} or {@code fn}, each a list of a
+	 * parameter vector and a body, with at most one variadic clause and one clause per
+	 * fixed arity.
+	 */
+	private List<Clause> arityClauses(List<LispVal> clauses, String owner) {
+		isTrue(!clauses.isEmpty(), owner + " needs a parameter vector and a body");
+		List<Clause> parsed = new ArrayList<>();
+		Set<Integer> fixed = new HashSet<>();
+		boolean variadic = false;
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = items(clauseDatum);
+			if (parts == null || parts.isEmpty()) {
+				throw new LispReadException(
+						owner + " arity clauses take a parameter vector and a body, not " + clauseDatum.print());
+			}
+			Clause clause = clause(parts.get(0), parts.subList(1, parts.size()));
+			if (clause.variadic()) {
+				isTrue(!variadic, owner + " takes at most one variadic clause");
+				variadic = true;
+			}
+			else {
+				isTrue(fixed.add(clause.fixed()), owner + " has two clauses for arity " + clause.fixed());
+			}
+			parsed.add(clause);
+		}
+		return parsed;
+	}
+
+	/**
+	 * One lambda over a parameter vector and a not-yet-lowered body, the params scoped.
+	 * Destructured parameters travel as generated temporaries with a {@code let*}
+	 * prologue rebinding them to their patterns.
+	 */
+	private Clause clause(LispVal paramVector, List<LispVal> bodyForms) {
+		List<LispVal> names = bindingItems(paramVector, "the parameter vector of");
+		Map<String, Kind> scope = new HashMap<>();
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> prologue = new ArrayList<>();
+		for (int i = 0; i < names.size(); i++) {
+			LispVal datum = names.get(i);
+			if (isSymbolNamed(datum, "&")) {
+				isTrue(i + 1 < names.size(), "a & needs a rest name after it");
+				isTrue(i + 2 == names.size(), "only one name may follow & in a parameter vector");
+				params.add(AMPERSAND_REST);
+				LispVal rest = names.get(++i);
+				if (rest instanceof LispSymbol) {
+					String name = plainName(rest, "the parameter vector of");
+					scope.put(name, Kind.VARIABLE);
+					params.add(idSym(name));
+				}
+				else {
+					LispSymbol temp = freshTemp();
+					params.add(temp);
+					destructureInto(rest, temp, prologue, scope, "the parameter vector of");
+				}
+				continue;
+			}
+			if (datum instanceof LispSymbol) {
+				String param = plainName(datum, "the parameter vector of");
+				scope.put(param, Kind.VARIABLE);
+				params.add(idSym(param));
+				continue;
+			}
+			LispSymbol temp = freshTemp();
+			params.add(temp);
+			destructureInto(datum, temp, prologue, scope, "the parameter vector of");
+		}
+		LispVal body = inScope(scope, () -> bodyOf(bodyForms));
+		boolean variadic = params.contains(AMPERSAND_REST);
+		int fixed = variadic ? params.indexOf(AMPERSAND_REST) : params.size();
+		return new Clause(List.copyOf(params), List.copyOf(prologue), body, variadic, fixed);
 	}
 
 	private LispVal fn(List<LispVal> items) {
-		if (items.get(1) == ClojureReader.FN_ANON) {
+		if (items.size() > 1 && items.get(1) == ClojureReader.FN_ANON) {
 			isTrue(items.size() >= 2, "the anon form #(...) needs a body");
 			LispVal form = items.size() == 3 ? items.get(2)
 					: new LispCons(items.get(2), list(items.subList(3, items.size())));
@@ -357,11 +572,69 @@ final class ClojureLowering {
 			}
 		}
 		int at = 1;
-		if (items.get(at) instanceof LispString) {
-			at++; // fn name
+		isTrue(items.size() > at, "fn needs a parameter vector and a body");
+		String self = null;
+		if (items.get(at) instanceof LispSymbol) {
+			self = plainName(items.get(at), "fn");
+			at++;
 		}
 		isTrue(items.size() > at, "fn needs a parameter vector and a body");
-		return lambda(items.get(at), items.subList(at + 1, items.size()));
+		if (self == null) {
+			return singleOrMultiFn(items, at, "fn");
+		}
+		Map<String, Kind> scope = new HashMap<>();
+		scope.put(self, Kind.FUNCTION);
+		String name = self;
+		int from = at;
+		return inScope(scope, () -> {
+			LispVal inner = singleOrMultiFn(items, from, name);
+			// a labels self-binding: calls lower directly and the labels
+			// expansion rewrites them to the local; the value is the local
+			LispVal paramsAndBody = ((LispCons) inner).cdr();
+			LispVal binding = new LispCons(idSym(name), paramsAndBody);
+			return list(sym("labels"), list(List.of(binding)), list(sym("function"), idSym(name)));
+		});
+	}
+
+	private LispVal singleOrMultiFn(List<LispVal> items, int at, String owner) {
+		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+			return multiFn(items.subList(at, items.size()), owner);
+		}
+		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()));
+		return list(sym("lambda"), list(clause.params()), clause.wrapped());
+	}
+
+	/**
+	 * A multi-arity {@code fn}: one {@code lambda} over {@code &rest} dispatching per
+	 * arity through {@code let*} argument bindings -- no local functions, so a clause
+	 * body closes over the outer scope like any lambda body.
+	 */
+	private LispVal multiFn(List<LispVal> clauses, String owner) {
+		List<Clause> parsed = arityClauses(clauses, owner);
+		LispVal args = freshTemp();
+		LispVal count = freshTemp();
+		List<LispVal> arms = new ArrayList<>();
+		for (Clause clause : parsed) {
+			List<LispVal> bindings = new ArrayList<>();
+			int position = 0;
+			boolean rest = false;
+			for (LispVal param : clause.params()) {
+				if (AMPERSAND_REST.equals(param)) {
+					rest = true;
+					continue;
+				}
+				bindings.add(list(param, rest ? list(sym("NTHCDR"), new LispInteger(position), args)
+						: list(sym("NTH"), new LispInteger(position++), args)));
+			}
+			bindings.addAll(clause.prologue());
+			LispVal test = clause.variadic() ? list(sym(">="), count, new LispInteger(clause.fixed()))
+					: list(sym("="), count, new LispInteger(clause.fixed()));
+			arms.add(list(test, list(sym("let*"), list(bindings), clause.body())));
+		}
+		arms.add(list(TRUE_CONST,
+				list(sym("error"), LispString.literal("wrong number of arguments passed to: " + owner))));
+		return list(sym("lambda"), list(List.of(AMPERSAND_REST, args)),
+				list(sym("let"), list(List.of(list(count, list(sym("length"), args)))), cons(sym("cond"), arms)));
 	}
 
 	private LispVal let(List<LispVal> items) {
@@ -374,9 +647,16 @@ final class ClojureLowering {
 		try {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
-				String name = plainName(bindings.get(i), "let");
-				pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
-				scope.put(name, Kind.VARIABLE);
+				LispVal pattern = bindings.get(i);
+				if (pattern instanceof LispSymbol) {
+					String name = plainName(pattern, "let");
+					pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
+					scope.put(name, Kind.VARIABLE);
+					continue;
+				}
+				LispSymbol temp = freshTemp();
+				pairs.add(list(temp, lower(bindings.get(i + 1))));
+				destructureInto(pattern, temp, pairs, scope, "let");
 			}
 			form = list(sym("let*"), list(pairs), body(items, 2));
 		}
@@ -394,25 +674,50 @@ final class ClojureLowering {
 		Map<String, Kind> scope = new HashMap<>();
 		List<LispVal> paramSyms = new ArrayList<>();
 		List<LispVal> inits = new ArrayList<>();
-		for (int i = 0; i < bindings.size(); i += 2) {
-			String binding = plainName(bindings.get(i), "loop");
-			paramSyms.add(idSym(binding));
-			inits.add(lower(bindings.get(i + 1)));
-			scope.put(binding, Kind.VARIABLE);
-		}
-		String outer = this.loop;
-		this.loop = name;
-		this.scopes.add(scope);
+		List<LispVal> prologue = new ArrayList<>();
+		this.scopes.add(scope); // let*-like: each init sees the bindings before it
 		try {
-			LispVal lambdaBody = body(items, 2);
-			// a labels binding is a named function: (name (params...) body...)
-			LispVal binding = new LispCons(new LispSymbol(name),
-					new LispCons(list(paramSyms), cons(lambdaBody, List.of())));
-			return list(sym("labels"), list(binding), new LispCons(new LispSymbol(name), list(inits)));
+			for (int i = 0; i < bindings.size(); i += 2) {
+				LispVal pattern = bindings.get(i);
+				LispVal init = lower(bindings.get(i + 1));
+				if (pattern instanceof LispSymbol) {
+					String binding = plainName(pattern, "loop");
+					paramSyms.add(idSym(binding));
+					inits.add(init);
+					scope.put(binding, Kind.VARIABLE);
+					continue;
+				}
+				LispSymbol temp = freshTemp();
+				paramSyms.add(temp);
+				inits.add(init);
+				destructureInto(pattern, temp, prologue, scope, "loop");
+			}
+			String outer = this.loop;
+			this.loop = name;
+			try {
+				LispVal lambdaBody = prologue.isEmpty() ? body(items, 2)
+						: list(sym("let*"), list(prologue), body(items, 2));
+				// a labels binding is a named function: (name (params...) body...)
+				LispVal binding = new LispCons(new LispSymbol(name),
+						new LispCons(list(paramSyms), cons(lambdaBody, List.of())));
+				// the self call wrapped in the sequential inits: labels parameters
+				// bind in parallel, but each init sees the bindings before it
+				LispVal self = new LispCons(new LispSymbol(name), list(paramSyms));
+				if (paramSyms.isEmpty()) {
+					return list(sym("labels"), list(binding), self);
+				}
+				List<LispVal> initPairs = new ArrayList<>();
+				for (int i = 0; i < paramSyms.size(); i++) {
+					initPairs.add(list(paramSyms.get(i), inits.get(i)));
+				}
+				return list(sym("labels"), list(binding), list(sym("let*"), list(initPairs), self));
+			}
+			finally {
+				this.loop = outer;
+			}
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
-			this.loop = outer;
 		}
 	}
 
@@ -588,7 +893,7 @@ final class ClojureLowering {
 				return list(sym("cdr"), seqForm(lower(items.get(1))));
 			case "cons":
 				isTrue(items.size() == 3, "cons takes an item and a collection");
-				return list(sym("cons"), lower(items.get(1)), seqForm(lower(items.get(2))));
+				return consForm(lower(items.get(1)), lower(items.get(2)));
 			case "empty?":
 				return booleanAnswer(emptyOf(items));
 			case "nil?":
@@ -842,12 +1147,20 @@ final class ClojureLowering {
 	private LispVal getOf(List<LispVal> items) {
 		int n = items.size() - 1;
 		isTrue(n == 2 || n == 3, "get takes a map, a key and an optional default");
-		LispSymbol coll = freshTemp();
-		LispSymbol key = freshTemp();
-		LispSymbol dflt = freshTemp();
-		List<LispVal> bindings = List.of(list(coll, lower(items.get(1))), list(key, lower(items.get(2))),
-				list(dflt, n == 3 ? lower(items.get(3)) : NIL_CONST));
-		return list(sym("let"), list(bindings), cons(sym("cond"), getBranches(coll, key, dflt)));
+		return getForm(lower(items.get(1)), lower(items.get(2)), n == 3 ? lower(items.get(3)) : NIL_CONST);
+	}
+
+	/**
+	 * The table-aware read over already-lowered collection, key and default: a set
+	 * answers its member, a map its value, a vector or a string its indexed element,
+	 * anything else the default.
+	 */
+	private LispVal getForm(LispVal coll, LispVal key, LispVal dflt) {
+		LispSymbol collSym = freshTemp();
+		LispSymbol keySym = freshTemp();
+		LispSymbol dfltSym = freshTemp();
+		List<LispVal> bindings = List.of(list(collSym, coll), list(keySym, key), list(dfltSym, dflt));
+		return list(sym("let"), list(bindings), cons(sym("cond"), getBranches(collSym, keySym, dfltSym)));
 	}
 
 	/**
@@ -1457,6 +1770,170 @@ final class ClojureLowering {
 	}
 
 	/**
+	 * {@code (-> x form...)}: each step with the value inserted second (a bare name calls
+	 * with it, a keyword step reads through it); a pure datum rewrite.
+	 */
+	private LispVal threadFirst(List<LispVal> items) {
+		isTrue(items.size() >= 2, "-> takes a value and forms to thread it through");
+		LispVal acc = items.get(1);
+		for (int i = 2; i < items.size(); i++) {
+			acc = threadInsert(items.get(i), acc, false);
+		}
+		return lower(acc);
+	}
+
+	/**
+	 * {@code (->> x form...)}: each step with the value appended last; a pure datum
+	 * rewrite like {@link #threadFirst}.
+	 */
+	private LispVal threadLast(List<LispVal> items) {
+		isTrue(items.size() >= 2, "->> takes a value and forms to thread it through");
+		LispVal acc = items.get(1);
+		for (int i = 2; i < items.size(); i++) {
+			acc = threadInsert(items.get(i), acc, true);
+		}
+		return lower(acc);
+	}
+
+	/**
+	 * One threading step around the threaded datum: a proper list not headed by a reader
+	 * marker takes the value second (first) or last; anything else -- a bare name, a
+	 * keyword, a literal -- calls or reads with it. A list headed by another list inserts
+	 * blindly, like the oracle's purely syntactic rule; a marker-headed literal cannot
+	 * take the value and signals when called.
+	 */
+	private static LispVal threadInsert(LispVal form, LispVal acc, boolean last) {
+		List<LispVal> parts = items(form);
+		if (parts != null && !parts.isEmpty() && !isThreadAtomHead(parts.get(0))) {
+			List<LispVal> out = new ArrayList<>();
+			out.add(parts.get(0));
+			if (!last) {
+				out.add(acc);
+			}
+			out.addAll(parts.subList(1, parts.size()));
+			if (last) {
+				out.add(acc);
+			}
+			return list(out);
+		}
+		return list(List.of(form, acc));
+	}
+
+	/** A threading step head that must not be inserted into: a reader marker. */
+	private static boolean isThreadAtomHead(LispVal head) {
+		return head instanceof LispSymbol s && s.name().startsWith("%");
+	}
+
+	/**
+	 * {@code (as-> x name form...)}: nested {@code let}s rebinding the name step by step,
+	 * so shadowing matches the oracle exactly.
+	 */
+	private LispVal threadAs(List<LispVal> items) {
+		isTrue(items.size() >= 3, "as-> takes a value, a name and forms");
+		String name = plainName(items.get(2), "as->");
+		if (items.size() == 3) {
+			return lower(items.get(1));
+		}
+		LispVal acc = items.get(items.size() - 1);
+		for (int i = items.size() - 2; i >= 3; i--) {
+			acc = letDatum(name, items.get(i), acc);
+		}
+		return lower(letDatum(name, items.get(1), acc));
+	}
+
+	/** The datum {@code (let [name init] body)}. */
+	private static LispVal letDatum(String name, LispVal init, LispVal body) {
+		return list(List.of(new LispSymbol("let"),
+				new LispCons(ClojureReader.VECTOR, list(List.of(new LispSymbol(name), init))), body));
+	}
+
+	/**
+	 * {@code (doto x form...)}: each step threaded first around one temporary, answering
+	 * the original value.
+	 */
+	private LispVal dotoOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "doto takes a value and forms");
+		Map<String, Kind> scope = new HashMap<>();
+		String temp = "doto-" + this.counter++;
+		scope.put(temp, Kind.VARIABLE);
+		LispSymbol ref = new LispSymbol(temp);
+		return inScope(scope, () -> {
+			List<LispVal> form = new ArrayList<>();
+			form.add(sym("let"));
+			form.add(list(List.of(list(idSym(temp), lower(items.get(1))))));
+			for (int i = 2; i < items.size(); i++) {
+				form.add(lower(threadInsert(items.get(i), ref, false)));
+			}
+			form.add(idSym(temp));
+			return list(form);
+		});
+	}
+
+	/**
+	 * {@code (cond-> x test form...)} (or {@code cond->>} threading last): each pair
+	 * rebinds one temporary to the running value and threads only when its test is
+	 * truthy.
+	 */
+	private LispVal condThread(List<LispVal> items, boolean last) {
+		String arrow = last ? "cond->>" : "cond->";
+		isTrue(items.size() >= 2 && items.size() % 2 == 0, arrow + " takes a value and test/form pairs");
+		Map<String, Kind> scope = new HashMap<>();
+		String temp = "condthread-" + this.counter++;
+		scope.put(temp, Kind.VARIABLE);
+		LispSymbol ref = new LispSymbol(temp);
+		return inScope(scope, () -> {
+			LispVal acc = items.get(1);
+			for (int i = 2; i + 1 < items.size(); i += 2) {
+				acc = letDatum(temp, acc, list(
+						List.of(new LispSymbol("if"), items.get(i), threadInsert(items.get(i + 1), ref, last), ref)));
+			}
+			return lower(acc);
+		});
+	}
+
+	/**
+	 * {@code (some-> x form...)} (or {@code some->>} threading last): each step threaded
+	 * around one temporary, short-circuiting to nil when it is nil -- but not when it is
+	 * false, like the oracle.
+	 */
+	private LispVal someThread(List<LispVal> items, boolean last) {
+		String arrow = last ? "some->>" : "some->";
+		isTrue(items.size() >= 2, arrow + " takes a value and forms");
+		Map<String, Kind> scope = new HashMap<>();
+		String temp = "somethread-" + this.counter++;
+		scope.put(temp, Kind.VARIABLE);
+		LispSymbol ref = new LispSymbol(temp);
+		return inScope(scope, () -> {
+			LispVal acc = items.get(1);
+			for (int i = 2; i < items.size(); i++) {
+				acc = letDatum(temp, acc, list(List.of(new LispSymbol("if"), list(List.of(new LispSymbol("nil?"), ref)),
+						LispNil.INSTANCE, threadInsert(items.get(i), ref, last))));
+			}
+			return lower(acc);
+		});
+	}
+
+	/**
+	 * {@code list*}: a right fold of {@code cons} over the seq view -- of one argument,
+	 * just its seq, signalling for a non-collection like the oracle.
+	 */
+	private LispVal listStar(List<LispVal> items) {
+		isTrue(items.size() >= 2, "list* takes a value and more collections");
+		if (items.size() == 2) {
+			return seqForm(lower(items.get(1)));
+		}
+		LispVal acc = lower(items.get(items.size() - 1));
+		for (int i = items.size() - 2; i >= 1; i--) {
+			acc = consForm(lower(items.get(i)), acc);
+		}
+		return acc;
+	}
+
+	private LispVal consForm(LispVal item, LispVal coll) {
+		return list(sym("cons"), item, seqForm(coll));
+	}
+
+	/**
 	 * {@code range} with an end: the strict list, built by a labels self call. Without an
 	 * end there is no strict lowering -- an infinite seq cannot be spelled -- so it is
 	 * refused by name, like {@code lazy-seq}. A zero step signals at run time.
@@ -1787,26 +2264,165 @@ final class ClojureLowering {
 	}
 
 	/**
-	 * One lambda over a parameter vector and a not-yet-lowered body, the params scoped.
+	 * One binding pattern destructured against an already-lowered init: flat
+	 * {@code (symbol init)} pairs appended to {@code pairs}, plain names registered in
+	 * {@code scope}. A plain symbol binds directly; a vector binds positionally through
+	 * the seq view ({@code &} the rest as a seq, {@code :as} the whole); a map binds
+	 * through the table-aware read ({@code :keys}/{@code :syms}/ {@code :strs}, explicit
+	 * locals, {@code :as}, {@code :or} defaults, whose keys name the locals they
+	 * default).
 	 */
-	private LispVal lambda(LispVal paramVector, List<LispVal> bodyForms) {
-		List<LispVal> names = bindingItems(paramVector, "the parameter vector of");
-		Map<String, Kind> scope = new HashMap<>();
-		List<LispVal> paramSyms = new ArrayList<>();
-		for (int i = 0; i < names.size(); i++) {
-			if (isSymbolNamed(names.get(i), "&")) {
-				isTrue(i + 1 < names.size(), "a & needs a rest name after it");
-				paramSyms.add(AMPERSAND_REST);
-				String rest = plainName(names.get(++i), "the parameter vector of");
-				scope.put(rest, Kind.VARIABLE);
-				paramSyms.add(idSym(rest));
+	private void destructureInto(LispVal pattern, LispVal init, List<LispVal> pairs, Map<String, Kind> scope,
+			String what) {
+		if (pattern instanceof LispSymbol) {
+			String name = plainName(pattern, what);
+			scope.put(name, Kind.VARIABLE);
+			pairs.add(list(idSym(name), init));
+			return;
+		}
+		List<LispVal> elements = items(pattern);
+		if (elements != null && !elements.isEmpty() && elements.get(0) == ClojureReader.VECTOR) {
+			destructureVector(elements.subList(1, elements.size()), init, pairs, scope, what);
+			return;
+		}
+		if (elements != null && !elements.isEmpty() && isSymbolNamed(elements.get(0), "%hash-map")) {
+			destructureMap(elements.subList(1, elements.size()), init, pairs, scope, what);
+			return;
+		}
+		throw new LispReadException(what + " needs a plain name or a vector or map pattern, not " + pattern.print());
+	}
+
+	/**
+	 * A vector pattern against an already-lowered init: each element binds positionally
+	 * through the seq view, so maps seq to entry vectors and anything past the end is
+	 * nil; {@code &} binds the rest as a seq, {@code :as} the whole. Elements destructure
+	 * recursively.
+	 */
+	private void destructureVector(List<LispVal> elements, LispVal init, List<LispVal> pairs, Map<String, Kind> scope,
+			String what) {
+		LispSymbol whole = freshTemp();
+		pairs.add(list(whole, init));
+		int position = 0;
+		for (int i = 0; i < elements.size(); i++) {
+			LispVal element = elements.get(i);
+			if (isSymbolNamed(element, ":as")) {
+				isTrue(i + 1 < elements.size(), "a vector pattern :as needs a plain name after it");
+				String name = plainName(elements.get(++i), "a vector pattern :as");
+				scope.put(name, Kind.VARIABLE);
+				pairs.add(list(idSym(name), whole));
 				continue;
 			}
-			String param = plainName(names.get(i), "the parameter vector of");
-			scope.put(param, Kind.VARIABLE);
-			paramSyms.add(idSym(param));
+			if (isSymbolNamed(element, "&")) {
+				isTrue(i + 1 < elements.size(), "a vector pattern & needs a single rest pattern after it");
+				isTrue(i + 2 == elements.size(), "a vector pattern & takes a single rest pattern after it");
+				destructureInto(elements.get(++i), dropView(whole, position), pairs, scope, what);
+				continue;
+			}
+			destructureInto(element, nthForm(whole, new LispInteger(position), NIL_CONST), pairs, scope, what);
+			position++;
 		}
-		return inScope(scope, () -> list(sym("lambda"), list(paramSyms), bodyOf(bodyForms)));
+	}
+
+	/** The seq view past the first {@code n} items: {@code nthcdr} over the view. */
+	private LispVal dropView(LispVal coll, int n) {
+		if (n == 0) {
+			return seqForm(coll);
+		}
+		return list(sym("nthcdr"), new LispInteger(n), seqForm(coll));
+	}
+
+	/**
+	 * A map pattern against an already-lowered init: every entry but the
+	 * {@code :keys}/{@code :syms}/{@code :strs}/{@code :as}/{@code :or} directives binds
+	 * its local through the table-aware read of its key expression, with the {@code :or}
+	 * default when present.
+	 */
+	private void destructureMap(List<LispVal> entries, LispVal init, List<LispVal> pairs, Map<String, Kind> scope,
+			String what) {
+		LispSymbol whole = freshTemp();
+		pairs.add(list(whole, init));
+		Map<String, LispVal> defaults = new HashMap<>();
+		for (int i = 0; i + 1 < entries.size(); i += 2) {
+			if (!isSymbolNamed(entries.get(i), ":or")) {
+				continue;
+			}
+			List<LispVal> orMap = items(entries.get(i + 1));
+			if (orMap == null || orMap.isEmpty() || !isSymbolNamed(orMap.get(0), "%hash-map")) {
+				throw new LispReadException(
+						"a map pattern :or takes a map of defaults, not " + entries.get(i + 1).print());
+			}
+			List<LispVal> orEntries = orMap.subList(1, orMap.size());
+			for (int j = 0; j + 1 < orEntries.size(); j += 2) {
+				LispVal defaultKey = orEntries.get(j);
+				isTrue(defaultKey instanceof LispSymbol key && !key.name().startsWith(":"),
+						"a map pattern :or takes plain names for defaults, not " + defaultKey.print());
+				defaults.put(((LispSymbol) defaultKey).name(), orEntries.get(j + 1));
+			}
+		}
+		for (int i = 0; i + 1 < entries.size(); i += 2) {
+			LispVal head = entries.get(i);
+			LispVal arg = entries.get(i + 1);
+			if (isSymbolNamed(head, ":or")) {
+				continue;
+			}
+			if (isSymbolNamed(head, ":as")) {
+				String name = plainName(arg, "a map pattern :as");
+				scope.put(name, Kind.VARIABLE);
+				pairs.add(list(idSym(name), whole));
+				continue;
+			}
+			if (head instanceof LispSymbol kind
+					&& (kind.name().equals(":keys") || kind.name().equals(":syms") || kind.name().equals(":strs"))) {
+				bindKeys(kind.name(), arg, whole, pairs, scope, defaults);
+				continue;
+			}
+			if (head instanceof LispSymbol) {
+				String name = plainName(head, "a map pattern binding");
+				scope.put(name, Kind.VARIABLE);
+				pairs.add(list(idSym(name), getForm(whole, lower(arg), defaultFor(defaults, name))));
+				continue;
+			}
+			// a nested pattern binds from the same read, without an :or default
+			destructureInto(head, getForm(whole, lower(arg), NIL_CONST), pairs, scope, what);
+		}
+	}
+
+	/**
+	 * One {@code :keys}/{@code :syms}/{@code :strs} directive: each entry binds its local
+	 * from the keyword, symbol or string key of that spelling (a {@code :keys} entry may
+	 * qualify, binding the short name).
+	 */
+	private void bindKeys(String kind, LispVal names, LispVal whole, List<LispVal> pairs, Map<String, Kind> scope,
+			Map<String, LispVal> defaults) {
+		List<LispVal> elements = items(names);
+		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException(
+					"a map pattern " + kind + " takes a vector of plain names, not " + names.print());
+		}
+		for (LispVal element : elements.subList(1, elements.size())) {
+			isTrue(element instanceof LispSymbol spelled && !spelled.name().startsWith(":")
+					&& !spelled.name().equals("&"),
+					"a map pattern " + kind + " takes a vector of plain names, not " + element.print());
+			String lookup = ((LispSymbol) element).name();
+			String local = lookup;
+			if ((kind.equals(":keys") || kind.equals(":syms")) && lookup.lastIndexOf('/') >= 0) {
+				local = lookup.substring(lookup.lastIndexOf('/') + 1);
+				isTrue(!local.isEmpty(),
+						"a map pattern " + kind + " takes a vector of plain names, not " + element.print());
+			}
+			LispVal keyForm = switch (kind) {
+				case ":keys" -> lower(new LispSymbol(":" + lookup));
+				case ":syms" -> quote(element);
+				default -> LispString.literal(local);
+			};
+			scope.put(local, Kind.VARIABLE);
+			pairs.add(list(idSym(local), getForm(whole, keyForm, defaultFor(defaults, local))));
+		}
+	}
+
+	private LispVal defaultFor(Map<String, LispVal> defaults, String name) {
+		LispVal found = defaults.get(name);
+		return found == null ? NIL_CONST : lower(found);
 	}
 
 	// atoms and quotes

@@ -1,8 +1,10 @@
 # Clojure (experimental)
 
-**Experimental.** rontolisp reads a small subset of Clojure -- `def`/`defn`, `fn` and
-`#(...)`, `let`/`loop`/`recur`, `if`/`when`/`cond`/`do`/`and`/`or`, `first`/`rest`/
-`next`/`seq`/`cons`/`map`/`filter`/`reduce`/`apply`/`concat`, `nth` (with an optional
+**Experimental.** rontolisp reads a small subset of Clojure -- `def`/`defn` (single- and
+multi-arity) and `declare`, `fn` (named, multi-arity) and `#(...)`, `let`/`loop`/`recur`
+with sequential and map destructuring, `if`/`when`/`cond`/`do`/`and`/`or`, threading
+(`->`/`->>`/`as->`/`doto`/`cond->`/`cond->>`/`some->`/`some->>`), `first`/`rest`/
+`next`/`seq`/`cons`/`list*`/`map`/`filter`/`reduce`/`apply`/`concat`, `nth` (with an optional
 default) and `take`/`drop`/`range` with an end, vector, keyword, map and set literals,
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
 `hash-map`/`array-map`, `println`/`print`/`pr`/`prn`/`str` -- just
@@ -58,6 +60,19 @@ and sets; `get` takes an optional default; transients (`assoc!` and friends) are
 refused. `::`-auto-resolve is refused; a namespaced `:a/b` is opaque data that
 prints and compares whole.
 
+`defn` with several arities is one `defun` per arity plus a dispatch `defun` picking
+by argument count (a single variadic clause takes any count past its fixed parameters);
+any other count signals. `fn` with several arities is one `lambda` dispatching the
+same way, and a named `fn` binds itself for self-calls. `declare` names what is
+defined below. A vector binding pattern binds positionally through the seq view
+(`&` the rest as a seq, `:as` the whole), a map pattern through the table-aware read
+(`:keys`/`:syms`/`:strs`, explicit locals, `:as`, `:or` defaults) -- in `let`,
+`loop` and `fn`/`defn` parameters alike. `->`/`->>` insert the value second/last,
+`as->` rebinds its name step by step, `doto` answers its (unchanged) target,
+`cond->`/`cond->>` thread only on truthy tests, `some->`/`some->>` stop at `nil` (but
+not at `false`), and `list*` folds `cons` over the seq view. `doseq`/`dotimes`/`for`
+and `defmulti`/`defmethod` are refused by name.
+
 ## REPL
 
 With no file, `--source-language clojure` starts a Clojure REPL (`clojure> ` prompt).
@@ -88,6 +103,10 @@ refused by spelling; the seq family runs over strict list views of every collect
 (lists pass through untouched; an empty result is `nil`, where the oracle prints
 `()`; `nth` past the end answers the default instead of throwing; map/set seq order
 is the table's walk order, unspecified; strings seq to characters printing in Common
-Lisp notation). Destructuring, threading macros,
-`atom`, lazy seqs, metadata and `var` are absent. A lowering error names the innermost
-form's position (`file:line:column` when the file is known).
+Lisp notation). `doseq`/`dotimes`/`for` comprehensions and loops, `defmulti`/
+`defmethod`, `atom`, lazy seqs, metadata and `var` are absent. `def` inside a body
+sets the global when the body runs; `defn` inside a body works only in statement
+position (a multi-arity one only at the top level). `cond` keeps the lenient reading:
+an odd trailing arm is the default, where Clojure signals. A threading step over a
+collection literal signals (collections are not functions here). A lowering error
+names the innermost form's position (`file:line:column` when the file is known).
