@@ -7,7 +7,7 @@ Difficulty: High
 A feasibility spike, verified 2026-09-30: a Clojure subset read case-sensitively and
 LOWERED to the Common Lisp core forms, exactly the Scheme front end's shape
 (`.kb/scheme-frontend.md`). The spike's sources are parked, uncompiled, under
-`.todo/artefacts/src/main/java/am/ik/rontolisp/clojure/` (`Clojure.java`,
+`.todo/artefacts/a97-clojure-frontend/src/main/java/am/ik/rontolisp/clojure/` (`Clojure.java`,
 `ClojureReader.java`, `ClojureLowering.java`) -- move the directory back to
 `src/main/java/am/ik/rontolisp/clojure/` to resume.
 
