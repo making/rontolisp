@@ -1025,3 +1025,18 @@ cases:
       e
       (1 2)
       e
+  - name: string-replace-and-split-stay-literal
+    # There is no regex runtime: split/replace match literal strings, so a
+    # pattern that is special in regex syntax matches only itself. Regex
+    # literals (#"...") stay refused at the reader.
+    source: |
+      (ns b08lit (:require [clojure.string :as s]))
+      (println (s/replace "aaa" "." "b"))
+      (println (s/split "aaa" "."))
+      (println (s/replace-first "aaa" "a+" "b"))
+      (println (.split "aaa" "."))
+    expected: |
+      aaa
+      (aaa)
+      aaa
+      (aaa)

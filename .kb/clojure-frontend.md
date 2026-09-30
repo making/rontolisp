@@ -37,20 +37,25 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `doto`/`cond->`/`cond->>`/`some->`/`some->>` | the threaded calls around one temporary | `doto` answers its (unchanged) target; `cond->` threads only on truthy tests; `some->` stops at `nil` but not at `false`, like the oracle |
 | `list*` | a right fold of `cons` over the seq view | of one argument, just its seq (signalling for a non-collection, like the oracle) |
 | `doseq`/`dotimes`/`for` | refused by name | `iteration forms are not supported yet`; comprehensions and imperative loops stay out |
-| `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table and a default value in two globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included); a miss falls back to the default dispatch value (`:default` without an option) or signals `No method in ...`; hierarchies (`derive`, `isa?`, `prefer-method`) and protocols are refused by name |
-| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` renders through `princ-to-string`, so strings keep their message; `ex-info`/`ex-data` are refused by name |
+| `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value and a per-multimethod prefers table in three globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included); an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate falls back to the default dispatch value (`:default` without an option) or signals `No method in ...` |
+| `derive`/`underive`/`isa?`/`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` | the hierarchy runtime over the shared table runtime | a hierarchy value is a map of `:parents`/`:ancestors`/`:descendants` tables (children to wrapped sets); the global value lives in `C%H-GLOBAL`, rebound by two-argument `derive`/`underive` (answering `nil`), while three-argument forms answer an updated value (`make-hierarchy` an empty one); `isa?` is `equal`, element-wise vector derivation, or ancestor membership (two- or three-argument), answering `T`-or-false; the three reads answer (possibly empty) sets; `prefer-method` records into the multimethod's prefers table and answers the multimethod; the runtime (set helpers, transitive rebuild, dispatch search) is spliced once behind the false binding when used |
+| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through `princ-to-string`, so strings keep their message |
+| `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through `princ-to-string`); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
 | `atom`/`deref`/`@`/`swap!`/`reset!`/`compare-and-set!` (and `volatile!`/`vswap!`/`vreset!`) | a tagged one-vector cell `(:C%ATOM #(value))`, like the set wrapper | every verb reads/writes the cell and answers the new value (`compare-and-set!` compares with `eql` and answers `T`-or-false); misuse signals; each works as a function value, so `(map deref atoms)` runs |
 | `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; only `clojure.string` resolves (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
-| Java interop (`.`, `..`, `.method`, `.-field`, `Class/member`, `Class.`, `new`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)`), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
+| Java interop (`.`, `..`, `.method`, `.-field`, `Class/member`, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)` instead -- kept, b08), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)`), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
+| `defprotocol` / `defrecord` / `deftype` / `definterface` / `reify` / `extend-protocol` / `extend-type` / `extend` / `satisfies?` / `gen-class` / `gen-interface` | refused by name (`protocols are not supported yet: <name>`) | REJECTED by design (decided 2026-09-30, b08): a protocol needs type-based dispatch and `defrecord`/`deftype` a value representation every backend prints, hashes and compares -- a new runtime on all four backends for no measured user (the b02 argument against a persistent-map library). The multimethod table plus the hierarchy search stays the dispatch story; `proxy` moved out (see the `proxy` row) |
 | `comment` | nothing (`nil`) | |
 | characters (`\a`, lowercase names, `\uXXXX`, `\oNNN`) | `LispChar`, self-evaluating | exactly the oracle's spellings, case-sensitively; anything else is the oracle's `Unsupported character` refusal |
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
 | regex literals (`#"..."`) | refused by name (`regex literals are not supported yet`) | there is no regex runtime to lower to |
 | syntax-quote/unquote (`\``, `~`, `~@`), `var`/`#'`, metadata (`^`) | refused by name | the reader still parses them into marked lists; the lowering names what is missing instead of `unknown name` |
-| `set!`, `proxy`/`gen-class`, `memfn`, hierarchies, protocols, `ex-info` | refused by name | each names the missing design |
+| `set!`, `gen-class`/`gen-interface`, backquote (`syntax-quote` / `unquote`), `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; backquote/`var`/metadata need their designs) |
+| `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
+| `proxy` | `java:proxy` with a name-dispatching lambda | a single interface and no constructor arguments; each `(method [params...] body...)` becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`); a superclass, constructor arguments, several interfaces and multi-arity methods are refused by name; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
 | `not` | an explicit null-or-false check answering `T`-or-false | |
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
@@ -124,14 +129,28 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   throwing; a map/set seq's order is the table's walk order, unspecified; strings seq
   to characters, which print in Common Lisp notation; there is no laziness, chunking
   or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
-- `doseq`/`dotimes`/`for`, hierarchies, protocols, `ex-info`, `set!`, regex
+- `doseq`/`dotimes`/`for`, protocols, `set!`, regex
   literals, backquote, `var`/`#'`, metadata `^`: all absent, each refused by name.
-  Catch clauses are catch-all in order (the first handles any condition, where the
+  Hierarchies and `ex-info` lowered in b08 (below); protocols were rejected by
+  design there instead (a per-backend value model for `defrecord`/`deftype`, the
+  b02 argument). Catch clauses are catch-all in order (the first handles any condition, where the
   oracle dispatches by class); multimethod dispatch values compare like `equal`
-  table keys (vectors by identity); atoms print as their `(:C%ATOM #(value))`
-  wrapper; `split`/`replace` match literal strings, never patterns; `indexOf`
+  table keys (vectors by identity), widened by the hierarchy search (most specific
+  wins, then `prefer-method`, like the oracle); a hierarchy value prints as its
+  `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
+  prints as its `#<C%E-EX-INFO ...>` condition; atoms print as their `(:C%ATOM #(value))`
+  wrapper; `split`/`replace` match literal strings, never patterns (the documented
+  literal-only position, decided 2026-09-30 b08: no regex runtime on any backend,
+  so `#"..."` stays refused at the reader and `clojure.string`/`String` splitting
+  keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
+  case); `indexOf`
   answers `-1` when missing, like the oracle (where `clojure.string/index-of`
-  answers nil); a zero-argument `Class/member` reads a static field.
+  answers nil); a zero-argument `Class/member` reads a static field (kept, b08: a
+  zero-argument static method spells `(. Class m)`); non-string receivers go to
+  `java:call` and fail there (kept, b08: only strings get the mapped core
+  operation); `proxy` methods take the Java arguments only (no `this`, kept b08:
+  nothing to close over); calling a function parameter or a `def`'d lambda in head
+  position is not a `funcall` (pre-existing: `The function c%f is undefined`).
 - `def` inside a body sets the global when the body runs (decided 2026-09-30, b04:
   keep the `setq`, document it). `defn` inside a body works only in statement
   position, and a multi-arity one only at the top level (several `defun`s cannot
@@ -205,4 +224,17 @@ for the refusals (regex, hierarchies, protocols, `ex-info`, `set!`, backquote,
 `var`, metadata, unknown namespaces), in `ClojureReaderTest`/`ClojureLoweringTest`.
 Interop (`.`, `..`, `Class/member`, `Class.`, `new`) lowers to the `java:`
 surface, pinned by `ClojureInteropTest` on the interpreter and the JVM (wasm
-rejects `java:`, so it cannot join the spec).
+rejects `java:`, so it cannot join the spec). Hierarchies, exception data and
+the interop gaps lower the same way (b08): `derive`/`underive`/`isa?`/
+`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` and
+`defmulti` `:hierarchy` over a hierarchy runtime spliced once behind the false
+binding (the unified dispatcher searches `isa?` candidates on a miss, most
+specific wins, then preferences), `ex-info`/`ex-data`/`ex-message` over a
+condition with message and data slots (`throw` signals one as its own
+condition), `memfn` as a lambda over the instance call, single-interface
+`proxy` through `java:proxy`, and the literal-only regex position -- each pinned
+in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
+(`proxy`, host-object `memfn`, literal `String/split`), in `ClojureInteropTest`;
+what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
+backquote, `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
+stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`.

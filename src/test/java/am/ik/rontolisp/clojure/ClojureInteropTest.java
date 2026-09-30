@@ -68,6 +68,12 @@ class ClojureInteropTest {
 				"hi\n");
 	}
 
+	@Test
+	void stringSplitStaysLiteral() throws Exception {
+		assertBothEqual("(println (.split \"aaa\" \".\"))", "(aaa)\n");
+		assertBothEqual("(println (.split \"a,b\" \",\"))", "(a b)\n");
+	}
+
 	private static void assertBothEqual(String source, String expected) throws Exception {
 		assertThat(interpret(source)).isEqualTo(expected);
 		assertThat(runOnJvm(source)).isEqualTo(expected);

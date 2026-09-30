@@ -10,9 +10,11 @@
 リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
 `hash-map`/`array-map`、`subs`、`println`/`print`/`pr`/`prn`/`str`、`comment`、
-`try`/`catch`/`finally`/`throw`、`atom`/`deref`/`swap!`/`reset!`/
-`compare-and-set!`（および `volatile!`/`vswap!`/`vreset!`）、`defmulti`/
-`defmethod`/`remove-method`/`get-method`、`clojure.string` 付きの `ns`（`join`/
+`try`/`catch`/`finally`/`throw`、`ex-info`/`ex-data`/`ex-message`、`atom`/`deref`/
+`swap!`/`reset!`/`compare-and-set!`（および `volatile!`/`vswap!`/`vreset!`）、階層付きの
+`defmulti`/`defmethod`/`remove-method`/`get-method`（`derive`/`underive`/`isa?`/
+`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method`）、`memfn` と
+`proxy`、`clojure.string` 付きの `ns`（`join`/
 `split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/
 `trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/
 `index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/
@@ -83,9 +85,8 @@ seq ビューを経由して位置で束縛され（`&` は残りを seq とし�
 は名前を段階的に束縛し直し、`doto` は（不変の）対象を答え、`cond->`/`cond->>`
 は真値のテストでのみスレッドし、`some->`/`some->>` は `nil` で止まります（`false`
 では止まりません）。`list*` は seq ビュー上の `cons` の右畳み込みです。
-`doseq`/`dotimes`/`for` は名前付きで拒否されます。階層（`derive`、`isa?`、
-`prefer-method`）、プロトコル（`defprotocol`、`defrecord`、`deftype`、`reify`、
-`extend-protocol` と仲間、`proxy`、`gen-class`）、`ex-info`/`ex-data`、`set!`、
+`doseq`/`dotimes`/`for` は名前付きで拒否されます。プロトコル（`defprotocol`、
+`defrecord`、`deftype`、`reify`、`extend-protocol` と仲間、`gen-class`）、`set!`、
 正規表現リテラル（`#"..."`）、バッククォート、`var`/`#'`、メタデータ（`^`）も同様です。
 
 ## 状態・エラー・ディスパッチ・名前空間・interop
@@ -109,14 +110,46 @@ atom はタグ付きセル `(:C%ATOM #(value))` で、すべての動詞がそ�
 (catch Class var body...)... (finally ...))` です。すべての catch 節は
 catch-all の `error` 節に答えます -- クラスは区別されないため、最初の節があらゆる
 コンディションを処理します -- catch 変数は Common Lisp のコンディションを束縛します。
-`throw` は `error` 経由でシグナルし、値を `princ-to-string` で描画するため、
+`throw` は `error` 経由でシグナルします。`ex-info` 値は自身のコンディションとして
+シグナルされ（データを運びます）、それ以外は `princ-to-string` で描画されるため、
 投げた文字列はメッセージを保ちます。
+
+`(ex-info message data)` はメッセージとデータのスロットを持つコンディションを作ります
+（レポートはメッセージを印字するため、捕捉されなかったものはすべてのバックエンドで
+同じに読めます）。`(ex-data e)` はマップを答え（他のコンディションには `nil`）、
+`(ex-message e)` はメッセージを答えます（それ以外は `princ-to-string` で印字されます）。
+いずれも関数値として動作するため、`(map ex-data xs)` が動きます。
+
+```clojure
+(println (try (throw (ex-info "boom" {:code 42}))
+              (catch Exception e (get (ex-data e) :code)))) ; 42
+```
 
 マルチメソッドはメソッドテーブルとディスパッチ `defun` です。`(defmulti name
 docstring? dispatch-fn :default default?)` が両方を作り（デフォルトのディスパッチ値は
 `:default`）、`(defmethod name value [params...] body...)` がメソッドを格納し、
 `(remove-method name value)` が削除し、`(get-method name value)` が読みます。
 デフォルトにもメソッドがないミスはシグナルします。
+
+階層はディスパッチを広げます。`(derive child parent)` と `(underive child
+parent)` はグローバル階層を書き換え（`nil` を答えます）、`(derive h child
+parent)` と `(underive h child parent)` は更新された階層値を答えます
+（`(make-hierarchy)` が空のものを作ります）。`(isa? child parent)`（階層を先頭に
+置く形も可）は `true`/`false` を答え、`(parents child)`、`(ancestors child)`、
+`(descendants child)` はセットを答えます。マルチメソッドは `defmulti` が
+`:hierarchy` を付けない限りグローバル階層でディスパッチします（`:hierarchy` は
+ディスパッチごとに評価される式なので、`def` した var を束縛し直すと効きます）。
+ミスではディスパッチ値が派生するすべてのメソッドが候補になり、厳密に最も具体的な
+ものが勝ち、`(prefer-method name x y)` が残りの同点を `x` 寄りに解消し、解消できない
+同点はシグナルします。
+
+```clojure
+(derive :circle :shape)
+(defmulti area :shape)
+(defmethod area :shape [m] 0)
+(defmethod area :circle [m] 1)
+(println (area {:shape :circle})) ; 1
+```
 
 `(ns name (:require [clojure.string :as s :refer [join]]) (:use ...) (:import ...))`
 は節を結線し、何も定義しません。`:as` は別名、`:refer`/`:use` は非修飾名、
@@ -138,11 +171,17 @@ args...)` と `(Class/static args...)` は static、`（Class. args...)` と
 インスタンスフィールド、`(.. obj (step args...) name...)` は入れ子です。クラス名は
 ドット付きならそのまま、`:import` 経由、または `java.lang` で解決されます。文字列
 レシーバは対応するコア操作に答え（Lisp 文字列はホストオブジェクトではありません）、
-それ以外は直接 `java:call` に行きます。
+それ以外は直接 `java:call` に行きます。`(memfn name args...)` は対象と名前付き引数
+の関数で、そのメソッドを呼び出します（同じ経路のため、`((memfn toUpperCase) "hi")`
+はすべてのバックエンドで `"HI"` を答えます）。`(proxy [interface] []
+(method [params...] body...)...)` は `java:proxy`（名前で振り分ける lambda）経由で
+単一インターフェースを実装します。スーパークラス・コンストラクタ引数はなく、
+メソッドは Java の引数のみを取ります（`this` はありません）。
 
 ```clojure
 (println (.toUpperCase "hi"))    ; HI
 (println (Integer/parseInt "42")) ; 42
+(println ((memfn toUpperCase) "hi")) ; HI
 ```
 
 文字は文字として読まれます（`\a`、小文字の `newline`/`space`/`tab`/
@@ -187,12 +226,16 @@ clojure> (twice 21)
 オラクルの `()` とは異なります。範囲外の `nth` は投げる代わりにデフォルトを
 答えます。マップ/セットの seq 順はテーブルの走査順で未規定です。文字列は文字に
 seq され Common Lisp 記法で印字されます）。`doseq`/`dotimes`/`for` の内包と
-ループ、階層、プロトコル、`ex-info`、`set!`、正規表現リテラル、バッククォート、
+ループ、プロトコル、`set!`、正規表現リテラル、バッククォート、
 `var`、メタデータは
-ありません。catch 節は順に catch-all です（最初があらゆるコンディションを処理します）。
+ありません。`ex-info` 値は他のコンディションと同様にコンディションオブジェクト
+（`#<C%E-EX-INFO ...>`）として印字されます。catch 節は順に catch-all です（最初があらゆるコンディションを処理します）。
 マルチメソッドのディスパッチ値は `equal` テーブルのキーのように比較されます
-（ベクターは同一性）。atom は `(:C%ATOM #(value))` ラッパーで印字されます。
-`split`/`replace` はリテラル文字列にマッチし、パターンではありません。`indexOf` は
+（ベクターは同一性）。階層の `parents`/`ancestors`/`descendants` はセットを答えます
+（セットリテラルと同様に包んで印字されます）。階層経由のディスパッチは厳密に最も
+具体的なメソッドを選び、次に `prefer-method` の選択を尊重します。
+atom は `(:C%ATOM #(value))` ラッパーで印字されます。
+`split`/`replace` はリテラル文字列にマッチし、パターンではありません（正規表現ランタイムはなく、`#"..."` は拒否されたままです）。`indexOf` は
 見つからないとき `nil` ではなくオラクルと同じ `-1` を答えます。ボディ内の `def` はボディの実行時にグローバルを設定します。ボディ内の
 `defn` は文の位置でのみ動作します（複数アリティはトップレベルのみ）。`cond` は
 寛容な読みを保ちます。末尾の奇数アームはデフォルトであり、Clojure がシグナルする

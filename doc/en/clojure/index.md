@@ -8,9 +8,10 @@ with sequential and map destructuring, `if`/`when`/`cond`/`do`/`and`/`or`, threa
 default) and `take`/`drop`/`range` with an end, vector, keyword, map and set literals,
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
 `hash-map`/`array-map`, `subs`, `println`/`print`/`pr`/`prn`/`str`, `comment`,
-`try`/`catch`/`finally`/`throw`, `atom`/`deref`/`swap!`/`reset!`/`compare-and-set!`
+`try`/`catch`/`finally`/`throw`, `ex-info`/`ex-data`/`ex-message`, `atom`/`deref`/`swap!`/`reset!`/`compare-and-set!`
 (and `volatile!`/`vswap!`/`vreset!`), `defmulti`/`defmethod`/`remove-method`/
-`get-method`, `ns` with `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/
+`get-method` with hierarchies (`derive`/`underive`/`isa?`/`parents`/`ancestors`/
+`descendants`/`make-hierarchy`/`prefer-method`), `memfn` and `proxy`, `ns` with `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/
 `lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/
 `ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/
 `re-quote-replacement`/`reverse`), and Java interop (`.`, `..`, `Class/member`,
@@ -78,9 +79,8 @@ defined below. A vector binding pattern binds positionally through the seq view
 `loop` and `fn`/`defn` parameters alike. `->`/`->>` insert the value second/last,
 `as->` rebinds its name step by step, `doto` answers its (unchanged) target,
 `cond->`/`cond->>` thread only on truthy tests, `some->`/`some->>` stop at `nil` (but
-not at `false`), and `list*` folds `cons` over the seq view. `doseq`/`dotimes`/`for` are refused by name, as are hierarchies (`derive`, `isa?`,
-`prefer-method`), protocols (`defprotocol`, `defrecord`, `deftype`, `reify`,
-`extend-protocol` and friends, `proxy`, `gen-class`), `ex-info`/`ex-data`, `set!`,
+not at `false`), and `list*` folds `cons` over the seq view. `doseq`/`dotimes`/`for` are refused by name, as are protocols (`defprotocol`, `defrecord`, `deftype`, `reify`,
+`extend-protocol` and friends, `gen-class`), `set!`,
 regex literals (`#"..."`), backquote, `var`/`#'` and metadata (`^`).
 
 ## State, errors, dispatch, namespaces and interop
@@ -105,14 +105,46 @@ as a function value too, so `(map deref atoms)` runs.
 (catch Class var body...)... (finally ...))`. Every catch class answers the
 catch-all `error` clause -- classes are not distinguished, so the first clause
 handles any condition -- and the catch variable binds the Common Lisp condition.
-`throw` signals through `error`, rendering its value with `princ-to-string`, so a
+`throw` signals through `error`: an `ex-info` value signals as its own condition
+(carrying its data), anything else renders through `princ-to-string`, so a
 thrown string keeps its message.
+
+`(ex-info message data)` builds a condition with message and data slots (its
+report prints the message, so an uncaught one reads the same on every backend);
+`(ex-data e)` answers the map (`nil` for any other condition) and `(ex-message
+e)` the message (anything else prints through `princ-to-string`). Each works as
+a function value too, so `(map ex-data xs)` runs.
+
+```clojure
+(println (try (throw (ex-info "boom" {:code 42}))
+              (catch Exception e (get (ex-data e) :code)))) ; 42
+```
 
 A multimethod is a method table plus a dispatcher `defun`: `(defmulti name
 docstring? dispatch-fn :default default?)` builds both (the default dispatch
 value is `:default`), `(defmethod name value [params...] body...)` stores a
 method, `(remove-method name value)` drops one, `(get-method name value)` reads
 one. A miss with no method for the default signals.
+
+Hierarchies widen the dispatch: `(derive child parent)` and `(underive child
+parent)` rewrite the global hierarchy (answering `nil`), `(derive h child
+parent)` and `(underive h child parent)` answer an updated hierarchy value
+instead (`(make-hierarchy)` builds an empty one), `(isa? child parent)` (or
+with a hierarchy first) answers `true`/`false`, and `(parents child)`,
+`(ancestors child)` and `(descendants child)` answer sets. A multimethod
+dispatches through the global hierarchy unless `defmulti` names `:hierarchy`
+(an expression evaluated on every dispatch, so rebinding the `def`'d var takes
+effect): on a miss every method the dispatch value descends from is a
+candidate, the strictly most specific wins, `(prefer-method name x y)` breaks
+the remaining ties toward `x`, and an unbroken tie signals.
+
+```clojure
+(derive :circle :shape)
+(defmulti area :shape)
+(defmethod area :shape [m] 0)
+(defmethod area :circle [m] 1)
+(println (area {:shape :circle})) ; 1
+```
 
 `(ns name (:require [clojure.string :as s :refer [join]]) (:use ...) (:import ...))`
 wires its clauses and defines nothing: `:as` registers an alias, `:refer`/`:use`
@@ -134,11 +166,18 @@ zero-argument static method spells `(. Class method)` instead), `(.-field obj)`
 an instance field, and `(.. obj (step args...) name...)` nests. Class names
 resolve dotted as written, through `:import`, or through `java.lang`. A string
 receiver answers the mapped core operation (a Lisp string is no host object),
-anything else goes to `java:call` directly.
+anything else goes to `java:call` directly. `(memfn name args...)` is a function
+of a target and the named arguments calling the method on it, over the same
+path (so `((memfn toUpperCase) "hi")` answers `"HI"` on every backend).
+`(proxy [interface] [] (method [params...] body...)...)` implements a single
+interface through `java:proxy` with a name-dispatching lambda: no superclass,
+no constructor arguments, and the methods take the Java arguments only (no
+`this`).
 
 ```clojure
 (println (.toUpperCase "hi"))    ; HI
 (println (Integer/parseInt "42")) ; 42
+(println ((memfn toUpperCase) "hi")) ; HI
 ```
 
 Characters read as characters (`\a`, the lowercase `newline`/`space`/`tab`/
@@ -179,12 +218,16 @@ refused by spelling; the seq family runs over strict list views of every collect
 (lists pass through untouched; an empty result is `nil`, where the oracle prints
 `()`; `nth` past the end answers the default instead of throwing; map/set seq order
 is the table's walk order, unspecified; strings seq to characters printing in Common
-Lisp notation). `doseq`/`dotimes`/`for` comprehensions and loops, hierarchies,
-protocols, `ex-info`, `set!`, regex literals, backquote, `var` and metadata are
-absent. Catch clauses are catch-all in order (the first handles any condition);
+Lisp notation). `doseq`/`dotimes`/`for` comprehensions and loops, protocols,
+`set!`, regex literals, backquote, `var` and metadata are
+absent. An `ex-info` value prints as its condition object (`#<C%E-EX-INFO ...>`),
+like any other condition. Catch clauses are catch-all in order (the first handles any condition);
 multimethod dispatch values compare like `equal` table keys (vectors by identity);
+a hierarchy's `parents`/`ancestors`/`descendants` answer sets (printed wrapped,
+like set literals); dispatch through a hierarchy prefers the strictly most
+specific method, then `prefer-method` choices;
 atoms print as their `(:C%ATOM #(value))` wrapper; `split`/`replace` match literal
-strings, never patterns; `indexOf` answers `-1` when missing, like the oracle. `def` inside a body
+strings, never patterns (there is no regex runtime, and `#"..."` stays refused); `indexOf` answers `-1` when missing, like the oracle. `def` inside a body
 sets the global when the body runs; `defn` inside a body works only in statement
 position (a multi-arity one only at the top level). `cond` keeps the lenient reading:
 an odd trailing arm is the default, where Clojure signals. A threading step over a
