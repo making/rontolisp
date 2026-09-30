@@ -100,6 +100,107 @@ cases:
       9
       (1 2 3 4)
       (1 (2 3) 20 3 (0 1 2) (3 2 1))
+  - name: seqs-run-over-vectors
+    # Vectors (and every other collection) seq like the oracle; an empty result is
+    # nil, where the oracle prints ().
+    source: |
+      (println (first [1 2]))
+      (println (rest [1 2 3]))
+      (println (next [1 2 3]))
+      (println (cons 0 [1 2]))
+      (println (concat '(1 2) [3 4]))
+      (println (concat))
+      (println (map #(inc %) [1 2 3]))
+      (println (filter odd? [1 2 3 4]))
+      (println (reduce + 0 [1 2 3]))
+      (println (reduce + [1 2 3]))
+      (println (apply max [3 9 4]))
+      (println (list (nth [10 20 30] 1) (nth [10 20] 5 :nf) (count [1 2 3])))
+    expected: |
+      1
+      (2 3)
+      (2 3)
+      (0 1 2)
+      (1 2 3 4)
+      nil
+      (2 3 4)
+      (1 3)
+      6
+      6
+      9
+      (20 NF 3)
+  - name: seq-and-next
+    # seq coerces any collection to a strict list; a map entry is a two-vector (in
+    # CL notation), a string seqs to chars, and the table walk order is unspecified
+    # (so map/set seqs are only counted here).
+    source: |
+      (println (seq '(1 2)))
+      (println (seq [1 2]))
+      (println (seq nil))
+      (println (seq []))
+      (println (next '(1 2 3)))
+      (println (next [1]))
+      (println (rest []))
+      (println (count (seq {:a 1 :b 2})))
+      (println (first {:a 1}))
+      (println (count (seq #{1 2})))
+      (println (count (seq "ab")))
+      (println (first "ab"))
+      (println (rest "ab"))
+    expected: |
+      (1 2)
+      (1 2)
+      nil
+      nil
+      (2 3)
+      nil
+      nil
+      2
+      #(A 1)
+      2
+      2
+      a
+      (b)
+  - name: finite-range-take-and-drop
+    # range with an end builds the strict list; an over-long take/drop answers the
+    # whole/empty seq as nil, where the oracle prints (). An end-less (range) and
+    # lazy-seq are refused by name (ClojureLoweringTest).
+    source: |
+      (println (range 5))
+      (println (range 2 8))
+      (println (range 0 10 3))
+      (println (range 5 0 -2))
+      (println (take 3 (range 10)))
+      (println (drop 8 (range 10)))
+      (println (take 2 [1 2 3 4]))
+      (println (drop 2 [1 2 3 4]))
+      (println (take 10 [1 2]))
+      (println (drop 10 [1 2]))
+    expected: |
+      (0 1 2 3 4)
+      (2 3 4 5 6 7)
+      (0 3 6 9)
+      (5 3 1)
+      (0 1 2)
+      (8 9)
+      (1 2)
+      (3 4)
+      (1 2)
+      nil
+  - name: nth-and-quot-as-values
+    # nth/quot as values are lambdas with the Clojure argument order (a bare #'NTH
+    # would take the index first).
+    source: |
+      (println (apply quot [7 2]))
+      (println (apply nth [[10 20] 1]))
+      (def b03-qv quot)
+      (println (apply b03-qv [7 2]))
+      (println (map (fn [v] (nth v 0)) [[1 2] [3 4]]))
+    expected: |
+      3
+      20
+      3
+      (1 3)
   - name: predicates
     source: |
       (println (list (even? 4) (odd? 3) (zero? 0) (pos? 5) (neg? -2) (vector? [1]) (vector? '(1)) (empty? '()) (empty? '(1)) (nil? nil) (some? 0)))

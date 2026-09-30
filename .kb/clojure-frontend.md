@@ -36,9 +36,15 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
 | `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
 | `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false; as values, lambdas answering a Common Lisp boolean | |
-| `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` | `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` is the 2-arity only (`(apply f args)`) |
+| `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` over the seq view | lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` is the 2-arity only (`(apply f args)`); `(concat)` is nil |
+| `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over the seq view, the view itself, `cons` onto the view | a seq IS a strict list view (decided 2026-09-30, b03): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; no laziness, chunking or memoisation -- the only sequence all four backends already share is the cons list, so a lazy struct would add a representation every backend prints, hashes and compares (the b02 argument against a persistent-map library) |
+| `nth` (2/3-arity) | the seq view indexed, past the end the default | the 2-arity answers nil past the end where the oracle throws; as a VALUE a lambda with the Clojure order (`(lambda (c i) ...)`), since a bare `#'NTH` takes the index first |
+| `quot` | `truncate` | as a VALUE a two-argument lambda over `truncate` |
+| `take`/`drop` | a labels self call over the seq view / `nthcdr` over the view | strict; an over-long take/drop answers the whole/empty seq (nil, where the oracle prints `()`) |
+| `range` (with an end) | a labels self call building the strict list | 1/2/3-arity (`end` / `start end` / `start end step`); a zero step signals; an end-less `(range)` is refused by name -- an infinite seq cannot be spelled strictly |
+| `lazy-seq`/`cycle`/`repeat`/`repeatedly`/`iterate` | refused by name (`lazy sequences are not supported: lazy-seq`) | OUT: there are no lazy seqs -- strict-only by decision, named refusals instead of `unknown name` |
 | a vector literal | a `vector` call | |
-| `first`/`rest` | `car`/`cdr` | the seq family runs over LISTS only, except these two which take any sequence |
+| `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
 | `count` | a table-aware length | maps and sets answer `hash-table-count`, everything else `length` |
 | `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/vector/string are empty |
 | `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; anything else is `equal` |
@@ -87,10 +93,14 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   CL-level type error instead of the oracle's (e.g. `dissoc` of a set, `keys` of a
   vector). `conj` of a set onto a map goes one level deep; anything else conjoined
   onto a map signals. `(empty? false)` answers false where the oracle signals.
-- The seq family runs over LISTS only (`first`=`car`, `rest`=`cdr`,
-  `count`/`empty?` being the map/set-aware exceptions). Vectors-as-seqs need real design.
+- The seq family runs over strict list views of every collection (decided 2026-09-30,
+  b03). What still differs from the oracle: `rest`/`next` of empty is `nil`, where it
+  prints `()`; `nth` past the end answers the default (nil without one) instead of
+  throwing; a map/set seq's order is the table's walk order, unspecified; strings seq
+  to characters, which print in Common Lisp notation; there is no laziness, chunking
+  or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
 - Destructuring, `->`/`->>`, `defmulti`/`defmethod`, protocols, `atom`/`swap!`/`deref`,
-  lazy seqs, metadata `^`, `var`/`#'`: all absent. The reader parses `@x`, `^meta`,
+  metadata `^`, `var`/`#'`: all absent. The reader parses `@x`, `^meta`,
   backquote, `~` into marked lists the lowering refuses.
 - `defn` inside a body works only in statement position; `declare` is absent. `def`
   inside a body mutates the global at run time, unreviewed.
@@ -123,12 +133,16 @@ transcript, the `--no-gc` refusal), `PackageCycleTest` (the `clojure` package
 sees only the AST types and `reader`). `examples/clojure/demo.clj` stays the
 user-facing smoke test, pinned by `examples.yaml` (`ExamplesE2eTest`); the old
 inline `ClojureE2eTest` over the same program was removed when the spec arrived.
-`nth` takes the collection first (`(nth coll i)` -> `(NTH i coll)`), `quot` is
-`truncate`, an `(ns ...)` form defines nothing (the file-level skip used to
+`nth` takes the collection first (2/3-arity with an optional default over the seq
+view; as a value a correctly-ordered lambda), `quot` is `truncate` (as a value a
+two-argument lambda), an `(ns ...)` form defines nothing (the file-level skip used to
 match only a bare `ns` symbol), and identifiers keep their case behind the
 prefix (`Foo` and `foo` no longer fold into one symbol). Maps and sets lower to the
 shared hash-table runtime (b02): literals, `assoc`/`dissoc`/`get` (with default)/
 `contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/`hash-map`/`array-map`,
 map/set-aware `count`/`empty?`/`=`, quoted maps/sets, and the transient refusals --
 each pinned in `clojure-spec.yaml` (run on all four backends) or, for the refusals,
-in `ClojureLoweringTest`.
+in `ClojureLoweringTest`. Seqs over every collection lower to strict list views
+(b03): `first`/`rest`/`next`/`seq`/`cons`/`concat`/`map`/`filter`/`reduce`/`apply`/
+`take`/`drop`/finite `range`, each pinned in `clojure-spec.yaml` (run on all four
+backends) or, for the lazy refusals, in `ClojureLoweringTest`.

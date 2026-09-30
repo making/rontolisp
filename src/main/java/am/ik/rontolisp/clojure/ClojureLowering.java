@@ -36,10 +36,21 @@ import org.jspecify.annotations.Nullable;
  * "changes" a map builds a fresh table, which is what keeps the persistent semantics
  * observable; a set literal is the same table with each member stored under itself,
  * wrapped as {@code (:C%SET table)} so a verb can tell a set from a map (the wrapper
- * prints as written, like vectors in CL notation); the seq functions run over LISTS
- * ({@code car}/{@code cdr}). {@code false} is a DISTINCT non-{@code NIL} object -- the
- * value of {@code rontolisp::%clojure-false}, bound before anything else runs, a symbol
- * spelled {@code false} -- so {@code (= false nil)} is false and {@code (nil?
+ * prints as written, like vectors in CL notation); a seq is a STRICT list view -- lists
+ * pass through untouched, vectors and strings coerce, maps contribute one two-vector per
+ * entry and sets one member per element (both in the table's walk order, unspecified),
+ * nil and the false object are empty, anything else signals -- so
+ * {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
+ * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
+ * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
+ * stays a no-copy identity. There is no laziness, chunking or memoisation:
+ * {@code lazy-seq}/{@code cycle}/{@code repeat}/{@code repeatedly}/{@code iterate} and an
+ * end-less {@code range} are refused by name, and {@code range} with an end builds the
+ * strict list. {@code nth} and {@code quot} as VALUES are correctly-ordered lambdas
+ * wrapping the primitive (a bare {@code #'NTH} would have the operands backwards).
+ * {@code false} is a DISTINCT non-{@code NIL} object -- the value of
+ * {@code rontolisp::%clojure-false}, bound before anything else runs, a symbol spelled
+ * {@code false} -- so {@code (= false nil)} is false and {@code (nil?
  * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
  * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
  * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,
@@ -459,14 +470,13 @@ final class ClojureLowering {
 	private @Nullable LispVal builtin(String name, List<LispVal> items) {
 		int n = items.size() - 1;
 		switch (name) {
-			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "reverse", "apply":
+			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt", "reverse":
 				return plain(name, items);
 			case "quot":
 				isTrue(n == 2, "quot takes two arguments");
 				return list(sym("truncate"), lower(items.get(1)), lower(items.get(2)));
 			case "nth":
-				isTrue(n == 2, "nth takes a collection and an index");
-				return list(sym("nth"), lower(items.get(2)), lower(items.get(1)));
+				return nthOf(items);
 			case "and":
 				return andOf(items.subList(1, items.size()));
 			case "or":
@@ -498,10 +508,19 @@ final class ClojureLowering {
 				return list(sym("princ"), LispString.literal("\n"));
 			case "count":
 				return countOf(items);
+			case "seq":
+				isTrue(items.size() == 2, "seq takes one collection");
+				return seqForm(lower(items.get(1)));
 			case "first":
-				return plain("car", items);
+				isTrue(items.size() == 2, "first takes one collection");
+				return list(sym("car"), seqForm(lower(items.get(1))));
 			case "rest":
-				return plain("cdr", items);
+			case "next":
+				isTrue(items.size() == 2, name + " takes one collection");
+				return list(sym("cdr"), seqForm(lower(items.get(1))));
+			case "cons":
+				isTrue(items.size() == 3, "cons takes an item and a collection");
+				return list(sym("cons"), lower(items.get(1)), seqForm(lower(items.get(2))));
 			case "empty?":
 				return booleanAnswer(emptyOf(items));
 			case "nil?":
@@ -536,19 +555,35 @@ final class ClojureLowering {
 				return booleanAnswer(plain("vectorp", items));
 			case "map":
 				isTrue(n == 2, "map takes one function and one collection");
-				return list(sym("mapcar"), fnValue(items.get(1)), lower(items.get(2)));
+				return list(sym("mapcar"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
 			case "filter":
 				isTrue(n == 2, "filter takes a predicate and a collection");
-				return list(sym("remove-if-not"), fnValue(items.get(1)), lower(items.get(2)));
+				return list(sym("remove-if-not"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
 			case "reduce":
 				isTrue(n == 2 || n == 3, "reduce takes a function, an optional value and a collection");
 				if (n == 2) {
-					return list(sym("reduce"), fnValue(items.get(1)), lower(items.get(2)));
+					return list(sym("reduce"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
 				}
-				return list(sym("reduce"), fnValue(items.get(1)), lower(items.get(3)), sym(":initial-value"),
+				return list(sym("reduce"), fnValue(items.get(1)), seqForm(lower(items.get(3))), sym(":initial-value"),
 						lower(items.get(2)));
+			case "apply":
+				isTrue(n == 2, "apply takes one function and one argument list");
+				return list(sym("apply"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
 			case "concat":
-				return cons(sym("append"), lowers(items, 1));
+				if (items.size() == 1) {
+					return NIL_CONST;
+				}
+				List<LispVal> seqs = new ArrayList<>();
+				for (int i = 1; i < items.size(); i++) {
+					seqs.add(seqForm(lower(items.get(i))));
+				}
+				return cons(sym("append"), seqs);
+			case "take":
+				return takeOf(items);
+			case "drop":
+				return dropOf(items);
+			case "range":
+				return rangeOf(items);
 			case "assoc":
 				return assocOf(items);
 			case "dissoc":
@@ -575,6 +610,8 @@ final class ClojureLowering {
 				return mapConstructorOf(items, "array-map");
 			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
 				throw new LispReadException("transients are not supported yet: " + name);
+			case "lazy-seq", "cycle", "repeat", "repeatedly", "iterate":
+				throw new LispReadException("lazy sequences are not supported: " + name);
 			default:
 				return null;
 		}
@@ -971,6 +1008,154 @@ final class ClojureLowering {
 	}
 
 	/**
+	 * The seq view of an already-lowered collection: a strict LIST, the one sequence
+	 * every backend already shares, so no backend learns a representation. Lists pass
+	 * through untouched (the list fast path -- no copy); vectors and strings coerce; maps
+	 * contribute one two-vector per entry and sets one member per element, both in the
+	 * table's walk order, unspecified like the oracle's; nil and the false object are
+	 * empty; anything else signals, like the oracle's. The collection runs once, behind a
+	 * temporary no user identifier can spell.
+	 * @param lowered the lowered collection
+	 * @return the form answering the list view
+	 */
+	private LispVal seqForm(LispVal lowered) {
+		LispSymbol coll = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("null"), coll), NIL_CONST));
+		branches.add(list(isSetForm(coll), memberList(coll)));
+		branches.add(list(list(sym("consp"), coll), coll));
+		branches.add(list(list(sym("vectorp"), coll), list(sym("coerce"), coll, quoted("list"))));
+		branches.add(list(list(sym("stringp"), coll), list(sym("coerce"), coll, quoted("list"))));
+		branches.add(list(list(sym("hash-table-p"), coll), entryList(coll)));
+		branches.add(list(list(sym("eq"), coll, this.falseVariable), NIL_CONST));
+		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("seq needs a collection"))));
+		return list(sym("let"), list(List.of(list(coll, lowered))), cons(sym("cond"), branches));
+	}
+
+	/** A set's members accumulated into a list, in the table's walk order. */
+	private LispVal memberList(LispVal coll) {
+		LispSymbol acc = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		return list(sym("let"), list(List.of(list(acc, NIL_CONST))),
+				list(sym("maphash"),
+						list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+								list(sym("setq"), acc, list(sym("cons"), key, acc))),
+						setInner(coll)),
+				acc);
+	}
+
+	/** A map's entries accumulated into a list of two-vectors, in walk order. */
+	private LispVal entryList(LispVal coll) {
+		LispSymbol acc = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		return list(sym("let"), list(List.of(list(acc, NIL_CONST))),
+				list(sym("maphash"),
+						list(sym("lambda"), list(List.of(key, val)),
+								list(sym("setq"), acc, list(sym("cons"), list(sym("vector"), key, val), acc))),
+						coll),
+				acc);
+	}
+
+	/**
+	 * {@code nth} over any collection: the seq view indexed, past the end the default
+	 * (nil without one) instead of the oracle's throw. The collection and the index run
+	 * once each.
+	 */
+	private LispVal nthForm(LispVal coll, LispVal index, LispVal dflt) {
+		LispSymbol seq = freshTemp();
+		LispSymbol at = freshTemp();
+		return list(sym("let"), list(List.of(list(seq, seqForm(coll)), list(at, index))),
+				list(sym("if"), list(sym("<"), at, list(sym("length"), seq)), list(sym("nth"), at, seq), dflt));
+	}
+
+	private LispVal nthOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "nth takes a collection, an index and an optional default");
+		return nthForm(lower(items.get(1)), lower(items.get(2)), n == 3 ? lower(items.get(3)) : NIL_CONST);
+	}
+
+	/**
+	 * {@code nth} as a value: a lambda with the Clojure argument order, since a bare
+	 * {@code #'NTH} would take the index first.
+	 */
+	private LispVal nthValue() {
+		LispSymbol coll = new LispSymbol(mangle("nth-coll"));
+		LispSymbol index = new LispSymbol(mangle("nth-index"));
+		return list(sym("lambda"), list(List.of(coll, index)), nthForm(coll, index, NIL_CONST));
+	}
+
+	/**
+	 * {@code quot} as a value: a lambda over the primitive, like {@link #nthValue}.
+	 */
+	private LispVal quotValue() {
+		LispSymbol first = new LispSymbol(mangle("quot-a"));
+		LispSymbol second = new LispSymbol(mangle("quot-b"));
+		return list(sym("lambda"), list(List.of(first, second)), list(sym("truncate"), first, second));
+	}
+
+	/** {@code take}: the first {@code n} of the seq view, strictly. */
+	private LispVal takeOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "take takes a count and a collection");
+		String name = mangle("take-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol left = freshTemp();
+		LispSymbol seq = freshTemp();
+		LispSymbol walked = freshTemp();
+		LispSymbol cell = freshTemp();
+		LispSymbol grown = freshTemp();
+		LispVal done = list(sym("reverse"), grown);
+		LispVal more = list(self, list(sym("-"), walked, new LispInteger(1)), list(sym("cdr"), cell),
+				list(sym("cons"), list(sym("car"), cell), grown));
+		LispVal step = list(sym("if"),
+				list(sym("or"), list(sym("<="), walked, new LispInteger(0)), list(sym("null"), cell)), done, more);
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(walked, cell, grown)), cons(step, List.of())));
+		return list(sym("let"), list(List.of(list(left, lower(items.get(1))), list(seq, seqForm(lower(items.get(2)))))),
+				list(sym("labels"), list(List.of(binding)), list(self, left, seq, NIL_CONST)));
+	}
+
+	/** {@code drop}: the seq view past the first {@code n}, strictly. */
+	private LispVal dropOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "drop takes a count and a collection");
+		LispSymbol left = freshTemp();
+		LispSymbol seq = freshTemp();
+		return list(sym("let"), list(List.of(list(left, lower(items.get(1))), list(seq, seqForm(lower(items.get(2)))))),
+				list(sym("if"), list(sym("<="), left, new LispInteger(0)), seq, list(sym("nthcdr"), left, seq)));
+	}
+
+	/**
+	 * {@code range} with an end: the strict list, built by a labels self call. Without an
+	 * end there is no strict lowering -- an infinite seq cannot be spelled -- so it is
+	 * refused by name, like {@code lazy-seq}. A zero step signals at run time.
+	 */
+	private LispVal rangeOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 0) {
+			throw new LispReadException("infinite range is not supported: range needs an end");
+		}
+		isTrue(n >= 1 && n <= 3, "range takes an end, or a start, an end and an optional step");
+		LispVal start = n >= 2 ? lower(items.get(1)) : new LispInteger(0);
+		LispVal end = n >= 2 ? lower(items.get(2)) : lower(items.get(1));
+		LispVal step = n == 3 ? lower(items.get(3)) : new LispInteger(1);
+		String name = mangle("range-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol from = freshTemp();
+		LispSymbol to = freshTemp();
+		LispSymbol by = freshTemp();
+		LispSymbol at = freshTemp();
+		LispSymbol grown = freshTemp();
+		LispVal pastEnd = list(sym("if"), list(sym("plusp"), by), list(sym(">="), at, to), list(sym("<="), at, to));
+		LispVal advance = list(self, list(sym("+"), at, by), list(sym("cons"), at, grown));
+		LispVal body = list(sym("if"), pastEnd, list(sym("reverse"), grown), advance);
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(at, grown)), cons(body, List.of())));
+		return list(sym("let"), list(List.of(list(from, start), list(to, end), list(by, step))),
+				list(sym("if"), list(sym("zerop"), by),
+						list(sym("error"), LispString.literal("range step cannot be zero")),
+						list(sym("labels"), list(List.of(binding)), list(self, from, NIL_CONST))));
+	}
+
+	/**
 	 * {@code =} over any arity: pairs of neighbours compared with the map- and set-aware
 	 * two-form below, {@code AND}ed. Zero arguments is true; one evaluates its argument
 	 * and is true. The answer is raw ({@code T} or {@code NIL}); the call sites wrap it
@@ -1243,6 +1428,12 @@ final class ClojureLowering {
 			return list(sym("nth"), new LispInteger(oneBased - 1), new LispSymbol(args));
 		}
 		if (!known(name)) {
+			if (name.equals("nth")) {
+				return nthValue();
+			}
+			if (name.equals("quot")) {
+				return quotValue();
+			}
 			String cl = builtinValue(name);
 			if (cl == null) {
 				throw new LispReadException("unknown name: " + name);

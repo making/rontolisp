@@ -1,8 +1,10 @@
 # Clojure (experimental)
 
 **Experimental.** rontolisp は Clojure の小さなサブセット -- `def`/`defn`、`fn` と
-`#(...)`、`let`/`loop`/`recur`、`if`/`when`/`cond`/`do`/`and`/`or`、`map`/`filter`/
-`reduce`/`apply`/`concat`、ベクター・キーワード・マップ・セットのリテラル、
+`#(...)`、`let`/`loop`/`recur`、`if`/`when`/`cond`/`do`/`and`/`or`、`first`/`rest`/
+`next`/`seq`/`cons`/`map`/`filter`/`reduce`/`apply`/`concat`、省略可能なデフォルト付き
+`nth` と end 付き `take`/`drop`/`range`、ベクター・キーワード・マップ・セットの
+リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
 `hash-map`/`array-map`、`println`/`print`/`str` --
 を読み込み、すべてのバックエンドで実行できます。部分的な準拠が設計であり、サブセットや
@@ -38,8 +40,15 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 `let` は `let*`、`loop`/`recur` は `labels` の自己呼び出し、ベクターリテラルは
 `vector` 呼び出し、マップリテラルは `equal` ハッシュテーブル（インプレースでは
 決して変更されません -- すべての動詞が新しいテーブルを作るため、永続性が観測可能に
-保たれます）、セットリテラルは各メンバーを自分自身の下に格納した同じテーブル、
-seq 関数はリスト操作です。`count`/`empty?`/`=` はマップとセットに届きます。`get`
+保たれます）、セットリテラルは各メンバーを自分自身の下に格納した同じテーブル、seq
+は任意のコレクションに対する strict なリストビューです（`first`/`rest`/`next`/
+`seq`/`cons`/`concat`/`map`/`filter`/`reduce`/`apply`/`nth`/`take`/`drop`
+はすべてそれを経由します -- リストはそのまま、ベクターと文字列は coerce され、
+マップはエントリごとに1つの2要素ベクター、セットは要素ごとに1つのメンバーを
+寄与します）。end 付き `range` は strict なリストを作ります。end のない `range`
+や `lazy-seq`（`cycle`/`repeat`/`repeatedly`/`iterate` とともに）は拒否されます --
+ここに遅延 seq はありません。値位置の `nth`/`quot` は Clojure の引数順の lambda
+です。`count`/`empty?`/`=` はマップとセットに届きます。`get`
 は省略可能なデフォルトを取ります。transient（`assoc!` など）は拒否されます。
 
 ## REPL
@@ -67,6 +76,10 @@ clojure> (twice 21)
 `#<HASH-TABLE :TEST EQUAL :COUNT n>` と印字され、セットは
 `(C%SET #<HASH-TABLE ...>)` と印字されます。ベクターとテーブルのキーは同一性で
 比較されるため、オラクルが答えるベクターキーの参照は外れます。セットリテラルの
-重複要素は綴りで拒否されます。seq 系はリストに対してのみ動作します。分割束縛、
+重複要素は綴りで拒否されます。seq 系はすべてのコレクションに対する strict な
+リストビューで動作します（リストはそのまま渡されます。空の結果は `nil` で、
+オラクルの `()` とは異なります。範囲外の `nth` は投げる代わりにデフォルトを
+答えます。マップ/セットの seq 順はテーブルの走査順で未規定です。文字列は文字に
+seq され Common Lisp 記法で印字されます）。分割束縛、
 スレッディングマクロ、`atom`、遅延 seq、メタデータ、`var` は
 ありません。エラーにはまだソース位置が付きません。

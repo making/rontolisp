@@ -56,12 +56,52 @@ class ClojureLoweringTest {
 
 	@Test
 	void coreCallsLowerToTheirCommonLispNames() {
-		assertThat(lowered("(map + '(1 2))")).isEqualTo(FALSE_BINDING + "(MAPCAR #'+ '(1 2))");
-		assertThat(lowered("(filter odd? '(1 2 3))")).contains("REMOVE-IF-NOT");
-		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE");
+		assertThat(lowered("(map + '(1 2))")).contains("MAPCAR").contains("#'+").contains("COND");
+		assertThat(lowered("(filter odd? '(1 2 3))")).contains("REMOVE-IF-NOT").contains("COND");
+		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE").contains("COND");
+		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("COND");
+		assertThat(lowered("(concat '(1 2) [3 4])")).contains("APPEND").contains("COERCE");
+		assertThat(lowered("(concat)")).isEqualTo(FALSE_BINDING + "NIL");
 		assertThat(lowered("(= 1 1)")).contains("LABELS").contains("(EQUAL");
 		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(cond (= 1 2) :one :else :fallback)")).contains(":FALLBACK");
+	}
+
+	@Test
+	void seqsCoerceCollectionsToStrictLists() {
+		assertThat(lowered("(seq [1 2])")).contains("COND").contains("COERCE");
+		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("COERCE");
+		assertThat(lowered("(rest [1 2])")).contains("(CDR").contains("COERCE");
+		assertThat(lowered("(next [1 2])")).contains("(CDR").contains("COERCE");
+		assertThat(lowered("(cons 0 [1 2])")).contains("(CONS").contains("COERCE");
+		assertThat(lowered("(first '(1 2))")).contains("(CAR").contains("CONSP");
+		assertThat(lowered("(seq {:a 1})")).contains("MAPHASH").contains("VECTOR");
+	}
+
+	@Test
+	void takeDropAndFiniteRangeAreStrict() {
+		assertThat(lowered("(take 2 [1 2])")).contains("LABELS").contains("REVERSE");
+		assertThat(lowered("(drop 2 [1 2])")).contains("NTHCDR");
+		assertThat(lowered("(range 3)")).contains("LABELS").contains("REVERSE");
+		assertThat(lowered("(range 1 5 2)")).contains("LABELS");
+		assertThatThrownBy(() -> Clojure.read("(range)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("infinite range is not supported: range needs an end");
+		assertThatThrownBy(() -> Clojure.read("(take 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("take takes a count and a collection");
+		assertThatThrownBy(() -> Clojure.read("(drop 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("drop takes a count and a collection");
+	}
+
+	@Test
+	void lazySeqsAreRefusedByName() {
+		assertThatThrownBy(() -> Clojure.read("(lazy-seq [1])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lazy sequences are not supported: lazy-seq");
+		assertThatThrownBy(() -> Clojure.read("(cycle [1])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lazy sequences are not supported: cycle");
+		assertThatThrownBy(() -> Clojure.read("(repeat 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lazy sequences are not supported: repeat");
+		assertThatThrownBy(() -> Clojure.read("(iterate inc 0)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lazy sequences are not supported: iterate");
 	}
 
 	@Test
@@ -113,8 +153,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(true? nil)")).isEqualTo(FALSE_BINDING + "(IF (EQ NIL T) T RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(boolean? nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (EQ |__clojure_0| T)");
 		assertThat(lowered("(not nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (NULL |__clojure_0|)");
-		assertThat(lowered("(map false? '(1))"))
-			.isEqualTo(FALSE_BINDING + "(MAPCAR (LAMBDA (|c%pred|) (EQ |c%pred| RONTOLISP::%CLOJURE-FALSE)) '(1))");
+		assertThat(lowered("(map false? '(1))")).contains("MAPCAR")
+			.contains("(LAMBDA (|c%pred|) (EQ |c%pred| RONTOLISP::%CLOJURE-FALSE))");
 	}
 
 	@Test
@@ -185,13 +225,18 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void nthTakesTheCollectionFirst() {
-		assertThat(lowered("(nth '(1 2 3) 1)")).isEqualTo(FALSE_BINDING + "(NTH 1 '(1 2 3))");
+	void nthIndexesTheSeqViewWithAnOptionalDefault() {
+		assertThat(lowered("(nth '(1 2 3) 1)")).contains("(NTH").contains("LENGTH");
+		assertThat(lowered("(nth [10 20] 5 :nf)")).contains("(NTH").contains(":NF");
+		assertThat(lowered("nth")).contains("(LAMBDA").contains("(NTH");
+		assertThatThrownBy(() -> Clojure.read("(nth '(1 2 3))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("nth takes a collection, an index and an optional default");
 	}
 
 	@Test
 	void quotTruncatesTowardZero() {
 		assertThat(lowered("(quot 7 2)")).isEqualTo(FALSE_BINDING + "(TRUNCATE 7 2)");
+		assertThat(lowered("quot")).contains("(LAMBDA").contains("TRUNCATE");
 	}
 
 }
