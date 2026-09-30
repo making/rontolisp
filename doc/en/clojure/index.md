@@ -46,7 +46,9 @@ rontolisp prog.txt --source-language clojure       # any extension
 ## What lowers to what
 
 Every identifier mangles behind `c%`, so no Clojure name can collide with a core form
-or built-in. `defn` is a `defun` (direct call), `def` a top-level `setq`, `fn` and
+or built-in. `defn` is a `defun` (direct call), `def` a top-level `setq`, while a
+head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable is
+a `funcall` of the value cell (so `(defn call-it [f x] (f x))` runs), `fn` and
 `#(...)` a `lambda` (the `#(...)` arguments travel as one rest list), `let` a `let*`,
 `loop`/`recur` a `labels` self call, a vector literal a `vector` call, a map literal
 an `equal` hash table (never mutated in place -- every verb builds a fresh one, so

@@ -39,6 +39,15 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void headPositionCallsToVariablesAreFuncalls() {
+		assertThat(lowered("(defn call-it [f x] (f x))"))
+			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (FUNCALL |c%f| |c%x|))");
+		assertThat(lowered("(let [g inc] (g 1))")).contains("(FUNCALL |c%g| 1)");
+		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
+		assertThat(lowered("(declare u) (u 1)")).contains("(|c%u| 1)").doesNotContain("FUNCALL");
+	}
+
+	@Test
 	void letIsSequentialAndLoopIsALabelsSelfCall() {
 		assertThat(lowered("(let [x 1 y x] y)")).isEqualTo(FALSE_BINDING + "(LET* ((|c%x| 1) (|c%y| |c%x|)) |c%y|)");
 		assertThat(lowered("(loop [a 0] (recur 1))")).contains("LABELS");
