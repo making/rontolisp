@@ -13,6 +13,7 @@ import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.FfiInterop;
 import am.ik.rontolisp.eval.CheckpointLibrary;
+import am.ik.rontolisp.eval.ClojureLibrary;
 import am.ik.rontolisp.eval.GeomLibrary;
 import am.ik.rontolisp.eval.GgufLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
@@ -694,17 +695,19 @@ final class CompileFrontend {
 		// program
 		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
 		// the
-		// string comparisons the helpers are written over.
+		// string comparisons the helpers are written over. ClojureLibrary sits beside
+		// SchemeLibrary for the same reason -- only a lowered Clojure program names a
+		// rontolisp::%clojure- helper.
 		// ObjcLibrary (objc and cocoa, objc.lisp) right OUTSIDE AppKitLibrary: a library
 		// written over objc is seen too. Its defining
 		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
 		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
 		// before any library is spliced.
-		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary
-			.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary
-				.process(CheckpointLibrary.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
-					.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)), features,
-							input.standards())))))))))))));
+		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(
+				GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
+					.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(ClojureLibrary
+						.process(SchemeLibrary.process(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded)),
+								features, input.standards()))))))))))))));
 		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
 		// output, needed by the primitive calls the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary

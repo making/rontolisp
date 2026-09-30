@@ -39,8 +39,8 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `doseq`/`dotimes`/`for` | refused by name | `iteration forms are not supported yet`; comprehensions and imperative loops stay out |
 | `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value and a per-multimethod prefers table in three globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included); an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate falls back to the default dispatch value (`:default` without an option) or signals `No method in ...` |
 | `derive`/`underive`/`isa?`/`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` | the hierarchy runtime over the shared table runtime | a hierarchy value is a map of `:parents`/`:ancestors`/`:descendants` tables (children to wrapped sets); the global value lives in `C%H-GLOBAL`, rebound by two-argument `derive`/`underive` (answering `nil`), while three-argument forms answer an updated value (`make-hierarchy` an empty one); `isa?` is `equal`, element-wise vector derivation, or ancestor membership (two- or three-argument), answering `T`-or-false; the three reads answer (possibly empty) sets; `prefer-method` records into the multimethod's prefers table and answers the multimethod; the runtime (set helpers, transitive rebuild, dispatch search) is spliced once behind the false binding when used |
-| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through `princ-to-string`, so strings keep their message |
-| `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through `princ-to-string`); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
+| `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through its Clojure-notation rendering (`rontolisp::%clojure-str-of`), so strings keep their message |
+| `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through its Clojure-notation rendering); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
 | `atom`/`deref`/`@`/`swap!`/`reset!`/`compare-and-set!` (and `volatile!`/`vswap!`/`vreset!`) | a tagged one-vector cell `(:C%ATOM #(value))`, like the set wrapper | every verb reads/writes the cell and answers the new value (`compare-and-set!` compares with `eql` and answers `T`-or-false); misuse signals; each works as a function value, so `(map deref atoms)` runs |
 | `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; only `clojure.string` resolves (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
@@ -83,12 +83,13 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `conj` | a member onto a set, entries onto a map, at the end of a vector, at the front of a list | a set conjoined onto a map contributes its members one level deep; anything else conjoined onto a map is refused |
 | `disj` | a fresh set minus the members | of nil, nil; of a map, refused |
 | `set`/`hash-map`/`array-map` | a set from a collection, a map from key/value pairs | `set` takes lists, vectors, maps (entry vectors) and sets; odd constructor pairs are refused |
-| `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, anything else through `princ-to-string` |
-| `println`/`print`/`pr`/`prn` | one `concatenate` + `princ`, the newline folded into the last part | a string prints unquoted (`pr`/`prn` convert readably, so strings print quoted); collections print in CL notation; parts are joined with a single space, like Clojure; each part maps like `str` except `nil` prints as `nil` |
+| `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, a keyword to its colon spelling, collections in Clojure notation through `rontolisp::%clojure-str-of` |
+| `pr-str` | `concatenate 'string` over mapped parts joined with a space | the readable arm of `str` (like `pr`): `(pr-str)` is `""`, `nil` maps to `"nil"` |
+| `println`/`print`/`pr`/`prn` | one `rontolisp::%clojure-write-datum` call per part straight to `*standard-output*`, spaces as `write-char`, the newline as `terpri`, answering nil | parts joined with a single space, like Clojure; `pr`/`prn` convert readably, so strings print quoted; collections print in Clojure notation; no `with-output-to-string` ever reaches a compiled program (a literal one flips a WASM module into EH mode -- measured gate, `.todo/artefacts/b07-clojure-print/NOTES.md` finding 6); the print family answers nil, like the oracle |
 | `true` | `LispTrue` (`T`) | a raw symbol spelled `T` is unbound -- `evalSymbolRef` looks the name up |
 | `nil` | `NIL` | falsey |
 | `false` | the value of `rontolisp::%clojure-false`, bound before anything else runs | a DISTINCT non-`NIL` symbol spelled `false` (the distinct-object treatment `scheme.lisp`'s `#f` uses); falsey in every conditional through the lowered tests; `eq`-comparable by name on every backend |
-| a keyword `:foo` | the list `(:C%KEYWORD "foo")` holding its spelling verbatim (case-preserved) | data, compared by `equal` through the cons shape; `:a` and `:A` stay apart; `println`/`print`/`str` spell it with its colon; a keyword nested in a printed collection shows the wrapper |
+| a keyword `:foo` | the list `(:C%KEYWORD "foo")` holding its spelling verbatim (case-preserved) | data, compared by `equal` through the cons shape; `:a` and `:A` stay apart; every print arm spells it with its colon, nested or not |
 | a keyword in call position `(:k m)` / `(:k m dflt)` | the same table-aware read `get` lowers to | the idiomatic map lookup, over b02's map runtime (sets answer their member, vectors/strings their element) |
 | a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a one-argument lambda over the same read | `(map :k coll)` reads the key out of each member |
 | a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole; `::`-auto-resolve is refused by name (there is no namespace to resolve against) |
@@ -99,19 +100,46 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 ## Deviations (each a real work item)
 
-- A keyword nested in a printed collection shows its `(:C%KEYWORD name)` wrapper
-  (e.g. `#((C%KEYWORD a) (C%KEYWORD b))` for `[:a :b]`), like a set shows its
-  wrapper; only `println`/`print`/`str` of the keyword itself spell the colon. The
-  REPL echo goes through the Common Lisp printer, so it shows the wrapper too.
-- Maps and sets print in the runtime's notation, like vectors print in CL notation: a
-  map prints `#<HASH-TABLE :TEST EQUAL :COUNT n>`, a set `(C%SET #<HASH-TABLE ...>)`
-  (the wrapper reads `C%SET` because `princ` strips a keyword's colon). The runtime is
-  the shared hash-table runtime (`.kb/hash-tables.md`), decided 2026-09-30 (b02): an
-  `equal` table per map/set, copy-on-write for every verb, so the persistent semantics
-  holds observably on all four backends with no new runtime and no per-backend code. A
-  persistent-map library spliced like `scheme.lisp` was the alternative; it would have
-  added a representation every backend prints, hashes and compares, for no measured
-  user beyond what the table already does.
+- Printing runs through the spliced `clojure.lisp` library (`eval/ClojureLibrary`,
+  the `SchemeLibrary` shape: `forms`, `isClojureFunction`, `process`), decided
+  2026-09-30 (b07): `println`/`print`/`pr`/`prn` write each part straight to the
+  stream behind `rontolisp::%clojure-write-datum` (spaces and the newline as their
+  own writes, answering nil like the oracle), `str`/`pr-str` build from
+  `rontolisp::%clojure-str-of` parts, and the `clojure> ` echo renders through it
+  (the `ECHO` shape). The renderer writes straight to the stream it is given
+  (`write-string`/`write-char`/`princ`, `princ` doubling for the unreadable
+  fallback), so no `with-output-to-string` ever reaches a compiled program. Vectors print
+  `[1 :a s]`, maps `{:a 1}`, sets `#{1}`, lists `(true false nil :k)`, quoted
+  symbols demangled (`e2e-foo`), chars `\a` (readable) / `a` (plain), strings
+  readable when asked. `nil` stays `nil` (it IS the empty list; never `()`),
+  map/set walk order stays unspecified (same as `keys`/`vals`, so only
+  single-entry maps and single-member sets print deterministically), unreadable
+  values (functions as `#<procedure>`, conditions, host objects) stay `#<..>`.
+  Cycles print with Scheme-scale datum labels (`#0=(1 . #0#)`), copied from
+  `%scheme-print`'s design and extended to hash-table nodes (a map can close a
+  cycle through an atom) -- copied, not shared, because the node shapes differ
+  and sharing would splice `scheme.lisp` into every Clojure program. The
+  `*print-length*`/`*print-level*` loss is documented, not implemented (a routed
+  `println` never passed through `%print-cased` either); `~S`/`~A` on Clojure
+  values stay Common Lisp notation (`format` is a CL surface);
+  `print-method`/`pprint` stay absent.
+- Cost (2026-09-30, x86-64 Linux, Java 25): the write path (`println` of a number,
+  a string, a vector, a map) compiles to 9,546 / 16,776 / 25,778 / 27,514 B of
+  wasm (51,329 B of class for the string case, 1,759 B without printing); adding
+  `str` (the string-stream half) reaches 29,778 B. The analogous Scheme shapes
+  measure 500 B (`(display "hi")`, which lowers behind no helper at all),
+  8,285 B (`(display (list 1 2))`, the full `%scheme-print` machinery) and
+  30,009 B (a string-port program) -- the same order, so the design (one
+  stream-direct writer, `str` over `make-string-output-stream` /
+  `get-output-stream-string`, never `with-output-to-string`, which measured
+  11,948 B vs 6,429 B for the same writes) stands as drawn.
+- Maps and sets keep the shared hash-table runtime (`.kb/hash-tables.md`),
+  decided 2026-09-30 (b02): an `equal` table per map/set, copy-on-write for
+  every verb, so the persistent semantics holds observably on all four backends
+  with no new runtime and no per-backend code. A persistent-map library spliced
+  like `scheme.lisp` was the alternative; it would have added a representation
+  every backend prints, hashes and compares, for no measured user beyond what
+  the table already does.
 - Vector and table keys compare by identity, not structurally: the runtime's `equal`
   on an array or a table IS identity (`.kb/hash-tables.md`), so
   `(get {[:a] 1} [:a])` misses here and answers `1` there, and a vector member never
@@ -138,8 +166,8 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   table keys (vectors by identity), widened by the hierarchy search (most specific
   wins, then `prefer-method`, like the oracle); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
-  prints as its `#<C%E-EX-INFO ...>` condition; atoms print as their `(:C%ATOM #(value))`
-  wrapper; `split`/`replace` match literal strings, never patterns (the documented
+  prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
+  functions as `#<procedure>`; `split`/`replace` match literal strings, never patterns (the documented
   literal-only position, decided 2026-09-30 b08: no regex runtime on any backend,
   so `#"..."` stays refused at the reader and `clojure.string`/`String` splitting
   keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
@@ -161,16 +189,18 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   are prefixed (`file:line:column` when the file is known), and the lowering
   re-reports its own errors (`unknown name`, arity refusals, ...) against the
   reader's per-datum offsets, innermost first (`.kb/source-positions.md`).
-- Printing: `print-method`/`pprint` are absent; `pr`/`prn` are the readable arms of
-  `print`/`println`, and a boolean nested in a collection prints in Common Lisp notation
-  (`T`/`NIL` for `true`/`nil`) while the false object spells `false`.
+- Printing: `print-method`/`pprint` are absent; `pr`/`prn`/`pr-str` are the
+  readable arms of `print`/`println`/`str` (strings print quoted, `pr-str` joining
+  with a space like `pr`); the print family answers nil, like the oracle. An atom
+  prints unreadably (`#<Atom value>`) and a function as `#<procedure>` -- the
+  b05/b08 values route through the same printer, so none leaks its wrapper.
 
 ## A session
 
 `ClojureSession` keeps the lowering across buffers: every buffer declares its own
 top-level `def`/`defn` names into the session's globals first, so a later buffer may
-call what an earlier one defined. `SourceSession` prompts `clojure> `, echoes through
-the Common Lisp printer, and decides completeness by bracket counting over `()[]{}` 
+call what an earlier one defined. `SourceSession` prompts `clojure> `, echoes through the spliced `clojure.lisp`
+printer (the `ECHO` shape, readable), and decides completeness by bracket counting over `()[]{}` 
 (outside strings and `;` comments) plus a reader probe for a trailing dispatch prefix
 (`'`, `` ` ``, `~`, `@`, `^`, `#'`, `#_`, `#(`).
 
@@ -238,3 +268,14 @@ in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
 what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
 backquote, `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`.
+Printing runs through the spliced library (b07): `println`/`print`/`pr`/`prn`
+write straight to the stream, `str`/`pr-str` build strings, the `clojure> ` echo
+renders readably, `throw`/`ex-message`/multimethod-miss messages render in
+Clojure notation, cycles print with datum labels -- each pinned in
+`clojure-spec.yaml` (run on all four backends) or, for the call shapes and the
+`pr-str` value, in `ClojureLoweringTest`; the `clojure>` REPL transcript is
+re-pinned in `RontoLispCliTest` (and `PlaygroundReplTest`), the splice in
+`ClojureLibraryTest`, the package rule (`clojure` sees only the AST types and
+`reader`; the `.lisp` resource is data) in `PackageCycleTest`. Multi-entry
+maps and multi-member sets never print in the spec (the walk order is
+unspecified); only single-entry/single-member shapes pin the notation.

@@ -9,7 +9,7 @@
 `nth` と end 付き `take`/`drop`/`range`、ベクター・キーワード・マップ・セットの
 リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
-`hash-map`/`array-map`、`subs`、`println`/`print`/`pr`/`prn`/`str`、`comment`、
+`hash-map`/`array-map`、`subs`、`println`/`print`/`pr`/`prn`/`str`/`pr-str`、`comment`、
 `try`/`catch`/`finally`/`throw`、`ex-info`/`ex-data`/`ex-message`、`atom`/`deref`/
 `swap!`/`reset!`/`compare-and-set!`（および `volatile!`/`vswap!`/`vreset!`）、階層付きの
 `defmulti`/`defmethod`/`remove-method`/`get-method`（`derive`/`underive`/`isa?`/
@@ -65,7 +65,7 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 end 付き `range` は strict なリストを作ります。end のない `range`
 や `lazy-seq`（`cycle`/`repeat`/`repeatedly`/`iterate` とともに）は拒否されます --
 ここに遅延 seq はありません。値位置の `nth`/`quot` は Clojure の引数順の lambda
-です。`inc`/`dec`/`str` と seq 動詞（`seq`/`first`/`rest`/`cons`/`count`/`map`/
+です。`inc`/`dec`/`str`/`pr-str` と seq 動詞（`seq`/`first`/`rest`/`cons`/`count`/`map`/
 `filter`/`reduce`/`concat`/`take`/`drop`/`range`）も同様に値位置の lambda なので、
 高階呼び出しはそれらを裸で取れます。`apply` は先行引数を seq 化した末尾引数の上に
 展開します。`count`/`empty?`/`=` はマップとセットに届きます。`get`
@@ -111,13 +111,13 @@ atom はタグ付きセル `(:C%ATOM #(value))` で、すべての動詞がそ�
 catch-all の `error` 節に答えます -- クラスは区別されないため、最初の節があらゆる
 コンディションを処理します -- catch 変数は Common Lisp のコンディションを束縛します。
 `throw` は `error` 経由でシグナルします。`ex-info` 値は自身のコンディションとして
-シグナルされ（データを運びます）、それ以外は `princ-to-string` で描画されるため、
+シグナルされ（データを運びます）、それ以外は Clojure 記法で描画されるため、
 投げた文字列はメッセージを保ちます。
 
 `(ex-info message data)` はメッセージとデータのスロットを持つコンディションを作ります
 （レポートはメッセージを印字するため、捕捉されなかったものはすべてのバックエンドで
 同じに読めます）。`(ex-data e)` はマップを答え（他のコンディションには `nil`）、
-`(ex-message e)` はメッセージを答えます（それ以外は `princ-to-string` で印字されます）。
+`(ex-message e)` はメッセージを答えます（それ以外は Clojure 記法で描画されます）。
 いずれも関数値として動作するため、`(map ex-data xs)` が動きます。
 
 ```clojure
@@ -201,6 +201,7 @@ number` 拒否）。`1M` は正確な比に低下します（`0.1M` は `1/10` �
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
+twice
 clojure> (twice 21)
 42
 ```
@@ -212,14 +213,21 @@ clojure> (twice 21)
 `true?`/`boolean?` もそれに応じて答えます。`println`/`print` は3つの値を
 `true`/`false`/`nil` と表記し、`str` は `true`/`false`/`""` と表記します。
 `println`/`print` の各部分は1つの空白で区切られ（Clojure と同じ）、`str`
-は区切りなしで連結されます。`pr`/`prn` は読み戻し可能な側面で、文字列は引用符付きで
-印字されます。キーワードはコロン付きで印字され（`:a`）、
-大文字小文字を保持します。コレクションは Common Lisp 記法で印字されます
-（`[:a :b]` に対して `#((C%KEYWORD a) (C%KEYWORD b))`、入れ子の `true`/`nil` は
-`T`/`NIL`）。コレクションに入れ子になったキーワードは `(:C%KEYWORD name)`
-ラッパーで表示されます（セットがラッパーで表示されるのと同様）。マップは
-`#<HASH-TABLE :TEST EQUAL :COUNT n>` と印字され、セットは
-`(C%SET #<HASH-TABLE ...>)` と印字されます。ベクターとテーブルのキーは同一性で
+は区切りなしで連結されます。`pr`/`prn`/`pr-str` は読み戻し可能な側面で、文字列は
+引用符付きで印字されます（`pr-str` は `pr` と同じく各部分を1つの空白で区切ります）。
+print 系はオラクルと同じく `nil` を答えます。キーワードはコロン付きで印字され
+（`:a`）、大文字小文字を保持します。コレクションは Clojure 記法で印字されます
+（`[1 :a s]`、`{:a 1}`、`#{1}`、`(true false nil :k)`）。クォートされたシンボルは
+`c%` の後ろから demangle されるため、`'e2e-foo` は `e2e-foo` と印字されます。
+`nil` は `nil` のまま（`()` にはなりません）で、マップ/セットの走査順は未規定のまま
+（`keys`/`vals` と同じ）なので、確定的に印字できるのは単一エントリのマップと単一
+メンバーのセットだけです。循環を閉じる値は datum label 付きで印字されます
+（`#0=(1 . #0#)`、Scheme の `write` と同様）。循環のない共有は2回印字されます。
+`*print-length*`/`*print-level*` は尊重されず（経由した `println` が元から
+`%print-cased` を通っていません）、Clojure 値への `~S`/`~A` は Common Lisp 記法の
+ままです（`format` は CL の表面です）。`print-method`/`pprint` はありません。
+atom は読み戻し不能な形（`#<Atom value>`）で印字され、関数は `#<procedure>` です。
+ベクターとテーブルのキーは同一性で
 比較されるため、オラクルが答えるベクターキーの参照は外れます。セットリテラルの
 重複要素は綴りで拒否されます。seq 系はすべてのコレクションに対する strict な
 リストビューで動作します（リストはそのまま渡されます。空の結果は `nil` で、
@@ -232,9 +240,8 @@ seq され Common Lisp 記法で印字されます）。`doseq`/`dotimes`/`for` 
 （`#<C%E-EX-INFO ...>`）として印字されます。catch 節は順に catch-all です（最初があらゆるコンディションを処理します）。
 マルチメソッドのディスパッチ値は `equal` テーブルのキーのように比較されます
 （ベクターは同一性）。階層の `parents`/`ancestors`/`descendants` はセットを答えます
-（セットリテラルと同様に包んで印字されます）。階層経由のディスパッチは厳密に最も
+（`#{...}` で印字されます）。階層経由のディスパッチは厳密に最も
 具体的なメソッドを選び、次に `prefer-method` の選択を尊重します。
-atom は `(:C%ATOM #(value))` ラッパーで印字されます。
 `split`/`replace` はリテラル文字列にマッチし、パターンではありません（正規表現ランタイムはなく、`#"..."` は拒否されたままです）。`indexOf` は
 見つからないとき `nil` ではなくオラクルと同じ `-1` を答えます。ボディ内の `def` はボディの実行時にグローバルを設定します。ボディ内の
 `defn` は文の位置でのみ動作します（複数アリティはトップレベルのみ）。`cond` は

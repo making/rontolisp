@@ -259,6 +259,8 @@ public final class LispEvaluator {
 
 	private boolean schemeLibraryLoaded = false;
 
+	private boolean clojureLibraryLoaded = false;
+
 	private boolean usocketLibraryLoaded = false;
 
 	private boolean witLibraryLoaded = false;
@@ -10416,6 +10418,21 @@ public final class LispEvaluator {
 				// rebinds *standard-output*, and only a form whose special bindings were
 				// registered (SpecialVarCollector) binds it DYNAMICALLY for its callees.
 				for (LispVal form : SchemeLibrary.forms(this.sourceStandards)) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Clojure front end (clojure.lisp)
+			// loads the same way on the first resolution of a rontolisp::%clojure-
+			// helper, which only a lowered Clojure program names.
+			if (!this.clojureLibraryLoaded && ClojureLibrary.isClojureFunction(name)) {
+				this.clojureLibraryLoaded = true;
+				// evalResolved, like the Scheme library above: the shape is the same
+				// (canonical rontolisp:: helpers over bare cl names).
+				for (LispVal form : ClojureLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

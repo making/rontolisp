@@ -69,7 +69,7 @@ cases:
     expected: |
       :two
       :fallback
-      (3 3 T false)
+      (3 3 true false)
       3
       2
   - name: arithmetic-and-comparison
@@ -82,7 +82,7 @@ cases:
       (6 6 24 7/2)
       (9 3 1 1 3 -3 5 1024)
       (6 4)
-      (T false T T T T false)
+      (true false true true true true false)
   - name: seq-ops-run-over-lists
     source: |
       (println (map #(* % %) '(1 2 3)))
@@ -128,10 +128,10 @@ cases:
       6
       6
       9
-      (20 (C%KEYWORD nf) 3)
+      (20 :nf 3)
   - name: seq-and-next
-    # seq coerces any collection to a strict list; a map entry is a two-vector (in
-    # CL notation), a string seqs to chars, and the table walk order is unspecified
+    # seq coerces any collection to a strict list; a map entry is a two-vector, a
+    # string seqs to chars, and the table walk order is unspecified
     # (so map/set seqs are only counted here).
     source: |
       (println (seq '(1 2)))
@@ -156,7 +156,7 @@ cases:
       nil
       nil
       2
-      #((C%KEYWORD a) 1)
+      [:a 1]
       2
       2
       a
@@ -217,37 +217,41 @@ cases:
       (2 3)
       (2 3 4)
       (1 :a false)
-      (#(1) #(2 3))
+      ([1] [2 3])
       10
       (1 2 3)
-      (T false T)
+      (true false true)
   - name: predicates
     source: |
       (println (list (even? 4) (odd? 3) (zero? 0) (pos? 5) (neg? -2) (vector? [1]) (vector? '(1)) (empty? '()) (empty? '(1)) (nil? nil) (some? 0)))
     expected: |
-      (T T T T T T false T false T T)
-  - name: vectors-print-in-common-lisp-notation
-    # Clojure prints [1 :a s]; here a vector prints as #(1 (C%KEYWORD a) s): a
-    # keyword nested in a collection shows its wrapper, like a set does.
+      (true true true true true true false true false true true)
+  - name: vectors-print-in-clojure-notation
+    # A vector prints in brackets, a nested keyword with its colon, a nested
+    # string bare; true/false/nil nest as themselves.
     source: |
       (println [1 :a "s"])
       (println (count [10 20 30]))
       (println (vector 1 2))
       (println (list (vector? [1]) (vector? '(1))))
+      (println [true false nil])
+      (println [])
     expected: |
-      #(1 (C%KEYWORD a) s)
+      [1 :a s]
       3
-      #(1 2)
-      (T false)
+      [1 2]
+      (true false)
+      [true false nil]
+      []
   - name: quote-mangles-symbols-and-re-emits-vectors
     source: |
       (println 'qi-a)
       (println '(1 2 qi-b))
       (println '[1 :a])
     expected: |
-      c%qi-a
-      (1 2 c%qi-b)
-      #(1 (C%KEYWORD a))
+      qi-a
+      (1 2 qi-b)
+      [1 :a]
   - name: keywords-are-case-sensitive-and-print-with-colon
     # Clojure prints :a :A distinctly and (= :a :A) is false; a keyword in call
     # position is the map lookup, per .kb/clojure-frontend.md.
@@ -362,7 +366,7 @@ cases:
       x y
       "a" 1 :k
       "x" "y"
-      #(1 2)
+      [1 2]
       nil true false
   - name: numbers
     # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
@@ -382,7 +386,7 @@ cases:
       (println "a\nb")
     expected: |
       1
-      #(1 2 3)
+      [1 2 3]
       42
       a
       b
@@ -415,25 +419,30 @@ cases:
       (println (fact-r 10))
     expected: |
       3628800
-  - name: map-literals-print-as-hash-tables
-    # A map is an equal hash table, so it prints in hash-table notation, like
-    # vectors print in CL notation (see .kb/clojure-frontend.md).
+  - name: map-literals-print-in-clojure-notation
+    # A map prints in braces with ", " between entries (the walk order stays
+    # unspecified, like keys/vals, so only single-entry maps print here).
     source: |
       (println {:a 1})
       (println {})
       (println {:a {:b [1 2]}})
     expected: |
-      #<HASH-TABLE :TEST EQUAL :COUNT 1>
-      #<HASH-TABLE :TEST EQUAL :COUNT 0>
-      #<HASH-TABLE :TEST EQUAL :COUNT 1>
-  - name: set-literals-print-wrapped
-    # The wrapper prints as written.
+      {:a 1}
+      {}
+      {:a {:b [1 2]}}
+  - name: set-literals-print-in-clojure-notation
+    # A set prints in #{} with spaces between members (the walk order stays
+    # unspecified, so only single-member sets print here).
     source: |
-      (println #{1 2})
+      (println (count #{1 2}))
+      (println (contains? #{1 2} 2))
+      (println #{1})
       (println #{})
     expected: |
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 2>)
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 0>)
+      2
+      true
+      #{1}
+      #{}
   - name: assoc-builds-a-fresh-map
     source: |
       (def mm-base {:a 1})
@@ -493,9 +502,9 @@ cases:
       (println (list (contains? [:a :b] 1) (contains? [:a :b] 5) (contains? "abc" 0)))
       (println (contains? #{false} false))
     expected: |
-      (T false false)
-      (T false)
-      (T false T)
+      (true false false)
+      (true false)
+      (true false true)
       true
   - name: keys-and-vals
     source: |
@@ -505,7 +514,7 @@ cases:
       (println (count (keys {:a 1 :b 2})))
       (println (count (vals {:a 1 :b 2})))
     expected: |
-      ((C%KEYWORD a))
+      (:a)
       (1)
       nil
       2
@@ -534,7 +543,7 @@ cases:
       (println (contains? (conj #{1} 2) 2))
       (println (contains? (conj #{1} false) false))
     expected: |
-      #(1 2 3)
+      [1 2 3]
       (3 1 2)
       (1)
       2
@@ -582,7 +591,7 @@ cases:
       0
       0
       0
-      (T T false T false false)
+      (true true false true false false)
   - name: equality-reaches-maps-and-sets
     source: |
       (println (= {:a 1} {:a 1}))
@@ -627,12 +636,12 @@ cases:
       (println (let [[e] {:a 1}] e))
       (println (loop [[a b] [3 4]] (+ a b)))
     expected: |
-      #(1 2)
-      #(1 (2 3))
-      #(1 #(1 2))
-      #(1 2 3)
-      #(1 NIL)
-      #((C%KEYWORD a) 1)
+      [1 2]
+      [1 (2 3)]
+      [1 [1 2]]
+      [1 2 3]
+      [1 nil]
+      [:a 1]
       7
   - name: map-destructuring-reads-through-get
     # :keys/:syms/:strs, explicit locals, :as and :or defaults; a nested map
@@ -647,14 +656,14 @@ cases:
       (println (let [{:keys [n/m]} {:n/m 6}] m))
       (println (let [{:keys [a] {:keys [b]} :nested} {:a 1 :nested {:b 2}}] [a b]))
     expected: |
-      #(1 2)
-      #(1 1)
-      #(9 2)
+      [1 2]
+      [1 1]
+      [9 2]
       3
       4
       5
       6
-      #(1 2)
+      [1 2]
   - name: fn-and-loop-destructure-their-parameters
     source: |
       (println ((fn [[a b]] (+ a b)) [3 4]))
@@ -664,7 +673,7 @@ cases:
     expected: |
       7
       5
-      #(1 2 3)
+      [1 2 3]
       42
   - name: threading-threads-first-and-last
     source: |
@@ -691,13 +700,13 @@ cases:
       5
       1
       3
-      #(1 2 3 4)
+      [1 2 3 4]
       (2 3)
       12
       5
       5
       6
-      #(1 5)
+      [1 5]
       7
       nil
       (2 3)
@@ -849,8 +858,8 @@ cases:
   - name: try-catch-finally-and-throw
     # try guards handler-case inside unwind-protect; every catch class answers
     # the catch-all error clause, so the first clause handles any condition (the
-    # oracle would run the second clause of the iae/ex pair); throw renders
-    # through princ-to-string, so strings keep their message.
+    # oracle would run the second clause of the iae/ex pair); throw renders in
+    # Clojure notation, so strings keep their message.
     source: |
       (println (try (throw "boom") (catch Exception e "caught")))
       (println (try (throw "boom") (catch IllegalArgumentException e "iae") (catch Exception e "ex")))
@@ -868,8 +877,8 @@ cases:
   - name: atoms-are-shared-cells
     # An atom is a tagged one-vector cell every verb reads and writes; swap!
     # spreads extra arguments over the function, compare-and-set! compares with
-    # eql and answers a boolean. Printing spells the wrapper, not the oracle's
-    # object syntax.
+    # eql and answers a boolean. An atom itself prints unreadably (#<Atom value>),
+    # not the oracle's object syntax.
     source: |
       (def a05 (atom 1))
       (println @a05)
@@ -930,7 +939,8 @@ cases:
       0
   - name: hierarchies-derive-isa-and-prefer
     # derive/underive rewrite the global hierarchy value; isa?/parents/ancestors/
-    # descendants read it (sets print wrapped, like set literals); a multimethod
+    # descendants read it (sets print in #{...}, single members only here -- the walk
+    # order is unspecified); a multimethod
     # miss walks every method the dispatch value descends from, the strictly most
     # specific wins, prefer-method breaks ties, and an unbroken tie or a miss with
     # no default method signals. A custom hierarchy value is pure: derive returns
@@ -943,7 +953,9 @@ cases:
       (println (isa? :h-circle :h-circle))
       (println (parents :h-circle))
       (println (ancestors :h-circle))
-      (println (descendants :h-shape))
+      (println (count (descendants :h-shape)))
+      (println (contains? (descendants :h-shape) :h-circle))
+      (println (contains? (descendants :h-shape) :h-square))
       (defmulti h08 :shape)
       (defmethod h08 :h-shape [m] 0)
       (defmethod h08 :h-circle [m] 1)
@@ -974,9 +986,11 @@ cases:
       true
       false
       true
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 2>)
+      #{:h-shape}
+      #{:h-shape}
+      2
+      true
+      true
       1
       0
       miss
@@ -985,7 +999,7 @@ cases:
       1
       true
       false
-      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
+      #{:h-q}
       q!
       miss
       x
@@ -993,8 +1007,9 @@ cases:
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
-    # else through its printed rendering; ex-data answers the map (nil for any
-    # other condition) and ex-message the message. Each works as a function value.
+    # else through its Clojure-notation rendering; ex-data answers the map (nil for
+    # any other condition) and ex-message the message. Each works as a function
+    # value.
     source: |
       (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (get (ex-data e) :code))))
       (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (ex-message e))))
@@ -1008,7 +1023,7 @@ cases:
       boom
       nil
       got-plain
-      (1 NIL)
+      (1 nil)
       (m nope)
       2
   - name: memfn-calls-a-method-on-its-target
@@ -1040,3 +1055,76 @@ cases:
       (aaa)
       aaa
       (aaa)
+  - name: pr-and-pr-str-are-readable
+    # pr/prn are the readable arms of print/println, pr-str of str: strings print
+    # quoted, chars with their backslash, collections in Clojure notation.
+    source: |
+      (pr \a)
+      (newline)
+      (pr "x" [1 :a] {:b 2} #{3})
+      (newline)
+      (println (pr-str [1 :a] "x" \a))
+      (println (pr-str))
+      (println (pr-str nil))
+      (println (map pr-str ["a" 1]))
+    expected: |
+      \a
+      "x" [1 :a] {:b 2} #{3}
+      [1 :a] "x" \a
+
+      nil
+      ("a" 1)
+  - name: collections-nest-in-clojure-notation
+    # Vectors, maps, sets and lists nest with their own brackets; nil stays nil
+    # (never ()).
+    source: |
+      (println [{:a [1 :b]} #{:c} (list true false nil)])
+      (println (list {:a 1} [2] #{3} "s" \c))
+      (println [])
+      (println {})
+      (println #{})
+    expected: |
+      [{:a [1 :b]} #{:c} (true false nil)]
+      ({:a 1} [2] #{3} s c)
+      []
+      {}
+      #{}
+  - name: cycles-print-with-datum-labels
+    # A value that closes a cycle prints with a datum label, like Scheme's write:
+    # an atom holding itself, and a map reaching itself through an atom.
+    source: |
+      (def cyc07 (atom nil))
+      (reset! cyc07 cyc07)
+      (println cyc07)
+      (def cyc07m {:self cyc07})
+      (reset! cyc07 cyc07m)
+      (println cyc07)
+      (println @cyc07)
+    expected: |
+      #0=#<Atom #0#>
+      #0=#<Atom {:self #0#}>
+      #0={:self #<Atom #0#>}
+  - name: unreadable-values-print-in-angle-brackets
+    # Functions and atoms have no readable notation: a function prints
+    # #<procedure>, an atom #<Atom value>.
+    source: |
+      (println (atom 1))
+      (println (fn [x] x))
+      (println (map deref [(atom 1) (atom 2)]))
+    expected: |
+      #<Atom 1>
+      #<procedure>
+      (1 2)
+  - name: throw-and-miss-messages-use-clojure-notation
+    # throw of a non-ex-info value signals its Clojure-notation rendering, and a
+    # multimethod miss names its dispatch value the same way.
+    source: |
+      (println (try (throw {:a 1}) (catch Exception e (ex-message e))))
+      (println (try (throw [1 :a]) (catch Exception e (str "got-" e))))
+      (defmulti b07m :t)
+      (defmethod b07m :a [x] 1)
+      (println (try (b07m {:t :zzz}) (catch Exception e (ex-message e))))
+    expected: |
+      {:a 1}
+      got-[1 :a]
+      No method in b07m for dispatch value: :zzz

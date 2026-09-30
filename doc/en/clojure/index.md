@@ -7,7 +7,7 @@ with sequential and map destructuring, `if`/`when`/`cond`/`do`/`and`/`or`, threa
 `next`/`seq`/`cons`/`list*`/`map`/`filter`/`reduce`/`apply`/`concat`, `nth` (with an optional
 default) and `take`/`drop`/`range` with an end, vector, keyword, map and set literals,
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
-`hash-map`/`array-map`, `subs`, `println`/`print`/`pr`/`prn`/`str`, `comment`,
+`hash-map`/`array-map`, `subs`, `println`/`print`/`pr`/`prn`/`str`/`pr-str`, `comment`,
 `try`/`catch`/`finally`/`throw`, `ex-info`/`ex-data`/`ex-message`, `atom`/`deref`/`swap!`/`reset!`/`compare-and-set!`
 (and `volatile!`/`vswap!`/`vreset!`), `defmulti`/`defmethod`/`remove-method`/
 `get-method` with hierarchies (`derive`/`underive`/`isa?`/`parents`/`ancestors`/
@@ -61,7 +61,7 @@ prints with its colon, and in call position (`(:k m)`, with an optional default)
 it is the map lookup. `range` with an end builds the strict list;
 an end-less `range` and `lazy-seq` (with `cycle`/`repeat`/`repeatedly`/`iterate`)
 are refused -- there are no lazy seqs here. `nth`/`quot` as values are lambdas with
-the Clojure argument order, as are `inc`/`dec`/`str` and the seq verbs
+the Clojure argument order, as are `inc`/`dec`/`str`/`pr-str` and the seq verbs
 (`seq`/`first`/`rest`/`cons`/`count`/`map`/`filter`/`reduce`/`concat`/`take`/
 `drop`/`range`), so higher-order calls take them bare; `apply` spreads leading
 arguments over the seq-coerced last one. `count`/`empty?`/`=` reach maps
@@ -106,13 +106,13 @@ as a function value too, so `(map deref atoms)` runs.
 catch-all `error` clause -- classes are not distinguished, so the first clause
 handles any condition -- and the catch variable binds the Common Lisp condition.
 `throw` signals through `error`: an `ex-info` value signals as its own condition
-(carrying its data), anything else renders through `princ-to-string`, so a
+(carrying its data), anything else renders in Clojure notation, so a
 thrown string keeps its message.
 
 `(ex-info message data)` builds a condition with message and data slots (its
 report prints the message, so an uncaught one reads the same on every backend);
 `(ex-data e)` answers the map (`nil` for any other condition) and `(ex-message
-e)` the message (anything else prints through `princ-to-string`). Each works as
+e)` the message (anything else renders in Clojure notation). Each works as
 a function value too, so `(map ex-data xs)` runs.
 
 ```clojure
@@ -197,6 +197,7 @@ would in one file.
 ```console
 $ rontolisp --source-language clojure
 clojure> (defn twice [x] (* 2 x))
+twice
 clojure> (twice 21)
 42
 ```
@@ -207,12 +208,18 @@ clojure> (twice 21)
 `or`/`not` treat them alike, while `=` and `nil?` tell them apart); `false?`/`true?`/
 `boolean?` answer accordingly. `println`/`print` spell the three values `true`/`false`/
 `nil` and `str` spells them `true`/`false`/`""`, joining `println`/`print` parts with
-a single space (like Clojure) while `str` concatenates bare; `pr`/`prn` are the
-readable arms (strings print quoted). A keyword prints with its colon (`:a`), case-preserved. Collections
-print in Common Lisp notation (`#((C%KEYWORD a) (C%KEYWORD b))` for `[:a :b]`, with
-`T`/`NIL` for a nested `true`/`nil`); a keyword nested in a collection shows its
-`(:C%KEYWORD name)` wrapper, like a set shows its wrapper. Maps print as `#<HASH-TABLE :TEST EQUAL :COUNT n>` and
-sets as `(C%SET #<HASH-TABLE ...>)`; vector and table keys compare by identity, so a
+a single space (like Clojure) while `str` concatenates bare; `pr`/`prn`/`pr-str` are the
+readable arms (strings print quoted, `pr-str` joining its parts with a space like `pr`).
+The print family answers `nil`, like the oracle. A keyword prints with its colon (`:a`), case-preserved. Collections
+print in Clojure notation (`[1 :a s]`, `{:a 1}`, `#{1}`, `(true false nil :k)`); a quoted
+symbol demangles from behind `c%`, so `'e2e-foo` prints `e2e-foo`. `nil` stays `nil`
+(never `()`), and map/set walk order stays unspecified (same as `keys`/`vals`), so only
+single-entry maps and single-member sets print deterministically. A value that closes a
+cycle prints with a datum label (`#0=(1 . #0#)`), like Scheme's `write`; sharing without
+a cycle prints twice. `*print-length*`/`*print-level*` are not honored (a routed `println`
+never passed through `%print-cased` either), and `~S`/`~A` on Clojure values stay Common
+Lisp notation (`format` is a CL surface); `print-method`/`pprint` stay absent. An atom
+prints unreadably (`#<Atom value>`), a function as `#<procedure>`; vector and table keys compare by identity, so a
 vector key misses a lookup its oracle answers; a repeated set-literal element is
 refused by spelling; the seq family runs over strict list views of every collection
 (lists pass through untouched; an empty result is `nil`, where the oracle prints
@@ -223,10 +230,10 @@ Lisp notation). `doseq`/`dotimes`/`for` comprehensions and loops, protocols,
 absent. An `ex-info` value prints as its condition object (`#<C%E-EX-INFO ...>`),
 like any other condition. Catch clauses are catch-all in order (the first handles any condition);
 multimethod dispatch values compare like `equal` table keys (vectors by identity);
-a hierarchy's `parents`/`ancestors`/`descendants` answer sets (printed wrapped,
-like set literals); dispatch through a hierarchy prefers the strictly most
+a hierarchy's `parents`/`ancestors`/`descendants` answer sets (printed in `#{...}`);
+dispatch through a hierarchy prefers the strictly most
 specific method, then `prefer-method` choices;
-atoms print as their `(:C%ATOM #(value))` wrapper; `split`/`replace` match literal
+`split`/`replace` match literal
 strings, never patterns (there is no regex runtime, and `#"..."` stays refused); `indexOf` answers `-1` when missing, like the oracle. `def` inside a body
 sets the global when the body runs; `defn` inside a body works only in statement
 position (a multi-arity one only at the top level). `cond` keeps the lenient reading:

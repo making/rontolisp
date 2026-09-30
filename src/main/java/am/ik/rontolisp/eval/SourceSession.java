@@ -43,6 +43,11 @@ public final class SourceSession {
 	private static final String ECHO = "(lambda (x) (if (eq x rontolisp::%scheme-unspecified) nil"
 			+ " (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x))))";
 
+	// The Clojure echo: the same closure shape, through the Clojure printer (readable,
+	// so strings echo quoted and chars as \a). The library answers the string itself,
+	// so no with-output-to-string is needed here either.
+	private static final String CLOJURE_ECHO = "(lambda (x) (rontolisp::%clojure-str-of x \"nil\" t))";
+
 	private final SourceLanguage language;
 
 	private final @Nullable SchemeSession scheme;
@@ -144,8 +149,9 @@ public final class SourceSession {
 	/**
 	 * Writes a value the way the language's own {@code write} would: {@code prin1}
 	 * through the {@code print-object} route for Common Lisp, the Scheme printer
-	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme -- or
-	 * nothing, for the unspecified object a Scheme effect answers.
+	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme, the
+	 * Clojure printer ({@code [...]}, {@code {...}}, {@code #{...}}, demangled symbols)
+	 * for Clojure -- or nothing, for the unspecified object a Scheme effect answers.
 	 * @param value the value to show
 	 * @param evaluator the session's evaluator
 	 * @return the text, or {@code null} when the value is not shown
@@ -154,11 +160,8 @@ public final class SourceSession {
 		if (this.scheme == null && this.clojure == null) {
 			return evaluator.prin1ToStringRouted(value);
 		}
-		if (this.clojure != null) {
-			return evaluator.prin1ToStringRouted(value);
-		}
 		try {
-			LispVal echoed = evaluator.printThrough(ECHO, value);
+			LispVal echoed = evaluator.printThrough(this.clojure != null ? CLOJURE_ECHO : ECHO, value);
 			return echoed instanceof LispString written ? written.value() : null;
 		}
 		catch (RuntimeException ex) {

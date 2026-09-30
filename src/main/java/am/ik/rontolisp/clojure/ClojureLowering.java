@@ -86,20 +86,25 @@ import org.jspecify.annotations.Nullable;
  * {@code true}/{@code false}/{@code nil}, {@code str} shows {@code true}/{@code false}
  * and {@code ""} for {@code nil}; {@code println}/{@code print} join their parts with a
  * single space (like the oracle) while {@code str} concatenates bare, and
- * {@code pr}/{@code prn} are the readable arms (strings print quoted). A lowering error
- * names the innermost form's position ({@code file:line:column} when the file is known)
- * through the reader's offsets. Transients ({@code transient}, {@code persistent!},
- * {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are refused by name: there
- * is no transient runtime behind the tables. State is a tagged one-vector cell
- * ({@code atom} builds it, {@code deref} reads it, {@code swap!}/{@code reset!}/
- * {@code compare-and-set!} rewrite it); errors are {@code handler-case} inside
- * {@code unwind-protect} ({@code try}, every catch class catch-all) with {@code throw}
- * over {@code error} -- an {@code ex-info} value signals as its own condition (message
- * plus data, read by {@code ex-data}/{@code ex-message}), anything else through its
- * printed rendering; dispatch is a method table plus a dispatcher {@code defun}
- * ({@code defmulti}/{@code defmethod}); namespaces wire aliases (only
- * {@code clojure.string} resolves, over the core string operations); interop lowers to
- * the {@code java:} surface. The reader spells characters, radix integers and exact
+ * {@code pr}/{@code prn}/{@code pr-str} are the readable arms (strings print quoted).
+ * Every conversion runs through the spliced {@code clojure.lisp} library
+ * ({@code rontolisp::%clojure-str-of} for strings,
+ * {@code rontolisp::%clojure-write-datum} straight to the stream for the print family),
+ * so collections print in Clojure notation ({@code [1 :a s]}, {@code {:a 1}},
+ * {@code #{1}}, {@code (true false nil :k)}) and the print family answers nil, like the
+ * oracle. A lowering error names the innermost form's position ({@code file:line:column}
+ * when the file is known) through the reader's offsets. Transients ({@code transient},
+ * {@code persistent!}, {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are
+ * refused by name: there is no transient runtime behind the tables. State is a tagged
+ * one-vector cell ({@code atom} builds it, {@code deref} reads it,
+ * {@code swap!}/{@code reset!}/ {@code compare-and-set!} rewrite it); errors are
+ * {@code handler-case} inside {@code unwind-protect} ({@code try}, every catch class
+ * catch-all) with {@code throw} over {@code error} -- an {@code ex-info} value signals as
+ * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
+ * anything else through its printed rendering; dispatch is a method table plus a
+ * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
+ * (only {@code clojure.string} resolves, over the core string operations); interop lowers
+ * to the {@code java:} surface. The reader spells characters, radix integers and exact
  * {@code M} decimals, and refuses regex literals by name.
  */
 final class ClojureLowering {
@@ -125,6 +130,21 @@ final class ClojureLowering {
 	private static final LispVal TRUE_CONST = LispTrue.INSTANCE;
 
 	private static final LispSymbol AMPERSAND_REST = new LispSymbol("&REST");
+
+	/**
+	 * The library string builder behind {@code str}/{@code pr-str} parts, the
+	 * {@code clojure.string/join} elements, {@code throw} of a non-{@code ex-info} value,
+	 * {@code ex-message} of one, and the multimethod miss messages: the value's
+	 * Clojure-notation string, so no backend prints the wrappers.
+	 */
+	private static final LispSymbol CLOJURE_STR_OF = new LispSymbol("RONTOLISP::%CLOJURE-STR-OF");
+
+	/**
+	 * The library direct writer behind {@code println}/{@code print}/{@code pr}/
+	 * {@code prn} parts: the value in Clojure notation straight to
+	 * {@code *standard-output*}, answering nil.
+	 */
+	private static final LispSymbol CLOJURE_WRITE_DATUM = new LispSymbol("RONTOLISP::%CLOJURE-WRITE-DATUM");
 
 	private static final LispSymbol ELSE = new LispSymbol(":else");
 
@@ -1169,7 +1189,7 @@ final class ClojureLowering {
 		LispSymbol parts = freshTemp();
 		LispSymbol one = freshTemp();
 		LispVal strings = list(sym("mapcar"),
-				list(sym("lambda"), list(one), printPartBody(one, LispString.literal(""), false)), seqForm(coll));
+				list(sym("lambda"), list(one), strOf(one, LispString.literal(""), NIL_CONST)), seqForm(coll));
 		LispVal interposed = list(sym("cdr"),
 				list(sym("mapcan"), list(sym("lambda"), list(one), list(sym("list"), sepSym, one)), parts));
 		LispVal joined = list(sym("apply"), list(sym("function"), sym("concatenate")), quoted("string"), interposed);
@@ -1513,6 +1533,8 @@ final class ClojureLowering {
 				return list(sym("LET"), list(list(notTemp, lower(items.get(1)))), booleanAnswer(isFalsey(notTemp)));
 			case "str":
 				return strCall(items);
+			case "pr-str":
+				return prStrCall(items);
 			case "println":
 				return printCall(items, true);
 			case "print":
@@ -2207,6 +2229,7 @@ final class ClojureLowering {
 		return switch (name) {
 			case "inc", "dec" -> incValue(name);
 			case "str" -> strValue();
+			case "pr-str" -> prStrValue();
 			case "seq" -> seqValue();
 			case "first" -> firstValue();
 			case "rest", "next" -> restValue();
@@ -2247,10 +2270,26 @@ final class ClojureLowering {
 	private LispVal strValue() {
 		LispSymbol args = new LispSymbol(mangle("str-args"));
 		LispSymbol one = new LispSymbol(mangle("str-one"));
-		LispVal oneFn = list(sym("lambda"), list(one), printPartBody(one, LispString.literal(""), false));
+		LispVal oneFn = list(sym("lambda"), list(one), strOf(one, LispString.literal(""), NIL_CONST));
 		return list(sym("lambda"), list(AMPERSAND_REST, args),
 				list(sym("apply"), list(sym("function"), sym("concatenate")), list(sym("quote"), sym("string")),
 						list(sym("mapcar"), oneFn, args)));
+	}
+
+	/**
+	 * {@code pr-str} as a value: like {@code str} as a value, but every part converts
+	 * readably, {@code nil} prints as {@code "nil"}, and the parts join with a single
+	 * space (like {@code pr}).
+	 */
+	private LispVal prStrValue() {
+		LispSymbol args = new LispSymbol(mangle("pr-str-args"));
+		LispSymbol one = new LispSymbol(mangle("pr-str-one"));
+		LispVal oneFn = list(sym("lambda"), list(one), strOf(one, LispString.literal("nil"), TRUE_CONST));
+		LispVal strings = list(sym("mapcar"), oneFn, args);
+		LispVal interposed = list(sym("cdr"), list(sym("mapcan"),
+				list(sym("lambda"), list(one), list(sym("list"), LispString.literal(" "), one)), strings));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), list(sym("apply"),
+				list(sym("function"), sym("concatenate")), list(sym("quote"), sym("string")), interposed));
 	}
 
 	/** {@code seq} as a value: the seq view as a one-argument lambda. */
@@ -2801,100 +2840,100 @@ final class ClojureLowering {
 		if (items.size() == 1) {
 			return LispString.literal("");
 		}
-		return concat(stringParts(items, LispString.literal(""), false, false));
+		List<LispVal> parts = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			parts.add(strOf(lower(items.get(i)), LispString.literal(""), NIL_CONST));
+		}
+		return concat(parts);
+	}
+
+	/**
+	 * {@code pr-str}: the readable arm of {@code str} -- every part converts readably
+	 * (strings print quoted, like {@code pr}), parts joined with a single space (like
+	 * {@code pr}), and {@code nil} prints as {@code "nil"}.
+	 */
+	private LispVal prStrCall(List<LispVal> items) {
+		if (items.size() == 1) {
+			return LispString.literal("");
+		}
+		List<LispVal> parts = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			if (i > 1) {
+				parts.add(LispString.literal(" "));
+			}
+			parts.add(strOf(lower(items.get(i)), LispString.literal("nil"), TRUE_CONST));
+		}
+		return concat(parts);
+	}
+
+	/**
+	 * One part's Clojure-notation string: {@code rontolisp::%clojure-str-of} over the
+	 * lowered value (false is {@code "false"}, {@code T} is {@code "true"}, {@code NIL}
+	 * is the replacement, a keyword its colon spelling, collections in Clojure notation).
+	 * The value runs once, as the call's argument.
+	 * @param value the lowered value
+	 * @param nilReplacement the string {@code NIL} prints as
+	 * @param readable whether the conversion reads back
+	 * @return the form
+	 */
+	private LispVal strOf(LispVal value, LispVal nilReplacement, LispVal readable) {
+		return list(CLOJURE_STR_OF, value, nilReplacement, readable);
 	}
 
 	private LispVal printCall(List<LispVal> items, boolean newline) {
-		if (!newline && items.size() == 1) {
-			return list(sym("princ"), LispString.literal(""));
+		// Every part writes to the stream directly behind one
+		// rontolisp::%clojure-write-datum call, with the single spaces and the
+		// newline as their own writes: no with-output-to-string ever reaches a
+		// compiled program (a literal one flips a WASM module into EH mode). The
+		// call answers nil, like the oracle.
+		List<LispVal> writes = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			if (i > 1) {
+				writes.add(list(sym("WRITE-CHAR"), new LispChar(32)));
+			}
+			writes.add(writeDatum(lower(items.get(i)), LispString.literal("nil"), NIL_CONST));
 		}
-		// one concatenate whose last part is the newline: no separate newline call
-		List<LispVal> parts = stringParts(items, LispString.literal("nil"), false, true);
 		if (newline) {
-			parts.add(LispString.literal("\n"));
+			writes.add(list(sym("TERPRI")));
 		}
-		return list(sym("princ"), concat(parts));
+		writes.add(NIL_CONST);
+		return cons(sym("PROGN"), writes);
 	}
 
 	/**
 	 * {@code pr}/{@code prn}: the readable arms of {@code print}/{@code println} -- same
-	 * space separator, same newline folding, but every part converts through
-	 * {@code prin1-to-string}, so strings print quoted like the oracle's.
+	 * space separator, same newline folding, but every part converts readably, so strings
+	 * print quoted like the oracle's.
 	 */
 	private LispVal prCall(List<LispVal> items, boolean newline) {
-		if (!newline && items.size() == 1) {
-			return list(sym("princ"), LispString.literal(""));
+		List<LispVal> writes = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			if (i > 1) {
+				writes.add(list(sym("WRITE-CHAR"), new LispChar(32)));
+			}
+			writes.add(writeDatum(lower(items.get(i)), LispString.literal("nil"), TRUE_CONST));
 		}
-		List<LispVal> parts = stringParts(items, LispString.literal("nil"), true, true);
 		if (newline) {
-			parts.add(LispString.literal("\n"));
+			writes.add(list(sym("TERPRI")));
 		}
-		return list(sym("princ"), concat(parts));
+		writes.add(NIL_CONST);
+		return cons(sym("PROGN"), writes);
+	}
+
+	/**
+	 * One part's direct write: {@code rontolisp::%clojure-write-datum} over the lowered
+	 * value, answering nil.
+	 * @param value the lowered value
+	 * @param nilReplacement the string {@code NIL} prints as
+	 * @param readable whether the conversion reads back
+	 * @return the form
+	 */
+	private LispVal writeDatum(LispVal value, LispVal nilReplacement, LispVal readable) {
+		return list(CLOJURE_WRITE_DATUM, value, nilReplacement, readable);
 	}
 
 	private LispVal concat(List<LispVal> parts) {
 		return new LispCons(sym("concatenate"), new LispCons(list(sym("quote"), sym("string")), list(parts)));
-	}
-
-	/**
-	 * Every argument's string, joined with a single space when asked (what
-	 * {@code print}/{@code println}/{@code pr}/{@code prn} separate with, like the
-	 * oracle) or concatenated bare (what {@code str} has always done).
-	 */
-	private List<LispVal> stringParts(List<LispVal> items, LispVal nilReplacement, boolean readable, boolean spaced) {
-		List<LispVal> parts = new ArrayList<>();
-		for (int i = 1; i < items.size(); i++) {
-			if (spaced && i > 1) {
-				parts.add(LispString.literal(" "));
-			}
-			parts.add(printPart(lower(items.get(i)), nilReplacement, readable));
-		}
-		return parts;
-	}
-
-	/**
-	 * One printed part's string: {@code "false"} for the false object, {@code "true"} for
-	 * {@code T}, the replacement for {@code NIL} ({@code ""} in {@code str},
-	 * {@code "nil"} in {@code print}/{@code println}/{@code pr}/{@code prn}), the colon
-	 * spelling for a keyword, else {@code princ-to-string} (or {@code prin1-to-string}
-	 * for the readable arms). The value runs once, behind a temporary no user identifier
-	 * can spell.
-	 * @param value the lowered value
-	 * @param nilReplacement the string {@code NIL} prints as
-	 * @param readable whether the fallback conversion reads back
-	 * @return the form
-	 */
-	private LispVal printPart(LispVal value, LispVal nilReplacement, boolean readable) {
-		LispSymbol temp = freshTemp();
-		return list(sym("LET"), list(list(temp, value)), printPartBody(temp, nilReplacement, readable));
-	}
-
-	/**
-	 * The string of an already-bound value: the {@code IF} chain inside
-	 * {@link #printPart}, shared with the {@code str} function value (whose argument is
-	 * its lambda's parameter, so there is no temporary to bind).
-	 */
-	private LispVal printPartBody(LispVal value, LispVal nilReplacement, boolean readable) {
-		return list(sym("IF"), list(sym("EQ"), value, this.falseVariable), LispString.literal("false"),
-				list(sym("IF"), list(sym("EQ"), value, TRUE_CONST), LispString.literal("true"),
-						list(sym("IF"), list(sym("NULL"), value), nilReplacement, keywordOrString(value, readable))));
-	}
-
-	/**
-	 * A keyword prints with its leading colon ({@code :a}); anything else prints through
-	 * {@code princ-to-string} (or {@code prin1-to-string} for the readable arms). The tag
-	 * test names the wrapper, and the string test keeps a user list that happens to share
-	 * the tag's head from reaching the colon path with a non-string tail.
-	 * @param value the bound part value
-	 * @param readable whether the fallback conversion reads back
-	 * @return the form
-	 */
-	private LispVal keywordOrString(LispVal value, boolean readable) {
-		LispVal isKeyword = list(sym("AND"), list(sym("CONSP"), value),
-				list(sym("EQ"), list(sym("CAR"), value), KEYWORD_TAG), list(sym("STRINGP"), list(sym("CADR"), value)));
-		LispVal spelled = concat(List.of(LispString.literal(":"), list(sym("CADR"), value)));
-		String converter = readable ? "prin1-to-string" : "princ-to-string";
-		return list(sym("IF"), isKeyword, spelled, list(sym(converter), value));
 	}
 
 	private LispVal bodyOf(List<LispVal> forms) {
@@ -4159,11 +4198,14 @@ final class ClojureLowering {
 				hfn("IF", hfn("BEATS-ALL?", hfn("CAR", ss), surv), hfn("CAR", ss), hfn("FIND", hfn("CDR", ss)))));
 		runtime.add(hdefun("C%H-PICK", List.of(surv, prefers), hlabels(List.of(beatsFn, findFn), hfn("FIND", surv))));
 		// (defun c%h-dispatch (name methods prefers hier default dv args) ...)
-		LispVal noMethod = hfn("ERROR", hfn("CONCATENATE", quoted("string"), LispString.literal("No method in "), name,
-				LispString.literal(" for dispatch value: "), hfn("PRINC-TO-STRING", dv)));
+		LispVal noMethod = hfn("ERROR",
+				hfn("CONCATENATE", quoted("string"), LispString.literal("No method in "), name,
+						LispString.literal(" for dispatch value: "),
+						hfn("RONTOLISP::%CLOJURE-STR-OF", dv, LispString.literal("nil"), NIL_CONST)));
 		LispVal ambiguous = hfn("ERROR",
 				hfn("CONCATENATE", quoted("string"), LispString.literal("Multiple methods in multimethod '"), name,
-						LispString.literal("' match dispatch value: "), hfn("PRINC-TO-STRING", dv),
+						LispString.literal("' match dispatch value: "),
+						hfn("RONTOLISP::%CLOJURE-STR-OF", dv, LispString.literal("nil"), NIL_CONST),
 						LispString.literal(", and neither is preferred")));
 		runtime.add(hdefun(HIERARCHY_DISPATCH, List.of(name, methods, prefers, hier, def, dv, args),
 				hlet(List.of(list(cands, hfn("C%H-CANDIDATES", methods, hier, dv))), hfn("IF", hfn("NULL", cands),
@@ -4206,12 +4248,13 @@ final class ClojureLowering {
 				list(sym("typep"), value, list(sym("quote"), cls))));
 		runtime.add(list(sym("defun"), new LispSymbol("C%E-THROW"), list(List.of(value)),
 				list(sym("if"), list(new LispSymbol("C%E-EX-INFO?"), value), list(sym("error"), value),
-						list(sym("error"), list(sym("princ-to-string"), value)))));
+						list(sym("error"), list(CLOJURE_STR_OF, value, LispString.literal("nil"), NIL_CONST)))));
 		runtime.add(list(sym("defun"), new LispSymbol("C%E-DATA"), list(List.of(ex)), list(sym("if"),
 				list(new LispSymbol("C%E-EX-INFO?"), ex), list(new LispSymbol("C%E-EX-INFO-DATA"), ex), NIL_CONST)));
 		runtime.add(list(sym("defun"), new LispSymbol("C%E-MESSAGE"), list(List.of(ex)),
 				list(sym("if"), list(new LispSymbol("C%E-EX-INFO?"), ex),
-						list(new LispSymbol("C%E-EX-INFO-MESSAGE"), ex), list(sym("princ-to-string"), ex))));
+						list(new LispSymbol("C%E-EX-INFO-MESSAGE"), ex),
+						list(CLOJURE_STR_OF, ex, LispString.literal("nil"), NIL_CONST))));
 		return runtime;
 	}
 

@@ -117,7 +117,7 @@ class ClojureLoweringTest {
 	@Test
 	void keywordsKeepTheirCaseAndPrintWithColon() {
 		assertThat(lowered("(= :a :A)")).contains("(EQUAL").contains(":C%KEYWORD");
-		assertThat(lowered("(str :a)")).contains("(CONCATENATE 'STRING \":\"");
+		assertThat(lowered("(str :a)")).contains("RONTOLISP::%CLOJURE-STR-OF");
 		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
 		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
 		assertThatThrownBy(() -> Clojure.read("::foo", null)).isInstanceOf(LispReadException.class)
@@ -185,11 +185,14 @@ class ClojureLoweringTest {
 
 	@Test
 	void printAndStrSpellTrueFalseNil() {
-		assertThat(lowered("(str nil)")).isEqualTo(FALSE_BINDING
-				+ "(CONCATENATE 'STRING (LET ((|__clojure_0| NIL)) (IF (EQ |__clojure_0| RONTOLISP::%CLOJURE-FALSE) \"false\" (IF (EQ |__clojure_0| T) \"true\" (IF (NULL |__clojure_0|) \"\" (IF (AND (CONSP |__clojure_0|) (EQ (CAR |__clojure_0|) :C%KEYWORD) (STRINGP (CADR |__clojure_0|))) (CONCATENATE 'STRING \":\" (CADR |__clojure_0|)) (PRINC-TO-STRING |__clojure_0|)))))))");
-		assertThat(lowered("(println true)")).contains("(PRINC (CONCATENATE 'STRING")
-			.contains("\"true\"")
-			.contains("PRINC-TO-STRING");
+		assertThat(lowered("(str nil)"))
+			.isEqualTo(FALSE_BINDING + "(CONCATENATE 'STRING (RONTOLISP::%CLOJURE-STR-OF NIL \"\" NIL))");
+		assertThat(lowered("(println true)"))
+			.isEqualTo(FALSE_BINDING + "(PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM T \"nil\" NIL) (TERPRI) NIL)");
+		assertThat(lowered("(print true)"))
+			.isEqualTo(FALSE_BINDING + "(PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM T \"nil\" NIL) NIL)");
+		assertThat(lowered("(pr-str nil)"))
+			.isEqualTo(FALSE_BINDING + "(CONCATENATE 'STRING (RONTOLISP::%CLOJURE-STR-OF NIL \"nil\" T))");
 	}
 
 	@Test
@@ -291,12 +294,22 @@ class ClojureLoweringTest {
 
 	@Test
 	void printPartsAreSpaceSeparatedAndPrIsReadable() {
-		assertThat(lowered("(println \"x\" \"y\")")).contains("\" \"");
-		assertThat(lowered("(print \"a\" \"b\")")).contains("\" \"");
-		assertThat(lowered("(println \"x\")")).doesNotContain("\" \"");
-		assertThat(lowered("(str \"a\" \"b\")")).doesNotContain("\" \"");
-		assertThat(lowered("(pr \"a\" 1)")).contains("PRIN1-TO-STRING").contains("\" \"");
-		assertThat(lowered("(prn :a)")).contains("PRIN1-TO-STRING").contains("(PRINC");
+		assertThat(lowered("(println \"x\" \"y\")")).contains("RONTOLISP::%CLOJURE-WRITE-DATUM")
+			.contains("(WRITE-CHAR #\\Space)")
+			.contains("(TERPRI)");
+		assertThat(lowered("(print \"a\" \"b\")")).contains("RONTOLISP::%CLOJURE-WRITE-DATUM")
+			.contains("(WRITE-CHAR #\\Space)")
+			.doesNotContain("(TERPRI)");
+		assertThat(lowered("(println \"x\")")).doesNotContain("(WRITE-CHAR");
+		assertThat(lowered("(str \"a\" \"b\")")).doesNotContain("(WRITE-CHAR").contains("RONTOLISP::%CLOJURE-STR-OF");
+		assertThat(lowered("(pr \"a\" 1)")).contains("RONTOLISP::%CLOJURE-WRITE-DATUM")
+			.contains("(WRITE-CHAR #\\Space)")
+			.contains("\"nil\" T");
+		assertThat(lowered("(prn :a)")).contains("RONTOLISP::%CLOJURE-WRITE-DATUM").contains("(TERPRI)");
+		assertThat(lowered("(pr-str \"a\" 1)")).contains("(CONCATENATE 'STRING")
+			.contains("\" \"")
+			.contains("\"nil\" T");
+		assertThat(lowered("(map pr-str [1 2])")).contains("MAPCAR").contains("CONCATENATE");
 	}
 
 	@Test
