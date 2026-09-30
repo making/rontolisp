@@ -928,3 +928,65 @@ cases:
       1
       nil
       0
+  - name: hierarchies-derive-isa-and-prefer
+    # derive/underive rewrite the global hierarchy value; isa?/parents/ancestors/
+    # descendants read it (sets print wrapped, like set literals); a multimethod
+    # miss walks every method the dispatch value descends from, the strictly most
+    # specific wins, prefer-method breaks ties, and an unbroken tie or a miss with
+    # no default method signals. A custom hierarchy value is pure: derive returns
+    # an updated map, and defmulti :hierarchy dispatches through it.
+    source: |
+      (derive :h-circle :h-shape)
+      (derive :h-square :h-shape)
+      (println (isa? :h-circle :h-shape))
+      (println (isa? :h-shape :h-circle))
+      (println (isa? :h-circle :h-circle))
+      (println (parents :h-circle))
+      (println (ancestors :h-circle))
+      (println (descendants :h-shape))
+      (defmulti h08 :shape)
+      (defmethod h08 :h-shape [m] 0)
+      (defmethod h08 :h-circle [m] 1)
+      (println (h08 {:shape :h-circle}))
+      (println (h08 {:shape :h-square}))
+      (println (try (h08 {:shape :h-tri}) (catch Exception e "miss")))
+      (println (underive :h-circle :h-shape))
+      (println (isa? :h-circle :h-shape))
+      (println (h08 {:shape :h-circle}))
+      (def h08map (make-hierarchy))
+      (def h08map2 (derive h08map :h-p :h-q))
+      (println (isa? h08map2 :h-p :h-q))
+      (println (isa? h08map :h-p :h-q))
+      (println (parents h08map2 :h-p))
+      (defmulti h08c :t :hierarchy h08map2)
+      (defmethod h08c :h-q [x] "q!")
+      (println (h08c {:t :h-p}))
+      (println (try (h08c {:t :h-zzz}) (catch Exception e "miss")))
+      (defmulti h08p :t)
+      (defmethod h08p :h-x [m] "x")
+      (defmethod h08p :h-y [m] "y")
+      (derive :h-a :h-x)
+      (derive :h-a :h-y)
+      (prefer-method h08p :h-x :h-y)
+      (println (h08p {:t :h-a}))
+      (println (try (do (defmulti h08amb :t) (defmethod h08amb :h-x [m] 1) (defmethod h08amb :h-y [m] 2) (h08amb {:t :h-a})) (catch Exception e "amb")))
+    expected: |
+      true
+      false
+      true
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 2>)
+      1
+      0
+      miss
+      nil
+      false
+      1
+      true
+      false
+      (C%SET #<HASH-TABLE :TEST EQUAL :COUNT 1>)
+      q!
+      miss
+      x
+      amb

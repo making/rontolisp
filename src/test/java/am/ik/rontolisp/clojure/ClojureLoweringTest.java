@@ -393,10 +393,20 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defmethod area :circle [m] 1)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("No such multimethod: area");
-		assertThatThrownBy(() -> Clojure.read("(prefer-method a :x :y)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("prefer-method is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("(derive ::a ::b)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("hierarchies are not supported yet: derive");
+		assertThatThrownBy(() -> Clojure.read("(prefer-method area :x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("prefer-method takes a multimethod and two dispatch values");
+		assertThatThrownBy(() -> Clojure.read("(prefer-method missing :x :y)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such multimethod: missing");
+		assertThat(lowered("(defmulti area :shape) (prefer-method area :x :y)")).contains("C%H-PREFERRED")
+			.contains("|c%area%prefers|");
+		assertThat(lowered("(derive :a :b)")).contains("C%H-DERIVE").contains("C%H-GLOBAL");
+		assertThat(lowered("(isa? :a :b)")).contains("C%H-ISA?");
+		assertThat(lowered("(parents :a)")).contains("C%H-PARENTS");
+		assertThat(lowered("(make-hierarchy)")).contains("C%H-EMPTY");
+		assertThat(lowered("(def h (make-hierarchy)) (defmulti area :shape :hierarchy h)")).contains("C%H-DISPATCH");
+		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("isa? takes a child and a parent");
 		assertThatThrownBy(() -> Clojure.read("(defrecord R [x])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: defrecord");
 		assertThatThrownBy(() -> Clojure.read("(reify Object (toString [this] 1))", null))

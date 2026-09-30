@@ -46,8 +46,11 @@ import org.jspecify.annotations.Nullable;
  * around one temporary; {@code list*} is a right fold of {@code cons} over the seq view.
  * A multimethod ({@code defmulti}) is a method table plus a dispatcher {@code defun}
  * applying each call's dispatch value to it ({@code defmethod} stores,
- * {@code remove-method} drops, {@code get-method} reads; hierarchies and protocols stay
- * refused by name); the imperative loops and comprehensions
+ * {@code remove-method} drops, {@code get-method} reads); hierarchies
+ * ({@code derive}/{@code underive}/{@code isa?}/{@code parents}/{@code ancestors}/
+ * {@code descendants}/{@code make-hierarchy}/{@code prefer-method}, {@code defmulti}
+ * {@code :hierarchy}) widen the dispatch through the global hierarchy value or a custom
+ * one, while protocols stay refused by name; the imperative loops and comprehensions
  * ({@code doseq}/{@code dotimes}/{@code for}) are refused by name. Collections: a vector
  * literal is a {@code vector} call; a map literal is an {@code equal} hash table built by
  * {@code rontolisp:plist-hash-table} (lists and nested maps key structurally; vectors and
@@ -172,6 +175,18 @@ final class ClojureLowering {
 	/** Whether the session already emitted the false binding (files always emit it). */
 	private boolean falseBound;
 
+	/**
+	 * Whether the program uses hierarchies (any of {@code derive}/{@code underive}/
+	 * {@code isa?}/{@code parents}/{@code ancestors}/{@code descendants}/
+	 * {@code make-hierarchy}/{@code prefer-method}, or any {@code defmulti} whose
+	 * dispatcher consults them): the hierarchy runtime is spliced in once, behind the
+	 * false binding.
+	 */
+	private boolean usedHierarchy;
+
+	/** Whether the hierarchy runtime was already spliced in (files splice it inline). */
+	private boolean hierarchyEmitted;
+
 	/** The reader the datums came out of, for error positions; null when unknown. */
 	private @Nullable ClojureReader reader;
 
@@ -187,6 +202,10 @@ final class ClojureLowering {
 		// pass two: lower
 		for (LispVal datum : datums) {
 			lowering.forms.addAll(lowering.topLevels(datum));
+		}
+		if (lowering.usedHierarchy) {
+			// the hierarchy runtime runs before anything else, like the false value
+			lowering.forms.addAll(1, lowering.hierarchyRuntime());
 		}
 		return lowering.forms;
 	}
@@ -220,6 +239,12 @@ final class ClojureLowering {
 			forms.addAll(first.forms());
 			out.set(0, new ClojureTopLevel(List.copyOf(forms), first.echoes()));
 			this.falseBound = true;
+		}
+		if (this.usedHierarchy && !this.hierarchyEmitted) {
+			// The hierarchy runtime travels ahead of the buffer that first needs
+			// it, like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(hierarchyRuntime(), false));
+			this.hierarchyEmitted = true;
 		}
 		return out;
 	}
@@ -396,12 +421,12 @@ final class ClojureLowering {
 			return getMethodOf(items);
 		}
 		if (isSymbolNamed(head, "prefer-method")) {
-			throw new LispReadException("prefer-method is not supported yet: hierarchies need a design");
+			return preferMethodOf(items);
 		}
 		if (isSymbolNamed(head, "derive") || isSymbolNamed(head, "underive") || isSymbolNamed(head, "isa?")
 				|| isSymbolNamed(head, "parents") || isSymbolNamed(head, "ancestors")
 				|| isSymbolNamed(head, "descendants") || isSymbolNamed(head, "make-hierarchy")) {
-			throw new LispReadException("hierarchies are not supported yet: " + ((LispSymbol) head).name());
+			return hierarchyOp(items);
 		}
 		if (isSymbolNamed(head, "defprotocol") || isSymbolNamed(head, "defrecord") || isSymbolNamed(head, "deftype")
 				|| isSymbolNamed(head, "definterface") || isSymbolNamed(head, "reify")
@@ -3698,8 +3723,11 @@ final class ClojureLowering {
 	 * mangled name, like the multi-arity helpers), plus a dispatcher {@code defun}
 	 * applying each call's dispatch value to the table. The default dispatch value is
 	 * {@code :default} without a {@code :default} option; a miss with no method for the
-	 * default signals, like the oracle. {@code :hierarchy} needs the hierarchy design and
-	 * is refused.
+	 * default signals, like the oracle. With a {@code :hierarchy} option the dispatcher
+	 * consults that hierarchy value on a miss (the global one without the option): every
+	 * method whose key the dispatch value descends from ({@code isa?}) is a candidate,
+	 * the strictly most specific wins, {@code prefer-method} breaks the remaining ties,
+	 * and an unbroken tie signals -- like the oracle.
 	 */
 	private List<LispVal> defmultiForms(List<LispVal> items) {
 		isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
@@ -3715,43 +3743,40 @@ final class ClojureLowering {
 		isTrue(at < items.size(), "defmulti takes a name, a dispatch function and options");
 		LispVal dispatchDatum = items.get(at++);
 		LispVal defaultDatum = null;
+		LispVal hierarchyDatum = null;
 		for (; at < items.size(); at += 2) {
 			if (at + 1 >= items.size() || !(items.get(at) instanceof LispSymbol opt)) {
 				throw new LispReadException("defmulti takes option/value pairs");
 			}
 			switch (opt.name()) {
 				case ":default" -> defaultDatum = items.get(at + 1);
-				case ":hierarchy" -> throw new LispReadException("hierarchies are not supported yet: :hierarchy");
+				case ":hierarchy" -> hierarchyDatum = items.get(at + 1);
 				default -> throw new LispReadException("defmulti option " + opt.name() + " is not supported yet");
 			}
 		}
 		this.globals.put(name, Kind.FUNCTION);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		LispSymbol fallback = new LispSymbol(mangle(name) + "%default");
+		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
 		LispVal dispatchFn = fnValue(dispatchDatum);
 		LispVal defaultForm = defaultDatum == null ? keywordForm("default") : lower(defaultDatum);
+		LispVal hierarchyForm = hierarchyDatum == null ? hierarchyGlobal() : lower(hierarchyDatum);
 		LispSymbol args = freshTemp();
 		LispSymbol disp = freshTemp();
 		LispSymbol found = freshTemp();
 		LispSymbol miss = freshTemp();
-		LispSymbol meth = freshTemp();
-		LispSymbol missFallback = freshTemp();
-		LispVal missing = list(sym("error"),
-				list(sym("concatenate"), quoted("string"),
-						LispString.literal("No method in " + name + " for dispatch value: "),
-						list(sym("princ-to-string"), disp)));
-		LispVal useFallback = list(sym("let*"),
-				list(List.of(list(missFallback, list(sym("list"), NIL_CONST)),
-						list(meth, list(sym("gethash"), fallback, methods, missFallback)))),
-				list(sym("if"), list(sym("eq"), meth, missFallback), missing, list(sym("apply"), meth, args)));
 		LispVal dispatch = list(sym("let*"),
 				list(List.of(list(disp, list(sym("apply"), dispatchFn, args)), list(miss, list(sym("list"), NIL_CONST)),
 						list(found, list(sym("gethash"), disp, methods, miss)))),
-				list(sym("if"), list(sym("eq"), found, miss), useFallback, list(sym("apply"), found, args)));
+				list(sym("if"), list(sym("eq"), found, miss), list(new LispSymbol(HIERARCHY_DISPATCH),
+						LispString.literal(name), methods, prefers, hierarchyForm, fallback, disp, args),
+						list(sym("apply"), found, args)));
 		List<LispVal> forms = new ArrayList<>();
 		forms.add(list(sym("setq"), methods, makeTable()));
 		forms.add(list(sym("setq"), fallback, defaultForm));
+		forms.add(list(sym("setq"), prefers, makeTable()));
 		forms.add(list(sym("defun"), idSym(name), list(List.of(AMPERSAND_REST, args)), dispatch));
+		this.usedHierarchy = true;
 		return forms;
 	}
 
@@ -3786,6 +3811,379 @@ final class ClojureLowering {
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		return list(sym("gethash"), lower(items.get(2)), methods, NIL_CONST);
+	}
+
+	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,
+	// prefer-method and defmulti :hierarchy over one shared runtime
+
+	/**
+	 * The global hierarchy value: a map of {@code :parents}, {@code :ancestors} and
+	 * {@code :descendants} tables, rebound by every global {@code derive}/
+	 * {@code underive}. A lone {@code %} no mangled identifier spells, so no user
+	 * definition can collide with it (like the multimethod helpers).
+	 */
+	private static final String HIERARCHY_GLOBAL = "C%H-GLOBAL";
+
+	private static final String HIERARCHY_DISPATCH = "C%H-DISPATCH";
+
+	/** The global hierarchy value as a form. */
+	private static LispVal hierarchyGlobal() {
+		return new LispSymbol(HIERARCHY_GLOBAL);
+	}
+
+	/**
+	 * A raw call over already-built forms: the hierarchy runtime is Common Lisp, so its
+	 * heads name core operations directly (never mangled, never re-lowered).
+	 */
+	private static LispVal hfn(String head, LispVal... args) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(head));
+		out.addAll(List.of(args));
+		return list(out);
+	}
+
+	/** A hierarchy map key: the keyword wrapper over its spelling. */
+	private static LispVal hkey(String spelling) {
+		return keywordForm(spelling);
+	}
+
+	private static LispVal hdefun(String name, List<LispVal> params, LispVal... body) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(sym("defun"));
+		form.add(new LispSymbol(name));
+		form.add(list(params));
+		form.addAll(List.of(body));
+		return list(form);
+	}
+
+	/**
+	 * A labels binding: {@code (name (params) body)} as one binding form.
+	 */
+	private static LispVal hfnDef(String name, List<LispVal> params, LispVal body) {
+		return list(new LispSymbol(name), list(params), body);
+	}
+
+	/**
+	 * A labels form over prebuilt bindings: no inline nesting, so the parentheses stay
+	 * countable.
+	 */
+	private static LispVal hlabels(List<LispVal> fns, LispVal... body) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(sym("labels"));
+		form.add(list(fns));
+		form.addAll(List.of(body));
+		return list(form);
+	}
+
+	/**
+	 * A let over prebuilt bindings (sequential, like the rest of the lowering).
+	 */
+	private static LispVal hlet(List<LispVal> bindings, LispVal... body) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(sym("let*"));
+		form.add(list(bindings));
+		form.addAll(List.of(body));
+		return list(form);
+	}
+
+	private static LispVal hmiss(LispSymbol miss) {
+		return list(miss, hfn("LIST", NIL_CONST));
+	}
+
+	/**
+	 * The hierarchy runtime, spliced once behind the false binding when the program uses
+	 * hierarchies: set helpers over the wrapped-set shape, the global hierarchy value,
+	 * the transitive {@code isa?}, and the multimethod miss search (candidates through
+	 * {@code isa?}, the strictly most specific, {@code prefer-method} ties). Pure
+	 * lowering over the shared table runtime, so every backend runs it unchanged.
+	 */
+	private List<LispVal> hierarchyRuntime() {
+		List<LispVal> runtime = new ArrayList<>();
+		LispSymbol table = new LispSymbol("table");
+		LispSymbol key = new LispSymbol("key");
+		LispSymbol setv = new LispSymbol("setv");
+		LispSymbol member = new LispSymbol("member");
+		LispSymbol members = new LispSymbol("members");
+		LispSymbol nt = new LispSymbol("nt");
+		LispSymbol miss = new LispSymbol("miss");
+		LispSymbol found = new LispSymbol("found");
+		LispSymbol pl = new LispSymbol("pl");
+		LispSymbol p = new LispSymbol("p");
+		LispSymbol acc = new LispSymbol("acc");
+		LispSymbol x = new LispSymbol("x");
+		LispSymbol lst = new LispSymbol("lst");
+		LispSymbol h = new LispSymbol("h");
+		LispSymbol child = new LispSymbol("child");
+		LispSymbol parent = new LispSymbol("parent");
+		LispSymbol parents = new LispSymbol("parents");
+		LispSymbol anc = new LispSymbol("anc");
+		LispSymbol desc = new LispSymbol("desc");
+		LispSymbol done = new LispSymbol("done");
+		LispSymbol c = new LispSymbol("c");
+		LispSymbol c0 = new LispSymbol("c0");
+		LispSymbol as = new LispSymbol("as");
+		LispSymbol stack = new LispSymbol("stack");
+		LispSymbol ps = new LispSymbol("ps");
+		LispSymbol parts = new LispSymbol("parts");
+		LispSymbol pc = new LispSymbol("pc");
+		LispSymbol d = new LispSymbol("d");
+		LispSymbol i = new LispSymbol("i");
+		LispSymbol n = new LispSymbol("n");
+		LispSymbol m = new LispSymbol("m");
+		LispSymbol y = new LispSymbol("y");
+		LispSymbol others = new LispSymbol("others");
+		LispSymbol cs = new LispSymbol("cs");
+		LispSymbol cands = new LispSymbol("cands");
+		LispSymbol hier = new LispSymbol("hier");
+		LispSymbol prefers = new LispSymbol("prefers");
+		LispSymbol methods = new LispSymbol("methods");
+		LispSymbol dv = new LispSymbol("dv");
+		LispSymbol args = new LispSymbol("args");
+		LispSymbol name = new LispSymbol("name");
+		LispSymbol def = new LispSymbol("default");
+		LispSymbol meth = new LispSymbol("meth");
+		LispSymbol surv = new LispSymbol("surv");
+		LispSymbol pick = new LispSymbol("pick");
+		LispSymbol ss = new LispSymbol("ss");
+		LispSymbol s = new LispSymbol("s");
+		// (defun c%h-copy-table (table) ...)
+		runtime.add(hdefun("C%H-COPY-TABLE", List.of(table), tableFromPlist(tablePlist(table))));
+		// (defun c%h-empty-set () (list :c%set (make-hash-table ...)))
+		runtime.add(hdefun("C%H-EMPTY-SET", List.of(), hfn("LIST", SET_TAG, makeTable())));
+		// (defun c%h-get-set (table key) ...) with a nil-table guard
+		runtime.add(
+				hdefun("C%H-GET-SET", List.of(table, key),
+						hfn("IF", hfn("NULL", table), hfn("C%H-EMPTY-SET"),
+								letForm(List.of(hmiss(miss)), List.of(letForm(
+										List.of(list(found, hfn("GETHASH", key, table, miss))),
+										List.of(hfn("IF", hfn("EQ", found, miss), hfn("C%H-EMPTY-SET"), found))))))));
+		// (defun c%h-set-add (setv member) ...)
+		runtime.add(hdefun("C%H-SET-ADD", List.of(setv, member),
+				letForm(List.of(list(nt, hfn("C%H-COPY-TABLE", hfn("CADR", setv)))),
+						List.of(hfn("SETF", hfn("GETHASH", member, nt), member), hfn("LIST", SET_TAG, nt)))));
+		// (defun c%h-add-all (setv members) ...)
+		LispVal addAllWalk = hfnDef("WALK", List.of(p), hfn("IF", hfn("NULL", p), NIL_CONST, hfn("PROGN",
+				hfn("SETF", hfn("GETHASH", hfn("CAR", p), nt), hfn("CAR", p)), hfn("WALK", hfn("CDR", p)))));
+		runtime.add(hdefun("C%H-ADD-ALL", List.of(setv, members),
+				hlet(List.of(list(nt, hfn("C%H-COPY-TABLE", hfn("CADR", setv)))),
+						hlabels(List.of(addAllWalk), hfn("WALK", members)), hfn("LIST", SET_TAG, nt))));
+		// (defun c%h-set-list (setv) ...): the members of a set wrapper
+		LispVal setListWalk = hfnDef("WALK", List.of(p, acc), hfn("IF", hfn("NULL", p), acc,
+				hfn("WALK", hfn("CDR", hfn("CDR", p)), hfn("CONS", hfn("CAR", p), acc))));
+		runtime.add(hdefun("C%H-SET-LIST", List.of(setv), hlet(List.of(list(pl, tablePlist(hfn("CADR", setv)))),
+				hlabels(List.of(setListWalk), hfn("WALK", pl, NIL_CONST)))));
+		// (defun c%h-mem? (x lst) ...): equal membership, t-or-nil
+		LispVal memWalk = hfnDef("WALK", List.of(p), hfn("IF", hfn("NULL", p), NIL_CONST,
+				hfn("IF", hfn("EQUAL", hfn("CAR", p), x), TRUE_CONST, hfn("WALK", hfn("CDR", p)))));
+		runtime.add(hdefun("C%H-MEM?", List.of(x, lst), hlabels(List.of(memWalk), hfn("WALK", lst))));
+		// (defun c%h-rebuild (parents) ...): transitive ancestors and descendants
+		LispVal rebuildEach = hfnDef("EACH", List.of(ps),
+				hfn("IF", hfn("NULL", ps), NIL_CONST,
+						hfn("PROGN", hfn("SETF", acc, hfn("C%H-ADD-ALL", acc,
+								hfn("CONS", hfn("CAR", ps),
+										hfn("C%H-SET-LIST", hfn("WALK", hfn("CAR", ps), hfn("CONS", c, stack)))))),
+								hfn("EACH", hfn("CDR", ps)))));
+		LispVal walkFn = hfnDef("WALK", List.of(c, stack),
+				hfn("IF", hfn("EQ", hfn("GETHASH", c, done, miss), miss),
+						hfn("IF", hfn("C%H-MEM?", c, stack), hfn("C%H-EMPTY-SET"),
+								hlet(List.of(list(acc, hfn("C%H-EMPTY-SET"))),
+										hlabels(List.of(rebuildEach),
+												hfn("EACH", hfn("C%H-SET-LIST", hfn("C%H-GET-SET", parents, c)))),
+										hfn("SETF", hfn("GETHASH", c, done), TRUE_CONST),
+										hfn("SETF", hfn("GETHASH", c, anc), acc), acc)),
+						hfn("C%H-GET-SET", anc, c)));
+		LispVal driveFn = hfnDef("DRIVE", List.of(p), hfn("IF", hfn("NULL", p), NIL_CONST,
+				hfn("PROGN", hfn("WALK", hfn("CAR", p), NIL_CONST), hfn("DRIVE", hfn("CDR", hfn("CDR", p))))));
+		LispVal invEach = hfnDef("EACH2", List.of(as, c0),
+				hfn("IF", hfn("NULL", as), NIL_CONST,
+						hfn("PROGN",
+								hfn("SETF", hfn("GETHASH", hfn("CAR", as), desc),
+										hfn("C%H-SET-ADD", hfn("C%H-GET-SET", desc, hfn("CAR", as)), c0)),
+								hfn("EACH2", hfn("CDR", as), c0))));
+		LispVal invFn = hfnDef("INV", List.of(p), hfn("IF", hfn("NULL", p), NIL_CONST,
+				hfn("PROGN",
+						hlabels(List.of(invEach), hfn("EACH2", hfn("C%H-SET-LIST", hfn("CADR", p)), hfn("CAR", p))),
+						hfn("INV", hfn("CDR", hfn("CDR", p))))));
+		runtime.add(hdefun("C%H-REBUILD", List.of(parents),
+				hlet(List.of(list(anc, makeTable()), list(desc, makeTable()), list(done, makeTable()), hmiss(miss)),
+						hlabels(List.of(walkFn, driveFn, invFn), hfn("DRIVE", tablePlist(parents)),
+								hfn("INV", tablePlist(anc))),
+						hfn("LIST", anc, desc))));
+		// (defun c%h-new-map (parents anc desc) ...): the three tables as a hierarchy
+		// value
+		LispSymbol newParents = new LispSymbol("new-parents");
+		LispSymbol newAnc = new LispSymbol("new-anc");
+		LispSymbol newDesc = new LispSymbol("new-desc");
+		LispVal newMap = tableFromPlist(
+				hfn("LIST", hkey("parents"), newParents, hkey("ancestors"), newAnc, hkey("descendants"), newDesc));
+		runtime.add(hdefun("C%H-NEW-MAP", List.of(newParents, newAnc, newDesc), newMap));
+		LispVal remake = hfn("C%H-NEW-MAP", parents, hfn("CAR", parts), hfn("CAR", hfn("CDR", parts)));
+		// (defun c%h-derive (h child parent) ...)
+		runtime.add(hdefun("C%H-DERIVE", List.of(h, child, parent),
+				hlet(List.of(list(parents, hfn("C%H-COPY-TABLE", hfn("GETHASH", hkey("parents"), h)))),
+						hfn("SETF", hfn("GETHASH", child, parents),
+								hfn("C%H-SET-ADD", hfn("C%H-GET-SET", parents, child), parent)),
+						hlet(List.of(list(parts, hfn("C%H-REBUILD", parents))), remake))));
+		// (defun c%h-underive (h child parent) ...)
+		runtime.add(
+				hdefun("C%H-UNDERIVE", List.of(h, child, parent), hlet(
+						List.of(list(parents, hfn("C%H-COPY-TABLE",
+								hfn("GETHASH", hkey("parents"), h))), hmiss(
+										miss)),
+						hlet(List.of(list(pc, hfn("GETHASH", child, parents, miss))),
+								hfn("IF", hfn("EQ", pc, miss), NIL_CONST,
+										hlet(List.of(list(nt, hfn("C%H-COPY-TABLE", hfn("CADR", pc)))),
+												hfn("REMHASH", parent, nt),
+												hfn("SETF", hfn("GETHASH", child, parents),
+														hfn("LIST", SET_TAG, nt))))),
+						hlet(List.of(list(parts, hfn("C%H-REBUILD", parents))), remake))));
+		// (defun c%h-vec-isa? (h c p i n m) ...): element-wise vector derivation
+		runtime.add(hdefun("C%H-VEC-ISA?", List.of(h, c, p, i, n, m),
+				hfn("IF", hfn("NOT", hfn("EQL", n, m)), NIL_CONST,
+						hfn("IF", hfn(">=", i, n), TRUE_CONST,
+								hfn("IF", hfn("C%H-ISA?", h, hfn("AREF", c, i), hfn("AREF", p, i)),
+										hfn("C%H-VEC-ISA?", h, c, p, hfn("+", i, new LispInteger(1)), n, m),
+										NIL_CONST)))));
+		// (defun c%h-isa? (h child parent) ...): equal, vector-wise, or an ancestor walk
+		runtime.add(hdefun("C%H-ISA?", List.of(h, child, parent), hfn("IF", hfn("EQUAL", child, parent), TRUE_CONST,
+				hfn("IF", hfn("AND", hfn("VECTORP", child), hfn("VECTORP", parent)),
+						hfn("C%H-VEC-ISA?", h, child, parent, new LispInteger(0), hfn("LENGTH", child),
+								hfn("LENGTH", parent)),
+						hfn("IF",
+								hfn("C%H-MEM?", parent,
+										hfn("C%H-SET-LIST",
+												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
+								TRUE_CONST, NIL_CONST)))));
+		// parents/ancestors/descendants reads, and the empty hierarchy value
+		runtime.add(hdefun("C%H-PARENTS", List.of(h, child),
+				hfn("C%H-GET-SET", hfn("GETHASH", hkey("parents"), h), child)));
+		runtime.add(hdefun("C%H-ANCESTORS", List.of(h, child),
+				hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child)));
+		runtime.add(hdefun("C%H-DESCENDANTS", List.of(h, child),
+				hfn("C%H-GET-SET", hfn("GETHASH", hkey("descendants"), h), child)));
+		runtime.add(hdefun("C%H-EMPTY", List.of(), tableFromPlist(hfn("LIST", hkey("parents"), makeTable(),
+				hkey("ancestors"), makeTable(), hkey("descendants"), makeTable()))));
+		// (defun c%h-preferred? (x y prefers) ...)
+		runtime.add(hdefun("C%H-PREFERRED?", List.of(x, y, prefers), hlet(List.of(hmiss(miss)),
+				hfn("IF", hfn("EQ", hfn("GETHASH", hfn("CONS", x, y), prefers, miss), miss), NIL_CONST, TRUE_CONST))));
+		// (defun c%h-more-specific? (c d hier) ...): c descends from d, not vice versa
+		runtime.add(hdefun("C%H-MORE-SPECIFIC?", List.of(c, d, hier), hfn("IF", hfn("C%H-ISA?", hier, c, d),
+				hfn("IF", hfn("C%H-ISA?", hier, d, c), NIL_CONST, TRUE_CONST), NIL_CONST)));
+		// (defun c%h-survivors (cands hier prefers) ...): undominated candidates
+		LispVal badFn = hfnDef("BAD?", List.of(d, others),
+				hfn("IF", hfn("NULL", others), NIL_CONST,
+						hfn("IF",
+								hfn("AND", hfn("C%H-MORE-SPECIFIC?", hfn("CAR", others), d, hier),
+										hfn("NOT", hfn("EQUAL", hfn("CAR", others), d)),
+										hfn("NOT", hfn("C%H-PREFERRED?", d, hfn("CAR", others), prefers))),
+								TRUE_CONST, hfn("BAD?", d, hfn("CDR", others)))));
+		LispVal keepFn = hfnDef("KEEP", List.of(cs, acc), hfn("IF", hfn("NULL", cs), acc, hfn("KEEP", hfn("CDR", cs),
+				hfn("IF", hfn("BAD?", hfn("CAR", cs), cands), acc, hfn("CONS", hfn("CAR", cs), acc)))));
+		runtime.add(hdefun("C%H-SURVIVORS", List.of(cands, hier, prefers),
+				hlabels(List.of(badFn, keepFn), hfn("KEEP", cands, NIL_CONST))));
+		// (defun c%h-candidates (methods hier dv) ...): methods the value descends from
+		LispVal candWalk = hfnDef("WALK", List.of(p, acc),
+				hfn("IF", hfn("NULL", p), acc, hfn("WALK", hfn("CDR", hfn("CDR", p)),
+						hfn("IF", hfn("C%H-ISA?", hier, dv, hfn("CAR", p)), hfn("CONS", hfn("CAR", p), acc), acc))));
+		runtime.add(hdefun("C%H-CANDIDATES", List.of(methods, hier, dv),
+				hlet(List.of(list(pl, tablePlist(methods))), hlabels(List.of(candWalk), hfn("WALK", pl, NIL_CONST)))));
+		// (defun c%h-pick (surv prefers) ...): the survivor preferred over every other
+		LispVal beatsFn = hfnDef("BEATS-ALL?", List.of(s, others),
+				hfn("IF", hfn("NULL", others), TRUE_CONST,
+						hfn("IF", hfn("EQUAL", hfn("CAR", others), s), hfn("BEATS-ALL?", s, hfn("CDR", others)),
+								hfn("IF", hfn("C%H-PREFERRED?", s, hfn("CAR", others), prefers),
+										hfn("BEATS-ALL?", s, hfn("CDR", others)), NIL_CONST))));
+		LispVal findFn = hfnDef("FIND", List.of(ss), hfn("IF", hfn("NULL", ss), NIL_CONST,
+				hfn("IF", hfn("BEATS-ALL?", hfn("CAR", ss), surv), hfn("CAR", ss), hfn("FIND", hfn("CDR", ss)))));
+		runtime.add(hdefun("C%H-PICK", List.of(surv, prefers), hlabels(List.of(beatsFn, findFn), hfn("FIND", surv))));
+		// (defun c%h-dispatch (name methods prefers hier default dv args) ...)
+		LispVal noMethod = hfn("ERROR", hfn("CONCATENATE", quoted("string"), LispString.literal("No method in "), name,
+				LispString.literal(" for dispatch value: "), hfn("PRINC-TO-STRING", dv)));
+		LispVal ambiguous = hfn("ERROR",
+				hfn("CONCATENATE", quoted("string"), LispString.literal("Multiple methods in multimethod '"), name,
+						LispString.literal("' match dispatch value: "), hfn("PRINC-TO-STRING", dv),
+						LispString.literal(", and neither is preferred")));
+		runtime.add(hdefun(HIERARCHY_DISPATCH, List.of(name, methods, prefers, hier, def, dv, args),
+				hlet(List.of(list(cands, hfn("C%H-CANDIDATES", methods, hier, dv))), hfn("IF", hfn("NULL", cands),
+						hlet(List.of(hmiss(miss), list(meth, hfn("GETHASH", def, methods, miss))),
+								hfn("IF", hfn("EQ", meth, miss), noMethod, hfn("APPLY", meth, args))),
+						hfn("IF", hfn("NULL", hfn("CDR", cands)),
+								hfn("APPLY", hfn("GETHASH", hfn("CAR", cands), methods), args),
+								hlet(List.of(list(surv, hfn("C%H-SURVIVORS", cands, hier, prefers))),
+										hfn("IF", hfn("NULL", surv), ambiguous,
+												hlet(List.of(list(pick, hfn("C%H-PICK", surv, prefers))), hfn("IF",
+														hfn("NULL", pick), ambiguous,
+														hfn("APPLY", hfn("GETHASH", pick, methods), args))))))))));
+		// the global hierarchy value, bound after its builders
+		runtime.add(list(sym("setq"), hierarchyGlobal(), hfn("C%H-EMPTY")));
+		return runtime;
+	}
+
+	/**
+	 * A hierarchy call: {@code derive}/{@code underive} (two forms on the global
+	 * hierarchy, three returning an updated hierarchy value), {@code isa?} (two or three,
+	 * answering {@code T}-or-false), {@code parents}/{@code ancestors}/
+	 * {@code descendants} (one or two, answering sets) and {@code make-hierarchy} (none,
+	 * a fresh hierarchy value).
+	 */
+	private LispVal hierarchyOp(List<LispVal> items) {
+		String name = ((LispSymbol) items.get(0)).name();
+		int n = items.size() - 1;
+		this.usedHierarchy = true;
+		return switch (name) {
+			case "derive" -> {
+				if (n == 2) {
+					yield list(sym("progn"), list(sym("setq"), hierarchyGlobal(), list(new LispSymbol("C%H-DERIVE"),
+							hierarchyGlobal(), lower(items.get(1)), lower(items.get(2)))), NIL_CONST);
+				}
+				isTrue(n == 3, "derive takes a child and a parent, or a hierarchy and both");
+				yield list(new LispSymbol("C%H-DERIVE"), lower(items.get(1)), lower(items.get(2)), lower(items.get(3)));
+			}
+			case "underive" -> {
+				if (n == 2) {
+					yield list(sym("progn"), list(sym("setq"), hierarchyGlobal(), list(new LispSymbol("C%H-UNDERIVE"),
+							hierarchyGlobal(), lower(items.get(1)), lower(items.get(2)))), NIL_CONST);
+				}
+				isTrue(n == 3, "underive takes a child and a parent, or a hierarchy and both");
+				yield list(new LispSymbol("C%H-UNDERIVE"), lower(items.get(1)), lower(items.get(2)),
+						lower(items.get(3)));
+			}
+			case "isa?" -> {
+				isTrue(n == 2 || n == 3, "isa? takes a child and a parent, or a hierarchy and both");
+				LispVal hier = n == 3 ? lower(items.get(1)) : hierarchyGlobal();
+				LispVal child = lower(items.get(n == 3 ? 2 : 1));
+				LispVal parent = lower(items.get(n == 3 ? 3 : 2));
+				yield booleanAnswer(list(new LispSymbol("C%H-ISA?"), hier, child, parent));
+			}
+			case "parents", "ancestors", "descendants" -> {
+				isTrue(n == 1 || n == 2, name + " takes a child, or a hierarchy and a child");
+				LispVal hier = n == 2 ? lower(items.get(1)) : hierarchyGlobal();
+				LispVal child = lower(items.get(n == 2 ? 2 : 1));
+				yield list(new LispSymbol("C%H-" + name.toUpperCase(java.util.Locale.ROOT)), hier, child);
+			}
+			case "make-hierarchy" -> {
+				isTrue(n == 0, "make-hierarchy takes no arguments");
+				yield list(new LispSymbol("C%H-EMPTY"));
+			}
+			default -> throw new LispReadException("unknown name: " + name);
+		};
+	}
+
+	/**
+	 * {@code (prefer-method name x y)}: {@code x} wins over {@code y} when both match a
+	 * dispatch of {@code name}. The multimethod must be defined -- forward order aside,
+	 * the pre-scan declares every {@code defmulti} first -- and answers itself, like
+	 * {@code remove-method}.
+	 */
+	private LispVal preferMethodOf(List<LispVal> items) {
+		isTrue(items.size() == 4, "prefer-method takes a multimethod and two dispatch values");
+		String name = plainName(items.get(1), "prefer-method");
+		isTrue(known(name), "No such multimethod: " + name);
+		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
+		this.usedHierarchy = true;
+		return list(sym("progn"), list(sym("setf"),
+				list(sym("gethash"), list(sym("cons"), lower(items.get(2)), lower(items.get(3))), prefers), TRUE_CONST),
+				list(sym("function"), idSym(name)));
 	}
 
 	// platform: Java interop over the java: surface
