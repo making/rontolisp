@@ -94,7 +94,9 @@ import org.jspecify.annotations.Nullable;
  * ({@code atom} builds it, {@code deref} reads it, {@code swap!}/{@code reset!}/
  * {@code compare-and-set!} rewrite it); errors are {@code handler-case} inside
  * {@code unwind-protect} ({@code try}, every catch class catch-all) with {@code throw}
- * over {@code error}; dispatch is a method table plus a dispatcher {@code defun}
+ * over {@code error} -- an {@code ex-info} value signals as its own condition (message
+ * plus data, read by {@code ex-data}/{@code ex-message}), anything else through its
+ * printed rendering; dispatch is a method table plus a dispatcher {@code defun}
  * ({@code defmulti}/{@code defmethod}); namespaces wire aliases (only
  * {@code clojure.string} resolves, over the core string operations); interop lowers to
  * the {@code java:} surface. The reader spells characters, radix integers and exact
@@ -176,6 +178,16 @@ final class ClojureLowering {
 	private boolean falseBound;
 
 	/**
+	 * Whether the program throws or carries exception data: the ex-info runtime (a
+	 * condition with message and data slots) is spliced in once, behind the false
+	 * binding.
+	 */
+	private boolean usedExInfo;
+
+	/** Whether the ex-info runtime was already spliced in (files splice it inline). */
+	private boolean exInfoEmitted;
+
+	/**
 	 * Whether the program uses hierarchies (any of {@code derive}/{@code underive}/
 	 * {@code isa?}/{@code parents}/{@code ancestors}/{@code descendants}/
 	 * {@code make-hierarchy}/{@code prefer-method}, or any {@code defmulti} whose
@@ -206,6 +218,10 @@ final class ClojureLowering {
 		if (lowering.usedHierarchy) {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, lowering.hierarchyRuntime());
+		}
+		if (lowering.usedExInfo) {
+			// the ex-info runtime runs before anything else, like the false value
+			lowering.forms.addAll(1, lowering.exInfoRuntime());
 		}
 		return lowering.forms;
 	}
@@ -245,6 +261,12 @@ final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(hierarchyRuntime(), false));
 			this.hierarchyEmitted = true;
+		}
+		if (this.usedExInfo && !this.exInfoEmitted) {
+			// The ex-info runtime travels ahead of the buffer that first needs
+			// it, like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(exInfoRuntime(), false));
+			this.exInfoEmitted = true;
 		}
 		return out;
 	}
@@ -440,13 +462,28 @@ final class ClojureLowering {
 		}
 		if (isSymbolNamed(head, "throw")) {
 			isTrue(items.size() == 2, "throw takes one form");
-			// a string signals with its message; anything else through its printed
-			// rendering, so the condition stays catchable by name
-			return list(sym("error"), list(sym("princ-to-string"), lower(items.get(1))));
+			// an ex-info value signals as its own condition (carrying the data);
+			// anything else signals through its printed rendering, like before
+			this.usedExInfo = true;
+			LispSymbol thrown = freshTemp();
+			return list(sym("let"), list(List.of(list(thrown, lower(items.get(1))))),
+					list(new LispSymbol("C%E-THROW"), thrown));
 		}
-		if (isSymbolNamed(head, "ex-info") || isSymbolNamed(head, "ex-data")) {
-			throw new LispReadException(
-					((LispSymbol) head).name() + " is not supported yet: exception data needs a design");
+		if (isSymbolNamed(head, "ex-info")) {
+			isTrue(items.size() == 3, "ex-info takes a message and a data map");
+			this.usedExInfo = true;
+			return list(sym("make-condition"), list(sym("quote"), new LispSymbol("C%E-EX-INFO")), sym(":message"),
+					lower(items.get(1)), sym(":data"), lower(items.get(2)));
+		}
+		if (isSymbolNamed(head, "ex-data")) {
+			isTrue(items.size() == 2, "ex-data takes one exception");
+			this.usedExInfo = true;
+			return list(new LispSymbol("C%E-DATA"), lower(items.get(1)));
+		}
+		if (isSymbolNamed(head, "ex-message")) {
+			isTrue(items.size() == 2, "ex-message takes one exception");
+			this.usedExInfo = true;
+			return list(new LispSymbol("C%E-MESSAGE"), lower(items.get(1)));
 		}
 		if (isSymbolNamed(head, "atom")) {
 			return atomOf(items);
@@ -2186,6 +2223,9 @@ final class ClojureLowering {
 			case "swap!", "vswap!" -> swapValue();
 			case "reset!", "vreset!" -> resetValue();
 			case "compare-and-set!" -> compareAndSetValue();
+			case "ex-data" -> exHelperValue("C%E-DATA");
+			case "ex-message" -> exHelperValue("C%E-MESSAGE");
+			case "ex-info" -> exInfoValue();
 			default -> null;
 		};
 	}
@@ -3704,6 +3744,25 @@ final class ClojureLowering {
 				withAtom(cell, "reset!", bound -> atomPut(bound, value)));
 	}
 
+	/**
+	 * {@code ex-data}/{@code ex-message} as a value: a one-argument lambda over the
+	 * helper.
+	 */
+	private LispVal exHelperValue(String helper) {
+		this.usedExInfo = true;
+		LispSymbol ex = new LispSymbol(mangle("ex-value"));
+		return list(sym("lambda"), list(ex), list(new LispSymbol(helper), ex));
+	}
+
+	/** {@code ex-info} as a value: a two-argument lambda over the constructor. */
+	private LispVal exInfoValue() {
+		this.usedExInfo = true;
+		LispSymbol message = new LispSymbol(mangle("ex-message"));
+		LispSymbol data = new LispSymbol(mangle("ex-data"));
+		return list(sym("lambda"), list(List.of(message, data)), list(sym("make-condition"),
+				list(sym("quote"), new LispSymbol("C%E-EX-INFO")), sym(":message"), message, sym(":data"), data));
+	}
+
 	/** {@code compare-and-set!} as a value: a three-argument lambda over the swap. */
 	private LispVal compareAndSetValue() {
 		LispSymbol cell = new LispSymbol(mangle("cas-cell"));
@@ -4116,6 +4175,40 @@ final class ClojureLowering {
 														hfn("APPLY", hfn("GETHASH", pick, methods), args))))))))));
 		// the global hierarchy value, bound after its builders
 		runtime.add(list(sym("setq"), hierarchyGlobal(), hfn("C%H-EMPTY")));
+		return runtime;
+	}
+
+	/**
+	 * The ex-info runtime, spliced once behind the false binding when the program throws
+	 * or carries exception data: a condition with message and data slots (whose report
+	 * prints the message), a predicate over it, and the throw/data/message helpers. Pure
+	 * lowering over the shared condition runtime, so every backend runs it unchanged.
+	 */
+	private List<LispVal> exInfoRuntime() {
+		List<LispVal> runtime = new ArrayList<>();
+		LispSymbol cls = new LispSymbol("C%E-EX-INFO");
+		LispSymbol cond = new LispSymbol("c");
+		LispSymbol stream = new LispSymbol("s");
+		LispSymbol value = new LispSymbol("v");
+		LispSymbol ex = new LispSymbol("e");
+		List<LispVal> slots = List.of(
+				list(new LispSymbol("C%E-MESSAGE"), sym(":initarg"), sym(":message"), sym(":reader"),
+						new LispSymbol("C%E-EX-INFO-MESSAGE")),
+				list(new LispSymbol("C%E-DATA"), sym(":initarg"), sym(":data"), sym(":reader"),
+						new LispSymbol("C%E-EX-INFO-DATA")));
+		LispVal report = list(sym(":report"), list(sym("lambda"), list(List.of(cond, stream)), list(sym("format"),
+				stream, LispString.literal("~a"), list(new LispSymbol("C%E-EX-INFO-MESSAGE"), cond))));
+		runtime.add(list(sym("define-condition"), cls, list(List.of(sym("error"))), list(slots), report));
+		runtime.add(list(sym("defun"), new LispSymbol("C%E-EX-INFO?"), list(List.of(value)),
+				list(sym("typep"), value, list(sym("quote"), cls))));
+		runtime.add(list(sym("defun"), new LispSymbol("C%E-THROW"), list(List.of(value)),
+				list(sym("if"), list(new LispSymbol("C%E-EX-INFO?"), value), list(sym("error"), value),
+						list(sym("error"), list(sym("princ-to-string"), value)))));
+		runtime.add(list(sym("defun"), new LispSymbol("C%E-DATA"), list(List.of(ex)), list(sym("if"),
+				list(new LispSymbol("C%E-EX-INFO?"), ex), list(new LispSymbol("C%E-EX-INFO-DATA"), ex), NIL_CONST)));
+		runtime.add(list(sym("defun"), new LispSymbol("C%E-MESSAGE"), list(List.of(ex)),
+				list(sym("if"), list(new LispSymbol("C%E-EX-INFO?"), ex),
+						list(new LispSymbol("C%E-EX-INFO-MESSAGE"), ex), list(sym("princ-to-string"), ex))));
 		return runtime;
 	}
 

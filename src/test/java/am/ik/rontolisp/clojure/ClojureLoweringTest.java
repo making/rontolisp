@@ -412,8 +412,11 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(reify Object (toString [this] 1))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("protocols are not supported yet: reify");
-		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\" {:a 1})", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("ex-info is not supported yet");
+		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("MAKE-CONDITION").contains("C%E-EX-INFO");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("C%E-DATA");
+		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("C%E-MESSAGE");
+		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("ex-info takes a message and a data map");
 	}
 
 	@Test
@@ -421,7 +424,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(try 1 (catch Exception e 2) (finally 3))")).contains("HANDLER-CASE")
 			.contains("UNWIND-PROTECT")
 			.contains("(ERROR (|c%e|)");
-		assertThat(lowered("(throw \"boom\")")).contains("(ERROR (PRINC-TO-STRING");
+		assertThat(lowered("(throw \"boom\")")).contains("C%E-THROW");
 	}
 
 	@Test

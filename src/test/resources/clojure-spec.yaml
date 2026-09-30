@@ -990,3 +990,24 @@ cases:
       miss
       x
       amb
+  - name: ex-info-carries-data-through-throw
+    # ex-info builds a condition with message and data slots (its report prints
+    # the message); throw signals an ex-info value as its own condition, anything
+    # else through its printed rendering; ex-data answers the map (nil for any
+    # other condition) and ex-message the message. Each works as a function value.
+    source: |
+      (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (get (ex-data e) :code))))
+      (println (try (throw (ex-info "boom" {:code 42})) (catch Exception e (ex-message e))))
+      (println (try (throw "plain") (catch Exception e (ex-data e))))
+      (println (try (throw "plain") (catch Exception e (str "got-" e))))
+      (println (map ex-data [(ex-info "m" 1) "nope"]))
+      (println (map ex-message [(ex-info "m" 1) "nope"]))
+      (println (ex-data (apply ex-info ["v" 2])))
+    expected: |
+      42
+      boom
+      nil
+      got-plain
+      (1 NIL)
+      (m nope)
+      2
