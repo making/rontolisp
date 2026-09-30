@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -137,6 +138,7 @@ final class ClojureReader {
 				yield list("with-meta", readDatum(), meta);
 			}
 			case '#' -> readDispatch();
+			case '\\' -> readCharLiteral();
 			default -> readAtom();
 		};
 		this.offsets.putIfAbsent(datum, start);
@@ -167,7 +169,64 @@ final class ClojureReader {
 			next();
 			return readSet();
 		}
-		throw error("unsupported reader form #");
+		if (peek() == '"') { // a regex literal has no lowering: refuse it by name
+			readString();
+			throw error("regex literals are not supported yet");
+		}
+		throw error("unsupported reader form #" + peek());
+	}
+
+	/**
+	 * One character literal: a single character, a lowercase name ({@code newline},
+	 * {@code space}, {@code tab}, {@code return}, {@code backspace}, {@code formfeed}), a
+	 * {@code u} plus four hex digits or an {@code o} plus one to three octal digits --
+	 * exactly the oracle's (Clojure CLI 1.12) spellings, case-sensitively. Anything else
+	 * is the oracle's {@code Unsupported character} refusal.
+	 */
+	private LispVal readCharLiteral() {
+		next(); // the backslash
+		int start = this.pos;
+		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
+			next();
+		}
+		String token = this.source.substring(start, this.pos);
+		if (token.length() == 1) {
+			return new LispChar(token.charAt(0));
+		}
+		if (token.length() == 5 && token.charAt(0) == 'u') {
+			try {
+				int cp = Integer.parseInt(token.substring(1), 16);
+				if (Character.isValidCodePoint(cp) && (cp < 0xD800 || cp > 0xDFFF)) {
+					return new LispChar(cp);
+				}
+			}
+			catch (NumberFormatException ex) {
+				// the refusal below
+			}
+			throw error("Unsupported character: \\" + token);
+		}
+		if (token.length() > 1 && token.charAt(0) == 'o' && token.length() <= 4) {
+			try {
+				int cp = Integer.parseInt(token.substring(1), 8);
+				return new LispChar(cp);
+			}
+			catch (NumberFormatException ex) {
+				throw error("Unsupported character: \\" + token);
+			}
+		}
+		int named = switch (token) {
+			case "newline" -> '\n';
+			case "space" -> ' ';
+			case "tab" -> '\t';
+			case "return" -> '\r';
+			case "backspace" -> '\b';
+			case "formfeed" -> '\f';
+			default -> -1;
+		};
+		if (named >= 0) {
+			return new LispChar(named);
+		}
+		throw error("Unsupported character: \\" + token);
 	}
 
 	private LispVal readAnonFn() {
@@ -304,51 +363,141 @@ final class ClojureReader {
 
 	/** The number the token spells, or null when it is an identifier. */
 	private @Nullable LispVal tryNumber(String token) {
-		// a leading sign must be followed by a digit for it to be a number
-		String body = token;
-		if (body.startsWith("+") || body.startsWith("-")) {
-			if (body.length() == 1 || !Character.isDigit(body.charAt(1)) && body.charAt(1) != '.') {
-				return null;
-			}
-		}
-		int slash = body.indexOf('/');
-		if (slash > 0 && noRadixMark(body)) {
-			try {
-				return LispRatio.valueOf(new java.math.BigInteger(body.substring(0, slash)),
-						new java.math.BigInteger(body.substring(slash + 1)));
-			}
-			catch (NumberFormatException ex) {
-				return null;
-			}
-		}
-		if (body.indexOf('.') >= 0 || body.indexOf('e') >= 0 || body.indexOf('E') >= 0 || body.indexOf('M') >= 0) {
-			try {
-				return new LispDouble(Double.parseDouble(body.substring(0, lenWithoutSuffix(body))));
-			}
-			catch (NumberFormatException ex) {
-				return null;
-			}
-		}
-		try {
-			long v = Long.parseLong(stripSuffix(body));
-			return new LispInteger(v);
-		}
-		catch (NumberFormatException ex) {
+		if (!numberShaped(token)) {
 			return null;
 		}
+		try {
+			return parseNumber(token);
+		}
+		catch (NumberFormatException | ArithmeticException ex) {
+			throw error("Invalid number: " + token);
+		}
 	}
 
-	private static boolean noRadixMark(String body) {
-		return body.indexOf('r') < 0 && body.indexOf('R') < 0 && body.indexOf('x') < 0 && body.indexOf('X') < 0
-				&& body.indexOf('.') < 0;
+	/**
+	 * Whether the token is number-shaped: a leading digit, a sign followed by a digit or
+	 * a dot, or a dot followed by a digit. Anything else is an identifier, so
+	 * {@code s/join} never reaches the number parser; a shaped token that parses to
+	 * nothing ( {@code 09}, {@code 1e}, {@code 2r}) is the oracle's
+	 * {@code Invalid number} refusal.
+	 */
+	private static boolean numberShaped(String token) {
+		if (token.isEmpty()) {
+			return false;
+		}
+		char first = token.charAt(0);
+		if (Character.isDigit(first)) {
+			return true;
+		}
+		if ((first == '+' || first == '-') && token.length() > 1) {
+			char second = token.charAt(1);
+			return Character.isDigit(second) || second == '.';
+		}
+		return first == '.' && token.length() > 1 && Character.isDigit(token.charAt(1));
 	}
 
-	private static int lenWithoutSuffix(String body) {
-		return body.endsWith("M") || body.endsWith("N") ? body.length() - 1 : body.length();
+	/**
+	 * The number the shaped token spells: a ratio, a radix integer ({@code 0x},
+	 * {@code Nr}, a leading {@code 0} for octal), an exact ratio for the {@code M}
+	 * suffix, a double, or a long (a {@link LispBigInteger} past the {@code long} range,
+	 * with or without the {@code N} suffix). The {@code M} suffix lowers to an exact
+	 * ratio -- {@code 0.1M} is {@code 1/10}, so decimal arithmetic stays exact instead of
+	 * the double's precision loss; it prints as the ratio, not {@code 0.1M}.
+	 */
+	private static LispVal parseNumber(String token) {
+		String unsigned = token.startsWith("+") || token.startsWith("-") ? token.substring(1) : token;
+		int slash = token.indexOf('/');
+		if (slash > 0 && isDecimalRatio(token)) {
+			return LispRatio.valueOf(new java.math.BigInteger(token.substring(0, slash)),
+					new java.math.BigInteger(token.substring(slash + 1)));
+		}
+		if (unsigned.startsWith("0x") || unsigned.startsWith("0X")) {
+			return signedOf(new java.math.BigInteger(stripBigSuffix(unsigned.substring(2)), 16), token);
+		}
+		int mark = Math.max(unsigned.indexOf('r'), unsigned.indexOf('R'));
+		if (mark > 0) {
+			int radix = Integer.parseInt(unsigned.substring(0, mark));
+			if (radix < 2 || radix > 36) {
+				throw new NumberFormatException(token);
+			}
+			return signedOf(new java.math.BigInteger(stripBigSuffix(unsigned.substring(mark + 1)), radix), token);
+		}
+		if (unsigned.length() > 1 && unsigned.charAt(0) == '0' && isDigits(unsigned)) {
+			if (!isOctalDigits(unsigned)) {
+				throw new NumberFormatException(token);
+			}
+			return signedOf(new java.math.BigInteger(unsigned, 8), token);
+		}
+		if (token.endsWith("M")) {
+			java.math.BigDecimal decimal = new java.math.BigDecimal(token.substring(0, token.length() - 1));
+			java.math.BigInteger numerator = decimal.unscaledValue();
+			int scale = decimal.scale();
+			if (scale >= 0) {
+				return LispRatio.valueOf(numerator, java.math.BigInteger.TEN.pow(scale));
+			}
+			return LispRatio.valueOf(numerator.multiply(java.math.BigInteger.TEN.pow(-scale)),
+					java.math.BigInteger.ONE);
+		}
+		if (token.indexOf('.') >= 0 || token.indexOf('e') >= 0 || token.indexOf('E') >= 0) {
+			if (token.endsWith("N")) {
+				throw new NumberFormatException(token);
+			}
+			return new LispDouble(Double.parseDouble(token));
+		}
+		return integerOf(new java.math.BigInteger(stripBigSuffix(token), 10));
 	}
 
-	private static String stripSuffix(String body) {
-		return body.endsWith("N") ? body.substring(0, body.length() - 1) : body;
+	/** Whether the token is a plain decimal ratio: digits around one slash, no suffix. */
+	private static boolean isDecimalRatio(String token) {
+		for (int i = 0; i < token.length(); i++) {
+			char c = token.charAt(i);
+			if (c == '/') {
+				continue;
+			}
+			if (c == '+' || c == '-') {
+				continue;
+			}
+			if (!Character.isDigit(c)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isDigits(String text) {
+		for (int i = 0; i < text.length(); i++) {
+			if (!Character.isDigit(text.charAt(i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isOctalDigits(String text) {
+		for (int i = 0; i < text.length(); i++) {
+			char c = text.charAt(i);
+			if (c < '0' || c > '7') {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static String stripBigSuffix(String digits) {
+		return digits.endsWith("N") ? digits.substring(0, digits.length() - 1) : digits;
+	}
+
+	/** A long when it fits, a {@link LispBigInteger} past the {@code long} range. */
+	private static LispVal integerOf(java.math.BigInteger value) {
+		return value.bitLength() < 64 ? new LispInteger(value.longValue()) : new LispBigInteger(value);
+	}
+
+	/** A radix value with the token's sign applied (the prefix tests read unsigned). */
+	private static LispVal signedOf(java.math.BigInteger value, String token) {
+		if (token.startsWith("-")) {
+			value = value.negate();
+		}
+		return integerOf(value);
 	}
 
 	private LispVal list(String head, LispVal... args) {

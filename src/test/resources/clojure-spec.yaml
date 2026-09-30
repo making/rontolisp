@@ -365,12 +365,14 @@ cases:
       #(1 2)
       nil true false
   - name: numbers
+    # 1M is an exact ratio (1), not a double: decimal arithmetic stays exact and
+    # prints as the ratio. The oracle prints 1M and 2N with their suffixes.
     source: |
       (println (list 42 -17 1/2 1.5 1e3))
       (println (list 1M 2N))
     expected: |
       (42 -17 1/2 1.5 1000.0)
-      (1.0 2)
+      (1 2)
   - name: reader-comments-commas-discard-and-string-escapes
     source: |
       ;; a comment line
@@ -732,3 +734,197 @@ cases:
       (println (dcl-g))
     expected: |
       2
+  - name: chars-are-characters
+    # Character literals print as their glyphs; equality and str see through.
+    # Whitespace characters only ever print inside strings here, so no expected
+    # line carries a bare blank or trailing space.
+    source: |
+      (println \a)
+      (println \A)
+      (println (str "n" \newline "l"))
+      (println (str "s" \space "s"))
+      (println \u0041)
+      (println \o141)
+      (println (= \a \a))
+      (println (= \a \b))
+      (println (str "a" \b "c"))
+      (println (nth "ab" 0))
+      (println (get "abc" 1))
+      (println (if (= \a \a) "same" "diff"))
+    expected: |
+      a
+      A
+      n
+      l
+      s s
+      A
+      a
+      true
+      false
+      abc
+      a
+      b
+      same
+  - name: radix-integers-and-exact-decimals
+    # 0x, Nr and leading-0 octal spell integers; M is an exact ratio (0.1M is
+    # 1/10, so (+ 0.1M 0.2M) is 3/10); big N values keep their magnitude. The
+    # oracle prints each with its mark (0xFF, 1M, 2N, ...).
+    source: |
+      (println (list 0xFF 2r101 8r17 16rFF -0xFF 017 36rzz))
+      (println (list 2N 99999999999999999999999N))
+      (println (list 1M 0.1M 1e3M))
+      (println (+ 0.1M 0.2M))
+    expected: |
+      (255 5 15 255 -255 15 1295)
+      (2 99999999999999999999999)
+      (1 1/10 1000)
+      3/10
+  - name: ns-require-wires-clojure-string
+    # (:require [clojure.string :as s :refer [join]]) wires the alias and the
+    # referred var; every verb runs over the core string operations. split takes
+    # a string pattern (regex literals are refused at the reader).
+    source: |
+      (ns b05-str (:require [clojure.string :as s :refer [join]]))
+      (println (s/join "," ["a" "b"]))
+      (println (join "-" ["x" "y"]))
+      (println (clojure.string/upper-case "hi"))
+      (println (s/lower-case "HI"))
+      (println (s/capitalize "hELLO"))
+      (println (s/trim "  hi  "))
+      (println (str "[" (s/triml "  hi  ") "]"))
+      (println (str "[" (s/trimr "  hi  ") "]"))
+      (println (s/trim-newline "a\r\n"))
+      (println (s/blank? "  "))
+      (println (s/blank? nil))
+      (println (s/blank? "x"))
+      (println (s/starts-with? "hi" "h"))
+      (println (s/ends-with? "hi" "i"))
+      (println (s/includes? "hi" "i"))
+      (println (s/index-of "hihi" "i"))
+      (println (s/index-of "hihi" "i" 2))
+      (println (s/last-index-of "hihi" "i"))
+      (println (s/replace "aaa" "a" "b"))
+      (println (s/replace "aaa" \a \b))
+      (println (s/replace-first "aaa" "a" "b"))
+      (println (s/split "a,b" ","))
+      (println (s/split "a,b," "," -1))
+      (println (s/split-lines "a\r\nb"))
+      (println (s/re-quote-replacement "a$b"))
+      (println (s/escape "hi" {\i "I"}))
+      (println (s/reverse "hi"))
+      (println (subs "hello" 1 3))
+      (println (subs "hello" 1))
+      (println (map s/upper-case ["a" "b"]))
+    expected: |
+      a,b
+      x-y
+      HI
+      hi
+      Hello
+      hi
+      [hi  ]
+      [  hi]
+      a
+      true
+      true
+      false
+      true
+      true
+      true
+      1
+      3
+      3
+      bbb
+      bbb
+      baa
+      (a b)
+      (a b )
+      (a b)
+      a\$b
+      hI
+      ih
+      el
+      ello
+      (A B)
+  - name: try-catch-finally-and-throw
+    # try guards handler-case inside unwind-protect; every catch class answers
+    # the catch-all error clause, so the first clause handles any condition (the
+    # oracle would run the second clause of the iae/ex pair); throw renders
+    # through princ-to-string, so strings keep their message.
+    source: |
+      (println (try (throw "boom") (catch Exception e "caught")))
+      (println (try (throw "boom") (catch IllegalArgumentException e "iae") (catch Exception e "ex")))
+      (println (try 1 (finally (println "fin"))))
+      (println (try (throw "x") (catch Exception e (str "got-" e)) (finally (println "done"))))
+      (println (try (+ 1 2) (catch Exception e "no")))
+    expected: |
+      caught
+      iae
+      fin
+      1
+      done
+      got-x
+      3
+  - name: atoms-are-shared-cells
+    # An atom is a tagged one-vector cell every verb reads and writes; swap!
+    # spreads extra arguments over the function, compare-and-set! compares with
+    # eql and answers a boolean. Printing spells the wrapper, not the oracle's
+    # object syntax.
+    source: |
+      (def a05 (atom 1))
+      (println @a05)
+      (println (swap! a05 inc))
+      (println (swap! a05 + 10 20))
+      (println (reset! a05 2))
+      (println (compare-and-set! a05 2 3))
+      (println (compare-and-set! a05 2 9))
+      (println @a05)
+      (println (deref a05))
+      (println @(volatile! 5))
+      (println (map deref [(atom 1) (atom 2)]))
+      (println (let [b05 (atom 0)] (reset! b05 41) (swap! b05 inc)))
+    expected: |
+      1
+      2
+      32
+      2
+      true
+      false
+      3
+      3
+      5
+      (1 2)
+      42
+  - name: multimethods-dispatch-over-a-table
+    # defmulti is a method table plus a dispatcher defun; defmethod stores,
+    # remove-method drops, get-method reads, and a miss falls back to the
+    # default dispatch value (:default without an option) or signals.
+    source: |
+      (defmulti m05 :shape)
+      (defmethod m05 :circle [m] 1)
+      (defmethod m05 :square [m] 2)
+      (defmethod m05 :default [m] 0)
+      (println (m05 {:shape :circle}))
+      (println (m05 {:shape :square}))
+      (println (m05 {:shape :tri}))
+      (defmulti m05b "adds" (fn [x] (:t x)) :default :other)
+      (defmethod m05b :other [x] 99)
+      (println (m05b {:t :zzz}))
+      (println (m05b {:t :other}))
+      (defmulti m05c (fn [x y] (:t x)))
+      (defmethod m05c :a [x y] (+ y 1))
+      (println (m05c {:t :a} 41))
+      (println ((get-method m05 :circle) {:shape :circle}))
+      (remove-method m05 :circle)
+      (println (get-method m05 :circle))
+      (println (m05 {:shape :circle}))
+    expected: |
+      1
+      2
+      0
+      99
+      99
+      42
+      1
+      nil
+      0

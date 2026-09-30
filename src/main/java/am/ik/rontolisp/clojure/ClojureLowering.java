@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
@@ -43,19 +44,22 @@ import org.jspecify.annotations.Nullable;
  * alike. Threading ({@code ->}/{@code ->>}/{@code as->}) is a pure datum rewrite;
  * {@code doto}/{@code cond->}/{@code cond->>}/ {@code some->}/{@code some->>} thread
  * around one temporary; {@code list*} is a right fold of {@code cons} over the seq view.
- * Multimethods ({@code defmulti}/{@code defmethod}) and the imperative loops and
- * comprehensions ({@code doseq}/{@code dotimes}/{@code for}) are refused by name.
- * Collections: a vector literal is a {@code vector} call; a map literal is an
- * {@code equal} hash table built by {@code rontolisp:plist-hash-table} (lists and nested
- * maps key structurally; vectors and tables key by identity, like the runtime), never
- * mutated in place -- every verb that "changes" a map builds a fresh table, which is what
- * keeps the persistent semantics observable; a set literal is the same table with each
- * member stored under itself, wrapped as {@code (:C%SET table)} so a verb can tell a set
- * from a map (the wrapper prints as written, like vectors in CL notation); a seq is a
- * STRICT list view -- lists pass through untouched, vectors and strings coerce, maps
- * contribute one two-vector per entry and sets one member per element (both in the
- * table's walk order, unspecified), nil and the false object are empty, anything else
- * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
+ * A multimethod ({@code defmulti}) is a method table plus a dispatcher {@code defun}
+ * applying each call's dispatch value to it ({@code defmethod} stores,
+ * {@code remove-method} drops, {@code get-method} reads; hierarchies and protocols stay
+ * refused by name); the imperative loops and comprehensions
+ * ({@code doseq}/{@code dotimes}/{@code for}) are refused by name. Collections: a vector
+ * literal is a {@code vector} call; a map literal is an {@code equal} hash table built by
+ * {@code rontolisp:plist-hash-table} (lists and nested maps key structurally; vectors and
+ * tables key by identity, like the runtime), never mutated in place -- every verb that
+ * "changes" a map builds a fresh table, which is what keeps the persistent semantics
+ * observable; a set literal is the same table with each member stored under itself,
+ * wrapped as {@code (:C%SET table)} so a verb can tell a set from a map (the wrapper
+ * prints as written, like vectors in CL notation); a seq is a STRICT list view -- lists
+ * pass through untouched, vectors and strings coerce, maps contribute one two-vector per
+ * entry and sets one member per element (both in the table's walk order, unspecified),
+ * nil and the false object are empty, anything else signals -- so
+ * {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
  * stays a no-copy identity. There is no laziness, chunking or memoisation:
@@ -83,7 +87,15 @@ import org.jspecify.annotations.Nullable;
  * names the innermost form's position ({@code file:line:column} when the file is known)
  * through the reader's offsets. Transients ({@code transient}, {@code persistent!},
  * {@code assoc!}/{@code dissoc!}/{@code conj!}/{@code disj!}) are refused by name: there
- * is no transient runtime behind the tables.
+ * is no transient runtime behind the tables. State is a tagged one-vector cell
+ * ({@code atom} builds it, {@code deref} reads it, {@code swap!}/{@code reset!}/
+ * {@code compare-and-set!} rewrite it); errors are {@code handler-case} inside
+ * {@code unwind-protect} ({@code try}, every catch class catch-all) with {@code throw}
+ * over {@code error}; dispatch is a method table plus a dispatcher {@code defun}
+ * ({@code defmulti}/{@code defmethod}); namespaces wire aliases (only
+ * {@code clojure.string} resolves, over the core string operations); interop lowers to
+ * the {@code java:} surface. The reader spells characters, radix integers and exact
+ * {@code M} decimals, and refuses regex literals by name.
  */
 final class ClojureLowering {
 
@@ -114,6 +126,34 @@ final class ClojureLowering {
 	private final List<LispVal> forms = new ArrayList<>();
 
 	private final Map<String, Kind> globals = new HashMap<>();
+
+	/**
+	 * The namespace aliases in scope: an {@code :as} alias (or a namespace's own name) to
+	 * its namespace. Wired by {@code ns} clauses and top-level {@code require} /
+	 * {@code use}, in order, so an alias serves only the forms below it.
+	 */
+	private final Map<String, String> aliases = new HashMap<>();
+
+	/**
+	 * Unqualified names a {@code :refer} / {@code :use} brought in: the name to its
+	 * namespace and var.
+	 */
+	private final Map<String, VarRef> refers = new HashMap<>();
+
+	/**
+	 * Simple class names an {@code :import} (or a top-level {@code import}) registered:
+	 * the name to its FQN.
+	 */
+	private final Map<String, String> classNames = new HashMap<>();
+
+	/**
+	 * What {@code (:refer-clojure :only [...])} restricts the core to, or null without
+	 * one; {@code (:refer-clojure :exclude [...])} removes instead. A name outside the
+	 * set is not a builtin, so a user definition of it wins.
+	 */
+	private @Nullable Set<String> referClojureOnly;
+
+	private final Set<String> referClojureExclude = new HashSet<>();
 
 	/** The scopes, innermost last; globals live in {@link #globals}. */
 	private final List<Map<String, Kind>> scopes = new ArrayList<>();
@@ -146,9 +186,6 @@ final class ClojureLowering {
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
 		for (LispVal datum : datums) {
-			if (isNsForm(datum)) {
-				continue; // a namespace declaration defines nothing
-			}
 			lowering.forms.addAll(lowering.topLevels(datum));
 		}
 		return lowering.forms;
@@ -169,10 +206,10 @@ final class ClojureLowering {
 		declare(datums);
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
-			if (isNsForm(datum)) {
-				continue; // a namespace declaration defines nothing
+			List<LispVal> forms = topLevels(datum);
+			if (!forms.isEmpty() || !isNsForm(datum)) {
+				out.add(new ClojureTopLevel(forms, true));
 			}
-			out.add(new ClojureTopLevel(topLevels(datum), true));
 		}
 		if (!this.falseBound && !out.isEmpty()) {
 			// The session's first datum carries the false binding ahead of itself,
@@ -210,6 +247,9 @@ final class ClojureLowering {
 		else if (isSymbolNamed(items.get(0), "defn")) {
 			this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
 		}
+		else if (isSymbolNamed(items.get(0), "defmulti")) {
+			this.globals.put(plainName(items.get(1), "defmulti"), Kind.FUNCTION);
+		}
 		else if (isSymbolNamed(items.get(0), "declare")) {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
@@ -225,9 +265,16 @@ final class ClojureLowering {
 
 	private List<LispVal> topLevels(LispVal form) {
 		try {
+			if (isNsForm(form)) {
+				processNs(form); // wires the aliases; defines nothing
+				return List.of();
+			}
 			List<LispVal> items = items(form);
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defn")) {
 				return defuns(items);
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmulti")) {
+				return defmultiForms(items);
 			}
 			return List.of(lower(form));
 		}
@@ -335,8 +382,114 @@ final class ClojureLowering {
 		if (isSymbolNamed(head, "doseq") || isSymbolNamed(head, "dotimes") || isSymbolNamed(head, "for")) {
 			throw new LispReadException("iteration forms are not supported yet: " + ((LispSymbol) head).name());
 		}
-		if (isSymbolNamed(head, "defmulti") || isSymbolNamed(head, "defmethod")) {
-			throw new LispReadException("multimethods are not supported yet: " + ((LispSymbol) head).name());
+		if (isSymbolNamed(head, "defmulti")) {
+			List<LispVal> forms = defmultiForms(items);
+			return forms.size() == 1 ? forms.get(0) : cons(sym("progn"), forms);
+		}
+		if (isSymbolNamed(head, "defmethod")) {
+			return defmethodForm(items);
+		}
+		if (isSymbolNamed(head, "remove-method")) {
+			return removeMethodOf(items);
+		}
+		if (isSymbolNamed(head, "get-method")) {
+			return getMethodOf(items);
+		}
+		if (isSymbolNamed(head, "prefer-method")) {
+			throw new LispReadException("prefer-method is not supported yet: hierarchies need a design");
+		}
+		if (isSymbolNamed(head, "derive") || isSymbolNamed(head, "underive") || isSymbolNamed(head, "isa?")
+				|| isSymbolNamed(head, "parents") || isSymbolNamed(head, "ancestors")
+				|| isSymbolNamed(head, "descendants") || isSymbolNamed(head, "make-hierarchy")) {
+			throw new LispReadException("hierarchies are not supported yet: " + ((LispSymbol) head).name());
+		}
+		if (isSymbolNamed(head, "defprotocol") || isSymbolNamed(head, "defrecord") || isSymbolNamed(head, "deftype")
+				|| isSymbolNamed(head, "definterface") || isSymbolNamed(head, "reify")
+				|| isSymbolNamed(head, "extend-protocol") || isSymbolNamed(head, "extend-type")
+				|| isSymbolNamed(head, "extend") || isSymbolNamed(head, "satisfies?") || isSymbolNamed(head, "proxy")
+				|| isSymbolNamed(head, "gen-class") || isSymbolNamed(head, "gen-interface")) {
+			throw new LispReadException("protocols are not supported yet: " + ((LispSymbol) head).name());
+		}
+		if (isSymbolNamed(head, "try")) {
+			return tryOf(items);
+		}
+		if (isSymbolNamed(head, "throw")) {
+			isTrue(items.size() == 2, "throw takes one form");
+			// a string signals with its message; anything else through its printed
+			// rendering, so the condition stays catchable by name
+			return list(sym("error"), list(sym("princ-to-string"), lower(items.get(1))));
+		}
+		if (isSymbolNamed(head, "ex-info") || isSymbolNamed(head, "ex-data")) {
+			throw new LispReadException(
+					((LispSymbol) head).name() + " is not supported yet: exception data needs a design");
+		}
+		if (isSymbolNamed(head, "atom")) {
+			return atomOf(items);
+		}
+		if (isSymbolNamed(head, "deref")) {
+			return derefOf(items);
+		}
+		if (isSymbolNamed(head, "swap!")) {
+			return swapOf(items);
+		}
+		if (isSymbolNamed(head, "reset!")) {
+			return resetOf(items);
+		}
+		if (isSymbolNamed(head, "compare-and-set!")) {
+			return compareAndSetOf(items);
+		}
+		if (isSymbolNamed(head, "volatile!")) {
+			isTrue(items.size() == 2, "volatile! takes an initial value");
+			return wrapAtom(lower(items.get(1)));
+		}
+		if (isSymbolNamed(head, "vreset!")) {
+			return resetOf(items);
+		}
+		if (isSymbolNamed(head, "vswap!")) {
+			return swapOf(items);
+		}
+		if (isSymbolNamed(head, "add-watch") || isSymbolNamed(head, "remove-watch")) {
+			throw new LispReadException(
+					((LispSymbol) head).name() + " is not supported yet: atom watches need a design");
+		}
+		if (isSymbolNamed(head, "comment")) {
+			return NIL_CONST;
+		}
+		if (isSymbolNamed(head, "require")) {
+			requireSpecs(specsOf(items, "require"), false);
+			return NIL_CONST;
+		}
+		if (isSymbolNamed(head, "use")) {
+			requireSpecs(specsOf(items, "use"), true);
+			return NIL_CONST;
+		}
+		if (isSymbolNamed(head, "import")) {
+			importSpecs(specsOf(items, "import"));
+			return NIL_CONST;
+		}
+		if (isSymbolNamed(head, "in-ns")) {
+			return NIL_CONST; // the namespace is flat: every definition is global
+		}
+		if (isSymbolNamed(head, "set!")) {
+			throw new LispReadException("set! is not supported yet: mutable fields need a design");
+		}
+		if (isSymbolNamed(head, "memfn")) {
+			throw new LispReadException("memfn is not supported yet: use an anonymous function instead");
+		}
+		if (isSymbolNamed(head, "new")) {
+			return newOf(items);
+		}
+		if (isSymbolNamed(head, "syntax-quote")) {
+			throw new LispReadException("syntax-quote is not supported yet: backquote needs a design");
+		}
+		if (isSymbolNamed(head, "unquote") || isSymbolNamed(head, "unquote-splicing")) {
+			throw new LispReadException(((LispSymbol) head).name() + " is not supported yet: backquote needs a design");
+		}
+		if (isSymbolNamed(head, "var")) {
+			throw new LispReadException("var is not supported yet: #'x needs a design");
+		}
+		if (isSymbolNamed(head, "with-meta")) {
+			throw new LispReadException("with-meta is not supported yet: ^metadata needs a design");
 		}
 		if (head instanceof LispCons) {
 			return cons(sym("funcall"), lowers(items, 0)); // ((fn ...) args)
@@ -812,6 +965,418 @@ final class ClojureLowering {
 				list(sym("IF"), isFalsey(temp), orOf(args.subList(1, args.size())), temp));
 	}
 
+	// clojure.string: each verb over the core string operations
+
+	/**
+	 * A {@code clojure.string} call: the vars {@code ns} resolution already vetted, over
+	 * the call's own items (whose head is ignored).
+	 */
+	private LispVal stringCall(String var, List<LispVal> items) {
+		int n = items.size() - 1;
+		return switch (var) {
+			case "join" -> {
+				isTrue(n == 1 || n == 2, "join takes a collection and an optional separator");
+				yield n == 2 ? joinForm(lower(items.get(1)), lower(items.get(2)))
+						: joinForm(LispString.literal(""), lower(items.get(1)));
+			}
+			case "split" -> {
+				isTrue(n == 2 || n == 3, "split takes a string, a pattern and an optional limit");
+				yield splitForm(lower(items.get(1)), lower(items.get(2)), n == 3 ? lower(items.get(3)) : NIL_CONST,
+						true);
+			}
+			case "split-lines" -> {
+				isTrue(n == 1, "split-lines takes one string");
+				yield splitLinesForm(lower(items.get(1)));
+			}
+			case "upper-case", "lower-case" -> {
+				isTrue(n == 1, var + " takes one string");
+				yield list(sym(var.equals("upper-case") ? "string-upcase" : "string-downcase"), lower(items.get(1)));
+			}
+			case "capitalize" -> {
+				isTrue(n == 1, "capitalize takes one string");
+				yield capitalizeForm(lower(items.get(1)));
+			}
+			case "trim" -> {
+				isTrue(n == 1, "trim takes one string");
+				yield list(sym("string-trim"), trimBag(), lower(items.get(1)));
+			}
+			case "triml" -> {
+				isTrue(n == 1, "triml takes one string");
+				yield list(sym("string-left-trim"), trimBag(), lower(items.get(1)));
+			}
+			case "trimr" -> {
+				isTrue(n == 1, "trimr takes one string");
+				yield list(sym("string-right-trim"), trimBag(), lower(items.get(1)));
+			}
+			case "trim-newline" -> {
+				isTrue(n == 1, "trim-newline takes one string");
+				yield trimNewlineForm(lower(items.get(1)));
+			}
+			case "blank?" -> {
+				isTrue(n == 1, "blank? takes one string");
+				yield booleanAnswer(blankForm(lower(items.get(1))));
+			}
+			case "starts-with?", "ends-with?", "includes?" -> {
+				isTrue(n == 2, var + " takes two strings");
+				yield booleanAnswer(affixForm(var, lower(items.get(1)), lower(items.get(2))));
+			}
+			case "index-of" -> {
+				isTrue(n == 2 || n == 3, "index-of takes a string, a value and an optional start");
+				yield n == 3 ? list(sym("search"), lower(items.get(2)), lower(items.get(1)), sym(":start2"),
+						lower(items.get(3))) : list(sym("search"), lower(items.get(2)), lower(items.get(1)));
+			}
+			case "last-index-of" -> {
+				isTrue(n == 2 || n == 3, "last-index-of takes a string, a value and an optional end");
+				yield lastIndexForm(lower(items.get(1)), lower(items.get(2)), n == 3 ? lower(items.get(3)) : null);
+			}
+			case "replace" -> {
+				isTrue(n == 3, "replace takes a string, a match and a replacement");
+				yield replaceForm(lower(items.get(1)), lower(items.get(2)), lower(items.get(3)), false);
+			}
+			case "replace-first" -> {
+				isTrue(n == 3, "replace-first takes a string, a match and a replacement");
+				yield replaceForm(lower(items.get(1)), lower(items.get(2)), lower(items.get(3)), true);
+			}
+			case "escape" -> {
+				isTrue(n == 2, "escape takes a string and a map");
+				yield escapeForm(lower(items.get(1)), lower(items.get(2)));
+			}
+			case "re-quote-replacement" -> {
+				isTrue(n == 1, "re-quote-replacement takes one string");
+				yield replaceForm(
+						replaceForm(lower(items.get(1)), LispString.literal("\\"), LispString.literal("\\\\"), false),
+						LispString.literal("$"), LispString.literal("\\$"), false);
+			}
+			case "reverse" -> {
+				isTrue(n == 1, "reverse takes one string");
+				yield list(sym("coerce"),
+						list(sym("reverse"), list(sym("coerce"), lower(items.get(1)), quoted("list"))),
+						quoted("string"));
+			}
+			default -> throw new LispReadException("unknown name: clojure.string/" + var);
+		};
+	}
+
+	/**
+	 * A {@code clojure.string} var as a function value: one rest lambda dispatching on
+	 * the argument count through the call lowering, so {@code (map s/upper-case ...)}
+	 * runs what a call would run.
+	 */
+	private LispVal stringValue(String var) {
+		// a user-style name lowered on both sides: the datum reference mangles to
+		// the same symbol the parameter binds, and the counter keeps it unique
+		String plain = "strv-rest" + (this.counter++);
+		LispSymbol ref = new LispSymbol(plain);
+		return inScope(Map.of(plain, Kind.VARIABLE), () -> {
+			List<LispVal> arms = new ArrayList<>();
+			for (int arity : stringArities(var)) {
+				List<LispVal> callItems = new ArrayList<>();
+				callItems.add(new LispSymbol(var));
+				for (int i = 0; i < arity; i++) {
+					callItems.add(list(new LispSymbol("nth"), ref, new LispInteger(i)));
+				}
+				arms.add(list(list(sym("="), list(sym("length"), idSym(plain)), new LispInteger(arity)),
+						stringCall(var, callItems)));
+			}
+			arms.add(list(TRUE_CONST,
+					list(sym("error"), LispString.literal(var + " called with wrong number of arguments"))));
+			return list(sym("lambda"), list(List.of(AMPERSAND_REST, idSym(plain))), cons(sym("cond"), arms));
+		});
+	}
+
+	private static List<Integer> stringArities(String var) {
+		return switch (var) {
+			case "join", "index-of", "last-index-of" -> List.of(1, 2);
+			case "split" -> List.of(2, 3);
+			case "starts-with?", "ends-with?", "includes?", "escape" -> List.of(2);
+			case "replace", "replace-first" -> List.of(3);
+			default -> List.of(1);
+		};
+	}
+
+	/**
+	 * {@code join}: the separator (nil counts as {@code ""}, like the oracle) between the
+	 * {@code str} parts of the seq view, concatenated. Each part converts like a
+	 * {@code str} part -- {@code ""} for nil, the colon spelling for a keyword.
+	 */
+	private LispVal joinForm(LispVal sep, LispVal coll) {
+		LispSymbol sepSym = freshTemp();
+		LispSymbol parts = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal strings = list(sym("mapcar"),
+				list(sym("lambda"), list(one), printPartBody(one, LispString.literal(""), false)), seqForm(coll));
+		LispVal interposed = list(sym("cdr"),
+				list(sym("mapcan"), list(sym("lambda"), list(one), list(sym("list"), sepSym, one)), parts));
+		LispVal joined = list(sym("apply"), list(sym("function"), sym("concatenate")), quoted("string"), interposed);
+		return list(sym("let"),
+				list(List.of(list(sepSym, list(sym("if"), list(sym("null"), sep), LispString.literal(""), sep)),
+						list(parts, strings))),
+				joined);
+	}
+
+	/**
+	 * {@code split}: the string cut at every (non-overlapping, in order) occurrence of
+	 * the string pattern -- a character or anything else signals, like the oracle's cast
+	 * failure -- as a strict list. An empty match cuts between characters; an empty input
+	 * answers nil; a positive limit caps the parts (the last holding the rest); a
+	 * negative limit keeps every part; otherwise trailing empties drop.
+	 */
+	private LispVal splitForm(LispVal text, LispVal pattern, LispVal limit, boolean emptyToNil) {
+		LispSymbol str = freshTemp();
+		LispSymbol pat = freshTemp();
+		LispSymbol lim = freshTemp();
+		LispVal chars = list(sym("mapcar"), list(sym("function"), sym("string")),
+				list(sym("coerce"), str, quoted("list")));
+		LispVal cut = splitLoop(str, pat, lim);
+		LispVal whole = list(sym("if"), list(sym("zerop"), list(sym("length"), pat)), chars, cut);
+		LispVal result = emptyToNil
+				? list(sym("if"), list(sym("string="), str, LispString.literal("")), NIL_CONST, whole) : whole;
+		LispVal checked = list(sym("if"), list(sym("or"), list(sym("null"), lim), list(sym("integerp"), lim)), result,
+				list(sym("error"), LispString.literal("split takes an integer limit")));
+		return list(sym("let"), list(List.of(list(str, text), list(pat,
+				list(sym("cond"), list(list(sym("stringp"), pattern), pattern),
+						list(list(sym("characterp"), pattern), list(sym("string"), pattern)),
+						list(TRUE_CONST, list(sym("error"), LispString.literal("split takes a string to split on"))))),
+				list(lim, limit))), result);
+	}
+
+	/**
+	 * The split loop: a labels self call accumulating the parts in reverse, then the
+	 * limit rule -- capped (the last part holding the rest), kept whole, or trailing
+	 * empties dropped.
+	 */
+	private LispVal splitLoop(LispVal str, LispVal pat, LispVal lim) {
+		String name = mangle("split-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol pos = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol at = freshTemp();
+		LispVal found = list(sym("search"), pat, str, sym(":start2"), at);
+		LispVal capped = list(sym("and"), list(sym("integerp"), lim), list(sym(">"), lim, new LispInteger(0)),
+				list(sym("="), list(sym("length"), acc), list(sym("-"), lim, new LispInteger(1))));
+		LispVal step = list(sym("if"), list(sym("null"), found),
+				list(sym("reverse"), list(sym("cons"), list(sym("subseq"), str, at), acc)),
+				list(sym("if"), capped, list(sym("reverse"), list(sym("cons"), list(sym("subseq"), str, at), acc)),
+						list(self, list(sym("+"), found, list(sym("length"), pat)),
+								list(sym("cons"), list(sym("subseq"), str, at, found), acc))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(at, acc)), cons(step, List.of())));
+		LispVal parts = list(sym("labels"), list(List.of(binding)), list(self, new LispInteger(0), NIL_CONST));
+		// a nonzero integer limit keeps every part (a positive one capped the loop
+		// above); otherwise trailing empties drop
+		LispVal keep = list(sym("and"), list(sym("integerp"), lim), list(sym("not"), list(sym("zerop"), lim)));
+		return list(sym("if"), keep, parts, dropTrailing(parts));
+	}
+
+	/**
+	 * Trailing empty strings dropped: the reversed list past its leading empties,
+	 * reversed back.
+	 */
+	private LispVal dropTrailing(LispVal parts) {
+		String name = mangle("trimtail-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol rest = freshTemp();
+		LispVal step = list(sym("if"),
+				list(sym("and"), rest, list(sym("string="), list(sym("car"), rest), LispString.literal(""))),
+				list(self, list(sym("cdr"), rest)), rest);
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(step, List.of())));
+		return list(sym("reverse"),
+				list(sym("labels"), list(List.of(binding)), list(self, list(sym("reverse"), parts))));
+	}
+
+	/** {@code split-lines}: split on newlines, an empty input nil, each line unended. */
+	private LispVal splitLinesForm(LispVal text) {
+		LispSymbol line = freshTemp();
+		LispSymbol len = freshTemp();
+		LispVal unended = list(sym("let"), list(List.of(list(len, list(sym("length"), line)))),
+				list(sym("if"),
+						list(sym("and"), list(sym(">"), len, new LispInteger(0)),
+								list(sym("eql"), list(sym("char"), line, list(sym("-"), len, new LispInteger(1))),
+										new LispChar('\r'))),
+						list(sym("subseq"), line, new LispInteger(0), list(sym("-"), len, new LispInteger(1))), line));
+		LispVal lines = splitForm(text, LispString.literal("\n"), NIL_CONST, true);
+		return list(sym("mapcar"), list(sym("lambda"), list(line), unended), lines);
+	}
+
+	/** {@code capitalize}: the first character up, the rest down. */
+	private static LispVal capitalizeForm(LispVal text) {
+		LispSymbol str = new LispSymbol("__clojure_cap");
+		return list(sym("let"), list(List.of(list(str, text))),
+				list(sym("if"), list(sym("zerop"), list(sym("length"), str)), str,
+						list(sym("concatenate"), quoted("string"),
+								list(sym("string-upcase"),
+										list(sym("subseq"), str, new LispInteger(0), new LispInteger(1))),
+								list(sym("string-downcase"), list(sym("subseq"), str, new LispInteger(1))))));
+	}
+
+	/** The whitespace bag {@code trim} trims: the ASCII whitespace characters. */
+	private static LispVal trimBag() {
+		return list(sym("quote"), list(List.of(new LispChar(' '), new LispChar('\t'), new LispChar('\n'),
+				new LispChar('\r'), new LispChar('\f'))));
+	}
+
+	/** {@code trim-newline}: one trailing newline (or carriage-return newline) off. */
+	private static LispVal trimNewlineForm(LispVal text) {
+		LispSymbol str = new LispSymbol("__clojure_tnl");
+		LispSymbol len = new LispSymbol("__clojure_tnl_n");
+		LispVal last = list(sym("char"), str, list(sym("-"), len, new LispInteger(1)));
+		LispVal prev = list(sym("char"), str, list(sym("-"), len, new LispInteger(2)));
+		return list(sym("let*"), list(List.of(list(str, text), list(len, list(sym("length"), str)))),
+				list(sym("cond"),
+						list(list(sym("and"), list(sym(">"), len, new LispInteger(1)),
+								list(sym("eql"), prev, new LispChar('\r')), list(sym("eql"), last, new LispChar('\n'))),
+								list(sym("subseq"), str, new LispInteger(0), list(sym("-"), len, new LispInteger(2)))),
+						list(list(sym("and"), list(sym(">"), len, new LispInteger(0)),
+								list(sym("eql"), last, new LispChar('\n'))),
+								list(sym("subseq"), str, new LispInteger(0), list(sym("-"), len, new LispInteger(1)))),
+						list(TRUE_CONST, str)));
+	}
+
+	/** Whether the value is blank: nil, or a string of only trimmable characters. */
+	private static LispVal blankForm(LispVal value) {
+		LispSymbol str = new LispSymbol("__clojure_blank");
+		return list(sym("let"), list(List.of(list(str, value))), list(sym("or"), list(sym("null"), str),
+				list(sym("zerop"), list(sym("length"), list(sym("string-trim"), trimBag(), str)))));
+	}
+
+	/**
+	 * {@code starts-with?} / {@code ends-with?} / {@code includes?}, answering raw: a
+	 * prefix, suffix or substring test through {@code string=} and {@code search}.
+	 */
+	private static LispVal affixForm(String var, LispVal text, LispVal wanted) {
+		LispSymbol str = new LispSymbol("__clojure_aff");
+		LispSymbol sub = new LispSymbol("__clojure_aff_sub");
+		LispVal test = switch (var) {
+			case "starts-with?" -> list(sym("and"), list(sym("<="), list(sym("length"), sub), list(sym("length"), str)),
+					list(sym("string="), sub, list(sym("subseq"), str, new LispInteger(0), list(sym("length"), sub))));
+			case "ends-with?" ->
+				list(sym("and"), list(sym("<="), list(sym("length"), sub), list(sym("length"), str)), list(
+						sym("string="), sub,
+						list(sym("subseq"), str, list(sym("-"), list(sym("length"), str), list(sym("length"), sub)))));
+			default -> list(sym("not"), list(sym("null"), list(sym("search"), sub, str)));
+		};
+		return list(sym("let"), list(List.of(list(str, text), list(sub, wanted))), test);
+	}
+
+	/**
+	 * {@code last-index-of}: the last occurrence at or before the end index (clamped to
+	 * the string, like the oracle; a negative end is nil). Without an end the whole
+	 * string is searched backwards.
+	 */
+	private static LispVal lastIndexForm(LispVal text, LispVal wanted, @Nullable LispVal end) {
+		LispSymbol str = new LispSymbol("__clojure_li");
+		LispSymbol sub = new LispSymbol("__clojure_li_sub");
+		LispVal tail = list(sym("search"), sub, str, sym(":from-end"), TRUE_CONST);
+		if (end == null) {
+			return list(sym("let"), list(List.of(list(str, text), list(sub, wanted))), tail);
+		}
+		LispSymbol to = new LispSymbol("__clojure_li_to");
+		LispVal window = list(sym("subseq"), str, new LispInteger(0),
+				list(sym("min"), list(sym("+"), to, new LispInteger(1)), list(sym("length"), str)));
+		LispVal found = list(sym("search"), sub, window, sym(":from-end"), TRUE_CONST);
+		return list(sym("let"), list(List.of(list(str, text), list(sub, wanted), list(to, end))),
+				list(sym("if"), list(sym("<"), to, new LispInteger(0)), NIL_CONST, found));
+	}
+
+	/**
+	 * {@code replace} / {@code replace-first}: every (or the first) occurrence of the
+	 * string match swapped for the string-or-character replacement -- anything else
+	 * signals, like the oracle's cast failure. An empty match interposes the replacement
+	 * between characters.
+	 */
+	private LispVal replaceForm(LispVal text, LispVal match, LispVal replacement, boolean first) {
+		// a string match pairs with a string replacement, a character with a
+		// character: anything else is the oracle's cast failure
+		LispSymbol str = freshTemp();
+		LispSymbol rawMatch = freshTemp();
+		LispSymbol rawRep = freshTemp();
+		LispSymbol mat = freshTemp();
+		LispSymbol rep = freshTemp();
+		LispVal bad = list(sym("error"),
+				LispString.literal("replace takes a string match and replacement, or a character pair"));
+		LispVal matchNorm = list(sym("cond"),
+				list(list(sym("and"), list(sym("stringp"), rawMatch), list(sym("stringp"), rawRep)), rawMatch),
+				list(list(sym("and"), list(sym("characterp"), rawMatch), list(sym("characterp"), rawRep)),
+						list(sym("string"), rawMatch)),
+				list(TRUE_CONST, bad));
+		LispVal repNorm = list(sym("cond"),
+				list(list(sym("and"), list(sym("stringp"), rawMatch), list(sym("stringp"), rawRep)), rawRep),
+				list(list(sym("and"), list(sym("characterp"), rawMatch), list(sym("characterp"), rawRep)),
+						list(sym("string"), rawRep)),
+				list(TRUE_CONST, bad));
+		LispVal looped = first ? replaceFirstLoop(str, mat, rep) : replaceLoop(str, mat, rep);
+		LispVal interposed = joinForm(rep,
+				list(sym("mapcar"), list(sym("function"), sym("string")), list(sym("coerce"), str, quoted("list"))));
+		return list(sym("let*"),
+				list(List.of(list(str, text), list(rawMatch, match), list(rawRep, replacement), list(mat, matchNorm),
+						list(rep, repNorm))),
+				list(sym("if"), list(sym("string="), mat, LispString.literal("")), interposed, looped));
+	}
+
+	/** Every occurrence swapped: the parts before, between and after, concatenated. */
+	private LispVal replaceLoop(LispVal str, LispVal mat, LispVal rep) {
+		String name = mangle("replace-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol pos = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispVal found = list(sym("search"), mat, str, sym(":start2"), pos);
+		LispVal grown = list(sym("cons"), rep, list(sym("cons"), list(sym("subseq"), str, pos, found), acc));
+		LispVal step = list(sym("if"), list(sym("null"), found),
+				list(sym("apply"), list(sym("function"), sym("concatenate")), quoted("string"),
+						list(sym("reverse"), list(sym("cons"), list(sym("subseq"), str, pos), acc))),
+				list(self, list(sym("+"), found, list(sym("length"), mat)), grown));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(pos, acc)), cons(step, List.of())));
+		return list(sym("labels"), list(List.of(binding)), list(self, new LispInteger(0), NIL_CONST));
+	}
+
+	/** The first occurrence swapped, or the string itself when there is none. */
+	private static LispVal replaceFirstLoop(LispVal str, LispVal mat, LispVal rep) {
+		LispSymbol at = new LispSymbol("__clojure_rf");
+		return list(sym("let"), list(List.of(list(at, list(sym("search"), mat, str)))),
+				list(sym("if"), list(sym("null"), at), str,
+						list(sym("concatenate"), quoted("string"), list(sym("subseq"), str, new LispInteger(0), at),
+								rep, list(sym("subseq"), str, list(sym("+"), at, list(sym("length"), mat))))));
+	}
+
+	/**
+	 * {@code escape}: each character looked up in the map, a hit (a string or a
+	 * character) swapped in, a miss kept as itself, the whole concatenated.
+	 */
+	private LispVal escapeForm(LispVal text, LispVal table) {
+		LispSymbol str = freshTemp();
+		LispSymbol cmap = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol hit = freshTemp();
+		LispVal swap = list(sym("let"), list(List.of(list(hit, list(sym("gethash"), one, cmap, miss)))),
+				list(sym("if"), list(sym("eq"), hit, miss), list(sym("string"), one),
+						list(sym("if"), list(sym("characterp"), hit), list(sym("string"), hit), hit)));
+		return list(sym("let"),
+				list(List.of(list(str, text), list(cmap, table), list(miss, list(sym("list"), NIL_CONST)))),
+				list(sym("apply"), list(sym("function"), sym("concatenate")), quoted("string"), list(sym("mapcar"),
+						list(sym("lambda"), list(one), swap), list(sym("coerce"), str, quoted("list")))));
+	}
+
+	/** {@code subs}: the substring from the start, past the optional end. */
+	private LispVal subsOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "subs takes a string, a start and an optional end");
+		return n == 3 ? list(sym("subseq"), lower(items.get(1)), lower(items.get(2)), lower(items.get(3)))
+				: list(sym("subseq"), lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/** {@code subs} as a value: a two- or three-argument lambda over the primitive. */
+	private LispVal subsValue() {
+		LispSymbol str = new LispSymbol(mangle("subs-s"));
+		LispSymbol from = new LispSymbol(mangle("subs-from"));
+		LispSymbol args = new LispSymbol(mangle("subs-args"));
+		LispVal two = list(sym("subseq"), str, from);
+		LispVal three = list(sym("subseq"), str, from, list(sym("car"), args));
+		LispVal arity = list(sym("error"), LispString.literal("subs takes a string, a start and an optional end"));
+		LispVal body = list(sym("if"), list(sym("null"), args), two,
+				list(sym("if"), list(sym("null"), list(sym("cdr"), args)), three, arity));
+		return list(sym("lambda"), list(List.of(str, from, AMPERSAND_REST, args)), body);
+	}
+
 	// calls
 
 	private LispVal call(List<LispVal> items) {
@@ -826,7 +1391,19 @@ final class ClojureLowering {
 		if (special != null) {
 			return special;
 		}
-		isTrue(known(name), "unknown name: " + name);
+		VarRef qualified = resolveQualified(name);
+		if (qualified != null) {
+			return stringCall(qualified.var(), items);
+		}
+		LispVal interop = interopCall(name, items);
+		if (interop != null) {
+			return interop;
+		}
+		isTrue(known(name) || this.refers.containsKey(name), "unknown name: " + name);
+		VarRef referred = known(name) ? null : this.refers.get(name);
+		if (referred != null) {
+			return stringCall(referred.var(), items);
+		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(idSym(name));
 		for (int i = 1; i < items.size(); i++) {
@@ -837,6 +1414,9 @@ final class ClojureLowering {
 
 	/** The core names, spelled as the Common Lisp operation they lower to. */
 	private @Nullable LispVal builtin(String name, List<LispVal> items) {
+		if (!coreAllowed(name)) {
+			return null; // excluded by (:refer-clojure ...): a user definition wins
+		}
 		int n = items.size() - 1;
 		switch (name) {
 			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "list", "expt", "reverse":
@@ -964,6 +1544,8 @@ final class ClojureLowering {
 				return getOf(items);
 			case "contains?":
 				return containsOf(items);
+			case "subs":
+				return subsOf(items);
 			case "keys":
 				return keysOf(items);
 			case "vals":
@@ -1573,6 +2155,12 @@ final class ClojureLowering {
 			case "take" -> takeValue();
 			case "drop" -> dropValue();
 			case "range" -> rangeValue();
+			case "subs" -> subsValue();
+			case "atom", "volatile!" -> atomValue();
+			case "deref" -> derefValue();
+			case "swap!", "vswap!" -> swapValue();
+			case "reset!", "vreset!" -> resetValue();
+			case "compare-and-set!" -> compareAndSetValue();
 			default -> null;
 		};
 	}
@@ -2096,6 +2684,15 @@ final class ClojureLowering {
 				return predicate;
 			}
 		}
+		if (form instanceof LispSymbol s) {
+			VarRef qualified = resolveQualified(s.name());
+			if (qualified == null) {
+				qualified = this.refers.get(s.name());
+			}
+			if (qualified != null) {
+				return stringValue(qualified.var());
+			}
+		}
 		return lower(form);
 	}
 
@@ -2425,6 +3022,307 @@ final class ClojureLowering {
 		return found == null ? NIL_CONST : lower(found);
 	}
 
+	// namespaces: ns clauses, require/use/import as alias wiring
+
+	/** A namespace-qualified var: the namespace and the var it names. */
+	private record VarRef(String ns, String var) {
+	}
+
+	/** The namespaces whose vars lower to core forms: only {@code clojure.string} yet. */
+	private static boolean isKnownNamespace(String ns) {
+		return ns.equals("clojure.string");
+	}
+
+	/** Whether the namespace exports the var as a lowering. */
+	private static boolean isKnownVar(String ns, String var) {
+		return ns.equals("clojure.string") && STRING_VARS.contains(var);
+	}
+
+	/** The {@code clojure.string} vars this front end implements. */
+	private static final Set<String> STRING_VARS = Set.of("join", "split", "split-lines", "upper-case", "lower-case",
+			"capitalize", "trim", "triml", "trimr", "trim-newline", "blank?", "starts-with?", "ends-with?", "includes?",
+			"index-of", "last-index-of", "replace", "replace-first", "escape", "re-quote-replacement", "reverse");
+
+	/** The {@code java.lang} classes a simple name resolves to without an import. */
+	private static final Set<String> JAVA_LANG = Set.of("Object", "String", "Integer", "Long", "Double", "Float",
+			"Boolean", "Character", "Byte", "Short", "Math", "System", "Class", "Thread", "Exception",
+			"RuntimeException", "Error", "StringBuilder", "Number", "Comparable", "CharSequence");
+
+	/**
+	 * Whether a core name is visible: everything outside a
+	 * {@code (:refer-clojure :only [...])} set, minus a {@code :exclude} set. An
+	 * invisible name is not a builtin, so a user definition of it wins.
+	 */
+	private boolean coreAllowed(String name) {
+		if (this.referClojureOnly != null && !this.referClojureOnly.contains(name)) {
+			return false;
+		}
+		return !this.referClojureExclude.contains(name);
+	}
+
+	/**
+	 * One {@code (ns name doc? attr-map? clause...)} form: wires the {@code :require} /
+	 * {@code :use} aliases and refers, the {@code :import} class names and the
+	 * {@code :refer-clojure} filter, and defines nothing. Metadata, the docstring and the
+	 * attr map are ignored, like the declaration itself.
+	 */
+	private void processNs(LispVal form) {
+		List<LispVal> items = items(form);
+		if (items == null || items.size() < 2) {
+			throw new LispReadException("ns takes a name: " + form.print());
+		}
+		if (!(items.get(1) instanceof LispSymbol)) {
+			throw new LispReadException("ns takes a name, not " + items.get(1).print());
+		}
+		for (int i = 2; i < items.size(); i++) {
+			LispVal clause = items.get(i);
+			if (clause instanceof LispString) {
+				continue; // the docstring
+			}
+			List<LispVal> parts = items(clause);
+			if (parts == null || parts.isEmpty()) {
+				continue;
+			}
+			if (!(parts.get(0) instanceof LispSymbol head) || !head.name().startsWith(":")) {
+				continue; // metadata and anything else that declares nothing
+			}
+			switch (head.name()) {
+				case ":require" -> requireSpecs(parts.subList(1, parts.size()), false);
+				case ":use" -> requireSpecs(parts.subList(1, parts.size()), true);
+				case ":import" -> importSpecs(parts.subList(1, parts.size()));
+				case ":refer-clojure" -> referClojure(parts.subList(1, parts.size()));
+				default -> throw new LispReadException("ns clause " + head.name() + " is not supported yet");
+			}
+		}
+	}
+
+	/**
+	 * The libspecs of a {@code :require} (or {@code :use}, which refers everything by
+	 * default): {@code [ns :as alias :refer [vars]/:all]} vectors, prefix symbols and
+	 * prefix lists. Requiring an unknown namespace is an error, like the oracle's
+	 * missing-library failure.
+	 */
+	private void requireSpecs(List<LispVal> specs, boolean referAll) {
+		String prefix = null;
+		for (LispVal spec : specs) {
+			LispVal unwrapped = unwrapQuote(spec);
+			if (unwrapped instanceof LispSymbol bare) {
+				prefix = bare.name();
+				continue;
+			}
+			List<LispVal> parts = items(unwrapped);
+			if (parts == null || parts.isEmpty() || !isVectorDatum(unwrapped)) {
+				throw new LispReadException("require takes library specs, not " + spec.print());
+			}
+			if (parts.get(1) instanceof LispSymbol) {
+				requireOne(prefix, parts.subList(1, parts.size()), referAll, spec);
+			}
+			else {
+				// a prefix list: (prefix sub...) names prefix.sub... libraries
+				List<LispVal> prefixParts = items(unwrapped);
+				if (prefixParts == null || prefixParts.isEmpty()
+						|| !(prefixParts.get(0) instanceof LispSymbol prefixName)) {
+					throw new LispReadException("require takes library specs, not " + spec.print());
+				}
+				for (int i = 1; i < prefixParts.size(); i++) {
+					LispVal sub = unwrapQuote(prefixParts.get(i));
+					List<LispVal> subParts = items(sub);
+					if (subParts == null || subParts.isEmpty() || !isVectorDatum(sub)) {
+						throw new LispReadException("require takes library specs, not " + spec.print());
+					}
+					requireOne(prefixName.name(), subParts.subList(1, subParts.size()), referAll, spec);
+				}
+			}
+		}
+	}
+
+	private void requireOne(@Nullable String prefix, List<LispVal> parts, boolean referAll, LispVal spec) {
+		String ns = ((LispSymbol) parts.get(0)).name();
+		if (prefix != null) {
+			ns = prefix + "." + ns;
+		}
+		if (!isKnownNamespace(ns)) {
+			throw new LispReadException("unknown namespace: " + ns);
+		}
+		this.aliases.putIfAbsent(ns, ns); // the fully-qualified spelling always resolves
+		boolean all = referAll;
+		List<String> only = null;
+		Set<String> exclude = new HashSet<>();
+		for (int i = 1; i < parts.size(); i += 2) {
+			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol opt)) {
+				throw new LispReadException("require takes option/value pairs, not " + spec.print());
+			}
+			LispVal arg = parts.get(i + 1);
+			switch (opt.name()) {
+				case ":as" -> {
+					if (!(arg instanceof LispSymbol alias)) {
+						throw new LispReadException(":as takes an alias, not " + arg.print());
+					}
+					this.aliases.put(alias.name(), ns);
+				}
+				case ":refer" -> {
+					if (arg instanceof LispSymbol every && every.name().equals(":all")) {
+						all = true;
+					}
+					else {
+						only = referNames(arg, spec);
+					}
+				}
+				case ":only" -> only = referNames(arg, spec);
+				case ":exclude" -> exclude.addAll(referNames(arg, spec));
+				case ":rename" -> throw new LispReadException(":rename is not supported yet: " + spec.print());
+				default -> throw new LispReadException("require option " + opt.name() + " is not supported yet");
+			}
+		}
+		if (all) {
+			for (String var : STRING_VARS) {
+				if (!exclude.contains(var)) {
+					this.refers.put(var, new VarRef(ns, var));
+				}
+			}
+		}
+		else if (only != null) {
+			for (String var : only) {
+				if (!exclude.contains(var)) {
+					if (!isKnownVar(ns, var)) {
+						throw new LispReadException("unknown name: " + ns + "/" + var);
+					}
+					this.refers.put(var, new VarRef(ns, var));
+				}
+			}
+		}
+	}
+
+	private static List<String> referNames(LispVal arg, LispVal spec) {
+		List<LispVal> elements = items(arg);
+		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("a :refer/:only/:exclude takes a vector of names, not " + spec.print());
+		}
+		List<String> names = new ArrayList<>();
+		for (LispVal element : elements.subList(1, elements.size())) {
+			if (!(element instanceof LispSymbol named) || named.name().startsWith(":")) {
+				throw new LispReadException("a :refer/:only/:exclude takes a vector of names, not " + spec.print());
+			}
+			names.add(named.name());
+		}
+		return names;
+	}
+
+	/**
+	 * The class specs of an {@code :import}: bare classes and {@code (package ...)}
+	 * lists.
+	 */
+	private void importSpecs(List<LispVal> specs) {
+		for (LispVal spec : specs) {
+			LispVal unwrapped = unwrapQuote(spec);
+			if (unwrapped instanceof LispSymbol single) {
+				importClass(single.name());
+				continue;
+			}
+			List<LispVal> parts = items(unwrapped);
+			if (parts == null || parts.isEmpty() || !(parts.get(0) instanceof LispSymbol pack)) {
+				throw new LispReadException("import takes class names, not " + spec.print());
+			}
+			for (int i = 1; i < parts.size(); i++) {
+				if (!(parts.get(i) instanceof LispSymbol named)) {
+					throw new LispReadException("import takes class names, not " + spec.print());
+				}
+				importClass(pack.name() + "." + named.name());
+			}
+		}
+	}
+
+	private void importClass(String fqn) {
+		int dot = fqn.lastIndexOf('.');
+		this.classNames.put(dot < 0 ? fqn : fqn.substring(dot + 1), fqn);
+	}
+
+	/**
+	 * The options of a {@code (:refer-clojure ...)} clause: {@code :only},
+	 * {@code :exclude}.
+	 */
+	private void referClojure(List<LispVal> opts) {
+		for (int i = 0; i < opts.size(); i += 2) {
+			if (i + 1 >= opts.size() || !(opts.get(i) instanceof LispSymbol opt)) {
+				throw new LispReadException(":refer-clojure takes option/value pairs");
+			}
+			switch (opt.name()) {
+				case ":only" -> this.referClojureOnly = new HashSet<>(referNames(opts.get(i + 1), opts.get(i + 1)));
+				case ":exclude" -> this.referClojureExclude.addAll(referNames(opts.get(i + 1), opts.get(i + 1)));
+				case ":rename" -> throw new LispReadException(":rename is not supported yet in :refer-clojure");
+				default -> throw new LispReadException(":refer-clojure option " + opt.name() + " is not supported yet");
+			}
+		}
+	}
+
+	/**
+	 * The libspecs of a top-level {@code require} / {@code use} / {@code import} call.
+	 */
+	private static List<LispVal> specsOf(List<LispVal> items, String what) {
+		isTrue(items.size() >= 2, what + " takes library specs");
+		return items.subList(1, items.size());
+	}
+
+	/** A libspec unquoted: {@code 'foo} and {@code foo} spell the same library. */
+	private static LispVal unwrapQuote(LispVal spec) {
+		List<LispVal> parts = items(spec);
+		if (parts != null && parts.size() == 2 && isSymbolNamed(parts.get(0), "quote")
+				&& parts.get(1) instanceof LispSymbol) {
+			return parts.get(1);
+		}
+		return spec;
+	}
+
+	/**
+	 * A slash name resolved through the aliases: {@code s/join} with {@code s} for
+	 * {@code clojure.string}, or the fully-qualified {@code clojure.string/join}. Null
+	 * when the head is no alias and no known namespace, so the call keeps falling through
+	 * to interop and the unknown-name refusal.
+	 */
+	private @Nullable VarRef resolveQualified(String name) {
+		int slash = name.indexOf('/');
+		if (slash <= 0) {
+			return null;
+		}
+		String head = name.substring(0, slash);
+		String tail = name.substring(slash + 1);
+		if (tail.isEmpty() || tail.indexOf('/') >= 0) {
+			return null;
+		}
+		String ns = this.aliases.get(head);
+		if (ns == null && isKnownNamespace(head)) {
+			ns = head;
+		}
+		if (ns == null || !isKnownVar(ns, tail)) {
+			return null;
+		}
+		return new VarRef(ns, tail);
+	}
+
+	/** A class name resolved: dotted as written, imported, or {@code java.lang}. */
+	private String resolveClass(String name) {
+		if (name.indexOf('.') >= 0) {
+			return name;
+		}
+		String imported = this.classNames.get(name);
+		if (imported != null) {
+			return imported;
+		}
+		if (JAVA_LANG.contains(name)) {
+			return "java.lang." + name;
+		}
+		return name;
+	}
+
+	/**
+	 * Whether the slash form's head names a class: imported, java.lang, dotted or
+	 * capitalized.
+	 */
+	private boolean isClasslike(String head) {
+		return this.classNames.containsKey(head) || JAVA_LANG.contains(head) || head.indexOf('.') >= 0
+				|| (!head.isEmpty() && Character.isUpperCase(head.charAt(0)));
+	}
+
 	// atoms and quotes
 
 	private LispVal atom(LispVal form) {
@@ -2463,6 +3361,13 @@ final class ClojureLowering {
 			}
 			if (name.equals("quot")) {
 				return quotValue();
+			}
+			VarRef qualified = resolveQualified(name);
+			if (qualified == null) {
+				qualified = this.refers.get(name);
+			}
+			if (qualified != null) {
+				return stringValue(qualified.var());
 			}
 			LispVal synth = valueOf(name);
 			if (synth != null) {
@@ -2582,7 +3487,545 @@ final class ClojureLowering {
 		return quotedConstant(datum);
 	}
 
-	// names
+	// errors: try over handler-case and unwind-protect, throw over error
+
+	/**
+	 * {@code (try body... (catch Class var body...)... (finally ...))}: the body guarded
+	 * by a {@code handler-case} inside an {@code unwind-protect}. Every catch class
+	 * answers the catch-all {@code error} clause -- the classes are not distinguished, so
+	 * the first clause handles any condition -- and the clauses keep their order. The
+	 * catch var binds the Common Lisp condition, not a host exception.
+	 */
+	private LispVal tryOf(List<LispVal> items) {
+		List<LispVal> body = new ArrayList<>();
+		List<List<LispVal>> catches = new ArrayList<>();
+		List<LispVal> fin = new ArrayList<>();
+		boolean closed = false;
+		for (int i = 1; i < items.size(); i++) {
+			List<LispVal> part = items(items.get(i));
+			if (part != null && !part.isEmpty() && isSymbolNamed(part.get(0), "catch")) {
+				isTrue(part.size() >= 3 && part.get(1) instanceof LispSymbol, "catch takes a class, a name and a body");
+				plainName(part.get(2), "catch");
+				catches.add(part);
+				closed = true;
+				continue;
+			}
+			if (part != null && !part.isEmpty() && isSymbolNamed(part.get(0), "finally")) {
+				fin.addAll(part.subList(1, part.size()));
+				closed = true;
+				continue;
+			}
+			isTrue(!closed, "a try body comes before catch and finally");
+			body.add(items.get(i));
+		}
+		LispVal guarded = body.isEmpty() ? NIL_CONST : bodyOf(body);
+		if (!catches.isEmpty()) {
+			List<LispVal> clauses = new ArrayList<>();
+			for (List<LispVal> caught : catches) {
+				String var = ((LispSymbol) caught.get(2)).name();
+				LispVal clauseBody = inScope(new HashMap<>(Map.of(var, Kind.VARIABLE)),
+						() -> bodyOf(caught.subList(3, caught.size())));
+				clauses.add(list(sym("ERROR"), list(idSym(var)), clauseBody));
+			}
+			List<LispVal> handler = new ArrayList<>();
+			handler.add(sym("HANDLER-CASE"));
+			handler.add(guarded);
+			handler.addAll(clauses);
+			guarded = list(handler);
+		}
+		if (!fin.isEmpty()) {
+			List<LispVal> forms = new ArrayList<>();
+			forms.add(sym("UNWIND-PROTECT"));
+			forms.add(guarded);
+			for (LispVal f : fin) {
+				forms.add(lower(f));
+			}
+			guarded = list(forms);
+		}
+		return guarded;
+	}
+
+	// state: atoms and volatiles over a tagged one-vector cell
+
+	/**
+	 * The tag heading an atom: {@code (:C%ATOM #(value))}, the set wrapper's shape, so
+	 * the verbs can tell an atom from a plain vector. The value lives in a one-vector
+	 * cell, which every backend reads and writes; printing spells the wrapper, not the
+	 * oracle's object syntax.
+	 */
+	private static final LispSymbol ATOM_TAG = new LispSymbol(":C%ATOM");
+
+	private static LispVal wrapAtom(LispVal value) {
+		return list(sym("list"), ATOM_TAG, list(sym("vector"), value));
+	}
+
+	/** Whether the form holds a wrapped atom: the tag over a one-vector cell. */
+	private static LispVal isAtomForm(LispVal form) {
+		return list(sym("and"), list(sym("consp"), form), list(sym("eq"), list(sym("car"), form), ATOM_TAG),
+				list(sym("vectorp"), list(sym("cadr"), form)));
+	}
+
+	/** The value inside an already-bound atom: the cell's only element. */
+	private static LispVal atomGet(LispVal bound) {
+		return list(sym("aref"), list(sym("cadr"), bound), new LispInteger(0));
+	}
+
+	/** The cell rewritten to the value: answers the value. */
+	private static LispVal atomPut(LispVal bound, LispVal value) {
+		return list(sym("setf"), list(sym("aref"), list(sym("cadr"), bound), new LispInteger(0)), value);
+	}
+
+	/**
+	 * The lowered atom checked and handed to the body builder: anything else signals,
+	 * like the oracle's cast failure. The atom runs once, behind a temporary.
+	 */
+	private LispVal withAtom(LispVal lowered, String op, java.util.function.Function<LispVal, LispVal> body) {
+		LispSymbol cell = freshTemp();
+		return list(sym("let"), list(List.of(list(cell, lowered))), list(sym("if"), isAtomForm(cell), body.apply(cell),
+				list(sym("error"), LispString.literal(op + " needs an atom"))));
+	}
+
+	private LispVal atomOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "atom takes an initial value");
+		return wrapAtom(lower(items.get(1)));
+	}
+
+	private LispVal derefOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "deref takes one argument");
+		return derefForm(lower(items.get(1)));
+	}
+
+	/** The value inside the lowered atom. */
+	private LispVal derefForm(LispVal lowered) {
+		return withAtom(lowered, "deref", ClojureLowering::atomGet);
+	}
+
+	private LispVal swapOf(List<LispVal> items) {
+		String op = ((LispSymbol) items.get(0)).name();
+		isTrue(items.size() >= 3, op + " takes an atom, a function and arguments");
+		LispVal loweredAtom = lower(items.get(1));
+		LispVal fun = items.get(2);
+		List<LispVal> rest = items.subList(3, items.size());
+		return withAtom(loweredAtom, op, cell -> {
+			List<LispVal> tail = new ArrayList<>();
+			for (LispVal arg : rest) {
+				tail.add(lower(arg));
+			}
+			LispVal spread = list(sym("cons"), atomGet(cell), cons(sym("list"), tail));
+			LispSymbol next = freshTemp();
+			return list(sym("let"), list(List.of(list(next, list(sym("apply"), fnValue(fun), spread)))),
+					atomPut(cell, next), next);
+		});
+	}
+
+	private LispVal resetOf(List<LispVal> items) {
+		String op = ((LispSymbol) items.get(0)).name();
+		isTrue(items.size() == 3, op + " takes an atom and a value");
+		LispVal value = lower(items.get(2));
+		return withAtom(lower(items.get(1)), op, cell -> {
+			LispSymbol next = freshTemp();
+			return list(sym("let"), list(List.of(list(next, value))), atomPut(cell, next), next);
+		});
+	}
+
+	/**
+	 * {@code compare-and-set!}: the cell rewritten only when its value is {@code eql} to
+	 * the expected one -- value comparison for numbers, identity for everything else,
+	 * which is how the oracle's reference comparison answers on coalesced literals --
+	 * answering a Clojure boolean.
+	 */
+	private LispVal compareAndSetOf(List<LispVal> items) {
+		isTrue(items.size() == 4, "compare-and-set! takes an atom, an expected value and a new value");
+		LispVal wanted = lower(items.get(2));
+		LispVal value = lower(items.get(3));
+		return withAtom(lower(items.get(1)), "compare-and-set!", cell -> {
+			LispSymbol next = freshTemp();
+			return list(sym("let"), list(List.of(list(next, value))),
+					booleanAnswer(list(sym("if"), list(sym("eql"), wanted, atomGet(cell)),
+							list(sym("progn"), atomPut(cell, next), TRUE_CONST), NIL_CONST)));
+		});
+	}
+
+	/** {@code atom} as a value: a one-argument lambda over the constructor. */
+	private LispVal atomValue() {
+		LispSymbol init = new LispSymbol(mangle("atom-init"));
+		return list(sym("lambda"), list(init), wrapAtom(init));
+	}
+
+	/** {@code deref} as a value: a one-argument lambda over the reader. */
+	private LispVal derefValue() {
+		LispSymbol cell = new LispSymbol(mangle("deref-cell"));
+		return list(sym("lambda"), list(cell), derefForm(cell));
+	}
+
+	/** {@code swap!} as a value: over an atom, a function and any more arguments. */
+	private LispVal swapValue() {
+		LispSymbol cell = new LispSymbol(mangle("swap-cell"));
+		LispSymbol fun = new LispSymbol(mangle("swap-fun"));
+		LispSymbol rest = new LispSymbol(mangle("swap-rest"));
+		LispSymbol next = new LispSymbol(mangle("swap-next"));
+		LispVal spread = list(sym("cons"), atomGet(cell), rest);
+		LispVal update = list(sym("let"), list(List.of(list(next, list(sym("apply"), fun, spread)))),
+				atomPut(cell, next), next);
+		return list(sym("lambda"), list(List.of(cell, fun, AMPERSAND_REST, rest)),
+				withAtom(cell, "swap!", ignored -> update));
+	}
+
+	/** {@code reset!} as a value: a two-argument lambda over the writer. */
+	private LispVal resetValue() {
+		LispSymbol cell = new LispSymbol(mangle("reset-cell"));
+		LispSymbol value = new LispSymbol(mangle("reset-value"));
+		return list(sym("lambda"), list(List.of(cell, value)),
+				withAtom(cell, "reset!", bound -> atomPut(bound, value)));
+	}
+
+	/** {@code compare-and-set!} as a value: a three-argument lambda over the swap. */
+	private LispVal compareAndSetValue() {
+		LispSymbol cell = new LispSymbol(mangle("cas-cell"));
+		LispSymbol wanted = new LispSymbol(mangle("cas-wanted"));
+		LispSymbol value = new LispSymbol(mangle("cas-value"));
+		return list(sym("lambda"), list(List.of(cell, wanted, value)),
+				withAtom(cell, "compare-and-set!",
+						bound -> booleanAnswer(list(sym("if"), list(sym("eql"), wanted, atomGet(bound)),
+								list(sym("progn"), atomPut(bound, value), TRUE_CONST), NIL_CONST))));
+	}
+
+	// dispatch: multimethods over a method table and a dispatcher defun
+
+	/**
+	 * {@code (defmulti name doc? dispatch-fn & opts)}: a method table and a default
+	 * dispatch value in two globals no identifier can spell (the suffix follows the
+	 * mangled name, like the multi-arity helpers), plus a dispatcher {@code defun}
+	 * applying each call's dispatch value to the table. The default dispatch value is
+	 * {@code :default} without a {@code :default} option; a miss with no method for the
+	 * default signals, like the oracle. {@code :hierarchy} needs the hierarchy design and
+	 * is refused.
+	 */
+	private List<LispVal> defmultiForms(List<LispVal> items) {
+		isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
+		String name = plainName(items.get(1), "defmulti");
+		int at = 2;
+		if (items.get(at) instanceof LispString) {
+			at++; // the docstring
+		}
+		List<LispVal> attr = items(items.get(at));
+		if (attr != null && !attr.isEmpty() && isSymbolNamed(attr.get(0), "%hash-map")) {
+			at++; // the attr map
+		}
+		isTrue(at < items.size(), "defmulti takes a name, a dispatch function and options");
+		LispVal dispatchDatum = items.get(at++);
+		LispVal defaultDatum = null;
+		for (; at < items.size(); at += 2) {
+			if (at + 1 >= items.size() || !(items.get(at) instanceof LispSymbol opt)) {
+				throw new LispReadException("defmulti takes option/value pairs");
+			}
+			switch (opt.name()) {
+				case ":default" -> defaultDatum = items.get(at + 1);
+				case ":hierarchy" -> throw new LispReadException("hierarchies are not supported yet: :hierarchy");
+				default -> throw new LispReadException("defmulti option " + opt.name() + " is not supported yet");
+			}
+		}
+		this.globals.put(name, Kind.FUNCTION);
+		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
+		LispSymbol fallback = new LispSymbol(mangle(name) + "%default");
+		LispVal dispatchFn = fnValue(dispatchDatum);
+		LispVal defaultForm = defaultDatum == null ? keywordForm("default") : lower(defaultDatum);
+		LispSymbol args = freshTemp();
+		LispSymbol disp = freshTemp();
+		LispSymbol found = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol meth = freshTemp();
+		LispSymbol missFallback = freshTemp();
+		LispVal missing = list(sym("error"),
+				list(sym("concatenate"), quoted("string"),
+						LispString.literal("No method in " + name + " for dispatch value: "),
+						list(sym("princ-to-string"), disp)));
+		LispVal useFallback = list(sym("let*"),
+				list(List.of(list(missFallback, list(sym("list"), NIL_CONST)),
+						list(meth, list(sym("gethash"), fallback, methods, missFallback)))),
+				list(sym("if"), list(sym("eq"), meth, missFallback), missing, list(sym("apply"), meth, args)));
+		LispVal dispatch = list(sym("let*"),
+				list(List.of(list(disp, list(sym("apply"), dispatchFn, args)), list(miss, list(sym("list"), NIL_CONST)),
+						list(found, list(sym("gethash"), disp, methods, miss)))),
+				list(sym("if"), list(sym("eq"), found, miss), useFallback, list(sym("apply"), found, args)));
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(list(sym("setq"), methods, makeTable()));
+		forms.add(list(sym("setq"), fallback, defaultForm));
+		forms.add(list(sym("defun"), idSym(name), list(List.of(AMPERSAND_REST, args)), dispatch));
+		return forms;
+	}
+
+	/**
+	 * {@code (defmethod name dispatch-value [params...] body...)}: the lambda over the
+	 * (possibly destructured) parameters stored in the method table. The multimethod must
+	 * be defined -- forward order aside, the pre-scan declares every {@code defmulti}
+	 * first.
+	 */
+	private LispVal defmethodForm(List<LispVal> items) {
+		isTrue(items.size() >= 4, "defmethod takes a name, a dispatch value, a parameter vector and a body");
+		String name = plainName(items.get(1), "defmethod");
+		isTrue(known(name), "No such multimethod: " + name);
+		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
+		Clause clause = clause(items.get(3), items.subList(4, items.size()));
+		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		return list(sym("setf"), list(sym("gethash"), lower(items.get(2)), methods), lambda);
+	}
+
+	private LispVal removeMethodOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "remove-method takes a multimethod and a dispatch value");
+		String name = plainName(items.get(1), "remove-method");
+		isTrue(known(name), "No such multimethod: " + name);
+		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
+		return list(sym("progn"), list(sym("remhash"), lower(items.get(2)), methods),
+				list(sym("function"), idSym(name)));
+	}
+
+	private LispVal getMethodOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
+		String name = plainName(items.get(1), "get-method");
+		isTrue(known(name), "No such multimethod: " + name);
+		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
+		return list(sym("gethash"), lower(items.get(2)), methods, NIL_CONST);
+	}
+
+	// platform: Java interop over the java: surface
+
+	private static final LispSymbol JAVA_CALL = new LispSymbol("JAVA:CALL");
+
+	private static final LispSymbol JAVA_STATIC = new LispSymbol("JAVA:STATIC");
+
+	private static final LispSymbol JAVA_NEW = new LispSymbol("JAVA:NEW");
+
+	private static final LispSymbol JAVA_FIELD = new LispSymbol("JAVA:FIELD");
+
+	/**
+	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
+	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
+	 * {@code (Class. ...)} construction and {@code (Class/member ...)} statics. Null when
+	 * the name is no interop shape, so the call keeps falling through.
+	 */
+	private @Nullable LispVal interopCall(String name, List<LispVal> items) {
+		if (name.equals(".")) {
+			return dotForm(items);
+		}
+		if (name.equals("..")) {
+			return dotDotOf(items);
+		}
+		if (name.startsWith(".")) {
+			if (name.startsWith(".-")) {
+				isTrue(name.length() > 2, "a field read needs a field name: " + name);
+				isTrue(items.size() == 2, name + " takes a target");
+				return cons(JAVA_FIELD, List.of(lower(items.get(1)), LispString.literal(name.substring(2))));
+			}
+			isTrue(name.length() > 1, "a method call needs a method name");
+			isTrue(items.size() >= 2, name + " takes a target and arguments");
+			return instanceCall(lower(items.get(1)), name.substring(1), items.subList(2, items.size()));
+		}
+		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {
+			List<LispVal> args = new ArrayList<>();
+			args.add(LispString.literal(resolveClass(name.substring(0, name.length() - 1))));
+			args.addAll(lowers(items, 1));
+			return cons(JAVA_NEW, args);
+		}
+		int slash = name.indexOf('/');
+		if (slash > 0) {
+			String head = name.substring(0, slash);
+			String tail = name.substring(slash + 1);
+			if (!tail.isEmpty() && tail.indexOf('/') < 0 && isClasslike(head)) {
+				String cls = resolveClass(head);
+				if (items.size() == 1) {
+					// no arguments reads a static field: a zero-argument static
+					// method spells (. Class method) instead
+					return cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+				}
+				List<LispVal> args = new ArrayList<>();
+				args.add(LispString.literal(cls));
+				args.add(LispString.literal(tail));
+				args.addAll(lowers(items, 1));
+				return cons(JAVA_STATIC, args);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * {@code (. target method args...)}: a static call when the target symbol names a
+	 * class (dotted, imported, {@code java.lang} or capitalized), an instance call
+	 * otherwise. A {@code (method args...)} list spells the call, with no further
+	 * arguments beside it.
+	 */
+	private LispVal dotForm(List<LispVal> items) {
+		isTrue(items.size() >= 3, ". takes a target, a method and arguments");
+		LispVal target = items.get(1);
+		LispVal member = items.get(2);
+		String method;
+		List<LispVal> argDatums;
+		List<LispVal> nested = items(member);
+		if (nested != null && !nested.isEmpty()) {
+			isTrue(items.size() == 3, ". with a call list takes no further arguments");
+			if (!(nested.get(0) instanceof LispSymbol called)) {
+				throw new LispReadException(". takes a method name, not " + nested.get(0).print());
+			}
+			method = called.name();
+			argDatums = nested.subList(1, nested.size());
+		}
+		else {
+			if (!(member instanceof LispSymbol called)) {
+				throw new LispReadException(". takes a method name, not " + member.print());
+			}
+			method = called.name();
+			argDatums = items.subList(3, items.size());
+		}
+		if (target instanceof LispSymbol named && isClasslike(named.name())) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(LispString.literal(resolveClass(named.name())));
+			call.add(LispString.literal(method));
+			for (LispVal arg : argDatums) {
+				call.add(lower(arg));
+			}
+			return cons(JAVA_STATIC, call);
+		}
+		return instanceCall(lower(target), method, argDatums);
+	}
+
+	/**
+	 * {@code (.. target (step args...) name...)}: nested {@code .} datums around the
+	 * running value -- a pure datum rewrite, lowered once built.
+	 */
+	private LispVal dotDotOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, ".. takes a target and steps");
+		LispVal acc = items.get(1);
+		for (int i = 2; i < items.size(); i++) {
+			LispVal step = items.get(i);
+			List<LispVal> form = new ArrayList<>();
+			form.add(new LispSymbol("."));
+			form.add(acc);
+			List<LispVal> parts = items(step);
+			if (parts != null && !parts.isEmpty()) {
+				form.addAll(parts);
+			}
+			else if (step instanceof LispSymbol) {
+				form.add(step);
+			}
+			else {
+				throw new LispReadException(".. takes method names and call lists, not " + step.print());
+			}
+			acc = list(form);
+		}
+		return lower(acc);
+	}
+
+	/** {@code (new Class args...)}: construction through {@code java:new}. */
+	private LispVal newOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "new takes a class and arguments");
+		if (!(items.get(1) instanceof LispSymbol named)) {
+			throw new LispReadException("new takes a class name, not " + items.get(1).print());
+		}
+		List<LispVal> args = new ArrayList<>();
+		args.add(LispString.literal(resolveClass(named.name())));
+		args.addAll(lowers(items, 2));
+		return cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * An instance call: the receiver runs once, behind a temporary; a string receiver
+	 * answers the mapped core operation (a Lisp string is not a host object, so the
+	 * {@code java:} surface cannot take it), anything else goes to {@code java:call}
+	 * directly.
+	 */
+	private LispVal instanceCall(LispVal receiver, String method, List<LispVal> argDatums) {
+		List<LispVal> args = new ArrayList<>();
+		for (LispVal arg : argDatums) {
+			args.add(lower(arg));
+		}
+		LispSymbol recv = freshTemp();
+		List<LispVal> direct = new ArrayList<>();
+		direct.add(recv);
+		direct.add(LispString.literal(method));
+		direct.addAll(args);
+		LispVal mapped = stringMethod(method, recv, args);
+		LispVal call = mapped == null ? cons(JAVA_CALL, direct)
+				: list(sym("if"), list(sym("stringp"), recv), mapped, cons(JAVA_CALL, direct));
+		return list(sym("let"), list(List.of(list(recv, receiver))), call);
+	}
+
+	/**
+	 * A {@code String} instance method over an already-bound string receiver: the core
+	 * operation answering what the oracle answers (a missing {@code indexOf} is
+	 * {@code -1}, like the oracle, not the {@code nil} {@code clojure.string} favors).
+	 * Null when the method maps to nothing, so the call goes to {@code java:call}.
+	 */
+	private @Nullable LispVal stringMethod(String method, LispVal recv, List<LispVal> args) {
+		return switch (method) {
+			case "toUpperCase" -> args.isEmpty() ? list(sym("string-upcase"), recv) : null;
+			case "toLowerCase" -> args.isEmpty() ? list(sym("string-downcase"), recv) : null;
+			case "trim", "strip" -> args.isEmpty() ? list(sym("string-trim"), trimBag(), recv) : null;
+			case "stripLeading" -> args.isEmpty() ? list(sym("string-left-trim"), trimBag(), recv) : null;
+			case "stripTrailing" -> args.isEmpty() ? list(sym("string-right-trim"), trimBag(), recv) : null;
+			case "length" -> args.isEmpty() ? list(sym("length"), recv) : null;
+			case "isEmpty" -> args.isEmpty() ? booleanAnswer(list(sym("zerop"), list(sym("length"), recv))) : null;
+			case "isBlank" -> args.isEmpty() ? booleanAnswer(blankForm(recv)) : null;
+			case "toString" -> args.isEmpty() ? recv : null;
+			case "substring" -> switch (args.size()) {
+				case 1 -> list(sym("subseq"), recv, args.get(0));
+				case 2 -> list(sym("subseq"), recv, args.get(0), args.get(1));
+				default -> null;
+			};
+			case "charAt" -> args.size() == 1 ? list(sym("char"), recv, args.get(0)) : null;
+			case "equals" -> args.size() == 1 ? booleanAnswer(list(sym("string="), recv, args.get(0))) : null;
+			case "equalsIgnoreCase" ->
+				args.size() == 1 ? booleanAnswer(list(sym("string-equal"), recv, args.get(0))) : null;
+			case "contains" -> args.size() == 1 ? booleanAnswer(affixForm("includes?", recv, args.get(0))) : null;
+			case "startsWith" -> args.size() == 1 ? booleanAnswer(affixForm("starts-with?", recv, args.get(0))) : null;
+			case "endsWith" -> args.size() == 1 ? booleanAnswer(affixForm("ends-with?", recv, args.get(0))) : null;
+			case "indexOf" -> indexForm(recv, args, false);
+			case "lastIndexOf" -> indexForm(recv, args, true);
+			case "replace" -> args.size() == 2 ? replaceForm(recv, args.get(0), args.get(1), false) : null;
+			case "replaceFirst" -> args.size() == 2 ? replaceForm(recv, args.get(0), args.get(1), true) : null;
+			case "split" -> switch (args.size()) {
+				case 1 -> splitForm(recv, args.get(0), NIL_CONST, true);
+				case 2 -> splitForm(recv, args.get(0), args.get(1), true);
+				default -> null;
+			};
+			case "concat" -> args.size() == 1 ? list(sym("concatenate"), quoted("string"), recv, args.get(0)) : null;
+			case "repeat" -> args.size() == 1 ? list(sym("apply"), list(sym("function"), sym("concatenate")),
+					quoted("string"), list(sym("make-list"), args.get(0), sym(":initial-element"), recv)) : null;
+			default -> null;
+		};
+	}
+
+	/**
+	 * {@code indexOf} / {@code lastIndexOf} over an already-bound string: the index, or
+	 * {@code -1} when missing, like the oracle.
+	 */
+	private @Nullable LispVal indexForm(LispVal recv, List<LispVal> args, boolean last) {
+		LispVal search = switch (args.size()) {
+			case 1 -> last ? lastIndexForm(recv, args.get(0), null) : list(sym("search"), args.get(0), recv);
+			case 2 -> last ? lastIndexForm(recv, args.get(0), args.get(1))
+					: list(sym("search"), args.get(0), recv, sym(":start2"), args.get(1));
+			default -> null;
+		};
+		if (search == null) {
+			return null;
+		}
+		LispSymbol at = freshTemp();
+		return list(sym("let"), list(List.of(list(at, search))),
+				list(sym("if"), list(sym("null"), at), new LispInteger(-1), at));
+	}
+
+	/** Whether the spelling can name a class: a dotted name over identifier parts. */
+	private static boolean isClassSpelling(String spelling) {
+		if (spelling.isEmpty() || !Character.isJavaIdentifierStart(spelling.charAt(0))) {
+			return false;
+		}
+		for (int i = 1; i < spelling.length(); i++) {
+			char c = spelling.charAt(i);
+			if (!Character.isJavaIdentifierPart(c) && c != '.') {
+				return false;
+			}
+		}
+		return true;
+	}
 
 	/** The Common Lisp symbol name of a Clojure identifier: always behind the prefix. */
 	static String mangle(String identifier) {

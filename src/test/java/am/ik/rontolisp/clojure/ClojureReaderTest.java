@@ -33,7 +33,58 @@ class ClojureReaderTest {
 
 	@Test
 	void numbers() {
-		assertThat(printed("42 -17 +5 1/2 1.5 1e3 1M 2N")).isEqualTo("[42, -17, 5, 1/2, 1.5, 1000.0, 1.0, 2]");
+		assertThat(printed("42 -17 +5 1/2 1.5 1e3 1M 2N")).isEqualTo("[42, -17, 5, 1/2, 1.5, 1000.0, 1, 2]");
+	}
+
+	@Test
+	void radixIntegers() {
+		assertThat(printed("0xFF 2r101 8r17 16rff -0xFF 017 10r17 36rzz 2r101N"))
+			.isEqualTo("[255, 5, 15, 255, -255, 15, 17, 1295, 5]");
+		assertThat(printed("99999999999999999999999N")).isEqualTo("[99999999999999999999999]");
+	}
+
+	@Test
+	void bigDecimalsAreExactRatios() {
+		assertThat(printed("1M 0.1M 1e3M")).isEqualTo("[1, 1/10, 1000]");
+	}
+
+	@Test
+	void invalidNumbersAreErrors() {
+		assertThatThrownBy(() -> read("09")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 09");
+		assertThatThrownBy(() -> read("1e")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 1e");
+		assertThatThrownBy(() -> read("2r")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 2r");
+		assertThatThrownBy(() -> read("0x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 0x");
+		assertThatThrownBy(() -> read("1.5N")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 1.5N");
+		assertThatThrownBy(() -> read("2r101/10")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 2r101/10");
+		assertThatThrownBy(() -> read("3/2N")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid number: 3/2N");
+	}
+
+	@Test
+	void characters() {
+		assertThat(printed("\\a \\A \\newline \\space \\tab \\return \\backspace \\formfeed"))
+			.isEqualTo("[#\\a, #\\A, #\\Newline, #\\Space, #\\Tab, #\\Return, #\\Backspace, #\\Page]");
+		assertThat(printed("\\u0041 \\o141")).isEqualTo("[#\\A, #\\a]");
+		assertThatThrownBy(() -> read("\\ab")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported character");
+		assertThatThrownBy(() -> read("\\Tab")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported character");
+		assertThatThrownBy(() -> read("\\rubout")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported character");
+	}
+
+	@Test
+	void regexLiteralsAreRefusedByName() {
+		assertThatThrownBy(() -> read("#\"x\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("regex literals are not supported yet");
+		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unsupported reader form #:");
 	}
 
 	@Test

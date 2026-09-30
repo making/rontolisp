@@ -374,18 +374,86 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void iterationAndMultimethodsAreRefusedByName() {
+	void iterationStaysRefusedByName() {
 		assertThatThrownBy(() -> Clojure.read("(doseq [x [1]] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("iteration forms are not supported yet: doseq");
 		assertThatThrownBy(() -> Clojure.read("(dotimes [i 2] i)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("iteration forms are not supported yet: dotimes");
 		assertThatThrownBy(() -> Clojure.read("(for [x [1]] x)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("iteration forms are not supported yet: for");
-		assertThatThrownBy(() -> Clojure.read("(defmulti area :shape)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("multimethods are not supported yet: defmulti");
+	}
+
+	@Test
+	void defmultiIsATablePlusADispatcherDefun() {
+		assertThat(lowered("(defmulti area :shape)")).contains("DEFUN |c%area|")
+			.contains("GETHASH")
+			.contains("|c%area%methods|");
+		assertThat(lowered("(defmulti area :shape) (defmethod area :circle [m] 1)")).contains("SETF")
+			.contains("LAMBDA");
 		assertThatThrownBy(() -> Clojure.read("(defmethod area :circle [m] 1)", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("multimethods are not supported yet: defmethod");
+			.hasMessageContaining("No such multimethod: area");
+		assertThatThrownBy(() -> Clojure.read("(prefer-method a :x :y)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("prefer-method is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(derive ::a ::b)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("hierarchies are not supported yet: derive");
+		assertThatThrownBy(() -> Clojure.read("(defrecord R [x])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("protocols are not supported yet: defrecord");
+		assertThatThrownBy(() -> Clojure.read("(reify Object (toString [this] 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("protocols are not supported yet: reify");
+		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\" {:a 1})", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("ex-info is not supported yet");
+	}
+
+	@Test
+	void tryIsAHandlerCaseInsideAnUnwindProtect() {
+		assertThat(lowered("(try 1 (catch Exception e 2) (finally 3))")).contains("HANDLER-CASE")
+			.contains("UNWIND-PROTECT")
+			.contains("(ERROR (|c%e|)");
+		assertThat(lowered("(throw \"boom\")")).contains("(ERROR (PRINC-TO-STRING");
+	}
+
+	@Test
+	void atomsAreTaggedCells() {
+		assertThat(lowered("(atom 1)")).contains(":C%ATOM").contains("(VECTOR 1)");
+		assertThat(lowered("(def a (atom 1)) @a")).contains("AREF");
+		assertThat(lowered("(def a (atom 1)) (swap! a inc)")).contains("APPLY");
+		assertThat(lowered("(def a (atom 1)) (compare-and-set! a 1 2)")).contains("EQL");
+		assertThatThrownBy(() -> Clojure.read("(deref a 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("deref takes one argument");
+	}
+
+	@Test
+	void nsRequireWiresAliasesAndRefers() {
+		assertThat(lowered("(ns t (:require [clojure.string :as s])) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(ns t (:require [clojure.string :as s :refer [join]])) (join \",\" [\"a\"])"))
+			.contains("CONCATENATE");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [no.such.lib :as n]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: no.such.lib");
+		assertThatThrownBy(() -> Clojure.read("(s/join \",\" [\"a\"])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: s/join");
+	}
+
+	@Test
+	void interopLowersToTheJavaSurface() {
+		assertThat(lowered("(.toUpperCase \"hi\")")).contains("JAVA:CALL").contains("toUpperCase");
+		assertThat(lowered("(. \"hi\" toUpperCase)")).contains("JAVA:CALL");
+		assertThat(lowered("(Math/max 3 7)")).contains("JAVA:STATIC").contains("java.lang.Math");
+		assertThat(lowered("(String. \"hi\")")).contains("JAVA:NEW").contains("java.lang.String");
+		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD");
+		assertThat(lowered("(new String \"hi\")")).contains("JAVA:NEW");
+		assertThatThrownBy(() -> Clojure.read("(set! x 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("set! is not supported yet");
+	}
+
+	@Test
+	void charactersAndRadixLowerAsThemselves() {
+		assertThat(lowered("\\a")).contains("#\\a");
+		assertThat(lowered("0xFF")).isEqualTo(FALSE_BINDING + "255");
+		assertThat(lowered("1M")).isEqualTo(FALSE_BINDING + "1");
+		assertThat(lowered("0.1M")).isEqualTo(FALSE_BINDING + "1/10");
 	}
 
 }

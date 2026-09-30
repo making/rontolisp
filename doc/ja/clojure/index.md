@@ -9,10 +9,19 @@
 `nth` と end 付き `take`/`drop`/`range`、ベクター・キーワード・マップ・セットの
 リテラル、
 `assoc`/`dissoc`/`get`/`contains?`/`keys`/`vals`/`merge`/`conj`/`disj`/`set`/
-`hash-map`/`array-map`、`println`/`print`/`pr`/`prn`/`str` --
+`hash-map`/`array-map`、`subs`、`println`/`print`/`pr`/`prn`/`str`、`comment`、
+`try`/`catch`/`finally`/`throw`、`atom`/`deref`/`swap!`/`reset!`/
+`compare-and-set!`（および `volatile!`/`vswap!`/`vreset!`）、`defmulti`/
+`defmethod`/`remove-method`/`get-method`、`clojure.string` 付きの `ns`（`join`/
+`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/
+`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/
+`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/
+`re-quote-replacement`/`reverse`）、Java interop（`.`、`..`、`Class/member`、
+`Class.`、`new`）--
 を読み込み、すべてのバックエンドで実行できます。部分的な準拠が設計であり、サブセットや
 互換性の約束はまだありません。JVM や WebAssembly で Clojure プログラムを試すために
-使い、維持が必要なものは Common Lisp で書いてください。
+使い、維持が必要なものは Common Lisp で書いてください。interop はインタプリタと
+JVM でのみ動作します。wasm バックエンドはそれが低下する `java:` 表面を拒否します。
 
 `.clj` ファイルは Clojure として読まれます。`--source-language clojure` は他の拡張子の
 ファイルにもそう指示します。言語はファイルごとに選ばれるため、2つの言語を混在できます。
@@ -74,7 +83,75 @@ seq ビューを経由して位置で束縛され（`&` は残りを seq とし�
 は名前を段階的に束縛し直し、`doto` は（不変の）対象を答え、`cond->`/`cond->>`
 は真値のテストでのみスレッドし、`some->`/`some->>` は `nil` で止まります（`false`
 では止まりません）。`list*` は seq ビュー上の `cons` の右畳み込みです。
-`doseq`/`dotimes`/`for` と `defmulti`/`defmethod` は名前付きで拒否されます。
+`doseq`/`dotimes`/`for` は名前付きで拒否されます。階層（`derive`、`isa?`、
+`prefer-method`）、プロトコル（`defprotocol`、`defrecord`、`deftype`、`reify`、
+`extend-protocol` と仲間、`proxy`、`gen-class`）、`ex-info`/`ex-data`、`set!`、
+正規表現リテラル（`#"..."`）、バッククォート、`var`/`#'`、メタデータ（`^`）も同様です。
+
+## 状態・エラー・ディスパッチ・名前空間・interop
+
+atom はタグ付きセル `(:C%ATOM #(value))` で、すべての動詞がそれを読み書きします。
+`(atom 1)` が作り、`@a` と `(deref a)` が読み、`(swap! a f x...)` は値と追加引数に
+`f` を適用して答えを格納し、`(reset! a v)` は `v` を格納し、
+`(compare-and-set! a old new)` は値が `old` と `eql` のときに限り `new` を格納します
+（数値は値比較、それ以外は同一性）。それぞれ新しい値を答え（比較は真偽値を答え）、
+いずれも関数値として動作するため、`(map deref atoms)` が動きます。
+
+```clojure
+(def a (atom 1))
+(println @a)                 ; 1
+(println (swap! a + 10 20))  ; 31
+(println (reset! a 2))       ; 2
+(println (compare-and-set! a 2 3)) ; true
+```
+
+`try` は `unwind-protect` 内の `handler-case` を守ります。`(try body...
+(catch Class var body...)... (finally ...))` です。すべての catch 節は
+catch-all の `error` 節に答えます -- クラスは区別されないため、最初の節があらゆる
+コンディションを処理します -- catch 変数は Common Lisp のコンディションを束縛します。
+`throw` は `error` 経由でシグナルし、値を `princ-to-string` で描画するため、
+投げた文字列はメッセージを保ちます。
+
+マルチメソッドはメソッドテーブルとディスパッチ `defun` です。`(defmulti name
+docstring? dispatch-fn :default default?)` が両方を作り（デフォルトのディスパッチ値は
+`:default`）、`(defmethod name value [params...] body...)` がメソッドを格納し、
+`(remove-method name value)` が削除し、`(get-method name value)` が読みます。
+デフォルトにもメソッドがないミスはシグナルします。
+
+`(ns name (:require [clojure.string :as s :refer [join]]) (:use ...) (:import ...))`
+は節を結線し、何も定義しません。`:as` は別名、`:refer`/`:use` は非修飾名、
+`:import` は interop 用のクラス名を登録し、`(:refer-clojure :only/ :exclude ...)`
+は見えるコアを狭めます。未知の名前空間の require はエラーです。トップレベルの
+`require`/`use`/`import` も同じことをして `nil` を答えます。
+
+```clojure
+(ns demo (:require [clojure.string :as s]))
+(println (s/join "," ["a" "b"])) ; a,b
+(println (s/upper-case "hi"))    ; HI
+```
+
+interop は `java:` 表面に低下します（`.kb/java-interop.md`）。`(. obj method
+args...)` と `(.method obj args...)` はインスタンスメソッド、`(. Class method
+args...)` と `(Class/static args...)` は static、`（Class. args...)` と
+`(new Class args...)` は構築、`(Class/FIELD)` は static フィールドの読み出し
+（引数なし static メソッドは `(. Class method)` と書きます）、`(.-field obj)` は
+インスタンスフィールド、`(.. obj (step args...) name...)` は入れ子です。クラス名は
+ドット付きならそのまま、`:import` 経由、または `java.lang` で解決されます。文字列
+レシーバは対応するコア操作に答え（Lisp 文字列はホストオブジェクトではありません）、
+それ以外は直接 `java:call` に行きます。
+
+```clojure
+(println (.toUpperCase "hi"))    ; HI
+(println (Integer/parseInt "42")) ; 42
+```
+
+文字は文字として読まれます（`\a`、小文字の `newline`/`space`/`tab`/
+`return`/`backspace`/`formfeed` 名、`\uXXXX`、`\oNNN` -- それ以外は
+`Unsupported character` 拒否）。整数は基数付きで読まれます（`0xFF`、`2r101`、
+`8r17`、先行 `0` の8進数。形は数だが解析できないものは `Invalid
+number` 拒否）。`1M` は正確な比に低下します（`0.1M` は `1/10` であり、10進演算は
+正確なまま比として印字されます）。`long` を超える `2N` は bignum です。いずれも
+印なしで印字されます。
 
 ## REPL
 
@@ -110,8 +187,13 @@ clojure> (twice 21)
 オラクルの `()` とは異なります。範囲外の `nth` は投げる代わりにデフォルトを
 答えます。マップ/セットの seq 順はテーブルの走査順で未規定です。文字列は文字に
 seq され Common Lisp 記法で印字されます）。`doseq`/`dotimes`/`for` の内包と
-ループ、`defmulti`/`defmethod`、`atom`、遅延 seq、メタデータ、`var` は
-ありません。ボディ内の `def` はボディの実行時にグローバルを設定します。ボディ内の
+ループ、階層、プロトコル、`ex-info`、`set!`、正規表現リテラル、バッククォート、
+`var`、メタデータは
+ありません。catch 節は順に catch-all です（最初があらゆるコンディションを処理します）。
+マルチメソッドのディスパッチ値は `equal` テーブルのキーのように比較されます
+（ベクターは同一性）。atom は `(:C%ATOM #(value))` ラッパーで印字されます。
+`split`/`replace` はリテラル文字列にマッチし、パターンではありません。`indexOf` は
+見つからないとき `nil` ではなくオラクルと同じ `-1` を答えます。ボディ内の `def` はボディの実行時にグローバルを設定します。ボディ内の
 `defn` は文の位置でのみ動作します（複数アリティはトップレベルのみ）。`cond` は
 寛容な読みを保ちます。末尾の奇数アームはデフォルトであり、Clojure がシグナルする
 箇所です。コレクションリテラルをまたぐスレッディングの段階はシグナルします
