@@ -27,7 +27,10 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
 - A nav entry may own `subpages:` — rendered like catalog detail pages but absent from the
   sidebar; every descendant highlights its TOP-level ancestor's row (`DocGen.renderSubpages`'s
   `topDocPath`, threaded unchanged, versus `parent`/`backlink`, recomputed per level). A
-  subpage is not a catalog entry but CAN be a catalog's `index_page`.
+  subpage is not a catalog entry but CAN be a catalog's `index_page`. Every catalog
+  `index_page` is pinned to a `file:` page in the matching `doc/<lang>/nav.yaml` by
+  `CatalogIndexPageTest` in the root suite, so a stray entry fails on every push
+  without anyone having to build `docs-tool/`.
 
 ## Code-fence conventions (`DocExamplesTest`, docgen's `RunnableBlockTransformer`)
 - ` ```lisp ` = runnable, self-contained "Run" cell; must not throw. Annotate `; => value`
