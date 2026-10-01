@@ -708,6 +708,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void bareRequireAcceptsPrefixLists() {
+		// prefix lists wire each member under the prefix on the shared path:
+		// quoted ('(prefix ...), the oracle's spelling) and bare (the
+		// unquoted-vector leniency extended), :as/:refer/bare members, use and
+		// the ns clauses included; a non-symbol head is refused
+		assertThat(lowered("(require '(clojure [string :as s])) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require (clojure [string :as s])) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require '(clojure [string :refer [join]])) (join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require '(clojure string)) (clojure.string/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(use '(clojure [string :only [upper-case]])) (upper-case \"hi\")"))
+			.contains("STRING-UPCASE");
+		assertThat(lowered("(ns t (:require (clojure [string :as s]))) (s/join \",\" [\"a\"])"))
+			.contains("CONCATENATE");
+		assertThatThrownBy(() -> Clojure.read("(require '([clojure.string :as s]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("require takes library specs, not");
+	}
+
+	@Test
 	void interopLowersToTheJavaSurface() {
 		assertThat(lowered("(.toUpperCase \"hi\")")).contains("JAVA:CALL").contains("toUpperCase");
 		assertThat(lowered("(. \"hi\" toUpperCase)")).contains("JAVA:CALL");

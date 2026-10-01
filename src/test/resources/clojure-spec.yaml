@@ -2614,6 +2614,24 @@ cases:
       HI
       hi
       Hello
+  - name: bare-require-accepts-prefix-lists
+    # Prefix lists wire each member under the prefix on the shared requireSpecs
+    # path: '(prefix [sub :as alias]/[sub :refer [vars]]/bare) quoted (the
+    # oracle's spelling) or bare (the unquoted-vector leniency extended); use
+    # refers through the same path.
+    source: |
+      (require '(clojure [string :as ps :refer [join]]))
+      (println (ps/join "," ["a" "b"]))
+      (println (join "-" ["x" "y"]))
+      (require '(clojure string))
+      (println (clojure.string/upper-case "HI"))
+      (use '(clojure [string :only [capitalize]]))
+      (println (capitalize "hello"))
+    expected: |
+      a,b
+      x-y
+      HI
+      Hello
   - name: vec-coerces-every-collection-to-a-vector
     # vec is the vector-over-seq-view coercion: lists pass through member by
     # member, strings become character vectors, maps contribute one two-vector

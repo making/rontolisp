@@ -7391,29 +7391,44 @@ public final class ClojureLowering {
 				prefix = bare.name();
 				continue;
 			}
-			List<LispVal> parts = items(unwrapped);
-			if (parts == null || parts.isEmpty() || !isVectorDatum(unwrapped)) {
-				throw new LispReadException("require takes library specs, not " + spec.print());
-			}
-			if (parts.get(1) instanceof LispSymbol) {
-				requireOne(prefix, parts.subList(1, parts.size()), referAll, spec);
-			}
-			else {
-				// a prefix list: (prefix sub...) names prefix.sub... libraries
+			if (!isVectorDatum(unwrapped)) {
+				// a prefix list: (prefix member...) names prefix.member...
+				// libraries -- quoted ('(prefix ...), the oracle's bare-require
+				// spelling) or bare (the unquoted-vector leniency extended, shared
+				// with the ns clauses which quote implicitly). Each member (bare
+				// or quoted) is a symbol or a [...] vector resolved under the
+				// prefix through requireOne.
 				List<LispVal> prefixParts = items(unwrapped);
 				if (prefixParts == null || prefixParts.isEmpty()
-						|| !(prefixParts.get(0) instanceof LispSymbol prefixName)) {
+						|| !(prefixParts.get(0) instanceof LispSymbol prefixName)
+						|| prefixName.name().startsWith(":")) {
 					throw new LispReadException("require takes library specs, not " + spec.print());
+				}
+				if (prefixParts.size() < 2) {
+					// (prefix) names the prefix library itself, like a bare symbol.
+					requireOne(null, prefixParts, referAll, spec);
+					continue;
 				}
 				for (int i = 1; i < prefixParts.size(); i++) {
 					LispVal sub = unwrapQuote(prefixParts.get(i));
+					if (sub instanceof LispSymbol sym) {
+						requireOne(prefixName.name(), List.of(sym), referAll, spec);
+						continue;
+					}
 					List<LispVal> subParts = items(sub);
-					if (subParts == null || subParts.isEmpty() || !isVectorDatum(sub)) {
+					if (subParts == null || subParts.isEmpty() || !isVectorDatum(sub) || subParts.size() < 2
+							|| !(subParts.get(1) instanceof LispSymbol)) {
 						throw new LispReadException("require takes library specs, not " + spec.print());
 					}
 					requireOne(prefixName.name(), subParts.subList(1, subParts.size()), referAll, spec);
 				}
+				continue;
 			}
+			List<LispVal> parts = items(unwrapped);
+			if (parts == null || parts.size() < 2 || !(parts.get(1) instanceof LispSymbol)) {
+				throw new LispReadException("require takes library specs, not " + spec.print());
+			}
+			requireOne(prefix, parts.subList(1, parts.size()), referAll, spec);
 		}
 	}
 
