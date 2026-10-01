@@ -1534,6 +1534,46 @@ cases:
       was-kw
       dflt
       dflt
+  - name: indirect-named-class-dispatch-hits-the-nil-method
+    # A call to a named class-calling function nested inside an inline dispatch
+    # datum answers the nil method for nil: the call site inlines the recorded
+    # definition with the dispatch lowering, like the bare name and the oracle,
+    # while :nil (whose class is Keyword) still falls to the default, a direct
+    # call to the definition keeps answering :nil, and an explicit :nil out of
+    # a named dispatch keeps its keyword row. Oracle: clj 1.12.6.1673.
+    source: |
+      (defn b46class [x] (class x))
+      (defmulti b46w (fn [x] (b46class x)))
+      (defmethod b46w nil [_] "was-nil")
+      (defmethod b46w :default [x] "dflt")
+      (println (b46w nil))
+      (println (b46w :nil))
+      (println (b46class nil))
+      (def b46fn (fn [x] (class x)))
+      (defmulti b46v (fn [x] (b46fn x)))
+      (defmethod b46v nil [_] "was-nil")
+      (defmethod b46v :default [x] "dflt")
+      (println (b46v nil))
+      (println (b46v :nil))
+      (defn b46m [x] (if (= x :foo) :nil (class x)))
+      (defmulti b46u (fn [x] (b46m x)))
+      (defmethod b46u nil [_] "was-nil")
+      (defmethod b46u :nil [_] "was-kw")
+      (defmethod b46u :default [x] "dflt")
+      (println (b46u nil))
+      (println (b46u :foo))
+      (println (b46u :nil))
+      (println (b46u "a"))
+    expected: |
+      was-nil
+      dflt
+      :nil
+      was-nil
+      dflt
+      was-nil
+      was-kw
+      dflt
+      dflt
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
