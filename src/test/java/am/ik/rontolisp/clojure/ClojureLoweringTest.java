@@ -122,10 +122,40 @@ class ClojureLoweringTest {
 		// an anonymous fn wraps the split in labels only when a recur reaches it
 		assertThat(lowered("((fn [a & r] (recur a r)) 1)")).contains("LABELS").contains("%*");
 		assertThat(lowered("((fn [a & r] a) 1)")).doesNotContain("LABELS");
-		// a stored method lambda keeps the named refusal
-		assertThatThrownBy(() -> Clojure.read("(defmulti m :shape) (defmethod m :a [a & r] (recur a r))", null))
+		// a stored method lambda splits the same way (decided 2026-10-01, b36)
+		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] (recur a r))")).contains("LABELS")
+			.contains("%*")
+			.contains("&REST");
+		// an unused variadic method keeps its bare lambda (the defmulti prelude
+		// carries its own labels, so the pin names the stored shape, not their
+		// absence)
+		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] a)"))
+			.contains("(LAMBDA (|c%a| &REST |c%r|) |c%a|)")
+			.doesNotContain("%*");
+		// inline and extended protocol methods share the stored path
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord R [f] P (foo [t a & r] (recur t a r)))"))
+			.contains("LABELS")
+			.contains("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (extend-protocol P String (foo [t a & r] (recur t a r)))"))
+			.contains("LABELS")
+			.contains("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (defrecord E [] P (foo [t a & r] (recur t a r)))"))
+			.contains("LABELS")
+			.contains("%*");
+		assertThat(lowered("(defprotocol P (foo [t a & r])) (reify P (foo [t a & r] (recur t a r)))"))
+			.contains("LABELS")
+			.contains("%*");
+		// the stored path keeps the arity, tail-position and try checks
+		assertThatThrownBy(() -> Clojure.read("(defmulti m :shape) (defmethod m :a [a & r] (recur a))", null))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("recur to a variadic function is not supported yet");
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 2, got 1");
+		assertThatThrownBy(() -> Clojure.read("(defmulti m :shape) (defmethod m :a [a & r] (recur a r) a)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		assertThatThrownBy(() -> Clojure
+			.read("(defmulti m :shape) (defmethod m :a [a & r] (try (recur a r) (catch Exception e :c)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
 	}
 
 	@Test

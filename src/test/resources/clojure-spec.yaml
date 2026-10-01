@@ -158,6 +158,46 @@ cases:
       nil
       [1]
       nil
+  - name: recur-to-variadic-method-splits-a-worker
+    # Oracle clj 1.12.6.1673: a recur to a variadic defmethod body binds the
+    # rest parameter to the last recur argument itself, like every other
+    # variadic clause (b27): (b36-walk {:shape :go :v :start} [1]) is [1] and
+    # with nil is nil (a plain &rest self call would wrap the rest in a
+    # one-list and loop forever on the second probe). The stored lambda splits
+    # into a worker (the rest as an ordinary parameter, so recur assigns
+    # exactly) plus the &rest head for normal calls; inline and extended
+    # protocol methods share the stored path (the oracle refuses variadic
+    # protocol methods at definition -- No single method ... of interface --
+    # so those rows pin our lenient reading, green on all four backends by the
+    # same construction). The dispatch function takes the call's full argument
+    # list (the dispatcher applies it to every argument), so it spells its own
+    # &r; a keyword dispatch stays single-argument.
+    source: |
+      (defmulti b36-walk (fn [m & r] (:shape m)))
+      (defmethod b36-walk :go [m & r] (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
+      (println (b36-walk {:shape :go :v :start} [1]))
+      (println (b36-walk {:shape :go :v :start} nil))
+      (println (b36-walk {:shape :go :v :only}))
+      (defmethod b36-walk :pt [{[a b] :pt} & r] (if (empty? r) [a b] (recur {:pt (first r)} (rest r))))
+      (println (b36-walk {:shape :pt :pt [1 2]} [3 4]))
+      (println (b36-walk {:shape :pt :pt [1 2]} nil))
+      (defprotocol B36P (b36-step [t a & r]))
+      (defrecord B36R [f] B36P (b36-step [t a & r] (if (empty? r) [f a] (recur t (first r) (rest r)))))
+      (println (b36-step (B36R. "f") :start [1]))
+      (println (b36-step (B36R. "f") :start nil))
+      (extend-protocol B36P String (b36-step [t a & r] (if (empty? r) a (recur t (first r) (rest r)))))
+      (println (b36-step "s" :start [1]))
+      (println (b36-step "s" :start nil))
+    expected: |
+      [1]
+      nil
+      :only
+      [3 4]
+      [nil nil]
+      [f [1]]
+      [f nil]
+      [1]
+      nil
   - name: if-when-cond-do-and-or
     # Clojure rejects the odd trailing arm (cond requires an even number of forms);
     # here it is the default, per .kb/clojure-frontend.md.

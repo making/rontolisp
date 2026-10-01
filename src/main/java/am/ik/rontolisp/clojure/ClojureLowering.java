@@ -1363,14 +1363,19 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A used variadic target outside the split shapes (a stored method lambda): the
-	 * oracle binds the rest parameter to the last recur argument itself, which no
-	 * {@code &rest} self call spells, so it stays a named refusal.
+	 * A used variadic stored-method lambda splits like every other {@code fn} shape: the
+	 * worker takes the rest as an ordinary parameter (the {@code recur} call assigns
+	 * exactly) while the {@code &rest} head answers normal calls (wrapping, like the
+	 * oracle); an unused variadic keeps its single shape. The body is the clause's
+	 * wrapped body, or the fields-bound one for an inline record body.
 	 */
-	private LispReadException variadicRecurRefusal(RecurTarget target) {
-		LispReadException refusal = new LispReadException("recur to a variadic function is not supported yet");
-		LispVal use = target.firstUse;
-		return (use == null) ? refusal : positioned(refusal, use);
+	private LispVal splitMethodLambda(String fresh, String worker, Clause clause, LispVal bodyForm) {
+		List<LispVal> workerParams = new ArrayList<>(clause.params());
+		workerParams.remove(AMPERSAND_REST);
+		LispVal entry = new LispCons(new LispSymbol(worker),
+				new LispCons(list(workerParams), cons(bodyForm, List.of())));
+		LispVal head = list(sym("lambda"), list(clause.params()), workerCall(worker, clause));
+		return labelsWithHead(fresh, List.of(entry), head);
 	}
 
 	private List<LispVal> defuns(List<LispVal> items) {
@@ -9020,14 +9025,16 @@ public final class ClojureLowering {
 	 * One single-arity method lambda, {@code labels}-wrapped under a fresh name when a
 	 * {@code recur} reaches its body (like an anonymous {@code fn}): a stored method has
 	 * no callable name of its own, so without a {@code recur} it stays a bare lambda,
-	 * exactly as before.
+	 * exactly as before. A used variadic target splits into a worker plus its
+	 * {@code &rest} head, like every other {@code fn} shape (decided 2026-10-01, b36).
 	 */
 	private LispVal methodLambda(LispVal params, List<LispVal> bodyForms) {
 		String fresh = freshRecurName();
-		RecurTarget target = new RecurTarget(fresh, true);
+		String worker = workerName(fresh);
+		RecurTarget target = new RecurTarget(isVariadicParams(params) ? worker : fresh, true);
 		Clause clause = clause(params, bodyForms, target);
 		if (target.used() && clause.variadic()) {
-			throw variadicRecurRefusal(target);
+			return splitMethodLambda(fresh, worker, clause, clause.wrapped());
 		}
 		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
 		if (!target.used()) {
@@ -9457,12 +9464,13 @@ public final class ClojureLowering {
 			}
 			lambda = inScope(scope, () -> {
 				String fresh = freshRecurName();
-				RecurTarget target = new RecurTarget(fresh, true);
+				String worker = workerName(fresh);
+				RecurTarget target = new RecurTarget(isVariadicParams(impl.params()) ? worker : fresh, true);
 				Clause clause = clause(impl.params(), impl.body(), target);
 				LispVal inner = list(sym("lambda"), list(clause.params()), clause.wrapped());
 				if (fields.isEmpty()) {
 					if (target.used() && clause.variadic()) {
-						throw variadicRecurRefusal(target);
+						return splitMethodLambda(fresh, worker, clause, clause.wrapped());
 					}
 					return target.used() ? labelsSelfCall(fresh, inner) : inner;
 				}
@@ -9472,10 +9480,10 @@ public final class ClojureLowering {
 					binds.add(list(idSym(field),
 							list(sym("gethash"), keywordForm(field), typedTableOf(self), NIL_CONST)));
 				}
-				LispVal withFields = list(sym("lambda"), list(clause.params()),
-						list(sym("let*"), list(binds), clause.wrapped()));
+				LispVal fieldBody = list(sym("let*"), list(binds), clause.wrapped());
+				LispVal withFields = list(sym("lambda"), list(clause.params()), fieldBody);
 				if (target.used() && clause.variadic()) {
-					throw variadicRecurRefusal(target);
+					return splitMethodLambda(fresh, worker, clause, fieldBody);
 				}
 				return target.used() ? labelsSelfCall(fresh, withFields) : withFields;
 			});

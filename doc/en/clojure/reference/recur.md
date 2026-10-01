@@ -27,6 +27,10 @@ tail calls.
   (if (empty? r) a (recur (first r) (rest r))))
 (println (walk :start [1])) ; [1]
 (println (walk :start nil)) ; nil
+(defmulti walk-shape (fn [m & r] (:shape m)))
+(defmethod walk-shape :go [m & r]
+  (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
+(println (walk-shape {:shape :go :v :start} [1])) ; [1]
 (def calls (atom 0))
 (def draining (lazy-seq (swap! calls inc) (when (< @calls 3) (recur))))
 (println (first draining)) ; nil
