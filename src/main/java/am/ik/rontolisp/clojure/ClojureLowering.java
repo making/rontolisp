@@ -6774,7 +6774,11 @@ public final class ClojureLowering {
 		return list(sym("let*"), list(bindings), cons(sym("progn"), merges));
 	}
 
-	/** {@code merge-with} as a value: the function, then any number of maps. */
+	/**
+	 * {@code merge-with} as a value: the function, then any number of maps, grown map by
+	 * map through {@code f} like a call and rewrapped in the first non-nil rest map's
+	 * record when there is one. Of no maps, {@code nil}.
+	 */
 	private LispVal mergeWithValue() {
 		String name = mangle("merge-with-") + (this.counter++);
 		LispSymbol self = new LispSymbol(name);
@@ -6786,19 +6790,30 @@ public final class ClojureLowering {
 		LispSymbol key = freshTemp();
 		LispSymbol val = freshTemp();
 		LispSymbol old = freshTemp();
+		LispSymbol found = freshTemp();
+		LispSymbol probe = freshTemp();
+		// a record contributes its entries, like a map; anything opaque signals
+		// in the maphash, like the oracle (the mergeWithForm precedent)
+		LispVal head = list(sym("car"), left);
+		LispVal src = list(sym("if"), isRecordForm(head), typedTableOf(head), head);
 		LispVal join = list(sym("maphash"),
 				list(sym("lambda"), list(List.of(key, val)),
 						list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
 								list(sym("setf"), list(sym("gethash"), key, acc),
 										list(sym("if"), list(sym("eq"), old, miss), val,
 												callableApply(fn, cons(sym("list"), List.of(old, val))))))),
-				list(sym("car"), left));
-		LispVal go = list(sym("if"), list(sym("null"), left), acc, list(sym("progn"),
+				src);
+		LispVal answer = list(sym("if"), found, rewrapAnswer(found, acc), NIL_CONST);
+		LispVal go = list(sym("if"), list(sym("null"), left), answer, list(sym("progn"),
 				list(sym("if"), list(sym("car"), left), join, NIL_CONST), list(self, list(sym("cdr"), left))));
 		LispVal binding = new LispCons(self, new LispCons(list(List.of(left)), cons(go, List.of())));
+		// the first non-nil rest map's record, like mergeValue's found
+		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
+				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
 		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)),
-				list(sym("let*"), list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)))),
-						list(sym("labels"), list(List.of(binding)), list(self, maps))));
+				list(sym("let*"), list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)),
+						list(found, NIL_CONST))),
+						find, list(sym("labels"), list(List.of(binding)), list(self, maps))));
 	}
 
 	/**
