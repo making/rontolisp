@@ -616,3 +616,176 @@
         ((<= left 0) (reverse acc))
       (setq acc (cons (rontolisp::%clojure-call f nil) acc))
       (setq left (- left 1)))))
+
+;;;; Core convenience fns (b18): strict vector answers, names and randomness.
+;;
+;; mapv/filterv answer vectors (never lazy wrappers); mapcat concats the mapped
+;; seq views strictly (nil-safe, like concat); shuffle Fisher-Yates over a fresh
+;; vector (membership and count pin, never order); name/namespace read the
+;; (:C%KEYWORD spelling) wrapper and demangled symbol names, split at the first
+;; slash; rand/rand-int/rand-nth/shuffle draw from the program-owned generator
+;; behind the CL random primitive (never a host call per draw, .kb/random.md).
+
+(defun rontolisp::%clojure-realize-all (coll)
+  "The fully strict list view of COLL: steps through lazy wrappers one level at
+   a time, so mapv/filterv/mapcat/rand-nth answer strictly even over lazy
+   inputs (an infinite input hangs, like the oracle's)."
+  (let ((s (rontolisp::%clojure-seq coll)) (acc nil))
+    (do ()
+        ((null s) (reverse acc))
+      (setq acc (cons (car s) acc))
+      (setq s (rontolisp::%clojure-seq (cdr s))))))
+
+(defun rontolisp::%clojure-mapv (f colls)
+  "Map F over the COLLS list, answering a vector (of empty, the empty vector)."
+  (coerce (apply #'mapcar (lambda (&rest xs) (rontolisp::%clojure-call f xs))
+                 (mapcar #'rontolisp::%clojure-realize-all colls)) 'vector))
+
+(defun rontolisp::%clojure-filterv (pred coll)
+  "Filter COLL through PRED under Clojure truthiness, answering a vector."
+  (coerce (remove-if-not (lambda (x) (rontolisp::%clojure-filter-test pred x))
+                         (rontolisp::%clojure-realize-all coll)) 'vector))
+
+(defun rontolisp::%clojure-mapcat (f colls)
+  "Map F over the COLLS list and concat the mapped seq views, strictly
+   (nil-safe: a nil result contributes nothing, like concat)."
+  (apply #'append
+         (mapcar #'rontolisp::%clojure-realize-all
+                 (apply #'mapcar
+                        (lambda (&rest xs) (rontolisp::%clojure-call f xs))
+                        (mapcar #'rontolisp::%clojure-realize-all colls)))))
+
+(defun rontolisp::%clojure-shuffle (items)
+  "Fisher-Yates over the strict ITEMS list, answering a fresh vector (never the
+   input: coerce from a list always copies)."
+  (let ((w (coerce items 'vector)) (n (length items)))
+    (do ((i (- n 1) (- i 1)))
+        ((< i 1) w)
+      (let ((j (random (+ i 1))))
+        (let ((tmp (aref w i)))
+          (setf (aref w i) (aref w j))
+          (setf (aref w j) tmp))))))
+
+(defun rontolisp::%clojure-real-symbol-p (x)
+  "Whether X is a real symbol for name/namespace/keyword/symbol: symbolp minus
+   nil, T and the false object (the symbol? rule)."
+  (and (symbolp x) (not (null x)) (not (eq x t))
+       (not (eq x rontolisp::%clojure-false))))
+
+(defun rontolisp::%clojure-unescape-part (s)
+  "Undo the mangle over the string S: %c -> :, %% -> %, anything else literal
+   (the %clojure-write-demangled rule, as a value)."
+  (let ((out "") (i 0) (n (length s)))
+    (do ()
+        ((>= i n) out)
+      (let ((c (char s i)))
+        (if (and (char= c #\%) (< (+ i 1) n)
+                 (or (char= (char s (+ i 1)) #\%) (char= (char s (+ i 1)) #\c)))
+            (progn
+              (setq out
+                    (concatenate 'string out
+                     (string (if (char= (char s (+ i 1)) #\c) #\: #\%))))
+              (setq i (+ i 2)))
+            (progn
+              (setq out (concatenate 'string out (string c)))
+              (setq i (+ i 1))))))))
+
+(defun rontolisp::%clojure-escape-part (s)
+  "The mangle over the string S: % -> %%, : -> %c (slash passes through, so a
+   later split at the first slash sees the real separator)."
+  (let ((out "") (n (length s)))
+    (do ((i 0 (+ i 1)))
+        ((>= i n) out)
+      (let ((c (char s i)))
+        (cond ((char= c #\%) (setq out (concatenate 'string out "%%")))
+              ((char= c #\:) (setq out (concatenate 'string out "%c")))
+              (t (setq out (concatenate 'string out (string c)))))))))
+
+(defun rontolisp::%clojure-symbol-full-name (x)
+  "The Clojure spelling of the symbol X: the member name demangled (the c%
+   prefix stripped, escapes decoded), or the raw name when unprefixed (a
+   gensym keeps its own spelling)."
+  (let ((name (symbol-name x)))
+    (if (and (>= (length name) 2) (char= (char name 0) #\c)
+             (char= (char name 1) #\%))
+        (rontolisp::%clojure-unescape-part (subseq name 2))
+        name)))
+
+(defun rontolisp::%clojure-split-name (s)
+  "The part of the S spelling past the first slash (the whole S when none)."
+  (let ((at (search "/" s))) (if at (subseq s (+ at 1)) s)))
+
+(defun rontolisp::%clojure-split-namespace (s)
+  "The part of the S spelling before the first slash, or NIL when none."
+  (let ((at (search "/" s))) (if at (subseq s 0 at) nil)))
+
+(defun rontolisp::%clojure-name (x)
+  "The name of X: a string itself, a keyword's spelling past the slash, a
+   symbol's demangled name past the slash; anything else signals."
+  (cond ((stringp x) x)
+        ((rontolisp::%clojure-keyword-p x)
+         (rontolisp::%clojure-split-name (car (cdr x))))
+        ((rontolisp::%clojure-real-symbol-p x)
+         (rontolisp::%clojure-split-name
+          (rontolisp::%clojure-symbol-full-name x)))
+        (t (error "name needs a string, keyword or symbol"))))
+
+(defun rontolisp::%clojure-namespace (x)
+  "The namespace of X: a keyword's spelling before the slash, a symbol's
+   demangled name before the slash, NIL when absent; strings and anything else
+   signal, like the oracle."
+  (cond ((rontolisp::%clojure-keyword-p x)
+         (rontolisp::%clojure-split-namespace (car (cdr x))))
+        ((rontolisp::%clojure-real-symbol-p x)
+         (rontolisp::%clojure-split-namespace
+          (rontolisp::%clojure-symbol-full-name x)))
+        (t (error "namespace needs a keyword or symbol"))))
+
+(defun rontolisp::%clojure-keyword-1 (x)
+  "The keyword for X: itself for a keyword, the demangled spelling for a
+   symbol, the string itself for a string, NIL for anything else."
+  (cond ((rontolisp::%clojure-keyword-p x) x)
+        ((rontolisp::%clojure-real-symbol-p x)
+         (list :C%KEYWORD (rontolisp::%clojure-symbol-full-name x)))
+        ((stringp x) (list :C%KEYWORD x))
+        (t nil)))
+
+(defun rontolisp::%clojure-symbol-1 (x)
+  "The symbol for X: itself for a symbol, the spelled one for a keyword or a
+   string; anything else signals."
+  (cond ((rontolisp::%clojure-real-symbol-p x) x)
+        ((rontolisp::%clojure-keyword-p x)
+         (intern
+          (concatenate 'string "c%"
+                       (rontolisp::%clojure-escape-part (car (cdr x))))))
+        ((stringp x)
+         (intern
+          (concatenate 'string "c%" (rontolisp::%clojure-escape-part x))))
+        (t (error "symbol needs a string, keyword or symbol"))))
+
+(defun rontolisp::%clojure-keyword-2 (ns nm)
+  "The keyword for namespace NS and name NM (a NIL namespace drops, like the
+   oracle; a NIL name signals)."
+  (if (null ns)
+      (if (null nm)
+          (error "keyword needs a name")
+          (rontolisp::%clojure-keyword-1 nm))
+      (if (null nm)
+          (error "keyword needs a name")
+          (list :C%KEYWORD (concatenate 'string ns "/" nm)))))
+
+(defun rontolisp::%clojure-symbol-2 (ns nm)
+  "The symbol for namespace NS and name NM (a NIL namespace is the one-argument
+   shape; NIL spells \"null\", like the oracle's a/null)."
+  (if (null ns)
+      (rontolisp::%clojure-symbol-1 nm)
+      (intern
+       (concatenate 'string "c%" (rontolisp::%clojure-escape-part ns) "/"
+        (rontolisp::%clojure-escape-part (if (null nm) "null" nm))))))
+
+(defun rontolisp::%clojure-char (x)
+  "The character for X: itself for a character, the code point (truncated)
+   for a number; anything else signals."
+  (cond ((characterp x) x)
+        ((numberp x) (code-char (truncate x)))
+        (t (error "char needs a character or a number"))))

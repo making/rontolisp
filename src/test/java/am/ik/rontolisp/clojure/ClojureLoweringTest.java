@@ -846,6 +846,35 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void convenienceFnsLowerOverCoreAndHelpers() {
+		assertThat(lowered("(mapv inc [1 2 3])")).contains("RONTOLISP::%CLOJURE-MAPV");
+		assertThat(lowered("(filterv odd? [1])")).contains("RONTOLISP::%CLOJURE-FILTERV");
+		assertThat(lowered("(mapcat reverse [[1]])")).contains("RONTOLISP::%CLOJURE-MAPCAT");
+		assertThat(lowered("(ffirst [[1]])")).contains("CAR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(nfirst [[1]])")).contains("CDR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(boolean 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(char 97)")).contains("RONTOLISP::%CLOJURE-CHAR");
+		assertThat(lowered("(name :a/b)")).contains("RONTOLISP::%CLOJURE-NAME");
+		assertThat(lowered("(namespace :a/b)")).contains("RONTOLISP::%CLOJURE-NAMESPACE");
+		assertThat(lowered("(keyword \"a\" \"b\")")).contains("RONTOLISP::%CLOJURE-KEYWORD-2");
+		assertThat(lowered("(keyword \"a\")")).contains("RONTOLISP::%CLOJURE-KEYWORD-1");
+		assertThat(lowered("(symbol \"a\")")).contains("RONTOLISP::%CLOJURE-SYMBOL-1");
+		assertThat(lowered("(symbol \"a\" \"b\")")).contains("RONTOLISP::%CLOJURE-SYMBOL-2");
+		assertThat(lowered("(assert true)")).contains("ERROR");
+		assertThat(lowered("(rand 5)")).contains("RANDOM");
+		assertThat(lowered("(rand-int 5)")).contains("TRUNCATE").contains("RANDOM");
+		assertThat(lowered("(rand-nth [1])")).contains("RANDOM").contains("RONTOLISP::%CLOJURE-REALIZE-ALL");
+		assertThat(lowered("(shuffle [1])")).contains("RONTOLISP::%CLOJURE-SHUFFLE");
+		assertThat(lowered("(map mapv [inc] [[1]])")).contains("LAMBDA");
+		assertThat(lowered("(map rand-nth [[1]])")).contains("LAMBDA");
+		assertThat(lowered("(map vals [{:a 1}])")).contains("LAMBDA").contains("MAPHASH");
+		assertThatThrownBy(() -> Clojure.read("(mapcat reverse)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transducers are not supported yet: mapcat");
+		assertThatThrownBy(() -> Clojure.read("(mapv inc)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("mapv takes a function and collections");
+	}
+
+	@Test
 	void mapVerbsBuildFreshTables() {
 		assertThat(lowered("(update {:a 1} :a inc)")).contains("RONTOLISP::%CLOJURE-CALL").contains("HASH-TABLE");
 		assertThat(lowered("(update-in {:a 1} [:a] inc)")).contains("RONTOLISP::%CLOJURE-CALL");

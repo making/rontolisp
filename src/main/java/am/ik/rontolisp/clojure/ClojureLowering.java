@@ -15,6 +15,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
@@ -2664,7 +2665,7 @@ public final class ClojureLowering {
 				return classForm(lower(items.get(1)));
 			case "int", "long":
 				isTrue(n == 1, name + " takes one value");
-				return list(sym("truncate"), lower(items.get(1)));
+				return intForm(lower(items.get(1)));
 			case "unchecked-add":
 				isTrue(n == 2, "unchecked-add takes two numbers");
 				return list(sym("+"), lower(items.get(1)), lower(items.get(2)));
@@ -2722,6 +2723,61 @@ public final class ClojureLowering {
 				throw new LispReadException("promise is not supported yet: blocking rendezvous needs a design");
 			case "deliver":
 				throw new LispReadException("deliver is not supported yet: blocking rendezvous needs a design");
+			default:
+				return builtinConvenience(name, items, n);
+		}
+	}
+
+	/**
+	 * The b18 core convenience fns, sliced out of {@link #builtin}: that dispatcher had
+	 * crossed HotSpot's {@code HugeMethodLimit} (like the backend
+	 * {@code compileConsLocated} slices before it), so these names dispatch through one
+	 * more call -- null when the name is none of them, like {@code builtin} itself.
+	 */
+	private @Nullable LispVal builtinConvenience(String name, List<LispVal> items, int n) {
+		switch (name) {
+			case "mapv":
+				return mapvOf(items);
+			case "filterv":
+				isTrue(n == 2, "filterv takes a predicate and a collection");
+				return filtervForm(fnValue(items.get(1)), lower(items.get(2)));
+			case "mapcat":
+				return mapcatOf(items);
+			case "ffirst":
+				isTrue(n == 1, "ffirst takes one collection");
+				return ffirstForm(seqForm(lower(items.get(1))));
+			case "nfirst":
+				isTrue(n == 1, "nfirst takes one collection");
+				return nfirstForm(seqForm(lower(items.get(1))));
+			case "boolean":
+				isTrue(n == 1, "boolean takes one value");
+				return booleanForm(lower(items.get(1)));
+			case "char":
+				isTrue(n == 1, "char takes one value");
+				return charForm(lower(items.get(1)));
+			case "name":
+				isTrue(n == 1, "name takes one value");
+				return list(new LispSymbol("RONTOLISP::%CLOJURE-NAME"), lower(items.get(1)));
+			case "namespace":
+				isTrue(n == 1, "namespace takes one value");
+				return list(new LispSymbol("RONTOLISP::%CLOJURE-NAMESPACE"), lower(items.get(1)));
+			case "keyword":
+				return keywordOf(items);
+			case "symbol":
+				return symbolOf(items);
+			case "assert":
+				return assertOf(items);
+			case "rand":
+				return randOf(items);
+			case "rand-int":
+				isTrue(n == 1, "rand-int takes one bound");
+				return randIntForm(lower(items.get(1)));
+			case "rand-nth":
+				isTrue(n == 1, "rand-nth takes one collection");
+				return randNthForm(lower(items.get(1)));
+			case "shuffle":
+				isTrue(n == 1, "shuffle takes one collection");
+				return shuffleForm(lower(items.get(1)));
 			default:
 				return null;
 		}
@@ -2987,6 +3043,11 @@ public final class ClojureLowering {
 	 * list. The order is the table's walk order, unspecified like the oracle's.
 	 */
 	private LispVal tableKeysOf(List<LispVal> items, boolean keys) {
+		return tableKeysForm(lower(items.get(1)), keys);
+	}
+
+	/** {@code keys}/{@code vals} over an already-lowered map. */
+	private LispVal tableKeysForm(LispVal lowered, boolean keys) {
 		LispSymbol map = freshTemp();
 		LispSymbol acc = freshTemp();
 		LispSymbol key = freshTemp();
@@ -2997,8 +3058,20 @@ public final class ClojureLowering {
 				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), drop)),
 						list(sym("setq"), acc, list(sym("cons"), take, acc))),
 				list(sym("if"), isRecordForm(map), typedTableOf(map), map));
-		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
+		return list(sym("let"), list(List.of(list(map, lowered))),
 				list(sym("if"), map, list(sym("let"), list(List.of(list(acc, NIL_CONST))), collect, acc), NIL_CONST));
+	}
+
+	/** {@code keys} as a value: a one-argument lambda over the same accumulation. */
+	private LispVal keysValue() {
+		LispSymbol coll = new LispSymbol(mangle("keys-coll"));
+		return list(sym("lambda"), list(coll), tableKeysForm(coll, true));
+	}
+
+	/** {@code vals} as a value: a one-argument lambda over the same accumulation. */
+	private LispVal valsValue() {
+		LispSymbol coll = new LispSymbol(mangle("vals-coll"));
+		return list(sym("lambda"), list(coll), tableKeysForm(coll, false));
 	}
 
 	private LispVal mergeOf(List<LispVal> items) {
@@ -3379,6 +3452,21 @@ public final class ClojureLowering {
 			case "last" -> lastValue();
 			case "butlast" -> butlastValue();
 			case "second" -> secondValue();
+			case "mapv" -> mapvValue();
+			case "filterv" -> filtervValue();
+			case "mapcat" -> mapcatValue();
+			case "ffirst" -> ffirstValue();
+			case "nfirst" -> nfirstValue();
+			case "boolean" -> booleanValue();
+			case "char" -> charValue();
+			case "name" -> nameValue();
+			case "namespace" -> namespaceValue();
+			case "keyword" -> keywordValue();
+			case "symbol" -> symbolValue();
+			case "rand" -> randValue();
+			case "rand-int" -> randIntValue();
+			case "rand-nth" -> randNthValue();
+			case "shuffle" -> shuffleValue();
 			case "update" -> updateValue();
 			case "update-in" -> updateInValue();
 			case "assoc-in" -> assocInValue();
@@ -3387,6 +3475,8 @@ public final class ClojureLowering {
 			case "merge-with" -> mergeWithValue();
 			case "into" -> intoValue();
 			case "frequencies" -> frequenciesValue();
+			case "keys" -> keysValue();
+			case "vals" -> valsValue();
 			case "comp" -> compValue();
 			case "partial" -> partialValue();
 			case "complement" -> complementValue();
@@ -5428,6 +5518,324 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(coll), list(sym("cadr"), seqForm(coll)));
 	}
 
+	// b18 core convenience fns: strict vectors, head pairs, names, randomness
+
+	/**
+	 * {@code mapv} over an already-lowered function and collections (one or more): one
+	 * call to the spliced {@code rontolisp::%clojure-mapv}, which realizes every input
+	 * fully (lazy inputs answer strictly too) and coerces to a vector, like the oracle.
+	 */
+	private LispVal mapvOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 2, "mapv takes a function and collections");
+		return mapvForm(fnValue(items.get(1)), lowers(items, 2));
+	}
+
+	/** {@code mapv} over an already-lowered function and collections. */
+	private LispVal mapvForm(LispVal fun, List<LispVal> colls) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fun, cons(sym("list"), colls));
+	}
+
+	/** {@code mapv} as a value: over a function and one rest list of collections. */
+	private LispVal mapvValue() {
+		LispSymbol fn = new LispSymbol(mangle("mapv-fn"));
+		LispSymbol colls = new LispSymbol(mangle("mapv-colls"));
+		LispVal arity = list(sym("error"), LispString.literal("mapv takes a function and collections"));
+		LispVal call = list(new LispSymbol("RONTOLISP::%CLOJURE-MAPV"), fn, colls);
+		LispVal body = list(sym("if"), list(sym("null"), colls), arity, call);
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, colls)), body);
+	}
+
+	/**
+	 * {@code filterv} over an already-lowered predicate and collection: one call to the
+	 * spliced {@code rontolisp::%clojure-filterv}, the strict vector arm of
+	 * {@code filter}.
+	 */
+	private LispVal filtervForm(LispVal fun, LispVal coll) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-FILTERV"), fun, coll);
+	}
+
+	/** {@code filterv} as a value: the predicate over the collection. */
+	private LispVal filtervValue() {
+		LispSymbol pred = new LispSymbol(mangle("filterv-pred"));
+		LispSymbol coll = new LispSymbol(mangle("filterv-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), filtervForm(pred, coll));
+	}
+
+	/**
+	 * {@code mapcat} over an already-lowered function and collections (one or more): one
+	 * call to the spliced {@code rontolisp::%clojure-mapcat}, the strict concat-of-maps
+	 * over the seq views (nil-safe, like {@code concat}). A lone function is the oracle's
+	 * transducer shape, which stays refused.
+	 */
+	private LispVal mapcatOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "mapcat takes a function and collections");
+		if (n == 1) {
+			throw new LispReadException("transducers are not supported yet: mapcat");
+		}
+		return mapcatForm(fnValue(items.get(1)), lowers(items, 2));
+	}
+
+	/** {@code mapcat} over an already-lowered function and collections. */
+	private LispVal mapcatForm(LispVal fun, List<LispVal> colls) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fun, cons(sym("list"), colls));
+	}
+
+	/** {@code mapcat} as a value: over a function and one rest list of collections. */
+	private LispVal mapcatValue() {
+		LispSymbol fn = new LispSymbol(mangle("mapcat-fn"));
+		LispSymbol colls = new LispSymbol(mangle("mapcat-colls"));
+		LispVal arity = list(sym("error"), LispString.literal("mapcat takes a function and collections"));
+		LispVal call = list(new LispSymbol("RONTOLISP::%CLOJURE-MAPCAT"), fn, colls);
+		LispVal body = list(sym("if"), list(sym("null"), colls), arity, call);
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, colls)), body);
+	}
+
+	/**
+	 * {@code ffirst} over an already-lowered seq view: the head of the head, each level
+	 * through the view (so a vector head seqs before its own head is read).
+	 */
+	private LispVal ffirstForm(LispVal seq) {
+		return list(sym("car"), seqForm(list(sym("car"), seq)));
+	}
+
+	/** {@code ffirst} as a value: a one-argument lambda over the same heads. */
+	private LispVal ffirstValue() {
+		LispSymbol coll = new LispSymbol(mangle("ffirst-coll"));
+		return list(sym("lambda"), list(coll), ffirstForm(seqForm(coll)));
+	}
+
+	/**
+	 * {@code nfirst} over an already-lowered seq view: the tail of the head, each level
+	 * through the view (of empty, nil -- the {@code next} shape, not {@code rest}).
+	 */
+	private LispVal nfirstForm(LispVal seq) {
+		return list(sym("cdr"), seqForm(list(sym("car"), seq)));
+	}
+
+	/** {@code nfirst} as a value: a one-argument lambda over the same tail. */
+	private LispVal nfirstValue() {
+		LispSymbol coll = new LispSymbol(mangle("nfirst-coll"));
+		return list(sym("lambda"), list(coll), nfirstForm(seqForm(coll)));
+	}
+
+	/**
+	 * {@code boolean} over an already-lowered value: {@code T} for anything truthy (only
+	 * nil and the false object are falsey), the false object otherwise.
+	 */
+	private LispVal booleanForm(LispVal lowered) {
+		LispSymbol one = freshTemp();
+		return list(sym("let"), list(List.of(list(one, lowered))), booleanAnswer(list(sym("not"), isFalsey(one))));
+	}
+
+	/** {@code boolean} as a value: a one-argument lambda over the same test. */
+	private LispVal booleanValue() {
+		LispSymbol one = new LispSymbol(mangle("boolean-one"));
+		return list(sym("lambda"), list(one), booleanForm(one));
+	}
+
+	/**
+	 * {@code char} over an already-lowered value: one call to the spliced
+	 * {@code rontolisp::%clojure-char} (a character itself, a number through its
+	 * truncated code point, anything else a signal).
+	 */
+	private LispVal charForm(LispVal lowered) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-CHAR"), lowered);
+	}
+
+	/** {@code char} as a value: a one-argument lambda over the same conversion. */
+	private LispVal charValue() {
+		LispSymbol one = new LispSymbol(mangle("char-one"));
+		return list(sym("lambda"), list(one), charForm(one));
+	}
+
+	/**
+	 * {@code keyword} over one or two arguments: the spliced
+	 * {@code rontolisp::%clojure-keyword-1} (a keyword itself, a symbol's demangled
+	 * spelling, a string verbatim, nil for anything else) or
+	 * {@code rontolisp::%clojure-keyword-2} (the slash-joined spelling).
+	 */
+	private LispVal keywordOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "keyword takes a name, or a namespace and a name");
+		if (n == 1) {
+			return list(new LispSymbol("RONTOLISP::%CLOJURE-KEYWORD-1"), lower(items.get(1)));
+		}
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-KEYWORD-2"), lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/** {@code keyword} as a value: the one- and two-argument shapes over a rest list. */
+	private LispVal keywordValue() {
+		LispSymbol args = new LispSymbol(mangle("keyword-args"));
+		LispVal one = list(new LispSymbol("RONTOLISP::%CLOJURE-KEYWORD-1"), list(sym("car"), args));
+		LispVal two = list(new LispSymbol("RONTOLISP::%CLOJURE-KEYWORD-2"), list(sym("car"), args),
+				list(sym("car"), list(sym("cdr"), args)));
+		LispVal arity = list(sym("error"), LispString.literal("keyword takes a name, or a namespace and a name"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code symbol} over one or two arguments: the spliced
+	 * {@code rontolisp::%clojure-symbol-1} (itself for a symbol, the spelled one for a
+	 * keyword or a string, else a signal) or {@code rontolisp::%clojure-symbol-2} (a
+	 * mangled symbol over the slash-joined spelling, so it prints and compares whole).
+	 */
+	private LispVal symbolOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "symbol takes a name, or a namespace and a name");
+		if (n == 1) {
+			return list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-1"), lower(items.get(1)));
+		}
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-2"), lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/** {@code symbol} as a value: the one- and two-argument shapes over a rest list. */
+	private LispVal symbolValue() {
+		LispSymbol args = new LispSymbol(mangle("symbol-args"));
+		LispVal one = list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-1"), list(sym("car"), args));
+		LispVal two = list(new LispSymbol("RONTOLISP::%CLOJURE-SYMBOL-2"), list(sym("car"), args),
+				list(sym("car"), list(sym("cdr"), args)));
+		LispVal arity = list(sym("error"), LispString.literal("symbol takes a name, or a namespace and a name"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/** {@code name} as a value: a one-argument lambda over the spliced helper. */
+	private LispVal nameValue() {
+		LispSymbol one = new LispSymbol(mangle("name-one"));
+		return list(sym("lambda"), list(one), list(new LispSymbol("RONTOLISP::%CLOJURE-NAME"), one));
+	}
+
+	/** {@code namespace} as a value: a one-argument lambda over the spliced helper. */
+	private LispVal namespaceValue() {
+		LispSymbol one = new LispSymbol(mangle("namespace-one"));
+		return list(sym("lambda"), list(one), list(new LispSymbol("RONTOLISP::%CLOJURE-NAMESPACE"), one));
+	}
+
+	/**
+	 * {@code assert} over a test and an optional message: nil when the test is truthy
+	 * (nil and the false object are falsey), else a signal. The message evaluates only on
+	 * failure (it sits in the else branch), like the oracle's lazy message form.
+	 */
+	private LispVal assertOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "assert takes a test and an optional message");
+		LispVal test = lower(items.get(1));
+		LispVal failure;
+		if (n == 2) {
+			LispVal text = list(sym("concatenate"), quoted("string"), LispString.literal("Assert failed: "),
+					strOf(lower(items.get(2)), LispString.literal(""), NIL_CONST));
+			failure = list(sym("error"), text);
+		}
+		else {
+			failure = list(sym("error"), LispString.literal("Assert failed"));
+		}
+		return ifFalsey(test, NIL_CONST, failure);
+	}
+
+	/**
+	 * {@code rand} over zero or one arguments: the bare draw is {@code (random 1.0)} (a
+	 * double in [0,1)); with a bound it scales one draw (never a domain check -- a
+	 * negative bound answers a negative double, like the oracle's multiply).
+	 */
+	private LispVal randOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 0 || n == 1, "rand takes no bound, or one bound");
+		LispVal draw = list(sym("random"), new LispDouble(1.0));
+		if (n == 0) {
+			return draw;
+		}
+		return list(sym("*"), lower(items.get(1)), draw);
+	}
+
+	/** {@code rand} as a value: the zero- and one-argument shapes over a rest list. */
+	private LispVal randValue() {
+		LispSymbol args = new LispSymbol(mangle("rand-args"));
+		LispVal none = list(sym("random"), new LispDouble(1.0));
+		LispVal one = list(sym("*"), list(sym("car"), args), list(sym("random"), new LispDouble(1.0)));
+		LispVal arity = list(sym("error"), LispString.literal("rand takes no bound, or one bound"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), none),
+				list(list(sym("null"), list(sym("cdr"), args)), one), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code rand-int} over an already-lowered bound: the truncation of one scaled draw
+	 * (an int in [0,n) for a positive bound; 0 and negative bounds answer without a
+	 * domain check, like the oracle's int-of-rand).
+	 */
+	private LispVal randIntForm(LispVal bound) {
+		return list(sym("truncate"), list(sym("*"), bound, list(sym("random"), new LispDouble(1.0))));
+	}
+
+	/** {@code rand-int} as a value: a one-argument lambda over the same draw. */
+	private LispVal randIntValue() {
+		LispSymbol bound = new LispSymbol(mangle("rand-int-bound"));
+		return list(sym("lambda"), list(bound), randIntForm(bound));
+	}
+
+	/**
+	 * {@code rand-nth} over an already-lowered collection: the fully realized list
+	 * indexed by one scaled draw. Nil answers nil (the empty list with it, both being nil
+	 * -- the seq-view past-the-end rule our {@code nth} keeps); an empty vector, string
+	 * or seq signals (like the oracle's throw); maps and sets signal too (none are
+	 * indexed there).
+	 */
+	private LispVal randNthForm(LispVal lowered) {
+		LispSymbol whole = freshTemp();
+		LispSymbol realized = freshTemp();
+		LispVal index = list(sym("truncate"),
+				list(sym("*"), list(sym("length"), realized), list(sym("random"), new LispDouble(1.0))));
+		LispVal hit = list(sym("nth"), index, realized);
+		LispVal emptyErr = list(sym("error"), LispString.literal("rand-nth of an empty collection"));
+		LispVal refusal = list(sym("error"), LispString.literal("rand-nth needs a vector, string, list or seq"));
+		LispVal pick = list(sym("let"),
+				list(List.of(list(realized, list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), whole)))),
+				list(sym("if"), list(sym("null"), realized), emptyErr, hit));
+		LispVal seqable = list(sym("or"), list(sym("stringp"), whole), list(sym("vectorp"), whole),
+				list(sym("consp"), whole));
+		LispVal check = cons(sym("cond"),
+				List.of(list(list(sym("null"), whole), NIL_CONST),
+						list(list(sym("or"), isSetForm(whole), list(sym("hash-table-p"), whole)), refusal),
+						list(seqable, pick), list(TRUE_CONST, refusal)));
+		return list(sym("let"), list(List.of(list(whole, lowered))), check);
+	}
+
+	/** {@code rand-nth} as a value: a one-argument lambda over the same draw. */
+	private LispVal randNthValue() {
+		LispSymbol coll = new LispSymbol(mangle("rand-nth-coll"));
+		return list(sym("lambda"), list(coll), randNthForm(coll));
+	}
+
+	/**
+	 * {@code shuffle} over an already-lowered collection: the realized members through
+	 * the spliced Fisher-Yates, answering a fresh vector. Nil, strings and maps signal
+	 * (none shuffle on the oracle either); sets shuffle through their member list.
+	 */
+	private LispVal shuffleForm(LispVal lowered) {
+		LispSymbol whole = freshTemp();
+		LispVal items = list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), whole);
+		LispVal shuffled = list(new LispSymbol("RONTOLISP::%CLOJURE-SHUFFLE"), items);
+		LispVal refusal = list(sym("error"), LispString.literal("shuffle needs a vector, list or set"));
+		LispVal check = cons(sym("cond"),
+				List.of(list(list(sym("null"), whole), refusal), list(list(sym("stringp"), whole), refusal),
+						list(list(sym("hash-table-p"), whole), refusal), list(isRecordForm(whole), refusal),
+						list(TRUE_CONST, shuffled)));
+		return list(sym("let"), list(List.of(list(whole, lowered))), check);
+	}
+
+	/** {@code shuffle} as a value: a one-argument lambda over the same permutation. */
+	private LispVal shuffleValue() {
+		LispSymbol coll = new LispSymbol(mangle("shuffle-coll"));
+		return list(sym("lambda"), list(coll), shuffleForm(coll));
+	}
+
 	// b15 map verbs: copy-on-write over fresh tables, like assoc/merge
 
 	/**
@@ -6111,10 +6519,21 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(one), classForm(one));
 	}
 
+	/**
+	 * {@code int}/{@code long} over an already-lowered value: a character reads back
+	 * through {@code char-code} (round-tripping {@code char}), anything else truncates,
+	 * like the oracle.
+	 */
+	private LispVal intForm(LispVal lowered) {
+		LispSymbol one = freshTemp();
+		return list(sym("let"), list(List.of(list(one, lowered))),
+				list(sym("if"), list(sym("characterp"), one), list(sym("char-code"), one), list(sym("truncate"), one)));
+	}
+
 	/** {@code int}/{@code long} as a value: truncation, like the call. */
 	private LispVal intValue() {
 		LispSymbol one = new LispSymbol(mangle("int-one"));
-		return list(sym("lambda"), list(one), list(sym("truncate"), one));
+		return list(sym("lambda"), list(one), intForm(one));
 	}
 
 	/** {@code unchecked-add} as a value: addition without the overflow check. */

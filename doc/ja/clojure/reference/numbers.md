@@ -40,4 +40,8 @@
 | `class` | `(class "a")` | `:string` |
 | `int` | `(int 2.7)` | `2` |
 | `long` | `(long -2.7)` | `-2` |
+| `boolean` | `(boolean 1)` | `true` |
+| `char` | `(char 97)` | `a` |
+| `rand` | `(rand 5)` | a double in `[0,5)` |
+| `rand-int` | `(rand-int 1)` | `0` |
 | `unchecked-add` | `(unchecked-add 3 4)` | `7` |

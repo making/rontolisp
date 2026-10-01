@@ -19,6 +19,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [プロトコル、レコード、型](reference/protocols.md) | `defprotocol`・`defrecord`・`deftype`、`reify`、`extend` 系と `satisfies?` |
 | [エラー](reference/errors.md) | `try`/`catch`/`finally`、`throw`、`ex-info` とその参照 |
 | [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
+| [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
 | [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`clojure.java.io/reader` と `format` |

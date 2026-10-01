@@ -9,3 +9,4 @@ try は unwind-protect の中の handler-case です。catch 節はすべて cat
 | `ex-info` | `(ex-message (ex-info "boom" {}))` | `boom` |
 | `ex-data` | `(ex-data (ex-info "boom" {:code 42}))` | `{:code 42}` |
 | `ex-message` | `(ex-message (ex-info "boom" {}))` | `boom` |
+| `assert` | `(assert (= 1 1))` | `nil` |

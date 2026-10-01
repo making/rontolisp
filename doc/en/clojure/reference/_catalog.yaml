@@ -55,6 +55,9 @@ categories:
       - { slug: empty-p, name: "empty?" }
       - { slug: map, name: "map" }
       - { slug: filter, name: "filter" }
+      - { slug: mapv, name: "mapv" }
+      - { slug: filterv, name: "filterv" }
+      - { slug: mapcat, name: "mapcat" }
       - { slug: reduce, name: "reduce" }
       - { slug: apply, name: "apply" }
       - { slug: concat, name: "concat" }
@@ -68,6 +71,8 @@ categories:
       - { slug: repeatedly, name: "repeatedly" }
       - { slug: range, name: "range" }
       - { slug: nth, name: "nth" }
+      - { slug: rand-nth, name: "rand-nth" }
+      - { slug: shuffle, name: "shuffle" }
       - { slug: keep, name: "keep" }
       - { slug: keep-indexed, name: "keep-indexed" }
       - { slug: map-indexed, name: "map-indexed" }
@@ -87,6 +92,8 @@ categories:
       - { slug: last, name: "last" }
       - { slug: butlast, name: "butlast" }
       - { slug: second, name: "second" }
+      - { slug: ffirst, name: "ffirst" }
+      - { slug: nfirst, name: "nfirst" }
   - title: "Iteration"
     index_page: clojure/reference/iteration.md
     functions:
@@ -162,6 +169,10 @@ categories:
       - { slug: class, name: "class" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }
+      - { slug: boolean, name: "boolean" }
+      - { slug: char, name: "char" }
+      - { slug: rand, name: "rand" }
+      - { slug: rand-int, name: "rand-int" }
       - { slug: unchecked-add, name: "unchecked-add" }
   - title: "State"
     index_page: clojure/reference/state.md
@@ -219,6 +230,7 @@ categories:
       - { slug: ex-info, name: "ex-info" }
       - { slug: ex-data, name: "ex-data" }
       - { slug: ex-message, name: "ex-message" }
+      - { slug: assert, name: "assert" }
   - title: "Namespaces"
     index_page: clojure/reference/namespaces.md
     functions:
@@ -227,6 +239,13 @@ categories:
       - { slug: use, name: "use" }
       - { slug: import, name: "import" }
       - { slug: in-ns, name: "in-ns" }
+  - title: "Names and keywords"
+    index_page: clojure/reference/names.md
+    functions:
+      - { slug: name, name: "name" }
+      - { slug: namespace, name: "namespace" }
+      - { slug: keyword, name: "keyword" }
+      - { slug: symbol, name: "symbol" }
   - title: "(clojure.string)"
     index_page: clojure/reference/string.md
     functions:

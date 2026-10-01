@@ -2123,3 +2123,310 @@ cases:
       #<procedure>
       nil
       nil
+  - name: mapv-answers-vectors
+    # mapv maps over one or more collections and answers a vector (never a lazy
+    # wrapper, even over lazy inputs); class pins the vector answer. The hangman
+    # letters shape (mapv char over a range) counts 26 from a to z.
+    source: |
+      (println (mapv inc [1 2 3]))
+      (println (mapv + [1 2 3] [10 20]))
+      (println (mapv inc []))
+      (println (mapv inc nil))
+      (println (class (mapv inc [1])))
+      (println (mapv char (range 97 101)))
+      (let [b18-letters (mapv char (range 97 123))] (println (count b18-letters) (first b18-letters) (last b18-letters)))
+      (println (mapv inc (concat (lazy-seq [1 2]) [3])))
+      (println (map mapv [inc] [[1 2]]))
+    expected: |
+      [2 3 4]
+      [11 22]
+      []
+      []
+      :vector
+      [a b c d]
+      26 a z
+      [2 3 4]
+      ([2 3])
+  - name: filterv-answers-vectors
+    # filterv is the strict vector arm of filter: Clojure truthiness (false drops
+    # like nil), sets work as predicates through the dispatcher, empty answers [].
+    source: |
+      (println (filterv odd? [1 2 3 4]))
+      (println (filterv odd? []))
+      (println (filterv odd? nil))
+      (println (class (filterv odd? [1])))
+      (println (filterv #{:h} [:h :t :h]))
+      (println (filterv odd? (concat (lazy-seq [1 2 3]) [4])))
+      (println (map filterv [odd?] [[1 2 3]]))
+    expected: |
+      [1 3]
+      []
+      []
+      :vector
+      [:h :h]
+      [1 3]
+      ([1 3])
+  - name: mapcat-concats-mapped-views
+    # mapcat concats the mapped seq views strictly (nil-safe like concat); the
+    # eager.clj shape maps vals over single-entry maps in order.
+    source: |
+      (println (mapcat reverse [[1 2] [3 4]]))
+      (println (mapcat identity [nil [1] nil]))
+      (println (mapcat reverse []))
+      (println (mapcat reverse nil))
+      (println (mapcat vector [1 2] [3 4]))
+      (println (mapcat vals [{:a 1} {:b 2}]))
+      (println (map vals [{:a 1} {:b 2}]))
+      (println (mapcat vector (concat (lazy-seq [1]) [2])))
+      (println (map mapcat [vector] [[[1 2]]]))
+    expected: |
+      (2 1 4 3)
+      (1)
+      nil
+      nil
+      (1 3 2 4)
+      (1 2)
+      ((1) (2))
+      (1 2)
+      (([1 2]))
+  - name: ffirst-and-nfirst-read-heads
+    # ffirst is the head of the head, nfirst the tail of the head, each level
+    # through the seq view (a vector head seqs before its own head is read); of
+    # empty, nil.
+    source: |
+      (println (ffirst [[1 2]]))
+      (println (ffirst [[1 2] [3 4]]))
+      (println (ffirst []) (ffirst nil))
+      (println (nfirst [[1 2 3]]))
+      (println (nfirst [[1]]))
+      (println (nfirst []) (nfirst nil))
+      (println (map ffirst [[[1 2]] [[3]]]))
+      (println (map nfirst [[[1 2 3]] [[4 5]]]))
+    expected: |
+      1
+      1
+      nil nil
+      (2 3)
+      nil
+      nil nil
+      (1 3)
+      ((2 3) (5))
+  - name: boolean-answers-truthiness
+    # boolean is true for anything truthy (only nil and false are falsey,
+    # including 0, empty strings and empty collections).
+    source: |
+      (println (boolean 1))
+      (println (boolean nil) (boolean false))
+      (println (boolean 0) (boolean "") (boolean []) (boolean {}))
+      (println (map boolean [1 nil false 0 ""]))
+    expected: |
+      true
+      false false
+      true true true true
+      (true false false true true)
+  - name: char-converts-code-points
+    # char answers the character itself, or the truncated code point of a number;
+    # int reads it back (int exists).
+    source: |
+      (println (char 97))
+      (println (char \a))
+      (println (= (char 97) \a))
+      (println (int (char 97)))
+      (println (int \a) (long \a))
+      (println (map char [97 98]))
+      (println (char 97.5))
+      (println (try (char "a") (catch Exception e :refused)))
+    expected: |
+      a
+      a
+      true
+      97
+      97 97
+      (a b)
+      a
+      :refused
+  - name: name-reads-past-the-slash
+    # name answers a string itself, and a keyword's or symbol's spelling past the
+    # first slash (the whole spelling when none); anything else signals.
+    source: |
+      (println (name :foo/bar))
+      (println (name :foo))
+      (println (name "hello"))
+      (println (name "a/b"))
+      (println (name 'foo/bar))
+      (println (name 'foo))
+      (println (map name [:a/b :c "s"]))
+      (println (try (name 1) (catch Exception e :refused)))
+    expected: |
+      bar
+      foo
+      hello
+      a/b
+      bar
+      foo
+      (b c s)
+      :refused
+  - name: namespace-reads-before-the-slash
+    # namespace answers the spelling before the first slash, nil when absent;
+    # strings and anything else signal, like the oracle.
+    source: |
+      (println (namespace :foo/bar))
+      (println (namespace :foo))
+      (println (namespace 'a/b))
+      (println (namespace 'a))
+      (println (map namespace [:a/b :c]))
+      (println (try (namespace "a/b") (catch Exception e :refused)))
+    expected: |
+      foo
+      nil
+      a
+      nil
+      (a nil)
+      :refused
+  - name: keyword-builds-colon-spellings
+    # keyword is itself for a keyword, the demangled spelling for a symbol, the
+    # string verbatim otherwise (a/b stays whole); two args join with a slash; a
+    # nil namespace drops; anything else is nil.
+    source: |
+      (println (keyword "b"))
+      (println (keyword :a))
+      (println (keyword 'a))
+      (println (keyword "a" "b"))
+      (println (keyword "a/b"))
+      (println (keyword 'a/b))
+      (println (keyword 1))
+      (println (keyword nil))
+      (println (keyword nil "b"))
+      (println (map keyword ["x" "y"]))
+      (println (apply keyword ["a" "b"]))
+      (println (= (keyword "a" "b") :a/b))
+    expected: |
+      :b
+      :a
+      :a
+      :a/b
+      :a/b
+      :a/b
+      nil
+      nil
+      :b
+      (:x :y)
+      :a/b
+      true
+  - name: symbol-builds-mangled-names
+    # symbol answers itself for a symbol and the spelled symbol (mangled behind
+    # the prefix, so it prints and compares whole) for a keyword or a string; a
+    # nil namespace is the one-argument shape; anything else signals.
+    source: |
+      (println (symbol "b"))
+      (println (symbol 'a))
+      (println (symbol :a/b))
+      (println (symbol "a" "b"))
+      (println (symbol nil "b"))
+      (println (= (symbol "a") 'a))
+      (println (name (symbol "a" "b")))
+      (println (namespace (symbol "a" "b")))
+      (println (map symbol ["x" "y"]))
+      (println (apply symbol ["a" "b"]))
+      (println (try (symbol 1) (catch Exception e :refused)))
+    expected: |
+      b
+      a
+      a/b
+      a/b
+      b
+      true
+      b
+      a
+      (x y)
+      a/b
+      :refused
+  - name: assert-answers-nil-and-throws-lazily
+    # assert answers nil when the test is truthy and signals otherwise; the
+    # message form sits in the else branch, so it never evaluates on success.
+    source: |
+      (println (assert (= 1 1)))
+      (println (assert (= 1 1) "msg"))
+      (let [b18-evaluated (atom false)] (assert true (do (reset! b18-evaluated true) "x")) (println @b18-evaluated))
+      (println (try (assert (= 1 2)) (catch Exception e :failed)))
+      (println (try (assert (= 1 2) "oops") (catch Exception e (ex-message e))))
+      (println (try (assert false (str "m" "sg")) (catch Exception e :failed-with-msg)))
+    expected: |
+      nil
+      nil
+      false
+      :failed
+      Assert failed: oops
+      :failed-with-msg
+  - name: rand-draws-scaled-doubles
+    # rand answers a double in [0,1) bare, one scaled draw with a bound (never a
+    # domain check: a negative bound answers a negative double, like the oracle's
+    # multiply); only predicates pin, never values.
+    source: |
+      (println (let [b18-r (rand)] (and (<= 0.0 b18-r) (< b18-r 1.0))))
+      (println (let [b18-r (rand 5)] (and (<= 0.0 b18-r) (< b18-r 5))))
+      (println (let [b18-r (rand -5)] (and (< -5.0 b18-r) (<= b18-r 0.0))))
+      (println (let [b18-r ((fn [b18-f] (b18-f)) rand)] (and (<= 0.0 b18-r) (< b18-r 1.0))))
+      (println (every? (fn [b18-r] (and (<= 0.0 b18-r) (< b18-r 5))) (map rand [5 5 5])))
+    expected: |
+      true
+      true
+      true
+      true
+      true
+  - name: rand-int-draws-below-the-bound
+    # rand-int truncates one scaled draw (an int in [0,n) for a positive bound; 0
+    # and negative bounds answer without a domain check, like the oracle's
+    # int-of-rand); shapes pin, values never do, except the forced zeros.
+    source: |
+      (println (contains? #{0 1 2 3 4} (rand-int 5)))
+      (println (rand-int 1))
+      (println (rand-int 0))
+      (println (let [b18-r (rand-int -5)] (and (< -5 b18-r) (<= b18-r 0))))
+      (println (map rand-int [1 1]))
+    expected: |
+      true
+      0
+      0
+      true
+      (0 0)
+  - name: rand-nth-draws-a-member
+    # rand-nth indexes the realized list by one scaled draw: nil (and the empty
+    # list, by the seq-view past-the-end rule our nth keeps) answers nil; an
+    # empty vector signals, like the oracle's throw; maps and sets signal too
+    # (none are indexed there). The hangman players shape pins membership.
+    source: |
+      (println (contains? #{:a :b} (rand-nth [:a :b])))
+      (println (rand-nth [:only]))
+      (println (rand-nth nil))
+      (println (try (rand-nth []) (catch Exception e :signalled)))
+      (println (try (rand-nth '()) (catch Exception e :signalled)))
+      (println ((fn [b18-f] (contains? #{1 2} (b18-f [1 2]))) rand-nth))
+      (println (try (rand-nth #{:a}) (catch Exception e :signalled)))
+    expected: |
+      true
+      :only
+      nil
+      :signalled
+      nil
+      true
+      :signalled
+  - name: shuffle-draws-permutations
+    # shuffle Fisher-Yates over a fresh vector (membership and count pin, never
+    # order); nil, strings and maps signal, like the oracle.
+    source: |
+      (println (let [b18-s (shuffle [1 2 3])] [(= (set b18-s) #{1 2 3}) (= (count b18-s) 3) (vector? b18-s)]))
+      (println (shuffle []))
+      (println (shuffle [1]))
+      (println (let [b18-s ((fn [b18-f] (b18-f [1 2])) shuffle)] [(= (set b18-s) #{1 2}) (vector? b18-s)]))
+      (println (try (shuffle nil) (catch Exception e :refused)))
+      (println (try (shuffle "ab") (catch Exception e :refused)))
+      (println (try (shuffle {:a 1}) (catch Exception e :refused)))
+    expected: |
+      [true true true]
+      []
+      [1]
+      [true true]
+      :refused
+      :refused
+      :refused

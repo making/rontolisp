@@ -18,9 +18,12 @@ realizes one element at a time through the same view. The empty result of every 
 | `empty?` | `(empty? "")` | `true` |
 | `map` | `(map inc [1 2 3])` | `(2 3 4)` |
 | `filter` | `(filter odd? [1 2 3 4])` | `(1 3)` |
+| `mapv` | `(mapv inc [1 2 3])` | `[2 3 4]` |
+| `filterv` | `(filterv odd? [1 2 3 4])` | `[1 3]` |
 | `reduce` | `(reduce + 0 [1 2 3])` | `6` |
 | `apply` | `(apply max 1 [2 3])` | `3` |
 | `concat` | `(concat [1] '(2) #{3})` | `(1 2 3)` |
+| `mapcat` | `(mapcat reverse [[1 2] [3 4]])` | `(2 1 4 3)` |
 | `take` | `(take 2 [1 2 3])` | `(1 2)` |
 | `drop` | `(drop 2 [1 2 3])` | `(3)` |
 | `lazy-seq` | `(take 2 (lazy-seq (cons 1 nil)))` | `(1)` |
@@ -31,6 +34,8 @@ realizes one element at a time through the same view. The empty result of every 
 | `repeatedly` | `(take 2 (repeatedly (fn [] 7)))` | `(7 7)` |
 | `range` | `(range 0 6 2)` | `(0 2 4)` |
 | `nth` | `(nth [1 2 3] 5 :none)` | `:none` |
+| `rand-nth` | `(rand-nth [:a])` | `:a` |
+| `shuffle` | `(shuffle [])` | `[]` |
 | `keep` | `(keep inc [1 2 3])` | `(2 3 4)` |
 | `keep-indexed` | `(keep-indexed (fn [i x] (when (odd? x) i)) [10 11 12])` | `(1)` |
 | `map-indexed` | `(map-indexed vector [:a :b])` | `([0 :a] [1 :b])` |
@@ -50,3 +55,5 @@ realizes one element at a time through the same view. The empty result of every 
 | `last` | `(last [1 2 3])` | `3` |
 | `butlast` | `(butlast [1 2 3])` | `(1 2)` |
 | `second` | `(second [1 2 3])` | `2` |
+| `ffirst` | `(ffirst [[1 2]])` | `1` |
+| `nfirst` | `(nfirst [[1 2 3]])` | `(2 3)` |

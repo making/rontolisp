@@ -20,6 +20,7 @@ has them.
 | [Protocols, records and types](reference/protocols.md) | `defprotocol`/`defrecord`/`deftype`, `reify`, the `extend` family and `satisfies?` |
 | [Errors](reference/errors.md) | `try`/`catch`/`finally`, `throw`, `ex-info` and its readers |
 | [Namespaces](reference/namespaces.md) | `ns` and the top-level `require`/`use`/`import` |
+| [Names and keywords](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
