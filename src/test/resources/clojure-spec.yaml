@@ -2566,3 +2566,25 @@ cases:
       :refused
       :refused
       :refused
+  - name: bare-require-accepts-quoted-libspecs
+    # Bare require/use spell their libspecs quoted (the oracle's spelling):
+    # (quote [ns :as alias :refer [vars]]) and 'spec both wire like the ns
+    # clause does -- the life_without_multi.clj/sequences.clj shape. An unquoted
+    # vector stays accepted too (a lenient superset: the oracle rejects it with
+    # a ClassNotFoundException). use refers the names the same way.
+    source: |
+      (require '[clojure.string :as qs :refer [join]])
+      (println (qs/join "," ["a" "b"]))
+      (println (join "-" ["x" "y"]))
+      (require (quote [clojure.string :as qs2]))
+      (println (qs2/upper-case "hi"))
+      (require '[clojure.string])
+      (println (clojure.string/lower-case "HI"))
+      (use '[clojure.string :only [capitalize]])
+      (println (capitalize "hello"))
+    expected: |
+      a,b
+      x-y
+      HI
+      hi
+      Hello

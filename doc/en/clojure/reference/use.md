@@ -1,13 +1,14 @@
 # use
 
-`(use clause)`
+`(use 'clause ...)`
 
-Loads a namespace and refers the names the clause lists, answering `nil` --
+Loads namespaces and refers the names each quoted clause lists, answering `nil` --
 `(:only [...])` narrows them, the same refer wiring `ns` does. `clojure.string`
 and `clojure.java.io` (`reader` only) resolve;
 an unknown namespace is an error.
+An unquoted vector spec is accepted too, though real Clojure rejects it.
 
 ```clojure
-(use [clojure.string :only [upper-case]])
+(use '[clojure.string :only [upper-case]])
 (println (upper-case "hi")) ; HI
 ```

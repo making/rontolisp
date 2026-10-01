@@ -1,12 +1,13 @@
 # require
 
-`(require clause)`
+`(require 'clause ...)`
 
-Loads a namespace and wires the clause's `:as` alias and `:refer`ed names, answering `nil` --
-the same wiring `ns` does, spelled at top level with the vector clause form. `clojure.string`
+Loads namespaces and wires each clause's `:as` alias and `:refer`ed names, answering `nil` --
+the same wiring `ns` does, spelled at top level with quoted libspecs. `clojure.string`
 and `clojure.java.io` (`reader` only) resolve; an unknown namespace is an error.
+An unquoted vector spec is accepted too, though real Clojure rejects it.
 
 ```clojure
-(require [clojure.string :as s])
+(require '[clojure.string :as s])
 (println (s/join "," ["a"])) ; a
 ```

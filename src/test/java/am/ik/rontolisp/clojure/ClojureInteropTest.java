@@ -186,6 +186,27 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void quotedRequiresWireTheBookShapes() throws Exception {
+		// life_without_multi.clj's my-print-vector and sequences.clj's non-blank?
+		// spell their libspecs quoted (the oracle's bare-require spelling, b24): a
+		// quoted :as over .write/str-join, and quoted :refer of reader/blank? over
+		// with-open/line-seq and the vendored fixture. Interpreter and JVM only
+		// (files), like the pins above.
+		java.nio.file.Path fixture = workDir.resolve("b24-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+			assertThat(in).isNotNull();
+			java.nio.file.Files.copy(in, fixture);
+		}
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual("(require '[clojure.string :as b24str])" + "(defn b24-my-print-vector [ob] (.write *out* \"[\")"
+				+ " (.write *out* (b24str/join \" \" ob)) (.write *out* \"]\"))"
+				+ "(b24-my-print-vector [\"a\" \"b\"])", "[a b]");
+		assertBothEqual("(require '[clojure.java.io :refer [reader]])" + "(require '[clojure.string :refer [blank?]])"
+				+ "(defn b24-non-blank? [line] (not (blank? line)))" + "(with-open [r (reader " + path + ")]"
+				+ " (println (count (filter b24-non-blank? (line-seq r)))))", "6\n");
+	}
+
+	@Test
 	void keepAndUpdateSignalInsteadOfSkipping() {
 		// (keep inc [1 nil 2]) throws on the oracle (nil is not a number): the
 		// signal is pinned here, not a silent skip. Same for a missing update key.
