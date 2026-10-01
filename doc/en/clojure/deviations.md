@@ -39,9 +39,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   dispatch through a hierarchy prefers the strictly most specific method, then
   `prefer-method` choices. A `defmethod` over a host class stores under the keyword
   `class` answers for it, merging every numeric spelling into `:number` (where the
-  oracle tells `Long` from `Double`); a nil dispatch value normalizes to the `:nil`
-  keyword, so no table ever keys on nil (a dispatch value that literally is `:nil`
-  answers it too, where the oracle tells them apart);
+  oracle tells `Long` from `Double`); a true nil maps onto the `(:C%NIL)` marker,
+  so no table ever keys on nil, while a dispatch value that literally is `:nil`
+  keeps its keyword row, like the oracle (a bare `class` dispatch answers that
+  keyword only for a nil argument, so it maps onto the marker too; a `class` call
+  wrapped in another function keeps the keyword and still misses the nil method);
   an `Object` method catches past the search but ahead of the default.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the

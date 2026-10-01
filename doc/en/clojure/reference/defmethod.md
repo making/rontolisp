@@ -12,8 +12,9 @@ Dispatch values compare like `equal` table keys -- vectors by identity, so a vec
 value reaches its method through the hierarchy search, element by element. A dispatch value
 may name a host class (`String`, `Number`, `java.util.Map`,
 `clojure.lang.IPersistentVector`, ...) and stores under the keyword `class` answers for it,
-so `class` multis dispatch to it; a nil dispatch value normalizes to the `:nil` keyword
-(no table ever keys on nil), and
+so `class` multis dispatch to it; a true nil maps onto the `(:C%NIL)` marker
+(no table ever keys on nil), so a literal `:nil` dispatch value answers only a `:nil`
+method, like the oracle, and
 `Object` matches every value past the search but ahead of the default.
 
 Deviation: every numeric class spelling merges into `:number`, where the oracle tells `Long`

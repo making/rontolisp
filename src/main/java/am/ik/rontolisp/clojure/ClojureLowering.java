@@ -3203,6 +3203,21 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The tag heading a nil method's table key: a nil dispatch value answers the one-list
+	 * {@code (:C%NIL)}, never the {@code (:C%KEYWORD "nil")} a literal {@code :nil}
+	 * keyword lowers to, so the two stay apart like the oracle tells them apart. No user
+	 * value spells the tag (a {@code :C%NIL} source spelling lexes as a keyword, which
+	 * wraps behind {@code :C%KEYWORD}), the same reason the record, set and keyword
+	 * wrappers keep their cars.
+	 */
+	private static final LispSymbol NIL_TAG = new LispSymbol(":C%NIL");
+
+	/** A nil method's table key construction: {@code (LIST :C%NIL)}. */
+	private static LispVal nilMarkerForm() {
+		return list(sym("list"), NIL_TAG);
+	}
+
+	/**
 	 * A keyword's spelling without its colon: {@code ::kw} resolves against the current
 	 * namespace, {@code ::alias/kw} against the alias (or the namespace's own name, or a
 	 * known namespace without any require), and anything else stays opaque data, printing
@@ -8742,9 +8757,9 @@ public final class ClojureLowering {
 	/**
 	 * Whether the dispatch datum is the nil spelling: the symbol the reader answers for
 	 * {@code nil}, or the empty list (which is nil too). A nil method stores under the
-	 * {@code :nil} keyword the dispatcher normalizes nil to (see
-	 * {@link #defmultiForms(List)}), so the corpus's both shapes ({@code my-print} over
-	 * {@code class}, {@code my-class} over {@code identity}) share the one definition.
+	 * {@code (:C%NIL)} marker (see {@link #nilMarkerForm}), so the corpus's both shapes
+	 * ({@code my-print} over {@code class}, {@code my-class} over {@code identity}) share
+	 * the one definition while a literal {@code :nil} keyword keeps its own row.
 	 */
 	private static boolean isNilDatum(LispVal datum) {
 		return datum instanceof LispNil || (datum instanceof LispSymbol s && s.name().equals("nil"));
@@ -8793,15 +8808,30 @@ public final class ClojureLowering {
 
 	/**
 	 * A {@code defmethod} (or {@code remove-method}, {@code get-method},
-	 * {@code prefer-method}) dispatch value lowered: class spellings onto the keyword the
-	 * {@code class} dispatcher produces, {@code nil} onto the {@code :nil} keyword (the
-	 * dispatcher normalizes nil to it, so no table ever keys on nil), {@code ::}-keywords
-	 * resolved like anywhere else, and literal vectors element by element (the corpus's
-	 * {@code [Number]} and {@code [Map Number]} pairs, whose element-wise derivation the
-	 * hierarchy search already runs). Anything else lowers as usual, so plain keywords
-	 * and values keep their exact shapes.
+	 * {@code prefer-method}) dispatch value lowered to its table key: {@code nil} onto
+	 * the {@code (:C%NIL)} marker (the dispatcher maps a true nil onto it, so no table
+	 * ever keys on nil, and a literal {@code :nil} keyword keeps its keyword row), class
+	 * spellings onto the keyword the {@code class} dispatcher produces,
+	 * {@code ::}-keywords resolved like anywhere else, and literal vectors element by
+	 * element (the corpus's {@code [Number]} and {@code [Map Number]} pairs, whose
+	 * element-wise derivation the hierarchy search already runs). Anything else lowers as
+	 * usual, so plain keywords and values keep their exact shapes.
 	 */
 	private LispVal dispatchKeyForm(LispVal datum) {
+		if (isNilDatum(datum)) {
+			return nilMarkerForm();
+		}
+		return dispatchElementForm(datum);
+	}
+
+	/**
+	 * A literal vector's element lowered: the table-key shape except that a nil element
+	 * stays the {@code :nil} keyword, exactly as before -- a class-mapped dispatch vector
+	 * spells its nil element the same way, so a {@code [nil]} row keeps answering it,
+	 * while a runtime vector holding a true nil still misses it, like before. Nested
+	 * vectors recurse here, never onto the marker.
+	 */
+	private LispVal dispatchElementForm(LispVal datum) {
 		if (isNilDatum(datum)) {
 			return keywordForm("nil");
 		}
@@ -8821,7 +8851,7 @@ public final class ClojureLowering {
 			List<LispVal> out = new ArrayList<>();
 			out.add(sym("vector"));
 			for (int i = 1; i < parts.size(); i++) {
-				out.add(dispatchKeyForm(parts.get(i)));
+				out.add(dispatchElementForm(parts.get(i)));
 			}
 			return list(out);
 		}
@@ -8833,20 +8863,24 @@ public final class ClojureLowering {
 	 * value and an {@code Object}-method slot in four globals no identifier can spell
 	 * (the suffix follows the mangled name, like the multi-arity helpers), plus a
 	 * dispatcher {@code defun} applying each call's dispatch value to the table. The
-	 * dispatcher normalizes a nil dispatch value to the {@code :nil} keyword first (no
-	 * table ever keys on nil, on any backend), so a {@code nil} method answers both the
-	 * {@code class} nil and the {@code identity} nil; a dispatch value that literally is
-	 * the {@code :nil} keyword answers it too, where the oracle tells them apart. The
-	 * default dispatch value is {@code :default} without a {@code :default} option (an
-	 * arbitrary keyword with one -- the corpus's {@code :everything-else} -- stored
-	 * per-multimethod like {@code :default} today); a miss with no method for the default
-	 * signals, like the oracle. With a {@code :hierarchy} option the dispatcher consults
-	 * that hierarchy value on a miss (the global one without the option): every method
-	 * whose key the dispatch value descends from ({@code isa?}) is a candidate, the
-	 * strictly most specific wins, {@code prefer-method} breaks the remaining ties, and
-	 * an unbroken tie signals -- like the oracle. Past the search but ahead of the
-	 * default, a defined {@code Object} method catches the rest, like the oracle's (which
-	 * it always beats); without one the slot is nil and the search decides alone.
+	 * dispatcher maps a true nil onto the {@code (:C%NIL)} marker first (no table ever
+	 * keys on nil, on any backend), so a {@code nil} method answers both the
+	 * {@code class} nil and the {@code identity} nil while a dispatch value that
+	 * literally is the {@code :nil} keyword keeps its keyword row, like the oracle. A
+	 * bare {@code class} dispatch answers that keyword only for a nil argument (every
+	 * other branch answers its own kind), so there the keyword maps onto the marker too;
+	 * a {@code class} call wrapped in another function (a lambda, a composition) keeps
+	 * the keyword and still misses the nil method. The default dispatch value is
+	 * {@code :default} without a {@code :default} option (an arbitrary keyword with one
+	 * -- the corpus's {@code :everything-else} -- stored per-multimethod like
+	 * {@code :default} today); a miss with no method for the default signals, like the
+	 * oracle. With a {@code :hierarchy} option the dispatcher consults that hierarchy
+	 * value on a miss (the global one without the option): every method whose key the
+	 * dispatch value descends from ({@code isa?}) is a candidate, the strictly most
+	 * specific wins, {@code prefer-method} breaks the remaining ties, and an unbroken tie
+	 * signals -- like the oracle. Past the search but ahead of the default, a defined
+	 * {@code Object} method catches the rest, like the oracle's (which it always beats);
+	 * without one the slot is nil and the search decides alone.
 	 */
 	private List<LispVal> defmultiForms(List<LispVal> items) {
 		isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
@@ -8893,9 +8927,14 @@ public final class ClojureLowering {
 				list(sym("and"), object,
 						list(sym("null"), list(new LispSymbol("C%H-CANDIDATES"), methods, hierarchyForm, disp))),
 				list(sym("apply"), object, args), missCall);
+		// A bare `class` dispatch spells a nil argument as the `:nil` keyword (no other
+		// argument reaches that spelling), so the marker test reads the keyword there and
+		// the null test everywhere else; a shadowed `class` is the caller's own function.
+		boolean classDispatch = dispatchDatum instanceof LispSymbol s && s.name().equals("class") && !known("class");
+		LispVal nilTest = classDispatch ? list(sym("equal"), raw, keywordForm("nil")) : list(sym("null"), raw);
 		LispVal dispatch = list(sym("let*"), list(List.of(list(raw, list(sym("apply"), dispatchFn, args)),
-				list(disp, list(sym("if"), list(sym("null"), raw), keywordForm("nil"), raw)),
-				list(miss, list(sym("list"), NIL_CONST)), list(found, list(sym("gethash"), disp, methods, miss)))),
+				list(disp, list(sym("if"), nilTest, nilMarkerForm(), raw)), list(miss, list(sym("list"), NIL_CONST)),
+				list(found, list(sym("gethash"), disp, methods, miss)))),
 				list(sym("if"), list(sym("eq"), found, miss), missForm, list(sym("apply"), found, args)));
 		List<LispVal> forms = new ArrayList<>();
 		forms.add(list(sym("setq"), methods, makeTable()));

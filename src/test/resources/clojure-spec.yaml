@@ -1339,6 +1339,41 @@ cases:
       m
       mn
       miss
+  - name: nil-method-stays-distinct-from-nil-keyword
+    # A nil method answers a true nil dispatch value only: identity dispatch on
+    # a literal :nil keyword falls past it to the :nil method or the default,
+    # while a bare class dispatch still answers the nil method for nil (and the
+    # default for :nil, whose class is Keyword). Oracle: clj 1.12.6.1673.
+    source: |
+      (defmulti b32id identity)
+      (defmethod b32id nil [_] "was-nil")
+      (defmethod b32id :default [x] "dflt")
+      (println (b32id nil))
+      (println (b32id :nil))
+      (defmulti b32both identity)
+      (defmethod b32both nil [_] "was-nil")
+      (defmethod b32both :nil [_] "was-kw")
+      (defmethod b32both :default [x] "dflt")
+      (println (b32both nil))
+      (println (b32both :nil))
+      (println (b32both :other))
+      (defmulti b32c class)
+      (defmethod b32c nil [_] "was-nil")
+      (defmethod b32c :default [x] "dflt")
+      (println (b32c nil))
+      (println (b32c :nil))
+      (println ((get-method b32both nil) nil))
+      (println ((get-method b32both :nil) :nil))
+    expected: |
+      was-nil
+      dflt
+      was-nil
+      was-kw
+      dflt
+      was-nil
+      dflt
+      was-nil
+      was-kw
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
