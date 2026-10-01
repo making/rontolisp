@@ -1331,7 +1331,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(re-pattern \"a\")")).contains("RONTOLISP::%CLOJURE-RE-PATTERN");
 		assertThat(lowered("(map re-find [(re-matcher #\"a\" \"a\")])")).contains("RONTOLISP::%CLOJURE-RE-FIND-M");
 		assertThat(lowered("(quote #\"a\")")).contains("RONTOLISP::%CLOJURE-RE-COMPILE");
-		assertThatThrownBy(() -> Clojure.read("(re-find #\"a\" \"a\" \"a\")", null)).isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(re-find #\"a\" \"a\" \"a\")", null))
+			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("re-find takes a matcher, or a pattern and a string");
 		assertThatThrownBy(() -> Clojure.read("(re-groups #\"a\" \"a\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("re-groups takes a matcher");

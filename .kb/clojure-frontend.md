@@ -603,11 +603,12 @@ oracle. Pinned in `clojure-spec.yaml`
 lowered shapes and arity refusals in `ClojureReaderTest`/`ClojureLoweringTest`,
 and the run-time signals plus value legs in `ClojureInteropTest`
 (interpreter and JVM).
-Cost (2026-10-01, x86-64 Linux, Java 25): the runtime travels only when a
-program references a `rontolisp::%clojure-re-*` name (the pruner drops it
-otherwise, like the STM/hierarchy runtimes); a `re-find` program compiles to
-MEASURED-BELOW bytes of wasm against BASELINE-BELOW without regex (raw module
-total, `.kb/size-measurement.md`: the target number is the raw total a
-downloader pays). `split` with a literal string is byte-identical with and
-without the change (the literal arm is untouched code beside a run-time
-branch).
+Cost (2026-10-01, x86-64 Linux, Java 25, raw module totals --
+`.kb/size-measurement.md`: the target number is the raw total a downloader
+pays): `(println (re-find #"a+" "aaab"))` compiles to 63,300 B of wasm
+(64,563 B as a component); the same program over a literal split
+(`(s/split "a,b" ",")`) is 52,597 B, over a pattern split 72,269 B, so the
+spliced runtime costs about 19.7 KB raw when referenced (a program without
+any of it, `(println (+ 1 2))`, is 9,581 B -- the pruner drops the runtime
+wholly, like the STM/hierarchy runtimes). The literal arm itself is untouched
+code beside a run-time branch, so literal-only programs pay nothing new.
