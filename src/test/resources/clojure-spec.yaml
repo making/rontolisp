@@ -85,7 +85,7 @@ cases:
       (println ((fn b17-m ([n] (if (zero? n) :multi (recur (dec n)))) ([a b] (+ a b))) 3))
       (defn b17-countdown [n] (if (zero? n) :done (recur (dec n))))
       (println (b17-countdown 3))
-      (defn b17-md ([n] (if (zero? n) :multi-defn (recur (dec n)))) ([a b] (+ a b))))
+      (defn b17-md ([n] (if (zero? n) :multi-defn (recur (dec n)))) ([a b] (+ a b)))
       (println (b17-md 3))
       (println (b17-md 4 5))
       (def b17-tries (atom 3))

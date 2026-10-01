@@ -11,7 +11,7 @@ destructuring でき、複数アリティは同じくディスパッチします
 ```clojure
 (println (letfn [(fact [x] (if (zero? x) 1 (* x (fact (dec x)))))] (fact 5))) ; 120
 (println (letfn [(even? [n] (if (zero? n) true (odd? (dec n))))
-                 (odd? [n] (if (zero? n) false (even? (dec n)))))]
+                 (odd? [n] (if (zero? n) false (even? (dec n))))]
            (even? 10))) ; true
 (let [y 7]
   (println (letfn [(g [x] (+ x y))] (g 3)))) ; 10

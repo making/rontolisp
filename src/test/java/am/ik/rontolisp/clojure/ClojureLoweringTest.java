@@ -66,15 +66,13 @@ class ClojureLoweringTest {
 			.isEqualTo(FALSE_BINDING + "(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
 		assertThat(lowered("(letfn [] 1)")).isEqualTo(FALSE_BINDING + "1");
 		// mutual recursion: siblings call each other directly
-		assertThat(lowered("(letfn [(e [n] (o n)) (o [n] n)] (e 1))")).contains("(|c%o| |c%n|)")
-			.contains("(|c%e| 1)");
+		assertThat(lowered("(letfn [(e [n] (o n)) (o [n] n)] (e 1))")).contains("(|c%o| |c%n|)").contains("(|c%e| 1)");
 		// an entry's name is a function value, like a named fn's
 		assertThat(lowered("(letfn [(f [x] x)] f)")).contains("#'|c%f|");
 		// an inner letfn shadows an outer variable: the call stays direct
 		assertThat(lowered("(let [f 99] (letfn [(f [x] x)] (f 1)))"))
 			.contains("(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
-		assertThatThrownBy(() -> Clojure.read("(letfn [f [x] x] (f 1))", null))
-			.isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(letfn [f [x] x] (f 1))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a letfn binding takes a name and a function");
 	}
 
@@ -91,11 +89,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn zg [] (recur))")).contains("(|c%zg|)");
 		// a recur through a plain lambda still reaches the enclosing loop
 		assertThat(lowered("(loop [i 0] ((fn [j] j) (recur (inc i))))")).contains("(|c%loop-0|");
-		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null))
-			.isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
-		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null))
-			.isInstanceOf(LispReadException.class)
+		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn vr [a & r] (recur a r))", null))
 			.isInstanceOf(LispReadException.class)
