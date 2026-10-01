@@ -57,6 +57,70 @@ cases:
     expected: |
       55
       3
+  - name: letfn-binds-mutual-fns-and-closes-over-outer
+    # The book's functional.clj shape: tail-fibo/recur-fibo are letfn entries that
+    # recur (and call each other); entries close over the outer scope, and nested
+    # letfn sees its own names first.
+    source: |
+      (println (letfn [(b17-fact [x] (if (zero? x) 1 (* x (b17-fact (dec x)))))] (b17-fact 5)))
+      (println (letfn [(b17-even? [n] (if (zero? n) true (b17-odd? (dec n)))) (b17-odd? [n] (if (zero? n) false (b17-even? (dec n))))] (b17-even? 10)))
+      (let [b17-y 7] (println (letfn [(b17-g [x] (+ x b17-y))] (b17-g 3))))
+      (println (letfn [(b17-z [] 1)] [(b17-z) (letfn [(b17-w [] 2)] (b17-w))]))
+      (println (letfn [(b17-f [x] (+ x 1))] (map b17-f [1 2 3])))
+    expected: |
+      120
+      true
+      10
+      [1 2]
+      (2 3 4)
+  - name: recur-targets-a-named-fn-and-a-defn
+    # recur reaches past loop: a named fn bound in a let, a directly applied named
+    # fn, an anonymous fn, a multi-arity fn (each clause its own boundary), a defn
+    # (multi-arity too), and a zero-arity defn recurring with no arguments (the
+    # book's hangman take-guess shape).
+    source: |
+      (println (let [b17-sum (fn b17-f [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))] (b17-sum 5 0)))
+      (println ((fn b17-g [n] (if (zero? n) :zero (recur (dec n)))) 3))
+      (println ((fn [n] (if (zero? n) :anon (recur (dec n)))) 3))
+      (println ((fn b17-m ([n] (if (zero? n) :multi (recur (dec n)))) ([a b] (+ a b))) 3))
+      (defn b17-countdown [n] (if (zero? n) :done (recur (dec n))))
+      (println (b17-countdown 3))
+      (defn b17-md ([n] (if (zero? n) :multi-defn (recur (dec n)))) ([a b] (+ a b))))
+      (println (b17-md 3))
+      (println (b17-md 4 5))
+      (def b17-tries (atom 3))
+      (defn b17-take-guess [] (if (zero? @b17-tries) :got-it (do (swap! b17-tries dec) (recur))))
+      (println (b17-take-guess))
+    expected: |
+      15
+      :zero
+      :anon
+      :multi
+      :done
+      :multi-defn
+      9
+      :got-it
+  - name: recur-fibs-and-primes-prefix
+    # The book's functional.clj fibs (a letfn tail-fibo mapped over 0..10) and
+    # primes.clj prefix (a named fn recurring with its found vector to 25 primes).
+    source: |
+      (letfn [(b17-fib [n a b] (if (zero? n) a (recur (dec n) b (+ a b))))]
+        (println (map (fn [n] (b17-fib n 0 1)) [0 1 2 3 4 5 6 7 8 9 10])))
+      (let [b17-primes-from (fn b17-pf [n found] (if (= (count found) 25) found (recur (inc n) (if (some (fn [d] (= (mod n d) 0)) found) found (conj found n)))))]
+        (println (b17-primes-from 2 [])))
+    expected: |
+      (0 1 1 2 3 5 8 13 21 34 55)
+      [2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97]
+  - name: deep-recur-answers-on-every-backend
+    # 5000 iterations: past what a non-tail expansion survives on wasm (about
+    # 3000 there), under the JVM worker's frame budget, so every backend answers
+    # the same sum. (The interpreter's non-tail bound sits higher, so its tail
+    # path rests on the labels shape pinned in ClojureLoweringTest.)
+    source: |
+      (defn b17-bigsum [n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))
+      (println (b17-bigsum 5000 0))
+    expected: |
+      12502500
   - name: if-when-cond-do-and-or
     # Clojure rejects the odd trailing arm (cond requires an even number of forms);
     # here it is the default, per .kb/clojure-frontend.md.

@@ -61,6 +61,57 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void letfnLowersToLabelsWithEveryNamePreScanned() {
+		assertThat(lowered("(letfn [(f [x] x)] (f 1))"))
+			.isEqualTo(FALSE_BINDING + "(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
+		assertThat(lowered("(letfn [] 1)")).isEqualTo(FALSE_BINDING + "1");
+		// mutual recursion: siblings call each other directly
+		assertThat(lowered("(letfn [(e [n] (o n)) (o [n] n)] (e 1))")).contains("(|c%o| |c%n|)")
+			.contains("(|c%e| 1)");
+		// an entry's name is a function value, like a named fn's
+		assertThat(lowered("(letfn [(f [x] x)] f)")).contains("#'|c%f|");
+		// an inner letfn shadows an outer variable: the call stays direct
+		assertThat(lowered("(let [f 99] (letfn [(f [x] x)] (f 1)))"))
+			.contains("(LABELS ((|c%f| (|c%x|) |c%x|)) (|c%f| 1))");
+		assertThatThrownBy(() -> Clojure.read("(letfn [f [x] x] (f 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a letfn binding takes a name and a function");
+	}
+
+	@Test
+	void recurTargetsAnyEnclosingFnAndChecksItsArity() {
+		// a named fn recurs through its labels self-binding
+		assertThat(lowered("(fn f [n] (recur n))")).contains("(|c%f| |c%n|)");
+		// an anonymous fn wraps itself in labels only when a recur reaches it
+		assertThat(lowered("((fn [n] (recur n)) 1)")).contains("LABELS").contains("(|c%fn-0| |c%n|)");
+		assertThat(lowered("((fn [n] n) 1)")).doesNotContain("LABELS");
+		// a defn recurs through a direct call
+		assertThat(lowered("(defn cd [n] (recur n))")).contains("(|c%cd| |c%n|)");
+		// a zero-arity defn recurs with no arguments
+		assertThat(lowered("(defn zg [] (recur))")).contains("(|c%zg|)");
+		// a recur through a plain lambda still reaches the enclosing loop
+		assertThat(lowered("(loop [i 0] ((fn [j] j) (recur (inc i))))")).contains("(|c%loop-0|");
+		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
+		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
+		assertThatThrownBy(() -> Clojure.read("(defn vr [a & r] (recur a r))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("recur to a variadic function is not supported yet");
+	}
+
+	@Test
+	void anInnerBindingShadowsAnOuterOneForCalls() {
+		// a let vector shadows a defn: the call reads the value, like the oracle
+		assertThat(lowered("(defn shf [x] x) (let [shf [1 2]] (shf 0))")).contains("%CLOJURE-CALL");
+		// a let vector shadows an enclosing named fn too: the call reads the
+		// value instead of calling the local function
+		assertThat(lowered("((fn shf [x] (let [shf [1 2]] (shf 0))) 5)")).contains("%CLOJURE-CALL");
+	}
+
+	@Test
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
 			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) (+ |c%a| |c%b|)) 1 2)");

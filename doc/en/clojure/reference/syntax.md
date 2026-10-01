@@ -10,6 +10,7 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `defonce` | `(do (defonce x 5) x)` | `5` |
 | `fn` | `((fn [a b] (+ a b)) 1 2)` | `3` |
 | `let` | `(let [x 1 y x] y)` | `1` |
+| `letfn` | `(letfn [(f [x] x)] (f 1))` | `1` |
 | `loop` | `(loop [i 0] (if (= i 3) i (recur (inc i))))` | `3` |
 | `recur` | `(loop [a 0] (if (= a 2) a (recur (inc a))))` | `2` |
 | `if` | `(if (< 1 2) :yes :no)` | `:yes` |

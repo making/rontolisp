@@ -7,7 +7,8 @@ Builds a lambda. The optional name binds itself for self-calls (a `labels` self-
 so the recursive call is direct). Several arities are one `lambda` dispatching on the
 argument count, the same way a multi-arity `defn` dispatches; clauses close over the
 outer scope (there are no local functions). Parameters destructure, vector and map
-patterns alike.
+patterns alike. A `recur` in the body jumps back to the enclosing clause with new
+argument values.
 
 The reader's `#(...)` form is the same lambda with the arguments traveling as one rest
 list: `%` is the first, `%N` the Nth (at most 9), `%&` the rest, and the body forms wrap
@@ -18,4 +19,5 @@ as ONE call -- multi-form bodies need an explicit `do`.
 (println (map #(* % %) '(1 2 3)))         ; (1 4 9)
 (println (#(+ %1 %2) 10 20))              ; 30
 (println ((fn fact [n] (if (< n 2) 1 (* n (fact (- n 1))))) 5)) ; 120
+(println ((fn countdown [n acc] (if (zero? n) acc (recur (dec n) (+ acc n)))) 5 0)) ; 15
 ```

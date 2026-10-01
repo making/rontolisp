@@ -1,6 +1,8 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -237,8 +239,91 @@ public final class ClojureLowering {
 
 	private int counter;
 
-	/** The loop whose body is being lowered, for {@code recur}; null outside any. */
-	private @Nullable String loop;
+	/** The enclosing recur targets, innermost last; empty outside any. */
+	private final Deque<RecurTarget> recurTargets = new ArrayDeque<>();
+
+	/**
+	 * One enclosing {@code recur} target: the Common Lisp function a {@code recur}
+	 * form calls with its lowered arguments. A {@code loop} pushes its
+	 * {@code labels} name, a named {@code fn} or {@code letfn} entry its
+	 * {@code labels} name, a {@code defn} clause its dispatch {@code defun} name, a
+	 * multi-arity {@code fn} clause the shared dispatch name, and an anonymous
+	 * {@code fn} (or {@code #(...)}, or a stored method lambda) a fresh
+	 * {@code labels} name the form wraps itself in when the target is used. A plain
+	 * lambda that is none of these pushes nothing, so a {@code recur} passes
+	 * through it to the enclosing target.
+	 */
+	private static final class RecurTarget {
+
+		private final String callName;
+
+		private final boolean checked;
+
+		private int arity = -1;
+
+		private boolean variadic;
+
+		private boolean used;
+
+		private @Nullable LispVal firstUse;
+
+		RecurTarget(String callName, boolean checked) {
+			this.callName = callName;
+			this.checked = checked;
+		}
+
+		String callName() {
+			return this.callName;
+		}
+
+		boolean checked() {
+			return this.checked;
+		}
+
+		int arity() {
+			return this.arity;
+		}
+
+		boolean variadic() {
+			return this.variadic;
+		}
+
+		void setArity(int arity, boolean variadic) {
+			this.arity = arity;
+			this.variadic = variadic;
+		}
+
+		boolean used() {
+			return this.used;
+		}
+
+		void markUsed(LispVal recurForm) {
+			if (!this.used) {
+				this.used = true;
+				this.firstUse = recurForm;
+			}
+		}
+
+	}
+
+	/**
+	 * A fresh {@code labels} name for an anonymous recur target: behind the prefix
+	 * like every mangled name, so no backend learns a Clojure name.
+	 */
+	private String freshRecurName() {
+		return mangle("fn-") + this.counter++;
+	}
+
+	/**
+	 * One already-lowered lambda wrapped in a {@code labels} self-binding under
+	 * {@code callName}, answering the local: the shape a named {@code fn} always
+	 * takes, an anonymous one only when a {@code recur} reached it.
+	 */
+	private static LispVal labelsSelfCall(String callName, LispVal lambda) {
+		LispVal paramsAndBody = ((LispCons) lambda).cdr();
+		LispVal binding = new LispCons(new LispSymbol(callName), paramsAndBody);
+		return list(sym("labels"), list(List.of(binding)), list(sym("function"), new LispSymbol(callName)));
+	}
 
 	/** The rest parameter of the {@code #(...)} being lowered, or null outside one. */
 	private @Nullable String anonArgs;
@@ -677,6 +762,9 @@ public final class ClojureLowering {
 		if (isSymbolNamed(head, "loop")) {
 			return loop(items);
 		}
+		if (isSymbolNamed(head, "letfn")) {
+			return letfn(items);
+		}
 		if (isSymbolNamed(head, "declare")) {
 			return declareForm(items);
 		}
@@ -964,16 +1052,7 @@ public final class ClojureLowering {
 			return body(items, 1);
 		}
 		if (isSymbolNamed(head, "recur")) {
-			if (this.loop == null) {
-				throw new LispReadException("recur outside loop");
-			}
-			String target = this.loop;
-			List<LispVal> out = new ArrayList<>();
-			out.add(new LispSymbol(target));
-			for (int i = 1; i < items.size(); i++) {
-				out.add(lower(items.get(i)));
-			}
-			return list(out);
+			return recurOf(form, items);
 		}
 		return call(items);
 	}
@@ -1054,10 +1133,12 @@ public final class ClojureLowering {
 		String name = plainName(items.get(1), "defn");
 		this.globals.put(name, Kind.FUNCTION);
 		this.macros.remove(name); // a definition wins over the macro it shadows
+		String callName = idSym(name).name();
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			return multiDefun(name, items.subList(at, items.size()));
+			return multiDefun(name, items.subList(at, items.size()), callName);
 		}
-		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()));
+		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()),
+				new RecurTarget(callName, true));
 		return List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped()));
 	}
 
@@ -1073,10 +1154,13 @@ public final class ClojureLowering {
 	 * clause keeps its own parameters (a variadic clause its {@code &rest}); the dispatch
 	 * hands each its arguments positionally. A name no identifier mangles to (a single
 	 * {@code %} outside the {@code :} escape) keeps the helpers apart from user
-	 * definitions.
+	 * definitions. A {@code recur} in a clause body is checked against that clause's
+	 * arity and calls the dispatch, which routes by count back to the same clause
+	 * (every fixed count names exactly one clause, so the routing is exact except
+	 * where a variadic clause listed before a fixed one also matches the count).
 	 */
-	private List<LispVal> multiDefun(String name, List<LispVal> clauses) {
-		List<Clause> parsed = arityClauses(clauses, "defn");
+	private List<LispVal> multiDefun(String name, List<LispVal> clauses, String callName) {
+		List<Clause> parsed = arityClauses(clauses, "defn", i -> new RecurTarget(callName, true));
 		List<LispVal> forms = new ArrayList<>();
 		LispVal args = freshTemp();
 		LispVal count = freshTemp();
@@ -1116,9 +1200,16 @@ public final class ClojureLowering {
 	/**
 	 * The arity clauses of a multi-arity {@code defn} or {@code fn}, each a list of a
 	 * parameter vector and a body, with at most one variadic clause and one clause per
-	 * fixed arity.
+	 * fixed arity. Each clause body lowers with its own recur target (a clause is its
+	 * own recur boundary, like the oracle: the count must match the enclosing clause,
+	 * never just any clause of the function).
 	 */
 	private List<Clause> arityClauses(List<LispVal> clauses, String owner) {
+		return arityClauses(clauses, owner, i -> null);
+	}
+
+	private List<Clause> arityClauses(List<LispVal> clauses, String owner,
+			java.util.function.IntFunction<RecurTarget> targets) {
 		isTrue(!clauses.isEmpty(), owner + " needs a parameter vector and a body");
 		List<Clause> parsed = new ArrayList<>();
 		Set<Integer> fixed = new HashSet<>();
@@ -1129,7 +1220,7 @@ public final class ClojureLowering {
 				throw new LispReadException(
 						owner + " arity clauses take a parameter vector and a body, not " + clauseDatum.print());
 			}
-			Clause clause = clause(parts.get(0), parts.subList(1, parts.size()));
+			Clause clause = clause(parts.get(0), parts.subList(1, parts.size()), targets.apply(parsed.size()));
 			if (clause.variadic()) {
 				isTrue(!variadic, owner + " takes at most one variadic clause");
 				variadic = true;
@@ -1145,9 +1236,16 @@ public final class ClojureLowering {
 	/**
 	 * One lambda over a parameter vector and a not-yet-lowered body, the params scoped.
 	 * Destructured parameters travel as generated temporaries with a {@code let*}
-	 * prologue rebinding them to their patterns.
+	 * prologue rebinding them to their patterns. With a recur target, the body lowers
+	 * with it pushed (its arity set from the parsed parameters first, so a
+	 * {@code recur} in the body checks against this clause), and the target records
+	 * whether any {@code recur} reached it.
 	 */
 	private Clause clause(LispVal paramVector, List<LispVal> bodyForms) {
+		return clause(paramVector, bodyForms, null);
+	}
+
+	private Clause clause(LispVal paramVector, List<LispVal> bodyForms, @Nullable RecurTarget target) {
 		// metadata on the vector (type hints like ^String) is dropped, like the
 		// rest: it never affects dispatch
 		List<LispVal> names = bindingItems(stripMeta(paramVector), "the parameter vector of");
@@ -1183,9 +1281,31 @@ public final class ClojureLowering {
 			params.add(temp);
 			destructureInto(datum, temp, prologue, scope, "the parameter vector of");
 		}
-		LispVal body = inScope(scope, () -> bodyOf(bodyForms));
+		LispVal body;
 		boolean variadic = params.contains(AMPERSAND_REST);
 		int fixed = variadic ? params.indexOf(AMPERSAND_REST) : params.size();
+		if (target == null) {
+			body = inScope(scope, () -> bodyOf(bodyForms));
+		}
+		else {
+			target.setArity(variadic ? fixed + 1 : fixed, variadic);
+			this.recurTargets.push(target);
+			try {
+				body = inScope(scope, () -> bodyOf(bodyForms));
+			}
+			finally {
+				this.recurTargets.pop();
+			}
+			if (target.used() && target.variadic()) {
+				// the oracle binds the rest parameter to the last recur argument
+				// itself; a plain &rest self call would wrap it in a list, so a
+				// recur that reaches a variadic clause is refused by name
+				LispReadException refusal = new LispReadException(
+						"recur to a variadic function is not supported yet");
+				LispVal use = target.firstUse;
+				throw (use == null) ? refusal : positioned(refusal, use);
+			}
+		}
 		return new Clause(List.copyOf(params), List.copyOf(prologue), body, variadic, fixed);
 	}
 
@@ -1196,10 +1316,21 @@ public final class ClojureLowering {
 					: new LispCons(items.get(2), list(items.subList(3, items.size())));
 			String outer = this.anonArgs;
 			this.anonArgs = mangle("anon-args");
+			String argsName = this.anonArgs;
+			// the anon form is its own recur target, but an unchecked one: its
+			// arity is the highest %N the body uses, known only after the body
+			// lowers, so a wrong count signals at run time, like any other call
+			RecurTarget target = new RecurTarget(freshRecurName(), false);
+			this.recurTargets.push(target);
 			try {
-				return list(sym("lambda"), list(AMPERSAND_REST, new LispSymbol(this.anonArgs)), lower(form));
+				LispVal lambda = list(sym("lambda"), list(AMPERSAND_REST, new LispSymbol(argsName)), lower(form));
+				if (!target.used()) {
+					return lambda;
+				}
+				return labelsSelfCall(target.callName(), lambda);
 			}
 			finally {
+				this.recurTargets.pop();
 				this.anonArgs = outer;
 			}
 		}
@@ -1212,37 +1343,51 @@ public final class ClojureLowering {
 		}
 		isTrue(items.size() > at, "fn needs a parameter vector and a body");
 		if (self == null) {
-			return singleOrMultiFn(items, at, "fn");
+			String fresh = freshRecurName();
+			List<RecurTarget> seen = new ArrayList<>();
+			LispVal inner = singleOrMultiFn(items, at, "fn", i -> {
+				RecurTarget target = new RecurTarget(fresh, true);
+				seen.add(target);
+				return target;
+			});
+			if (seen.stream().noneMatch(RecurTarget::used)) {
+				return inner;
+			}
+			return labelsSelfCall(fresh, inner);
 		}
 		Map<String, Kind> scope = new HashMap<>();
 		scope.put(self, Kind.FUNCTION);
 		String name = self;
+		String callName = idSym(name).name();
 		int from = at;
 		return inScope(scope, () -> {
-			LispVal inner = singleOrMultiFn(items, from, name);
+			LispVal inner = singleOrMultiFn(items, from, name, i -> new RecurTarget(callName, true));
 			// a labels self-binding: calls lower directly and the labels
 			// expansion rewrites them to the local; the value is the local
-			LispVal paramsAndBody = ((LispCons) inner).cdr();
-			LispVal binding = new LispCons(idSym(name), paramsAndBody);
-			return list(sym("labels"), list(List.of(binding)), list(sym("function"), idSym(name)));
+			return labelsSelfCall(callName, inner);
 		});
 	}
 
-	private LispVal singleOrMultiFn(List<LispVal> items, int at, String owner) {
+	private LispVal singleOrMultiFn(List<LispVal> items, int at, String owner,
+			java.util.function.IntFunction<RecurTarget> targets) {
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			return multiFn(items.subList(at, items.size()), owner);
+			return multiFn(items.subList(at, items.size()), owner, targets);
 		}
-		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()));
+		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), targets.apply(0));
 		return list(sym("lambda"), list(clause.params()), clause.wrapped());
 	}
 
 	/**
 	 * A multi-arity {@code fn}: one {@code lambda} over {@code &rest} dispatching per
 	 * arity through {@code let*} argument bindings -- no local functions, so a clause
-	 * body closes over the outer scope like any lambda body.
+	 * body closes over the outer scope like any lambda body. A {@code recur} in a
+	 * clause body is checked against that clause's arity and calls the dispatch,
+	 * which routes by count back to the same clause (same routing caveat as a
+	 * multi-arity {@code defn}).
 	 */
-	private LispVal multiFn(List<LispVal> clauses, String owner) {
-		List<Clause> parsed = arityClauses(clauses, owner);
+	private LispVal multiFn(List<LispVal> clauses, String owner,
+			java.util.function.IntFunction<RecurTarget> targets) {
+		List<Clause> parsed = arityClauses(clauses, owner, targets);
 		LispVal args = freshTemp();
 		LispVal count = freshTemp();
 		List<LispVal> arms = new ArrayList<>();
@@ -1304,6 +1449,31 @@ public final class ClojureLowering {
 		return form;
 	}
 
+	/**
+	 * A {@code recur} form lowered: a direct call to the innermost enclosing target
+	 * (a {@code loop}, a named or anonymous {@code fn}, a {@code defn} clause, a
+	 * {@code letfn} entry), checked against that target's arity. Outside any target
+	 * it stays a refusal.
+	 */
+	private LispVal recurOf(LispVal form, List<LispVal> items) {
+		if (this.recurTargets.isEmpty()) {
+			throw new LispReadException("recur outside loop");
+		}
+		RecurTarget target = this.recurTargets.peek();
+		int given = items.size() - 1;
+		if (target.checked() && given != target.arity()) {
+			throw new LispReadException(
+					"wrong number of arguments passed to recur: expected " + target.arity() + ", got " + given);
+		}
+		target.markUsed(form);
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(target.callName()));
+		for (int i = 1; i < items.size(); i++) {
+			out.add(lower(items.get(i)));
+		}
+		return list(out);
+	}
+
 	private LispVal loop(List<LispVal> items) {
 		isTrue(items.size() >= 3, "loop needs a binding vector and a body");
 		List<LispVal> bindings = bindingItems(items.get(1), "loop");
@@ -1334,8 +1504,9 @@ public final class ClojureLowering {
 				inits.add(init);
 				destructureInto(pattern, temp, prologue, scope, "loop");
 			}
-			String outer = this.loop;
-			this.loop = name;
+			RecurTarget target = new RecurTarget(name, true);
+			target.setArity(paramSyms.size(), false);
+			this.recurTargets.push(target);
 			try {
 				LispVal lambdaBody = prologue.isEmpty() ? body(items, 2)
 						: list(sym("let*"), list(prologue), body(items, 2));
@@ -1355,13 +1526,53 @@ public final class ClojureLowering {
 				return list(sym("labels"), list(binding), list(sym("let*"), list(initPairs), self));
 			}
 			finally {
-				this.loop = outer;
+				this.recurTargets.pop();
 			}
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
 		}
+	}
+
+	/**
+	 * {@code (letfn [(f [params] body...)+] body...)}: mutual local functions over
+	 * one {@code labels}, so every entry -- and the body -- calls every other
+	 * directly, the shape a named {@code fn} self-binding already uses. Every name is
+	 * pre-scanned first (the {@code defn} mutual-recursion precedent), so siblings
+	 * call each other; each entry then lowers like a named {@code fn} clause, with
+	 * its own recur target pushing while its body lowers. Parameters destructure
+	 * like {@code fn} parameters, and an entry's name is a function value (through
+	 * {@code function}, like any other local function). An empty binding vector is
+	 * just the body.
+	 */
+	private LispVal letfn(List<LispVal> items) {
+		isTrue(items.size() >= 3, "letfn needs a binding vector and a body");
+		List<LispVal> specs = bindingItems(items.get(1), "letfn");
+		if (specs.isEmpty()) {
+			return body(items, 2);
+		}
+		Map<String, Kind> scope = new HashMap<>();
+		List<List<LispVal>> fnspecs = new ArrayList<>();
+		for (LispVal spec : specs) {
+			List<LispVal> parts = items(spec);
+			isTrue(parts != null && parts.size() >= 3, "a letfn binding takes a name and a function, not "
+					+ spec.print());
+			scope.put(plainName(parts.get(0), "letfn"), Kind.FUNCTION);
+			fnspecs.add(parts);
+		}
+		return inScope(scope, () -> {
+			// a later entry shadows an earlier one with the same name, like the
+			// oracle (labels itself refuses a name twice)
+			Map<String, LispVal> bindings = new LinkedHashMap<>();
+			for (List<LispVal> parts : fnspecs) {
+				String fname = plainName(parts.get(0), "letfn");
+				String callName = idSym(fname).name();
+				LispVal inner = singleOrMultiFn(parts, 1, fname, i -> new RecurTarget(callName, true));
+				bindings.put(callName, new LispCons(new LispSymbol(callName), ((LispCons) inner).cdr()));
+			}
+			return list(sym("labels"), list(new ArrayList<>(bindings.values())), body(items, 2));
+		});
 	}
 
 	private LispVal condOf(List<LispVal> items) {
@@ -7357,13 +7568,29 @@ public final class ClojureLowering {
 	 * be defined -- forward order aside, the pre-scan declares every {@code defmulti}
 	 * first.
 	 */
+	/**
+	 * One single-arity method lambda, {@code labels}-wrapped under a fresh name when
+	 * a {@code recur} reaches its body (like an anonymous {@code fn}): a stored
+	 * method has no callable name of its own, so without a {@code recur} it stays a
+	 * bare lambda, exactly as before.
+	 */
+	private LispVal methodLambda(LispVal params, List<LispVal> bodyForms) {
+		String fresh = freshRecurName();
+		RecurTarget target = new RecurTarget(fresh, true);
+		Clause clause = clause(params, bodyForms, target);
+		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		if (!target.used()) {
+			return lambda;
+		}
+		return labelsSelfCall(fresh, lambda);
+	}
+
 	private LispVal defmethodForm(List<LispVal> items) {
 		isTrue(items.size() >= 4, "defmethod takes a name, a dispatch value, a parameter vector and a body");
 		String name = plainName(items.get(1), "defmethod");
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
-		Clause clause = clause(items.get(3), items.subList(4, items.size()));
-		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		LispVal lambda = methodLambda(items.get(3), items.subList(4, items.size()));
 		return list(sym("setf"), list(sym("gethash"), lower(items.get(2)), methods), lambda);
 	}
 
@@ -7755,8 +7982,7 @@ public final class ClojureLowering {
 		}
 		LispVal lambda;
 		if (fields == null) {
-			Clause clause = clause(impl.params(), impl.body());
-			lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+			lambda = methodLambda(impl.params(), impl.body());
 		}
 		else {
 			Map<String, Kind> scope = new HashMap<>();
@@ -7764,9 +7990,12 @@ public final class ClojureLowering {
 				scope.put(field, Kind.VARIABLE);
 			}
 			lambda = inScope(scope, () -> {
-				Clause clause = clause(impl.params(), impl.body());
+				String fresh = freshRecurName();
+				RecurTarget target = new RecurTarget(fresh, true);
+				Clause clause = clause(impl.params(), impl.body(), target);
+				LispVal inner = list(sym("lambda"), list(clause.params()), clause.wrapped());
 				if (fields.isEmpty()) {
-					return list(sym("lambda"), list(clause.params()), clause.wrapped());
+					return target.used() ? labelsSelfCall(fresh, inner) : inner;
 				}
 				LispVal self = clause.params().isEmpty() ? NIL_CONST : clause.params().get(0);
 				List<LispVal> binds = new ArrayList<>();
@@ -7774,7 +8003,9 @@ public final class ClojureLowering {
 					binds.add(list(idSym(field),
 							list(sym("gethash"), keywordForm(field), typedTableOf(self), NIL_CONST)));
 				}
-				return list(sym("lambda"), list(clause.params()), list(sym("let*"), list(binds), clause.wrapped()));
+				LispVal withFields = list(sym("lambda"), list(clause.params()),
+						list(sym("let*"), list(binds), clause.wrapped()));
+				return target.used() ? labelsSelfCall(fresh, withFields) : withFields;
 			});
 		}
 		return methodStoreForm(def.methodsVar(), key, impl.method(), lambda);
@@ -7910,8 +8141,7 @@ public final class ClojureLowering {
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		isTrue(def.methods().contains(impl.method()), "Can't define method not in interfaces: " + impl.method());
-		Clause clause = clause(impl.params(), impl.body());
-		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		LispVal lambda = methodLambda(impl.params(), impl.body());
 		if (key == null) {
 			return list(sym("setq"), def.defaultVar(), lambda);
 		}
@@ -8069,8 +8299,7 @@ public final class ClojureLowering {
 				throw new LispReadException("No such protocol: " + group.protocol());
 			}
 			for (TypeMethod impl : group.methods()) {
-				Clause clause = clause(impl.params(), impl.body());
-				LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+				LispVal lambda = methodLambda(impl.params(), impl.body());
 				body.add(methodStoreForm(def.methodsVar(), list(sym("cadr"), self), impl.method(), lambda));
 			}
 		}
@@ -8097,7 +8326,7 @@ public final class ClojureLowering {
 	 * suffixed or qualified.
 	 */
 	private static final Set<String> MACRO_RESERVED = Set.of("quote", "def", "defn", "defn-", "defonce", "defstruct",
-			"struct", "struct-map", "defmacro", "fn", "let", "loop", "declare", "->", "->>", "as->", "doto", "cond->",
+			"struct", "struct-map", "defmacro", "fn", "let", "letfn", "loop", "declare", "->", "->>", "as->", "doto", "cond->",
 			"cond->>", "some->", "some->>", "list*", "doseq", "dotimes", "for", "defmulti", "defmethod",
 			"remove-method", "get-method", "prefer-method", "derive", "underive", "isa?", "parents", "ancestors",
 			"descendants", "make-hierarchy", "defprotocol", "defrecord", "deftype", "definterface", "reify",
@@ -9662,9 +9891,12 @@ public final class ClojureLowering {
 	}
 
 	private boolean isFunction(String name) {
-		for (Map<String, Kind> scope : this.scopes) {
-			Kind kind = scope.get(name);
+		for (int i = this.scopes.size() - 1; i >= 0; i--) {
+			Kind kind = this.scopes.get(i).get(name);
 			if (kind != null) {
+				// the innermost binding decides, so a local shadows an outer one
+				// (and a global): a parameter holding a collection routes through
+				// the dispatcher, a local function stays direct
 				return kind == Kind.FUNCTION;
 			}
 		}

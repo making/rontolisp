@@ -9,7 +9,8 @@ parameters, and any other count signals (`wrong number of arguments passed to: f
 most one variadic clause and one clause per arity. Parameters destructure, vector and map
 patterns alike. The name lowers to a direct call, so recursion is a call, not a value
 lookup; a head-position use of a *value* binding (a `def`, a parameter) is the funcall
-instead.
+instead. A `recur` in the body jumps back to the enclosing clause with new argument
+values.
 
 A definition may use a name defined below it: the file is pre-scanned for every top-level
 `def`/`defn` (and `declare`) name. Inside a body, `defn` works only in statement
