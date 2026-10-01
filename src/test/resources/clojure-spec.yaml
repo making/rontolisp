@@ -2669,6 +2669,20 @@ cases:
       x-y
       HI
       Hello
+  - name: use-only-and-exclude-narrow
+    # use :only narrows the referred set (winning over the refer-all default)
+    # and :exclude subtracts from it -- and from :refer :all -- like the oracle
+    # (clj 1.12.6.1673). Absence stays a lowering refusal ("unknown name",
+    # pinned in ClojureLoweringTest); here the narrowed wirings run on all
+    # four backends. upper-case/split-lines are first bare-referred here.
+    source: |
+      (use '[clojure.string :only [upper-case join] :exclude [join]])
+      (println (upper-case "hi"))
+      (require '[clojure.string :refer :all :exclude [join]])
+      (println (split-lines "a\nb"))
+    expected: |
+      HI
+      (a b)
   - name: vec-coerces-every-collection-to-a-vector
     # vec is the vector-over-seq-view coercion: lists pass through member by
     # member, strings become character vectors, maps contribute one two-vector
