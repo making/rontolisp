@@ -89,6 +89,38 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void filesRoundTripThroughReaderAndLineSeq() throws Exception {
+		// clojure.java.io/reader opens a buffered file-stream reader: line-seq reads
+		// it without closing (with-open owns closing, like the oracle), over the
+		// vendored words fixture rather than the book's 32k corpus. Interpreter and
+		// JVM only, like the pins above (no filesystem on wasm).
+		java.nio.file.Path fixture = workDir.resolve("b22-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
+			assertThat(in).isNotNull();
+			java.nio.file.Files.copy(in, fixture);
+		}
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		String prelude = "(ns b22io (:require [clojure.java.io :as jio] [clojure.string :as s])) ";
+		// the hangman available-words shape: lowercase-only words survive, like the
+		// oracle
+		assertBothEqual(
+				prelude + "(with-open [r (jio/reader " + path + ")]"
+						+ " (println (apply vector (filter (fn [w] (= w (s/lower-case w))) (line-seq r)))))",
+				"[apple fig cherry kiwi ]\n");
+		// the eager.clj non-blank-lines count over the same fixture
+		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))", "6\n");
+		// the sequences.clj with-open shape over a referred reader, answering the line
+		// count
+		assertBothEqual("(ns b22ref (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path
+				+ ")] (println (count (line-seq r))))", "7\n");
+		// with-open closes: reading after the close signals, like the oracle
+		assertBothEqual(prelude + "(def b22closed (jio/reader " + path + "))" + "(with-open [r b22closed] (line-seq r))"
+				+ "(println (try (line-seq b22closed) (catch Exception e :closed)))", ":closed\n");
+		// the line-seq path form keeps answering strictly
+		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");
+	}
+
+	@Test
 	void keepAndUpdateSignalInsteadOfSkipping() {
 		// (keep inc [1 nil 2]) throws on the oracle (nil is not a number): the
 		// signal is pinned here, not a silent skip. Same for a missing update key.

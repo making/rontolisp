@@ -193,7 +193,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | `::` 自動解決キーワード | 名前で | 解決先の名前空間がない |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | 3引数 `into`（トランスデューサー） | `transducers are not supported yet: into` | トランスデューサー実装なし。2引数は conj |
-| `file-seq`、`reader` | `file-seq` / `reader` `is not supported yet: ...` | ディレクトリ走査・ホストリーダなし。`spit`・`slurp`・`line-seq` はパスを取る |
+| `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |
 
 ## エラーと位置
 

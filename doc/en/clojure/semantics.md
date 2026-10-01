@@ -193,7 +193,7 @@ Each refusal names the missing design, never `unknown name`:
 | `::`-auto-resolve keywords | by name | no namespace to resolve against |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 | three-argument `into` (transducers) | `transducers are not supported yet: into` | no transducer runtime; two arguments conjoin |
-| `file-seq`, `reader` | `file-seq` / `reader` `is not supported yet: ...` | no directory walks or host readers; `spit`/`slurp`/`line-seq` take paths |
+| `file-seq`, `clojure.java.io` (except `reader`) | `file-seq` / `unknown name: clojure.java.io/...` | no directory walks; only `reader` resolves, opening a file-stream reader |
 
 ## Errors and positions
 

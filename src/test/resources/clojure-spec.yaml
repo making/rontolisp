@@ -2100,3 +2100,26 @@ cases:
       true
       :str
       :fn
+  - name: jio-reader-resolves-on-every-backend
+    # clojure.java.io resolves beside clojure.string, for reader only: the alias,
+    # the referred bare var and the fully-qualified spelling all name the same
+    # one-argument open, which prints as a function value without touching the
+    # filesystem -- so this case runs unmodified on all four backends. Opening a
+    # path, reading a reader through line-seq and closing through with-open need
+    # files and live in ClojureInteropTest (interpreter and JVM); without a
+    # preopened directory both wasm backends refuse with the file-error
+    # (ClojureWasmFileRefusalTest); an unknown jio fn is a lowering refusal
+    # (ClojureLoweringTest).
+    source: |
+      (ns b22jio (:require [clojure.java.io :as jio :refer [reader]]))
+      (println jio/reader)
+      (println reader)
+      (println clojure.java.io/reader)
+      (println (map jio/reader []))
+      (println (map reader []))
+    expected: |
+      #<procedure>
+      #<procedure>
+      #<procedure>
+      nil
+      nil

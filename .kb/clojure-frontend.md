@@ -64,13 +64,13 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
 | `defn-` | `defn`, private by convention only | metadata never affects dispatch, so there is nothing to enforce |
 | `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value) |
-| `with-open` | `let*` plus `unwind-protect` closing in reverse order | each closer is the `close` interop call, so Java closeables work where host objects exist (interpreter and JVM; wasm rejects `java:`); an empty vector is the body |
+| `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the body |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
 | `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
 | `*out*` | `*standard-output*`, not a mangled name | the stream the print family writes to; `binding` may rebind it, like any special |
 | `.write`/`.flush` on a stream | `princ` / `finish-output` over the receiver | so `(. *out* write ...)` runs on every backend; a non-stream receiver still goes to `java:call` |
-| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; only `clojure.string` resolves (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
+| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; `clojure.string` and `clojure.java.io` (`reader` only) resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member`, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)` instead -- kept, b08), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)`), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
@@ -119,7 +119,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `coll?`/`string?`/`symbol?` | `or` over the shapes / `stringp` / `symbolp` minus the booleans and nil | `coll?` excludes strings (which the runtime stores as vectors) and nil, like the oracle; as values lambdas answering `T`-or-false |
 | `instance?`/`class` | the class name mapped onto the shared predicates / a `cond` answering a kind keyword | only the core classes lower (`String`, `Long`, ...) plus known record/deftype names (a tag-equality test), anything else a named refusal; `class` answers `:map`/`:vector`/`:set`/`:list`/`:string`/`:number`/`:keyword`/`:symbol`/`:char`/`:boolean`/`:nil`/`:function`/`:atom` (host classes exist on no wasm backend) and a record/deftype answers its tag keyword; as values lambdas (`instance?` has none -- an arity error stays one) |
 | `int`/`long`/`unchecked-add` | `truncate` / `+` | a non-number signals, like the oracle; `unchecked-add` never wraps (bignums); as values lambdas |
-| `spit`/`slurp`/`line-seq` | `with-open-file` writes / a `read-char` loop into a string stream / a `read-line` loop | interpreter and JVM only (no filesystem on wasm); `spit` supersedes unless `:append` is truthy; `line-seq` takes a path and answers strictly; each a function value too; `file-seq`/`reader` stay refused by name |
+| `spit`/`slurp`/`line-seq`/`clojure.java.io/reader` | `with-open-file` writes / a `read-char` loop into a string stream / a `read-line` loop / an `open` input stream | interpreter and JVM only (no filesystem on wasm -- a wasm module run without a preopened directory refuses with the file-error, pinned in `ClojureWasmFileRefusalTest`; measured 2026-10-01: with a `--dir` preopen both wasm backends read like the rest); `spit` supersedes unless `:append` is truthy; `line-seq` takes a path or an open reader and answers strictly either way (a reader is read but never closed -- `with-open` owns closing, like the oracle); each a function value too; `file-seq` and every other `clojure.java.io` fn stay refused by name |
 | `format` | the Java directives translated to Common Lisp over Clojure-notation arguments | the format string must be literal; `%s` converts like `str` (nil spells `"null"`), `%b` the boolean spelling, numbers the matching checked directive; `%e`/`%g`, flags and anything else are named refusals |
 | `range` (with an end) | a labels self call building the strict list | 1/2/3-arity (`end` / `start end` / `start end step`); a zero step signals; an end-less `(range)` is refused by name -- an infinite seq cannot be spelled strictly (spell it with `iterate`, b11) |
 | `lazy-seq` | `rontolisp::%clojure-make-lazy` over a zero-argument lambda of the body | the body (an implicit `do`) runs on first realization, at most once per seq object (memoized through `rplaca`/`rplacd` on the wrapper cell, primitives every backend already compiles -- no new runtime); `lazy-cat` desugars to `(concat (lazy-seq e) ...)` at datum time |
@@ -279,7 +279,8 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   prints `#<Atom ...>`, not the oracle's object), `await`/`shutdown-agents`
   answer `nil`, and `*agent*` is `nil` outside a send (unbound there). `binding`
   rebinds only `^:dynamic` vars, like the oracle's non-dynamic error for the
-  rest; `with-open` closes through the `close` method (Java closeables need the
+  rest; `with-open` closes stream values through `close` on every backend and
+  anything else through the `close` method (Java closeables need the
   JVM); `time` answers its value but only its `Elapsed time:` prefix pins.
   `*out*` is `*standard-output*`; `defonce` keeps the root where `def` resets
   it; refs and atoms share the cell, so STM verbs accept atom cells.
@@ -412,9 +413,21 @@ higher-order family (`comp`/`partial`/`complement`/`constantly`/`identity`/
 in `clojure-spec.yaml` (run on all four backends; the corpus slices are
 `keep-indexed` `index_of_any`, `map-indexed` `exploring`, `partition`/`comp`/
 `partial`/`every?` `functional` `count-runs`, `update-in` `note`), the refusals
-(regex literals, `clojure.spec`/`xml`/`java.io` namespaces, transducers,
-`file-seq`/`reader`, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
+(regex literals, `clojure.spec`/`xml` namespaces, transducers,
+`file-seq`/unknown-`clojure.java.io`-fn, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
 plus the `keep`/`update` signals in `ClojureInteropTest` (no filesystem on wasm).
+The reader-object IO slice lowers the same way (b22): `clojure.java.io` resolves
+for exactly `reader` (an `open` input stream over the file-stream runtime, so
+`line-seq` reads it and `with-open` closes it), `line-seq` takes a path or an
+open reader (strict either way; a reader is never closed by the read), and the
+`ns`/`require` `:as`/`:refer` wiring follows the `clojure.string` row -- pinned
+in `clojure-spec.yaml` (`jio-reader-resolves-on-every-backend`, resolution only,
+all four backends), `ClojureLoweringTest` (the lowered shapes, the
+unknown-`jio`-fn and bare-`reader` refusals), `ClojureInteropTest` (the
+hangman `available-words` shape, the `non-blank-lines` count, the observable
+`with-open` close and the path regression over the vendored fixture, interpreter
+and JVM) and `ClojureWasmFileRefusalTest` (both wasm backends refuse without a
+preopen); `file-seq`/`load-string`/`read-string`/`eval` stay refused.
 Predicate values answer `T`-or-false (so `(map odd? [1 2])` prints `(true false)`
 like the oracle); `filter`/`remove` test Clojure truthiness around the call.
 Multi-entry maps and multi-member sets never print in the spec (the walk order is
@@ -428,7 +441,7 @@ docstrings and attr maps), `defstruct`/`struct`/`struct-map` over key vectors,
 validator registry, agent var), `agent`/`send`/`send-off`/`await`/
 `shutdown-agents` as synchronous atoms over the same runtime, `binding` over
 `defparameter`-proclaimed specials, `with-open`/`with-out-str`/`time`, `*out*`
-as `*standard-output*`, and the stream `.write`/`.flush` methods -- each pinned
+as `*standard-output*`, and the stream `.write`/`.flush`/`.close` methods -- each pinned
 in `clojure-spec.yaml` (run on all four backends; the corpus slices are the
 `chat.clj` validator room `refs-transact-singly`, the `concurrency.clj` dynamic
 memo `binding-rebinds-dynamic-vars`, the `pi.clj` agent partition
