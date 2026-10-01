@@ -4110,6 +4110,10 @@ public final class ClojureLowering {
 		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
 				list(sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(list(isRegexForm(coll), list(sym("error"), LispString.literal("count needs a collection"))));
+		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
+		// too, so the oracle signals instead of counting (b45, the b42
+		// conj-guard precedent)
+		branches.add(list(isAtomForm(coll), list(sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("hash-table-count"), coll)));
 		// the false object counts as empty, like the oracle; anything else takes length
 		branches.add(list(list(sym("eq"), coll, this.falseVariable), new LispInteger(0)));
@@ -4131,6 +4135,10 @@ public final class ClojureLowering {
 		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
 				list(sym("error"), LispString.literal("empty? needs a collection"))));
 		branches.add(list(isRegexForm(coll), list(sym("error"), LispString.literal("empty? needs a collection"))));
+		// atoms (and refs/agents/volatiles, the same cell) are cons wrappers
+		// too, so the oracle signals instead of answering false (b45, the b42
+		// conj-guard precedent)
+		branches.add(list(isAtomForm(coll), list(sym("error"), LispString.literal("empty? needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("zerop"), list(sym("hash-table-count"), coll))));
 		branches.add(list(list(sym("vectorp"), coll), list(sym("zerop"), list(sym("length"), coll))));
 		branches.add(list(list(sym("stringp"), coll), list(sym("zerop"), list(sym("length"), coll))));

@@ -329,6 +329,9 @@ cases:
       (println (count (seq "ab")))
       (println (first "ab"))
       (println (rest "ab"))
+      (println (try (seq (atom nil)) (catch Exception e :refused)))
+      (println (try (first (atom nil)) (catch Exception e :refused)))
+      (println (try (cons 1 (atom nil)) (catch Exception e :refused)))
     expected: |
       (1 2)
       (1 2)
@@ -343,6 +346,9 @@ cases:
       2
       a
       (b)
+      :refused
+      :refused
+      :refused
   - name: finite-range-take-and-drop
     # range with an end builds the strict list; an over-long take/drop answers the
     # whole/empty seq as nil, where the oracle prints (). An end-less (range) is
@@ -886,6 +892,8 @@ cases:
       (println (count #{}))
       (println (count false))
       (println (list (empty? {}) (empty? #{}) (empty? {:a 1}) (empty? []) (empty? [1]) (empty? false)))
+      (println (try (count (atom nil)) (catch Exception e :refused)))
+      (println (try (empty? (atom nil)) (catch Exception e :refused)))
     expected: |
       2
       3
@@ -893,6 +901,8 @@ cases:
       0
       0
       (true true false true false false)
+      :refused
+      :refused
   - name: equality-reaches-maps-and-sets
     source: |
       (println (= {:a 1} {:a 1}))
