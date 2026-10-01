@@ -3831,10 +3831,12 @@ public final class ClojureLowering {
 				list(sym("coerce"),
 						list(sym("append"), list(sym("coerce"), collSym, quoted("list")), list(sym("list"), item)),
 						quoted("vector"))));
-		branches.add(list(
-				list(sym("and"), list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
-						list(sym("not"), isTypedForm(collSym)), list(sym("not"), isRegexForm(collSym))),
-				list(sym("cons"), item, collSym)));
+		branches.add(list(list(sym("and"), list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
+				list(sym("not"), isTypedForm(collSym)), list(sym("not"), isRegexForm(collSym)),
+				// atoms (and refs/agents/volatiles, the same cell) are cons
+				// wrappers too, so the oracle signals instead of consing (b42,
+				// the b21 regex-guard precedent)
+				list(sym("not"), isAtomForm(collSym))), list(sym("cons"), item, collSym)));
 		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("conj needs a collection and an item"))));
 		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
 	}
