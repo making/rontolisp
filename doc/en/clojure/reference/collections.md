@@ -1,6 +1,8 @@
 # Maps, sets and vectors
 
-A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Vector and table keys compare by identity.
+A map or set is an `equal` hash table, never mutated in place: every verb builds a fresh one, so persistence holds observably. Map/set iteration order is the table's walk order, unspecified. Vector and table keys compare by identity. Arrays are general:
+`(make-array Class dim...)` ignores the class, reads through `aget`, writes through
+`aset`, and measures through `alength`.
 
 | Name | Example | Result |
 |---|---|---|
@@ -29,3 +31,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct-map` | `(do (defstruct s :a) (:a (struct-map s :a 1)))` | `1` |
+| `make-array` | `(alength (make-array String 2))` | `2` |
+| `aget` | `(let [a (make-array String 1)] (aset a 0 "x") (aget a 0))` | `"x"` |
+| `aset` | `(let [a (make-array String 1)] (aset a 0 "x"))` | `"x"` |
+| `alength` | `(alength (make-array String 2))` | `2` |

@@ -97,7 +97,9 @@ splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoi
 形で保たれます。セットリテラルは各要素を自分自身の下に格納した同じテーブルで、操作がセットを
 マップと区別できるよう包まれます。キーワードは綴りを `(:C%KEYWORD name)` と包んだもの:
 `equal` で比較されるデータで、呼び出し位置（`(:k m)`、省略可能なデフォルト付き）や関数値として
-はマップ参照です。
+はマップ参照です。配列は general です。`(make-array Class dim...)` はクラスを無視した
+一般配列を作り、`aget` で読み、`aset` で書き、`alength` で測ります（本の
+`interop.clj` の形。Clojure の綴りだけが新しく、どのバックエンドでも動きます）。
 
 seq 群はすべてのコレクションのリストビュー上で動きます:リストはそのまま通り抜け、
 ベクターと文字列は変換され、マップはエントリごとに 2 要素ベクターを、セットは要素ごとに
@@ -131,8 +133,8 @@ lazy な tail は `...` で打ち切られます。chunk 化はありません�
 `nil` を答えます。`future`/`delay`/`force`/`promise`/`deliver` は名前で拒否された
 ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
 
-`binding` は `^:dynamic` な var（と、もとから special な `*out*`。
-`*out*` は `*standard-output*` です）を動的エクステントで再束縛します。それ以外は
+`binding` は `^:dynamic` な var（と、もとから special な `*out*`/`*in*`。
+`*out*`/`*in*` は `*standard-output*`/`*standard-input*` です）を動的エクステントで再束縛します。それ以外は
 拒否されます。`defstruct` はキーベクターを名前の裏に保持します。
 `struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は
 `*standard-output*` を文字列ストリームに束縛し（リテラルの
@@ -140,7 +142,8 @@ lazy な tail は `...` で打ち切られます。chunk 化はありません�
 `Elapsed time: N msecs` を報告して値を答えます。`with-open` は束縛して
 `unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
 closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
-`princ` 越しに印字され、どのバックエンドでも動きます。
+`princ` 越しに印字され、どのバックエンドでも動きます。`(.readLine stream)` は
+`read-line` 越しに読みます（末尾越しはオラクル同様 `nil`）。
 他の seq 動詞（`doseq`/`for`/`reduce` や `keep` 群）への lazy 入力は seq ビューを1レベル
 だけ消費します。先に `take` した prefix を渡してください。
 
@@ -189,6 +192,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |
+| 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | `::` 自動解決キーワード | 名前で | 解決先の名前空間がない |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |

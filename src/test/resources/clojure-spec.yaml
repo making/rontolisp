@@ -1861,6 +1861,25 @@ cases:
     expected: |
       hi:!
       :ok
+  - name: make-array-aget-aset-and-alength-round-trip
+    # The book's interop.clj painstakingly-create-array shape: the class spells the
+    # element type and is ignored -- every array here is general. Only the Clojure
+    # spellings are new, so this case runs on all four backends.
+    source: |
+      (let [b20-a (make-array String 3)] (aset b20-a 0 "x") (println (aget b20-a 0)) (println (alength b20-a)))
+      (let [b20-b (make-array String 2 2)] (aset b20-b 0 1 "y") (println (aget b20-b 0 1)) (println (alength b20-b)))
+    expected: |
+      x
+      3
+      y
+      2
+  - name: in-is-bound-to-standard-input
+    # *in* is *standard-input*: bound on every backend. Reading from a rebound *in*
+    # is pinned in ClojureInteropTest instead -- never real stdin in either place.
+    source: |
+      (println (nil? *in*))
+    expected: |
+      false
   - name: records-are-maps-with-a-type-tag
     # b13: a record is a (:C%RECORD tag fields table) wrapper over the same equal
     # table every map uses, so the map verbs read through it on all four backends

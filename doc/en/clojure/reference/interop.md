@@ -8,6 +8,7 @@ Interop lowers to the `java:` surface and runs on the interpreter and the JVM on
 | `..` | `(.. "hi" (toUpperCase) (length))` | `2` |
 | `.name / .-name` | `(.toUpperCase "hi")` | `HI` |
 | `Class/member` | `(Integer/parseInt "42")` | `42` |
+| `Class/member` (value) | `(every? Character/isWhitespace " ")` | `true` |
 | `new` | `(.length (new String "hi"))` | `2` |
 | `memfn` | `((memfn toUpperCase) "hi")` | `HI` |
 | `proxy` | `(.toString (proxy [java.lang.Object] [] (toString [] "p")))` | `p` |

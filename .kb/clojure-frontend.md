@@ -68,12 +68,13 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
 | `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
-| `*out*` | `*standard-output*`, not a mangled name | the stream the print family writes to; `binding` may rebind it, like any special |
-| `.write`/`.flush` on a stream | `princ` / `finish-output` over the receiver | so `(. *out* write ...)` runs on every backend; a non-stream receiver still goes to `java:call` |
+| `*out*`/`*in*` | `*standard-output*`/`*standard-input*`, not mangled names | the streams the print family writes to / reads from; `binding` may rebind either, like any special (decided 2026-10-01, b20) |
+| `.write`/`.flush`/`.readLine` on a stream | `princ` / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
 | `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; `clojure.string` and `clojure.java.io` (`reader` only) resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
-| Java interop (`.`, `..`, `.method`, `.-field`, `Class/member`, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)` instead -- kept, b08), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)`), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
+| Java interop (`.`, `..`, `.method`, `.-field`, `Class/member` in call and value position, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field -- decided 2026-10-01, b20, lifting the b08 deviation; a bare `Class/member` value reads the static field when the host class has one, else answers a member-as-value lambda dispatching per arity over the static call -- so `(every? Character/isWhitespace s)` runs -- and a variadic-only member is refused by name), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field; a bare `Class/member` value reads the field or answers an arity-dispatching member lambda), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
+| `make-array`/`aget`/`aset`/`alength` | the general array (`make-array` dims, `aref`, `(setf aref)`, `array-dimension` 0) | the class spells the element type and is ignored -- every array here is general (the book's `interop.clj` shape); only the Clojure spellings are new, so all four backends |
 | `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the protocol name answers its table; single signature per method (several arities stay refused) |
 | `defrecord` / `deftype` | the positional and map constructors (records only -- the oracle defines no `map->` for deftypes) as mangled `defun`s, plus one table row per inline method | a record is `(:C%RECORD tag fields table)` over the same `equal` table every map uses (no per-backend struct -- the b08 rejection reason); a deftype shares the shape with an opaque `:C%TYPE` tag; names join the whole-file pre-scan (forward refs like `defn`); `(T. ...)`/`(new T ...)` rewrite to `->T`; inline bodies see the fields as locals (an explicit parameter shadows its field, like the oracle); a trailing keyword option is refused |
 | `reify` | one fresh `:C%REIFY` tag per evaluation with a row per method in each protocol's table | a single-shot map plus methods (never `proxy`, which stays the `java:` surface); `=` is identity, like the oracle |
@@ -247,8 +248,18 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
   case); `indexOf`
   answers `-1` when missing, like the oracle (where `clojure.string/index-of`
-  answers nil); a zero-argument `Class/member` reads a static field (kept, b08: a
-  zero-argument static method spells `(. Class m)`); non-string receivers go to
+  answers nil); a zero-argument `(Class/m)` or `(. Class m)` is the static method
+  when the host class has one, else the static field read (decided 2026-10-01, b20,
+  lifting the b08 deviation that read the field and spelled the method
+  `(. Class m)` -- the corpus spells `(System/currentTimeMillis)` and
+  `(System/nanoTime)`); a bare `Class/member` value reads the static field when the
+  host class has one (dotted, imported, or `java.lang`, like the call position),
+  else answers a member-as-value lambda dispatching per known fixed arity over the
+  static call (a variadic-only member is refused by name; an unknown class or member
+  reads the field, whose run-time error names it); a static call or member value
+  whose overloads at that arity all answer a boolean answers `T`-or-false, like
+  every predicate value (a static call WITH arguments keeps the shared `java:`
+  unmarshal otherwise); non-string receivers go to
   `java:call` and fail there (kept, b08: only strings get the mapped core
   operation); `proxy` methods take the Java arguments only (no `this`, kept b08:
   nothing to close over); a head-position call to a `VARIABLE`-kind name holding
@@ -282,7 +293,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   rest; `with-open` closes stream values through `close` on every backend and
   anything else through the `close` method (Java closeables need the
   JVM); `time` answers its value but only its `Elapsed time:` prefix pins.
-  `*out*` is `*standard-output*`; `defonce` keeps the root where `def` resets
+  `*out*`/`*in*` are `*standard-output*`/`*standard-input*`; `defonce` keeps the root where `def` resets
   it; refs and atoms share the cell, so STM verbs accept atom cells.
 
 ## A session
@@ -427,7 +438,24 @@ unknown-`jio`-fn and bare-`reader` refusals), `ClojureInteropTest` (the
 hangman `available-words` shape, the `non-blank-lines` count, the observable
 `with-open` close and the path regression over the vendored fixture, interpreter
 and JVM) and `ClojureWasmFileRefusalTest` (both wasm backends refuse without a
-preopen); `file-seq`/`load-string`/`read-string`/`eval` stay refused.
+preopen); `file-seq`/`load-string`/`read-string`/`eval` stay refused. The
+interop-as-value slice lowers the same way (b20): a bare `Class/member` value reads
+the static field (dotted, imported, or `java.lang`, like the call position) or
+answers an arity-dispatching member lambda (a variadic-only member is refused by
+name; an unknown class or member reads the field, whose run-time error names it), a
+zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class
+has one else the field (lifting the b08 deviation), `make-array`/`aget`/`aset`/
+`alength` lower to the general array forms (the class is ignored), and `*in*` is
+`*standard-input*` (rebindable through `binding`; `.readLine` reads through
+`read-line`, nil past the end) -- pinned in `clojure-spec.yaml`
+(`make-array-aget-aset-and-alength-round-trip`, `in-is-bound-to-standard-input`,
+all four backends), `ClojureLoweringTest` (the lowered shapes, the variadic
+refusal), `ClojureInteropTest` (the corpus slices: `blank?` from `introduction`,
+`painstakingly-create-array` from `interop`, `take-guess` from `hangman` over a
+mocked `*in*`, interpreter and JVM) and `ClojureWasmInteropRefusalTest` (both wasm
+backends refuse the `java:` legs with the undefined-function call-time error);
+multi-interface `proxy` plus `proxy-super` stay refused (the snake GUI files stay
+non-goals, b16).
 Predicate values answer `T`-or-false (so `(map odd? [1 2])` prints `(true false)`
 like the oracle); `filter`/`remove` test Clojure truthiness around the call.
 Multi-entry maps and multi-member sets never print in the spec (the walk order is

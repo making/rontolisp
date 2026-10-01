@@ -56,6 +56,71 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void staticFieldsAnswerAsValues() throws Exception {
+		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
+		// value, through an import
+		assertBothEqual("(ns b20snake (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "37\n");
+		assertBothEqual("(println Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(println java.lang.Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(ns b20imp (:import java.lang.Math)) (println Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(println (Math/PI))", "3.141592653589793\n");
+		assertBothEqual("(println (. Math PI))", "3.141592653589793\n");
+	}
+
+	@Test
+	void zeroArgStaticCallsReachTheMethod() throws Exception {
+		// the book's sequences.clj/pi.clj shape and the bench-macro timer: a
+		// zero-argument (Class/member) is the static method, not the field read
+		assertBothEqual("(println (> (System/currentTimeMillis) 0))", "true\n");
+		assertBothEqual("(println (> (System/nanoTime) 0))", "true\n");
+		assertBothEqual("(println (> (. System currentTimeMillis) 0))", "true\n");
+		// a field in call position keeps answering the field
+		assertBothEqual("(println (Integer/MAX_VALUE))", "2147483647\n");
+	}
+
+	@Test
+	void staticMembersAnswerAsValues() throws Exception {
+		// the book's introduction.clj blank? shape: the member over every?
+		assertBothEqual("(defn b20-blank? [s] (every? Character/isWhitespace s)) (println (b20-blank? \"   \"))",
+				"true\n");
+		assertBothEqual("(println (every? Character/isWhitespace \"   \"))", "true\n");
+		assertBothEqual("(println (every? Character/isWhitespace \" a \"))", "false\n");
+		assertBothEqual("(println (map Integer/toString [1 2]))", "(1 2)\n");
+		assertBothEqual("(println (map Character/isWhitespace \" a\"))", "(true false)\n");
+		assertBothEqual("(let [b20-isws Character/isWhitespace] (println (b20-isws \\space)))", "true\n");
+	}
+
+	@Test
+	void memberValuesRefuseAWrongArgumentCount() throws Exception {
+		// like a multi-arity defn dispatch: any other count signals, on both backends
+		assertThatThrownBy(() -> interpret("(println ((fn [f] (f 1 2)) Character/isWhitespace))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println ((fn [f] (f 1 2)) Character/isWhitespace))"))
+			.isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void arraysRoundTripThroughMakeArrayAgetAsetAlength() throws Exception {
+		// the book's interop.clj painstakingly-create-array shape: the class spells
+		// the element type and is ignored, every array here is general
+		assertBothEqual("(let [a (make-array String 3)] (aset a 0 \"x\") (println (aget a 0)))", "x\n");
+		assertBothEqual("(let [a (make-array String 3)] (aset a 0 \"x\") (println (alength a)))", "3\n");
+		assertBothEqual(
+				"(let [b (make-array String 2 2)] (aset b 0 1 \"y\") (println (aget b 0 1)) (println (alength b)))",
+				"y\n2\n");
+	}
+
+	@Test
+	void inIsBoundAndReadsThroughBinding() throws Exception {
+		// the book's hangman take-guess input shape, mocked: *in* is bound (never
+		// real stdin here) and rebinding it feeds (.readLine *in*)
+		assertBothEqual("(println (nil? *in*))", "false\n");
+		assertBothEqual(
+				"(binding [*in* (java.io.BufferedReader. (java.io.StringReader. \"hello\"))] (println (.readLine *in*)))",
+				"hello\n");
+	}
+
+	@Test
 	void memfnCallsHostMethods() throws Exception {
 		assertBothEqual("(println (.toString ((memfn append x) (StringBuilder. \"a\") \"b\")))", "ab\n");
 		assertBothEqual("(println (map (memfn toString) [(StringBuilder. \"a\")]))", "(a)\n");
