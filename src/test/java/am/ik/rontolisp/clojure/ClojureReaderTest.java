@@ -106,6 +106,42 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void octalStringEscapesMatchTheOracle() {
+		// measured on `clj` 1.12.6.1673: `"\0"` is NUL, `"\77"` is `?`
+		assertThat(read("\"\\0\"")).isEqualTo(List.of(new LispString("\0")));
+		assertThat(read("\"\\77\"")).isEqualTo(List.of(new LispString("?")));
+		assertThat(read("\"\\377\"")).isEqualTo(List.of(new LispString("ÿ")));
+		assertThat(read("\"\\07\\00\"")).isEqualTo(List.of(new LispString("\7\0")));
+		// the escape stops at the closing quote, whitespace, `,` or a macro
+		// char, leaving it for the string body
+		assertThat(read("\"a\\12 b\"")).isEqualTo(List.of(new LispString("a\n b")));
+		assertThat(read("\"a\\0,b\"")).isEqualTo(List.of(new LispString("a\0,b")));
+		assertThat(read("\"\\0123\"")).isEqualTo(List.of(new LispString("\n3")));
+		// past `\377` is the oracle's range refusal
+		assertThatThrownBy(() -> read("\"\\400\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Octal escape sequence must be in range [0, 377].");
+		assertThatThrownBy(() -> read("\"\\777\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Octal escape sequence must be in range [0, 377].");
+		// a non-octal digit -- `8`/`9` or a trailing letter -- is the oracle's
+		// `Invalid digit` refusal
+		assertThatThrownBy(() -> read("\"a\\8b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: 8");
+		assertThatThrownBy(() -> read("\"a\\9b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: 9");
+		assertThatThrownBy(() -> read("\"a\\0b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: b");
+	}
+
+	@Test
+	void singleQuoteEscapeSignalsLikeTheOracle() {
+		// `\'` read as `'` here but the oracle (clj 1.12.6.1673) signals
+		// `Unsupported escape character: \'`: refused to match it (b44) instead
+		// of keeping the lenient read (a `'` needs no escaping in `"..."`).
+		assertThatThrownBy(() -> read("\"a\\'b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported escape character: \\'");
+	}
+
+	@Test
 	void vectorsMapsSetsAndQuotes() {
 		assertThat(printed("[1 :a]")).isEqualTo("[(|%vector| 1 :|a|)]");
 		assertThat(printed("{:a 1}")).isEqualTo("[(|%hash-map| :|a| 1)]");
