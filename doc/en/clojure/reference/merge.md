@@ -3,7 +3,7 @@
 `(merge m ...)`
 
 Answers one fresh table over every argument's pairs, later maps winning; no argument is
-mutated. `(merge)` is `nil`, and a merge of all-`nil` arguments is `nil` too.
+mutated. `(merge)` is `nil`, and a merge of all-`nil` arguments is `nil` too. The result keeps a record's type only when the first non-`nil` argument is one, like the oracle.
 
 ```clojure
 (println (count (merge {:a 1} {:b 2})))     ; 2

@@ -17,6 +17,7 @@ has them.
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |
 | [Multimethods and hierarchies](reference/multimethods.md) | `defmulti`/`defmethod`, `derive` and the hierarchy reads |
+| [Protocols, records and types](reference/protocols.md) | `defprotocol`/`defrecord`/`deftype`, `reify`, the `extend` family and `satisfies?` |
 | [Errors](reference/errors.md) | `try`/`catch`/`finally`, `throw`, `ex-info` and its readers |
 | [Namespaces](reference/namespaces.md) | `ns` and the top-level `require`/`use`/`import` |
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |

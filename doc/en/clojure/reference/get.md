@@ -4,7 +4,7 @@
 
 Answers the value under `k`: in a map or set (the member itself), the element at index
 `k` of a vector or character of a string, `default` (nil without one) when missing. Reads
-`nil` too; a list answers the default. The same read backs keyword call position
+`nil` too; a list answers the default. A record reads through its entry table; a deftype or reify answers the default, like the oracle. The same read backs keyword call position
 `(:k m)`.
 
 Deviation: vector and table keys compare by identity, not structurally, so

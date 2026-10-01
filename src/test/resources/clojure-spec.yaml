@@ -1797,3 +1797,242 @@ cases:
     expected: |
       hi:!
       :ok
+  - name: records-are-maps-with-a-type-tag
+    # b13: a record is a (:C%RECORD tag fields table) wrapper over the same equal
+    # table every map uses, so the map verbs read through it on all four backends
+    # (the oracle answers #user.R{...}; this prints the wrapper -- the documented
+    # record-printing deviation -- so cases read through get/class instead).
+    # (assoc b13-r :hard true) keeps the type; (dissoc r :hard) of the extension
+    # key keeps it while (dissoc r :mass) of the base field drops to a plain map.
+    source: |
+      (defrecord B13Rock [mass])
+      (def b13-r (->B13Rock 7))
+      (println (= b13-r (->B13Rock 7)))
+      (println (= b13-r {:mass 7}))
+      (println (get b13-r :mass))
+      (println (:mass b13-r))
+      (println (contains? b13-r :mass))
+      (println (count b13-r))
+      (println (keys b13-r))
+      (println (vals b13-r))
+      (println (class b13-r))
+      (println (instance? B13Rock b13-r))
+      (println (instance? B13Rock {:mass 7}))
+      (println (get (assoc b13-r :hard true) :hard))
+      (println (class (assoc b13-r :hard true)))
+      (println (get (map->B13Rock {:mass 1 :color :red}) :color))
+      (println (get (map->B13Rock {:mass 1}) :color :gone))
+      (println (B13Rock. 42))
+      (def b13-r2 (dissoc (assoc b13-r :hard true) :hard))
+      (println (class b13-r2))
+      (println (get b13-r2 :hard :gone))
+      (def b13-r3 (dissoc b13-r :mass))
+      (println b13-r3)
+      (println (get (merge b13-r {:hard true}) :hard))
+      (println (class (merge b13-r {:hard true})))
+      (println (class (merge {:hard true} b13-r)))
+      (println (get (merge-with + b13-r {:mass 10}) :mass))
+      (println (class (merge-with + b13-r {:mass 10})))
+      (println (get (update b13-r :mass inc) :mass))
+      (println (select-keys (assoc b13-r :hard true) [:mass]))
+      (println (into {} b13-r))
+      (println (empty? b13-r))
+      (println (empty? (B13Rock. nil)))
+      (println (seq b13-r))
+      (println (get (conj b13-r [:hard true]) :hard))
+      (println (get-in b13-r [:mass]))
+      (println (get (assoc-in b13-r [:mass] 8) :mass))
+      (println (get (update-in b13-r [:mass] inc) :mass))
+    expected: |
+      true
+      false
+      7
+      7
+      true
+      1
+      (:mass)
+      (7)
+      :B13Rock
+      true
+      false
+      true
+      :B13Rock
+      :red
+      :gone
+      (:C%RECORD :B13Rock (:mass) {:mass 42})
+      :B13Rock
+      :gone
+      {}
+      true
+      :B13Rock
+      :map
+      17
+      :B13Rock
+      8
+      {:mass 7}
+      {:mass 7}
+      false
+      false
+      ([:mass 7])
+      true
+      7
+      8
+      8
+  - name: protocols-dispatch-over-the-type-tag
+    # b13: the InstantProvider/SimClock slice of instant.clj, adapted (the oracle
+    # extends to the Instant/Date host classes, which no wasm backend has; the
+    # kinds class answers stand in). extend-protocol rows dispatch nil/String/
+    # Number separately with Object as the catch-all; the deftype body sees its
+    # fields as locals, so (swap! tick inc) advances the simulated clock.
+    source: |
+      (defprotocol B13Time (b13-to-ms [source]))
+      (extend-protocol B13Time
+        nil (b13-to-ms [src] :b13-nil)
+        Object (b13-to-ms [src] :b13-object)
+        String (b13-to-ms [s] :b13-string)
+        Number (b13-to-ms [n] n))
+      (println (b13-to-ms nil))
+      (println (b13-to-ms "oops"))
+      (println (b13-to-ms 42))
+      (println (b13-to-ms 4.5))
+      (println (b13-to-ms :k))
+      (println (satisfies? B13Time nil))
+      (println (satisfies? B13Time "s"))
+      (defprotocol B13Sim (b13-advance! [s]))
+      (deftype B13Clock [start granularity tick]
+        B13Sim (b13-advance! [_] (swap! tick inc))
+        B13Time (b13-to-ms [_] (+ start (* granularity @tick))))
+      (def b13-clock (->B13Clock 1000 100 (atom 0)))
+      (println (b13-to-ms b13-clock))
+      (b13-advance! b13-clock)
+      (b13-advance! b13-clock)
+      (println (b13-to-ms b13-clock))
+      (println (satisfies? B13Sim b13-clock))
+      (println (satisfies? B13Time b13-clock))
+      (println (instance? B13Clock b13-clock))
+      (println (class b13-clock))
+      (println (get b13-clock :start))
+      (println (.-granularity b13-clock))
+    expected: |
+      :b13-nil
+      :b13-string
+      42
+      4.5
+      :b13-object
+      true
+      true
+      1000
+      1200
+      true
+      true
+      true
+      :B13Clock
+      nil
+      100
+  - name: hangman-players-guess-through-the-protocol
+    # b13: the Player slice of hangman/core.clj (random-player/interactive-player
+    # via reify, ChoicesPlayer via defrecord, the pure game loop). Letters are
+    # strings (the char-coercion helpers are outside the subset); the two games
+    # below differ by one wrong guess, like the oracle's 2 and 3.
+    source: |
+      (defprotocol B13Player (b13-next-guess [player progress]))
+      (def b13-letters ["e" "t" "a" "o" "i" "n" "h" "x"])
+      (def b13-random-player (reify B13Player (b13-next-guess [_ progress] :rand)))
+      (def b13-interactive-player (reify B13Player (b13-next-guess [_ progress] :human)))
+      (println (b13-next-guess b13-random-player nil))
+      (println (b13-next-guess b13-interactive-player nil))
+      (println (satisfies? B13Player b13-random-player))
+      (println (= b13-random-player b13-random-player))
+      (println (= b13-random-player b13-interactive-player))
+      (defrecord B13Choices [choices]
+        B13Player
+        (b13-next-guess [_ progress]
+          (let [guess (first @choices)]
+            (swap! choices rest)
+            guess)))
+      (defn b13-choices-player [choices] (->B13Choices (atom choices)))
+      (def b13-alpha (b13-choices-player b13-letters))
+      (println (b13-next-guess b13-alpha nil))
+      (println (b13-next-guess b13-alpha nil))
+      (println (satisfies? B13Player b13-alpha))
+      (println (satisfies? B13Player {}))
+      (println (instance? B13Choices b13-alpha))
+      (extend-type String B13Player (b13-next-guess [s progress] :str-player))
+      (println (b13-next-guess "x" nil))
+      (extend String B13Player {:b13-next-guess (fn [s progress] :ext-fn)})
+      (println (b13-next-guess "y" nil))
+      (defn b13-new-progress [word] (repeat (count word) "_"))
+      (defn b13-update-progress [progress word guess]
+        (map #(if (= %1 guess) guess %2) word progress))
+      (defn b13-complete? [progress word] (= progress (seq word)))
+      (defn b13-game [word player]
+        (loop [progress (b13-new-progress word) guesses 1]
+          (let [guess (b13-next-guess player progress)
+                progress2 (b13-update-progress progress word guess)]
+            (if (b13-complete? progress2 word) guesses (recur progress2 (inc guesses))))))
+      (println (b13-game ["h" "i"] (b13-choices-player ["h" "i" "x"])))
+      (println (b13-game ["h" "i"] (b13-choices-player ["x" "h" "i"])))
+    expected: |
+      :rand
+      :human
+      true
+      true
+      false
+      e
+      t
+      true
+      false
+      true
+      :str-player
+      :ext-fn
+      2
+      3
+  - name: reify-values-dispatch-and-deftypes-stay-opaque
+    # b13: each reify is a distinct dispatch value (= is identity); a deftype is
+    # opaque to the map verbs (reads miss, writers and seq/count/empty? signal,
+    # caught here) while instance?/class still see its tag.
+    source: |
+      (defprotocol B13Greet (b13-hello [g]))
+      (def b13-ga (reify B13Greet (b13-hello [_] :a)))
+      (def b13-gb (reify B13Greet (b13-hello [_] :b)))
+      (println (b13-hello b13-ga))
+      (println (b13-hello b13-gb))
+      (println (satisfies? B13Greet b13-ga))
+      (println (= b13-ga b13-ga))
+      (println (= b13-ga b13-gb))
+      (deftype B13Box [v])
+      (def b13-box (B13Box. 1))
+      (println (= b13-box b13-box))
+      (println (= b13-box (B13Box. 1)))
+      (println (get b13-box :v))
+      (println (contains? b13-box :v))
+      (println (try (keys b13-box) (catch Exception e :threw)))
+      (println (try (count b13-box) (catch Exception e :threw)))
+      (println (try (seq b13-box) (catch Exception e :threw)))
+      (println (try (assoc b13-box :w 2) (catch Exception e :threw)))
+      (println (try (b13-hello 1.5) (catch Exception e :threw)))
+      (println (class b13-box))
+      (println (instance? B13Box b13-box))
+      (extend-type String B13Greet (b13-hello [s] :str))
+      (println (b13-hello "x"))
+      (extend String B13Greet {:b13-hello (fn [s] :fn)})
+      (println (b13-hello "y"))
+    expected: |
+      :a
+      :b
+      true
+      true
+      false
+      true
+      false
+      nil
+      false
+      :threw
+      :threw
+      :threw
+      :threw
+      :threw
+      :B13Box
+      true
+      :str
+      :fn

@@ -6,6 +6,8 @@ Answers a fresh map over `m`'s pairs plus the given ones, later pairs winning; `
 never mutated. `assoc` onto `nil` builds from empty. Odd pair counts are refused. Vector
 keys compare by identity.
 
+Onto a record the entries join the entry table and the type survives.
+
 Deviation: a vector key misses a lookup the oracle answers -- table keys compare by
 identity, so `(get (assoc {} [:a] 1) [:a])` is `nil` here. Transients (`assoc!`) are
 refused by name.

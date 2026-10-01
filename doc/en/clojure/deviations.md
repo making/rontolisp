@@ -36,7 +36,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
 - Multimethod dispatch values compare like `equal` table keys (vectors by identity);
   dispatch through a hierarchy prefers the strictly most specific method, then
-  `prefer-method` choices.
+  `prefer-method` choices. Protocol dispatch reads no hierarchy (exact tag match
+  plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
+  oracle tells them apart.
+- A record prints as its wrapper list (`(:C%RECORD :R (:a) {:a 7})`, where the
+  oracle prints `#user.R{:a 7}`), a deftype likewise with `:C%TYPE`, a reify as
+  `(:C%REIFY ...)`; only the entry maps print deterministically.
 - `split`/`replace` match literal strings, never patterns; `index-of` answers `-1` when
   missing, like the oracle (where `clojure.string/index-of` answers `nil`).
 - `def` inside a body sets the global when the body runs; `defn` inside a body works only
@@ -56,9 +61,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   evaluates its levels in the one expansion. `var`/`#'` stays refused everywhere:
   bodies quote symbols instead.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
-  the oracle answers host classes, which no wasm backend has.
-- `instance?` only over the core classes (`String`, `Long`, ...); any other class is a
-  named refusal instead of a wrong answer.
+  the oracle answers host classes, which no wasm backend has. A record or deftype
+  answers its tag keyword instead.
+- `instance?` over the core classes (`String`, `Long`, ...) and known record/deftype
+  names; any other class is a named refusal instead of a wrong answer.
 - `unchecked-add` never wraps (integers are bignums); the other `unchecked-*` verbs are
   absent.
 - `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float

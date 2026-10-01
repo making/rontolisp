@@ -467,16 +467,82 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def h (make-hierarchy)) (defmulti area :shape :hierarchy h)")).contains("C%H-DISPATCH");
 		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("isa? takes a child and a parent");
-		assertThatThrownBy(() -> Clojure.read("(defrecord R [x])", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("protocols are not supported yet: defrecord");
-		assertThatThrownBy(() -> Clojure.read("(reify Object (toString [this] 1))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("protocols are not supported yet: reify");
 		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("MAKE-CONDITION").contains("C%E-EX-INFO");
 		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-data e)")).contains("C%E-DATA");
 		assertThat(lowered("(def e (ex-info \"m\" {:a 1})) (ex-message e)")).contains("C%E-MESSAGE");
 		assertThatThrownBy(() -> Clojure.read("(ex-info \"m\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("ex-info takes a message and a data map");
+	}
+
+	@Test
+	void protocolsRecordsAndTypesLowerToTables() {
+		// a protocol is a method-table global plus one dispatcher defun per method,
+		// over the shared tag reader (the multimethod shape without the hierarchy
+		// search); the protocol name answers its table
+		assertThat(lowered("(defprotocol P (foo [x]) (bar [x y]))")).contains("C%PROTOCOL-TAG")
+			.contains("|c%P%methods|")
+			.contains("DEFUN |c%foo|")
+			.contains("DEFUN |c%bar|")
+			.contains("(SETQ |c%P| |c%P%methods|)");
+		// a record is a (:C%RECORD tag fields table) wrapper with positional and map
+		// constructors as mangled defuns, so constructor calls stay direct
+		assertThat(lowered("(defprotocol P (foo [x])) (defrecord R [a] P (foo [_] a))")).contains(":C%RECORD")
+			.contains("DEFUN |c%->R|")
+			.contains("DEFUN |c%map->R|")
+			.contains("GETHASH");
+		assertThat(lowered("(defrecord R [a]) (->R 1)")).contains("(|c%->R| 1)");
+		assertThat(lowered("(->R 1) (defrecord R [a])")).contains("(|c%->R| 1)");
+		assertThat(lowered("(defrecord R [a]) (R. 1)")).contains("(|c%->R| 1)");
+		assertThat(lowered("(defrecord R [a]) (map->R {:a 1})")).contains("|c%map->R|");
+		assertThat(lowered("(T. 1)")).contains("JAVA:NEW");
+		// a deftype shares the shape with an opaque tag and no map constructor
+		assertThat(lowered("(deftype T [a])")).contains(":C%TYPE").contains("DEFUN |c%->T|");
+		assertThat(lowered("(deftype T [a])")).doesNotContain("map->");
+		assertThatThrownBy(() -> Clojure.read("(map->T {:a 1}) (deftype T [a])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: map->T");
+		// reify answers one fresh tag per evaluation with a row per method
+		assertThat(lowered("(defprotocol P (foo [x])) (reify P (foo [_] 1))")).contains(":C%REIFY")
+			.contains("GENSYM")
+			.contains("|c%P%methods|");
+		// extend-protocol/extend-type/extend are defmethod rows; satisfies? is table
+		// membership; instance? of a type is tag equality
+		assertThat(lowered("(defprotocol P (foo [x])) (extend-protocol P String (foo [s] s))"))
+			.contains("|c%P%methods|");
+		assertThat(lowered("(defprotocol P (foo [x])) (extend-type String P (foo [s] s))")).contains("|c%P%methods|");
+		assertThat(lowered("(defprotocol P (foo [x])) (extend String P {:foo (fn [s] s)})")).contains("|c%P%methods|");
+		assertThat(lowered("(defprotocol P (foo [x])) (satisfies? P 1)")).contains("C%PROTOCOL-TAG");
+		assertThat(lowered("(defrecord R [a]) (instance? R 1)")).contains("C%PROTOCOL-TAG");
+		assertThat(lowered("(defrecord R [a]) (.-a (->R 1))")).contains("GETHASH");
+		// the stays-refused set: interfaces and code generation, multi-arity methods,
+		// metadata extension, non-core extend targets, unknown protocols and methods
+		// outside their protocols
+		assertThatThrownBy(() -> Clojure.read("(gen-class)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("protocols are not supported yet: gen-class");
+		assertThatThrownBy(() -> Clojure.read("(gen-interface)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("protocols are not supported yet: gen-interface");
+		assertThatThrownBy(() -> Clojure.read("(definterface I (m [x]))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("protocols are not supported yet: definterface");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m ([x] 1) ([x y] 2)))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("multi-arity protocol methods are not supported yet: m");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q :extend-via-metadata true (m [x]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("extend-via-metadata is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (extend-protocol Q Instant (m [x] 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("extend-protocol needs a core type, not Instant");
+		assertThatThrownBy(() -> Clojure.read("(extend-protocol Missing String (m [x] 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such protocol: Missing");
+		assertThatThrownBy(() -> Clojure.read("(satisfies? Missing 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No such protocol: Missing");
+		assertThatThrownBy(() -> Clojure.read("(defprotocol Q (m [x])) (defrecord R [a] Q (nope [x] 1))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can't define method not in interfaces: nope");
+		assertThatThrownBy(() -> Clojure.read("(defrecord R [a] :load-ns true)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defrecord option");
 	}
 
 	@Test

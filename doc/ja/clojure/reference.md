@@ -16,6 +16,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [数値と述語](reference/numbers.md) | 算術、比較、型述語 |
 | [状態](reference/state.md) | `atom`/`deref`/`swap!` と volatile 三兄弟 |
 | [マルチメソッドと階層](reference/multimethods.md) | `defmulti`/`defmethod`、`derive` と階層参照 |
+| [プロトコル、レコード、型](reference/protocols.md) | `defprotocol`・`defrecord`・`deftype`、`reify`、`extend` 系と `satisfies?` |
 | [エラー](reference/errors.md) | `try`/`catch`/`finally`、`throw`、`ex-info` とその参照 |
 | [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |

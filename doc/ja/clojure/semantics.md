@@ -143,6 +143,35 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 
 ## 状態と動的スコープ
 
+## プロトコル、レコード、型
+
+`defprotocol` はメソッドを宣言します。各メソッドはターゲットのタグ上のディスパッチャ
+（階層探索なしの multimethod 形:タグの完全一致、それから `Object` 行）に lower され
+ます。`extend-protocol`/`extend-type`/`extend` はターゲットのタグの下に行を足し、
+`satisfies?` は所属を調べます。extend 対象は `class` が答える種類（`String`、
+`Number`、`Boolean`、`Keyword`、`Symbol`、`Character`、`Map`、`Vector`、`Set`、
+`List`/`Seq`、それに外れ既定としての `nil` と `Object`）と既知の record/deftype 名
+で、それ以外は名前付きで拒否されます。`Object` 行なしの外れはオラクル同様シグナル
+を上げます。各メソッドは1つのパラメータベクターを取ります（複数アリティは拒否のまま）。
+
+`defrecord` 値は型タグ付きのマップです。すべてのマップが使うエントリ表を
+`(:C%RECORD tag fields table)` で包むため、マップ動詞はそれを通して読みます
+（`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` はエントリを読み、
+`assoc`/`update`/`conj`/`merge` は表を組み直してタグを保ち、`dissoc` は宣言
+フィールドが全部残る間はレコードを保ち、そうでなければオラクル同様プレーンな
+マップに落ちます）。`=` は2つのレコードをタグとエントリで比べ、プレーンなマップ
+と等しくなることは決してありません（オラクル同様）。`deftype` は不透明タグで
+同じ形を共有します。読みは外れ、書きと `seq`/`count`/`empty?` はシグナルを上げ、
+`=` は同一性です（オラクル同様）。`reify` は評価ごとに新しいタグを答え、各
+プロトコルの表に行を持ちます。コンストラクタはマングルされた関数です。位置指定の
+`->Type`、マップからの `map->Type`（record のみ -- オラクルは deftype に `map->`
+を定義しません）。`(Type. ...)`/`(new Type ...)` は `->Type` に書き換わります。
+`instance?` の record/deftype 名はタグを調べ、`(.-field x)` はフィールド表を読み
+ます（欠けたフィールドはオラクル同様シグナル）。インラインのメソッド本体には
+フィールドがローカルとして見えます（明示パラメータは同名フィールドを隠します。
+オラクル同様）。型ヒント（`^String`、`^H`）はパースして捨てられ、ディスパッチに
+影響しません。
+
 ## 未対応
 
 各拒否は `unknown name` ではなく欠けた設計を名指します:
@@ -152,8 +181,10 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | 正規表現リテラル `#"..."` | `regex literals are not supported yet` | どのバックエッドにも正規表現実装がない |
-| `defprotocol`、`defrecord`、`deftype`、`definterface`、`reify`、`extend-protocol`、`extend-type`、`extend`、`satisfies?`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | 設計上拒否 -- 4 バックエンド全部での型ディスパッチとレコード値表現 |
-| `set!` | 名前で | フィールド書き込みプリミティブと変更対象の型がない |
+| `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
+| 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
+| `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | メタデータはディスパッチに影響しない |
+| `set!` | 名前で | フィールド書き込みプリミティブがない |
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |

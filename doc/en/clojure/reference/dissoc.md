@@ -3,7 +3,7 @@
 `(dissoc m k ...)`
 
 Answers a fresh map over `m`'s pairs minus the given keys; absent keys are ignored and
-`m` is never mutated. `dissoc` of `nil` is `nil`.
+`m` is never mutated. `dissoc` of `nil` is `nil`. Of a record the type survives while every declared field is still present and drops to a plain map otherwise, like the oracle.
 
 Deviation: transients (`dissoc!`) are refused by name. Misuse of a non-map may signal
 the Common Lisp type error instead of the oracle's.

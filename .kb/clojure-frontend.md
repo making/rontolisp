@@ -72,7 +72,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member`, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)` instead -- kept, b08), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument static method spells `(. Class m)`), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
-| `defprotocol` / `defrecord` / `deftype` / `definterface` / `reify` / `extend-protocol` / `extend-type` / `extend` / `satisfies?` / `gen-class` / `gen-interface` | refused by name (`protocols are not supported yet: <name>`) | REJECTED by design (decided 2026-09-30, b08): a protocol needs type-based dispatch and `defrecord`/`deftype` a value representation every backend prints, hashes and compares -- a new runtime on all four backends for no measured user (the b02 argument against a persistent-map library). The multimethod table plus the hierarchy search stays the dispatch story; `proxy` moved out (see the `proxy` row) |
+| `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the protocol name answers its table; single signature per method (several arities stay refused) |
+| `defrecord` / `deftype` | the positional and map constructors (records only -- the oracle defines no `map->` for deftypes) as mangled `defun`s, plus one table row per inline method | a record is `(:C%RECORD tag fields table)` over the same `equal` table every map uses (no per-backend struct -- the b08 rejection reason); a deftype shares the shape with an opaque `:C%TYPE` tag; names join the whole-file pre-scan (forward refs like `defn`); `(T. ...)`/`(new T ...)` rewrite to `->T`; inline bodies see the fields as locals (an explicit parameter shadows its field, like the oracle); a trailing keyword option is refused |
+| `reify` | one fresh `:C%REIFY` tag per evaluation with a row per method in each protocol's table | a single-shot map plus methods (never `proxy`, which stays the `java:` surface); `=` is identity, like the oracle |
+| `extend-protocol` / `extend-type` / `extend` | `defmethod` rows under the target's tag (`extend` from a map literal of method functions) | targets are the `class`-keyword kinds (`String`, `Number`/`Long`/`Double`, ..., `Map`/`Vector`/`Set`/`List`, plus `nil` and `Object` as the miss default) and known record/deftype names; anything else (an `Instant`, a `Date`, ...) is a named refusal; `extend-type` groups methods under protocol names |
+| `satisfies?` | table membership (the tag's row, or the `Object` row) | the protocol is a literal name, like `defmethod`'s multimethod |
+| `definterface` / `gen-class` / `gen-interface` | refused by name (`protocols are not supported yet: <name>`) | stay refused: no interface generation on any backend |
 | `comment` | nothing (`nil`) | |
 | characters (`\a`, lowercase names, `\uXXXX`, `\oNNN`) | `LispChar`, self-evaluating | exactly the oracle's spellings, case-sensitively; anything else is the oracle's `Unsupported character` refusal |
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
@@ -105,12 +110,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `sort`/`sort-by` | `sort` over a copy with the default or wrapped comparator | the default orders numbers, strings, characters and keywords (anything else signals); a comparator runs on truthiness through the null-or-false test; as values rest lambdas |
 | `last`/`butlast`/`second` | `car` of `last` / `butlast` / `cadr` over the seq view | of empty, nil; as values one-argument lambdas |
 | a set/map/vector literal in call position, or as a function value | the member / table-aware read / `nth` with an optional default | `(#{:h} :h)` is `:h`, `({:a 1} :b :d)` is `:dflt`, `([10 20] 5 :d)` is `:d` (the `nth` past-the-end-is-default position); `(filter #{:h} ...)` runs through the same lambda |
-| `update`/`update-in`/`assoc-in`/`get-in` | a fresh table over the old pairs with the rewritten pair / the nested walk | `update` applies `(apply f (get m k) args...)`; `update-in` recurses (an empty key vector is refused, like the oracle's throw); `assoc-in` builds missing levels (no keys associates under nil, like the oracle); `get-in` threads the default through every level; as values lambdas walking the key sequence at run time |
-| `select-keys`/`merge-with`/`into`/`frequencies` | a fresh table over the present keys / grown map by map through `f` / a `conj` fold / one `dolist` pass | `select-keys` of nil is the empty map; `merge-with` of no maps is nil (a transducer argument is refused); `into` targets lists/vectors/maps/sets; as values lambdas |
+| `update`/`update-in`/`assoc-in`/`get-in` | a fresh table over the old pairs with the rewritten pair / the nested walk, rewrapped in the record it came from | `update` applies `(apply f (get m k) args...)`; `update-in` recurses (an empty key vector is refused, like the oracle's throw); `assoc-in` builds missing levels (no keys associates under nil, like the oracle); `get-in` threads the default through every level; records read and rewrite through the entry table, keeping the type; as values lambdas walking the key sequence at run time |
+| `select-keys`/`merge-with`/`into`/`frequencies` | a fresh table over the present keys / grown map by map through `f` / a `conj` fold / one `dolist` pass | `select-keys` of nil is the empty map; `merge-with` of no maps is nil (a transducer argument is refused); `into` targets lists/vectors/maps/sets; a record reads through its entry table -- `select-keys` and `into {}` answer plain maps (like the oracle), `merge-with`/`into` onto a record keep the type (like `merge`/`conj`); as values lambdas |
 | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` | right-nested closures / fixed-plus-rest closures / the negated predicate / the kept value / the value itself / an `equal`-tabled closure / a labels self call over thunks | no functions is `identity` for `comp`; `complement` answers `T`-or-false; `memoize` keys the argument list structurally; `trampoline` invokes zero-argument results until a non-function answers; each a function value too |
 | `when-let`/`if-let`/`when-not`/`if-not`/`when-first` | `let*` pairs over one temporary plus `if` on null-or-false | `when-let`/`if-let` destructure like `let` (testing the whole init); `when-not`/`if-not` swap the branches; `when-first` binds the head of the seq view |
 | `coll?`/`string?`/`symbol?` | `or` over the shapes / `stringp` / `symbolp` minus the booleans and nil | `coll?` excludes strings (which the runtime stores as vectors) and nil, like the oracle; as values lambdas answering `T`-or-false |
-| `instance?`/`class` | the class name mapped onto the shared predicates / a `cond` answering a kind keyword | only the core classes lower (`String`, `Long`, ...), anything else a named refusal; `class` answers `:map`/`:vector`/`:set`/`:list`/`:string`/`:number`/`:keyword`/`:symbol`/`:char`/`:boolean`/`:nil`/`:function`/`:atom` (host classes exist on no wasm backend); as values lambdas (`instance?` has none -- an arity error stays one) |
+| `instance?`/`class` | the class name mapped onto the shared predicates / a `cond` answering a kind keyword | only the core classes lower (`String`, `Long`, ...) plus known record/deftype names (a tag-equality test), anything else a named refusal; `class` answers `:map`/`:vector`/`:set`/`:list`/`:string`/`:number`/`:keyword`/`:symbol`/`:char`/`:boolean`/`:nil`/`:function`/`:atom` (host classes exist on no wasm backend) and a record/deftype answers its tag keyword; as values lambdas (`instance?` has none -- an arity error stays one) |
 | `int`/`long`/`unchecked-add` | `truncate` / `+` | a non-number signals, like the oracle; `unchecked-add` never wraps (bignums); as values lambdas |
 | `spit`/`slurp`/`line-seq` | `with-open-file` writes / a `read-char` loop into a string stream / a `read-line` loop | interpreter and JVM only (no filesystem on wasm); `spit` supersedes unless `:append` is truthy; `line-seq` takes a path and answers strictly; each a function value too; `file-seq`/`reader` stay refused by name |
 | `format` | the Java directives translated to Common Lisp over Clojure-notation arguments | the format string must be literal; `%s` converts like `str` (nil spells `"null"`), `%b` the boolean spelling, numbers the matching checked directive; `%e`/`%g`, flags and anything else are named refusals |
@@ -119,17 +124,17 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `repeat`/`cycle`/`iterate`/`repeatedly` | `rontolisp::%clojure-repeat`/`-cycle`/`-iterate`/`-repeatedly` (infinite arities), strict-list builders (finite arities) | the infinite arities answer wrapper chains through the IFn dispatcher; `(repeat n x)`/`(repeatedly n f)` answer strict lists and print like the oracle; each names a function value too |
 | a vector literal | a `vector` call | |
 | `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
-| `count` | a table-aware length | maps and sets answer `hash-table-count`, everything else `length` |
-| `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/vector/string are empty |
-| `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; anything else is `equal` |
+| `count` | a table-aware length | maps, sets and records answer `hash-table-count` (records their entries), a deftype or reify signals (a bare length would answer the wrapper's size), everything else `length` |
+| `empty?` | a table/vector/string-aware null test, answering `T`-or-false | `nil`, an empty map/set/record/vector/string are empty; a deftype or reify signals, like the oracle's `seq` throw |
+| `=`/`not=` | a labels self call comparing maps entry by entry and sets member by member, deep, answering `T`-or-false | two maps compare structurally (nested included); a map and a set never compare equal; two records compare by tag plus entries (never equal to a plain map, like the oracle); a deftype or reify on either side is identity, like the oracle; anything else is `equal` |
 | `{k v ..}` | `rontolisp:plist-hash-table` over the lowered pairs | an `equal` table, never mutated in place: every verb builds a fresh one |
 | `#{..}` | an `equal` table holding each member under itself, wrapped as `(:C%SET table)` | the wrapper tells verbs a set from a map; a repeated literal element is refused by spelling (`Duplicate key`) |
-| `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused |
-| `get` | `gethash` with the default, or a bounds-checked `elt`/`char` | takes maps, sets (answering the member), vectors, strings and nil; a list answers the default |
-| `contains?` | a sentinel-`gethash` presence test, or a bounds check | takes maps, sets, vectors and strings; anything else answers false |
-| `keys`/`vals` | a `maphash` accumulation into a list | the order is the table's walk order, unspecified; of nil, nil |
-| `merge` | one fresh table over every argument's pairs | later maps win; `(merge)` is nil; of all nil, nil |
-| `conj` | a member onto a set, entries onto a map, at the end of a vector, at the front of a list | a set conjoined onto a map contributes its members one level deep; anything else conjoined onto a map is refused |
+| `assoc`/`dissoc` | a fresh table over the old pairs plus/minus the keys, rewrapped in the record it came from | `assoc` onto nil builds from empty; `dissoc` of nil is nil; odd `assoc` pairs are refused; `assoc` keeps the record's tag and fields, like the oracle; `dissoc` keeps the record while every declared field is still present and drops to a plain map otherwise (removing a base field drops the type, removing an extension key keeps it), like the oracle |
+| `get` | `gethash` with the default, or a bounds-checked `elt`/`char` | takes maps, records (through the entry table), sets (answering the member), vectors, strings and nil; a deftype or reify answers the default, like the oracle; a list answers the default |
+| `contains?` | a sentinel-`gethash` presence test, or a bounds check | takes maps, records, sets, vectors and strings; anything else answers false |
+| `keys`/`vals` | a `maphash` accumulation into a list | the order is the table's walk order, unspecified; of nil, nil; records read through the entry table |
+| `merge` | one fresh table over every argument's pairs, rewrapped when the merge starts from a record | later maps win; `(merge)` is nil; of all nil, nil; the result keeps a record's type only when the first non-nil argument is one, like the oracle (`merge-with` the same) |
+| `conj` | a member onto a set, entries onto a map or record (keeping the type), at the end of a vector, at the front of a list | a set conjoined onto a map contributes its members one level deep; anything else conjoined onto a map is refused; onto a deftype or reify signals, like the oracle |
 | `disj` | a fresh set minus the members | of nil, nil; of a map, refused |
 | `set`/`hash-map`/`array-map` | a set from a collection, a map from key/value pairs | `set` takes lists, vectors, maps (entry vectors) and sets; odd constructor pairs are refused |
 | `str` | `concatenate 'string` over mapped parts | `(str)` is `""`; `nil` maps to `""`, `true`/`false` to `"true"`/`"false"`, a keyword to its colon spelling, collections in Clojure notation through `rontolisp::%clojure-str-of` |
@@ -211,21 +216,30 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   infinite print); there is no chunking, so an end-less `range` stays refused by name
   (spell it with `iterate`). Lazy inputs to the other seq verbs consume one level --
   pass a `take`n prefix.
-- protocols, `set!`, regex
-  literals, `var`/`#'`: all absent, each refused by name (backquote
+- protocols (lowered in b13, below), `set!`, regex
+  literals, `var`/`#'`: `set!`, regex literals and `var`/`#'` stay absent, each
+  refused by name (backquote
   lowered in b12, below). Metadata instead parses and drops (b14):
   `^`/`with-meta` lower to the object itself, and only `binding` reads
   `^:dynamic` -- see the table rows above.
-  Hierarchies and `ex-info` lowered in b08 (below); protocols were rejected by
-  design there instead (a per-backend value model for `defrecord`/`deftype`, the
-  b02 argument). Catch clauses are catch-all in order (the first handles any condition, where the
+  Hierarchies and `ex-info` lowered in b08 (below); protocols lowered in b13 instead
+  of the b08 rejection (a wrapper over the shared table runtime, not a per-backend
+  value model -- the decision spike is `.todo/artefacts/b13-protocols/spike.md`). Catch clauses are catch-all in order (the first handles any condition, where the
   oracle dispatches by class); multimethod dispatch values compare like `equal`
   table keys (vectors by identity), widened by the hierarchy search (most specific
   wins, then `prefer-method`, like the oracle); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
   prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
   functions as `#<procedure>`, a lazy seq as `#<LazySeq>` (a lazy tail truncates with
-  ` ...`, so no bare infinite print ever hangs); `split`/`replace` match literal strings, never patterns (the documented
+  ` ...`, so no bare infinite print ever hangs); a record prints as its wrapper
+  list (`(:C%RECORD :R (:a) {:a 7})` where the oracle prints `#user.R{:a 7}`), a
+  deftype likewise with `:C%TYPE`, a reify as `(:C%REIFY ...)`; `class` of a
+  record/deftype answers its tag keyword (the oracle answers a host class, which
+  no wasm backend has); `assoc` onto a record keeps the type (like the oracle)
+  while a `dissoc` that removes a declared field drops to a plain map (like the
+  oracle); protocol dispatch merges `Long`/`Double` into `:number` (the oracle
+  tells them apart) and reads no hierarchy (exact tag match plus the `Object`
+  default); `split`/`replace` match literal strings, never patterns (the documented
   literal-only position, decided 2026-09-30 b08: no regex runtime on any backend,
   so `#"..."` stays refused at the reader and `clojure.string`/`String` splitting
   keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
@@ -355,7 +369,8 @@ condition), `memfn` as a lambda over the instance call, single-interface
 `proxy` through `java:proxy`, and the literal-only regex position -- each pinned
 in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
 (`proxy`, host-object `memfn`, literal `String/split`), in `ClojureInteropTest`;
-what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
+what stays refused (`definterface`/`gen-class`/`gen-interface`, multi-arity protocol
+methods, `:extend-via-metadata`, `set!`,
 `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else

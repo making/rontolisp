@@ -44,6 +44,19 @@
   (and (consp x) (eq (car x) :C%SET) (consp (cdr x))
        (hash-table-p (car (cdr x))) (null (cdr (cdr x)))))
 
+(defun rontolisp::%clojure-record-p (x)
+  "Whether X is the (:C%RECORD tag fields table) wrapper the lowering lowers
+   records to: map-like, so the map verbs read through its entry table."
+  (and (consp x) (eq (car x) :C%RECORD) (consp (cdr (cdr x)))
+       (hash-table-p (car (cdr (cdr (cdr x)))))))
+
+(defun rontolisp::%clojure-typed-opaque-p (x)
+  "Whether X is a deftype or reify value: typed, but opaque to the map verbs,
+   like the oracle."
+  (or (and (consp x) (eq (car x) :C%TYPE) (consp (cdr (cdr x)))
+           (hash-table-p (car (cdr (cdr (cdr x))))))
+      (and (consp x) (eq (car x) :C%REIFY))))
+
 (defun rontolisp::%clojure-atom-p (x)
   "Whether X is the (:C%ATOM #(value)) cell the lowering lowers atoms to."
   (and (consp x) (eq (car x) :C%ATOM) (consp (cdr x))
@@ -338,6 +351,9 @@
                   (if (cdr args) (car (cdr args)) nil)))
         ((hash-table-p f)
          (gethash (car args) f (if (cdr args) (car (cdr args)) nil)))
+        ((rontolisp::%clojure-record-p f)
+         (gethash (car args) (car (cdr (cdr (cdr f))))
+                  (if (cdr args) (car (cdr args)) nil)))
         ((and (vectorp f) (not (stringp f)))
          (let ((i (car args)))
            (if (and (integerp i) (<= 0 i) (< i (length f)))
@@ -350,8 +366,11 @@
 
 (defun rontolisp::%clojure-call-keyword (k coll dflt)
   "The keyword K read through COLL: sets answer the member, maps the value,
-   anything else the default (a keyword never indexes a vector or a string)."
+   records their entry table, anything else the default (a keyword never indexes
+   a vector or a string)."
   (cond ((rontolisp::%clojure-set-p coll) (gethash k (car (cdr coll)) dflt))
+        ((rontolisp::%clojure-record-p coll)
+         (gethash k (car (cdr (cdr (cdr coll)))) dflt))
         ((hash-table-p coll) (gethash k coll dflt))
         (t dflt)))
 
@@ -385,21 +404,27 @@
   "The strict list view of COLL: the b03 cond, now shared by every backend
    through this one defun instead of inline in the lowering."
   (cond ((null coll) nil)
-        ((rontolisp::%clojure-set-p coll)
-         (let ((acc nil))
-           (maphash (lambda (k v)
-                      (declare (ignore v))
-                      (setq acc (cons k acc))) (car (cdr coll)))
-           acc))
-        ((consp coll) coll)
-        ((vectorp coll) (coerce coll 'list))
-        ((stringp coll) (coerce coll 'list))
-        ((hash-table-p coll)
-         (let ((acc nil))
-           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
-           acc))
-        ((eq coll rontolisp::%clojure-false) nil)
-        (t (error "seq needs a collection"))))
+   ((rontolisp::%clojure-set-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v)
+                 (declare (ignore v))
+                 (setq acc (cons k acc))) (car (cdr coll)))
+      acc))
+   ((rontolisp::%clojure-record-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v) (setq acc (cons (vector k v) acc)))
+               (car (cdr (cdr (cdr coll)))))
+      acc))
+   ((rontolisp::%clojure-typed-opaque-p coll) (error "seq needs a collection"))
+   ((consp coll) coll)
+   ((vectorp coll) (coerce coll 'list))
+   ((stringp coll) (coerce coll 'list))
+   ((hash-table-p coll)
+    (let ((acc nil))
+      (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
+      acc))
+   ((eq coll rontolisp::%clojure-false) nil)
+   (t (error "seq needs a collection"))))
 
 (defun rontolisp::%clojure-realize (x)
   "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.

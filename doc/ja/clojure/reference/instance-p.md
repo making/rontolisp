@@ -6,7 +6,7 @@
 `CharSequence`、`Character`、`Boolean`、`Number`、`Long`、`Double`、`Object`、
 `clojure.lang.Keyword`、`clojure.lang.Symbol`。あるものは `java.lang.` 綴りも可）。
 他のクラスは誤答の代わりに名前付きで拒否されます（wasm バックエンドにホストの幅は
-ないため）。
+ないため）。既知の record/deftype 名はディスパッチタグの検査になります。
 
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false

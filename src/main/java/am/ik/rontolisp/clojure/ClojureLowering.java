@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -282,6 +283,40 @@ public final class ClojureLowering {
 	private boolean hierarchyEmitted;
 
 	/**
+	 * A protocol the program defines or extends: its method names, the method-table
+	 * global and the {@code Object}-default global. Protocols dispatch over the
+	 * {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the hierarchy
+	 * search); the table maps a tag to the method lambda, the default global the
+	 * {@code Object} row consulted on a miss.
+	 */
+	private record ProtocolDef(Set<String> methods, LispSymbol methodsVar, LispSymbol defaultVar) {
+	}
+
+	/**
+	 * A record or deftype the program defines: whether it is map-like (a record) or
+	 * opaque (a deftype), its declared field names and its dispatch-tag spelling.
+	 */
+	private record TypeDef(boolean record, List<String> fields, String tagSpelling) {
+	}
+
+	/** The protocols defined so far, by name (the whole-file pre-scan fills it first). */
+	private final Map<String, ProtocolDef> protocols = new HashMap<>();
+
+	/**
+	 * The record/deftype names defined so far (the whole-file pre-scan fills it first).
+	 */
+	private final Map<String, TypeDef> types = new HashMap<>();
+
+	/**
+	 * Whether the program uses protocols, records, deftypes or reify: the protocol
+	 * runtime (the tag reader) is spliced in once, behind the false binding.
+	 */
+	private boolean usedProtocols;
+
+	/** Whether the protocol runtime was already spliced in (files splice it inline). */
+	private boolean protocolsEmitted;
+
+	/**
 	 * Names declared {@code ^:dynamic}: only {@code binding} may rebind them, and only
 	 * they may be rebound. {@code *agent*} is dynamic from the start (bound to the acting
 	 * agent while a {@code send} runs, nil outside one).
@@ -348,6 +383,10 @@ public final class ClojureLowering {
 			// the hierarchy runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, lowering.hierarchyRuntime());
 		}
+		if (lowering.usedProtocols) {
+			// the protocol runtime runs before anything else, like the false value
+			lowering.forms.addAll(1, lowering.protocolRuntime());
+		}
 		if (lowering.usedExInfo) {
 			// the ex-info runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, lowering.exInfoRuntime());
@@ -394,6 +433,12 @@ public final class ClojureLowering {
 			// it, like the false binding; later buffers reuse it.
 			out.add(0, new ClojureTopLevel(hierarchyRuntime(), false));
 			this.hierarchyEmitted = true;
+		}
+		if (this.usedProtocols && !this.protocolsEmitted) {
+			// The protocol runtime travels ahead of the buffer that first needs
+			// it, like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(protocolRuntime(), false));
+			this.protocolsEmitted = true;
 		}
 		if (this.usedMacros && !this.macrosEmitted) {
 			// The macro runtime travels ahead of the buffer that first needs
@@ -447,6 +492,12 @@ public final class ClojureLowering {
 		}
 		else if (isSymbolNamed(items.get(0), "defmulti")) {
 			this.globals.put(plainName(items.get(1), "defmulti"), Kind.FUNCTION);
+		}
+		else if (isSymbolNamed(items.get(0), "defprotocol")) {
+			declareProtocol(items);
+		}
+		else if (isSymbolNamed(items.get(0), "defrecord") || isSymbolNamed(items.get(0), "deftype")) {
+			declareRecordType(items);
 		}
 		else if (isSymbolNamed(items.get(0), "defmacro")) {
 			// a macro name, so a call above its definition names the missing
@@ -502,6 +553,22 @@ public final class ClojureLowering {
 			}
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmulti")) {
 				return defmultiForms(items);
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defprotocol")) {
+				return defprotocolForms(items);
+			}
+			if (items != null && !items.isEmpty()
+					&& (isSymbolNamed(items.get(0), "defrecord") || isSymbolNamed(items.get(0), "deftype"))) {
+				return recordTypeForms(items);
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "extend-protocol")) {
+				return List.of(extendProtocolForm(items));
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "extend-type")) {
+				return List.of(extendTypeForm(items));
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "extend")) {
+				return List.of(extendForm(items));
 			}
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmacro")) {
 				return defmacroForms(items);
@@ -670,11 +737,31 @@ public final class ClojureLowering {
 				|| isSymbolNamed(head, "descendants") || isSymbolNamed(head, "make-hierarchy")) {
 			return hierarchyOp(items);
 		}
-		if (isSymbolNamed(head, "defprotocol") || isSymbolNamed(head, "defrecord") || isSymbolNamed(head, "deftype")
-				|| isSymbolNamed(head, "definterface") || isSymbolNamed(head, "reify")
-				|| isSymbolNamed(head, "extend-protocol") || isSymbolNamed(head, "extend-type")
-				|| isSymbolNamed(head, "extend") || isSymbolNamed(head, "satisfies?")
-				|| isSymbolNamed(head, "gen-class") || isSymbolNamed(head, "gen-interface")) {
+		if (isSymbolNamed(head, "defprotocol")) {
+			List<LispVal> forms = defprotocolForms(items);
+			return forms.size() == 1 ? forms.get(0) : cons(sym("progn"), forms);
+		}
+		if (isSymbolNamed(head, "defrecord") || isSymbolNamed(head, "deftype")) {
+			List<LispVal> forms = recordTypeForms(items);
+			return forms.size() == 1 ? forms.get(0) : cons(sym("progn"), forms);
+		}
+		if (isSymbolNamed(head, "extend-protocol")) {
+			return extendProtocolForm(items);
+		}
+		if (isSymbolNamed(head, "extend-type")) {
+			return extendTypeForm(items);
+		}
+		if (isSymbolNamed(head, "extend")) {
+			return extendForm(items);
+		}
+		if (isSymbolNamed(head, "reify")) {
+			return reifyForm(items);
+		}
+		if (isSymbolNamed(head, "satisfies?")) {
+			return satisfiesOf(items);
+		}
+		if (isSymbolNamed(head, "definterface") || isSymbolNamed(head, "gen-class")
+				|| isSymbolNamed(head, "gen-interface")) {
 			throw new LispReadException("protocols are not supported yet: " + ((LispSymbol) head).name());
 		}
 		if (isSymbolNamed(head, "try")) {
@@ -2510,9 +2597,22 @@ public final class ClojureLowering {
 		int n = items.size() - 1;
 		isTrue(n >= 3 && n % 2 == 1, "assoc takes a map and key/value pairs");
 		LispSymbol map = freshTemp();
+		LispVal src = list(sym("if"), isRecordForm(map), typedTableOf(map), map);
 		LispVal grown = cons(sym("append"),
-				List.of(list(sym("if"), map, tablePlist(map), NIL_CONST), cons(sym("list"), lowers(items, 2))));
-		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))), tableFromPlist(grown));
+				List.of(list(sym("if"), map, tablePlist(src), NIL_CONST), cons(sym("list"), lowers(items, 2))));
+		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
+				rewrapAnswer(map, tableFromPlist(grown)));
+	}
+
+	/**
+	 * A rebuilt table back in the record it came from: {@code assoc} (and everything
+	 * through {@link #assocPairForm}, like {@code update} and {@code assoc-in}) keeps the
+	 * record's tag and fields, like the oracle. Anything else answers the table.
+	 */
+	private LispVal rewrapAnswer(LispVal map, LispVal tableForm) {
+		LispSymbol done = freshTemp();
+		return list(sym("let"), list(List.of(list(done, tableForm))),
+				list(sym("if"), isRecordForm(map), wrapRecord(typedTagOf(map), typedFieldsOf(map), done), done));
 	}
 
 	private LispVal dissocOf(List<LispVal> items) {
@@ -2524,10 +2624,28 @@ public final class ClojureLowering {
 		for (int i = 2; i < items.size(); i++) {
 			body.add(list(sym("remhash"), lower(items.get(i)), copy));
 		}
-		body.add(copy);
-		LispVal rebuilt = letForm(List.of(list(copy, tableFromPlist(tablePlist(map)))), body);
+		body.add(dissocAnswer(map, copy));
+		LispVal src = list(sym("if"), isRecordForm(map), typedTableOf(map), map);
+		LispVal rebuilt = letForm(List.of(list(copy, tableFromPlist(tablePlist(src)))), body);
 		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
 				list(sym("if"), map, rebuilt, NIL_CONST));
+	}
+
+	/**
+	 * A dissociated table back in its record: the record survives only while every
+	 * declared field is still present (removing an extension key keeps the type, removing
+	 * a base field drops to a plain map), like the oracle. Anything else answers the
+	 * table.
+	 */
+	private LispVal dissocAnswer(LispVal map, LispVal copy) {
+		LispSymbol keep = freshTemp();
+		LispSymbol field = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispVal scan = list(sym("dolist"), list(List.of(field, typedFieldsOf(map))), list(sym("if"),
+				list(sym("eq"), list(sym("gethash"), field, copy, miss), miss), list(sym("setq"), keep, NIL_CONST)));
+		LispVal rewrap = list(sym("if"), keep, wrapRecord(typedTagOf(map), typedFieldsOf(map), copy), copy);
+		return list(sym("let"), list(List.of(list(keep, TRUE_CONST), list(miss, list(sym("list"), NIL_CONST)))),
+				list(sym("if"), isRecordForm(map), list(sym("progn"), scan, rewrap), copy));
 	}
 
 	/**
@@ -2567,6 +2685,9 @@ public final class ClojureLowering {
 	private List<LispVal> getBranches(LispVal coll, LispVal key, LispVal dflt) {
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("gethash"), key, setInner(coll), dflt)));
+		// a record reads through its entry table, like a map; a deftype or reify is
+		// opaque and falls to the default, like the oracle
+		branches.add(list(isRecordForm(coll), list(sym("gethash"), key, typedTableOf(coll), dflt)));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("gethash"), key, coll, dflt)));
 		branches.add(list(indexForm(coll, key, true), list(sym("elt"), coll, key)));
 		branches.add(list(indexForm(coll, key, false), list(sym("char"), coll, key)));
@@ -2584,6 +2705,8 @@ public final class ClojureLowering {
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), booleanAnswer(
 				list(sym("not"), list(sym("eq"), list(sym("gethash"), key, setInner(coll), miss), miss)))));
+		branches.add(list(isRecordForm(coll), booleanAnswer(
+				list(sym("not"), list(sym("eq"), list(sym("gethash"), key, typedTableOf(coll), miss), miss)))));
 		branches.add(list(list(sym("hash-table-p"), coll),
 				booleanAnswer(list(sym("not"), list(sym("eq"), list(sym("gethash"), key, coll, miss), miss)))));
 		branches.add(list(indexForm(coll, key, true), TRUE_CONST));
@@ -2613,9 +2736,10 @@ public final class ClojureLowering {
 		LispSymbol val = freshTemp();
 		LispVal take = keys ? key : val;
 		LispVal drop = keys ? val : key;
-		LispVal collect = list(sym("maphash"), list(sym("lambda"), list(List.of(key, val)),
-				list(sym("declare"), list(sym("ignore"), drop)), list(sym("setq"), acc, list(sym("cons"), take, acc))),
-				map);
+		LispVal collect = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), drop)),
+						list(sym("setq"), acc, list(sym("cons"), take, acc))),
+				list(sym("if"), isRecordForm(map), typedTableOf(map), map));
 		return list(sym("let"), list(List.of(list(map, lower(items.get(1))))),
 				list(sym("if"), map, list(sym("let"), list(List.of(list(acc, NIL_CONST))), collect, acc), NIL_CONST));
 	}
@@ -2635,10 +2759,25 @@ public final class ClojureLowering {
 			LispSymbol one = freshTemp();
 			bindings.add(list(one, lower(items.get(i))));
 			present.add(one);
-			plists.add(list(sym("if"), one, tablePlist(one), NIL_CONST));
+			// a record contributes its entries, like a map; anything opaque signals
+			// in the plist walk, like the oracle
+			LispVal src = list(sym("if"), isRecordForm(one), typedTableOf(one), one);
+			plists.add(list(sym("if"), one, tablePlist(src), NIL_CONST));
 		}
-		return list(sym("let"), list(bindings),
-				list(sym("if"), cons(sym("or"), present), tableFromPlist(cons(sym("append"), plists)), NIL_CONST));
+		return list(sym("let"), list(bindings), list(sym("if"), cons(sym("or"), present),
+				rewrapAnswer(firstPresent(present), tableFromPlist(cons(sym("append"), plists))), NIL_CONST));
+	}
+
+	/**
+	 * The first non-nil map of a merge: the merge keeps a record's type when the merge
+	 * would start from it (later maps only contribute entries), like the oracle.
+	 */
+	private LispVal firstPresent(List<LispVal> maps) {
+		LispVal first = NIL_CONST;
+		for (int i = maps.size() - 1; i >= 0; i--) {
+			first = list(sym("if"), maps.get(i), maps.get(i), first);
+		}
+		return first;
 	}
 
 	private LispVal conjOf(List<LispVal> items) {
@@ -2671,14 +2810,18 @@ public final class ClojureLowering {
 		List<LispVal> bindings = List.of(list(collSym, coll), list(item, itemLowered));
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(collSym), setAdd(collSym, item)));
+		// onto a record the entries join the entry table and the type survives, like
+		// the oracle; onto anything opaque the oracle signals, like below
+		branches.add(list(isRecordForm(collSym), rewrapAnswer(collSym,
+				tableFromPlist(cons(sym("append"), List.of(tablePlist(typedTableOf(collSym)), entryPlist(item)))))));
 		branches.add(list(list(sym("hash-table-p"), collSym),
 				tableFromPlist(cons(sym("append"), List.of(tablePlist(collSym), entryPlist(item))))));
 		branches.add(list(list(sym("vectorp"), collSym),
 				list(sym("coerce"),
 						list(sym("append"), list(sym("coerce"), collSym, quoted("list")), list(sym("list"), item)),
 						quoted("vector"))));
-		branches.add(list(list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
-				list(sym("cons"), item, collSym)));
+		branches.add(list(list(sym("and"), list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
+				list(sym("not"), isTypedForm(collSym))), list(sym("cons"), item, collSym)));
 		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("conj needs a collection and an item"))));
 		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
 	}
@@ -2838,6 +2981,11 @@ public final class ClojureLowering {
 		LispSymbol coll = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("hash-table-count"), setInner(coll))));
+		// a record counts its entries, like a map; anything opaque signals, like the
+		// oracle (a bare length would silently answer the wrapper's size)
+		branches.add(list(isRecordForm(coll), list(sym("hash-table-count"), typedTableOf(coll))));
+		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
+				list(sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("hash-table-count"), coll)));
 		// the false object counts as empty, like the oracle; anything else takes length
 		branches.add(list(list(sym("eq"), coll, this.falseVariable), new LispInteger(0)));
@@ -2855,6 +3003,9 @@ public final class ClojureLowering {
 		LispSymbol coll = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(coll), list(sym("zerop"), list(sym("hash-table-count"), setInner(coll)))));
+		branches.add(list(isRecordForm(coll), list(sym("zerop"), list(sym("hash-table-count"), typedTableOf(coll)))));
+		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
+				list(sym("error"), LispString.literal("empty? needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("zerop"), list(sym("hash-table-count"), coll))));
 		branches.add(list(list(sym("vectorp"), coll), list(sym("zerop"), list(sym("length"), coll))));
 		branches.add(list(list(sym("stringp"), coll), list(sym("zerop"), list(sym("length"), coll))));
@@ -3994,6 +4145,13 @@ public final class ClojureLowering {
 		LispSymbol right = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(list(sym("and"), isSetForm(left), isSetForm(right)), setEquality(left, right, eq)));
+		// two records compare by tag plus entries (never equal to a plain map, like
+		// the oracle); a deftype or reify on either side is identity, like the oracle
+		branches.add(list(list(sym("and"), isRecordForm(left), isRecordForm(right)),
+				list(sym("and"), list(sym("equal"), typedTagOf(left), typedTagOf(right)),
+						mapEquality(typedTableOf(left), typedTableOf(right), eq))));
+		branches.add(list(list(sym("or"), list(sym("and"), isTypedForm(left), isTypedForm(right)), isDeftypeForm(left),
+				isReifyForm(left), isDeftypeForm(right), isReifyForm(right)), list(sym("eq"), left, right)));
 		branches.add(list(list(sym("and"), list(sym("hash-table-p"), left), list(sym("hash-table-p"), right)),
 				mapEquality(left, right, eq)));
 		branches.add(list(TRUE_CONST, list(sym("equal"), left, right)));
@@ -5021,9 +5179,10 @@ public final class ClojureLowering {
 	 */
 	private LispVal assocPairForm(LispVal map, LispVal key, LispVal val) {
 		LispSymbol one = freshTemp();
+		LispVal src = list(sym("if"), isRecordForm(one), typedTableOf(one), one);
 		LispVal grown = cons(sym("append"),
-				List.of(list(sym("if"), one, tablePlist(one), NIL_CONST), list(sym("list"), key, val)));
-		return list(sym("let*"), list(List.of(list(one, map))), tableFromPlist(grown));
+				List.of(list(sym("if"), one, tablePlist(src), NIL_CONST), list(sym("list"), key, val)));
+		return list(sym("let*"), list(List.of(list(one, map))), rewrapAnswer(one, tableFromPlist(grown)));
 	}
 
 	/** {@code update}: the key rewritten through the function and extra arguments. */
@@ -5049,9 +5208,11 @@ public final class ClojureLowering {
 		LispSymbol at = freshTemp();
 		LispSymbol fn = freshTemp();
 		LispVal next = callableApply(fn, list(sym("cons"), getForm(one, at, NIL_CONST), tail));
+		LispVal src = list(sym("if"), isRecordForm(one), typedTableOf(one), one);
 		LispVal grown = cons(sym("append"),
-				List.of(list(sym("if"), one, tablePlist(one), NIL_CONST), list(sym("list"), at, next)));
-		return list(sym("let*"), list(List.of(list(one, map), list(at, key), list(fn, fun))), tableFromPlist(grown));
+				List.of(list(sym("if"), one, tablePlist(src), NIL_CONST), list(sym("list"), at, next)));
+		return list(sym("let*"), list(List.of(list(one, map), list(at, key), list(fn, fun))),
+				rewrapAnswer(one, tableFromPlist(grown)));
 	}
 
 	/** {@code update} as a value: map, key, function and any extra arguments. */
@@ -5226,14 +5387,19 @@ public final class ClojureLowering {
 		LispSymbol one = freshTemp();
 		LispSymbol got = freshTemp();
 		LispVal keep = list(sym("setf"), list(sym("gethash"), one, out), got);
+		LispSymbol src = freshTemp();
 		LispVal gather = list(sym("dolist"), list(List.of(one, keys)),
-				list(sym("let"), list(List.of(list(got, list(sym("gethash"), one, whole, miss)))),
+				list(sym("let"), list(List.of(list(got, list(sym("gethash"), one, src, miss)))),
 						list(sym("if"), list(sym("eq"), got, miss), NIL_CONST, keep)));
+		// a record reads through its entry table and answers a plain map, like the
+		// oracle; anything opaque signals, like the oracle
+		LispVal norm = list(sym("if"), isRecordForm(whole), typedTableOf(whole), whole);
 		return list(sym("let*"),
 				list(List.of(list(whole, map), list(miss, list(sym("list"), NIL_CONST)), list(out, makeTable()))),
 				list(sym("if"), list(sym("null"), whole), out,
-						list(sym("if"), list(sym("hash-table-p"), whole), list(sym("progn"), gather, out),
-								list(sym("error"), LispString.literal("select-keys needs a map")))));
+						list(sym("let"), list(List.of(list(src, norm))),
+								list(sym("if"), list(sym("hash-table-p"), src), list(sym("progn"), gather, out),
+										list(sym("error"), LispString.literal("select-keys needs a map"))))));
 	}
 
 	/** {@code select-keys} as a value: a two-argument lambda over the same read. */
@@ -5285,15 +5451,18 @@ public final class ClojureLowering {
 			LispSymbol val = freshTemp();
 			LispSymbol old = freshTemp();
 			LispVal invoked = callFun(fun, fn, List.of(old, val));
+			// a record contributes its entries, like a map; anything opaque signals
+			// in the maphash, like the oracle
+			LispVal src = list(sym("if"), isRecordForm(one), typedTableOf(one), one);
 			LispVal join = list(sym("maphash"),
 					list(sym("lambda"), list(List.of(key, val)),
 							list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
 									list(sym("setf"), list(sym("gethash"), key, acc),
 											list(sym("if"), list(sym("eq"), old, miss), val, invoked)))),
-					one);
+					src);
 			merges.add(list(sym("if"), one, join, NIL_CONST));
 		}
-		merges.add(acc);
+		merges.add(rewrapAnswer(firstPresent(syms), acc));
 		return list(sym("let*"), list(bindings), cons(sym("progn"), merges));
 	}
 
@@ -5622,6 +5791,16 @@ public final class ClojureLowering {
 		String name = cls.name();
 		String simple = name.lastIndexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1) : name;
 		LispVal lowered = lower(items.get(2));
+		TypeDef known = this.types.get(name);
+		if (known == null && name.indexOf('.') < 0) {
+			known = this.types.get(simple);
+		}
+		if (known != null) {
+			// a record or deftype name tests the dispatch tag, like a class
+			this.usedProtocols = true;
+			return booleanAnswer(
+					list(sym("equal"), list(new LispSymbol(PROTOCOL_TAG), lowered), typeTagForm(known.tagSpelling())));
+		}
 		LispVal raw = switch (simple) {
 			case "String", "CharSequence" -> list(sym("stringp"), lowered);
 			case "Character" -> list(sym("characterp"), lowered);
@@ -5646,6 +5825,11 @@ public final class ClojureLowering {
 	private LispVal classForm(LispVal lowered) {
 		LispSymbol one = freshTemp();
 		List<LispVal> branches = new ArrayList<>();
+		// a record or deftype answers its tag keyword (the oracle answers a host
+		// class, which no wasm backend has); a reify answers a constant keyword
+		branches.add(list(isRecordForm(one), typedTagOf(one)));
+		branches.add(list(isDeftypeForm(one), typedTagOf(one)));
+		branches.add(list(isReifyForm(one), keywordForm("reify")));
 		branches.add(list(list(sym("null"), one), keywordForm("nil")));
 		branches.add(list(list(sym("eq"), one, this.falseVariable), keywordForm("boolean")));
 		branches.add(list(list(sym("eq"), one, TRUE_CONST), keywordForm("boolean")));
@@ -7200,6 +7384,701 @@ public final class ClojureLowering {
 		return list(sym("gethash"), lower(items.get(2)), methods, NIL_CONST);
 	}
 
+	// protocols/records: defprotocol/defrecord/deftype/reify/extend/satisfies? over the
+	// table runtime
+
+	/**
+	 * The tag heading a record value: a record is
+	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table)}, beside the
+	 * {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers. The table is an
+	 * {@code equal} table like every map, so every backend prints, hashes and compares it
+	 * through the runtime they already share; no backend learns a new value shape.
+	 */
+	private static final LispSymbol RECORD_TAG = new LispSymbol(":C%RECORD");
+
+	/**
+	 * The tag heading a deftype value: the same 4-list as a record, but opaque to the map
+	 * verbs (reads miss, writers signal, {@code =} is identity), like the oracle.
+	 */
+	private static final LispSymbol TYPE_TAG = new LispSymbol(":C%TYPE");
+
+	/**
+	 * The tag heading a reify value: {@code (LIST :C%REIFY (gensym))}, one fresh tag per
+	 * evaluation, so two instances never share a dispatch row. Opaque like a deftype.
+	 */
+	private static final LispSymbol REIFY_TAG = new LispSymbol(":C%REIFY");
+
+	/**
+	 * The runtime reader of a value's protocol-dispatch tag, as spelled in programs.
+	 */
+	private static final String PROTOCOL_TAG = "C%PROTOCOL-TAG";
+
+	/**
+	 * Whether the form holds a record: a cons headed by the tag with a field list and a
+	 * table behind it. The full shape check keeps user data from misfiring the test, like
+	 * {@link #isSetForm}.
+	 */
+	private static LispVal isRecordForm(LispVal form) {
+		return list(sym("and"), list(sym("consp"), form), list(sym("eq"), list(sym("car"), form), RECORD_TAG),
+				list(sym("consp"), list(sym("cddr"), form)), list(sym("hash-table-p"), list(sym("cadddr"), form)));
+	}
+
+	/** Whether the form holds a deftype value: the same shape check over its tag. */
+	private static LispVal isDeftypeForm(LispVal form) {
+		return list(sym("and"), list(sym("consp"), form), list(sym("eq"), list(sym("car"), form), TYPE_TAG),
+				list(sym("consp"), list(sym("cddr"), form)), list(sym("hash-table-p"), list(sym("cadddr"), form)));
+	}
+
+	/** Whether the form holds a reify value: a cons headed by its tag. */
+	private static LispVal isReifyForm(LispVal form) {
+		return list(sym("and"), list(sym("consp"), form), list(sym("eq"), list(sym("car"), form), REIFY_TAG));
+	}
+
+	/** Whether the form holds any typed value: a record, a deftype or a reify. */
+	private static LispVal isTypedForm(LispVal form) {
+		return list(sym("or"), isRecordForm(form), isDeftypeForm(form), isReifyForm(form));
+	}
+
+	/** The dispatch tag inside a record or deftype value: {@code (CADR form)}. */
+	private static LispVal typedTagOf(LispVal form) {
+		return list(sym("cadr"), form);
+	}
+
+	/** The entry table inside a record or deftype value: {@code (CADDDR form)}. */
+	private static LispVal typedTableOf(LispVal form) {
+		return list(sym("cadddr"), form);
+	}
+
+	/**
+	 * The declared field keywords inside a record or deftype value: {@code (CADDR form)}.
+	 */
+	private static LispVal typedFieldsOf(LispVal form) {
+		return list(sym("caddr"), form);
+	}
+
+	/** A record's construction: {@code (LIST :C%RECORD tag fields table)}. */
+	private static LispVal wrapRecord(LispVal tag, LispVal fields, LispVal table) {
+		return list(sym("list"), RECORD_TAG, tag, fields, table);
+	}
+
+	/** A deftype's construction: {@code (LIST :C%TYPE tag fields table)}. */
+	private static LispVal wrapDeftype(LispVal tag, LispVal fields, LispVal table) {
+		return list(sym("list"), TYPE_TAG, tag, fields, table);
+	}
+
+	/** A type's dispatch tag as data: the keyword of its spelling. */
+	private static LispVal typeTagForm(String name) {
+		return keywordForm(name);
+	}
+
+	/**
+	 * The protocol runtime, spliced once per program behind the false binding: the tag
+	 * reader every dispatcher and {@code satisfies?} shares. A record, deftype or reify
+	 * answers its own tag; anything else answers its {@code class} kind keyword, so
+	 * extending to a host kind ({@code String}, {@code Number}, ...) dispatches on the
+	 * same spelling {@code class} answers. What no branch names (a host object from
+	 * interop on the backends that have one) answers a fresh one-list no row can hold, so
+	 * the {@code Object} default still catches it instead of signalling.
+	 */
+	private List<LispVal> protocolRuntime() {
+		LispSymbol one = new LispSymbol("x");
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(isRecordForm(one), typedTagOf(one)));
+		branches.add(list(isDeftypeForm(one), typedTagOf(one)));
+		branches.add(list(isReifyForm(one), typedTagOf(one)));
+		branches.add(list(list(sym("null"), one), keywordForm("nil")));
+		branches.add(list(list(sym("eq"), one, this.falseVariable), keywordForm("boolean")));
+		branches.add(list(list(sym("eq"), one, TRUE_CONST), keywordForm("boolean")));
+		branches.add(list(keywordTest(one), keywordForm("keyword")));
+		branches.add(list(list(sym("symbolp"), one), keywordForm("symbol")));
+		branches.add(list(list(sym("characterp"), one), keywordForm("char")));
+		branches.add(list(list(sym("stringp"), one), keywordForm("string")));
+		branches.add(list(list(sym("numberp"), one), keywordForm("number")));
+		branches.add(list(isSetForm(one), keywordForm("set")));
+		branches.add(list(list(sym("hash-table-p"), one), keywordForm("map")));
+		branches.add(list(list(sym("vectorp"), one), keywordForm("vector")));
+		branches.add(list(list(sym("consp"), one), keywordForm("list")));
+		branches.add(list(list(sym("functionp"), one), keywordForm("function")));
+		branches.add(list(isAtomForm(one), keywordForm("atom")));
+		branches.add(list(TRUE_CONST, list(sym("list"), NIL_CONST)));
+		return List
+			.of(list(sym("defun"), new LispSymbol(PROTOCOL_TAG), list(List.of(one)), cons(sym("cond"), branches)));
+	}
+
+	/**
+	 * The pre-scan half of {@code defprotocol}: registers the protocol (parsed pure, so
+	 * parsing twice is harmless) plus the protocol name and every method name, so a
+	 * dispatch call may stand above the definition, like {@code defn}.
+	 */
+	private ProtocolDef declareProtocol(List<LispVal> items) {
+		String name = plainName(items.get(1), "defprotocol");
+		ProtocolDef def = parseProtocol(name, items);
+		this.protocols.put(name, def);
+		this.globals.put(name, Kind.VARIABLE);
+		this.macros.remove(name); // a definition wins over the macro it shadows
+		for (String method : def.methods()) {
+			this.globals.put(method, Kind.FUNCTION);
+			this.macros.remove(method); // a definition wins over the macro it shadows
+		}
+		return def;
+	}
+
+	/**
+	 * The pre-scan half of {@code defrecord}/{@code deftype}: registers the type plus its
+	 * constructors, so a constructor call may stand above the definition, like
+	 * {@code defn}. The type name itself is no value (the oracle answers a host class,
+	 * which no wasm backend has).
+	 */
+	private TypeDef declareRecordType(List<LispVal> items) {
+		boolean record = isSymbolNamed(items.get(0), "defrecord");
+		String name = plainName(items.get(1), record ? "defrecord" : "deftype");
+		List<String> fields = recordFields(items);
+		TypeDef def = new TypeDef(record, fields, name);
+		this.types.put(name, def);
+		this.globals.put("->" + name, Kind.FUNCTION);
+		if (record) {
+			this.globals.put("map->" + name, Kind.FUNCTION);
+		}
+		return def;
+	}
+
+	/**
+	 * Parses a {@code defprotocol} datum without emitting: the name's method names in
+	 * definition order, with the table and default globals. Docstrings and attr maps are
+	 * skipped, like {@code defn} and {@code defmulti}; a signature is one parameter
+	 * vector per method (several arities stay refused).
+	 */
+	private ProtocolDef parseProtocol(String name, List<LispVal> items) {
+		int at = 2;
+		if (at < items.size() && items.get(at) instanceof LispString) {
+			at++; // the docstring
+		}
+		if (at < items.size() && isAttrMap(items.get(at))) {
+			at++; // the attr map
+		}
+		for (; at + 1 < items.size() && items.get(at) instanceof LispSymbol opt
+				&& opt.name().startsWith(":"); at += 2) {
+			if (opt.name().equals(":extend-via-metadata")) {
+				LispVal flag = items.get(at + 1);
+				if (!(flag instanceof LispSymbol f && (f.name().equals("false") || f.name().equals("nil")))) {
+					throw new LispReadException(
+							"extend-via-metadata is not supported yet: metadata never affects dispatch");
+				}
+			}
+			else {
+				throw new LispReadException("defprotocol option " + opt.name() + " is not supported yet");
+			}
+		}
+		Set<String> methods = new LinkedHashSet<>();
+		for (; at < items.size(); at++) {
+			List<LispVal> sig = items(items.get(at));
+			if (sig == null || sig.isEmpty() || !(sig.get(0) instanceof LispSymbol)) {
+				throw new LispReadException("defprotocol takes method signatures, not " + items.get(at).print());
+			}
+			String method = ((LispSymbol) sig.get(0)).name();
+			isTrue(!method.startsWith(":"), "defprotocol takes method signatures, not " + items.get(at).print());
+			isTrue(methods.add(method), "duplicate method in defprotocol " + name + ": " + method);
+			int marg = 1;
+			if (marg < sig.size() && sig.get(marg) instanceof LispString) {
+				marg++; // the method docstring
+			}
+			isTrue(marg < sig.size() && isVectorDatum(stripMeta(sig.get(marg))),
+					"multi-arity protocol methods are not supported yet: " + method);
+			List<LispVal> params = bindingItems(stripMeta(sig.get(marg)), "the method " + method + " of");
+			isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+		}
+		isTrue(!methods.isEmpty(), "defprotocol takes at least one method: " + name);
+		return new ProtocolDef(methods, new LispSymbol(mangle(name) + "%methods"),
+				new LispSymbol(mangle(name) + "%default"));
+	}
+
+	/**
+	 * {@code (defprotocol name doc? (method [target & args] doc?)...)}: a method-table
+	 * global plus an {@code Object}-default global per protocol, one dispatcher
+	 * {@code defun} per method, and the protocol name bound to its table. A call
+	 * dispatches on the target's tag (exact match, then the {@code Object} row); a miss
+	 * with no {@code Object} row signals, like the oracle.
+	 */
+	private List<LispVal> defprotocolForms(List<LispVal> items) {
+		isTrue(items.size() >= 2, "defprotocol takes a name and methods");
+		String name = plainName(items.get(1), "defprotocol");
+		ProtocolDef def = declareProtocol(items);
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(list(sym("setq"), def.methodsVar(), makeTable()));
+		forms.add(list(sym("setq"), def.defaultVar(), NIL_CONST));
+		for (String method : def.methods()) {
+			forms.add(dispatcherDefun(name, method, def));
+		}
+		forms.add(list(sym("setq"), idSym(name), def.methodsVar()));
+		this.usedProtocols = true;
+		return forms;
+	}
+
+	/**
+	 * One protocol-method dispatcher: the {@code &rest} shape {@code defmulti} takes, so
+	 * arities (fixed or variadic) fall out of the stored lambda. No arguments signals the
+	 * wrong-count error instead of dispatching on nil, like the oracle's arity error.
+	 */
+	private LispVal dispatcherDefun(String protocol, String method, ProtocolDef def) {
+		LispSymbol args = freshTemp();
+		LispSymbol tag = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol inner = freshTemp();
+		LispSymbol found = freshTemp();
+		LispVal lookup = list(sym("let*"),
+				list(List.of(list(tag, list(new LispSymbol(PROTOCOL_TAG), list(sym("car"), args))),
+						list(miss, list(sym("list"), NIL_CONST)),
+						list(inner, list(sym("gethash"), tag, def.methodsVar(), miss)),
+						list(found,
+								list(sym("if"), list(sym("eq"), inner, miss), miss,
+										list(sym("gethash"), keywordForm(method), inner, miss))))),
+				list(sym("if"), list(sym("eq"), found, miss),
+						list(sym("if"), list(sym("null"), def.defaultVar()),
+								list(sym("error"),
+										LispString.literal("No implementation of method :" + method + " of protocol :"
+												+ protocol + " found")),
+								list(sym("apply"), def.defaultVar(), args)),
+						list(sym("apply"), found, args)));
+		LispVal body = list(sym("if"), list(sym("null"), args),
+				list(sym("error"), LispString.literal("wrong number of arguments passed to: " + method)), lookup);
+		return list(sym("defun"), idSym(method), list(List.of(AMPERSAND_REST, args)), body);
+	}
+
+	/**
+	 * Stores one method row in a protocol's table: the tag's inner table (made on first
+	 * use) mapping the method keyword to the lambda. Later rows win, like the oracle.
+	 */
+	private LispVal methodStoreForm(LispSymbol methodsVar, LispVal key, String method, LispVal lambda) {
+		LispSymbol inner = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispVal ensure = list(sym("if"), list(sym("eq"), inner, miss),
+				list(sym("setf"), list(sym("gethash"), key, methodsVar), list(sym("setf"), inner, makeTable())), inner);
+		return list(sym("let*"),
+				list(List.of(list(miss, list(sym("list"), NIL_CONST)),
+						list(inner, list(sym("gethash"), key, methodsVar, miss)))),
+				ensure, list(sym("setf"), list(sym("gethash"), keywordForm(method), inner), lambda));
+	}
+
+	/**
+	 * The declared fields of a {@code defrecord}/{@code deftype} datum: plain names (type
+	 * hints strip, like everywhere else), each once.
+	 */
+	private List<String> recordFields(List<LispVal> items) {
+		boolean record = isSymbolNamed(items.get(0), "defrecord");
+		String what = record ? "defrecord" : "deftype";
+		isTrue(items.size() >= 3, what + " takes a name and fields");
+		List<LispVal> names = bindingItems(stripMeta(items.get(2)), what);
+		List<String> fields = new ArrayList<>();
+		for (LispVal datum : names) {
+			String field = plainName(stripMeta(datum), what);
+			isTrue(!fields.contains(field), "duplicate field in " + what + " " + items.get(1).print() + ": " + field);
+			fields.add(field);
+		}
+		return fields;
+	}
+
+	/**
+	 * One parsed method implementation: the method name, its parameter vector and body.
+	 */
+	private record TypeMethod(String method, LispVal params, List<LispVal> body) {
+	}
+
+	/** One parsed implementation group: the protocol plus its method implementations. */
+	private record ImplGroup(String protocol, List<TypeMethod> methods) {
+	}
+
+	/**
+	 * The implementation groups behind {@code defrecord}/{@code deftype} (each headed by
+	 * a known protocol name) or {@code extend-type}: every method must belong to its
+	 * protocol, like the oracle's "Can't define method not in interfaces".
+	 */
+	private List<ImplGroup> implGroups(List<LispVal> rest, String what) {
+		List<ImplGroup> groups = new ArrayList<>();
+		String protocol = null;
+		ProtocolDef def = null;
+		List<TypeMethod> methods = null;
+		for (LispVal datum : rest) {
+			if (datum instanceof LispSymbol s && !s.name().startsWith(":")) {
+				if (methods != null) {
+					if (protocol == null) {
+						throw new LispReadException(what + " takes method implementations");
+					}
+					groups.add(new ImplGroup(protocol, methods));
+				}
+				protocol = s.name();
+				def = this.protocols.get(protocol);
+				if (def == null) {
+					throw new LispReadException("No such protocol: " + protocol);
+				}
+				methods = new ArrayList<>();
+				continue;
+			}
+			if (def == null || methods == null) {
+				throw new LispReadException(what + " methods group under a protocol name, not " + datum.print());
+			}
+			List<LispVal> impl = items(datum);
+			if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
+				throw new LispReadException(
+						"a method implementation takes a name, parameters and a body, not " + datum.print());
+			}
+			String method = ((LispSymbol) impl.get(0)).name();
+			isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
+			String seen = method;
+			isTrue(methods.stream().noneMatch(m -> m.method().equals(seen)),
+					"duplicate method implementation: " + method);
+			isTrue(isVectorDatum(stripMeta(impl.get(1))),
+					"multi-arity protocol methods are not supported yet: " + method);
+			List<LispVal> params = bindingItems(stripMeta(impl.get(1)), "the method " + method + " of");
+			isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+			methods.add(new TypeMethod(method, impl.get(1), impl.subList(2, impl.size())));
+		}
+		if (methods != null) {
+			if (protocol == null) {
+				throw new LispReadException(what + " takes method implementations");
+			}
+			groups.add(new ImplGroup(protocol, methods));
+		}
+		return groups;
+	}
+
+	/**
+	 * One method-implementation row: the lambda (with the usual destructuring prologue)
+	 * stored in the protocol's table under the target's tag. Inline
+	 * {@code defrecord}/{@code deftype} bodies see the fields as locals bound from the
+	 * instance table -- an outer scope, so an explicit parameter shadows its field, like
+	 * the oracle.
+	 */
+	private LispVal methodRow(String protocol, LispVal key, TypeMethod impl, @Nullable List<String> fields) {
+		ProtocolDef def = this.protocols.get(protocol);
+		if (def == null) {
+			throw new LispReadException("No such protocol: " + protocol);
+		}
+		LispVal lambda;
+		if (fields == null) {
+			Clause clause = clause(impl.params(), impl.body());
+			lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		}
+		else {
+			Map<String, Kind> scope = new HashMap<>();
+			for (String field : fields) {
+				scope.put(field, Kind.VARIABLE);
+			}
+			lambda = inScope(scope, () -> {
+				Clause clause = clause(impl.params(), impl.body());
+				if (fields.isEmpty()) {
+					return list(sym("lambda"), list(clause.params()), clause.wrapped());
+				}
+				LispVal self = clause.params().isEmpty() ? NIL_CONST : clause.params().get(0);
+				List<LispVal> binds = new ArrayList<>();
+				for (String field : fields) {
+					binds.add(list(idSym(field),
+							list(sym("gethash"), keywordForm(field), typedTableOf(self), NIL_CONST)));
+				}
+				return list(sym("lambda"), list(clause.params()), list(sym("let*"), list(binds), clause.wrapped()));
+			});
+		}
+		return methodStoreForm(def.methodsVar(), key, impl.method(), lambda);
+	}
+
+	/**
+	 * {@code (defrecord Name [fields] Protocol (method [target & args] body...)...
+	 * opts?)}: the positional and map constructors plus one table row per inline method.
+	 * A trailing keyword names an unsupported option, like {@code defprotocol}'s.
+	 */
+	private List<LispVal> recordTypeForms(List<LispVal> items) {
+		boolean record = isSymbolNamed(items.get(0), "defrecord");
+		String what = record ? "defrecord" : "deftype";
+		isTrue(items.size() >= 3, what + " takes a name and fields");
+		String name = plainName(items.get(1), what);
+		TypeDef def = declareRecordType(items);
+		List<LispVal> rest = new ArrayList<>(items.subList(3, items.size()));
+		for (LispVal datum : rest) {
+			isTrue(!(datum instanceof LispSymbol s && s.name().startsWith(":")),
+					what + " option " + datum.print() + " is not supported yet");
+		}
+		List<ImplGroup> groups = implGroups(rest, what);
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(positionalCtor(name, def));
+		if (record) {
+			forms.add(mapCtor(name, def));
+		}
+		for (ImplGroup group : groups) {
+			for (TypeMethod impl : group.methods()) {
+				forms.add(methodRow(group.protocol(), typeTagForm(name), impl, def.fields()));
+			}
+		}
+		this.usedProtocols = true;
+		return forms;
+	}
+
+	/**
+	 * The positional constructor: a mangled {@code defun} over the fields, so a wrong
+	 * count signals like any other call. The field keywords travel twice (the declared
+	 * list for {@code dissoc}'s keep-type rule, the table for the map verbs).
+	 */
+	private LispVal positionalCtor(String name, TypeDef def) {
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> pairs = new ArrayList<>();
+		List<LispVal> keys = new ArrayList<>();
+		for (String field : def.fields()) {
+			params.add(idSym(field));
+			LispVal key = keywordForm(field);
+			keys.add(key);
+			pairs.add(key);
+			pairs.add(idSym(field));
+		}
+		LispVal table = tableFromPlist(cons(sym("list"), pairs));
+		LispVal value = def.record() ? wrapRecord(typeTagForm(name), cons(sym("list"), keys), table)
+				: wrapDeftype(typeTagForm(name), cons(sym("list"), keys), table);
+		return list(sym("defun"), idSym("->" + name), list(params), value);
+	}
+
+	/**
+	 * The map constructor (records only -- the oracle defines none for deftypes): the
+	 * entries copied out of the argument (nil builds empty, a record contributes its
+	 * entries), missing fields defaulting to nil, extra entries kept, like the oracle.
+	 */
+	private LispVal mapCtor(String name, TypeDef def) {
+		LispSymbol src = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol pairs = freshTemp();
+		LispSymbol miss = freshTemp();
+		List<LispVal> keys = new ArrayList<>();
+		for (String field : def.fields()) {
+			keys.add(keywordForm(field));
+		}
+		List<LispVal> fill = new ArrayList<>();
+		for (LispVal key : keys) {
+			fill.add(list(sym("if"), list(sym("eq"), list(sym("gethash"), key, table, miss), miss),
+					list(sym("setf"), list(sym("gethash"), key, table), NIL_CONST), NIL_CONST));
+		}
+		fill.add(wrapRecord(typeTagForm(name), cons(sym("list"), keys), table));
+		LispVal whole = list(sym("let*"), list(List.of(list(src, src),
+				list(pairs, list(sym("if"), src,
+						list(sym("if"), isRecordForm(src), tablePlist(typedTableOf(src)), tablePlist(src)), NIL_CONST)),
+				list(miss, list(sym("list"), NIL_CONST)))),
+				list(sym("let"), list(List.of(list(table, tableFromPlist(pairs)))), cons(sym("progn"), fill)));
+		return list(sym("defun"), idSym("map->" + name), list(List.of(src)), whole);
+	}
+
+	/**
+	 * Maps an {@code extend} target name to its dispatch-key form, or null for
+	 * {@code Object} (the default row). Record and deftype names answer their tags; host
+	 * kinds answer the {@code class} keyword spelling, so dispatch agrees with
+	 * {@code class}; anything else (a {@code java.time.Instant}, a {@code Date}, ...) is
+	 * a named refusal.
+	 */
+	private @Nullable LispVal extendKeyForm(String typeName, String what) {
+		if (typeName.equals("Object")) {
+			return null;
+		}
+		if (typeName.equals("nil")) {
+			return keywordForm("nil");
+		}
+		if (this.types.containsKey(typeName)) {
+			return typeTagForm(typeName);
+		}
+		String kind = switch (typeName) {
+			case "String", "CharSequence" -> "string";
+			case "Number", "Long", "Double", "Integer", "Float", "Short", "Byte" -> "number";
+			case "Boolean" -> "boolean";
+			case "Keyword" -> "keyword";
+			case "Symbol" -> "symbol";
+			case "Character", "Char" -> "char";
+			case "Map", "IPersistentMap" -> "map";
+			case "Vector", "IPersistentVector" -> "vector";
+			case "Set", "IPersistentSet" -> "set";
+			case "List", "Seq", "Sequential", "Collection", "IPersistentList", "IPersistentCollection" -> "list";
+			case "Fn", "IFn", "Function" -> "function";
+			case "Atom" -> "atom";
+			default -> null;
+		};
+		if (kind == null) {
+			throw new LispReadException(what + " needs a core type, not " + typeName);
+		}
+		return keywordForm(kind);
+	}
+
+	/**
+	 * Stores one extension row: under the target's tag, or (for {@code Object}) the
+	 * protocol's default global consulted on a miss. The method must belong to the
+	 * protocol, like the inline implementations.
+	 */
+	private LispVal extendRow(String protocol, @Nullable LispVal key, TypeMethod impl, String what) {
+		ProtocolDef def = this.protocols.get(protocol);
+		if (def == null) {
+			throw new LispReadException("No such protocol: " + protocol);
+		}
+		isTrue(def.methods().contains(impl.method()), "Can't define method not in interfaces: " + impl.method());
+		Clause clause = clause(impl.params(), impl.body());
+		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+		if (key == null) {
+			return list(sym("setq"), def.defaultVar(), lambda);
+		}
+		return methodStoreForm(def.methodsVar(), key, impl.method(), lambda);
+	}
+
+	/**
+	 * {@code (extend-protocol P Type (method [target & args] body...)+ ...)}: one row per
+	 * method per type, like {@code defmethod} rows. The type may repeat (later rows win,
+	 * like the oracle).
+	 */
+	private LispVal extendProtocolForm(List<LispVal> items) {
+		isTrue(items.size() >= 3, "extend-protocol takes a protocol, a type and methods");
+		isTrue(items.get(1) instanceof LispSymbol, "extend-protocol takes a protocol name");
+		String protocol = ((LispSymbol) items.get(1)).name();
+		if (!this.protocols.containsKey(protocol)) {
+			throw new LispReadException("No such protocol: " + protocol);
+		}
+		List<LispVal> rows = new ArrayList<>();
+		int at = 2;
+		while (at < items.size()) {
+			isTrue(items.get(at) instanceof LispSymbol, "extend-protocol takes a type name");
+			String target = ((LispSymbol) items.get(at)).name();
+			LispVal key = extendKeyForm(target, "extend-protocol");
+			at++;
+			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
+				List<LispVal> impl = items(items.get(at));
+				if (impl == null || impl.size() < 2 || !(impl.get(0) instanceof LispSymbol)) {
+					throw new LispReadException("a method implementation takes a name, parameters and a body, not "
+							+ items.get(at).print());
+				}
+				String method = ((LispSymbol) impl.get(0)).name();
+				isTrue(isVectorDatum(stripMeta(impl.get(1))),
+						"multi-arity protocol methods are not supported yet: " + method);
+				List<LispVal> params = bindingItems(stripMeta(impl.get(1)), "the method " + method + " of");
+				isTrue(!params.isEmpty(), "a protocol method takes a target and arguments: " + method);
+				rows.add(extendRow(protocol, key, new TypeMethod(method, impl.get(1), impl.subList(2, impl.size())),
+						"extend-protocol"));
+				at++;
+			}
+		}
+		this.usedProtocols = true;
+		if (rows.isEmpty()) {
+			return NIL_CONST;
+		}
+		return cons(sym("progn"), rows);
+	}
+
+	/**
+	 * {@code (extend-type T Protocol (method [target & args] body...)+ ...)}: the same
+	 * rows, grouped under protocol names. A bare method group (no protocol) is refused:
+	 * there is no interface to check it against.
+	 */
+	private LispVal extendTypeForm(List<LispVal> items) {
+		isTrue(items.size() >= 3, "extend-type takes a type, a protocol and methods");
+		isTrue(items.get(1) instanceof LispSymbol, "extend-type takes a type name");
+		String target = ((LispSymbol) items.get(1)).name();
+		LispVal key = extendKeyForm(target, "extend-type");
+		List<ImplGroup> groups = implGroups(items.subList(2, items.size()), "extend-type");
+		List<LispVal> rows = new ArrayList<>();
+		for (ImplGroup group : groups) {
+			for (TypeMethod impl : group.methods()) {
+				rows.add(extendRow(group.protocol(), key, impl, "extend-type"));
+			}
+		}
+		this.usedProtocols = true;
+		if (rows.isEmpty()) {
+			return NIL_CONST;
+		}
+		return cons(sym("progn"), rows);
+	}
+
+	/**
+	 * {@code (extend T Protocol {method fn ...})}: the same rows from a map literal of
+	 * method functions. Anything but a literal map is refused (there is nothing to walk
+	 * at lower time).
+	 */
+	private LispVal extendForm(List<LispVal> items) {
+		isTrue(items.size() == 4, "extend takes a type, a protocol and a map of methods");
+		isTrue(items.get(1) instanceof LispSymbol, "extend takes a type name");
+		isTrue(items.get(2) instanceof LispSymbol, "extend takes a protocol name");
+		String target = ((LispSymbol) items.get(1)).name();
+		String protocol = ((LispSymbol) items.get(2)).name();
+		ProtocolDef def = this.protocols.get(protocol);
+		if (def == null) {
+			throw new LispReadException("No such protocol: " + protocol);
+		}
+		List<LispVal> entries = items(items.get(3));
+		if (entries == null || entries.isEmpty() || !isSymbolNamed(entries.get(0), "%hash-map")
+				|| entries.size() % 2 == 0) {
+			throw new LispReadException("extend takes a map literal of methods, not " + items.get(3).print());
+		}
+		LispVal key = extendKeyForm(target, "extend");
+		List<LispVal> rows = new ArrayList<>();
+		for (int i = 1; i < entries.size(); i += 2) {
+			isTrue(entries.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
+					"extend takes keyword method names, not " + entries.get(i).print());
+			String method = ((LispSymbol) entries.get(i)).name().substring(1);
+			isTrue(def.methods().contains(method), "Can't define method not in interfaces: " + method);
+			LispVal fun = fnValue(entries.get(i + 1));
+			LispVal row = key == null ? list(sym("setq"), def.defaultVar(), fun)
+					: methodStoreForm(def.methodsVar(), key, method, fun);
+			rows.add(row);
+		}
+		this.usedProtocols = true;
+		if (rows.isEmpty()) {
+			return NIL_CONST;
+		}
+		return cons(sym("progn"), rows);
+	}
+
+	/**
+	 * {@code (satisfies? Protocol x)}: table membership -- the tag's row, or the
+	 * {@code Object} row an extension installed, like the oracle. The protocol is a
+	 * literal name, like {@code defmethod}'s multimethod.
+	 */
+	private LispVal satisfiesOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "satisfies? takes a protocol and a value");
+		isTrue(items.get(1) instanceof LispSymbol, "satisfies? takes a protocol name");
+		String protocol = ((LispSymbol) items.get(1)).name();
+		ProtocolDef def = this.protocols.get(protocol);
+		if (def == null) {
+			throw new LispReadException("No such protocol: " + protocol);
+		}
+		LispSymbol tag = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol inner = freshTemp();
+		LispVal hit = list(sym("not"), list(sym("eq"), inner, miss));
+		LispVal answer = list(sym("if"), hit, TRUE_CONST,
+				list(sym("if"), list(sym("null"), def.defaultVar()), this.falseVariable, TRUE_CONST));
+		this.usedProtocols = true;
+		return list(sym("let*"),
+				list(List.of(list(tag, list(new LispSymbol(PROTOCOL_TAG), lower(items.get(2)))),
+						list(miss, list(sym("list"), NIL_CONST)),
+						list(inner, list(sym("gethash"), tag, def.methodsVar(), miss)))),
+				answer);
+	}
+
+	/**
+	 * {@code (reify Protocol (method [target & args] body...)+ ...)}: one fresh tag per
+	 * evaluation with a row per method in each protocol's table, answering the opaque
+	 * value -- a single-shot map plus methods (never {@code proxy}, which stays the
+	 * {@code java:} surface).
+	 */
+	private LispVal reifyForm(List<LispVal> items) {
+		isTrue(items.size() >= 2, "reify takes a protocol and methods");
+		List<ImplGroup> groups = implGroups(items.subList(1, items.size()), "reify");
+		LispSymbol self = freshTemp();
+		List<LispVal> prologue = new ArrayList<>();
+		prologue.add(list(self, list(sym("list"), REIFY_TAG, list(sym("gensym"), LispString.literal("reify")))));
+		List<LispVal> body = new ArrayList<>();
+		for (ImplGroup group : groups) {
+			ProtocolDef def = this.protocols.get(group.protocol());
+			if (def == null) {
+				throw new LispReadException("No such protocol: " + group.protocol());
+			}
+			for (TypeMethod impl : group.methods()) {
+				Clause clause = clause(impl.params(), impl.body());
+				LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
+				body.add(methodStoreForm(def.methodsVar(), list(sym("cadr"), self), impl.method(), lambda));
+			}
+		}
+		body.add(self);
+		this.usedProtocols = true;
+		return list(sym("let*"), list(prologue), cons(sym("progn"), body));
+	}
+
 	// macros: defmacro, lower-time expansion, syntax-quote, macroexpand, gensym
 
 	/** The runtime once-expander behind {@code macroexpand-1}, as spelled in programs. */
@@ -8405,13 +9284,18 @@ public final class ClojureLowering {
 			if (name.startsWith(".-")) {
 				isTrue(name.length() > 2, "a field read needs a field name: " + name);
 				isTrue(items.size() == 2, name + " takes a target");
-				return cons(JAVA_FIELD, List.of(lower(items.get(1)), LispString.literal(name.substring(2))));
+				return fieldRead(lower(items.get(1)), name.substring(2));
 			}
 			isTrue(name.length() > 1, "a method call needs a method name");
 			isTrue(items.size() >= 2, name + " takes a target and arguments");
 			return instanceCall(lower(items.get(1)), name.substring(1), items.subList(2, items.size()));
 		}
 		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {
+			String base = name.substring(0, name.length() - 1);
+			if (this.types.containsKey(base)) {
+				// (T. args...) constructs the record or deftype, like ->T
+				return lower(cons(new LispSymbol("->" + base), items.subList(1, items.size())));
+			}
 			List<LispVal> args = new ArrayList<>();
 			args.add(LispString.literal(resolveClass(name.substring(0, name.length() - 1))));
 			args.addAll(lowers(items, 1));
@@ -8421,7 +9305,7 @@ public final class ClojureLowering {
 		if (slash > 0) {
 			String head = name.substring(0, slash);
 			String tail = name.substring(slash + 1);
-			if (!tail.isEmpty() && tail.indexOf('/') < 0 && isClasslike(head)) {
+			if (!tail.isEmpty() && tail.indexOf('/') < 0 && isClasslike(head) && !this.types.containsKey(head)) {
 				String cls = resolveClass(head);
 				if (items.size() == 1) {
 					// no arguments reads a static field: a zero-argument static
@@ -8511,10 +9395,31 @@ public final class ClojureLowering {
 		if (!(items.get(1) instanceof LispSymbol named)) {
 			throw new LispReadException("new takes a class name, not " + items.get(1).print());
 		}
+		if (this.types.containsKey(named.name())) {
+			// (new T args...) constructs the record or deftype, like ->T
+			return lower(cons(new LispSymbol("->" + named.name()), items.subList(2, items.size())));
+		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(resolveClass(named.name())));
 		args.addAll(lowers(items, 2));
 		return cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * {@code (.-field target)}: a record or deftype answers its field table's entry
+	 * (missing fields signal, like the oracle); anything else takes the host field path,
+	 * like before.
+	 */
+	private LispVal fieldRead(LispVal target, String field) {
+		LispSymbol one = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal table = list(sym("if"), isReifyForm(one), NIL_CONST, typedTableOf(one));
+		LispVal read = list(sym("let"), list(List.of(list(got, list(sym("gethash"), keywordForm(field), table, miss)))),
+				list(sym("if"), list(sym("eq"), got, miss),
+						list(sym("error"), LispString.literal("No such field: " + field)), got));
+		return list(sym("let"), list(List.of(list(one, target), list(miss, list(sym("list"), NIL_CONST)))),
+				list(sym("if"), isTypedForm(one), read, cons(JAVA_FIELD, List.of(one, LispString.literal(field)))));
 	}
 
 	/**

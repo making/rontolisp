@@ -141,6 +141,35 @@ reverse order through `unwind-protect`, calling the `close` method (Java
 closeables need the JVM, like all interop); `(. stream write x)` prints through
 `princ` on every backend.
 
+## Protocols, records and types
+
+A `defprotocol` declares methods; each method lowers to a dispatcher over the
+target's tag (the multimethod shape without the hierarchy search: an exact tag
+match, then the `Object` row). `extend-protocol`/`extend-type`/`extend` add rows
+under a target's tag; `satisfies?` tests membership. Extend targets are the kinds
+`class` answers (`String`, `Number`, `Boolean`, `Keyword`, `Symbol`, `Character`,
+`Map`, `Vector`, `Set`, `List`/`Seq`, plus `nil` and `Object` as the miss
+default) and known record/deftype names; anything else is a named refusal. A miss
+with no `Object` row signals, like the oracle. Each method takes one parameter
+vector (several arities stay refused).
+
+A `defrecord` value is a map with a type tag: the entry table every map uses,
+wrapped as `(:C%RECORD tag fields table)`, so the map verbs read through it
+(`get`/`contains?`/`keys`/`vals`/`count`/`seq`/`select-keys` read the entries;
+`assoc`/`update`/`conj`/`merge` rebuild the table and keep the tag; `dissoc`
+keeps the record while every declared field is still present and drops to a plain
+map otherwise, like the oracle). `=` compares two records by tag plus entries
+and never equals a plain map, like the oracle. A `deftype` shares the shape with
+an opaque tag: reads miss, writers and `seq`/`count`/`empty?` signal, and `=`
+is identity, like the oracle. `reify` answers one fresh tag per evaluation with
+a row per method in each protocol's table. Constructors are mangled functions:
+`->Type` positionally, `map->Type` from a map (records only -- the oracle defines
+none for deftypes); `(Type. ...)`/`(new Type ...)` rewrite to `->Type`.
+`instance?` of a record/deftype name tests the tag; `(.-field x)` reads the field
+table (missing fields signal, like the oracle). Inline method bodies see the
+fields as locals (an explicit parameter shadows its field, like the oracle);
+type hints (`^String`, `^H`) parse and drop, never affecting dispatch.
+
 ## Not yet
 
 Each refusal names the missing design, never `unknown name`:
@@ -150,8 +179,10 @@ Each refusal names the missing design, never `unknown name`:
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |
-| `defprotocol`, `defrecord`, `deftype`, `definterface`, `reify`, `extend-protocol`, `extend-type`, `extend`, `satisfies?`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | rejected by design -- type dispatch and a record value representation on all four backends |
-| `set!` | by name | no field-write primitive and no record type to mutate |
+| `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
+| multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
+| `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | metadata never affects dispatch |
+| `set!` | by name | no field-write primitive |
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |
