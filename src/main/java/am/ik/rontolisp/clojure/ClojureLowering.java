@@ -54,18 +54,20 @@ import org.jspecify.annotations.Nullable;
  * {@code descendants}/{@code make-hierarchy}/{@code prefer-method}, {@code defmulti}
  * {@code :hierarchy}) widen the dispatch through the global hierarchy value or a custom
  * one, while protocols stay refused by name; the imperative loops and comprehensions
- * ({@code doseq}/{@code dotimes}/{@code for}) are refused by name. Collections: a vector
- * literal is a {@code vector} call; a map literal is an {@code equal} hash table built by
- * {@code rontolisp:plist-hash-table} (lists and nested maps key structurally; vectors and
- * tables key by identity, like the runtime), never mutated in place -- every verb that
- * "changes" a map builds a fresh table, which is what keeps the persistent semantics
- * observable; a set literal is the same table with each member stored under itself,
- * wrapped as {@code (:C%SET table)} so a verb can tell a set from a map (the wrapper
- * prints as written, like vectors in CL notation); a seq is a STRICT list view -- lists
- * pass through untouched, vectors and strings coerce, maps contribute one two-vector per
- * entry and sets one member per element (both in the table's walk order, unspecified),
- * nil and the false object are empty, anything else signals -- so
- * {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
+ * lower like the rest ({@code doseq} over the seq view answering nil, {@code dotimes}
+ * over the integers below a count, {@code for} as a strict list comprehension with
+ * {@code :when}/{@code :while}/{@code :let}, plus the strict {@code dorun}/ {@code doall}
+ * companions). Collections: a vector literal is a {@code vector} call; a map literal is
+ * an {@code equal} hash table built by {@code rontolisp:plist-hash-table} (lists and
+ * nested maps key structurally; vectors and tables key by identity, like the runtime),
+ * never mutated in place -- every verb that "changes" a map builds a fresh table, which
+ * is what keeps the persistent semantics observable; a set literal is the same table with
+ * each member stored under itself, wrapped as {@code (:C%SET table)} so a verb can tell a
+ * set from a map (the wrapper prints as written, like vectors in CL notation); a seq is a
+ * STRICT list view -- lists pass through untouched, vectors and strings coerce, maps
+ * contribute one two-vector per entry and sets one member per element (both in the
+ * table's walk order, unspecified), nil and the false object are empty, anything else
+ * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
  * stays a no-copy identity. There is no laziness, chunking or memoisation:
@@ -449,8 +451,14 @@ final class ClojureLowering {
 		if (isSymbolNamed(head, "list*")) {
 			return listStar(items);
 		}
-		if (isSymbolNamed(head, "doseq") || isSymbolNamed(head, "dotimes") || isSymbolNamed(head, "for")) {
-			throw new LispReadException("iteration forms are not supported yet: " + ((LispSymbol) head).name());
+		if (isSymbolNamed(head, "doseq")) {
+			return doseqOf(items);
+		}
+		if (isSymbolNamed(head, "dotimes")) {
+			return dotimesOf(items);
+		}
+		if (isSymbolNamed(head, "for")) {
+			return forOf(items);
 		}
 		if (isSymbolNamed(head, "defmulti")) {
 			List<LispVal> forms = defmultiForms(items);
@@ -1639,6 +1647,10 @@ final class ClojureLowering {
 				return dropOf(items);
 			case "range":
 				return rangeOf(items);
+			case "dorun":
+				return dorunOf(items);
+			case "doall":
+				return doallOf(items);
 			case "assoc":
 				return assocOf(items);
 			case "dissoc":
@@ -2259,6 +2271,8 @@ final class ClojureLowering {
 			case "take" -> takeValue();
 			case "drop" -> dropValue();
 			case "range" -> rangeValue();
+			case "dorun" -> dorunValue();
+			case "doall" -> doallValue();
 			case "subs" -> subsValue();
 			case "atom", "volatile!" -> atomValue();
 			case "deref" -> derefValue();
@@ -2642,6 +2656,373 @@ final class ClojureLowering {
 
 	private LispVal consForm(LispVal item, LispVal coll) {
 		return list(sym("cons"), item, seqForm(coll));
+	}
+
+	/**
+	 * One level of a {@code doseq}/{@code for} binding vector: a pattern over a
+	 * collection plus the {@code :when}/{@code :while}/{@code :let} modifiers that follow
+	 * it, in order.
+	 */
+	private record SeqLevel(LispVal pattern, LispVal coll, List<SeqModifier> modifiers) {
+	}
+
+	/** One {@code :when}/{@code :while}/{@code :let} modifier and its datum. */
+	private record SeqModifier(String kind, LispVal datum) {
+	}
+
+	/**
+	 * {@code doseq}: side-effecting iteration over the seq view, answering nil. One
+	 * {@code dolist} per binding pair (which the macro expander already shares with every
+	 * backend), nested left to right; patterns destructure through the same {@code let}
+	 * lowering; {@code :when} skips the element, {@code :while} ends its level's loop
+	 * through a block (an outer level's ends the whole form), {@code :let} binds
+	 * sequentially. An empty binding vector runs the body once.
+	 */
+	private LispVal doseqOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "doseq takes a binding vector and a body");
+		List<SeqLevel> levels = seqLevels(bindingItems(items.get(1), "doseq"), "doseq");
+		Map<String, Kind> scope = new HashMap<>();
+		for (SeqLevel level : levels) {
+			collectSeqNames(level, scope);
+		}
+		return inScope(scope, () -> {
+			LispVal inner = body(items, 2);
+			for (int i = levels.size() - 1; i >= 0; i--) {
+				inner = seqLevel(levels.get(i), inner, scope, "doseq");
+			}
+			return list(sym("progn"), inner, NIL_CONST);
+		});
+	}
+
+	/**
+	 * {@code dotimes}: one strict binding over the integers below the count, answering
+	 * nil -- the core {@code dotimes} the macro expander already shares. The count runs
+	 * through {@code truncate} first, the oracle's {@code intCast} cast in lowering form:
+	 * a float counts its truncation ({@code 2.5} runs {@code 0 1}), and a non-number
+	 * signals there instead of in the loop's comparison.
+	 */
+	private LispVal dotimesOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "dotimes takes a binding vector and a body");
+		List<LispVal> bindings = bindingItems(items.get(1), "dotimes");
+		isTrue(bindings.size() == 2, "dotimes takes exactly one name and count");
+		String name = plainName(bindings.get(0), "dotimes");
+		Map<String, Kind> scope = new HashMap<>();
+		scope.put(name, Kind.VARIABLE);
+		LispVal count = list(sym("truncate"), lower(bindings.get(1)));
+		return inScope(scope, () -> list(sym("dotimes"), list(List.of(idSym(name), count)), body(items, 2)));
+	}
+
+	/**
+	 * {@code for}: a strict list comprehension over the seq view -- nested {@code dolist}
+	 * loops accumulating in reverse, like {@code take}'s labels walk, so no backend
+	 * learns a representation. Modifiers behave per level, left to right: {@code :when}
+	 * skips the element, {@code :while} ends its level's loop (an outer level's ends the
+	 * whole comprehension), {@code :let} binds sequentially. Answers the strict list,
+	 * {@code nil} when empty (the {@code rest}/{@code take} divergence, not {@code ()}).
+	 */
+	private LispVal forOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "for takes a binding vector and a body");
+		List<SeqLevel> levels = seqLevels(bindingItems(items.get(1), "for"), "for");
+		isTrue(!levels.isEmpty(), "for takes at least one binding pair");
+		Map<String, Kind> scope = new HashMap<>();
+		for (SeqLevel level : levels) {
+			collectSeqNames(level, scope);
+		}
+		return inScope(scope, () -> {
+			LispSymbol acc = freshTemp();
+			LispVal inner = list(sym("setq"), acc, list(sym("cons"), lower(items.get(2)), acc));
+			for (int i = levels.size() - 1; i >= 0; i--) {
+				inner = seqLevel(levels.get(i), inner, scope, "for");
+			}
+			return list(sym("let"), list(List.of(list(acc, NIL_CONST))), inner, list(sym("reverse"), acc));
+		});
+	}
+
+	/**
+	 * The levels of a {@code doseq}/{@code for} binding vector: pattern/collection pairs,
+	 * each trailed by its {@code :when}/{@code :while}/{@code :let} modifiers in order.
+	 * Any other keyword is the oracle's {@code Invalid ... keyword} refusal.
+	 */
+	private static List<SeqLevel> seqLevels(List<LispVal> bindings, String owner) {
+		List<SeqLevel> levels = new ArrayList<>();
+		int i = 0;
+		while (i < bindings.size()) {
+			LispVal head = bindings.get(i);
+			if (head instanceof LispSymbol keyword && keyword.name().startsWith(":")) {
+				if (keyword.name().equals(":when") || keyword.name().equals(":while")
+						|| keyword.name().equals(":let")) {
+					throw new LispReadException(
+							"Invalid '" + owner + "' keyword " + keyword.name() + " without a binding before it");
+				}
+				throw new LispReadException("Invalid '" + owner + "' keyword " + keyword.name());
+			}
+			isTrue(i + 1 < bindings.size(), "a " + owner + " binding vector pairs a name with a value");
+			LispVal pattern = head;
+			LispVal coll = bindings.get(i + 1);
+			i += 2;
+			List<SeqModifier> modifiers = new ArrayList<>();
+			while (i < bindings.size() && bindings.get(i) instanceof LispSymbol trailer
+					&& trailer.name().startsWith(":")) {
+				String kind = trailer.name();
+				isTrue(kind.equals(":when") || kind.equals(":while") || kind.equals(":let"),
+						"Invalid '" + owner + "' keyword " + kind);
+				isTrue(i + 1 < bindings.size(), owner + " " + kind + " takes a form after it");
+				modifiers.add(new SeqModifier(kind, bindings.get(i + 1)));
+				i += 2;
+			}
+			levels.add(new SeqLevel(pattern, coll, List.copyOf(modifiers)));
+		}
+		return levels;
+	}
+
+	/**
+	 * One binding level wrapped around its inner content: the collection's seq view
+	 * iterated by {@code dolist} (patterns through the {@code let} destructuring), the
+	 * level's modifiers applied in order around the content. A {@code :while} ends the
+	 * level's own loop through a block, so an outer level's ends the whole
+	 * {@code doseq}/{@code for} while an inner one's lets the outer loops continue, like
+	 * the oracle's.
+	 */
+	private LispVal seqLevel(SeqLevel level, LispVal inner, Map<String, Kind> scope, String owner) {
+		LispVal seq = seqForm(lower(level.coll()));
+		LispVal wrap = inner;
+		LispSymbol whileBlock = null;
+		for (int m = level.modifiers().size() - 1; m >= 0; m--) {
+			SeqModifier modifier = level.modifiers().get(m);
+			switch (modifier.kind()) {
+				case ":when" -> wrap = ifFalsey(lower(modifier.datum()), wrap, NIL_CONST);
+				case ":while" -> {
+					if (whileBlock == null) {
+						whileBlock = freshTemp();
+					}
+					LispSymbol stop = whileBlock;
+					wrap = ifFalsey(lower(modifier.datum()), wrap, list(sym("return-from"), stop, NIL_CONST));
+				}
+				case ":let" -> wrap = seqLetOf(modifier.datum(), wrap, scope, owner);
+				default -> throw new LispReadException("Invalid '" + owner + "' keyword " + modifier.kind());
+			}
+		}
+		LispVal loopForm = dolistOf(level.pattern(), seq, wrap, scope, owner);
+		if (whileBlock != null) {
+			return list(sym("block"), whileBlock, loopForm);
+		}
+		return loopForm;
+	}
+
+	/**
+	 * One {@code dolist} over an already-lowered seq view: a plain name binds the element
+	 * directly, a pattern through the {@code let} destructuring over a temporary.
+	 */
+	private LispVal dolistOf(LispVal pattern, LispVal seq, LispVal wrap, Map<String, Kind> scope, String owner) {
+		if (pattern instanceof LispSymbol) {
+			String name = plainName(pattern, owner);
+			return list(sym("dolist"), list(List.of(idSym(name), seq)), wrap);
+		}
+		LispSymbol temp = freshTemp();
+		List<LispVal> pairs = new ArrayList<>();
+		destructureInto(pattern, temp, pairs, scope, owner);
+		if (pairs.isEmpty()) {
+			return list(sym("dolist"), list(List.of(temp, seq)), wrap);
+		}
+		return list(sym("dolist"), list(List.of(temp, seq)), list(sym("let*"), list(pairs), wrap));
+	}
+
+	/**
+	 * A {@code :let} modifier's binding vector around its level's content: sequential
+	 * pairs through the {@code let} destructuring, like {@code let} itself.
+	 */
+	private LispVal seqLetOf(LispVal letVector, LispVal wrap, Map<String, Kind> scope, String owner) {
+		List<LispVal> bindings = bindingItems(letVector, owner + " :let");
+		isTrue(bindings.size() % 2 == 0, "a " + owner + " :let vector pairs a name with a value");
+		List<LispVal> pairs = new ArrayList<>();
+		for (int i = 0; i < bindings.size(); i += 2) {
+			LispVal pattern = bindings.get(i);
+			if (pattern instanceof LispSymbol) {
+				String name = plainName(pattern, owner + " :let");
+				pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
+				scope.put(name, Kind.VARIABLE);
+				continue;
+			}
+			LispSymbol temp = freshTemp();
+			pairs.add(list(temp, lower(bindings.get(i + 1))));
+			destructureInto(pattern, temp, pairs, scope, owner + " :let");
+		}
+		if (pairs.isEmpty()) {
+			return wrap;
+		}
+		return list(sym("let*"), list(pairs), wrap);
+	}
+
+	/**
+	 * Every name a {@code doseq}/{@code for} level binds, registered before anything
+	 * lowers: a later collection (or the body) may use an earlier binding, like
+	 * {@code let*}'s sequential scope. Lenient by design -- anything malformed stays for
+	 * the lowering to refuse with the {@code let} shape.
+	 */
+	private static void collectSeqNames(SeqLevel level, Map<String, Kind> scope) {
+		collectPatternNames(level.pattern(), scope);
+		for (SeqModifier modifier : level.modifiers()) {
+			if (modifier.kind().equals(":let")) {
+				collectLetNames(modifier.datum(), scope);
+			}
+		}
+	}
+
+	/**
+	 * The names a binding pattern binds, without lowering: a plain name binds directly, a
+	 * vector positionally ({@code &} the rest, {@code :as} the whole), a map through
+	 * {@code :keys}/{@code :syms}/{@code :strs}, explicit locals, {@code :as} and nested
+	 * patterns -- mirroring {@code destructureInto}, which still owns every refusal.
+	 */
+	private static void collectPatternNames(LispVal pattern, Map<String, Kind> scope) {
+		if (pattern instanceof LispSymbol name) {
+			if (!name.name().startsWith(":") && !name.name().equals("&")) {
+				scope.put(name.name(), Kind.VARIABLE);
+			}
+			return;
+		}
+		List<LispVal> elements = items(pattern);
+		if (elements == null || elements.isEmpty()) {
+			return;
+		}
+		if (elements.get(0) == ClojureReader.VECTOR) {
+			List<LispVal> rest = elements.subList(1, elements.size());
+			for (int i = 0; i < rest.size(); i++) {
+				LispVal element = rest.get(i);
+				if (isSymbolNamed(element, ":as")) {
+					if (i + 1 < rest.size() && rest.get(i + 1) instanceof LispSymbol named
+							&& !named.name().startsWith(":") && !named.name().equals("&")) {
+						scope.put(named.name(), Kind.VARIABLE);
+					}
+					i++;
+					continue;
+				}
+				if (isSymbolNamed(element, "&")) {
+					if (i + 1 < rest.size()) {
+						collectPatternNames(rest.get(i + 1), scope);
+					}
+					break;
+				}
+				collectPatternNames(element, scope);
+			}
+			return;
+		}
+		if (isSymbolNamed(elements.get(0), "%hash-map")) {
+			List<LispVal> entries = elements.subList(1, elements.size());
+			for (int i = 0; i + 1 < entries.size(); i += 2) {
+				LispVal head = entries.get(i);
+				LispVal arg = entries.get(i + 1);
+				if (isSymbolNamed(head, ":or")) {
+					continue;
+				}
+				if (isSymbolNamed(head, ":as")) {
+					if (arg instanceof LispSymbol named && !named.name().startsWith(":") && !named.name().equals("&")) {
+						scope.put(named.name(), Kind.VARIABLE);
+					}
+					continue;
+				}
+				if (head instanceof LispSymbol kind && (kind.name().equals(":keys") || kind.name().equals(":syms")
+						|| kind.name().equals(":strs"))) {
+					collectKeyNames(kind.name(), arg, scope);
+					continue;
+				}
+				if (head instanceof LispSymbol named && !named.name().startsWith(":")) {
+					scope.put(named.name(), Kind.VARIABLE);
+					continue;
+				}
+				collectPatternNames(head, scope);
+			}
+		}
+	}
+
+	/**
+	 * The locals one {@code :keys}/{@code :syms}/{@code :strs} directive binds: each
+	 * entry its local (a {@code :keys} entry may qualify, binding the short name) --
+	 * mirroring {@code bindKeys}.
+	 */
+	private static void collectKeyNames(String kind, LispVal names, Map<String, Kind> scope) {
+		List<LispVal> elements = items(names);
+		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
+			return;
+		}
+		for (LispVal element : elements.subList(1, elements.size())) {
+			if (element instanceof LispSymbol spelled && !spelled.name().startsWith(":")
+					&& !spelled.name().equals("&")) {
+				String local = spelled.name();
+				if ((kind.equals(":keys") || kind.equals(":syms")) && local.lastIndexOf('/') >= 0) {
+					local = local.substring(local.lastIndexOf('/') + 1);
+					if (local.isEmpty()) {
+						continue;
+					}
+				}
+				scope.put(local, Kind.VARIABLE);
+			}
+		}
+	}
+
+	/** The names a {@code :let} modifier's binding vector binds, without lowering. */
+	private static void collectLetNames(LispVal letVector, Map<String, Kind> scope) {
+		List<LispVal> found = items(letVector);
+		if (found == null || found.isEmpty() || found.get(0) != ClojureReader.VECTOR) {
+			return;
+		}
+		List<LispVal> bindings = found.subList(1, found.size());
+		for (int i = 0; i + 1 < bindings.size(); i += 2) {
+			collectPatternNames(bindings.get(i), scope);
+		}
+	}
+
+	/**
+	 * {@code dorun}: the strict companion of {@code doseq} -- seqs are already strict
+	 * lists here, so realizing one is evaluating it; answers nil.
+	 */
+	private LispVal dorunOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "dorun takes a collection and an optional count");
+		if (n == 1) {
+			return list(sym("progn"), lower(items.get(1)), NIL_CONST);
+		}
+		return list(sym("progn"), lower(items.get(1)), lower(items.get(2)), NIL_CONST);
+	}
+
+	/**
+	 * {@code doall}: like {@code dorun}, but answers the collection itself (never
+	 * coerced: a vector stays a vector, like the oracle's).
+	 */
+	private LispVal doallOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "doall takes a collection and an optional count");
+		if (n == 1) {
+			return lower(items.get(1));
+		}
+		return list(sym("progn"), lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/**
+	 * {@code dorun} as a value: over one collection (or a count and a collection),
+	 * answering nil; any other count signals, like a call's arity refusal.
+	 */
+	private LispVal dorunValue() {
+		LispSymbol args = new LispSymbol(mangle("dorun-args"));
+		LispVal arity = list(sym("error"), LispString.literal("dorun takes a collection and an optional count"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), NIL_CONST),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), NIL_CONST), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code doall} as a value: over one collection (or a count and a collection),
+	 * answering the collection; any other count signals.
+	 */
+	private LispVal doallValue() {
+		LispSymbol args = new LispSymbol(mangle("doall-args"));
+		LispVal arity = list(sym("error"), LispString.literal("doall takes a collection and an optional count"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), list(sym("car"), args)),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), list(sym("cadr"), args)),
+				list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
 	}
 
 	/**

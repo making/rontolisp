@@ -40,6 +40,20 @@ are the core forms: every test treats `nil` and the false object as falsey, and 
 keeps the lenient reading (an odd trailing arm is the default). `list*` folds `cons` over
 the seq view.
 
+## Iteration
+
+`doseq` iterates the seq view for side effects and answers `nil`: one `dolist` per
+binding pair nested left to right, the body an implicit `do`. `dotimes` binds `0` below
+its count the same way and answers `nil`; the count runs through `truncate` first, so
+`2.5` counts `0 1` and a non-number signals, like the oracle's `intCast`. `for` answers
+the strict list of its body over every combination, accumulated in reverse; an empty
+result is `nil`, where the oracle prints `()`. Each pair takes any collection the seq
+view takes, and patterns destructure like `let`. The `:when`/`:while`/`:let` modifiers
+trail their binding in order: `:when` skips the element, `:while` ends its level's loop
+(an outer level's ends the whole form), `:let` binds sequentially; any other keyword is
+refused. `dorun` realizes a collection for effect and answers `nil`, `doall` answers the
+collection itself; seqs are already strict, so realizing is evaluating.
+
 ## Collections
 
 A vector literal is a `vector` call; a map literal an `equal` hash table, never mutated in
@@ -61,7 +75,6 @@ Each refusal names the missing design, never `unknown name`:
 
 | Refused | Message shape | Why |
 |---|---|---|
-| `doseq`/`dotimes`/`for` | `iteration forms are not supported yet` | no comprehension/loop design |
 | `lazy-seq`, `cycle`, `repeat`, `repeatedly`, `iterate`, end-less `range` | `lazy sequences are not supported: ...` | seqs are strict; an infinite seq cannot be spelled |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |

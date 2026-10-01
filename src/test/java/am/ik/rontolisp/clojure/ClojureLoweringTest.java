@@ -396,13 +396,35 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void iterationStaysRefusedByName() {
-		assertThatThrownBy(() -> Clojure.read("(doseq [x [1]] x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("iteration forms are not supported yet: doseq");
-		assertThatThrownBy(() -> Clojure.read("(dotimes [i 2] i)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("iteration forms are not supported yet: dotimes");
-		assertThatThrownBy(() -> Clojure.read("(for [x [1]] x)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("iteration forms are not supported yet: for");
+	void doseqDotimesForLowerToCoreLoops() {
+		assertThat(lowered("(doseq [x [1]] x)")).contains("DOLIST").contains("|c%x|").contains("(PROGN");
+		assertThat(lowered("(doseq [x [1 2] y [3 4]] x)")).contains("DOLIST");
+		assertThat(lowered("(dotimes [i 2] i)")).contains("DOTIMES").contains("TRUNCATE");
+		assertThat(lowered("(for [x [1]] x)")).contains("DOLIST").contains("REVERSE").contains("SETQ");
+		assertThat(lowered("(for [x [1] :when x] x)")).contains("DOLIST");
+		assertThat(lowered("(for [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
+		assertThat(lowered("(doseq [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
+		assertThat(lowered("(for [x [1] :let [y 2]] y)")).contains("LET*").contains("|c%y|");
+		assertThat(lowered("(for [[a b] [[1 2]]] a)")).contains("DOLIST").contains("LET*");
+		assertThat(lowered("(dorun [1])")).contains("PROGN");
+		assertThat(lowered("(doall [1])")).isEqualTo(FALSE_BINDING + "(VECTOR 1)");
+		assertThatThrownBy(() -> Clojure.read("(for [x [1] :foo 1] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid 'for' keyword :foo");
+		assertThatThrownBy(() -> Clojure.read("(doseq [x [1] :unless true] x)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid 'doseq' keyword :unless");
+		assertThatThrownBy(() -> Clojure.read("(for [x [1]] 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("for takes a binding vector and a body");
+		assertThatThrownBy(() -> Clojure.read("(for [] 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("for takes at least one binding pair");
+		assertThatThrownBy(() -> Clojure.read("(dotimes [i] i)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("dotimes takes exactly one name and count");
+		assertThatThrownBy(() -> Clojure.read("(dotimes [[a] 2] a)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("dotimes needs a plain name");
+		assertThatThrownBy(() -> Clojure.read("(dorun)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("dorun takes a collection and an optional count");
+		assertThatThrownBy(() -> Clojure.read("(doseq [x [1] :when] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("doseq :when takes a form after it");
 	}
 
 	@Test

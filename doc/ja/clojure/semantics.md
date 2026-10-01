@@ -39,6 +39,20 @@ Common Lisp の核フォームへ低下します。どのバックエッドも C
 すべてのテストは `nil` と false オブジェクトを偽として扱い、`cond` は寛容な読みを保ちます
 （奇数の末尾 arm はデフォルト）。`list*` は seq ビュー上の `cons` 折り畳みです。
 
+## 反復
+
+`doseq` は副作用のために seq ビューを反復し `nil` を答えます:束縛ペアごとに `dolist`
+が 1 つ、左から右へ入れ子になり、本体は暗黙の `do` です。`dotimes` はカウント未満の
+`0` から同じく束縛し `nil` を答えます。カウントは先に `truncate` を通るため、`2.5`
+は `0 1` を数え、非数はそこでシグナルします（オラクルの `intCast` と同様）。`for` は
+本体を全組合せに適用した strict なリストを答え、逆順に蓄積します。空の結果は `nil`
+で、オラクルが `()` と印字する点と異なります。各ペアは seq ビューが取る任意のコレク
+ションを取れ、パターンは `let` と同様に分配束縛します。`:when`/`:while`/`:let` 修飾子は
+束縛の後に順に続きます:`:when` は要素を飛ばし、`:while` はそのレベルのループを終え
+（外側のレベルのものは全体を終える）、`:let` は逐次に束縛します。それ以外のキーワードは
+拒否されます。`dorun` は効果のためにコレクションを実現して `nil` を答え、`doall` は
+コレクション自身を答えます。seq は既に strict なので、実現とは評価することです。
+
 ## コレクション
 
 ベクターリテラルは `vector` 呼び出し、マップリテラルは `equal` ハッシュテーブル --
@@ -61,7 +75,6 @@ seq 群はすべてのコレクションの strict なリストビュー上で�
 
 | 拒否されるもの | メッセージ形 | 理由 |
 |---|---|---|
-| `doseq`/`dotimes`/`for` | `iteration forms are not supported yet` | 内包/ループの設計がない |
 | `lazy-seq`、`cycle`、`repeat`、`repeatedly`、`iterate`、end なし `range` | `lazy sequences are not supported: ...` | seq は strict。無限 seq は綴れない |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | 正規表現リテラル `#"..."` | `regex literals are not supported yet` | どのバックエッドにも正規表現実装がない |

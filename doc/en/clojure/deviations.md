@@ -24,6 +24,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; map/set seq order is the table's walk
   order; strings seq to characters printing in Common Lisp notation.
+- A strict `for` with no elements answers `nil`, where the oracle prints `()` (the same
+  empty-as-`nil` position as `rest`/`next`/`take`).
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure
   signals. A threading step over a collection literal signals (collections are not
   functions here).

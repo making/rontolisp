@@ -36,7 +36,10 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `->`/`->>`/`as->` | the threaded call, rewritten as datums | `->` inserts second, `->>` last; a bare name or keyword calls/reads with the value; `as->` is nested `let`s, so shadowing matches the oracle. A step over a collection literal signals (collections are not functions here) |
 | `doto`/`cond->`/`cond->>`/`some->`/`some->>` | the threaded calls around one temporary | `doto` answers its (unchanged) target; `cond->` threads only on truthy tests; `some->` stops at `nil` but not at `false`, like the oracle |
 | `list*` | a right fold of `cons` over the seq view | of one argument, just its seq (signalling for a non-collection, like the oracle) |
-| `doseq`/`dotimes`/`for` | refused by name | `iteration forms are not supported yet`; comprehensions and imperative loops stay out |
+| `doseq` | nested `dolist` loops over the seq view around an implicit `do`, answering `nil` | `:when` skips, `:while` ends its level through a block (an outer level's ends the whole form), `:let` binds sequentially; patterns destructure like `let`; an empty vector runs the body once, `nil` never |
+| `dotimes [i n]` | the core `dotimes` over `(truncate n)`, answering `nil` | the count runs through `truncate` first (the oracle's `intCast`: `2.5` counts `0 1`, a non-number signals there); exactly one plain name and count, else a named refusal |
+| `for` | nested `dolist` loops accumulating in reverse into a strict list | `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); empty is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
+| `dorun`/`doall` | the strict companions: the collection (and the optional count) evaluated, answering `nil`/the collection itself, each a function value too | seqs are already strict, so realizing is evaluating; `doall` never coerces (a vector stays a vector) |
 | `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value and a per-multimethod prefers table in three globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included); an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate falls back to the default dispatch value (`:default` without an option) or signals `No method in ...` |
 | `derive`/`underive`/`isa?`/`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` | the hierarchy runtime over the shared table runtime | a hierarchy value is a map of `:parents`/`:ancestors`/`:descendants` tables (children to wrapped sets); the global value lives in `C%H-GLOBAL`, rebound by two-argument `derive`/`underive` (answering `nil`), while three-argument forms answer an updated value (`make-hierarchy` an empty one); `isa?` is `equal`, element-wise vector derivation, or ancestor membership (two- or three-argument), answering `T`-or-false; the three reads answer (possibly empty) sets; `prefer-method` records into the multimethod's prefers table and answers the multimethod; the runtime (set helpers, transitive rebuild, dispatch search) is spliced once behind the false binding when used |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through its Clojure-notation rendering (`rontolisp::%clojure-str-of`), so strings keep their message |
@@ -157,7 +160,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   throwing; a map/set seq's order is the table's walk order, unspecified; strings seq
   to characters, which print in Common Lisp notation; there is no laziness, chunking
   or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
-- `doseq`/`dotimes`/`for`, protocols, `set!`, regex
+- protocols, `set!`, regex
   literals, backquote, `var`/`#'`, metadata `^`: all absent, each refused by name.
   Hierarchies and `ex-info` lowered in b08 (below); protocols were rejected by
   design there instead (a per-backend value model for `defrecord`/`deftype`, the
@@ -275,7 +278,14 @@ binding and a `def`'d variable each call through the value cell (so higher-order
 `defn` parameters run), while a `defn` name stays a direct call and a
 `declare`d-but-never-defined name keeps its direct-call error -- pinned in
 `clojure-spec.yaml` (run on all four backends) and in `ClojureLoweringTest` (the
-lowered shape).
+lowered shape). Imperative loops and comprehensions lower the same way (b10):
+`doseq` as nested `dolist` loops over the seq view answering `nil` (an empty vector
+runs the body once), `dotimes` as the core `dotimes` over a truncated count,
+`for` as nested `dolist` loops accumulating in reverse into a strict list
+(`:when`/`:while`/`:let` per level, an inner `:while` ending only its level like the
+oracle, destructuring through the `let` lowering, `dorun`/`doall` as the strict
+companions) -- each pinned in `clojure-spec.yaml` (run on all four backends) or,
+for the lowered shapes and the modifier/arity refusals, in `ClojureLoweringTest`.
 Printing runs through the spliced library (b07): `println`/`print`/`pr`/`prn`
 write straight to the stream, `str`/`pr-str` build strings, the `clojure> ` echo
 renders readably, `throw`/`ex-message`/multimethod-miss messages render in

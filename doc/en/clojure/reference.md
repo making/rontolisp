@@ -11,6 +11,7 @@ has them.
 | [Syntax and definition](reference/syntax.md) | `def`/`defn`/`fn`, binding, conditionals, `quote`, `comment`, `declare` |
 | [Threading](reference/threading.md) | `->`, `->>`, `as->`, `doto` and the conditional threaders |
 | [Seqs](reference/seqs.md) | The seq family over strict list views of every collection |
+| [Iteration](reference/iteration.md) | `doseq`/`dotimes`/`for` and the strict `dorun`/`doall` |
 | [Maps, sets and vectors](reference/collections.md) | The persistent collection verbs over `equal` hash tables |
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |

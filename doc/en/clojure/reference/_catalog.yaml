@@ -51,6 +51,14 @@ categories:
       - { slug: drop, name: "drop" }
       - { slug: range, name: "range" }
       - { slug: nth, name: "nth" }
+  - title: "Iteration"
+    index_page: clojure/reference/iteration.md
+    functions:
+      - { slug: doseq, name: "doseq" }
+      - { slug: dotimes, name: "dotimes" }
+      - { slug: for, name: "for" }
+      - { slug: dorun, name: "dorun" }
+      - { slug: doall, name: "doall" }
   - title: "Maps, sets and vectors"
     index_page: clojure/reference/collections.md
     functions:
