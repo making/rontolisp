@@ -2416,6 +2416,12 @@ public final class ClojureLowering {
 		};
 	}
 
+	/** Whether NAME is a {@code re-*} core name (lowered beside the big switch). */
+	private static boolean isReName(String name) {
+		return name.equals("re-pattern") || name.equals("re-matcher") || name.equals("re-find")
+				|| name.equals("re-seq") || name.equals("re-matches") || name.equals("re-groups");
+	}
+
 	/**
 	 * A {@code re-*} call over the call's own items (whose head is ignored): patterns
 	 * lower to the spliced regex runtime, so every backend shares the semantics.
@@ -2429,25 +2435,21 @@ public final class ClojureLowering {
 			}
 			case "re-matcher" -> {
 				isTrue(n == 2, "re-matcher takes a pattern and a string");
-				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHER"), lower(items.get(1)),
-						lower(items.get(2)));
+				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHER"), lower(items.get(1)), lower(items.get(2)));
 			}
 			case "re-find" -> {
 				isTrue(n == 1 || n == 2, "re-find takes a matcher, or a pattern and a string");
 				yield n == 2
-						? list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND"), lower(items.get(1)),
-								lower(items.get(2)))
+						? list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND"), lower(items.get(1)), lower(items.get(2)))
 						: list(new LispSymbol("RONTOLISP::%CLOJURE-RE-FIND-M"), lower(items.get(1)));
 			}
 			case "re-seq" -> {
 				isTrue(n == 2, "re-seq takes a pattern and a string");
-				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-SEQ"), lower(items.get(1)),
-						lower(items.get(2)));
+				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-SEQ"), lower(items.get(1)), lower(items.get(2)));
 			}
 			case "re-matches" -> {
 				isTrue(n == 2, "re-matches takes a pattern and a string");
-				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHES"), lower(items.get(1)),
-						lower(items.get(2)));
+				yield list(new LispSymbol("RONTOLISP::%CLOJURE-RE-MATCHES"), lower(items.get(1)), lower(items.get(2)));
 			}
 			case "re-groups" -> {
 				isTrue(n == 1, "re-groups takes a matcher");
@@ -2458,9 +2460,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code re-*} var as a function value: one rest lambda dispatching on the
-	 * argument count through the call lowering, so {@code (map re-pattern ...)} runs
-	 * what a call would run.
+	 * A {@code re-*} var as a function value: one rest lambda dispatching on the argument
+	 * count through the call lowering, so {@code (map re-pattern ...)} runs what a call
+	 * would run.
 	 */
 	private LispVal reValue(String name, List<Integer> arities) {
 		String plain = "rev-rest" + (this.counter++);
@@ -2619,8 +2621,7 @@ public final class ClojureLowering {
 						list(sym("cond"), list(list(sym("stringp"), raw), raw),
 								list(list(sym("characterp"), raw), list(sym("string"), raw)),
 								list(TRUE_CONST,
-										list(sym("error"),
-												LispString.literal("split takes a string to split on"))))))),
+										list(sym("error"), LispString.literal("split takes a string to split on"))))))),
 				result);
 		LispVal regex = list(new LispSymbol("RONTOLISP::%CLOJURE-RE-SPLIT"), raw, str, lim);
 		return list(sym("let"), list(List.of(list(str, text), list(raw, pattern), list(lim, limit))),
@@ -2800,8 +2801,7 @@ public final class ClojureLowering {
 				list(sym("if"), list(sym("string="), mat, LispString.literal("")), interposed, looped));
 		LispVal regex = list(new LispSymbol("RONTOLISP::%CLOJURE-RE-REPLACE"), str, rawMatch, rawRep,
 				first ? TRUE_CONST : NIL_CONST);
-		return list(sym("let*"),
-				list(List.of(list(str, text), list(rawMatch, match), list(rawRep, replacement))),
+		return list(sym("let*"), list(List.of(list(str, text), list(rawMatch, match), list(rawRep, replacement))),
 				list(sym("if"), isPatternForm(rawMatch), regex, literal));
 	}
 
@@ -2822,8 +2822,8 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * Whether the lowered value is regex state (a pattern or a matcher): opaque to
-	 * every collection verb, like a deftype or reify value.
+	 * Whether the lowered value is regex state (a pattern or a matcher): opaque to every
+	 * collection verb, like a deftype or reify value.
 	 */
 	private static LispVal isRegexForm(LispVal lowered) {
 		return list(sym("or"), isPatternForm(lowered), isMatcherForm(lowered));
@@ -2907,6 +2907,11 @@ public final class ClojureLowering {
 		LispVal macro = macroCall(name, items);
 		if (macro != null) {
 			return macro;
+		}
+		// the re-* names lower beside the big core switch (which stays under the
+		// method-size limit): same position, before any qualified or user name
+		if (isReName(name) && coreAllowed(name)) {
+			return reCall(name, items);
 		}
 		LispVal special = builtin(name, items);
 		if (special != null) {
@@ -3104,8 +3109,6 @@ public final class ClojureLowering {
 				return containsOf(items);
 			case "subs":
 				return subsOf(items);
-			case "re-pattern", "re-matcher", "re-find", "re-seq", "re-matches", "re-groups":
-				return reCall(name, items);
 			case "keep":
 				isTrue(n == 2, "keep takes a function and a collection");
 				return keepForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
@@ -3468,9 +3471,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A regex literal: the source string compiled to a pattern value at run time
-	 * (parsed eagerly, like the oracle). The source datum is a reader-produced
-	 * literal, so it travels as is -- shared by quoted and syntax-quoted literals.
+	 * A regex literal: the source string compiled to a pattern value at run time (parsed
+	 * eagerly, like the oracle). The source datum is a reader-produced literal, so it
+	 * travels as is -- shared by quoted and syntax-quoted literals.
 	 */
 	private static LispVal regexForm(List<LispVal> items) {
 		isTrue(items.size() == 2, "a regex literal takes a pattern string");
@@ -3828,8 +3831,9 @@ public final class ClojureLowering {
 				list(sym("coerce"),
 						list(sym("append"), list(sym("coerce"), collSym, quoted("list")), list(sym("list"), item)),
 						quoted("vector"))));
-		branches.add(list(list(sym("and"), list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
-				list(sym("not"), isTypedForm(collSym)), list(sym("not"), isRegexForm(collSym))),
+		branches.add(list(
+				list(sym("and"), list(sym("or"), list(sym("null"), collSym), list(sym("consp"), collSym)),
+						list(sym("not"), isTypedForm(collSym)), list(sym("not"), isRegexForm(collSym))),
 				list(sym("cons"), item, collSym)));
 		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("conj needs a collection and an item"))));
 		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
@@ -4083,8 +4087,7 @@ public final class ClojureLowering {
 		branches.add(list(isRecordForm(coll), list(sym("hash-table-count"), typedTableOf(coll))));
 		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
 				list(sym("error"), LispString.literal("count needs a collection"))));
-		branches.add(list(isRegexForm(coll),
-				list(sym("error"), LispString.literal("count needs a collection"))));
+		branches.add(list(isRegexForm(coll), list(sym("error"), LispString.literal("count needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("hash-table-count"), coll)));
 		// the false object counts as empty, like the oracle; anything else takes length
 		branches.add(list(list(sym("eq"), coll, this.falseVariable), new LispInteger(0)));
@@ -4105,8 +4108,7 @@ public final class ClojureLowering {
 		branches.add(list(isRecordForm(coll), list(sym("zerop"), list(sym("hash-table-count"), typedTableOf(coll)))));
 		branches.add(list(list(sym("or"), isDeftypeForm(coll), isReifyForm(coll)),
 				list(sym("error"), LispString.literal("empty? needs a collection"))));
-		branches.add(list(isRegexForm(coll),
-				list(sym("error"), LispString.literal("empty? needs a collection"))));
+		branches.add(list(isRegexForm(coll), list(sym("error"), LispString.literal("empty? needs a collection"))));
 		branches.add(list(list(sym("hash-table-p"), coll), list(sym("zerop"), list(sym("hash-table-count"), coll))));
 		branches.add(list(list(sym("vectorp"), coll), list(sym("zerop"), list(sym("length"), coll))));
 		branches.add(list(list(sym("stringp"), coll), list(sym("zerop"), list(sym("length"), coll))));
@@ -7233,10 +7235,9 @@ public final class ClojureLowering {
 	 */
 	private LispVal collRaw(LispVal lowered) {
 		LispSymbol one = freshTemp();
-		LispVal test = list(sym("and"), list(sym("not"), list(sym("stringp"), one)),
-				list(sym("not"), isRegexForm(one)),
-				list(sym("or"), list(sym("consp"), one), list(sym("vectorp"), one),
-						list(sym("hash-table-p"), one), isSetForm(one)));
+		LispVal test = list(sym("and"), list(sym("not"), list(sym("stringp"), one)), list(sym("not"), isRegexForm(one)),
+				list(sym("or"), list(sym("consp"), one), list(sym("vectorp"), one), list(sym("hash-table-p"), one),
+						isSetForm(one)));
 		return list(sym("let*"), list(List.of(list(one, lowered))), test);
 	}
 
@@ -10337,8 +10338,7 @@ public final class ClojureLowering {
 		if (!marked.isEmpty() && isSymbolNamed(marked.get(0), "%hash-set")) {
 			return syntaxQuotedSet(marked.subList(1, marked.size()), level, gens);
 		}
-		if (!marked.isEmpty() && (marked.get(0) == ClojureReader.REGEX
-				|| isSymbolNamed(marked.get(0), "%regex"))) {
+		if (!marked.isEmpty() && (marked.get(0) == ClojureReader.REGEX || isSymbolNamed(marked.get(0), "%regex"))) {
 			return regexForm(marked);
 		}
 		if (datum instanceof LispCons) {

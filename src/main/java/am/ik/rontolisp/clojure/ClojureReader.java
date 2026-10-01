@@ -186,7 +186,7 @@ final class ClojureReader {
 			return readSet();
 		}
 		if (peek() == '"') { // a regex literal: its source travels to the lowering
-			LispVal source = readString();
+			LispVal source = readRegexSource();
 			List<LispVal> regex = new ArrayList<>();
 			regex.add(REGEX);
 			regex.add(source);
@@ -317,6 +317,58 @@ final class ClojureReader {
 
 	private LispVal quoted(String name) {
 		return list(name, readDatum());
+	}
+
+	/**
+	 * One regex literal's source: like {@link #readString} for the standard escapes,
+	 * but any other backslashed character passes through verbatim for the pattern
+	 * parser (which names what it cannot lower) instead of naming the next
+	 * character twice.
+	 */
+	private LispVal readRegexSource() {
+		next();
+		StringBuilder text = new StringBuilder();
+		while (true) {
+			if (this.pos >= this.source.length()) {
+				throw error("unterminated string");
+			}
+			char c = next();
+			if (c == '"') {
+				return LispString.literal(text.toString());
+			}
+			if (c != '\\') {
+				text.append(c);
+				continue;
+			}
+			if (this.pos >= this.source.length()) {
+				throw error("unterminated escape");
+			}
+			char e = next();
+			switch (e) {
+				case 'n' -> text.append('\n');
+				case 't' -> text.append('\t');
+				case 'r' -> text.append('\r');
+				case 'f' -> text.append('\f');
+				case 'b' -> text.append('\b');
+				case '\\' -> text.append('\\');
+				case '"' -> text.append('"');
+				case '\'' -> text.append('\'');
+				case 'u' -> {
+					if (this.pos + 4 > this.source.length()) {
+						throw error("truncated \\u escape");
+					}
+					int cp = Integer.parseInt(this.source.substring(this.pos, this.pos + 4), 16);
+					for (int i = 0; i < 4; i++) {
+						next();
+					}
+					text.append(Character.toChars(cp));
+				}
+				default -> {
+					text.append('\\');
+					text.append(e);
+				}
+			}
+		}
 	}
 
 	private LispVal readString() {

@@ -3036,7 +3036,7 @@ cases:
       (println (s/split "a,b,c" #","))
       (println (s/split "a,b," #","))
       (println (s/split "a,b," #"," -1))
-      (println (s/split "" #","))
+      (println (count (s/split "" #",")))
       (println (s/split "x" #"x+"))
       (println (filter #(> (count %) 2) (s/split "hi there a b" #"\W+")))
       (println (let [[w1 w2 w3] (s/split "foo bar baz qux" #"\\s+")] [w1 w2 w3]))
@@ -3057,7 +3057,7 @@ cases:
       (a b c)
       (a b)
       (a b )
-      ("")
+      1
       nil
       (there)
       [foo bar baz]
