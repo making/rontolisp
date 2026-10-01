@@ -87,8 +87,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn cd [n] (recur n))")).contains("(|c%cd| |c%n|)");
 		// a zero-arity defn recurs with no arguments
 		assertThat(lowered("(defn zg [] (recur))")).contains("(|c%zg|)");
-		// a recur through a plain lambda still reaches the enclosing loop
-		assertThat(lowered("(loop [i 0] ((fn [j] j) (recur (inc i))))")).contains("(|c%loop-0|");
+		// a recur in a call argument is not in tail position, like the oracle
+		assertThatThrownBy(() -> Clojure.read("(loop [i 0] ((fn [j] j) (recur (inc i))))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
 		assertThatThrownBy(() -> Clojure.read("(loop [a 0] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
@@ -96,6 +98,47 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(defn vr [a & r] (recur a r))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("recur to a variadic function is not supported yet");
+	}
+
+	@Test
+	void recurNeedsTailPositionAndRespectsTheTryBarrier() {
+		// oracle clj 1.12.6.1673: ((fn [n] (try (if (zero? n) :t (recur (dec n))))) 3)
+		// -> UnsupportedOperationException compiling recur: Cannot recur across try
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (try (if (zero? n) :t (recur (dec n))))) 3)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
+		assertThatThrownBy(() -> Clojure.read("(loop [i 0] (try (recur (inc i))))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
+		// the barrier holds wherever the try sits, even outside tail position
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (try (recur n) (catch Exception e :c)) :after) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
+		// a target opened inside the try still recurs through it
+		assertThat(lowered("((fn [n] (try ((fn [m] (recur m)) n) (catch Exception e :c))) 1)")).contains("LABELS");
+		// oracle clj 1.12.6.1673: ((fn [n] (recur n) n) 1)
+		// -> UnsupportedOperationException compiling recur: Can only recur from tail
+		// position (which also beats the arity check, like the barrier does)
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (recur n) n) 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		// a catch body is never tail, like the oracle
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (try :a (catch Exception e (recur n)))) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		// a lazy-seq body is never tail either (it answers through the wrapper; the
+		// zero-arity target itself is .todo/b28, which will reword this refusal)
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (if (zero? n) :d (lazy-seq (recur (dec n))))) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		// the tail slots still lower: let/do bodies, cond arms, when, and/or tails,
+		// and every clause of a multi-arity dispatch
+		assertThat(lowered("((fn [n] (let [x 1] (recur n))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (do :x (recur n))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (cond (zero? n) :z :else (recur (dec n)))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (when (pos? n) (recur (dec n)))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (and true (recur n))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn [n] (or false (recur n))) 1)")).contains("LABELS");
+		assertThat(lowered("((fn ([n] (if (zero? n) :m (recur (dec n)))) ([a b] (+ a b))) 3)")).contains("LABELS");
 	}
 
 	@Test

@@ -252,6 +252,26 @@ public final class ClojureLowering {
 	private final Deque<RecurTarget> recurTargets = new ArrayDeque<>();
 
 	/**
+	 * Whether the form being lowered sits in the tail position of the innermost enclosing
+	 * recur target's body: only there may a {@code recur} lower, like the oracle.
+	 * {@link #lower} clears it (a call argument, an init or a test is never tail) and
+	 * {@link #lowerTail} sets it; a body form inherits it for its last form, a target
+	 * body forces it, and {@code lazy-seq}, {@code doseq}, {@code dotimes} and
+	 * {@code try} parts force it off (their bodies are never tail, and the {@code try}
+	 * body additionally trips the barrier below).
+	 */
+	private boolean tailPosition;
+
+	/**
+	 * How many {@code try} bodies deep the lowering sits: a {@code recur} with a
+	 * {@code try} between it and its target is the oracle's
+	 * {@code Cannot recur across try} refusal. Each target captures this depth when
+	 * pushed (see {@link #pushRecurTarget}), so a target opened inside the {@code try}
+	 * still recurs.
+	 */
+	private int tryDepth;
+
+	/**
 	 * One enclosing {@code recur} target: the Common Lisp function a {@code recur} form
 	 * calls with its lowered arguments. A {@code loop} pushes its {@code labels} name, a
 	 * named {@code fn} or {@code letfn} entry its {@code labels} name, a {@code defn}
@@ -275,6 +295,9 @@ public final class ClojureLowering {
 
 		private @Nullable LispVal firstUse;
 
+		/** The {@link #tryDepth} when this target was pushed. */
+		private int depth;
+
 		RecurTarget(String callName, boolean checked) {
 			this.callName = callName;
 			this.checked = checked;
@@ -296,6 +319,10 @@ public final class ClojureLowering {
 			return this.variadic;
 		}
 
+		int depth() {
+			return this.depth;
+		}
+
 		void setArity(int arity, boolean variadic) {
 			this.arity = arity;
 			this.variadic = variadic;
@@ -312,6 +339,92 @@ public final class ClojureLowering {
 			}
 		}
 
+	}
+
+	/**
+	 * One recur target pushed with the current {@code try} depth captured, so a
+	 * {@code recur} is across a {@code try} exactly when the depth grew since.
+	 */
+	private void pushRecurTarget(RecurTarget target) {
+		target.depth = this.tryDepth;
+		this.recurTargets.push(target);
+	}
+
+	/**
+	 * One datum lowered in tail position: the tail slots (an {@code if} arm, a body's
+	 * last form) of a form already in tail position. Anything else lowers through
+	 * {@link #lower}, which clears the position.
+	 */
+	private LispVal lowerTail(LispVal form) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = true;
+		try {
+			return lowerPositioned(form);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
+	}
+
+	/**
+	 * One tail slot lowered: tail when the enclosing form is in tail position, non-tail
+	 * otherwise.
+	 */
+	private LispVal lowerTailSlot(LispVal form) {
+		return this.tailPosition ? lowerTail(form) : lower(form);
+	}
+
+	/**
+	 * One body lowered in the target body's tail position: a clause or {@code loop} body
+	 * forces the position its last form inherits.
+	 */
+	private LispVal bodyOfTail(List<LispVal> forms) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = true;
+		try {
+			return bodyOf(forms);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
+	}
+
+	private LispVal bodyTail(List<LispVal> items, int from) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = true;
+		try {
+			return body(items, from);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
+	}
+
+	/**
+	 * One body lowered outside any tail position: a {@code lazy-seq}, {@code doseq},
+	 * {@code dotimes} or {@code try} part is never tail, so a {@code recur} inside one is
+	 * refused even in an enclosing tail.
+	 */
+	private LispVal nonTailBody(List<LispVal> items, int from) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = false;
+		try {
+			return body(items, from);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
+	}
+
+	private LispVal nonTailBodyOf(List<LispVal> forms) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = false;
+		try {
+			return bodyOf(forms);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
 	}
 
 	/**
@@ -683,12 +796,27 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * One datum lowered, positioned: a lowering error names the innermost form's
-	 * {@code file:line:column} (through the reader's offsets), so {@code unknown name}
-	 * and arity errors point at the call. An error that already carries a position -- a
-	 * reader error, or one an inner form attached -- passes through untouched.
+	 * One datum lowered, positioned: a lowering error names the innermost form's /** One
+	 * datum lowered outside tail position and positioned: a call argument, an init, a
+	 * test or any other non-tail slot clears the position, so only the tail slots
+	 * (lowered through {@link #lowerTail}) keep it. A lowering error names the innermost
+	 * form's {@code file:line:column} (through the reader's offsets), so
+	 * {@code unknown name} and arity errors point at the call. An error that already
+	 * carries a position -- a reader error, or one an inner form attached -- passes
+	 * through untouched.
 	 */
 	private LispVal lower(LispVal form) {
+		boolean outer = this.tailPosition;
+		this.tailPosition = false;
+		try {
+			return lowerPositioned(form);
+		}
+		finally {
+			this.tailPosition = outer;
+		}
+	}
+
+	private LispVal lowerPositioned(LispVal form) {
 		try {
 			return lowerInner(form);
 		}
@@ -1039,8 +1167,8 @@ public final class ClojureLowering {
 		if (isSymbolNamed(head, "if")) {
 			isTrue(items.size() == 3 || items.size() == 4, "if takes a condition, a then and an optional else");
 			LispVal test = lower(items.get(1));
-			LispVal then = lower(items.get(2));
-			LispVal elseForm = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
+			LispVal then = lowerTailSlot(items.get(2));
+			LispVal elseForm = items.size() == 4 ? lowerTailSlot(items.get(3)) : NIL_CONST;
 			return ifFalsey(test, then, elseForm);
 		}
 		if (isSymbolNamed(head, "when")) {
@@ -1324,9 +1452,9 @@ public final class ClojureLowering {
 		}
 		else {
 			target.setArity(variadic ? fixed + 1 : fixed, variadic);
-			this.recurTargets.push(target);
+			pushRecurTarget(target);
 			try {
-				body = inScope(scope, () -> bodyOf(bodyForms));
+				body = inScope(scope, () -> bodyOfTail(bodyForms));
 			}
 			finally {
 				this.recurTargets.pop();
@@ -1355,9 +1483,9 @@ public final class ClojureLowering {
 			// arity is the highest %N the body uses, known only after the body
 			// lowers, so a wrong count signals at run time, like any other call
 			RecurTarget target = new RecurTarget(freshRecurName(), false);
-			this.recurTargets.push(target);
+			pushRecurTarget(target);
 			try {
-				LispVal lambda = list(sym("lambda"), list(AMPERSAND_REST, new LispSymbol(argsName)), lower(form));
+				LispVal lambda = list(sym("lambda"), list(AMPERSAND_REST, new LispSymbol(argsName)), lowerTail(form));
 				if (!target.used()) {
 					return lambda;
 				}
@@ -1484,14 +1612,23 @@ public final class ClojureLowering {
 	/**
 	 * A {@code recur} form lowered: a direct call to the innermost enclosing target (a
 	 * {@code loop}, a named or anonymous {@code fn}, a {@code defn} clause, a
-	 * {@code letfn} entry), checked against that target's arity. Outside any target it
-	 * stays a refusal.
+	 * {@code letfn} entry), checked against that target's arity. A {@code try} between
+	 * the {@code recur} and its target is the oracle's {@code Cannot recur across try}
+	 * refusal, and a {@code recur} outside its target body's tail position the oracle's
+	 * {@code Can only recur from tail position} refusal; both beat the arity check, like
+	 * the oracle. Outside any target it stays a refusal.
 	 */
 	private LispVal recurOf(LispVal form, List<LispVal> items) {
 		if (this.recurTargets.isEmpty()) {
 			throw new LispReadException("recur outside loop");
 		}
 		RecurTarget target = this.recurTargets.peek();
+		if (this.tryDepth > target.depth()) {
+			throw new LispReadException("Cannot recur across try");
+		}
+		if (!this.tailPosition) {
+			throw new LispReadException("Can only recur from tail position");
+		}
 		int given = items.size() - 1;
 		if (target.checked() && given != target.arity()) {
 			throw new LispReadException(
@@ -1538,10 +1675,10 @@ public final class ClojureLowering {
 			}
 			RecurTarget target = new RecurTarget(name, true);
 			target.setArity(paramSyms.size(), false);
-			this.recurTargets.push(target);
+			pushRecurTarget(target);
 			try {
-				LispVal lambdaBody = prologue.isEmpty() ? body(items, 2)
-						: list(sym("let*"), list(prologue), body(items, 2));
+				LispVal lambdaBody = prologue.isEmpty() ? bodyTail(items, 2)
+						: list(sym("let*"), list(prologue), bodyTail(items, 2));
 				// a labels binding is a named function: (name (params...) body...)
 				LispVal binding = new LispCons(new LispSymbol(name),
 						new LispCons(list(paramSyms), cons(lambdaBody, List.of())));
@@ -1612,10 +1749,10 @@ public final class ClojureLowering {
 		// an odd trailing arm is the default: it fires whatever came before
 		int pairsEnd = items.size() % 2 == 0 ? items.size() - 1 : items.size();
 		if (pairsEnd != items.size()) {
-			out = lower(items.get(items.size() - 1));
+			out = lowerTailSlot(items.get(items.size() - 1));
 		}
 		for (int i = pairsEnd - 2; i >= 1; i -= 2) {
-			out = ifFalsey(condTest(items.get(i)), lower(items.get(i + 1)), out);
+			out = ifFalsey(condTest(items.get(i)), lowerTailSlot(items.get(i + 1)), out);
 		}
 		return out;
 	}
@@ -1668,8 +1805,8 @@ public final class ClojureLowering {
 			List<LispVal> pairs = new ArrayList<>();
 			pairs.add(list(init, lower(bindings.get(1))));
 			destructureInto(bindings.get(0), init, pairs, scope, "if-let");
-			LispVal then = lower(items.get(2));
-			LispVal els = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
+			LispVal then = lowerTailSlot(items.get(2));
+			LispVal els = items.size() == 4 ? lowerTailSlot(items.get(3)) : NIL_CONST;
 			return list(sym("let*"), list(pairs), ifFalsey(init, then, els));
 		}
 		finally {
@@ -1687,8 +1824,8 @@ public final class ClojureLowering {
 	/** {@code if-not}: the branches swapped, the else defaulting to nil. */
 	private LispVal ifNotOf(List<LispVal> items) {
 		isTrue(items.size() == 3 || items.size() == 4, "if-not takes a condition, a then and an optional else");
-		LispVal then = lower(items.get(2));
-		LispVal els = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
+		LispVal then = lowerTailSlot(items.get(2));
+		LispVal els = items.size() == 4 ? lowerTailSlot(items.get(3)) : NIL_CONST;
 		return ifFalsey(lower(items.get(1)), els, then);
 	}
 
@@ -1907,7 +2044,7 @@ public final class ClojureLowering {
 			return TRUE_CONST; // (and) is true
 		}
 		if (args.size() == 1) {
-			return lower(args.get(0));
+			return lowerTailSlot(args.get(0));
 		}
 		LispSymbol temp = freshTemp();
 		return list(sym("LET"), list(list(temp, lower(args.get(0)))),
@@ -1920,7 +2057,7 @@ public final class ClojureLowering {
 			return NIL_CONST; // (or) is nil
 		}
 		if (args.size() == 1) {
-			return lower(args.get(0));
+			return lowerTailSlot(args.get(0));
 		}
 		LispSymbol temp = freshTemp();
 		return list(sym("LET"), list(list(temp, lower(args.get(0)))),
@@ -4093,7 +4230,7 @@ public final class ClojureLowering {
 	 */
 	private LispVal lazySeqOf(List<LispVal> items) {
 		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAKE-LAZY"),
-				list(sym("lambda"), list(List.of()), body(items, 1)));
+				list(sym("lambda"), list(List.of()), nonTailBody(items, 1)));
 	}
 
 	/**
@@ -4331,7 +4468,9 @@ public final class ClojureLowering {
 			collectSeqNames(level, scope);
 		}
 		return inScope(scope, () -> {
-			LispVal inner = body(items, 2);
+			// the body answers nil through the loops, never the target: a recur
+			// inside one is not in tail position, like the oracle
+			LispVal inner = nonTailBody(items, 2);
 			for (int i = levels.size() - 1; i >= 0; i--) {
 				inner = seqLevel(levels.get(i), inner, scope, "doseq");
 			}
@@ -4354,7 +4493,9 @@ public final class ClojureLowering {
 		Map<String, Kind> scope = new HashMap<>();
 		scope.put(name, Kind.VARIABLE);
 		LispVal count = list(sym("truncate"), lower(bindings.get(1)));
-		return inScope(scope, () -> list(sym("dotimes"), list(List.of(idSym(name), count)), body(items, 2)));
+		// the body answers nil through the loop, never the target: a recur inside
+		// one is not in tail position, like the oracle
+		return inScope(scope, () -> list(sym("dotimes"), list(List.of(idSym(name), count)), nonTailBody(items, 2)));
 	}
 
 	/**
@@ -5015,13 +5156,14 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (forms.size() == 1) {
-			return lower(forms.get(0));
+			return lowerTailSlot(forms.get(0));
 		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(sym("progn"));
-		for (LispVal form : forms) {
-			out.add(lower(form));
+		for (int i = 0; i < forms.size() - 1; i++) {
+			out.add(lower(forms.get(i)));
 		}
+		out.add(lowerTailSlot(forms.get(forms.size() - 1)));
 		return list(out);
 	}
 
@@ -5031,13 +5173,14 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (n == 1) {
-			return lower(items.get(from));
+			return lowerTailSlot(items.get(from));
 		}
 		List<LispVal> out = new ArrayList<>();
 		out.add(sym("progn"));
-		for (int i = from; i < items.size(); i++) {
+		for (int i = from; i < items.size() - 1; i++) {
 			out.add(lower(items.get(i)));
 		}
+		out.add(lowerTailSlot(items.get(items.size() - 1)));
 		return list(out);
 	}
 
@@ -7598,11 +7741,33 @@ public final class ClojureLowering {
 	// errors: try over handler-case and unwind-protect, throw over error
 
 	/**
+	 * The {@code try} body lowered behind the barrier: the depth grows while it lowers,
+	 * so a {@code recur} inside one trips the barrier no matter where the {@code try}
+	 * itself sits. The body is never tail position either.
+	 */
+	private LispVal tryBodyOf(List<LispVal> body) {
+		boolean outerTail = this.tailPosition;
+		this.tailPosition = false;
+		this.tryDepth++;
+		try {
+			return bodyOf(body);
+		}
+		finally {
+			this.tryDepth--;
+			this.tailPosition = outerTail;
+		}
+	}
+
+	/**
 	 * {@code (try body... (catch Class var body...)... (finally ...))}: the body guarded
 	 * by a {@code handler-case} inside an {@code unwind-protect}. Every catch class
 	 * answers the catch-all {@code error} clause -- the classes are not distinguished, so
 	 * the first clause handles any condition -- and the clauses keep their order. The
-	 * catch var binds the Common Lisp condition, not a host exception.
+	 * catch var binds the Common Lisp condition, not a host exception. The body lowers
+	 * behind the {@code try} barrier (a {@code recur} across it is the oracle's
+	 * {@code Cannot recur across try} refusal); the catch and finally parts are never
+	 * tail position (a {@code recur} there is the oracle's tail refusal), like the
+	 * oracle.
 	 */
 	private LispVal tryOf(List<LispVal> items) {
 		List<LispVal> body = new ArrayList<>();
@@ -7626,13 +7791,13 @@ public final class ClojureLowering {
 			isTrue(!closed, "a try body comes before catch and finally");
 			body.add(items.get(i));
 		}
-		LispVal guarded = body.isEmpty() ? NIL_CONST : bodyOf(body);
+		LispVal guarded = body.isEmpty() ? NIL_CONST : tryBodyOf(body);
 		if (!catches.isEmpty()) {
 			List<LispVal> clauses = new ArrayList<>();
 			for (List<LispVal> caught : catches) {
 				String var = ((LispSymbol) caught.get(2)).name();
 				LispVal clauseBody = inScope(new HashMap<>(Map.of(var, Kind.VARIABLE)),
-						() -> bodyOf(caught.subList(3, caught.size())));
+						() -> nonTailBodyOf(caught.subList(3, caught.size())));
 				clauses.add(list(sym("ERROR"), list(idSym(var)), clauseBody));
 			}
 			List<LispVal> handler = new ArrayList<>();
