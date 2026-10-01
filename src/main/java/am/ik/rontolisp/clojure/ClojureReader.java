@@ -44,6 +44,9 @@ final class ClojureReader {
 
 	private static final LispSymbol HASH_SET = new LispSymbol("%hash-set");
 
+	/** Marks a regex literal's source string: the lowering compiles it to a pattern. */
+	static final LispSymbol REGEX = new LispSymbol("%regex");
+
 	private static final String DELIMS = " \t\n\r\f,()[]{}\";'@^`~#";
 
 	private final String source;
@@ -182,9 +185,12 @@ final class ClojureReader {
 			next();
 			return readSet();
 		}
-		if (peek() == '"') { // a regex literal has no lowering: refuse it by name
-			readString();
-			throw error("regex literals are not supported yet");
+		if (peek() == '"') { // a regex literal: its source travels to the lowering
+			LispVal source = readString();
+			List<LispVal> regex = new ArrayList<>();
+			regex.add(REGEX);
+			regex.add(source);
+			return list(regex);
 		}
 		throw error("unsupported reader form #" + peek());
 	}

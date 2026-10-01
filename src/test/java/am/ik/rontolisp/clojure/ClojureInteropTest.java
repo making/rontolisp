@@ -232,6 +232,39 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void regexRuntimeSignalsLikeTheOracle() throws Exception {
+		// re-groups past no match, a bad group reference, a dangling $, an
+		// unsupported construct and non-pattern arguments all signal, on both
+		// backends. Value legs run too (re-find/re-seq/re-matches as values).
+		assertBothEqual("(println (map re-pattern [\"a+\" \"b+\"]))", "(#\"a+\" #\"b+\")\n");
+		assertBothEqual("(println (map #(re-find #\"a\" %) [\"xa\" \"y\"]))", "(a nil)\n");
+		assertThatThrownBy(
+				() -> interpret("(println (re-groups (re-matcher #\"a\" \"a\")))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("No match found");
+		assertThatThrownBy(
+				() -> runOnJvm("(println (re-groups (re-matcher #\"a\" \"a\")))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("No match found");
+		assertThatThrownBy(
+				() -> interpret("(println (clojure.string/replace \"a\" #\"a\" \"$\")))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(
+				() -> runOnJvm("(println (clojure.string/replace \"a\" #\"a\" \"$\")))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (re-find \"a+\" \"aaab\"))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (re-find \"a+\" \"aaab\"))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (re-find #\"a(?=b)\" \"ab\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("unsupported regex");
+		assertThatThrownBy(() -> runOnJvm("(println (re-find #\"a(?=b)\" \"ab\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("unsupported regex");
+	}
+
+	@Test
 	void keepAndUpdateSignalInsteadOfSkipping() {
 		// (keep inc [1 nil 2]) throws on the oracle (nil is not a number): the
 		// signal is pinned here, not a silent skip. Same for a missing update key.

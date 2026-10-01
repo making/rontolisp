@@ -1315,9 +1315,32 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void regexAndForeignNamespacesStayRefused() {
-		assertThatThrownBy(() -> Clojure.read("#\"x\"", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("regex literals are not supported yet");
+	void regexLiteralsLowerToCompiledPatterns() {
+		assertThat(Clojure.read("#\"a+\"", null).stream().map(LispVal::print).toList().toString())
+			.contains("RONTOLISP::%CLOJURE-RE-COMPILE");
+	}
+
+	@Test
+	void reFormsLowerToTheRegexRuntime() {
+		assertThat(lowered("(re-find #\"a+\" \"aaab\")")).contains("RONTOLISP::%CLOJURE-RE-FIND");
+		assertThat(lowered("(re-find (re-matcher #\"a\" \"a\"))")).contains("RONTOLISP::%CLOJURE-RE-FIND-M");
+		assertThat(lowered("(re-seq #\"a\" \"a\")")).contains("RONTOLISP::%CLOJURE-RE-SEQ");
+		assertThat(lowered("(re-matches #\"a\" \"a\")")).contains("RONTOLISP::%CLOJURE-RE-MATCHES");
+		assertThat(lowered("(re-groups (re-matcher #\"a\" \"a\"))")).contains("RONTOLISP::%CLOJURE-RE-GROUPS");
+		assertThat(lowered("(re-pattern \"a\")")).contains("RONTOLISP::%CLOJURE-RE-PATTERN");
+		assertThat(lowered("(map re-find [m])")).contains("RONTOLISP::%CLOJURE-RE-FIND-M");
+		assertThat(lowered("(quote #\"a\")")).contains("RONTOLISP::%CLOJURE-RE-COMPILE");
+		assertThatThrownBy(() -> Clojure.read("(re-find #\"a\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("re-find takes a matcher, or a pattern and a string");
+		assertThatThrownBy(() -> Clojure.read("(re-groups #\"a\" \"a\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("re-groups takes a matcher");
+		assertThatThrownBy(() -> Clojure.read("(re-matches #\"a\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("re-matches takes a pattern and a string");
+	}
+
+	@Test
+	void foreignNamespacesStayRefused() {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.spec.alpha");

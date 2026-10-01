@@ -189,7 +189,6 @@ Each refusal names the missing design, never `unknown name`:
 |---|---|---|
 | end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
-| regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
 | `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | metadata never affects dispatch |

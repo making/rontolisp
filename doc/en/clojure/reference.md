@@ -22,6 +22,7 @@ has them.
 | [Namespaces](reference/namespaces.md) | `ns` and the top-level `require`/`use`/`import` |
 | [Names and keywords](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
+| [Regular expressions](reference/regex.md) | `re-find`/`re-seq`/`re-matches`, `re-matcher`/`re-groups`, `re-pattern` and pattern `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

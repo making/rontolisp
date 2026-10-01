@@ -21,6 +21,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
 | [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
+| [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
 | [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`clojure.java.io/reader` と `format` |
 | [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |

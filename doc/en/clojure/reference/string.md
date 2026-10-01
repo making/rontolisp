@@ -1,6 +1,6 @@
 # (clojure.string)
 
-The string library, reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value too. `split`/`replace` match literal strings, never patterns -- there is no regex runtime. `subs` is a core operation, listed here with them.
+The string library, reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value too. `split`/`replace` take pattern values as well as literal strings (a plain string never compiles to a pattern). `subs` is a core operation, listed here with them.
 
 | Name | Example | Result |
 |---|---|---|

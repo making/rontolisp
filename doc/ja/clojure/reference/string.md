@@ -1,6 +1,6 @@
 # (clojure.string)
 
-文字列ライブラリです。alias/var、clojure.string/var、refer された裸の名前のいずれでも届き、関数値としても動きます。split/replace はリテラル文字列のみをマッチし、パターンは扱いません -- 正規表現実装がないためです。subs は核の操作で、ここに一緒に載せています。
+文字列ライブラリです。alias/var、clojure.string/var、refer された裸の名前のいずれでも届き、関数値としても動きます。split/replace はパターン値もリテラル文字列も取ります（素の文字列がパターンにコンパイルされることはありません）。subs は核の操作で、ここに一緒に載せています。
 
 | Name | Example | Result |
 |---|---|---|

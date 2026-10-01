@@ -272,6 +272,15 @@ categories:
       - { slug: escape, name: "clojure.string/escape" }
       - { slug: re-quote-replacement, name: "clojure.string/re-quote-replacement" }
       - { slug: reverse, name: "clojure.string/reverse" }
+  - title: "正規表現"
+    index_page: clojure/reference/regex.md
+    functions:
+      - { slug: re-pattern, name: "re-pattern" }
+      - { slug: re-find, name: "re-find" }
+      - { slug: re-seq, name: "re-seq" }
+      - { slug: re-matcher, name: "re-matcher" }
+      - { slug: re-groups, name: "re-groups" }
+      - { slug: re-matches, name: "re-matches" }
   - title: "高階関数"
     index_page: clojure/reference/higher-order.md
     functions:

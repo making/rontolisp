@@ -80,9 +80,8 @@ class ClojureReaderTest {
 	}
 
 	@Test
-	void regexLiteralsAreRefusedByName() {
-		assertThatThrownBy(() -> read("#\"x\"")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("regex literals are not supported yet");
+	void regexLiteralsReadAsMarkedSourceStrings() {
+		assertThat(printed("#\"a+\"")).isEqualTo("[(|%regex| \"a+\")]");
 		assertThatThrownBy(() -> read("#:x")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unsupported reader form #:");
 	}

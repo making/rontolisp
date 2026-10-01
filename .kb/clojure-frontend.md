@@ -71,7 +71,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `*out*`/`*in*` | `*standard-output*`/`*standard-input*`, not mangled names | the streams the print family writes to / reads from; `binding` may rebind either, like any special (decided 2026-10-01, b20) |
 | `.write`/`.flush`/`.readLine` on a stream | `princ` / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
 | `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string` and `clojure.java.io` (`reader` only) resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
-| `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
+| `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` take pattern values (around matches, through the regex runtime) as well as literal strings and characters (a plain string never compiles -- the b08 literal-only position holds for strings, pinned by `string-replace-and-split-stay-literal`); an empty literal-`split` input is nil (a pattern answers one empty part, like the oracle); a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member` in call and value position, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call (a known-class receiver whose overloads at that arity all answer a primitive boolean answers `T`-or-false -- a construction literal, a `let`/`if-let`/`when-let` local bound to one, or a `..` step's declared return; any other receiver keeps the shared `java:` unmarshal), `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field -- decided 2026-10-01, b20, lifting the b08 deviation; a bare `Class/member` value reads the static field when the host class has one, else answers a member-as-value lambda dispatching per arity over the static call -- so `(every? Character/isWhitespace s)` runs -- and a variadic-only member is refused by name), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field; a bare `Class/member` value reads the field or answers an arity-dispatching member lambda), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
 | `make-array`/`aget`/`aset`/`alength` | the general array (`make-array` dims, `aref`, `(setf aref)`, `array-dimension` 0) | the class spells the element type and is ignored -- every array here is general (the book's `interop.clj` shape); only the Clojure spellings are new, so all four backends |
@@ -85,7 +85,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | characters (`\a`, lowercase names, `\uXXXX`, `\oNNN`) | `LispChar`, self-evaluating | exactly the oracle's spellings, case-sensitively; anything else is the oracle's `Unsupported character` refusal |
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
-| regex literals (`#"..."`) | refused by name (`regex literals are not supported yet`) | there is no regex runtime to lower to |
+| regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle |
 | syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
 | `var`/`#'`, metadata (`^`) | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
 | `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
@@ -232,10 +232,9 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   infinite print); there is no chunking, so an end-less `range` stays refused by name
   (spell it with `iterate`). Lazy inputs to the other seq verbs consume one level --
   pass a `take`n prefix.
-- protocols (lowered in b13, below), `set!`, regex
-  literals, `var`/`#'`: `set!`, regex literals and `var`/`#'` stay absent, each
-  refused by name (backquote
-  lowered in b12, below). Metadata instead parses and drops (b14):
+- protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` and `var`/`#'`
+  stay absent, each refused by name (backquote lowered in b12, below; regex
+  literals lowered in b21, below). Metadata instead parses and drops (b14):
   `^`/`with-meta` lower to the object itself, and only `binding` reads
   `^:dynamic` -- see the table rows above.
   Hierarchies and `ex-info` lowered in b08 (below); protocols lowered in b13 instead
@@ -265,11 +264,11 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   while a `dissoc` that removes a declared field drops to a plain map (like the
   oracle); protocol dispatch merges `Long`/`Double` into `:number` (the oracle
   tells them apart) and reads no hierarchy (exact tag match plus the `Object`
-  default); `split`/`replace` match literal strings, never patterns (the documented
-  literal-only position, decided 2026-09-30 b08: no regex runtime on any backend,
-  so `#"..."` stays refused at the reader and `clojure.string`/`String` splitting
-  keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
-  case); `indexOf`
+  default); `split`/`replace` take pattern values as well as literal strings
+  (decided 2026-10-01 b21: the regex runtime is spliced Lisp over the string
+  primitives every backend already compiles, so no backend learns a regex name;
+  plain strings stay literal -- the b08 position, still pinned by the spec's
+  `string-replace-and-split-stay-literal` case); `indexOf`
   answers `-1` when missing, like the oracle (where `clojure.string/index-of`
   answers nil); a zero-argument `(Class/m)` or `(. Class m)` is the static method
   when the host class has one, else the static field read (decided 2026-10-01, b20,
@@ -393,7 +392,7 @@ literals lower the same way (b05): `try`/`catch`/`finally`/`throw`,
 `defmulti`/`defmethod`/`remove-method`/`get-method`, `ns` clauses wiring
 `clojure.string` (plus `subs`), characters, radix integers and exact `M`
 decimals -- each pinned in `clojure-spec.yaml` (run on all four backends) or,
-for the refusals (regex, hierarchies, protocols, `ex-info`, `set!`, backquote,
+for the refusals (hierarchies, protocols, `ex-info`, `set!`, backquote,
 `var`, metadata, unknown namespaces), in `ClojureReaderTest`/`ClojureLoweringTest`.
 Host-class dispatch and `::`-auto-resolve lower the same way (b19): `defmethod`
 class spellings onto the keyword `class` answers (`String`, every numeric spelling
@@ -431,12 +430,12 @@ binding (the unified dispatcher searches `isa?` candidates on a miss, most
 specific wins, then preferences), `ex-info`/`ex-data`/`ex-message` over a
 condition with message and data slots (`throw` signals one as its own
 condition), `memfn` as a lambda over the instance call, single-interface
-`proxy` through `java:proxy`, and the literal-only regex position -- each pinned
-in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
-(`proxy`, host-object `memfn`, literal `String/split`), in `ClojureInteropTest`;
-what stays refused (`definterface`/`gen-class`/`gen-interface`, multi-arity protocol
-methods, `:extend-via-metadata`, `set!`,
-`var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
+`proxy` through `java:proxy`, and the literal-only string position beside the
+pattern arms -- each pinned in `clojure-spec.yaml` (run on all four backends)
+or, for the interop legs (`proxy`, host-object `memfn`, literal `String/split`),
+in `ClojureInteropTest`; what stays refused (`definterface`/`gen-class`/`gen-interface`,
+multi-arity protocol methods, `:extend-via-metadata`, `set!`,
+`var`/`#'`, metadata `^`, multi-interface `proxy`)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else
 through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
@@ -475,7 +474,7 @@ higher-order family (`comp`/`partial`/`complement`/`constantly`/`identity`/
 in `clojure-spec.yaml` (run on all four backends; the corpus slices are
 `keep-indexed` `index_of_any`, `map-indexed` `exploring`, `partition`/`comp`/
 `partial`/`every?` `functional` `count-runs`, `update-in` `note`), the refusals
-(regex literals, `clojure.spec`/`xml` namespaces, transducers,
+(`clojure.spec`/`xml` namespaces, transducers,
 `file-seq`/unknown-`clojure.java.io`-fn, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
 plus the `keep`/`update` signals in `ClojureInteropTest` (no filesystem on wasm).
 The reader-object IO slice lowers the same way (b22): `clojure.java.io` resolves
@@ -576,3 +575,39 @@ fibs and the `primes.clj` prefix, run on all four backends) or, for the lowered
 shapes and the refusals (wrong-count `recur`, `recur` outside any target,
 variadic-`recur`, malformed `letfn`), in `ClojureLoweringTest`; the innermost
 binding wins for calls now, so a local shadows an outer one (pinned there too).
+Regex literals and `re-*` lower the same way (b21, oracle `clj` 1.12.6.1673):
+`#"..."` reads to a `(%regex source)` datum and lowers through
+`RONTOLISP::%CLOJURE-RE-COMPILE` to a `(:C%PATTERN stamp source ops ngroups)`
+value (the stamp a fresh gensym, so `=` is identity like the oracle);
+greedy, reluctant and possessive quantifiers plus backreferences lower too;
+`re-pattern`/`re-matcher`/`re-find`/`re-seq`/`re-matches`/`re-groups` lower to
+the spliced runtime (each a value too), and `split`/`replace`/`replace-first`
+branch on the pattern at run time (plain strings stay literal, still pinned by
+`string-replace-and-split-stay-literal`). The engine is a backtracking matcher
+in `clojure.lisp` over the string primitives every backend already compiles --
+decision (a) with no per-backend code: literals compile AND runtime strings
+widen, sharing one runtime (a host `java.util.regex` import would have served
+only two backends, a WASM-side engine is the same code with a new language).
+Patterns print `#"..."` (`str` spells the source), matchers `#<Matcher source>`;
+`class` answers `:pattern`/`:matcher`, `coll?` is false, `count`/`empty?`/the
+seq view signal, `conj` onto one signals. Unsupported constructs
+(lookarounds, named groups, inline flags, POSIX
+classes, `&&`, `\G`), bad escapes and bad ranges signal `unsupported regex`
+at construction; `$` past the groups and a trailing `$` signal like the
+oracle. Pinned in `clojure-spec.yaml`
+(`regex-literals-compile-and-round-trip`, `re-find-re-seq-groups-and-matches`,
+`re-matcher-loop-pins-sequences-demo`,
+`string-split-and-replace-take-patterns` -- the corpus slices are
+`exploring.clj` `indexable-words`/`ellipsize`, `sequences.clj`
+`demo-mutable-re`, `utils.clj` `jar-urls` -- run on all four backends), the
+lowered shapes and arity refusals in `ClojureReaderTest`/`ClojureLoweringTest`,
+and the run-time signals plus value legs in `ClojureInteropTest`
+(interpreter and JVM).
+Cost (2026-10-01, x86-64 Linux, Java 25): the runtime travels only when a
+program references a `rontolisp::%clojure-re-*` name (the pruner drops it
+otherwise, like the STM/hierarchy runtimes); a `re-find` program compiles to
+MEASURED-BELOW bytes of wasm against BASELINE-BELOW without regex (raw module
+total, `.kb/size-measurement.md`: the target number is the raw total a
+downloader pays). `split` with a literal string is byte-identical with and
+without the change (the literal arm is untouched code beside a run-time
+branch).

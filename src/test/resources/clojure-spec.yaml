@@ -2929,3 +2929,121 @@ cases:
       [berry]
       [11 22]
       [hi yo]
+      [hi yo]
+  - name: regex-literals-compile-and-round-trip
+    # #"..." lowers to a pattern value over the spliced regex runtime (b21):
+    # re-pattern compiles strings and answers patterns back, str spells the
+    # source, and patterns compare by identity (like the oracle).
+    source: |
+      (println #"a+")
+      (println (re-pattern "a+"))
+      (println (re-pattern #"a+"))
+      (println (str (re-pattern "a+")))
+      (println (= #"a+" #"a+"))
+      (println (re-find #"a+" "aaab"))
+      (println (re-find #"a+" "c"))
+      (println (str "[" (re-find #"" "abc") "]"))
+    expected: |
+      #"a+"
+      #"a+"
+      #"a+"
+      a+
+      false
+      aaa
+      nil
+      []
+  - name: re-find-re-seq-groups-and-matches
+    # re-find answers the string without groups and a whole-plus-groups vector
+    # with them (nil past no match); re-seq collects every match; re-matches
+    # needs the whole string.
+    source: |
+      (println (re-find #"(\\w+)@(\\w+)" "user@host"))
+      (println (re-find #"z(zz)?" "z"))
+      (println (re-seq #"a+" "aaabbaa"))
+      (println (re-seq #"(\\w+)@(\\w+)" "a@b c@d"))
+      (println (re-seq #"z" "abc"))
+      (println (re-matches #"a+" "aaa"))
+      (println (re-matches #"a+" "aaab"))
+      (println (re-matches #"(\\w+)@(\\w+)" "user@host"))
+    expected: |
+      [user@host user host]
+      [z nil]
+      (aaa aa)
+      ([a@b a b] [c@d c d])
+      nil
+      aaa
+      nil
+      [user@host user host]
+  - name: re-matcher-loop-pins-sequences-demo
+    # The sequences.clj demo-mutable-re shape: a re-matcher loop prints every
+    # match, re-groups answers the last match's vector, and an exhausted
+    # matcher answers nil.
+    source: |
+      (let [m (re-matcher #"\\w+" "the quick brown fox")]
+        (loop [match (re-find m)]
+          (when match
+            (println match)
+            (recur (re-find m)))))
+      (let [m (re-matcher #"(\\w+)@(\\w+)" "user@host")]
+        (println (re-find m))
+        (println (re-groups m)))
+      (let [m (re-matcher #"a" "a")]
+        (println (re-find m))
+        (println (re-find m)))
+    expected: |
+      the
+      quick
+      brown
+      fox
+      [user@host user host]
+      [user@host user host]
+      a
+      nil
+  - name: string-split-and-replace-take-patterns
+    # The exploring.clj indexable-words/ellipsize shapes and the utils.clj
+    # jar-urls filter: split/replace take pattern values (strings stay
+    # literal, per string-replace-and-split-stay-literal). A string
+    # replacement interpolates $ groups; a function applies to the match.
+    source: |
+      (ns b21-re (:require [clojure.string :as s]))
+      (println (s/split "a,b,c" #","))
+      (println (s/split "a,b," #","))
+      (println (s/split "a,b," #"," -1))
+      (println (s/split "" #","))
+      (println (s/split "x" #"x+"))
+      (println (filter #(> (count %) 2) (s/split "hi there a b" #"\W+")))
+      (println (let [[w1 w2 w3] (s/split "foo bar baz qux" #"\\s+")] [w1 w2 w3]))
+      (println (s/replace "aaa" #"a" "b"))
+      (println (s/replace "aaa" #"a+" "b"))
+      (println (s/replace-first "aaa" #"a+" "b"))
+      (println (s/replace "abc123def" #"(\\d+)" "<$1>"))
+      (println (s/replace "abc" #"(b)" (s/re-quote-replacement "$1")))
+      (println (s/replace "abc" #"b" (fn [m] (str "<" m ">"))))
+      (println (s/replace "a1b2" #"(\\d)" (fn [m] (str "[" (get m 1) "]"))))
+      (println (filter #(re-find #"jar$" %) ["a.jar" "b.zip"]))
+      (println (map re-pattern ["a+" "b+"]))
+      (println (class #"a+"))
+      (println (class (re-matcher #"a" "a")))
+      (println (coll? #"a+"))
+      (println (re-matcher #"a+" "aaab"))
+    expected: |
+      (a b c)
+      (a b)
+      (a b )
+      ("")
+      nil
+      (there)
+      [foo bar baz]
+      bbb
+      b
+      b
+      abc<123>def
+      a$1c
+      a<b>c
+      a[1]b[2]
+      (a.jar)
+      (#"a+" #"b+")
+      :pattern
+      :matcher
+      false
+      #<Matcher a+>
