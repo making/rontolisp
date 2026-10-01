@@ -101,19 +101,20 @@ class ClojureInteropTest {
 		}
 		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
 		String prelude = "(ns b22io (:require [clojure.java.io :as jio] [clojure.string :as s])) ";
-		// the hangman available-words shape: lowercase-only words survive, like the oracle
-		assertBothEqual(prelude + "(with-open [r (jio/reader " + path + ")]"
-				+ " (println (apply vector (filter (fn [w] (= w (s/lower-case w))) (line-seq r)))))",
+		// the hangman available-words shape: lowercase-only words survive, like the
+		// oracle
+		assertBothEqual(
+				prelude + "(with-open [r (jio/reader " + path + ")]"
+						+ " (println (apply vector (filter (fn [w] (= w (s/lower-case w))) (line-seq r)))))",
 				"[apple fig cherry kiwi ]\n");
 		// the eager.clj non-blank-lines count over the same fixture
-		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))",
-				"6\n");
-		// the sequences.clj with-open shape over a referred reader, answering the line count
-		assertBothEqual("(ns b22ref (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader "
-				+ path + ")] (println (count (line-seq r))))", "7\n");
+		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))", "6\n");
+		// the sequences.clj with-open shape over a referred reader, answering the line
+		// count
+		assertBothEqual("(ns b22ref (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path
+				+ ")] (println (count (line-seq r))))", "7\n");
 		// with-open closes: reading after the close signals, like the oracle
-		assertBothEqual(prelude + "(def b22closed (jio/reader " + path + "))"
-				+ "(with-open [r b22closed] (line-seq r))"
+		assertBothEqual(prelude + "(def b22closed (jio/reader " + path + "))" + "(with-open [r b22closed] (line-seq r))"
 				+ "(println (try (line-seq b22closed) (catch Exception e :closed)))", ":closed\n");
 		// the line-seq path form keeps answering strictly
 		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");

@@ -120,16 +120,15 @@ import org.jspecify.annotations.Nullable;
  * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
  * anything else through its printed rendering; dispatch is a method table plus a
  * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * ({@code clojure.string} over the core string operations, {@code clojure.java.io}
- * for {@code reader} only); interop lowers
- * to the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
- * over the call's argument list, the same function the runtime table entry holds for
- * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
- * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
- * splicing over the mangled namespace ({@code x#} one gensym per expansion);
- * {@code gensym} is the ordinary uninterned symbol. {@code var}/{@code #'} stays refused.
- * The reader spells characters, radix integers and exact {@code M} decimals, and refuses
- * regex literals by name.
+ * ({@code clojure.string} over the core string operations, {@code clojure.java.io} for
+ * {@code reader} only); interop lowers to the {@code java:} surface. A {@code defmacro}
+ * is a compile-time expander (one lambda over the call's argument list, the same function
+ * the runtime table entry holds for {@code macroexpand-1}/{@code macroexpand}) plus
+ * datum-to-datum expansion at lower time, so every backend runs expanded code;
+ * syntax-quote lowers to {@code quote} with unquote splicing over the mangled namespace
+ * ({@code x#} one gensym per expansion); {@code gensym} is the ordinary uninterned
+ * symbol. {@code var}/{@code #'} stays refused. The reader spells characters, radix
+ * integers and exact {@code M} decimals, and refuses regex literals by name.
  */
 public final class ClojureLowering {
 
@@ -1818,8 +1817,8 @@ public final class ClojureLowering {
 
 	/**
 	 * A known-namespace call: the vars {@code ns} resolution already vetted, over the
-	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the
-	 * core string operations, {@code clojure.java.io} to the file-stream runtime.
+	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the core
+	 * string operations, {@code clojure.java.io} to the file-stream runtime.
 	 */
 	private LispVal namespaceCall(VarRef ref, List<LispVal> items) {
 		if (ref.ns().equals("clojure.java.io")) {
@@ -1841,8 +1840,8 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A {@code clojure.java.io} call: exactly {@code reader}, a buffered reader over
-	 * the path through the same file-stream runtime {@code slurp} reads through -- an
+	 * A {@code clojure.java.io} call: exactly {@code reader}, a buffered reader over the
+	 * path through the same file-stream runtime {@code slurp} reads through -- an
 	 * {@code open} input stream, so {@code line-seq} reads it and {@code with-open}
 	 * closes it.
 	 */
@@ -1855,7 +1854,10 @@ public final class ClojureLowering {
 		throw new LispReadException("unknown name: clojure.java.io/" + var);
 	}
 
-	/** {@code clojure.java.io/reader} as a function value: a one-argument lambda over the same open. */
+	/**
+	 * {@code clojure.java.io/reader} as a function value: a one-argument lambda over the
+	 * same open.
+	 */
 	private LispVal jioValue(String var) {
 		if (var.equals("reader")) {
 			LispSymbol path = new LispSymbol(mangle("reader-path"));
@@ -5988,11 +5990,11 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code line-seq}: the lines as a strict list -- of a path, opened and closed
-	 * around the read (the documented path deviation: the oracle takes a reader and
-	 * answers lazily), or of an already-open reader, which is read but never closed
-	 * ({@code with-open} owns closing, like the oracle). A stream value takes the
-	 * reader loop, anything else the path form.
+	 * {@code line-seq}: the lines as a strict list -- of a path, opened and closed around
+	 * the read (the documented path deviation: the oracle takes a reader and answers
+	 * lazily), or of an already-open reader, which is read but never closed
+	 * ({@code with-open} owns closing, like the oracle). A stream value takes the reader
+	 * loop, anything else the path form.
 	 */
 	private LispVal lineSeqForm(LispVal target) {
 		LispSymbol src = freshTemp();
@@ -6001,9 +6003,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The {@code read-line} loop over an already-bound stream: no open, no close, so
-	 * a {@code with-open} body may consume its reader and the cleanup still closes
-	 * exactly once.
+	 * The {@code read-line} loop over an already-bound stream: no open, no close, so a
+	 * {@code with-open} body may consume its reader and the cleanup still closes exactly
+	 * once.
 	 */
 	private LispVal lineSeqReaderLoop(LispVal stream) {
 		String name = mangle("line-seq-") + (this.counter++);
@@ -6177,7 +6179,10 @@ public final class ClojureLowering {
 	private record VarRef(String ns, String var) {
 	}
 
-	/** The namespaces whose vars lower to core forms: {@code clojure.string} and {@code clojure.java.io}. */
+	/**
+	 * The namespaces whose vars lower to core forms: {@code clojure.string} and
+	 * {@code clojure.java.io}.
+	 */
 	private static boolean isKnownNamespace(String ns) {
 		return ns.equals("clojure.string") || ns.equals("clojure.java.io");
 	}
@@ -6188,7 +6193,10 @@ public final class ClojureLowering {
 				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var);
 	}
 
-	/** The vars a namespace refers in full: per namespace, so {@code :refer :all} stays exact. */
+	/**
+	 * The vars a namespace refers in full: per namespace, so {@code :refer :all} stays
+	 * exact.
+	 */
 	private static Set<String> varsOf(String ns) {
 		if (ns.equals("clojure.java.io")) {
 			return JIO_VARS;
@@ -6196,7 +6204,9 @@ public final class ClojureLowering {
 		return STRING_VARS;
 	}
 
-	/** The {@code clojure.java.io} vars this front end implements: exactly {@code reader}. */
+	/**
+	 * The {@code clojure.java.io} vars this front end implements: exactly {@code reader}.
+	 */
 	private static final Set<String> JIO_VARS = Set.of("reader");
 
 	/** The {@code clojure.string} vars this front end implements. */
@@ -9639,9 +9649,9 @@ public final class ClojureLowering {
 	 * A stream method over an already-bound receiver: {@code write} prints through
 	 * {@code princ} (strings bare, characters as glyphs), {@code flush} finishes the
 	 * output and {@code close} closes the stream, so {@code with-open} over a
-	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every
-	 * backend without reaching {@code java:call}. Null when the method maps to
-	 * nothing, so the call goes to {@code java:call}.
+	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
+	 * without reaching {@code java:call}. Null when the method maps to nothing, so the
+	 * call goes to {@code java:call}.
 	 */
 	private @Nullable LispVal streamMethod(String method, LispVal recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {

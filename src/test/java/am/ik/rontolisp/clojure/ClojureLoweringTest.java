@@ -849,12 +849,10 @@ class ClojureLoweringTest {
 			.hasMessageContaining("file-seq is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: reader");
-		assertThatThrownBy(
-				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/writer \"f\")", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/writer \"f\")", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: clojure.java.io/writer");
-		assertThatThrownBy(
-				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/file \".\")", null))
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/file \".\")", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name: clojure.java.io/file");
 		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
@@ -870,8 +868,7 @@ class ClojureLoweringTest {
 			.contains("(OPEN \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio :refer [reader]])) (reader \"f\")"))
 			.contains("(OPEN \"f\")");
-		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")"))
-			.contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")")).contains("(OPEN \"f\")");
 		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader")).contains("LAMBDA")
 			.contains("OPEN");
 		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader")).contains("LAMBDA")

@@ -15,11 +15,10 @@ import static org.junit.jupiter.api.Assumptions.abort;
 
 /**
  * The filesystem refusal of the {@code clojure.java.io/reader} program on both WASM
- * backends: without a preopened directory covering the path, opening the fixture
- * signals the file-error instead of answering a reader. (With a preopen the same
- * program reads, like every backend -- but the spec suite's shared yaml cannot pin
- * file IO, so the behavior lives in {@link ClojureInteropTest} on the interpreter
- * and the JVM.)
+ * backends: without a preopened directory covering the path, opening the fixture signals
+ * the file-error instead of answering a reader. (With a preopen the same program reads,
+ * like every backend -- but the spec suite's shared yaml cannot pin file IO, so the
+ * behavior lives in {@link ClojureInteropTest} on the interpreter and the JVM.)
  */
 class ClojureWasmFileRefusalTest {
 
@@ -39,14 +38,13 @@ class ClojureWasmFileRefusalTest {
 	private static void assertRefusal(boolean component) throws Exception {
 		requireWasmtime();
 		Path fixture = workDir.resolve("b22-words.txt");
-		try (java.io.InputStream in = ClojureWasmFileRefusalTest.class
-			.getResourceAsStream("/clojure-b22-words.txt")) {
+		try (java.io.InputStream in = ClojureWasmFileRefusalTest.class.getResourceAsStream("/clojure-b22-words.txt")) {
 			assertThat(in).isNotNull();
 			Files.copy(in, fixture, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 		}
 		String quoted = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
-		String program = "(ns b22wref (:require [clojure.java.io :as jio]))" + "(with-open [r (jio/reader "
-				+ quoted + ")] (println (count (line-seq r))))";
+		String program = "(ns b22wref (:require [clojure.java.io :as jio]))" + "(with-open [r (jio/reader " + quoted
+				+ ")] (println (count (line-seq r))))";
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.clojure(program, false, component);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
@@ -66,8 +64,7 @@ class ClojureWasmFileRefusalTest {
 			assertThat(process.exitValue()).as("wasmtime exit code without a preopen").isNotZero();
 			String transcript = Files.readString(outFile, StandardCharsets.UTF_8)
 					+ Files.readString(errFile, StandardCharsets.UTF_8);
-			assertThat(transcript).as("the filesystem refusal names the failed open")
-				.contains("cannot open file");
+			assertThat(transcript).as("the filesystem refusal names the failed open").contains("cannot open file");
 		}
 		finally {
 			Files.deleteIfExists(outFile);
@@ -81,7 +78,8 @@ class ClojureWasmFileRefusalTest {
 			if (!probe.waitFor(60, TimeUnit.SECONDS) || probe.exitValue() != 0) {
 				abort("no usable wasmtime on PATH");
 			}
-		} catch (Exception ex) {
+		}
+		catch (Exception ex) {
 			abort("no usable wasmtime on PATH");
 		}
 	}
