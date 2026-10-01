@@ -718,6 +718,25 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void hostBooleansAnswerTorFalseForKnownReceivers() {
+		// a construction literal of a class whose overloads at that arity all
+		// answer a primitive boolean wraps the java:call in T-or-false: the IF
+		// sits directly over the call (the STRINGP dispatch owns the outer one)
+		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))")).contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (.contains (java.util.ArrayList. [1]) 2))")).contains("(IF (JAVA:CALL");
+		// a let local bound to a construction carries the class; a non-boolean
+		// answer and an unknown receiver keep the bare call
+		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))"))
+			.contains("(IF (JAVA:CALL");
+		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.size b29-list)))")).contains("JAVA:CALL")
+			.doesNotContain("(IF (JAVA:CALL");
+		assertThat(lowered("(defn b29-empty [x] (.isEmpty x))")).contains("JAVA:CALL").doesNotContain("(IF (JAVA:CALL");
+		// a shadowing binding hides the class again
+		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] ((fn [b29-list] (.isEmpty b29-list)) 1))"))
+			.doesNotContain("(IF (JAVA:CALL");
+	}
+
+	@Test
 	void arraysLowerToTheCoreArrayForms() {
 		assertThat(lowered("(make-array String 3)")).contains("MAKE-ARRAY");
 		assertThat(lowered("(make-array String 2 2)")).contains("MAKE-ARRAY").contains("LIST");
