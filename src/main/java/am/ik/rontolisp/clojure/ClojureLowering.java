@@ -2988,18 +2988,16 @@ public final class ClojureLowering {
 
 	/**
 	 * {@code assoc} as a value: over a map and a rest list of alternating keys and
-	 * values, grown in one copy like a call (later pairs winning, onto {@code nil}
-	 * from empty). An odd rest count signals, like a call's pair refusal.
+	 * values, grown in one copy like a call (later pairs winning, onto {@code nil} from
+	 * empty). An odd rest count signals, like a call's pair refusal.
 	 */
 	private LispVal assocValue() {
 		LispSymbol map = new LispSymbol(mangle("assoc-map"));
 		LispSymbol pairs = new LispSymbol(mangle("assoc-pairs"));
 		LispSymbol bound = freshTemp();
 		LispVal src = list(sym("if"), isRecordForm(bound), typedTableOf(bound), bound);
-		LispVal grown = cons(sym("append"),
-				List.of(list(sym("if"), bound, tablePlist(src), NIL_CONST), pairs));
-		LispVal build = list(sym("let"), list(List.of(list(bound, map))),
-				rewrapAnswer(bound, tableFromPlist(grown)));
+		LispVal grown = cons(sym("append"), List.of(list(sym("if"), bound, tablePlist(src), NIL_CONST), pairs));
+		LispVal build = list(sym("let"), list(List.of(list(bound, map))), rewrapAnswer(bound, tableFromPlist(grown)));
 		LispVal arity = list(sym("error"), LispString.literal("assoc takes a map and key/value pairs"));
 		LispVal body = list(sym("if"), list(sym("oddp"), list(sym("length"), pairs)), arity, build);
 		return list(sym("lambda"), list(List.of(map, AMPERSAND_REST, pairs)), body);
@@ -3064,8 +3062,7 @@ public final class ClojureLowering {
 		LispVal rebuilt = list(sym("let"), list(List.of(list(copy, tableFromPlist(tablePlist(src))))), drops,
 				dissocAnswer(bound, copy));
 		return list(sym("lambda"), list(List.of(map, AMPERSAND_REST, keys)),
-				list(sym("let"), list(List.of(list(bound, map))),
-						list(sym("if"), bound, rebuilt, NIL_CONST)));
+				list(sym("let"), list(List.of(list(bound, map))), list(sym("if"), bound, rebuilt, NIL_CONST)));
 	}
 
 	/**
@@ -3116,9 +3113,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code get} as a value: over a collection and a key, or those plus a default --
-	 * the two call shapes, dispatched on the rest count. Any other count signals, like
-	 * a call's arity refusal.
+	 * {@code get} as a value: over a collection and a key, or those plus a default -- the
+	 * two call shapes, dispatched on the rest count. Any other count signals, like a
+	 * call's arity refusal.
 	 */
 	private LispVal getValue() {
 		LispSymbol coll = new LispSymbol(mangle("get-coll"));
@@ -3126,8 +3123,7 @@ public final class ClojureLowering {
 		LispSymbol rest = new LispSymbol(mangle("get-rest"));
 		LispVal two = getForm(coll, key, NIL_CONST);
 		LispVal three = getForm(coll, key, list(sym("car"), rest));
-		LispVal arity = list(sym("error"),
-				LispString.literal("get takes a map, a key and an optional default"));
+		LispVal arity = list(sym("error"), LispString.literal("get takes a map, a key and an optional default"));
 		LispVal body = list(sym("cond"), list(list(sym("null"), rest), two),
 				list(list(sym("null"), list(sym("cdr"), rest)), three), list(TRUE_CONST, arity));
 		return list(sym("lambda"), list(List.of(coll, key, AMPERSAND_REST, rest)), body);
@@ -3140,15 +3136,14 @@ public final class ClojureLowering {
 
 	/**
 	 * The presence test over an already-lowered collection and key: a sentinel
-	 * {@code gethash} for maps, records and sets, a bounds check for vectors and
-	 * strings, answering {@code T}-or-false.
+	 * {@code gethash} for maps, records and sets, a bounds check for vectors and strings,
+	 * answering {@code T}-or-false.
 	 */
 	private LispVal containsForm(LispVal coll, LispVal key) {
 		LispSymbol bound = freshTemp();
 		LispSymbol at = freshTemp();
 		LispSymbol miss = freshTemp();
-		List<LispVal> bindings = List.of(list(bound, coll), list(at, key),
-				list(miss, list(sym("list"), NIL_CONST)));
+		List<LispVal> bindings = List.of(list(bound, coll), list(at, key), list(miss, list(sym("list"), NIL_CONST)));
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(bound), booleanAnswer(
 				list(sym("not"), list(sym("eq"), list(sym("gethash"), at, setInner(bound), miss), miss)))));
@@ -3252,9 +3247,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code merge} as a value: over a rest list of maps, every map's pairs appended
-	 * in one copy like a call (later maps winning), rewrapped in the first non-nil
-	 * map's record when there is one. Of no maps, {@code nil}.
+	 * {@code merge} as a value: over a rest list of maps, every map's pairs appended in
+	 * one copy like a call (later maps winning), rewrapped in the first non-nil map's
+	 * record when there is one. Of no maps, {@code nil}.
 	 */
 	private LispVal mergeValue() {
 		LispSymbol maps = new LispSymbol(mangle("merge-maps"));
@@ -3267,8 +3262,7 @@ public final class ClojureLowering {
 		LispVal gather = list(sym("mapcar"), list(sym("lambda"), list(one), onePlist), maps);
 		LispVal spread = list(sym("apply"), list(sym("function"), sym("append")), gather);
 		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
-				list(sym("if"), list(sym("and"), list(sym("null"), found), probe),
-						list(sym("setq"), found, probe)));
+				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
 		return list(sym("lambda"), list(AMPERSAND_REST, maps),
 				list(sym("let*"), list(List.of(list(found, NIL_CONST), list(grown, spread))), find,
 						list(sym("if"), found, rewrapAnswer(found, tableFromPlist(grown)), NIL_CONST)));
@@ -3398,8 +3392,8 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code conj} as a value: over a collection and a rest list of items, folded one
-	 * by one through the same per-kind read, so {@code (map conj ...)} and
+	 * {@code conj} as a value: over a collection and a rest list of items, folded one by
+	 * one through the same per-kind read, so {@code (map conj ...)} and
 	 * {@code (swap! a conj x)} run what a call would run.
 	 */
 	private LispVal conjValue() {
@@ -3521,23 +3515,21 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code hash-map}/{@code array-map} as a value: over a rest list of alternating
-	 * keys and values, built in one table like a call. An odd rest count signals,
-	 * like a call's pair refusal.
+	 * {@code hash-map}/{@code array-map} as a value: over a rest list of alternating keys
+	 * and values, built in one table like a call. An odd rest count signals, like a
+	 * call's pair refusal.
 	 */
 	private LispVal mapConstructorValue(String what) {
 		LispSymbol pairs = new LispSymbol(mangle(what + "-pairs"));
 		LispVal arity = list(sym("error"), LispString.literal(what + " takes key/value pairs"));
-		LispVal body = list(sym("if"), list(sym("oddp"), list(sym("length"), pairs)), arity,
-				tableFromPlist(pairs));
+		LispVal body = list(sym("if"), list(sym("oddp"), list(sym("length"), pairs)), arity, tableFromPlist(pairs));
 		return list(sym("lambda"), list(AMPERSAND_REST, pairs), body);
 	}
 
 	/**
-	 * {@code vec} over one collection: the fully realized seq view coerced to a
-	 * vector, so {@code (vec nil)} is {@code []}, {@code (vec "ab")} is the character
-	 * vector, and lazy inputs realize fully (an infinite input hangs, like the
-	 * oracle's).
+	 * {@code vec} over one collection: the fully realized seq view coerced to a vector,
+	 * so {@code (vec nil)} is {@code []}, {@code (vec "ab")} is the character vector, and
+	 * lazy inputs realize fully (an infinite input hangs, like the oracle's).
 	 */
 	private LispVal vecOf(List<LispVal> items) {
 		isTrue(items.size() == 2, "vec takes one collection");
@@ -3546,8 +3538,7 @@ public final class ClojureLowering {
 
 	/** {@code vec} over an already-lowered collection. */
 	private LispVal vecForm(LispVal lowered) {
-		return list(sym("coerce"), list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), lowered),
-				quoted("vector"));
+		return list(sym("coerce"), list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), lowered), quoted("vector"));
 	}
 
 	/** {@code vec} as a value: a one-argument lambda over the same coercion. */

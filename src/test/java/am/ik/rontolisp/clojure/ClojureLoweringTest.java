@@ -981,7 +981,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
 		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
 		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
-		assertThat(lowered("(let [b23-a (atom [1])] (swap! b23-a conj 1))")).contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(let [b23-a (atom [1])] (swap! b23-a conj 1))")).contains("APPLY").contains("REDUCE");
 		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("vec takes one collection");
 		assertThatThrownBy(() -> Clojure.read("(vec [1] [2])", null)).isInstanceOf(LispReadException.class)
