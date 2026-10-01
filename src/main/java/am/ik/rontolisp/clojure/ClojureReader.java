@@ -398,16 +398,7 @@ final class ClojureReader {
 				case 'b' -> text.append('\b');
 				case '\\' -> text.append('\\');
 				case '"' -> text.append('"');
-				case 'u' -> {
-					if (this.pos + 4 > this.source.length()) {
-						throw error("truncated \\u escape");
-					}
-					int cp = Integer.parseInt(this.source.substring(this.pos, this.pos + 4), 16);
-					for (int i = 0; i < 4; i++) {
-						next();
-					}
-					text.append(Character.toChars(cp));
-				}
+				case 'u' -> text.append(Character.toChars(readUnicodeEscape()));
 				// Octal `\0`-`\7` (up to two more `0`-`7`), like the oracle: a
 				// following `8`/`9` -- or any other non-octal char the reader would
 				// not stop at -- is the oracle's `Invalid digit` refusal, and a
@@ -418,7 +409,7 @@ final class ClojureReader {
 				case '0', '1', '2', '3', '4', '5', '6', '7' -> {
 					int value = e - '0';
 					int count = 1;
-					while (count < 3 && this.pos < this.source.length() && !octalStops(peek())) {
+					while (count < 3 && this.pos < this.source.length() && !escapeStops(peek())) {
 						int digit = Character.digit(peek(), 8);
 						if (digit < 0) {
 							throw error("Invalid digit: " + peek());
@@ -436,19 +427,63 @@ final class ClojureReader {
 				// like the oracle: an unknown escape signals instead of reading
 				// on.
 				default -> throw error("Unsupported escape character: \\" + e);
+
 			}
 		}
 	}
 
 	/**
-	 * Whether the oracle's string reader would stop an octal escape before this
-	 * character: its {@code readUnicodeChar} unreads at the end of input, at whitespace
-	 * (the comma counts as one there) or at a macro character, leaving the character for
-	 * the string body. Anything else must be an octal digit (measured on {@code clj}
-	 * 1.12.6.1673: {@code "a\0:b"} refuses with {@code Invalid digit: :}, while
-	 * {@code "a\0,b"}, {@code "a\0;b"}, {@code "a\0(b"} and {@code "a\0#b"} read on).
+	 * One backslash-u escape's character, like the oracle ({@code clj} 1.12.6.1673,
+	 * measured 2026-10-01): its string reader checks the first digit itself
+	 * ({@code Invalid unicode escape}, naming even the closing quote), then runs the
+	 * shared unicode reader over exactly four hex digits. A non-hex later digit is
+	 * {@code Invalid digit}; fewer than four digits before a stop -- whitespace (the
+	 * comma counts as one there), a macro character, or the closing quote -- is
+	 * {@code Invalid character length}. A buffer that ends mid-escape stays the
+	 * {@code truncated} refusal (a deliberate deviation: the oracle reports the
+	 * escape/length refusal even at end of input, but here the end of input may be a REPL
+	 * buffer boundary, so {@code ClojureSession.isComplete} keeps waiting for the rest
+	 * instead of reporting a complete-but-wrong form).
 	 */
-	private static boolean octalStops(char c) {
+
+	private int readUnicodeEscape() {
+		if (this.pos >= this.source.length()) {
+			throw error("truncated \\u escape");
+		}
+		char first = peek();
+		if (Character.digit(first, 16) < 0) {
+			throw error("Invalid unicode escape: \\u" + first);
+		}
+		int value = Character.digit(next(), 16);
+		int count = 1;
+		while (count < 4 && this.pos < this.source.length() && !escapeStops(peek())) {
+			int digit = Character.digit(peek(), 16);
+			if (digit < 0) {
+				throw error("Invalid digit: " + peek());
+			}
+			next();
+			value = value * 16 + digit;
+			count++;
+		}
+		if (count != 4) {
+			if (this.pos >= this.source.length()) {
+				throw error("truncated \\u escape");
+			}
+			throw error("Invalid character length: " + count + ", should be: 4");
+		}
+		return value;
+
+	}
+
+	/**
+	 * Whether the oracle's string reader would stop a backslash-u or octal escape before
+	 * this character: its shared unicode reader stops at the end of input, at whitespace
+	 * (the comma counts as one there) or at a macro character, leaving the character for
+	 * the string body. Anything else must be a digit of the escape's base (measured on
+	 * {@code clj} 1.12.6.1673 for both arms: a colon refuses with {@code Invalid digit}
+	 * while a comma, a semicolon, an open paren and a hash stop the escape there).
+	 */
+	private static boolean escapeStops(char c) {
 		return Character.isWhitespace(c) || c == ',' || "\";'@^`~()[]{}\\%#".indexOf(c) >= 0;
 	}
 

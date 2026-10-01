@@ -133,6 +133,42 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void unicodeStringEscapesMatchTheOracle() {
+		// measured on `clj` 1.12.6.1673 (b47): exactly four hex digits read, the
+		// rest stays string body
+		assertThat(read("\"\\u0041\"")).isEqualTo(List.of(new LispString("A")));
+		assertThat(read("\"\\u00419\"")).isEqualTo(List.of(new LispString("A9")));
+		// a non-hex FIRST digit is the oracle's `Invalid unicode escape` (never
+		// the old `NumberFormatException` leak, and even the closing quote is
+		// named, like the closing quote in `"\"\\u\""`)
+		assertThatThrownBy(() -> read("\"\\uzzzz\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid unicode escape: \\uz");
+		assertThatThrownBy(() -> read("\"\\u\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid unicode escape: \\u\"");
+		// a non-hex LATER digit is the oracle's `Invalid digit`
+		assertThatThrownBy(() -> read("\"\\u12xg\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: x");
+		assertThatThrownBy(() -> read("\"\\u123x\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: x");
+		assertThatThrownBy(() -> read("\"\\u12:b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digit: :");
+		// fewer than four digits before a stop (the closing quote, whitespace,
+		// `,` or a macro char) is the oracle's length refusal, not the old
+		// `truncated \\u escape`
+		assertThatThrownBy(() -> read("\"\\u12\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid character length: 2, should be: 4");
+		assertThatThrownBy(() -> read("\"\\u1\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid character length: 1, should be: 4");
+		assertThatThrownBy(() -> read("\"\\u12 b\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid character length: 2, should be: 4");
+		// a buffer ending mid-escape stays incomplete (the session waits for the
+		// rest), while the closed-but-wrong shape is complete, so it is reported
+		assertThat(ClojureSession.isComplete("\"\\u")).isFalse();
+		assertThat(ClojureSession.isComplete("\"\\u12")).isFalse();
+		assertThat(ClojureSession.isComplete("\"\\u12\"")).isTrue();
+	}
+
+	@Test
 	void singleQuoteEscapeSignalsLikeTheOracle() {
 		// `\'` read as `'` here but the oracle (clj 1.12.6.1673) signals
 		// `Unsupported escape character: \'`: refused to match it (b44) instead
