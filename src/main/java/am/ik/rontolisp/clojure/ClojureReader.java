@@ -442,12 +442,11 @@ final class ClojureReader {
 
 	/**
 	 * Whether the oracle's string reader would stop an octal escape before this
-	 * character: its {@code readUnicodeChar} unreads at the end of input, at
-	 * whitespace (the comma counts as one there) or at a macro character, leaving
-	 * the character for the string body. Anything else must be an octal digit
-	 * (measured on {@code clj} 1.12.6.1673: {@code "a\0:b"} refuses with
-	 * {@code Invalid digit: :}, while {@code "a\0,b"}, {@code "a\0;b"},
-	 * {@code "a\0(b"} and {@code "a\0#b"} read on).
+	 * character: its {@code readUnicodeChar} unreads at the end of input, at whitespace
+	 * (the comma counts as one there) or at a macro character, leaving the character for
+	 * the string body. Anything else must be an octal digit (measured on {@code clj}
+	 * 1.12.6.1673: {@code "a\0:b"} refuses with {@code Invalid digit: :}, while
+	 * {@code "a\0,b"}, {@code "a\0;b"}, {@code "a\0(b"} and {@code "a\0#b"} read on).
 	 */
 	private static boolean octalStops(char c) {
 		return Character.isWhitespace(c) || c == ',' || "\";'@^`~()[]{}\\%#".indexOf(c) >= 0;
