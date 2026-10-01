@@ -303,6 +303,20 @@ cases:
       1
       (1 2)
       1
+  - name: lazy-seq-body-is-a-zero-arity-recur-target
+    # Oracle clj 1.12.6.1673: the lazy-seq body is its own zero-arity recur
+    # target (a recur with arguments is "Mismatched argument count to recur,
+    # expected: 0 args, got: 1", pinned in ClojureLoweringTest), so a bare
+    # recur in the body's tail position re-runs the thunk itself: the counter
+    # climbs to 3 and the seq bottoms out at nil.
+    source: |
+      (def b28-calls (atom 0))
+      (def b28-draining (lazy-seq (swap! b28-calls inc) (when (< @b28-calls 3) (recur))))
+      (println (first b28-draining))
+      (println @b28-calls)
+    expected: |
+      nil
+      3
   - name: lazy-cat-fibs-prefix
     # lazy-cat nests concat over per-member lazy-seqs, so the self-referential
     # fibs (the book's introduction.clj shape) terminates behind take; map runs

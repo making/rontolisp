@@ -153,9 +153,20 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("((fn [n] (try :a (catch Exception e (recur n)))) 1)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can only recur from tail position");
-		// a lazy-seq body is never tail either (it answers through the wrapper; the
-		// zero-arity target itself is .todo/b28, which will reword this refusal)
+		// a lazy-seq body is its own zero-arity recur target (the oracle's thunk is a
+		// zero-argument function): a recur in its tail position checks against 0 --
+		// oracle clj 1.12.6.1673: ((fn [n] (lazy-seq (if (zero? n) nil (recur (dec n)))))
+		// 3)
+		// -> IllegalArgumentException compiling recur: Mismatched argument count to
+		// recur, expected: 0 args, got: 1
 		assertThatThrownBy(() -> Clojure.read("((fn [n] (if (zero? n) :d (lazy-seq (recur (dec n))))) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 0, got 1");
+		// while a recur outside the lazy-seq body's tail position is still the
+		// oracle's tail refusal (verified: ((fn [n] (lazy-seq (recur) :after)) 3)
+		// -> UnsupportedOperationException compiling recur: Can only recur from tail
+		// position)
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (lazy-seq (recur) :after)) 1)", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Can only recur from tail position");
 		// the tail slots still lower: let/do bodies, cond arms, when, and/or tails,
@@ -229,6 +240,11 @@ class ClojureLoweringTest {
 	@Test
 	void lazySeqsLowerToMemoizedThunks() {
 		assertThat(lowered("(lazy-seq (cons 1 nil))")).contains("%CLOJURE-MAKE-LAZY").contains("LAMBDA");
+		// an unused body stays a bare lambda; a used one wraps itself in a labels
+		// self-binding under a fresh name (the anonymous-fn shape), called with no
+		// arguments -- the body is a zero-arity recur target
+		assertThat(lowered("(lazy-seq (cons 1 nil))")).doesNotContain("LABELS");
+		assertThat(lowered("(lazy-seq (if (zero? 1) nil (recur)))")).contains("LABELS").contains("(|c%fn-0|)");
 		assertThat(lowered("(lazy-cat [0 1] [2])")).contains("%CLOJURE-CONCAT").contains("%CLOJURE-MAKE-LAZY");
 		assertThat(lowered("(lazy-cat)")).isEqualTo(FALSE_BINDING + "NIL");
 		assertThat(lowered("(repeat 3)")).contains("%CLOJURE-REPEAT");

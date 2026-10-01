@@ -256,9 +256,10 @@ public final class ClojureLowering {
 	 * recur target's body: only there may a {@code recur} lower, like the oracle.
 	 * {@link #lower} clears it (a call argument, an init or a test is never tail) and
 	 * {@link #lowerTail} sets it; a body form inherits it for its last form, a target
-	 * body forces it, and {@code lazy-seq}, {@code doseq}, {@code dotimes} and
-	 * {@code try} parts force it off (their bodies are never tail, and the {@code try}
-	 * body additionally trips the barrier below).
+	 * body (a clause, a {@code loop}, or a {@code lazy-seq} body for its own zero-arity
+	 * target) forces it, and {@code doseq}, {@code dotimes} and {@code try} parts force
+	 * it off (their bodies are never tail, and the {@code try} body additionally trips
+	 * the barrier below).
 	 */
 	private boolean tailPosition;
 
@@ -276,10 +277,11 @@ public final class ClojureLowering {
 	 * calls with its lowered arguments. A {@code loop} pushes its {@code labels} name, a
 	 * named {@code fn} or {@code letfn} entry its {@code labels} name, a {@code defn}
 	 * clause its dispatch {@code defun} name, a multi-arity {@code fn} clause the shared
-	 * dispatch name, and an anonymous {@code fn} (or {@code #(...)}, or a stored method
-	 * lambda) a fresh {@code labels} name the form wraps itself in when the target is
-	 * used. A plain lambda that is none of these pushes nothing, so a {@code recur}
-	 * passes through it to the enclosing target.
+	 * dispatch name, a {@code lazy-seq} body a fresh {@code labels} name of arity 0, and
+	 * an anonymous {@code fn} (or {@code #(...)}, or a stored method lambda) a fresh
+	 * {@code labels} name the form wraps itself in when the target is used. A plain
+	 * lambda that is none of these pushes nothing, so a {@code recur} passes through it
+	 * to the enclosing target.
 	 */
 	private static final class RecurTarget {
 
@@ -401,9 +403,9 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * One body lowered outside any tail position: a {@code lazy-seq}, {@code doseq},
-	 * {@code dotimes} or {@code try} part is never tail, so a {@code recur} inside one is
-	 * refused even in an enclosing tail.
+	 * One body lowered outside any tail position: a {@code doseq}, {@code dotimes} or
+	 * {@code try} part is never tail, so a {@code recur} inside one is refused even in an
+	 * enclosing tail.
 	 */
 	private LispVal nonTailBody(List<LispVal> items, int from) {
 		boolean outer = this.tailPosition;
@@ -1819,11 +1821,12 @@ public final class ClojureLowering {
 	/**
 	 * A {@code recur} form lowered: a direct call to the innermost enclosing target (a
 	 * {@code loop}, a named or anonymous {@code fn}, a {@code defn} clause, a
-	 * {@code letfn} entry), checked against that target's arity. A {@code try} between
-	 * the {@code recur} and its target is the oracle's {@code Cannot recur across try}
-	 * refusal, and a {@code recur} outside its target body's tail position the oracle's
-	 * {@code Can only recur from tail position} refusal; both beat the arity check, like
-	 * the oracle. Outside any target it stays a refusal.
+	 * {@code letfn} entry, or a {@code lazy-seq} body of arity 0), checked against that
+	 * target's arity. A {@code try} between the {@code recur} and its target is the
+	 * oracle's {@code Cannot recur across try} refusal, and a {@code recur} outside its
+	 * target body's tail position the oracle's {@code Can only recur from tail position}
+	 * refusal; both beat the arity check, like the oracle. Outside any target it stays a
+	 * refusal.
 	 */
 	private LispVal recurOf(LispVal form, List<LispVal> items) {
 		if (this.recurTargets.isEmpty()) {
@@ -4437,11 +4440,26 @@ public final class ClojureLowering {
 	/**
 	 * {@code (lazy-seq body...)}: the body behind a memoized thunk. The body runs at most
 	 * once per seq object -- when first realized -- and answers the seq's contents (nil,
-	 * a cons, or another collection to seq).
+	 * a cons, or another collection to seq). The body is its own zero-arity recur target
+	 * (the oracle's thunk is a zero-argument function): a {@code recur} in the body's
+	 * tail position calls the thunk itself, checked against arity 0, while a
+	 * {@code recur} anywhere else is refused by the tail walk first, and a {@code try}
+	 * between the {@code recur} and the body trips the barrier the same way. The thunk
+	 * lambda wraps itself in a {@code labels} self-binding only when a {@code recur}
+	 * reaches it (the anonymous-{@code fn} shape).
 	 */
 	private LispVal lazySeqOf(List<LispVal> items) {
-		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAKE-LAZY"),
-				list(sym("lambda"), list(List.of()), nonTailBody(items, 1)));
+		RecurTarget target = new RecurTarget(freshRecurName(), true);
+		target.setArity(0, false);
+		pushRecurTarget(target);
+		try {
+			LispVal lambda = list(sym("lambda"), list(List.of()), bodyTail(items, 1));
+			LispVal thunk = target.used() ? labelsSelfCall(target.callName(), lambda) : lambda;
+			return list(new LispSymbol("RONTOLISP::%CLOJURE-MAKE-LAZY"), thunk);
+		}
+		finally {
+			this.recurTargets.pop();
+		}
 	}
 
 	/**

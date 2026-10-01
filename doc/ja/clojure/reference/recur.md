@@ -6,7 +6,7 @@
 その本体へ跳び戻ります。値は跳ぶ前に、束縛の順に評価されます。多アリティの各節はそれぞれ
 対象なので、個数は囲みの節に一致しなければなりません。個数の不一致はエラーで、`loop`
 にも関数にも囲まれない `recur` もエラーです。末尾位置にある `recur` だけが展開され、
-それ以外はエラー、`recur` と対象のあいだに `try` がある場合もエラーです。可変長（`[x & xs]`）節へ届く `recur` はワーカーを経由して代入されます。その節は rest を通常引数に取るワーカーと、通常呼び出し用の `&rest` ヘッドに分割されるため、最後の `recur` 引数が rest そのものに束縛されます（oracle と同様。使われない可変長節は単一の形のままです）。インタープリターの末尾呼び出しによりスタック定数です。
+それ以外はエラー、`recur` と対象のあいだに `try` がある場合もエラーです。可変長（`[x & xs]`）節へ届く `recur` はワーカーを経由して代入されます。その節は rest を通常引数に取るワーカーと、通常呼び出し用の `&rest` ヘッドに分割されるため、最後の `recur` 引数が rest そのものに束縛されます（oracle と同様。使われない可変長節は単一の形のままです）。`lazy-seq` の本体はそれ自体が0引数の対象です。本体の末尾位置にある `recur` は thunk 自体を再実行するため、引数付きの recur はそこで個数エラーになります。インタープリターの末尾呼び出しによりスタック定数です。
 
 ```clojure
 (println (loop [i 0 acc 0]
@@ -19,4 +19,8 @@
   (if (empty? r) a (recur (first r) (rest r))))
 (println (walk :start [1])) ; [1]
 (println (walk :start nil)) ; nil
+(def calls (atom 0))
+(def draining (lazy-seq (swap! calls inc) (when (< @calls 3) (recur))))
+(println (first draining)) ; nil
+(println @calls) ; 3
 ```

@@ -11,7 +11,9 @@ is an error, and a `try` between the `recur` and its target is one too. A `recur
 reaching a variadic (`[x & xs]`) clause assigns through a worker: the clause splits
 into a worker taking the rest as an ordinary parameter plus the `&rest` head for
 normal calls, so the last `recur` argument binds the rest itself, like the oracle
-(an unused variadic keeps its single shape). Constant-stack by the interpreter's
+(an unused variadic keeps its single shape). A `lazy-seq` body is its own zero-arity
+target: a `recur` in its tail position re-runs the thunk itself, so a recur with
+arguments is an arity error there. Constant-stack by the interpreter's
 tail calls.
 
 ```clojure
@@ -25,4 +27,8 @@ tail calls.
   (if (empty? r) a (recur (first r) (rest r))))
 (println (walk :start [1])) ; [1]
 (println (walk :start nil)) ; nil
+(def calls (atom 0))
+(def draining (lazy-seq (swap! calls inc) (when (< @calls 3) (recur))))
+(println (first draining)) ; nil
+(println @calls) ; 3
 ```
