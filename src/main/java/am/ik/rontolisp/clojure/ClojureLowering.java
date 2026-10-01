@@ -2794,6 +2794,8 @@ public final class ClojureLowering {
 			case "shuffle":
 				isTrue(n == 1, "shuffle takes one collection");
 				return shuffleForm(lower(items.get(1)));
+			case "vec":
+				return vecOf(items);
 			default:
 				return null;
 		}
@@ -2957,6 +2959,25 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * {@code assoc} as a value: over a map and a rest list of alternating keys and
+	 * values, grown in one copy like a call (later pairs winning, onto {@code nil}
+	 * from empty). An odd rest count signals, like a call's pair refusal.
+	 */
+	private LispVal assocValue() {
+		LispSymbol map = new LispSymbol(mangle("assoc-map"));
+		LispSymbol pairs = new LispSymbol(mangle("assoc-pairs"));
+		LispSymbol bound = freshTemp();
+		LispVal src = list(sym("if"), isRecordForm(bound), typedTableOf(bound), bound);
+		LispVal grown = cons(sym("append"),
+				List.of(list(sym("if"), bound, tablePlist(src), NIL_CONST), pairs));
+		LispVal build = list(sym("let"), list(List.of(list(bound, map))),
+				rewrapAnswer(bound, tableFromPlist(grown)));
+		LispVal arity = list(sym("error"), LispString.literal("assoc takes a map and key/value pairs"));
+		LispVal body = list(sym("if"), list(sym("oddp"), list(sym("length"), pairs)), arity, build);
+		return list(sym("lambda"), list(List.of(map, AMPERSAND_REST, pairs)), body);
+	}
+
+	/**
 	 * A rebuilt table back in the record it came from: {@code assoc} (and everything
 	 * through {@link #assocPairForm}, like {@code update} and {@code assoc-in}) keeps the
 	 * record's tag and fields, like the oracle. Anything else answers the table.
@@ -2998,6 +3019,25 @@ public final class ClojureLowering {
 		LispVal rewrap = list(sym("if"), keep, wrapRecord(typedTagOf(map), typedFieldsOf(map), copy), copy);
 		return list(sym("let"), list(List.of(list(keep, TRUE_CONST), list(miss, list(sym("list"), NIL_CONST)))),
 				list(sym("if"), isRecordForm(map), list(sym("progn"), scan, rewrap), copy));
+	}
+
+	/**
+	 * {@code dissoc} as a value: over a map and a rest list of keys, copied once and
+	 * dropped one by one, like a call (of {@code nil}, {@code nil}).
+	 */
+	private LispVal dissocValue() {
+		LispSymbol map = new LispSymbol(mangle("dissoc-map"));
+		LispSymbol keys = new LispSymbol(mangle("dissoc-keys"));
+		LispSymbol bound = freshTemp();
+		LispSymbol copy = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal src = list(sym("if"), isRecordForm(bound), typedTableOf(bound), bound);
+		LispVal drops = list(sym("dolist"), list(List.of(one, keys)), list(sym("remhash"), one, copy));
+		LispVal rebuilt = list(sym("let"), list(List.of(list(copy, tableFromPlist(tablePlist(src))))), drops,
+				dissocAnswer(bound, copy));
+		return list(sym("lambda"), list(List.of(map, AMPERSAND_REST, keys)),
+				list(sym("let"), list(List.of(list(bound, map))),
+						list(sym("if"), bound, rebuilt, NIL_CONST)));
 	}
 
 	/**
@@ -3047,24 +3087,58 @@ public final class ClojureLowering {
 		return branches;
 	}
 
+	/**
+	 * {@code get} as a value: over a collection and a key, or those plus a default --
+	 * the two call shapes, dispatched on the rest count. Any other count signals, like
+	 * a call's arity refusal.
+	 */
+	private LispVal getValue() {
+		LispSymbol coll = new LispSymbol(mangle("get-coll"));
+		LispSymbol key = new LispSymbol(mangle("get-key"));
+		LispSymbol rest = new LispSymbol(mangle("get-rest"));
+		LispVal two = getForm(coll, key, NIL_CONST);
+		LispVal three = getForm(coll, key, list(sym("car"), rest));
+		LispVal arity = list(sym("error"),
+				LispString.literal("get takes a map, a key and an optional default"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), rest), two),
+				list(list(sym("null"), list(sym("cdr"), rest)), three), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(List.of(coll, key, AMPERSAND_REST, rest)), body);
+	}
+
 	private LispVal containsOf(List<LispVal> items) {
 		isTrue(items.size() == 3, "contains? takes a collection and a key");
-		LispSymbol coll = freshTemp();
-		LispSymbol key = freshTemp();
+		return containsForm(lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/**
+	 * The presence test over an already-lowered collection and key: a sentinel
+	 * {@code gethash} for maps, records and sets, a bounds check for vectors and
+	 * strings, answering {@code T}-or-false.
+	 */
+	private LispVal containsForm(LispVal coll, LispVal key) {
+		LispSymbol bound = freshTemp();
+		LispSymbol at = freshTemp();
 		LispSymbol miss = freshTemp();
-		List<LispVal> bindings = List.of(list(coll, lower(items.get(1))), list(key, lower(items.get(2))),
+		List<LispVal> bindings = List.of(list(bound, coll), list(at, key),
 				list(miss, list(sym("list"), NIL_CONST)));
 		List<LispVal> branches = new ArrayList<>();
-		branches.add(list(isSetForm(coll), booleanAnswer(
-				list(sym("not"), list(sym("eq"), list(sym("gethash"), key, setInner(coll), miss), miss)))));
-		branches.add(list(isRecordForm(coll), booleanAnswer(
-				list(sym("not"), list(sym("eq"), list(sym("gethash"), key, typedTableOf(coll), miss), miss)))));
-		branches.add(list(list(sym("hash-table-p"), coll),
-				booleanAnswer(list(sym("not"), list(sym("eq"), list(sym("gethash"), key, coll, miss), miss)))));
-		branches.add(list(indexForm(coll, key, true), TRUE_CONST));
-		branches.add(list(indexForm(coll, key, false), TRUE_CONST));
+		branches.add(list(isSetForm(bound), booleanAnswer(
+				list(sym("not"), list(sym("eq"), list(sym("gethash"), at, setInner(bound), miss), miss)))));
+		branches.add(list(isRecordForm(bound), booleanAnswer(
+				list(sym("not"), list(sym("eq"), list(sym("gethash"), at, typedTableOf(bound), miss), miss)))));
+		branches.add(list(list(sym("hash-table-p"), bound),
+				booleanAnswer(list(sym("not"), list(sym("eq"), list(sym("gethash"), at, bound, miss), miss)))));
+		branches.add(list(indexForm(bound, at, true), TRUE_CONST));
+		branches.add(list(indexForm(bound, at, false), TRUE_CONST));
 		branches.add(list(TRUE_CONST, this.falseVariable));
 		return list(sym("let"), list(bindings), cons(sym("cond"), branches));
+	}
+
+	/** {@code contains?} as a value: a two-argument lambda over the same test. */
+	private LispVal containsValue() {
+		LispSymbol coll = new LispSymbol(mangle("contains-coll"));
+		LispSymbol key = new LispSymbol(mangle("contains-key"));
+		return list(sym("lambda"), list(List.of(coll, key)), containsForm(coll, key));
 	}
 
 	private LispVal keysOf(List<LispVal> items) {
@@ -3147,6 +3221,29 @@ public final class ClojureLowering {
 			first = list(sym("if"), maps.get(i), maps.get(i), first);
 		}
 		return first;
+	}
+
+	/**
+	 * {@code merge} as a value: over a rest list of maps, every map's pairs appended
+	 * in one copy like a call (later maps winning), rewrapped in the first non-nil
+	 * map's record when there is one. Of no maps, {@code nil}.
+	 */
+	private LispVal mergeValue() {
+		LispSymbol maps = new LispSymbol(mangle("merge-maps"));
+		LispSymbol one = freshTemp();
+		LispSymbol found = freshTemp();
+		LispSymbol grown = freshTemp();
+		LispSymbol probe = freshTemp();
+		LispVal src = list(sym("if"), isRecordForm(one), typedTableOf(one), one);
+		LispVal onePlist = list(sym("if"), one, tablePlist(src), NIL_CONST);
+		LispVal gather = list(sym("mapcar"), list(sym("lambda"), list(one), onePlist), maps);
+		LispVal spread = list(sym("apply"), list(sym("function"), sym("append")), gather);
+		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
+				list(sym("if"), list(sym("and"), list(sym("null"), found), probe),
+						list(sym("setq"), found, probe)));
+		return list(sym("lambda"), list(AMPERSAND_REST, maps),
+				list(sym("let*"), list(List.of(list(found, NIL_CONST), list(grown, spread))), find,
+						list(sym("if"), found, rewrapAnswer(found, tableFromPlist(grown)), NIL_CONST)));
 	}
 
 	private LispVal conjOf(List<LispVal> items) {
@@ -3272,6 +3369,21 @@ public final class ClojureLowering {
 				list(sym("setf"), list(sym("gethash"), item, table), item), wrapSet(table));
 	}
 
+	/**
+	 * {@code conj} as a value: over a collection and a rest list of items, folded one
+	 * by one through the same per-kind read, so {@code (map conj ...)} and
+	 * {@code (swap! a conj x)} run what a call would run.
+	 */
+	private LispVal conjValue() {
+		LispSymbol coll = new LispSymbol(mangle("conj-coll"));
+		LispSymbol items = new LispSymbol(mangle("conj-items"));
+		LispSymbol acc = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal step = list(sym("lambda"), list(List.of(acc, one)), conjTwoForm(acc, one));
+		return list(sym("lambda"), list(List.of(coll, AMPERSAND_REST, items)),
+				list(sym("reduce"), step, items, sym(":initial-value"), coll));
+	}
+
 	private LispVal disjOf(List<LispVal> items) {
 		int n = items.size() - 1;
 		isTrue(n >= 1, "disj takes a set and members");
@@ -3306,8 +3418,42 @@ public final class ClojureLowering {
 		return cons(sym("progn"), drops);
 	}
 
+	/**
+	 * {@code disj} as a value: over a set and a rest list of members, copied once and
+	 * dropped one by one, like a call (of {@code nil}, {@code nil}; of a non-set, a
+	 * signal).
+	 */
+	private LispVal disjValue() {
+		LispSymbol set = new LispSymbol(mangle("disj-set"));
+		LispSymbol members = new LispSymbol(mangle("disj-members"));
+		LispSymbol bound = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal copy = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
+						list(sym("setf"), list(sym("gethash"), key, table), key)),
+				setInner(bound));
+		LispVal drops = list(sym("dolist"), list(List.of(one, members)), list(sym("remhash"), one, table));
+		LispVal kept = list(sym("let"), list(List.of(list(table, makeTable()))), copy, drops, wrapSet(table));
+		LispVal needSet = list(sym("error"), LispString.literal("disj needs a set"));
+		return list(sym("lambda"), list(List.of(set, AMPERSAND_REST, members)),
+				list(sym("let"), list(List.of(list(bound, set))),
+						list(sym("if"), bound, list(sym("if"), isSetForm(bound), kept, needSet), NIL_CONST)));
+	}
+
 	private LispVal setOf(List<LispVal> items) {
 		isTrue(items.size() == 2, "set takes one collection");
+		return setForm(lower(items.get(1)));
+	}
+
+	/**
+	 * A set over an already-lowered collection: every member under itself in a fresh
+	 * table, wrapped so verbs tell it from a map. The walk populates the table for
+	 * effect; the wrapper answers.
+	 */
+	private LispVal setForm(LispVal lowered) {
 		LispSymbol coll = freshTemp();
 		LispSymbol table = freshTemp();
 		LispSymbol key = freshTemp();
@@ -3331,13 +3477,55 @@ public final class ClojureLowering {
 						setInner(coll))));
 		branches.add(list(TRUE_CONST, list(sym("dolist"), list(List.of(one, coll)),
 				list(sym("setf"), list(sym("gethash"), one, table), one))));
-		return list(sym("let"), list(List.of(list(coll, lower(items.get(1))), list(table, makeTable()))),
+		return list(sym("let"), list(List.of(list(coll, lowered), list(table, makeTable()))),
 				cons(sym("cond"), branches), wrapSet(table));
+	}
+
+	/** {@code set} as a value: a one-argument lambda over the same construction. */
+	private LispVal setValue() {
+		LispSymbol coll = new LispSymbol(mangle("set-coll"));
+		return list(sym("lambda"), list(coll), setForm(coll));
 	}
 
 	private LispVal mapConstructorOf(List<LispVal> items, String what) {
 		isTrue((items.size() - 1) % 2 == 0, what + " takes key/value pairs");
 		return mapBuild(lowers(items, 1));
+	}
+
+	/**
+	 * {@code hash-map}/{@code array-map} as a value: over a rest list of alternating
+	 * keys and values, built in one table like a call. An odd rest count signals,
+	 * like a call's pair refusal.
+	 */
+	private LispVal mapConstructorValue(String what) {
+		LispSymbol pairs = new LispSymbol(mangle(what + "-pairs"));
+		LispVal arity = list(sym("error"), LispString.literal(what + " takes key/value pairs"));
+		LispVal body = list(sym("if"), list(sym("oddp"), list(sym("length"), pairs)), arity,
+				tableFromPlist(pairs));
+		return list(sym("lambda"), list(AMPERSAND_REST, pairs), body);
+	}
+
+	/**
+	 * {@code vec} over one collection: the fully realized seq view coerced to a
+	 * vector, so {@code (vec nil)} is {@code []}, {@code (vec "ab")} is the character
+	 * vector, and lazy inputs realize fully (an infinite input hangs, like the
+	 * oracle's).
+	 */
+	private LispVal vecOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "vec takes one collection");
+		return vecForm(lower(items.get(1)));
+	}
+
+	/** {@code vec} over an already-lowered collection. */
+	private LispVal vecForm(LispVal lowered) {
+		return list(sym("coerce"), list(new LispSymbol("RONTOLISP::%CLOJURE-REALIZE-ALL"), lowered),
+				quoted("vector"));
+	}
+
+	/** {@code vec} as a value: a one-argument lambda over the same coercion. */
+	private LispVal vecValue() {
+		LispSymbol coll = new LispSymbol(mangle("vec-coll"));
+		return list(sym("lambda"), list(coll), vecForm(coll));
 	}
 
 	private LispVal countOf(List<LispVal> items) {
@@ -3516,6 +3704,17 @@ public final class ClojureLowering {
 			case "frequencies" -> frequenciesValue();
 			case "keys" -> keysValue();
 			case "vals" -> valsValue();
+			case "assoc" -> assocValue();
+			case "dissoc" -> dissocValue();
+			case "get" -> getValue();
+			case "contains?" -> containsValue();
+			case "merge" -> mergeValue();
+			case "conj" -> conjValue();
+			case "disj" -> disjValue();
+			case "set" -> setValue();
+			case "hash-map" -> mapConstructorValue("hash-map");
+			case "array-map" -> mapConstructorValue("array-map");
+			case "vec" -> vecValue();
 			case "comp" -> compValue();
 			case "partial" -> partialValue();
 			case "complement" -> complementValue();

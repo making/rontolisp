@@ -2588,3 +2588,138 @@ cases:
       HI
       hi
       Hello
+  - name: vec-coerces-every-collection-to-a-vector
+    # vec is the vector-over-seq-view coercion: lists pass through member by
+    # member, strings become character vectors, maps contribute one two-vector
+    # per entry, sets one member per element, nil is []. Lazy inputs realize
+    # fully (an infinite input hangs, like the oracle's). class pins the vector
+    # answer (:vector here; the oracle names its own class).
+    source: |
+      (println (vec '(1 2)))
+      (println (vec [1 2 3]))
+      (println (vec "ab"))
+      (println (vec nil))
+      (println (vec #{1}))
+      (println (vec {:a 1}))
+      (println (count (vec #{1 2 3})))
+      (println (vec (map inc [1 2])))
+      (println (vec (concat (lazy-seq [1]) [2])))
+      (println (class (vec '(1))))
+      (println (map vec (list '(1 2) [3])))
+    expected: |
+      [1 2]
+      [1 2 3]
+      [a b]
+      []
+      [1]
+      [[:a 1]]
+      3
+      [2 3]
+      [1 2]
+      :vector
+      ([1 2] [3])
+  - name: assoc-and-dissoc-answer-values
+    # assoc as a value grows one copy from the rest pairs (later pairs winning,
+    # onto nil from empty); an odd rest count signals at run time. dissoc as a
+    # value drops each rest key (of nil, nil).
+    source: |
+      (println (get ((fn [b23-f] (b23-f {:a 1} :b 2 :c 3)) assoc) :c))
+      (println (map #(get % :b) (map assoc [{:a 1} {:x 0}] [:b :b] [2 3])))
+      (println (get ((fn [b23-f] (b23-f nil :a 1)) assoc) :a))
+      (println (try ((fn [b23-f] (b23-f {:a 1} :b)) assoc) (catch Exception e :signalled)))
+      (println (map dissoc [{:a 1 :b 2} {:x 1}] [:a :x]))
+      (println ((fn [b23-f] (b23-f {:a 1 :b 2} :a :b)) dissoc))
+      (println ((fn [b23-f] (b23-f nil :a)) dissoc))
+    expected: |
+      3
+      (2 3)
+      1
+      :signalled
+      ({:b 2} {})
+      {}
+      nil
+  - name: get-and-contains-answer-values
+    # get as a value is the two- or three-argument read (the default threading
+    # through); any other count signals at run time. contains? as a value is the
+    # same sentinel presence test, answering T-or-false.
+    source: |
+      (println (map get [{:a 1} {:b 2}] [:a :b]))
+      (println (map get [{:a 1}] [:b] [:d]))
+      (println ((fn [b23-f] (b23-f {:a 1} :b :dflt)) get))
+      (println ((fn [b23-f] (b23-f [10 20] 5 :d)) get))
+      (println (map contains? [{:a 1} #{1}] [:a 1]))
+      (println ((fn [b23-f] (b23-f [1 2] 5)) contains?))
+      (println (try ((fn [b23-f] (b23-f {:a 1} :a :x :y)) get) (catch Exception e :signalled)))
+    expected: |
+      (1 2)
+      (:d)
+      :dflt
+      :d
+      (true true)
+      false
+      :signalled
+  - name: merge-conj-and-disj-answer-values
+    # merge as a value appends every rest map's pairs in one copy (of none,
+    # nil); conj as a value folds the rest items through the same per-kind
+    # read, so alter/swap! over conj run what a call would run (the chat.clj
+    # and introduction.clj shapes); disj as a value drops each rest member
+    # (of nil, nil).
+    source: |
+      (println (map #(get % :b) (map merge [{:a 1} nil] [{:b 2} {:c 3}])))
+      (println (count ((fn [b23-f] (b23-f {:a 1} {:b 2} {:c 3})) merge)))
+      (println ((fn [b23-f] (b23-f)) merge))
+      (println (map conj [[1] [2]] [3]))
+      (println ((fn [b23-f] (b23-f [1] 2 3)) conj))
+      (println (get ((fn [b23-f] (b23-f {:a 1} [:b 2])) conj) :b))
+      (println (map disj [#{1 2} #{3}] [1 3]))
+      (println ((fn [b23-f] (b23-f #{1 2} 1 2)) disj))
+      (println (let [b23-a (atom [1])] (swap! b23-a conj 2) @b23-a))
+      (println (dosync (let [b23-r (ref [1])] (alter b23-r conj 2) (commute b23-r conj 3) @b23-r)))
+    expected: |
+      (2 nil)
+      3
+      nil
+      ([1 3])
+      [1 2 3]
+      2
+      (#{2} #{})
+      #{}
+      [1 2]
+      [1 2 3]
+  - name: set-and-map-constructors-answer-values
+    # set as a value builds the member table over one collection; hash-map and
+    # array-map as values build one table from the rest pairs (an odd rest count
+    # signals at run time, like a call's pair refusal).
+    source: |
+      (println (map set [[1]]))
+      (println (map count (map set [[1 1 2] nil])))
+      (println (get ((fn [b23-f] (b23-f :a 1)) hash-map) :a))
+      (println (get ((fn [b23-f] (b23-f :a 1)) array-map) :a))
+      (println (count ((fn [b23-f] (b23-f)) hash-map)))
+      (println (try ((fn [b23-f] (b23-f :a)) hash-map) (catch Exception e :signalled)))
+      (println (get ((fn [b23-f] (apply b23-f [:a 1 :b 2])) hash-map) :b))
+    expected: |
+      (#{1})
+      (2 0)
+      1
+      1
+      0
+      :signalled
+      2
+  - name: corpus-pins-over-vec-and-conj-values
+    # The shcloj4 shapes the gaps blocked: eager.clj squares-seq (vec over a
+    # mapped range), hangman available-words (vec over a filtered word list),
+    # snake add-points (vec over an applied map), chat add-message (alter and
+    # commute over conj, dereferenced back).
+    source: |
+      (defn b23-square [x] (* x x))
+      (defn b23-squares-seq [n] (vec (map b23-square (range n))))
+      (println (b23-squares-seq 4))
+      (println (vec (filter (fn [b23-w] (not (contains? #{\a} (first b23-w)))) ["apple" "avocado" "berry"])))
+      (println (vec (apply map + [[1 2] [10 20]])))
+      (println (dosync (let [b23-msgs (ref [])] (alter b23-msgs conj "hi") (commute b23-msgs conj "yo") @b23-msgs)))
+    expected: |
+      [0 1 4 9]
+      [berry]
+      [11 22]
+      [hi yo]

@@ -968,6 +968,27 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void collectionVerbsLowerToValuesAndVecCoerces() {
+		assertThat(lowered("(vec [1 2])")).contains("RONTOLISP::%CLOJURE-REALIZE-ALL").contains("COERCE");
+		assertThat(lowered("(map vec [[1]])")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-REALIZE-ALL");
+		assertThat(lowered("(map assoc [{:a 1}] [:a] [2])")).contains("LAMBDA").contains("APPEND");
+		assertThat(lowered("(map dissoc [{:a 1}] [:a])")).contains("LAMBDA").contains("REMHASH");
+		assertThat(lowered("(map get [{:a 1}] [:a])")).contains("LAMBDA").contains("GETHASH");
+		assertThat(lowered("(map contains? [{:a 1}] [:a])")).contains("LAMBDA").contains("GETHASH");
+		assertThat(lowered("(map merge [{:a 1}] [{:b 2}])")).contains("LAMBDA").contains("MAPCAR");
+		assertThat(lowered("(map conj [[1]] [2])")).contains("LAMBDA").contains("REDUCE");
+		assertThat(lowered("(map disj [#{1}] [1])")).contains("LAMBDA").contains("REMHASH");
+		assertThat(lowered("(map set [[1]])")).contains("LAMBDA").contains("GETHASH");
+		assertThat(lowered("(map hash-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
+		assertThat(lowered("(map array-map [:a] [1])")).contains("LAMBDA").contains("PLIST-HASH-TABLE");
+		assertThat(lowered("(let [b23-a (atom [1])] (swap! b23-a conj 1))")).contains("RONTOLISP::%CLOJURE-CALL");
+		assertThatThrownBy(() -> Clojure.read("(vec)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("vec takes one collection");
+		assertThatThrownBy(() -> Clojure.read("(vec [1] [2])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("vec takes one collection");
+	}
+
+	@Test
 	void mapVerbsBuildFreshTables() {
 		assertThat(lowered("(update {:a 1} :a inc)")).contains("RONTOLISP::%CLOJURE-CALL").contains("HASH-TABLE");
 		assertThat(lowered("(update-in {:a 1} [:a] inc)")).contains("RONTOLISP::%CLOJURE-CALL");

@@ -7,6 +7,9 @@ onto a map, at the end of a vector, at the front of a list -- `nil` collects lik
 A set conjoined onto a map contributes its members one level deep (as entries); anything
 else conjoined onto a map signals. Entries conjoined onto a record keep the type; onto a deftype or reify it signals, like the oracle.
 
+As a value a collection plus a rest list of items, folded one by one -- so `alter` and
+`swap!` over `conj` run what a call would run.
+
 Deviation: transients (`conj!`) are refused by name.
 
 ```clojure
@@ -15,4 +18,5 @@ Deviation: transients (`conj!`) are refused by name.
 (println (conj nil 1))    ; (1)
 (println (get (conj {:a 1} [:b 2]) :b)) ; 2
 (println (count (conj #{1 2} 3)))       ; 3
+(println (map conj [[1] [2]] [3]))     ; ([1 3])
 ```

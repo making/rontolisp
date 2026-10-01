@@ -8,6 +8,7 @@ A map or set is an `equal` hash table, never mutated in place: every verb builds
 |---|---|---|
 | `vector` | `(vector 1 2)` | `[1 2]` |
 | `vector?` | `(vector? [1])` | `true` |
+| `vec` | `(vec '(1 2))` | `[1 2]` |
 | `hash-map` | `(hash-map :a 1)` | `{:a 1}` |
 | `array-map` | `(array-map :a 1)` | `{:a 1}` |
 | `assoc` | `(assoc {:a 1} :b 2)` | `{:a 1, :b 2}` |

@@ -107,6 +107,7 @@ categories:
     functions:
       - { slug: vector, name: "vector" }
       - { slug: vector-p, name: "vector?" }
+      - { slug: vec, name: "vec" }
       - { slug: hash-map, name: "hash-map" }
       - { slug: array-map, name: "array-map" }
       - { slug: assoc, name: "assoc" }
