@@ -322,7 +322,8 @@ final class ClojureReader {
 	/**
 	 * One regex literal's source: like {@link #readString} for the standard escapes, but
 	 * any other backslashed character passes through verbatim for the pattern parser
-	 * (which names what it cannot lower) instead of naming the next character twice.
+	 * (which names what it cannot lower), while {@link #readString} refuses it like the
+	 * oracle.
 	 */
 	private LispVal readRegexSource() {
 		next();
@@ -388,15 +389,16 @@ final class ClojureReader {
 			if (this.pos >= this.source.length()) {
 				throw error("unterminated escape");
 			}
-			text.append(switch (next()) {
-				case 'n' -> '\n';
-				case 't' -> '\t';
-				case 'r' -> '\r';
-				case 'f' -> '\f';
-				case 'b' -> '\b';
-				case '\\' -> '\\';
-				case '"' -> '"';
-				case '\'' -> '\'';
+			char e = next();
+			switch (e) {
+				case 'n' -> text.append('\n');
+				case 't' -> text.append('\t');
+				case 'r' -> text.append('\r');
+				case 'f' -> text.append('\f');
+				case 'b' -> text.append('\b');
+				case '\\' -> text.append('\\');
+				case '"' -> text.append('"');
+				case '\'' -> text.append('\'');
 				case 'u' -> {
 					if (this.pos + 4 > this.source.length()) {
 						throw error("truncated \\u escape");
@@ -405,10 +407,12 @@ final class ClojureReader {
 					for (int i = 0; i < 4; i++) {
 						next();
 					}
-					yield Character.toChars(cp);
+					text.append(Character.toChars(cp));
 				}
-				default -> Character.toString(peek());
-			});
+				// like the oracle: an unknown escape signals instead of reading
+				// on (octal `\0`-`\7` stays a follow-up -- it signals here).
+				default -> throw error("Unsupported escape character: \\" + e);
+			}
 		}
 	}
 

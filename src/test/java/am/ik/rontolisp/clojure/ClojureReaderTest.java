@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.List;
 
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -91,6 +92,17 @@ class ClojureReaderTest {
 		List<LispVal> datums = read("\"a\" ; a comment\n[a, b]");
 		assertThat(datums).hasSize(2);
 		assertThat(datums.get(1).print()).isEqualTo("(|%vector| |a| |b|)");
+	}
+
+	@Test
+	void unknownStringEscapesSignalInsteadOfDuplicatingTheNextChar() {
+		assertThatThrownBy(() -> read("\"a\\q\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported escape character: \\q");
+		// with a char behind the escape: the old default arm read the next char
+		// twice, so `"a\qb"` came out as `"abb"` instead of signalling
+		assertThatThrownBy(() -> read("\"a\\qb\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unsupported escape character: \\q");
+		assertThat(read("\"a\\n\\t\\r\\f\\b\\\\\\\"\\u0041\"")).isEqualTo(List.of(new LispString("a\n\t\r\f\b\\\"A")));
 	}
 
 	@Test
