@@ -95,7 +95,35 @@ class ClojureLoweringTest {
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
 		assertThatThrownBy(() -> Clojure.read("(defn wcr [a] (recur 1 2))", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("wrong number of arguments passed to recur: expected 1, got 2");
-		assertThatThrownBy(() -> Clojure.read("(defn vr [a & r] (recur a r))", null))
+		assertThatThrownBy(() -> Clojure.read("(defn vr [a & r] (recur a))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("wrong number of arguments passed to recur: expected 2, got 1");
+	}
+
+	@Test
+	void recurToAVariadicClauseSplitsAWorker() {
+		// a used variadic defn clause splits: a worker taking the rest as an
+		// ordinary parameter (the recur call assigns exactly) plus the &rest head
+		assertThat(lowered("(defn vr [a & r] (recur a r))"))
+			.contains("(DEFUN |c%vr%*| (|c%a| |c%r|) (|c%vr%*| |c%a| |c%r|))")
+			.contains("(DEFUN |c%vr| (|c%a| &REST |c%r|) (|c%vr%*| |c%a| |c%r|))");
+		// an unused variadic keeps its single shape
+		assertThat(lowered("(defn vu [a & r] a)"))
+			.isEqualTo(FALSE_BINDING + "(DEFUN |c%vu| (|c%a| &REST |c%r|) |c%a|)");
+		// a named fn splits into a worker plus its &rest head inside labels
+		assertThat(lowered("(fn f [a & r] (recur a r))")).contains("(|c%f%*| (|c%a| |c%r|) (|c%f%*| |c%a| |c%r|))")
+			.contains("(|c%f| (|c%a| &REST |c%r|) (|c%f%*| |c%a| |c%r|))");
+		// a multi-arity defn's variadic clause recurs to its helper directly
+		assertThat(lowered("(defn vm ([a] a) ([a & r] (recur a r)))")).contains("(|c%vm%*| |c%a| |c%r|)");
+		// a multi-arity fn's variadic clause recurs to its worker directly
+		assertThat(lowered("((fn g ([a] a) ([a & r] (recur a r))) 1)")).contains("(|c%g%*| |c%a| |c%r|)");
+		// a letfn entry splits the same way
+		assertThat(lowered("(letfn [(w [a & r] (recur a r))] (w 1 2))")).contains("(|c%w%*| |c%a| |c%r|)");
+		// an anonymous fn wraps the split in labels only when a recur reaches it
+		assertThat(lowered("((fn [a & r] (recur a r)) 1)")).contains("LABELS").contains("%*");
+		assertThat(lowered("((fn [a & r] a) 1)")).doesNotContain("LABELS");
+		// a stored method lambda keeps the named refusal
+		assertThatThrownBy(() -> Clojure.read("(defmulti m :shape) (defmethod m :a [a & r] (recur a r))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("recur to a variadic function is not supported yet");
 	}

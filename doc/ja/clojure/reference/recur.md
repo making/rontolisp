@@ -6,9 +6,7 @@
 その本体へ跳び戻ります。値は跳ぶ前に、束縛の順に評価されます。多アリティの各節はそれぞれ
 対象なので、個数は囲みの節に一致しなければなりません。個数の不一致はエラーで、`loop`
 にも関数にも囲まれない `recur` もエラーです。末尾位置にある `recur` だけが展開され、
-それ以外はエラー、`recur` と対象のあいだに `try` がある場合もエラーです。可変長（`[x & xs]`）節へ届く `recur` は拒否
-されます。oracle は rest 引数に最後の引数そのものを束縛しますが、`&rest` 自己呼び出しに
-その綴りはありません。インタープリターの末尾呼び出しによりスタック定数です。
+それ以外はエラー、`recur` と対象のあいだに `try` がある場合もエラーです。可変長（`[x & xs]`）節へ届く `recur` はワーカーを経由して代入されます。その節は rest を通常引数に取るワーカーと、通常呼び出し用の `&rest` ヘッドに分割されるため、最後の `recur` 引数が rest そのものに束縛されます（oracle と同様。使われない可変長節は単一の形のままです）。インタープリターの末尾呼び出しによりスタック定数です。
 
 ```clojure
 (println (loop [i 0 acc 0]
@@ -17,4 +15,8 @@
 (defn greet-again [n]
   (if (zero? n) :done (recur (dec n))))
 (println (greet-again 3)) ; :done
+(defn walk [a & r]
+  (if (empty? r) a (recur (first r) (rest r))))
+(println (walk :start [1])) ; [1]
+(println (walk :start nil)) ; nil
 ```

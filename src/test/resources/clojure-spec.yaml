@@ -121,6 +121,43 @@ cases:
       (println (b17-bigsum 5000 0))
     expected: |
       12502500
+  - name: recur-to-variadic-clause-splits-a-worker
+    # Oracle clj 1.12.6.1673: the rest parameter binds the last recur argument
+    # itself, so (vr :start [1]) is [1] and (vr :start nil) is nil (a plain
+    # &rest self call would wrap the rest in a one-list and loop forever on the
+    # second probe). A used variadic clause splits into a worker (the rest as an
+    # ordinary parameter, so recur assigns exactly) plus the &rest head for
+    # normal calls; single-arity defn, named fn, multi-arity defn, letfn entry
+    # and anonymous fn alike.
+    source: |
+      (defn b27-vr [a & r] (if (empty? r) a (recur (first r) (rest r))))
+      (println (b27-vr :start [1]))
+      (println (b27-vr :start nil))
+      (println (b27-vr :only))
+      (println ((fn b27-g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start [1]))
+      (println ((fn b27-g [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start nil))
+      (defn b27-vm ([a] a) ([a & r] (if (empty? r) a (recur (first r) (rest r)))))
+      (println (b27-vm :x))
+      (println (b27-vm :start [1]))
+      (println (b27-vm :start nil))
+      (letfn [(b27-w [a & r] (if (empty? r) a (recur (first r) (rest r))))]
+        (println (b27-w :start [1]))
+        (println (b27-w :start nil)))
+      (println ((fn [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start [1]))
+      (println ((fn [a & r] (if (empty? r) a (recur (first r) (rest r)))) :start nil))
+    expected: |
+      [1]
+      nil
+      :only
+      [1]
+      nil
+      :x
+      [1]
+      nil
+      [1]
+      nil
+      [1]
+      nil
   - name: if-when-cond-do-and-or
     # Clojure rejects the odd trailing arm (cond requires an even number of forms);
     # here it is the default, per .kb/clojure-frontend.md.

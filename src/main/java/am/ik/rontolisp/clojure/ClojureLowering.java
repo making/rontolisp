@@ -441,9 +441,7 @@ public final class ClojureLowering {
 	 * an anonymous one only when a {@code recur} reached it.
 	 */
 	private static LispVal labelsSelfCall(String callName, LispVal lambda) {
-		LispVal paramsAndBody = ((LispCons) lambda).cdr();
-		LispVal binding = new LispCons(new LispSymbol(callName), paramsAndBody);
-		return list(sym("labels"), list(List.of(binding)), list(sym("function"), new LispSymbol(callName)));
+		return labelsWithHead(callName, List.of(), lambda);
 	}
 
 	/** The rest parameter of the {@code #(...)} being lowered, or null outside one. */
@@ -1282,6 +1280,97 @@ public final class ClojureLowering {
 
 	}
 
+	/**
+	 * One lambda lowered with its recur targets: the lambda itself, any extra worker
+	 * labels entries a used variadic clause needs, and whether any recur reached it. A
+	 * used variadic clause splits like the multi-{@code defn} helpers: the worker takes
+	 * the rest as an ordinary parameter (so a {@code recur} assigns exactly) while the
+	 * head keeps the {@code &rest} shape for normal calls (wrapping, like the oracle).
+	 */
+	private record SplitLambda(LispVal lambda, List<LispVal> workers, boolean used) {
+	}
+
+	/** The parameter shape of one clause datum, read without lowering anything. */
+	private record ParamShape(boolean variadic, int fixed) {
+	}
+
+	/**
+	 * A used variadic clause's worker: the entry or {@code defun} taking the rest as an
+	 * ordinary parameter. A lone {@code %} no mangled identifier spells, so workers stay
+	 * apart from user definitions, like the multi-{@code defn} helpers.
+	 */
+	private static String workerName(String callName) {
+		return callName + "%*";
+	}
+
+	/** The parameter shape of one parameter vector datum, without lowering anything. */
+	private static ParamShape paramShape(LispVal paramVector) {
+		List<LispVal> names;
+		try {
+			names = bindingItems(stripMeta(paramVector), "the parameter vector of");
+		}
+		catch (LispReadException ex) {
+			// malformed: the real pass reports the shape, so say nothing here
+			return new ParamShape(false, -1);
+		}
+		for (int i = 0; i < names.size(); i++) {
+			if (isSymbolNamed(stripMeta(names.get(i)), "&")) {
+				return new ParamShape(true, i);
+			}
+		}
+		return new ParamShape(false, names.size());
+	}
+
+	private static boolean isVariadicParams(LispVal paramVector) {
+		return paramShape(paramVector).variadic();
+	}
+
+	/**
+	 * One labels entry for a used variadic clause's worker: the rest as an ordinary
+	 * parameter around the clause's prologue and body, so a {@code recur} assigns
+	 * exactly.
+	 */
+	private static LispVal workerEntry(String worker, Clause clause) {
+		List<LispVal> params = new ArrayList<>(clause.params());
+		params.remove(AMPERSAND_REST);
+		return new LispCons(new LispSymbol(worker), new LispCons(list(params), cons(clause.wrapped(), List.of())));
+	}
+
+	/** A direct call forwarding each parameter (the rest as one value) to the worker. */
+	private static LispVal workerCall(String worker, Clause clause) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(worker));
+		for (LispVal param : clause.params()) {
+			if (!AMPERSAND_REST.equals(param)) {
+				call.add(param);
+			}
+		}
+		return list(call);
+	}
+
+	/**
+	 * One already-lowered lambda behind a {@code labels} head entry plus any worker
+	 * entries, answering the head: the shape a named {@code fn} always takes, an
+	 * anonymous one only when a {@code recur} reached it.
+	 */
+	private static LispVal labelsWithHead(String headName, List<LispVal> workers, LispVal lambda) {
+		LispVal paramsAndBody = ((LispCons) lambda).cdr();
+		List<LispVal> entries = new ArrayList<>(workers);
+		entries.add(new LispCons(new LispSymbol(headName), paramsAndBody));
+		return list(sym("labels"), list(entries), list(sym("function"), new LispSymbol(headName)));
+	}
+
+	/**
+	 * A used variadic target outside the split shapes (a stored method lambda): the
+	 * oracle binds the rest parameter to the last recur argument itself, which no
+	 * {@code &rest} self call spells, so it stays a named refusal.
+	 */
+	private LispReadException variadicRecurRefusal(RecurTarget target) {
+		LispReadException refusal = new LispReadException("recur to a variadic function is not supported yet");
+		LispVal use = target.firstUse;
+		return (use == null) ? refusal : positioned(refusal, use);
+	}
+
 	private List<LispVal> defuns(List<LispVal> items) {
 		int at = 2;
 		if (items.size() > at && items.get(at) instanceof LispString) {
@@ -1309,8 +1398,25 @@ public final class ClojureLowering {
 			forms = multiDefun(name, items.subList(at, items.size()), callName);
 		}
 		else {
-			Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), new RecurTarget(callName, true));
-			forms = new ArrayList<>(List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped())));
+			boolean variadic = isVariadicParams(items.get(at));
+			String worker = workerName(callName);
+			RecurTarget target = new RecurTarget(variadic ? worker : callName, true);
+			Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), target);
+			if (target.used() && clause.variadic()) {
+				// a used variadic target splits like the multi-defn helpers: a
+				// worker defun taking the rest as an ordinary parameter (the recur
+				// call assigns exactly) plus the &rest head for normal calls
+				// (wrapping, like the oracle); an unused variadic keeps its shape
+				List<LispVal> workerParams = new ArrayList<>(clause.params());
+				workerParams.remove(AMPERSAND_REST);
+				forms = new ArrayList<>(
+						List.of(list(sym("defun"), new LispSymbol(worker), list(workerParams), clause.wrapped()),
+								list(sym("defun"), idSym(name), list(clause.params()), workerCall(worker, clause))));
+			}
+			else {
+				forms = new ArrayList<>(
+						List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped())));
+			}
 		}
 		if (dynamic) {
 			// the value cell carries the function for calls and value carries
@@ -1333,19 +1439,38 @@ public final class ClojureLowering {
 	 * clause keeps its own parameters (a variadic clause its {@code &rest}); the dispatch
 	 * hands each its arguments positionally. A name no identifier mangles to (a single
 	 * {@code %} outside the {@code :} escape) keeps the helpers apart from user
-	 * definitions. A {@code recur} in a clause body is checked against that clause's
-	 * arity and calls the dispatch, which routes by count back to the same clause (every
-	 * fixed count names exactly one clause, so the routing is exact except where a
-	 * variadic clause listed before a fixed one also matches the count).
+	 * definitions. A {@code recur} in a fixed clause body is checked against that
+	 * clause's arity and calls the dispatch, which routes by count back to the same
+	 * clause (every fixed count names exactly one clause, so the routing is exact except
+	 * where a variadic clause listed before a fixed one also matches the count); a
+	 * {@code recur} in a used variadic clause calls its helper directly, which takes the
+	 * rest as an ordinary parameter, so the call assigns exactly.
 	 */
 	private List<LispVal> multiDefun(String name, List<LispVal> clauses, String callName) {
-		List<Clause> parsed = arityClauses(clauses, "defn", i -> new RecurTarget(callName, true));
+		// the shapes first, without lowering: a used variadic clause recurs to its
+		// helper (which takes the rest as an ordinary parameter, so the recur call
+		// assigns exactly) rather than the dispatch (whose NTHCDR rest would wrap
+		// it in a list); every fixed clause still recurs through the dispatch
+		List<ParamShape> shapes = new ArrayList<>();
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = items(clauseDatum);
+			shapes.add(parts == null || parts.isEmpty() ? new ParamShape(false, -1) : paramShape(parts.get(0)));
+		}
+		List<String> helperNames = new ArrayList<>();
+		List<RecurTarget> targets = new ArrayList<>();
+		for (ParamShape shape : shapes) {
+			String helperName = PREFIX + name + "%" + (shape.variadic() ? "*" : shape.fixed());
+			helperNames.add(helperName);
+			targets.add(new RecurTarget(shape.variadic() ? helperName : callName, true));
+		}
+		List<Clause> parsed = arityClauses(clauses, "defn", targets::get);
 		List<LispVal> forms = new ArrayList<>();
 		LispVal args = freshTemp();
 		LispVal count = freshTemp();
 		List<LispVal> helpers = new ArrayList<>();
-		for (Clause clause : parsed) {
-			LispSymbol helper = new LispSymbol(PREFIX + name + "%" + (clause.variadic() ? "*" : clause.fixed()));
+		for (int i = 0; i < parsed.size(); i++) {
+			Clause clause = parsed.get(i);
+			LispSymbol helper = new LispSymbol(helperNames.get(i));
 			helpers.add(helper);
 			// the dispatch hands a variadic clause its rest pre-built as a list,
 			// so the helper takes it as an ordinary parameter, not &rest
@@ -1475,14 +1600,6 @@ public final class ClojureLowering {
 			finally {
 				this.recurTargets.pop();
 			}
-			if (target.used() && target.variadic()) {
-				// the oracle binds the rest parameter to the last recur argument
-				// itself; a plain &rest self call would wrap it in a list, so a
-				// recur that reaches a variadic clause is refused by name
-				LispReadException refusal = new LispReadException("recur to a variadic function is not supported yet");
-				LispVal use = target.firstUse;
-				throw (use == null) ? refusal : positioned(refusal, use);
-			}
 		}
 		return new Clause(List.copyOf(params), List.copyOf(prologue), body, variadic, fixed);
 	}
@@ -1522,16 +1639,11 @@ public final class ClojureLowering {
 		isTrue(items.size() > at, "fn needs a parameter vector and a body");
 		if (self == null) {
 			String fresh = freshRecurName();
-			List<RecurTarget> seen = new ArrayList<>();
-			LispVal inner = singleOrMultiFn(items, at, "fn", i -> {
-				RecurTarget target = new RecurTarget(fresh, true);
-				seen.add(target);
-				return target;
-			});
-			if (seen.stream().noneMatch(RecurTarget::used)) {
-				return inner;
+			SplitLambda split = singleOrMultiFn(items, at, "fn", fresh);
+			if (!split.used()) {
+				return split.lambda();
 			}
-			return labelsSelfCall(fresh, inner);
+			return labelsWithHead(fresh, split.workers(), split.lambda());
 		}
 		Map<String, Kind> scope = new HashMap<>();
 		scope.put(self, Kind.FUNCTION);
@@ -1539,35 +1651,69 @@ public final class ClojureLowering {
 		String callName = idSym(name).name();
 		int from = at;
 		return inScope(scope, () -> {
-			LispVal inner = singleOrMultiFn(items, from, name, i -> new RecurTarget(callName, true));
+			SplitLambda split = singleOrMultiFn(items, from, name, callName);
 			// a labels self-binding: calls lower directly and the labels
 			// expansion rewrites them to the local; the value is the local
-			return labelsSelfCall(callName, inner);
+			return labelsWithHead(callName, split.workers(), split.lambda());
 		});
 	}
 
-	private LispVal singleOrMultiFn(List<LispVal> items, int at, String owner,
-			java.util.function.IntFunction<RecurTarget> targets) {
+	private SplitLambda singleOrMultiFn(List<LispVal> items, int at, String owner, String headName) {
+		String worker = workerName(headName);
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			return multiFn(items.subList(at, items.size()), owner, targets);
+			return multiFn(items.subList(at, items.size()), owner, headName, worker);
 		}
-		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), targets.apply(0));
-		return list(sym("lambda"), list(clause.params()), clause.wrapped());
+		boolean variadic = isVariadicParams(items.get(at));
+		RecurTarget target = new RecurTarget(variadic ? worker : headName, true);
+		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), target);
+		if (target.used() && clause.variadic()) {
+			// a used variadic target splits: the worker takes the rest as an
+			// ordinary parameter (the recur call assigns exactly) while the
+			// &rest head answers normal calls (wrapping, like the oracle)
+			LispVal head = list(sym("lambda"), list(clause.params()), workerCall(worker, clause));
+			return new SplitLambda(head, List.of(workerEntry(worker, clause)), true);
+		}
+		return new SplitLambda(list(sym("lambda"), list(clause.params()), clause.wrapped()), List.of(), target.used());
 	}
 
 	/**
 	 * A multi-arity {@code fn}: one {@code lambda} over {@code &rest} dispatching per
 	 * arity through {@code let*} argument bindings -- no local functions, so a clause
-	 * body closes over the outer scope like any lambda body. A {@code recur} in a clause
-	 * body is checked against that clause's arity and calls the dispatch, which routes by
-	 * count back to the same clause (same routing caveat as a multi-arity {@code defn}).
+	 * body closes over the outer scope like any lambda body. A {@code recur} in a fixed
+	 * clause body is checked against that clause's arity and calls the dispatch, which
+	 * routes by count back to the same clause (same routing caveat as a multi-arity
+	 * {@code defn}); a {@code recur} in a used variadic clause calls the worker instead,
+	 * which takes the rest as an ordinary parameter.
 	 */
-	private LispVal multiFn(List<LispVal> clauses, String owner, java.util.function.IntFunction<RecurTarget> targets) {
-		List<Clause> parsed = arityClauses(clauses, owner, targets);
+	private SplitLambda multiFn(List<LispVal> clauses, String owner, String headName, String worker) {
+		// the shapes first, without lowering: a used variadic clause recurs to its
+		// worker (which takes the rest as an ordinary parameter) while the dispatch
+		// arm hands it the rest pre-built; every fixed clause still recurs through
+		// the dispatch (the same routing caveat as a multi-arity defn)
+		List<RecurTarget> made = new ArrayList<>();
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = items(clauseDatum);
+			boolean variadic = parts != null && !parts.isEmpty() && isVariadicParams(parts.get(0));
+			made.add(new RecurTarget(variadic ? worker : headName, true));
+		}
+		List<Clause> parsed = arityClauses(clauses, owner, made::get);
 		LispVal args = freshTemp();
 		LispVal count = freshTemp();
 		List<LispVal> arms = new ArrayList<>();
-		for (Clause clause : parsed) {
+		int split = -1;
+		for (int i = 0; i < parsed.size(); i++) {
+			Clause clause = parsed.get(i);
+			if (clause.variadic() && made.get(i).used()) {
+				List<LispVal> call = new ArrayList<>();
+				call.add(new LispSymbol(worker));
+				for (int p = 0; p < clause.fixed(); p++) {
+					call.add(list(sym("NTH"), new LispInteger(p), args));
+				}
+				call.add(list(sym("NTHCDR"), new LispInteger(clause.fixed()), args));
+				arms.add(list(list(sym(">="), count, new LispInteger(clause.fixed())), list(call)));
+				split = i;
+				continue;
+			}
 			List<LispVal> bindings = new ArrayList<>();
 			int position = 0;
 			boolean rest = false;
@@ -1586,8 +1732,13 @@ public final class ClojureLowering {
 		}
 		arms.add(list(TRUE_CONST,
 				list(sym("error"), LispString.literal("wrong number of arguments passed to: " + owner))));
-		return list(sym("lambda"), list(List.of(AMPERSAND_REST, args)),
+		LispVal lambda = list(sym("lambda"), list(List.of(AMPERSAND_REST, args)),
 				list(sym("let"), list(List.of(list(count, list(sym("length"), args)))), cons(sym("cond"), arms)));
+		boolean used = made.stream().anyMatch(RecurTarget::used);
+		if (split >= 0) {
+			return new SplitLambda(lambda, List.of(workerEntry(worker, parsed.get(split))), used);
+		}
+		return new SplitLambda(lambda, List.of(), used);
 	}
 
 	private LispVal let(List<LispVal> items) {
@@ -1793,8 +1944,12 @@ public final class ClojureLowering {
 			for (List<LispVal> parts : fnspecs) {
 				String fname = plainName(parts.get(0), "letfn");
 				String callName = idSym(fname).name();
-				LispVal inner = singleOrMultiFn(parts, 1, fname, i -> new RecurTarget(callName, true));
-				bindings.put(callName, new LispCons(new LispSymbol(callName), ((LispCons) inner).cdr()));
+				SplitLambda split = singleOrMultiFn(parts, 1, fname, callName);
+				for (LispVal worker : split.workers()) {
+					LispVal key = ((LispCons) worker).car();
+					bindings.put(((LispSymbol) key).name(), worker);
+				}
+				bindings.put(callName, new LispCons(new LispSymbol(callName), ((LispCons) split.lambda()).cdr()));
 			}
 			return list(sym("labels"), list(new ArrayList<>(bindings.values())), body(items, 2));
 		});
@@ -8733,6 +8888,9 @@ public final class ClojureLowering {
 		String fresh = freshRecurName();
 		RecurTarget target = new RecurTarget(fresh, true);
 		Clause clause = clause(params, bodyForms, target);
+		if (target.used() && clause.variadic()) {
+			throw variadicRecurRefusal(target);
+		}
 		LispVal lambda = list(sym("lambda"), list(clause.params()), clause.wrapped());
 		if (!target.used()) {
 			return lambda;
@@ -9165,6 +9323,9 @@ public final class ClojureLowering {
 				Clause clause = clause(impl.params(), impl.body(), target);
 				LispVal inner = list(sym("lambda"), list(clause.params()), clause.wrapped());
 				if (fields.isEmpty()) {
+					if (target.used() && clause.variadic()) {
+						throw variadicRecurRefusal(target);
+					}
 					return target.used() ? labelsSelfCall(fresh, inner) : inner;
 				}
 				LispVal self = clause.params().isEmpty() ? NIL_CONST : clause.params().get(0);
@@ -9175,6 +9336,9 @@ public final class ClojureLowering {
 				}
 				LispVal withFields = list(sym("lambda"), list(clause.params()),
 						list(sym("let*"), list(binds), clause.wrapped()));
+				if (target.used() && clause.variadic()) {
+					throw variadicRecurRefusal(target);
+				}
 				return target.used() ? labelsSelfCall(fresh, withFields) : withFields;
 			});
 		}

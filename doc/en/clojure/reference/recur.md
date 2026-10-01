@@ -8,9 +8,11 @@ jump, in the bindings' order. Each multi-arity clause is its own target, so the 
 must match the enclosing clause; a wrong count is an error, and `recur` outside any
 loop or function is one too. Only a `recur` in tail position lowers -- anywhere else
 is an error, and a `try` between the `recur` and its target is one too. A `recur`
-reaching a variadic (`[x & xs]`) clause is
-refused: the oracle binds the rest parameter to the last argument itself, which no
-`&rest` self call spells. Constant-stack by the interpreter's tail calls.
+reaching a variadic (`[x & xs]`) clause assigns through a worker: the clause splits
+into a worker taking the rest as an ordinary parameter plus the `&rest` head for
+normal calls, so the last `recur` argument binds the rest itself, like the oracle
+(an unused variadic keeps its single shape). Constant-stack by the interpreter's
+tail calls.
 
 ```clojure
 (println (loop [i 0 acc 0]
@@ -19,4 +21,8 @@ refused: the oracle binds the rest parameter to the last argument itself, which 
 (defn greet-again [n]
   (if (zero? n) :done (recur (dec n))))
 (println (greet-again 3)) ; :done
+(defn walk [a & r]
+  (if (empty? r) a (recur (first r) (rest r))))
+(println (walk :start [1])) ; [1]
+(println (walk :start nil)) ; nil
 ```
