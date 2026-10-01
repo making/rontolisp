@@ -83,6 +83,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `definterface` / `gen-class` / `gen-interface` | refused by name (`protocols are not supported yet: <name>`) | stay refused: no interface generation on any backend |
 | `comment` | nothing (`nil`) | |
 | characters (`\a`, lowercase names, `\uXXXX`, `\oNNN`) | `LispChar`, self-evaluating | exactly the oracle's spellings, case-sensitively; anything else is the oracle's `Unsupported character` refusal |
+| strings (`"..."`) | `LispString`, self-evaluating | the standard escapes plus `\uXXXX`, like the oracle; anything else is the oracle's `Unsupported escape character` refusal (b41: the old default arm duplicated the next char); octal `\0`-`\7` still signals -- a follow-up |
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
 | regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle |
