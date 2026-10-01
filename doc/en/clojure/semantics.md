@@ -121,8 +121,11 @@ one level through the seq view: pass a `take`n prefix first.
 ## State and dynamic scope
 
 Metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints, `with-meta`)
-parses and drops everywhere: it never affects dispatch. Only `binding` reads one
-piece of it. `defn-` is a private-by-convention `defn`; `def` takes a docstring
+parses and drops everywhere: it never affects dispatch, except that `^:dynamic`
+on a `def`/`defonce`/`defn` name marks the var rebindable -- a `^:dynamic`
+`defn` keeps its direct definition but its calls go through the var, so
+`binding` reaches them. Only `binding` rebinds through it. `defn-` is a
+private-by-convention `defn`; `def` takes a docstring
 and an attr map like `defn`; `defonce` is `def` unless bound, so a reload keeps
 the root.
 

@@ -1933,6 +1933,32 @@ cases:
       (:quiet :a)
       1
       :a
+  - name: binding-rebinds-dynamic-defn
+    # The concurrency.clj demo-memoize shape: a ^:dynamic defn holds its function
+    # in the value cell (the defun stays for recur and the arity helpers), so
+    # binding rebinds it with dynamic extent -- a callee sees the binding, the
+    # root returns after -- for plain values and memoized ones alike, every arity.
+    # A defn without the marker stays refused (ClojureLoweringTest pins the
+    # refusal: the oracle reports it at run time, here it is a named refusal).
+    source: |
+      (defn ^:dynamic b25-slow-double [n] (* n 2))
+      (defn b25-calls-slow-double [] (b25-slow-double 21))
+      (println (b25-calls-slow-double))
+      (println (binding [b25-slow-double (memoize b25-slow-double)] (b25-calls-slow-double)))
+      (println (b25-calls-slow-double))
+      (println (binding [b25-slow-double (fn [n] 7)] (b25-slow-double 21)))
+      (println (binding [b25-slow-double (memoize b25-slow-double)] [(b25-slow-double 21) (b25-slow-double 21)]))
+      (defn ^:dynamic b25-madd ([x] (b25-madd x 1)) ([x y] (+ x y)))
+      (println (b25-madd 5))
+      (println (binding [b25-madd (memoize b25-madd)] (b25-madd 5 6)))
+    expected: |
+      42
+      42
+      42
+      7
+      [42 42]
+      6
+      11
   - name: agents-send-synchronously
     # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
     # and the estimate combines deterministically. Sends apply at once (there is

@@ -94,7 +94,8 @@
   `await` と `shutdown-agents` は `nil` を答えます。`*agent*` は送信実行中にだけ
   束縛され（外側は `nil`。オラクルでは unbound です）。
 - `binding` が再束縛できるのは `^:dynamic` な var だけです（それ以外はオラクルの
-  非 dynamic エラー同様に拒否）。それ以外のメタデータは解析して捨てられ、
+  非 dynamic エラー同様に拒否）。`^:dynamic` な `defn` も再束縛できます（定義は
+  直接のまま、呼び出しは var 経由になります）。それ以外のメタデータは解析して捨てられ、
   ディスパッチに影響しません。
 - `with-open` は `close` メソッド越しに閉じるため、バックエンドの届く closeable
   だけが動きます（Java の closeable は JVM が要ります）。`time` は値を答えますが、

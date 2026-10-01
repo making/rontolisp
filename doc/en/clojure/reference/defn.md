@@ -12,6 +12,12 @@ lookup; a head-position use of a *value* binding (a `def`, a parameter) is the f
 instead. A `recur` in the body jumps back to the enclosing clause with new argument
 values.
 
+A `^:dynamic` name holds its function in the var instead: the definition keeps its
+direct call shape (so `recur` still jumps straight to it), but calls go through the
+var's value, so `binding` rebinds them with dynamic extent (see
+[binding](binding.md)). Any other `defn` without the marker stays refused by
+`binding`, like the oracle's non-dynamic error.
+
 A definition may use a name defined below it: the file is pre-scanned for every top-level
 `def`/`defn` (and `declare`) name. Inside a body, `defn` works only in statement
 position, and a multi-arity one only at the top level.

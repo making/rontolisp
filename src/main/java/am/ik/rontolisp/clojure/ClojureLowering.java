@@ -575,7 +575,10 @@ public final class ClojureLowering {
 			this.globals.put(plainName(items.get(1), "def"), Kind.VARIABLE);
 		}
 		else if (isSymbolNamed(items.get(0), "defn") || isSymbolNamed(items.get(0), "defn-")) {
-			this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
+			// a ^:dynamic defn holds its function in the value cell (like a def),
+			// so even a forward call routes through it and sees a binding
+			this.globals.put(plainName(items.get(1), "defn"),
+					nameIsDynamic(items.get(1)) ? Kind.VARIABLE : Kind.FUNCTION);
 		}
 		else if (isSymbolNamed(items.get(0), "defonce")) {
 			this.globals.put(plainName(items.get(1), "defonce"), Kind.VARIABLE);
@@ -743,16 +746,23 @@ public final class ClojureLowering {
 		}
 		if (isSymbolNamed(head, "defn")) {
 			// in a body: a single defun, like ever; several arities cannot splice
-			// into expression position
+			// into expression position (a dynamic single-arity one splices its
+			// defun plus its defparameter behind a progn instead)
 			List<LispVal> forms = defuns(items);
-			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
-			return forms.get(0);
+			if (forms.size() == 1) {
+				return forms.get(0);
+			}
+			isTrue(forms.size() == 2, "a multi-arity defn is only allowed at the top level");
+			return cons(sym("progn"), forms);
 		}
 		if (isSymbolNamed(head, "defn-")) {
 			// private by convention only: metadata never affects dispatch
 			List<LispVal> forms = defuns(items);
-			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
-			return forms.get(0);
+			if (forms.size() == 1) {
+				return forms.get(0);
+			}
+			isTrue(forms.size() == 2, "a multi-arity defn is only allowed at the top level");
+			return cons(sym("progn"), forms);
 		}
 		if (isSymbolNamed(head, "defmacro")) {
 			// in a body: a single progn, like ever; the expander registers when
@@ -1139,14 +1149,32 @@ public final class ClojureLowering {
 		isTrue(items.size() > at + 1 || items.size() == at + 1 && items.get(at) instanceof LispCons,
 				"defn needs a parameter vector and a body");
 		String name = plainName(items.get(1), "defn");
-		this.globals.put(name, Kind.FUNCTION);
+		boolean dynamic = nameIsDynamic(items.get(1));
+		this.globals.put(name, dynamic ? Kind.VARIABLE : Kind.FUNCTION);
 		this.macros.remove(name); // a definition wins over the macro it shadows
-		String callName = idSym(name).name();
-		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
-			return multiDefun(name, items.subList(at, items.size()), callName);
+		if (dynamic) {
+			// a dynamic var is rebindable: the value cell holds the function
+			// (proclaimed special, so binding rebinds it with dynamic extent)
+			// while the function cell keeps the definition
+			this.dynamicVars.add(name);
+			this.globalDirectFuns.add(name);
 		}
-		Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), new RecurTarget(callName, true));
-		return List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped()));
+		String callName = idSym(name).name();
+		List<LispVal> forms;
+		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+			forms = multiDefun(name, items.subList(at, items.size()), callName);
+		}
+		else {
+			Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), new RecurTarget(callName, true));
+			forms = new ArrayList<>(List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped())));
+		}
+		if (dynamic) {
+			// the value cell carries the function for calls and value carries
+			// (a funcall of it, like a def'd function); recur and the
+			// arity-dispatch helpers stay direct calls to the function cell
+			forms.add(list(sym("defparameter"), idSym(name), list(sym("function"), idSym(name))));
+		}
+		return forms;
 	}
 
 	/** Whether the datum is a `[...]` vector (its marker head), not an arity clause. */
