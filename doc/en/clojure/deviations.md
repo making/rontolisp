@@ -34,9 +34,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   functions here).
 - `try` catch clauses are catch-all in order: the first handles any condition, where the
   oracle dispatches by class; the catch variable binds the Common Lisp condition.
-- Multimethod dispatch values compare like `equal` table keys (vectors by identity);
+- Multimethod dispatch values compare like `equal` table keys (vectors by identity --
+  literal vector pairs still dispatch element-wise through the hierarchy search);
   dispatch through a hierarchy prefers the strictly most specific method, then
-  `prefer-method` choices. Protocol dispatch reads no hierarchy (exact tag match
+  `prefer-method` choices. A `defmethod` over a host class stores under the keyword
+  `class` answers for it, merging every numeric spelling into `:number` (where the
+  oracle tells `Long` from `Double`); a nil dispatch value normalizes to the `:nil`
+  keyword, so no table ever keys on nil (a dispatch value that literally is `:nil`
+  answers it too, where the oracle tells them apart);
+  an `Object` method catches past the search but ahead of the default.
+  Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.
 - A record prints as its wrapper list (`(:C%RECORD :R (:a) {:a 7})`, where the

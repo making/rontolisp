@@ -10,4 +10,6 @@
 (println (isa? :circle :shape)) ; true
 (def h (derive (make-hierarchy) :p :q))
 (println (isa? h :p :q)) ; true
+(derive ::savings ::account)
+(println (isa? ::savings ::account)) ; true
 ```

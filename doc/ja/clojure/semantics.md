@@ -194,7 +194,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |
 | 可変長のみの静的メンバー値 | `... is variadic and has no value form` | `java:static` へ届く rest 展開がない |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
-| `::` 自動解決キーワード | 名前で | 解決先の名前空間がない |
+| 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | 3引数 `into`（トランスデューサー） | `transducers are not supported yet: into` | トランスデューサー実装なし。2引数は conj |
 | `file-seq`、`clojure.java.io`（`reader` 以外） | `file-seq` / `unknown name: clojure.java.io/...` | ディレクトリ走査なし。解決するのは `reader` のみで、ファイルストリームのリーダーを開く |

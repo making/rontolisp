@@ -52,7 +52,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `dotimes [i n]` | the core `dotimes` over `(truncate n)`, answering `nil` | the count runs through `truncate` first (the oracle's `intCast`: `2.5` counts `0 1`, a non-number signals there); exactly one plain name and count, else a named refusal |
 | `for` | nested `dolist` loops accumulating in reverse into a strict list | `:when`/`:while`/`:let` per level like `doseq` (an inner `:while` ends only its level, measured on the oracle); empty is `nil` (the `rest`/`take` divergence, not `()`); unknown keywords the oracle's `Invalid ... keyword` refusal; an empty vector refused, like the oracle |
 | `dorun`/`doall` | the strict companions: the collection (and the optional count) evaluated, answering `nil`/the collection itself, each a function value too | seqs are already strict, so realizing is evaluating; `doall` never coerces (a vector stays a vector) |
-| `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value and a per-multimethod prefers table in three globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included); an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate falls back to the default dispatch value (`:default` without an option) or signals `No method in ...` |
+| `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value, a per-multimethod prefers table and an `Object`-method slot in four globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table; `defmethod` stores a parameter lambda (destructuring included) under the dispatch value lowered by `dispatchKeyForm` -- a class spelling (`String`, `Number`, ..., dotted/`java.lang`/imported names, known record/deftype names) onto the keyword the `class` dispatcher produces for it, `nil` onto the `:nil` keyword (the dispatcher normalizes nil to it first, so no table ever keys on nil -- while a dispatch value that literally is `:nil` answers it too, where the oracle tells them apart), `Object` under the `:object` keyword plus the catch-all slot, `::`-keywords resolved like anywhere else, literal vectors element by element; an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate tries the `Object` slot past the search but ahead of the default dispatch value (`:default` without an option, an arbitrary keyword with the `:default` option -- the corpus's `:everything-else`, stored per-multimethod like `:default` today) or signals `No method in ...` |
 | `derive`/`underive`/`isa?`/`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` | the hierarchy runtime over the shared table runtime | a hierarchy value is a map of `:parents`/`:ancestors`/`:descendants` tables (children to wrapped sets); the global value lives in `C%H-GLOBAL`, rebound by two-argument `derive`/`underive` (answering `nil`), while three-argument forms answer an updated value (`make-hierarchy` an empty one); `isa?` is `equal`, element-wise vector derivation, or ancestor membership (two- or three-argument), answering `T`-or-false; the three reads answer (possibly empty) sets; `prefer-method` records into the multimethod's prefers table and answers the multimethod; the runtime (set helpers, transitive rebuild, dispatch search) is spliced once behind the false binding when used |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through its Clojure-notation rendering (`rontolisp::%clojure-str-of`), so strings keep their message |
 | `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through its Clojure-notation rendering); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
@@ -117,7 +117,7 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `ffirst`/`nfirst` | `car`/`cdr` of the seq of the `car` of the seq view | each level seqs (a vector head coerces before its own head is read); of empty, nil; as values one-argument lambdas |
 | `boolean` | the null-or-false test answering `T`-or-false | only nil and the false object are falsey (0, empty strings and empty collections are truthy); as a value a one-argument lambda |
 | `char` | `rontolisp::%clojure-char`: itself for a character, `code-char` of the truncated number | anything else signals, like the oracle; as a value a one-argument lambda |
-| `name`/`namespace` | `rontolisp::%clojure-name`/`-namespace` over the spelling (a keyword's verbatim, a symbol's demangled), split at the first `/` | `name` answers the part past the slash (a string answers itself); `namespace` the part before it (nil when absent, strings and anything else signal); `::` stays refused at the reader (b19); as values one-argument lambdas |
+| `name`/`namespace` | `rontolisp::%clojure-name`/`-namespace` over the spelling (a keyword's verbatim, a symbol's demangled), split at the first `/` | `name` answers the part past the slash (a string answers itself); `namespace` the part before it (nil when absent, strings and anything else signal); as values one-argument lambdas |
 | `keyword`/`symbol` | `rontolisp::%clojure-keyword-1/-2` / `%clojure-symbol-1/-2` | one argument: a keyword itself, a symbol's demangled spelling, a string verbatim (`a/b` stays whole) to a keyword (nil for anything else), or the spelled symbol behind the mangled prefix (else a signal); two arguments: the slash-joined spelling (a nil namespace drops for keywords, a nil name signals; a nil namespace is the one-argument shape for symbols, nil spelling `null`); as values rest-dispatch lambdas |
 | `assert` | `if` on null-or-false around `error` | answers nil when truthy, signals otherwise; the message (an `Assert failed:`-prefixed `str`) sits in the else branch, so it evaluates only on failure; no function value, like `and`/`or` |
 | `rand`/`rand-int` | `(random 1.0)` scaled (`rand`), truncated (`rand-int`) | one draw from the program-owned generator per call, never a host call per draw (`.kb/random.md`); no domain check (a negative bound answers negative, 0 answers 0), like the oracle's multiply-then-int; as values a rest lambda (`rand`) / a one-argument lambda (`rand-int`) |
@@ -160,8 +160,9 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | a keyword `:foo` | the list `(:C%KEYWORD "foo")` holding its spelling verbatim (case-preserved) | data, compared by `equal` through the cons shape; `:a` and `:A` stay apart; every print arm spells it with its colon, nested or not |
 | a keyword in call position `(:k m)` / `(:k m dflt)` | the same table-aware read `get` lowers to | the idiomatic map lookup, over b02's map runtime (sets answer their member, vectors/strings their element) |
 | a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a one-argument lambda over the same read | `(map :k coll)` reads the key out of each member |
-| a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole; `::`-auto-resolve is refused by name (there is no namespace to resolve against) |
-| a bare `(ns name)` | nothing | a namespace declaration defines nothing; clauses wire aliases (see the `ns` row above) |
+| a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole |
+| `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil -- the namespace stays flat, every definition still global); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
+| a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
 | transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
@@ -240,8 +241,16 @@ an earlier one with the same name (decided 2026-10-01, b17) |
   of the b08 rejection (a wrapper over the shared table runtime, not a per-backend
   value model -- the decision spike is `.todo/artefacts/b13-protocols/spike.md`). Catch clauses are catch-all in order (the first handles any condition, where the
   oracle dispatches by class); multimethod dispatch values compare like `equal`
-  table keys (vectors by identity), widened by the hierarchy search (most specific
-  wins, then `prefer-method`, like the oracle); a hierarchy value prints as its
+  table keys (vectors by identity -- literal vector pairs still dispatch element-wise
+  through the hierarchy search), widened by the hierarchy search (most specific
+  wins, then `prefer-method`, like the oracle); a `defmethod` over a host class
+  stores under the keyword `class` answers for it, merging every numeric spelling
+  (`Long`, `Double`, ...) into `:number` where the oracle tells them apart;
+  a nil dispatch value normalizes to the `:nil` keyword first (no table ever keys on
+  nil -- while a dispatch value that literally is `:nil` answers it too, where the
+  oracle tells them apart); an `Object` method catches past the search but
+  ahead of the default, like the oracle's (which always beats `:default` there --
+  measured on the oracle 2026-10-01); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
   prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
   functions as `#<procedure>`, a lazy seq as `#<LazySeq>` (a lazy tail truncates with
@@ -340,8 +349,10 @@ each pinned in `clojure-spec.yaml` (run on all four backends) or, for the refusa
 in `ClojureLoweringTest`. Keywords lower to the case-preserving `(:C%KEYWORD
 spelling)` wrapper (b01): printing with the colon through `println`/`print`/`str`,
 keyword-as-function call and function value over the table-aware read, `:a/b` as
-opaque data and the `::` refusal -- each pinned in `clojure-spec.yaml` (run on all
-four backends) or, for the refusals, in `ClojureLoweringTest`. Seqs over every
+opaque data and `::` resolved against the file `ns` name (`::alias/kw` through the
+alias) -- each pinned in `clojure-spec.yaml`
+(`auto-resolved-keywords-use-the-file-ns`, run on all four backends) or, for the
+refusals (a bare `:`, an unknown alias), in `ClojureLoweringTest`. Seqs over every
 collection lower to list views (b03 strict, b11 lazy-aware): `first`/`rest`/`next`/
 `seq`/`cons`/`concat`/`map`/`filter`/`reduce`/`apply`/`take`/`drop`/finite `range`,
 each pinned in `clojure-spec.yaml` (run on all four backends); laziness pins
@@ -367,6 +378,18 @@ literals lower the same way (b05): `try`/`catch`/`finally`/`throw`,
 decimals -- each pinned in `clojure-spec.yaml` (run on all four backends) or,
 for the refusals (regex, hierarchies, protocols, `ex-info`, `set!`, backquote,
 `var`, metadata, unknown namespaces), in `ClojureReaderTest`/`ClojureLoweringTest`.
+Host-class dispatch and `::`-auto-resolve lower the same way (b19): `defmethod`
+class spellings onto the keyword `class` answers (`String`, every numeric spelling
+merged into `:number`, dotted/`java.lang`/imported names, known record/deftype tags,
+`nil` normalized to `:nil` at dispatch, `Object` past the search but ahead of the default), literal
+vectors element by element, `::kw` against the file `ns` name (`::alias/kw` through
+the alias, `*ns*` tracked across session buffers) -- each pinned in
+`clojure-spec.yaml` (`auto-resolved-keywords-use-the-file-ns`,
+`class-dispatch-maps-host-spellings-to-kind-keywords`, run on all four backends;
+the corpus slices are the `multimethods.clj` interest/service-charge decisions with
+`derive ::savings ::account` + `isa?`, and the `pi.clj` `run-simulation` 3-method
+shape) or, for the lowered shapes and the refusals (a bare `:`, an unknown alias, a
+non-core class), in `ClojureLoweringTest`/`ClojureSessionTest`.
 Macros lower the same way (b12): `defmacro` (multi-arity, `&` rest, docstring and
 attr-map skip, `declare` pre-scan, whole-file pre-scan, session-aware) as one expander
 lambda over the call's argument list plus a runtime table entry, call sites expanded

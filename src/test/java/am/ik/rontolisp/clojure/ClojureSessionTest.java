@@ -38,6 +38,25 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferSeesTheNsAnEarlierOneDeclared() {
+		ClojureSession session = new ClojureSession();
+		session.read("(ns b19sess)");
+		List<String> auto = session.read("::checking")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(auto).anyMatch(form -> form.contains("\"b19sess/checking\""));
+		session.read("(in-ns 'other)");
+		List<String> moved = session.read("::checking")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(moved).anyMatch(form -> form.contains("\"other/checking\""));
+	}
+
+	@Test
 	void isCompleteCountsBracketsStringsAndComments() {
 		assertThat(ClojureSession.isComplete("(defn f [x] x)")).isTrue();
 		assertThat(ClojureSession.isComplete("(defn f [x]")).isFalse();

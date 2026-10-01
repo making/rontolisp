@@ -198,6 +198,14 @@ public final class ClojureLowering {
 	private final Map<String, String> classNames = new HashMap<>();
 
 	/**
+	 * The namespace {@code ::}-keywords resolve against: the file's {@code ns} name
+	 * (the seam reads the whole file, so the form order decides), or the session's
+	 * {@code *ns*} (an {@code ns} or {@code in-ns} buffer switches it for the buffers
+	 * below it). The oracle starts a REPL in {@code user}, so that is the default.
+	 */
+	private String currentNs = "user";
+
+	/**
 	 * What {@code (:refer-clojure :only [...])} restricts the core to, or null without
 	 * one; {@code (:refer-clojure :exclude [...])} removes instead. A name outside the
 	 * set is not a builtin, so a user definition of it wins.
@@ -968,7 +976,7 @@ public final class ClojureLowering {
 			return NIL_CONST;
 		}
 		if (isSymbolNamed(head, "in-ns")) {
-			return NIL_CONST; // the namespace is flat: every definition is global
+			return inNsOf(items);
 		}
 		if (isSymbolNamed(head, "set!")) {
 			throw new LispReadException("set! is not supported yet: mutable fields need a design");
@@ -2814,16 +2822,41 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * Refuses what a keyword spelling cannot be: {@code ::}-auto-resolve has no namespace
-	 * to resolve against (an {@code ns} form defines nothing), and a bare {@code :} names
-	 * nothing. A namespaced {@code :a/b} is opaque data otherwise -- its spelling prints
-	 * and compares whole, like the oracle's.
+	 * A keyword's spelling without its colon: {@code ::kw} resolves against the
+	 * current namespace, {@code ::alias/kw} against the alias (or the namespace's own
+	 * name, or a known namespace without any require), and anything else stays opaque
+	 * data, printing and comparing whole like the oracle's. A bare {@code :} names
+	 * nothing, and an unknown alias or a second slash is the oracle's
+	 * {@code Invalid token} refusal.
 	 */
-	private static void validateKeyword(String name) {
-		if (name.startsWith("::")) {
-			throw new LispReadException("auto-resolved keywords are not supported yet: " + name);
-		}
+	private String resolveKeywordSpelling(String name) {
 		isTrue(name.length() > 1, "a keyword needs a name: " + name);
+		if (!name.startsWith("::")) {
+			return name.substring(1);
+		}
+		String rest = name.substring(2);
+		int slash = rest.indexOf('/');
+		if (slash < 0) {
+			if (rest.isEmpty()) {
+				throw new LispReadException("Invalid token: " + name);
+			}
+			return this.currentNs + "/" + rest;
+		}
+		String alias = rest.substring(0, slash);
+		String tail = rest.substring(slash + 1);
+		if (alias.isEmpty() || tail.isEmpty() || tail.indexOf('/') >= 0) {
+			throw new LispReadException("Invalid token: " + name);
+		}
+		String ns = this.aliases.get(alias);
+		if (ns == null) {
+			if (alias.equals(this.currentNs) || isKnownNamespace(alias)) {
+				ns = alias;
+			}
+			else {
+				throw new LispReadException("Invalid token: " + name);
+			}
+		}
+		return ns + "/" + tail;
 	}
 
 	/**
@@ -2834,7 +2867,6 @@ public final class ClojureLowering {
 	private LispVal keywordCall(String name, List<LispVal> items) {
 		int n = items.size() - 1;
 		isTrue(n == 1 || n == 2, name + " takes a collection and an optional default");
-		validateKeyword(name);
 		List<LispVal> getForm = new ArrayList<>();
 		getForm.add(new LispSymbol("get"));
 		getForm.add(items.get(1));
@@ -4576,7 +4608,6 @@ public final class ClojureLowering {
 	private LispVal fnValue(LispVal form) {
 		if (form instanceof LispSymbol s && s.name().startsWith(":")) {
 			// no scope can bind a keyword (plainName refuses one), so this is data
-			validateKeyword(s.name());
 			return keywordFn(form);
 		}
 		if (form instanceof LispSymbol s && known(s.name())) {
@@ -6878,6 +6909,7 @@ public final class ClojureLowering {
 		if (!(items.get(1) instanceof LispSymbol)) {
 			throw new LispReadException("ns takes a name, not " + items.get(1).print());
 		}
+		this.currentNs = ((LispSymbol) items.get(1)).name();
 		for (int i = 2; i < items.size(); i++) {
 			LispVal clause = items.get(i);
 			if (clause instanceof LispString) {
@@ -6898,6 +6930,32 @@ public final class ClojureLowering {
 				default -> throw new LispReadException("ns clause " + head.name() + " is not supported yet");
 			}
 		}
+	}
+
+	/**
+	 * {@code (in-ns 'name)}: switches the session's {@code *ns*} for the
+	 * {@code ::}-keywords below it, answering nil. The namespace stays flat -- every
+	 * definition is still global -- so only the auto-resolve moves. A quoted symbol, a
+	 * bare symbol or a string names it directly (never evaluated); anything else leaves
+	 * it alone.
+	 */
+	private LispVal inNsOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "in-ns takes a namespace");
+		LispVal arg = items.get(1);
+		if (arg instanceof LispSymbol sym) {
+			this.currentNs = sym.name();
+		}
+		else if (arg instanceof LispString text) {
+			this.currentNs = text.value();
+		}
+		else {
+			List<LispVal> quoted = items(arg);
+			if (quoted != null && quoted.size() == 2 && isSymbolNamed(quoted.get(0), "quote")
+					&& quoted.get(1) instanceof LispSymbol sym) {
+				this.currentNs = sym.name();
+			}
+		}
+		return NIL_CONST; // the namespace is flat: every definition is global
 	}
 
 	/**
@@ -7151,8 +7209,7 @@ public final class ClojureLowering {
 				break;
 		}
 		if (name.startsWith(":")) {
-			validateKeyword(name);
-			return keywordForm(name.substring(1)); // a keyword is its spelling,
+			return keywordForm(resolveKeywordSpelling(name)); // a keyword is its spelling,
 													// case-preserved
 		}
 		if (name.startsWith("#:")) {
@@ -7242,8 +7299,7 @@ public final class ClojureLowering {
 				return list(sym("quote"), new LispSymbol(FALSE_VALUE_NAME));
 			}
 			if (name.startsWith(":")) {
-				validateKeyword(name);
-				return list(sym("quote"), keywordDatum(name.substring(1)));
+				return list(sym("quote"), keywordDatum(resolveKeywordSpelling(name)));
 			}
 			if (name.startsWith("#:")) {
 				// a gensym a macro expansion returned: it quotes to itself
@@ -7308,8 +7364,7 @@ public final class ClojureLowering {
 	 */
 	private LispVal quotedElement(LispVal datum) {
 		if (datum instanceof LispSymbol s && s.name().startsWith(":")) {
-			validateKeyword(s.name());
-			return keywordForm(s.name().substring(1));
+			return keywordForm(resolveKeywordSpelling(s.name()));
 		}
 		return quotedConstant(datum);
 	}
@@ -7964,8 +8019,7 @@ public final class ClojureLowering {
 			if (!(key instanceof LispSymbol s) || !s.name().startsWith(":")) {
 				throw new LispReadException("defstruct takes keyword keys, not " + key.print());
 			}
-			validateKeyword(s.name());
-			keys.add(keywordForm(s.name().substring(1)));
+			keys.add(keywordForm(resolveKeywordSpelling(s.name())));
 		}
 		return list(sym("setq"), idSym(name), cons(sym("vector"), keys));
 	}
@@ -8030,16 +8084,135 @@ public final class ClojureLowering {
 	// dispatch: multimethods over a method table and a dispatcher defun
 
 	/**
-	 * {@code (defmulti name doc? dispatch-fn & opts)}: a method table and a default
-	 * dispatch value in two globals no identifier can spell (the suffix follows the
-	 * mangled name, like the multi-arity helpers), plus a dispatcher {@code defun}
-	 * applying each call's dispatch value to the table. The default dispatch value is
-	 * {@code :default} without a {@code :default} option; a miss with no method for the
+	 * The host spellings a {@code defmethod} dispatch value may name, to the
+	 * {@code class}-keyword the dispatcher actually produces for them. The table mirrors
+	 * {@code class} (and {@code extend-protocol} targets): every numeric spelling merges
+	 * into {@code :number} (the oracle tells {@code Long} from {@code Double}, which no
+	 * wasm backend has -- the documented merge), every collection spelling into its kind.
+	 */
+	private static final Map<String, String> DISPATCH_CLASS_KEYWORDS = Map.ofEntries(Map.entry("String", "string"),
+			Map.entry("CharSequence", "string"), Map.entry("Number", "number"), Map.entry("Long", "number"),
+			Map.entry("Double", "number"), Map.entry("Integer", "number"), Map.entry("Float", "number"),
+			Map.entry("Short", "number"), Map.entry("Byte", "number"), Map.entry("Boolean", "boolean"),
+			Map.entry("Keyword", "keyword"), Map.entry("Symbol", "symbol"), Map.entry("Character", "char"),
+			Map.entry("Char", "char"), Map.entry("Map", "map"), Map.entry("IPersistentMap", "map"),
+			Map.entry("Vector", "vector"), Map.entry("IPersistentVector", "vector"), Map.entry("Set", "set"),
+			Map.entry("IPersistentSet", "set"), Map.entry("List", "list"), Map.entry("Seq", "list"),
+			Map.entry("Sequential", "list"), Map.entry("Collection", "list"), Map.entry("IPersistentList", "list"),
+			Map.entry("IPersistentCollection", "list"), Map.entry("Fn", "function"), Map.entry("IFn", "function"),
+			Map.entry("Function", "function"), Map.entry("Atom", "atom"));
+
+	/**
+	 * Whether the dispatch datum is the nil spelling: the symbol the reader answers for
+	 * {@code nil}, or the empty list (which is nil too). A nil method stores under the
+	 * {@code :nil} keyword the dispatcher normalizes nil to (see
+	 * {@link #defmultiForms(List)}), so the corpus's both shapes ({@code my-print} over
+	 * {@code class}, {@code my-class} over {@code identity}) share the one definition.
+	 */
+	private static boolean isNilDatum(LispVal datum) {
+		return datum instanceof LispNil
+				|| (datum instanceof LispSymbol s && s.name().equals("nil"));
+	}
+
+	/**
+	 * Whether the name spells {@code Object}: dotted, imported, or {@code java.lang}, a
+	 * record or deftype of that name aside (which keeps its tag). An {@code Object}
+	 * method matches every dispatch value, like the oracle's, so it lives in the
+	 * multimethod's {@code %object} global beside its table row: the dispatcher tries it
+	 * past the hierarchy search but ahead of the default, which it always beats.
+	 */
+	private boolean isObjectClassName(String name) {
+		return !this.types.containsKey(name) && resolveClass(name).equals("java.lang.Object");
+	}
+
+	/**
+	 * A class spelling to the keyword the {@code class} dispatcher produces for it, or
+	 * null when the name is no class spelling at all (so the caller lowers it as usual
+	 * -- a var holding the dispatch value, like the oracle's evaluated position).
+	 * Record and deftype names answer their tags; dotted, imported and
+	 * {@code java.lang} spellings resolve through {@link #resolveClass} first, so
+	 * {@code java.util.Map} and {@code clojure.lang.IPersistentVector} map like their
+	 * simple names. A capitalized name that maps to nothing (an {@code Instant}, a
+	 * {@code Date}, ...) is the {@code extend-protocol} row's named refusal.
+	 */
+	private @Nullable LispVal dispatchClassKey(String name) {
+		if (this.types.containsKey(name)) {
+			return typeTagForm(name);
+		}
+		if (isObjectClassName(name)) {
+			return keywordForm("object");
+		}
+		boolean classlike = this.classNames.containsKey(name) || JAVA_LANG.contains(name) || name.indexOf('.') >= 0
+				|| (!name.isEmpty() && Character.isUpperCase(name.charAt(0)));
+		if (!classlike) {
+			return null;
+		}
+		String fqn = resolveClass(name);
+		String kind = DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
+		if (kind == null) {
+			throw new LispReadException("defmethod needs a core class, not " + name);
+		}
+		return keywordForm(kind);
+	}
+
+	/**
+	 * A {@code defmethod} (or {@code remove-method}, {@code get-method},
+	 * {@code prefer-method}) dispatch value lowered: class spellings onto the keyword
+	 * the {@code class} dispatcher produces, {@code nil} onto the {@code :nil} keyword
+	 * (the dispatcher normalizes nil to it, so no table ever keys on nil),
+	 * {@code ::}-keywords resolved like anywhere else, and literal vectors element by
+	 * element (the corpus's {@code [Number]} and {@code [Map Number]} pairs, whose
+	 * element-wise derivation the hierarchy search already runs). Anything else lowers
+	 * as usual, so plain keywords and values keep their exact shapes.
+	 */
+	private LispVal dispatchKeyForm(LispVal datum) {
+		if (isNilDatum(datum)) {
+			return keywordForm("nil");
+		}
+		if (datum instanceof LispSymbol s) {
+			String name = s.name();
+			if (name.startsWith(":")) {
+				return keywordForm(resolveKeywordSpelling(name));
+			}
+			LispVal cls = dispatchClassKey(name);
+			if (cls != null) {
+				return cls;
+			}
+			return lower(datum);
+		}
+		List<LispVal> parts = items(datum);
+		if (parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR) {
+			List<LispVal> out = new ArrayList<>();
+			out.add(sym("vector"));
+			for (int i = 1; i < parts.size(); i++) {
+				out.add(dispatchKeyForm(parts.get(i)));
+			}
+			return list(out);
+		}
+		return lower(datum);
+	}
+
+	/**
+	 * {@code (defmulti name doc? dispatch-fn & opts)}: a method table, a default
+	 * dispatch value and an {@code Object}-method slot in four globals no identifier
+	 * can spell (the suffix follows the mangled name, like the multi-arity helpers),
+	 * plus a dispatcher {@code defun} applying each call's dispatch value to the table.
+	 * The dispatcher normalizes a nil dispatch value to the {@code :nil} keyword first
+	 * (no table ever keys on nil, on any backend), so a {@code nil} method answers both
+	 * the {@code class} nil and the {@code identity} nil; a dispatch value that
+	 * literally is the {@code :nil} keyword answers it too, where the oracle tells them
+	 * apart.
+	 * The default dispatch value is {@code :default} without a {@code :default} option
+	 * (an arbitrary keyword with one -- the corpus's {@code :everything-else} -- stored
+	 * per-multimethod like {@code :default} today); a miss with no method for the
 	 * default signals, like the oracle. With a {@code :hierarchy} option the dispatcher
 	 * consults that hierarchy value on a miss (the global one without the option): every
 	 * method whose key the dispatch value descends from ({@code isa?}) is a candidate,
 	 * the strictly most specific wins, {@code prefer-method} breaks the remaining ties,
-	 * and an unbroken tie signals -- like the oracle.
+	 * and an unbroken tie signals -- like the oracle. Past the search but ahead of the
+	 * default, a defined {@code Object} method catches the rest, like the oracle's
+	 * (which it always beats); without one the slot is nil and the search decides
+	 * alone.
 	 */
 	private List<LispVal> defmultiForms(List<LispVal> items) {
 		isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
@@ -8071,23 +8244,32 @@ public final class ClojureLowering {
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		LispSymbol fallback = new LispSymbol(mangle(name) + "%default");
 		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
+		LispSymbol object = new LispSymbol(mangle(name) + "%object");
 		LispVal dispatchFn = fnValue(dispatchDatum);
 		LispVal defaultForm = defaultDatum == null ? keywordForm("default") : lower(defaultDatum);
 		LispVal hierarchyForm = hierarchyDatum == null ? hierarchyGlobal() : lower(hierarchyDatum);
 		LispSymbol args = freshTemp();
 		LispSymbol disp = freshTemp();
+		LispSymbol raw = freshTemp();
 		LispSymbol found = freshTemp();
 		LispSymbol miss = freshTemp();
+		LispVal missCall = list(new LispSymbol(HIERARCHY_DISPATCH), LispString.literal(name), methods, prefers,
+				hierarchyForm, fallback, disp, args);
+		LispVal missForm = list(sym("if"),
+				list(sym("and"), object,
+						list(sym("null"), list(new LispSymbol("C%H-CANDIDATES"), methods, hierarchyForm, disp))),
+				list(sym("apply"), object, args), missCall);
 		LispVal dispatch = list(sym("let*"),
-				list(List.of(list(disp, list(sym("apply"), dispatchFn, args)), list(miss, list(sym("list"), NIL_CONST)),
+				list(List.of(list(raw, list(sym("apply"), dispatchFn, args)),
+						list(disp, list(sym("if"), list(sym("null"), raw), keywordForm("nil"), raw)),
+						list(miss, list(sym("list"), NIL_CONST)),
 						list(found, list(sym("gethash"), disp, methods, miss)))),
-				list(sym("if"), list(sym("eq"), found, miss), list(new LispSymbol(HIERARCHY_DISPATCH),
-						LispString.literal(name), methods, prefers, hierarchyForm, fallback, disp, args),
-						list(sym("apply"), found, args)));
+				list(sym("if"), list(sym("eq"), found, miss), missForm, list(sym("apply"), found, args)));
 		List<LispVal> forms = new ArrayList<>();
 		forms.add(list(sym("setq"), methods, makeTable()));
 		forms.add(list(sym("setq"), fallback, defaultForm));
 		forms.add(list(sym("setq"), prefers, makeTable()));
+		forms.add(list(sym("setq"), object, NIL_CONST));
 		forms.add(list(sym("defun"), idSym(name), list(List.of(AMPERSAND_REST, args)), dispatch));
 		this.usedHierarchy = true;
 		return forms;
@@ -8122,7 +8304,16 @@ public final class ClojureLowering {
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		LispVal lambda = methodLambda(items.get(3), items.subList(4, items.size()));
-		return list(sym("setf"), list(sym("gethash"), lower(items.get(2)), methods), lambda);
+		LispVal keyDatum = items.get(2);
+		if (keyDatum instanceof LispSymbol s && isObjectClassName(s.name())) {
+			// the table row (for get-method) and the catch-all slot the dispatcher
+			// tries past the hierarchy search but ahead of the default
+			LispSymbol object = new LispSymbol(mangle(name) + "%object");
+			return cons(sym("progn"), List.of(
+					list(sym("setf"), list(sym("gethash"), keywordForm("object"), methods), lambda),
+					list(sym("setq"), object, lambda)));
+		}
+		return list(sym("setf"), list(sym("gethash"), dispatchKeyForm(keyDatum), methods), lambda);
 	}
 
 	private LispVal removeMethodOf(List<LispVal> items) {
@@ -8130,7 +8321,13 @@ public final class ClojureLowering {
 		String name = plainName(items.get(1), "remove-method");
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
-		return list(sym("progn"), list(sym("remhash"), lower(items.get(2)), methods),
+		LispVal keyDatum = items.get(2);
+		if (keyDatum instanceof LispSymbol s && isObjectClassName(s.name())) {
+			LispSymbol object = new LispSymbol(mangle(name) + "%object");
+			return cons(sym("progn"), List.of(list(sym("remhash"), keywordForm("object"), methods),
+					list(sym("setq"), object, NIL_CONST), list(sym("function"), idSym(name))));
+		}
+		return list(sym("progn"), list(sym("remhash"), dispatchKeyForm(keyDatum), methods),
 				list(sym("function"), idSym(name)));
 	}
 
@@ -8139,7 +8336,7 @@ public final class ClojureLowering {
 		String name = plainName(items.get(1), "get-method");
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
-		return list(sym("gethash"), lower(items.get(2)), methods, NIL_CONST);
+		return list(sym("gethash"), dispatchKeyForm(items.get(2)), methods, NIL_CONST);
 	}
 
 	// protocols/records: defprotocol/defrecord/deftype/reify/extend/satisfies? over the
@@ -9287,8 +9484,7 @@ public final class ClojureLowering {
 			return this.falseVariable;
 		}
 		if (name.startsWith(":")) {
-			validateKeyword(name);
-			return keywordForm(name.substring(1));
+			return keywordForm(resolveKeywordSpelling(name));
 		}
 		if (name.endsWith("#") && name.length() > 1 && gens != null) {
 			String stem = name.substring(0, name.length() - 1);
@@ -10011,7 +10207,9 @@ public final class ClojureLowering {
 		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
 		this.usedHierarchy = true;
 		return list(sym("progn"), list(sym("setf"),
-				list(sym("gethash"), list(sym("cons"), lower(items.get(2)), lower(items.get(3))), prefers), TRUE_CONST),
+				list(sym("gethash"), list(sym("cons"), dispatchKeyForm(items.get(2)), dispatchKeyForm(items.get(3))),
+						prefers),
+				TRUE_CONST),
 				list(sym("function"), idSym(name)));
 	}
 

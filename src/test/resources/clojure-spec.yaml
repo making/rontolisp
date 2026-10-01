@@ -1171,6 +1171,123 @@ cases:
       miss
       x
       amb
+  - name: auto-resolved-keywords-use-the-file-ns
+    # ::kw resolves against the file's ns name, ::alias/kw against the alias;
+    # :a/b stays opaque. The corpus shapes: interest-rate/account-level over :tag,
+    # service-charge2 vector pairs, derive plus service-charge3 over the parent.
+    source: |
+      (ns b19auto (:require [clojure.string :as str]))
+      (println ::checking)
+      (println ::str/join)
+      (println (name ::str/join))
+      (println (namespace ::str/join))
+      (println (= ::checking :b19auto/checking))
+      (println (::checking {:b19auto/checking 7}))
+      (println (::missing {:b19auto/checking 7} :dflt))
+      (defmulti b19rate :tag)
+      (defmethod b19rate ::checking [_] 0)
+      (defmethod b19rate ::savings [_] 5)
+      (println (b19rate {:tag ::checking}))
+      (println (b19rate {:tag ::savings}))
+      (derive ::savings ::account)
+      (derive ::checking ::account)
+      (println (isa? ::savings ::account))
+      (println (parents ::savings))
+      (defmulti b19level :tag)
+      (defmethod b19level ::checking [a] (if (>= (:balance a) 5000) ::premium ::basic))
+      (defmethod b19level ::savings [a] (if (>= (:balance a) 1000) ::premium ::basic))
+      (defmulti b19charge (fn [a] [(b19level a) (:tag a)]))
+      (defmethod b19charge [::basic ::checking] [_] 25)
+      (defmethod b19charge [::basic ::savings] [_] 10)
+      (defmethod b19charge [::premium ::account] [_] 0)
+      (println (b19charge {:tag ::checking :balance 100}))
+      (println (b19charge {:tag ::savings :balance 100}))
+      (println (b19charge {:tag ::checking :balance 9000}))
+      (println (b19charge {:tag ::savings :balance 9000}))
+    expected: |
+      :b19auto/checking
+      :clojure.string/join
+      join
+      clojure.string
+      true
+      7
+      :dflt
+      0
+      5
+      true
+      #{:b19auto/account}
+      25
+      10
+      0
+      0
+  - name: class-dispatch-maps-host-spellings-to-kind-keywords
+    # A defmethod over class names stores under the keyword class answers
+    # (Long/Double merge into :number, like every numeric spelling); dotted and
+    # clojure.lang names resolve first. nil answers both the :nil keyword and the
+    # identity nil; Object catches past the search but ahead of the default; the
+    # pi.clj run-simulation shape dispatches [Map Number] pairs element-wise.
+    source: |
+      (defmulti b19print class)
+      (defmethod b19print String [s] (str "str:" s))
+      (defmethod b19print Number [n] (str "num:" n))
+      (defmethod b19print nil [_] "was-nil")
+      (defmethod b19print :default [x] "dflt")
+      (println (b19print "a"))
+      (println (b19print 1))
+      (println (b19print 1.5))
+      (println (b19print nil))
+      (println (b19print :k))
+      (println (b19print [1 2]))
+      (defmethod b19print java.util.Map [m] "map!")
+      (println (b19print {:a 1}))
+      (defmethod b19print clojure.lang.IPersistentVector [v] "vec!")
+      (println (b19print [1 2]))
+      (defmethod b19print java.util.Collection [c] "coll!")
+      (println (b19print (list 1)))
+      (prefer-method b19print clojure.lang.IPersistentVector java.util.Collection)
+      (println (b19print [1 2]))
+      (defmulti b19id identity)
+      (defmethod b19id nil [_] "was-nil")
+      (defmethod b19id :default [x] "dflt")
+      (println (b19id nil))
+      (println (b19id 1))
+      (println ((get-method b19id nil) nil))
+      (remove-method b19id nil)
+      (println (b19id nil))
+      (defmulti b19obj class :default :dflt)
+      (defmethod b19obj Object [x] "obj!")
+      (defmethod b19obj :dflt [x] "d!")
+      (println (b19obj "a"))
+      (println (b19obj :k))
+      (defmulti b19sim (fn [& args] (into [] (map class args))))
+      (defmethod b19sim [Number] [n] (str "n:" n))
+      (defmethod b19sim [java.util.Map] [m] "m")
+      (defmethod b19sim [java.util.Map Number] [m n] "mn")
+      (println (b19sim 5))
+      (println (b19sim {:a 1}))
+      (println (b19sim {:a 1} 2))
+      (println (try (b19sim [1] 2) (catch Exception e "miss")))
+    expected: |
+      str:a
+      num:1
+      num:1.5
+      was-nil
+      dflt
+      dflt
+      map!
+      vec!
+      coll!
+      vec!
+      was-nil
+      dflt
+      was-nil
+      dflt
+      obj!
+      obj!
+      n:5
+      m
+      mn
+      miss
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything

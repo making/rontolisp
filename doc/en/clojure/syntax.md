@@ -35,8 +35,11 @@ printing without its mark. Ratios read as `1/2`.
 `true`, `false` and `nil` are self-evaluating; `false` is a distinct object from `nil`
 (see [Deviations](deviations.md)). A keyword `:foo` is data holding its spelling
 verbatim, case-preserved, so `:a` and `:A` stay apart; it prints with its colon. A
-namespaced `:a/b` is opaque data that prints and compares whole; `::`-auto-resolve is
-refused. In call position a keyword is the map lookup -- [Semantics](semantics.md).
+namespaced `:a/b` is opaque data that prints and compares whole. `::`-auto-resolve
+resolves against the current namespace: `::kw` to `:my.ns/kw` inside `(ns my.ns)`
+(`:user/kw` without one), `::alias/kw` through the alias (`:require`'s `:as`, the
+namespace's own name, or a known namespace without any require). An unknown alias is
+an `Invalid token` refusal. In call position a keyword is the map lookup -- [Semantics](semantics.md).
 
 ## Collection literals
 

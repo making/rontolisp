@@ -191,8 +191,14 @@ class ClojureLoweringTest {
 		assertThat(lowered("(str :a)")).contains("RONTOLISP::%CLOJURE-STR-OF");
 		assertThat(lowered("':a")).isEqualTo(FALSE_BINDING + "'(:C%KEYWORD \"a\")");
 		assertThat(lowered(":a/b")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"a/b\")");
-		assertThatThrownBy(() -> Clojure.read("::foo", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("auto-resolved keywords are not supported yet: ::foo");
+		assertThat(lowered("::foo")).isEqualTo(FALSE_BINDING + "(LIST :C%KEYWORD \"user/foo\")");
+		assertThat(lowered("(ns b19auto) ::foo")).contains("(LIST :C%KEYWORD \"b19auto/foo\")");
+		assertThat(lowered("(ns b19auto (:require [clojure.string :as str])) ::str/join"))
+			.contains("(LIST :C%KEYWORD \"clojure.string/join\")");
+		assertThat(lowered("(ns b19auto) '::foo")).contains("(:C%KEYWORD \"b19auto/foo\")");
+		assertThat(lowered("(ns b19auto) (in-ns 'other) ::foo")).contains("(LIST :C%KEYWORD \"other/foo\")");
+		assertThatThrownBy(() -> Clojure.read("::nope/kw", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid token: ::nope/kw");
 		assertThatThrownBy(() -> Clojure.read(":", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a keyword needs a name");
 	}
@@ -205,8 +211,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(map :a '({:a 1}))")).contains("%CLOJURE-MAP").contains("LAMBDA").contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(:a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining(":a takes a collection and an optional default");
-		assertThatThrownBy(() -> Clojure.read("(::foo m)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("auto-resolved keywords are not supported yet: ::foo");
+		assertThat(lowered("(def m {:a 1}) (::foo m)")).contains("GETHASH").contains("user/foo");
 	}
 
 	@Test
@@ -512,6 +517,25 @@ class ClojureLoweringTest {
 		assertThat(lowered("(parents :a)")).contains("C%H-PARENTS");
 		assertThat(lowered("(make-hierarchy)")).contains("C%H-EMPTY");
 		assertThat(lowered("(def h (make-hierarchy)) (defmulti area :shape :hierarchy h)")).contains("C%H-DISPATCH");
+		assertThat(lowered("(defmulti area :shape)")).contains("|c%area%object|");
+		assertThat(lowered("(defmulti area class) (defmethod area String [s] s)")).contains("\"string\"");
+		assertThat(lowered("(defmulti area class) (defmethod area Number [n] n)")).contains("\"number\"");
+		assertThat(lowered("(defmulti area class) (defmethod area Long [n] n)")).contains("\"number\"");
+		assertThat(lowered("(defmulti area class) (defmethod area java.util.Map [m] m)")).contains("\"map\"");
+		assertThat(lowered("(defmulti area class) (defmethod area clojure.lang.IPersistentVector [v] v)"))
+			.contains("\"vector\"");
+		assertThat(lowered("(defmulti area class) (defmethod area java.util.Collection [c] c)")).contains("\"list\"");
+		assertThat(lowered("(defmulti area class) (defmethod area nil [x] x)")).contains("\"nil\"");
+		assertThat(lowered("(defmulti area class) (defmethod area Object [x] x)")).contains("|c%area%object|")
+			.contains("\"object\"");
+		assertThat(lowered("(defmulti area (fn [a b] [(class a) (class b)])) (defmethod area [Number Number] [a b] 1)"))
+			.contains("VECTOR");
+		assertThat(lowered("(defmulti area :t) (defmethod area ::k [x] x)")).contains("\"user/k\"");
+		assertThat(lowered("(defmulti area :t) (remove-method area String)")).contains("\"string\"");
+		assertThat(lowered("(defmulti area :t) (get-method area Number)")).contains("\"number\"");
+		assertThatThrownBy(() -> Clojure.read("(defmulti area class) (defmethod area Instant [x] x)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defmethod needs a core class, not Instant");
 		assertThatThrownBy(() -> Clojure.read("(isa? :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("isa? takes a child and a parent");
 		assertThat(lowered("(ex-info \"m\" {:a 1})")).contains("MAKE-CONDITION").contains("C%E-EX-INFO");
