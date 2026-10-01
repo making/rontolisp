@@ -319,3 +319,32 @@
    building block. Answers NIL, so a print call's value is nil like the oracle."
   (rontolisp::%clojure-print x nil-replacement readable *standard-output*)
   nil)
+
+(defun rontolisp::%clojure-call (f args)
+  "Apply F to the argument list ARGS: real functions through apply, collection
+   values through their lookup, like the oracle's IFn. Sets answer the member,
+   maps the value, vectors the indexed element, keywords the table-aware read --
+   each with the next argument as the default (nil without one). Strings are no
+   functions, like the oracle, and anything else signals."
+  (cond ((functionp f) (apply f args))
+        ((rontolisp::%clojure-set-p f)
+         (gethash (car args) (car (cdr f))
+                  (if (cdr args) (car (cdr args)) nil)))
+        ((hash-table-p f)
+         (gethash (car args) f (if (cdr args) (car (cdr args)) nil)))
+        ((and (vectorp f) (not (stringp f)))
+         (let ((i (car args)))
+           (if (and (integerp i) (<= 0 i) (< i (length f)))
+               (elt f i)
+               (if (cdr args) (car (cdr args)) nil))))
+        ((rontolisp::%clojure-keyword-p f)
+         (rontolisp::%clojure-call-keyword f (car args)
+          (if (cdr args) (car (cdr args)) nil)))
+        (t (error "not a function"))))
+
+(defun rontolisp::%clojure-call-keyword (k coll dflt)
+  "The keyword K read through COLL: sets answer the member, maps the value,
+   anything else the default (a keyword never indexes a vector or a string)."
+  (cond ((rontolisp::%clojure-set-p coll) (gethash k (car (cdr coll)) dflt))
+        ((hash-table-p coll) (gethash k coll dflt))
+        (t dflt)))

@@ -1,6 +1,6 @@
 # Syntax and definition
 
-The binding and control forms. Definitions are decided by a pre-scan of the whole file, so a definition may use one below it; a head-position call to a value binding is a `funcall` of the value cell.
+The binding and control forms. Definitions are decided by a pre-scan of the whole file, so a definition may use one below it; a head-position call to a value binding holding a real function is a `funcall` of the value cell, while any other variable goes through the prelude dispatcher (which `funcall`s real functions and invokes collections).
 
 | Name | Example | Result |
 |---|---|---|
@@ -20,3 +20,8 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `quote` | `(quote (a b c))` | `(a b c)` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |
+| `when-let` | `(when-let [x 1] (+ x 10))` | `11` |
+| `if-let` | `(if-let [x nil] 1 :none)` | `:none` |
+| `when-not` | `(when-not false :ran)` | `:ran` |
+| `if-not` | `(if-not nil :t :e)` | `:t` |
+| `when-first` | `(when-first [x [1 2]] x)` | `1` |

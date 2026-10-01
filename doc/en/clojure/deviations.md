@@ -52,3 +52,18 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (case folds, print-only); their data takes bare operator names. Nested syntax-quote
   evaluates its levels in the one expansion. `var`/`#'` stays refused everywhere:
   bodies quote symbols instead.
+- `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
+  the oracle answers host classes, which no wasm backend has.
+- `instance?` only over the core classes (`String`, `Long`, ...); any other class is a
+  named refusal instead of a wrong answer.
+- `unchecked-add` never wraps (integers are bignums); the other `unchecked-*` verbs are
+  absent.
+- `format` renders `%s`/`%d`/`%x`/`%X`/`%o`/`%c`/`%b`/`%f`/`%%`/`%n` (with widths, float
+  precision); `%e`/`%g`, flags and non-literal patterns are named refusals. `%s` spells
+  `nil` `"null"`, like the oracle.
+- `line-seq` takes a path and answers strictly (the oracle takes a reader and answers
+  lazily); `spit`/`slurp`/`line-seq` run on the interpreter and the JVM only.
+- `sort` without a comparator orders numbers, strings, characters and keywords; anything
+  else (or mixed kinds) signals.
+- `into` takes two collections (a transducer argument stays refused); `partition` takes
+  no pad.

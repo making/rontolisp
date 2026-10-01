@@ -237,6 +237,17 @@ public final class ClojureLowering {
 	/** The false value, referenced (never rebuilt) wherever {@code false} lowers. */
 	private final LispSymbol falseVariable = new LispSymbol(FALSE_VARIABLE);
 
+	/**
+	 * The names bound to real functions, per {@link #scopes} level: a head-position call
+	 * to one stays a direct call, while any other variable goes through the prelude
+	 * dispatcher (its value may hold a collection). Globals live in
+	 * {@link #globalDirectFuns}.
+	 */
+	private final List<Set<String>> directScopes = new ArrayList<>();
+
+	/** The globals bound to real functions, like {@link #directScopes}. */
+	private final Set<String> globalDirectFuns = new HashSet<>();
+
 	/** Whether the session already emitted the false binding (files always emit it). */
 	private boolean falseBound;
 
@@ -411,6 +422,28 @@ public final class ClojureLowering {
 
 	ClojureLowering() {
 		this.scopes.add(new HashMap<>()); // locals; globals live in globals
+		this.directScopes.add(new HashSet<>());
+	}
+
+	/**
+	 * Whether a variable name holds a real function: the innermost binding decides, like
+	 * {@link #known}.
+	 */
+	private boolean isDirectVar(String name) {
+		for (int i = this.scopes.size() - 1; i >= 0; i--) {
+			if (this.scopes.get(i).containsKey(name)) {
+				return this.directScopes.get(i).contains(name);
+			}
+		}
+		if (this.globals.containsKey(name)) {
+			return this.globalDirectFuns.contains(name);
+		}
+		return false;
+	}
+
+	/** Marks the name direct in the innermost scope. */
+	private void markDirect(String name) {
+		this.directScopes.get(this.directScopes.size() - 1).add(name);
 	}
 
 	private List<LispVal> topLevels(LispVal form) {
@@ -678,6 +711,9 @@ public final class ClojureLowering {
 			throw new LispReadException("with-meta is not supported yet: ^metadata needs a design");
 		}
 		if (head instanceof LispCons) {
+			if (isCollectionHead(head)) {
+				return collectionCall(items);
+			}
 			return cons(sym("funcall"), lowers(items, 0)); // ((fn ...) args)
 		}
 		if (head == ClojureReader.VECTOR) {
@@ -700,6 +736,21 @@ public final class ClojureLowering {
 			isTrue(items.size() >= 3, "when needs a condition and a body");
 			LispVal test = lower(items.get(1));
 			return ifFalsey(test, body(items, 2), NIL_CONST);
+		}
+		if (isSymbolNamed(head, "when-let")) {
+			return whenLetOf(items);
+		}
+		if (isSymbolNamed(head, "if-let")) {
+			return ifLetOf(items);
+		}
+		if (isSymbolNamed(head, "when-not")) {
+			return whenNotOf(items);
+		}
+		if (isSymbolNamed(head, "if-not")) {
+			return ifNotOf(items);
+		}
+		if (isSymbolNamed(head, "when-first")) {
+			return whenFirstOf(items);
 		}
 		if (isSymbolNamed(head, "cond")) {
 			return condOf(items);
@@ -728,6 +779,12 @@ public final class ClojureLowering {
 		this.globals.put(name, Kind.VARIABLE);
 		this.macros.remove(name); // a definition wins over the macro it shadows
 		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
+		if (isDirectFun(value)) {
+			this.globalDirectFuns.add(name);
+		}
+		else {
+			this.globalDirectFuns.remove(name);
+		}
 		return list(sym("setq"), idSym(name), value);
 	}
 
@@ -984,6 +1041,7 @@ public final class ClojureLowering {
 		isTrue(bindings.size() % 2 == 0, "a let binding vector pairs a name with a value");
 		Map<String, Kind> scope = new HashMap<>();
 		this.scopes.add(scope); // let* : each value sees the bindings before it
+		this.directScopes.add(new HashSet<>());
 		LispVal form;
 		try {
 			List<LispVal> pairs = new ArrayList<>();
@@ -991,8 +1049,12 @@ public final class ClojureLowering {
 				LispVal pattern = bindings.get(i);
 				if (pattern instanceof LispSymbol) {
 					String name = plainName(pattern, "let");
-					pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
+					LispVal init = lower(bindings.get(i + 1));
+					pairs.add(list(idSym(name), init));
 					scope.put(name, Kind.VARIABLE);
+					if (isDirectFun(init)) {
+						markDirect(name);
+					}
 					continue;
 				}
 				LispSymbol temp = freshTemp();
@@ -1003,6 +1065,7 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
 		}
 		return form;
 	}
@@ -1017,6 +1080,7 @@ public final class ClojureLowering {
 		List<LispVal> inits = new ArrayList<>();
 		List<LispVal> prologue = new ArrayList<>();
 		this.scopes.add(scope); // let*-like: each init sees the bindings before it
+		this.directScopes.add(new HashSet<>());
 		try {
 			for (int i = 0; i < bindings.size(); i += 2) {
 				LispVal pattern = bindings.get(i);
@@ -1026,6 +1090,9 @@ public final class ClojureLowering {
 					paramSyms.add(idSym(binding));
 					inits.add(init);
 					scope.put(binding, Kind.VARIABLE);
+					if (isDirectFun(init)) {
+						markDirect(binding);
+					}
 					continue;
 				}
 				LispSymbol temp = freshTemp();
@@ -1059,6 +1126,7 @@ public final class ClojureLowering {
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
 		}
 	}
 
@@ -1080,6 +1148,235 @@ public final class ClojureLowering {
 			return TRUE_CONST;
 		}
 		return lower(test);
+	}
+
+	/**
+	 * {@code when-let}: one binding tested, the body only on truthy. The init runs once
+	 * behind a temporary; the pattern destructures from it like {@code let}, so a vector
+	 * or map pattern tests the whole init value, like the oracle.
+	 */
+	private LispVal whenLetOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "when-let needs a binding vector and a body");
+		List<LispVal> bindings = bindingItems(items.get(1), "when-let");
+		isTrue(bindings.size() == 2, "when-let takes a single binding pair");
+		LispSymbol init = freshTemp();
+		Map<String, Kind> scope = new HashMap<>();
+		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			pairs.add(list(init, lower(bindings.get(1))));
+			destructureInto(bindings.get(0), init, pairs, scope, "when-let");
+			return list(sym("let*"), list(pairs), ifFalsey(init, body(items, 2), NIL_CONST));
+		}
+		finally {
+			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
+		}
+	}
+
+	/**
+	 * {@code if-let}: one binding tested, the then or the else branch. Same shape as
+	 * {@link #whenLetOf}, with the else defaulting to nil.
+	 */
+	private LispVal ifLetOf(List<LispVal> items) {
+		isTrue(items.size() == 3 || items.size() == 4, "if-let takes a binding vector, a then and an optional else");
+		List<LispVal> bindings = bindingItems(items.get(1), "if-let");
+		isTrue(bindings.size() == 2, "if-let takes a single binding pair");
+		LispSymbol init = freshTemp();
+		Map<String, Kind> scope = new HashMap<>();
+		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			pairs.add(list(init, lower(bindings.get(1))));
+			destructureInto(bindings.get(0), init, pairs, scope, "if-let");
+			LispVal then = lower(items.get(2));
+			LispVal els = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
+			return list(sym("let*"), list(pairs), ifFalsey(init, then, els));
+		}
+		finally {
+			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
+		}
+	}
+
+	/** {@code when-not}: the body unless the test is truthy. */
+	private LispVal whenNotOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "when-not needs a condition and a body");
+		return ifFalsey(lower(items.get(1)), NIL_CONST, body(items, 2));
+	}
+
+	/** {@code if-not}: the branches swapped, the else defaulting to nil. */
+	private LispVal ifNotOf(List<LispVal> items) {
+		isTrue(items.size() == 3 || items.size() == 4, "if-not takes a condition, a then and an optional else");
+		LispVal then = lower(items.get(2));
+		LispVal els = items.size() == 4 ? lower(items.get(3)) : NIL_CONST;
+		return ifFalsey(lower(items.get(1)), els, then);
+	}
+
+	/**
+	 * {@code when-first}: the pattern bound to the head of the seq view, the body only
+	 * when the collection is non-empty. The seq runs once behind a temporary.
+	 */
+	private LispVal whenFirstOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "when-first needs a binding vector and a body");
+		List<LispVal> bindings = bindingItems(items.get(1), "when-first");
+		isTrue(bindings.size() == 2, "when-first takes a single binding pair");
+		LispSymbol seq = freshTemp();
+		Map<String, Kind> scope = new HashMap<>();
+		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			pairs.add(list(seq, seqForm(lower(bindings.get(1)))));
+			destructureInto(bindings.get(0), list(sym("car"), seq), pairs, scope, "when-first");
+			return list(sym("let*"), list(pairs), ifFalsey(seq, body(items, 2), NIL_CONST));
+		}
+		finally {
+			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
+		}
+	}
+
+	/**
+	 * Whether the call head is a collection literal used as a function: a vector, map or
+	 * set datum in head position, like {@code (#{:h} :h)} or {@code ([1 2] 0)}.
+	 */
+	private static boolean isCollectionHead(LispVal head) {
+		if (!(head instanceof LispCons cons)) {
+			return false;
+		}
+		LispVal marker = cons.car();
+		return marker == ClojureReader.VECTOR || isSymbolNamed(marker, "%hash-map")
+				|| isSymbolNamed(marker, "%hash-set");
+	}
+
+	/**
+	 * A collection literal in call position: a set answers its member, a map its value, a
+	 * vector its indexed element, each with an optional default. One or two arguments
+	 * besides the collection, like the oracle.
+	 */
+	private LispVal collectionCall(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "a collection as a function takes a key and an optional default");
+		LispVal dflt = n == 2 ? lower(items.get(2)) : NIL_CONST;
+		List<LispVal> headItems = items(items.get(0), List.of());
+		if (headItems.isEmpty()) {
+			throw new LispReadException("a collection as a function takes a key and an optional default");
+		}
+		LispVal marker = headItems.get(0);
+		if (marker == ClojureReader.VECTOR) {
+			List<LispVal> elements = new ArrayList<>();
+			for (int i = 1; i < headItems.size(); i++) {
+				elements.add(lower(headItems.get(i)));
+			}
+			return nthForm(cons(sym("vector"), elements), lower(items.get(1)), dflt);
+		}
+		List<LispVal> lowered = new ArrayList<>();
+		for (int i = 1; i < headItems.size(); i++) {
+			lowered.add(lower(headItems.get(i)));
+		}
+		if (isSymbolNamed(marker, "%hash-map")) {
+			return getForm(mapBuild(lowered), lower(items.get(1)), dflt);
+		}
+		LispSymbol set = freshTemp();
+		LispSymbol key = freshTemp();
+		return list(sym("let*"), list(List.of(list(set, setBuild(lowered)), list(key, lower(items.get(1))))),
+				list(sym("gethash"), key, setInner(set), dflt));
+	}
+
+	/**
+	 * A collection literal as a function value: a one-or-two-argument lambda over the
+	 * same read a call lowers to, so {@code (filter #{:h} ...)} runs. Null when the datum
+	 * is no collection literal.
+	 * @param datum the function-position datum
+	 * @return the lambda, or null
+	 */
+	private @Nullable LispVal collectionValue(LispVal datum) {
+		List<LispVal> headItems = items(datum);
+		if (headItems == null || headItems.isEmpty()) {
+			return null;
+		}
+		LispVal marker = headItems.get(0);
+		boolean vector = marker == ClojureReader.VECTOR;
+		boolean map = isSymbolNamed(marker, "%hash-map");
+		boolean set = isSymbolNamed(marker, "%hash-set");
+		if (!vector && !map && !set) {
+			return null;
+		}
+		List<LispVal> lowered = new ArrayList<>();
+		for (int i = 1; i < headItems.size(); i++) {
+			lowered.add(lower(headItems.get(i)));
+		}
+		LispSymbol arg = new LispSymbol(mangle("coll-fn-arg"));
+		LispSymbol rest = new LispSymbol(mangle("coll-fn-rest"));
+		LispVal dflt = list(sym("if"), list(sym("null"), rest), NIL_CONST, list(sym("car"), rest));
+		LispVal read;
+		if (vector) {
+			read = nthForm(cons(sym("vector"), lowered), arg, dflt);
+		}
+		else if (map) {
+			read = getForm(mapBuild(lowered), arg, dflt);
+		}
+		else {
+			LispSymbol table = freshTemp();
+			read = list(sym("let"), list(List.of(list(table, setBuild(lowered)))),
+					list(sym("gethash"), arg, setInner(table), dflt));
+		}
+		return list(sym("lambda"), list(List.of(arg, AMPERSAND_REST, rest)), read);
+	}
+
+	/**
+	 * The prelude call behind every runtime-unknown function: real functions and
+	 * collection values alike, over the argument-list form.
+	 */
+	private LispVal callableApply(LispVal fun, LispVal argList) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), fun, argList);
+	}
+
+	/**
+	 * Whether the function form is already a real function: a {@code function} designator
+	 * or a lambda. Anything else (a variable, a call result) may hold a collection at run
+	 * time and goes through the dispatcher instead.
+	 */
+	private static boolean isDirectFun(LispVal fun) {
+		if (!(fun instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		return head.name().equals("FUNCTION") || head.name().equals("LAMBDA");
+	}
+
+	/**
+	 * The function form invoked with the argument forms over its bound value: direct for
+	 * real functions, through the prelude dispatcher otherwise, so a variable holding a
+	 * set, map, vector or keyword still answers.
+	 * @param funForm the function form, as bound
+	 * @param bound the bound value (a symbol)
+	 * @param args the argument forms
+	 * @return the invocation
+	 */
+	private LispVal callFun(LispVal funForm, LispVal bound, List<LispVal> args) {
+		if (isDirectFun(funForm)) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(sym("funcall"));
+			call.add(bound);
+			call.addAll(args);
+			return list(call);
+		}
+		return callableApply(bound, cons(sym("list"), args));
+	}
+
+	/**
+	 * A one-argument function over the dispatcher: for the sequence operators that take a
+	 * Common Lisp function designator ({@code mapcar}, {@code remove-if}), so a variable
+	 * holding a collection still answers element by element.
+	 * @param bound the bound function value (a symbol)
+	 * @param arg the element (a symbol)
+	 * @return the lambda
+	 */
+	private LispVal dispatchLambda(LispVal bound, LispVal arg) {
+		return list(sym("lambda"), list(arg), callableApply(bound, list(sym("list"), arg)));
 	}
 
 	/**
@@ -1604,7 +1901,12 @@ public final class ClojureLowering {
 			// a parameter, a let/loop binding or a def'd variable holds the
 			// function in the VALUE cell (Lisp-2): a direct call would read the
 			// function cell and miss, so call through funcall instead. A defn
-			// (and a declare, which keeps its current error) stays direct.
+			// (and a declare, which keeps its current error) stays direct. A
+			// variable whose value may hold a collection goes through the
+			// prelude dispatcher instead, which funcalls real functions.
+			if (!isDirectVar(name)) {
+				return callableApply(idSym(name), cons(sym("list"), args));
+			}
 			List<LispVal> funcall = new ArrayList<>();
 			funcall.add(sym("FUNCALL"));
 			funcall.add(idSym(name));
@@ -1715,17 +2017,16 @@ public final class ClojureLowering {
 				return booleanAnswer(plain("vectorp", items));
 			case "map":
 				isTrue(n == 2, "map takes one function and one collection");
-				return list(sym("mapcar"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
+				return mapForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
 			case "filter":
 				isTrue(n == 2, "filter takes a predicate and a collection");
-				return list(sym("remove-if-not"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
+				return filterForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
 			case "reduce":
 				isTrue(n == 2 || n == 3, "reduce takes a function, an optional value and a collection");
 				if (n == 2) {
-					return list(sym("reduce"), fnValue(items.get(1)), seqForm(lower(items.get(2))));
+					return reduceForm(fnValue(items.get(1)), seqForm(lower(items.get(2))), null);
 				}
-				return list(sym("reduce"), fnValue(items.get(1)), seqForm(lower(items.get(3))), sym(":initial-value"),
-						lower(items.get(2)));
+				return reduceForm(fnValue(items.get(1)), seqForm(lower(items.get(3))), lower(items.get(2)));
 			case "apply":
 				return applyOf(items);
 			case "concat":
@@ -1767,6 +2068,131 @@ public final class ClojureLowering {
 				return containsOf(items);
 			case "subs":
 				return subsOf(items);
+			case "keep":
+				isTrue(n == 2, "keep takes a function and a collection");
+				return keepForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "keep-indexed":
+				isTrue(n == 2, "keep-indexed takes a function and a collection");
+				return keepIndexedForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "map-indexed":
+				isTrue(n == 2, "map-indexed takes a function and a collection");
+				return mapIndexedForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "every?":
+				isTrue(n == 2, "every? takes a predicate and a collection");
+				return everyForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "some":
+				isTrue(n == 2, "some takes a predicate and a collection");
+				return someForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "remove":
+				isTrue(n == 2, "remove takes a predicate and a collection");
+				return removeForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "distinct":
+				isTrue(n == 1, "distinct takes one collection");
+				return distinctForm(seqForm(lower(items.get(1))));
+			case "partition":
+				return partitionOf(items);
+			case "take-while":
+				isTrue(n == 2, "take-while takes a predicate and a collection");
+				return takeWhileForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "drop-while":
+				isTrue(n == 2, "drop-while takes a predicate and a collection");
+				return dropWhileForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "interleave":
+				return interleaveOf(items);
+			case "interpose":
+				isTrue(n == 2, "interpose takes a separator and a collection");
+				return interposeForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+			case "zipmap":
+				isTrue(n == 2, "zipmap takes keys and values");
+				return zipmapForm(seqForm(lower(items.get(1))), seqForm(lower(items.get(2))));
+			case "group-by":
+				isTrue(n == 2, "group-by takes a function and a collection");
+				return groupByForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+			case "sort":
+				return sortOf(items);
+			case "sort-by":
+				return sortByOf(items);
+			case "last":
+				isTrue(n == 1, "last takes one collection");
+				return list(sym("car"), list(sym("last"), seqForm(lower(items.get(1)))));
+			case "butlast":
+				isTrue(n == 1, "butlast takes one collection");
+				return list(sym("butlast"), seqForm(lower(items.get(1))));
+			case "second":
+				isTrue(n == 1, "second takes one collection");
+				return list(sym("cadr"), seqForm(lower(items.get(1))));
+			case "update":
+				return updateOf(items);
+			case "update-in":
+				return updateInOf(items);
+			case "assoc-in":
+				return assocInOf(items);
+			case "get-in":
+				return getInOf(items);
+			case "select-keys":
+				isTrue(n == 2, "select-keys takes a map and keys");
+				return selectKeysForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+			case "merge-with":
+				return mergeWithOf(items);
+			case "into":
+				return intoOf(items);
+			case "frequencies":
+				isTrue(n == 1, "frequencies takes one collection");
+				return frequenciesForm(seqForm(lower(items.get(1))));
+			case "comp":
+				return compOf(items);
+			case "partial":
+				isTrue(n >= 1, "partial takes a function and arguments");
+				return partialForm(fnValue(items.get(1)), lowers(items, 2));
+			case "complement":
+				isTrue(n == 1, "complement takes one function");
+				return complementForm(fnValue(items.get(1)));
+			case "constantly":
+				isTrue(n == 1, "constantly takes one value");
+				return constantlyForm(lower(items.get(1)));
+			case "identity":
+				isTrue(n == 1, "identity takes one value");
+				return lower(items.get(1));
+			case "memoize":
+				isTrue(n == 1, "memoize takes one function");
+				return memoizeForm(fnValue(items.get(1)));
+			case "trampoline":
+				isTrue(n >= 1, "trampoline takes a function and arguments");
+				return trampolineForm(fnValue(items.get(1)), cons(sym("list"), lowers(items, 2)));
+			case "coll?":
+				isTrue(n == 1, "coll? takes one value");
+				return booleanAnswer(collRaw(lower(items.get(1))));
+			case "string?":
+				isTrue(n == 1, "string? takes one value");
+				return booleanAnswer(plain("stringp", items));
+			case "symbol?":
+				isTrue(n == 1, "symbol? takes one value");
+				return booleanAnswer(symbolRaw(lower(items.get(1))));
+			case "instance?":
+				return instanceOf(items);
+			case "class":
+				isTrue(n == 1, "class takes one value");
+				return classForm(lower(items.get(1)));
+			case "int", "long":
+				isTrue(n == 1, name + " takes one value");
+				return list(sym("truncate"), lower(items.get(1)));
+			case "unchecked-add":
+				isTrue(n == 2, "unchecked-add takes two numbers");
+				return list(sym("+"), lower(items.get(1)), lower(items.get(2)));
+			case "spit":
+				return spitOf(items);
+			case "slurp":
+				isTrue(n == 1, "slurp takes one path");
+				return slurpForm(lower(items.get(1)));
+			case "line-seq":
+				isTrue(n == 1, "line-seq takes one path");
+				return lineSeqForm(lower(items.get(1)));
+			case "format":
+				return formatOf(items);
+			case "file-seq":
+				throw new LispReadException("file-seq is not supported yet: directory walks need a design");
+			case "reader":
+				throw new LispReadException("reader is not supported yet: host readers need a design");
 			case "keys":
 				return keysOf(items);
 			case "vals":
@@ -2066,9 +2492,18 @@ public final class ClojureLowering {
 	 * oracle's.
 	 */
 	private LispVal conjTwo(LispVal coll, LispVal itemDatum) {
+		return conjTwoForm(coll, lower(itemDatum));
+	}
+
+	/**
+	 * One conjoined item over an already-lowered collection and item: a set gains a
+	 * member, a map gains the item's entries, a vector gains at the end, a list or nil at
+	 * the front. Anything else signals, like the oracle's.
+	 */
+	private LispVal conjTwoForm(LispVal coll, LispVal itemLowered) {
 		LispSymbol collSym = freshTemp();
 		LispSymbol item = freshTemp();
-		List<LispVal> bindings = List.of(list(collSym, coll), list(item, lower(itemDatum)));
+		List<LispVal> bindings = List.of(list(collSym, coll), list(item, itemLowered));
 		List<LispVal> branches = new ArrayList<>();
 		branches.add(list(isSetForm(collSym), setAdd(collSym, item)));
 		branches.add(list(list(sym("hash-table-p"), collSym),
@@ -2380,11 +2815,62 @@ public final class ClojureLowering {
 			case "dorun" -> dorunValue();
 			case "doall" -> doallValue();
 			case "subs" -> subsValue();
+			case "keep" -> keepValue();
+			case "keep-indexed" -> keepIndexedValue();
+			case "map-indexed" -> mapIndexedValue();
+			case "every?" -> everyValue();
+			case "some" -> someValue();
+			case "remove" -> removeValue();
+			case "distinct" -> distinctValue();
+			case "partition" -> partitionValue();
+			case "take-while" -> takeWhileValue();
+			case "drop-while" -> dropWhileValue();
+			case "interleave" -> interleaveValue();
+			case "interpose" -> interposeValue();
+			case "zipmap" -> zipmapValue();
+			case "group-by" -> groupByValue();
+			case "sort" -> sortValue();
+			case "sort-by" -> sortByValue();
+			case "last" -> lastValue();
+			case "butlast" -> butlastValue();
+			case "second" -> secondValue();
+			case "update" -> updateValue();
+			case "update-in" -> updateInValue();
+			case "assoc-in" -> assocInValue();
+			case "get-in" -> getInValue();
+			case "select-keys" -> selectKeysValue();
+			case "merge-with" -> mergeWithValue();
+			case "into" -> intoValue();
+			case "frequencies" -> frequenciesValue();
+			case "comp" -> compValue();
+			case "partial" -> partialValue();
+			case "complement" -> complementValue();
+			case "constantly" -> constantlyValue();
+			case "identity" -> identityValue();
+			case "memoize" -> memoizeValue();
+			case "trampoline" -> trampolineValue();
+			case "coll?" -> collValue();
+			case "string?" -> stringPredValue();
+			case "symbol?" -> symbolPredValue();
+			case "class" -> classValue();
+			case "int", "long" -> intValue();
+			case "unchecked-add" -> uncheckedAddValue();
+			case "spit" -> spitValue();
+			case "slurp" -> slurpValue();
+			case "line-seq" -> lineSeqValue();
 			case "atom", "volatile!" -> atomValue();
 			case "deref" -> derefValue();
 			case "swap!", "vswap!" -> swapValue();
 			case "reset!", "vreset!" -> resetValue();
 			case "compare-and-set!" -> compareAndSetValue();
+			case "odd?" -> predValue(x -> list(sym("oddp"), x));
+			case "even?" -> predValue(x -> list(sym("evenp"), x));
+			case "zero?" -> predValue(x -> list(sym("zerop"), x));
+			case "pos?" -> predValue(x -> list(sym("plusp"), x));
+			case "neg?" -> predValue(x -> list(sym("minusp"), x));
+			case "nil?" -> predValue(x -> list(sym("null"), x));
+			case "some?" -> predValue(x -> list(sym("not"), list(sym("null"), x)));
+			case "not" -> notValue();
 			case "ex-data" -> exHelperValue("C%E-DATA");
 			case "ex-message" -> exHelperValue("C%E-MESSAGE");
 			case "ex-info" -> exInfoValue();
@@ -2461,24 +2947,27 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(coll), countForm(coll));
 	}
 
-	/** {@code empty?} as a value: the table-aware emptiness test, answering raw. */
+	/**
+	 * {@code empty?} as a value: the table-aware emptiness test, answering
+	 * {@code T}-or-false.
+	 */
 	private LispVal emptyValue() {
 		LispSymbol coll = new LispSymbol(mangle("empty-coll"));
-		return list(sym("lambda"), list(coll), emptyForm(coll));
+		return list(sym("lambda"), list(coll), booleanAnswer(emptyForm(coll)));
 	}
 
 	/** {@code map} as a value: {@code mapcar} over the seq view. */
 	private LispVal mapValue() {
 		LispSymbol fn = new LispSymbol(mangle("map-fn"));
 		LispSymbol coll = new LispSymbol(mangle("map-coll"));
-		return list(sym("lambda"), list(List.of(fn, coll)), list(sym("mapcar"), fn, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(fn, coll)), mapForm(fn, seqForm(coll)));
 	}
 
 	/** {@code filter} as a value: {@code remove-if-not} over the seq view. */
 	private LispVal filterValue() {
 		LispSymbol pred = new LispSymbol(mangle("filter-pred"));
 		LispSymbol coll = new LispSymbol(mangle("filter-coll"));
-		return list(sym("lambda"), list(List.of(pred, coll)), list(sym("remove-if-not"), pred, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(pred, coll)), filterForm(pred, seqForm(coll)));
 	}
 
 	/**
@@ -2489,9 +2978,8 @@ public final class ClojureLowering {
 	private LispVal reduceValue() {
 		LispSymbol fn = new LispSymbol(mangle("reduce-fn"));
 		LispSymbol args = new LispSymbol(mangle("reduce-args"));
-		LispVal two = list(sym("reduce"), fn, seqForm(list(sym("car"), args)));
-		LispVal three = list(sym("reduce"), fn, seqForm(list(sym("car"), list(sym("cdr"), args))),
-				sym(":initial-value"), list(sym("car"), args));
+		LispVal two = reduceForm(fn, seqForm(list(sym("car"), args)), null);
+		LispVal three = reduceForm(fn, seqForm(list(sym("car"), list(sym("cdr"), args))), list(sym("car"), args));
 		LispVal arity = list(sym("error"),
 				LispString.literal("reduce takes a function, an optional value and a collection"));
 		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
@@ -2549,14 +3037,83 @@ public final class ClojureLowering {
 	 */
 	private LispVal applyOf(List<LispVal> items) {
 		isTrue(items.size() >= 3, "apply takes a function and an argument list");
-		List<LispVal> out = new ArrayList<>();
-		out.add(sym("apply"));
-		out.add(fnValue(items.get(1)));
+		LispVal fun = fnValue(items.get(1));
+		List<LispVal> pres = new ArrayList<>();
 		for (int i = 2; i < items.size() - 1; i++) {
-			out.add(lower(items.get(i)));
+			pres.add(lower(items.get(i)));
 		}
-		out.add(seqForm(lower(items.get(items.size() - 1))));
-		return list(out);
+		LispVal last = seqForm(lower(items.get(items.size() - 1)));
+		if (isDirectFun(fun)) {
+			List<LispVal> out = new ArrayList<>();
+			out.add(sym("apply"));
+			out.add(fun);
+			out.addAll(pres);
+			out.add(last);
+			return list(out);
+		}
+		LispSymbol cell = freshTemp();
+		LispVal tail = pres.isEmpty() ? last : list(sym("append"), cons(sym("list"), pres), last);
+		return list(sym("let*"), list(List.of(list(cell, fun))), callableApply(cell, tail));
+	}
+
+	/**
+	 * {@code map} over an already-lowered function and seq view: direct for real
+	 * functions, through the dispatcher for values that may hold collections.
+	 */
+	private LispVal mapForm(LispVal fun, LispVal seq) {
+		if (isDirectFun(fun)) {
+			return list(sym("mapcar"), fun, seq);
+		}
+		LispSymbol cell = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol one = freshTemp();
+		return list(sym("let*"), list(List.of(list(cell, fun), list(coll, seq))),
+				list(sym("mapcar"), dispatchLambda(cell, one), coll));
+	}
+
+	/**
+	 * {@code filter} over an already-lowered predicate and seq view: the predicate
+	 * through the truthiness test, so a false object drops like nil. Direct for real
+	 * predicates, through the dispatcher otherwise.
+	 */
+	private LispVal filterForm(LispVal fun, LispVal seq) {
+		LispSymbol cell = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal invoke = isDirectFun(fun) ? list(sym("funcall"), cell, one)
+				: callableApply(cell, list(sym("list"), one));
+		LispVal test = list(sym("let"), list(List.of(list(got, invoke))),
+				list(sym("not"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable))));
+		return list(sym("let*"), list(List.of(list(cell, fun), list(coll, seq))),
+				list(sym("remove-if-not"), list(sym("lambda"), list(one), test), coll));
+	}
+
+	/**
+	 * {@code reduce} over an already-lowered function, seq view and optional initial
+	 * value: direct for real functions, through the dispatcher otherwise.
+	 */
+	private LispVal reduceForm(LispVal fun, LispVal seq, @Nullable LispVal init) {
+		if (isDirectFun(fun)) {
+			if (init == null) {
+				return list(sym("reduce"), fun, seq);
+			}
+			return list(sym("reduce"), fun, seq, sym(":initial-value"), init);
+		}
+		LispSymbol cell = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal step = list(sym("lambda"), list(List.of(acc, one)),
+				callableApply(cell, cons(sym("list"), List.of(acc, one))));
+		List<LispVal> call = new ArrayList<>();
+		call.add(sym("reduce"));
+		call.add(step);
+		call.add(seq);
+		if (init != null) {
+			call.add(sym(":initial-value"));
+			call.add(init);
+		}
+		return list(sym("let*"), list(List.of(list(cell, fun))), list(call));
 	}
 
 	/** {@code take}: the first {@code n} of the seq view, strictly. */
@@ -3308,6 +3865,10 @@ public final class ClojureLowering {
 				return stringValue(qualified.var());
 			}
 		}
+		LispVal collection = collectionValue(form);
+		if (collection != null) {
+			return collection;
+		}
 		return lower(form);
 	}
 
@@ -3327,21 +3888,40 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A predicate as a first-class value: a lambda answering a Common Lisp boolean, so a
-	 * sequence function called with it keeps testing raw truthiness. A call answers the
-	 * Clojure {@code T}-or-false instead, for printing; null when not a predicate.
+	 * A predicate as a first-class value: a lambda answering {@code T}-or-false, like a
+	 * call, so {@code (map odd? ...)} prints what the oracle prints; sequence operators
+	 * that need raw truthiness test through it explicitly. Null when not a predicate.
 	 * @param name the Clojure name
 	 * @return the lambda, or null
 	 */
 	private @Nullable LispVal predicateValue(String name) {
 		LispSymbol arg = new LispSymbol(mangle("pred"));
 		return switch (name) {
-			case "false?" -> list(sym("LAMBDA"), list(arg), list(sym("EQ"), arg, this.falseVariable));
-			case "true?" -> list(sym("LAMBDA"), list(arg), list(sym("EQ"), arg, TRUE_CONST));
-			case "boolean?" -> list(sym("LAMBDA"), list(arg),
-					list(sym("OR"), list(sym("EQ"), arg, TRUE_CONST), list(sym("EQ"), arg, this.falseVariable)));
+			case "false?" -> list(sym("LAMBDA"), list(arg), booleanAnswer(list(sym("EQ"), arg, this.falseVariable)));
+			case "true?" -> list(sym("LAMBDA"), list(arg), booleanAnswer(list(sym("EQ"), arg, TRUE_CONST)));
+			case "boolean?" -> list(sym("LAMBDA"), list(arg), booleanAnswer(
+					list(sym("OR"), list(sym("EQ"), arg, TRUE_CONST), list(sym("EQ"), arg, this.falseVariable))));
 			default -> null;
 		};
+	}
+
+	/**
+	 * A one-argument predicate as a function value, answering {@code T}-or-false like its
+	 * call: the raw Common Lisp test runs once, behind a temporary.
+	 * @param raw the raw test over the bound value
+	 * @return the lambda
+	 */
+	/** {@code not} as a value: the falsehood of Clojure truthiness. */
+	private LispVal notValue() {
+		LispSymbol arg = freshTemp();
+		return list(sym("lambda"), list(arg),
+				list(sym("if"), list(sym("or"), list(sym("null"), arg), list(sym("eq"), arg, this.falseVariable)),
+						TRUE_CONST, this.falseVariable));
+	}
+
+	private LispVal predValue(java.util.function.Function<LispVal, LispVal> raw) {
+		LispSymbol arg = freshTemp();
+		return list(sym("lambda"), list(arg), booleanAnswer(raw.apply(arg)));
 	}
 
 	private LispVal strCall(List<LispVal> items) {
@@ -3635,6 +4215,1471 @@ public final class ClojureLowering {
 	private LispVal defaultFor(Map<String, LispVal> defaults, String name) {
 		LispVal found = defaults.get(name);
 		return found == null ? NIL_CONST : lower(found);
+	}
+
+	// b15 seq verbs: each over the seq view, strict lists, nil-for-empty
+
+	/**
+	 * {@code keep}: the non-nil results of the function over the seq view. {@code false}
+	 * is kept (only nil drops), and a signalling function signals --
+	 * {@code (keep inc [1 nil 2])} throws, like the oracle, instead of skipping.
+	 */
+	private LispVal keepForm(LispVal fn, LispVal seq) {
+		LispSymbol fun = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal mapped = list(sym("mapcar"), list(sym("lambda"), list(one), callFun(fn, fun, List.of(one))), coll);
+		return list(sym("let*"), list(List.of(list(fun, fn), list(coll, seq))),
+				list(sym("remove-if"), list(sym("function"), sym("null")), mapped));
+	}
+
+	/** {@code keep} as a value: a two-argument lambda over the same removal. */
+	private LispVal keepValue() {
+		LispSymbol fun = new LispSymbol(mangle("keep-fn"));
+		LispSymbol coll = new LispSymbol(mangle("keep-coll"));
+		return list(sym("lambda"), list(List.of(fun, coll)), keepForm(fun, seqForm(coll)));
+	}
+
+	/**
+	 * {@code keep-indexed}: like {@code keep}, but the function takes the index and the
+	 * item. A labels self call accumulating in reverse, so it stays tail-recursive.
+	 */
+	private LispVal keepIndexedForm(LispVal fn, LispVal seq) {
+		String name = mangle("keep-indexed-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fun = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol at = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal invoked = callFun(fn, fun, List.of(at, list(sym("car"), rest)));
+		LispVal step = list(sym("if"), list(sym("null"), rest), list(sym("reverse"), acc),
+				list(sym("let"), list(List.of(list(got, invoked))),
+						list(sym("if"), list(sym("null"), got),
+								list(self, list(sym("+"), at, new LispInteger(1)), list(sym("cdr"), rest), acc),
+								list(self, list(sym("+"), at, new LispInteger(1)), list(sym("cdr"), rest),
+										list(sym("cons"), got, acc)))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(at, rest, acc)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(fun, fn), list(coll, seq))),
+				list(sym("labels"), list(List.of(binding)), list(self, new LispInteger(0), coll, NIL_CONST)));
+	}
+
+	/** {@code keep-indexed} as a value: a two-argument lambda over the same loop. */
+	private LispVal keepIndexedValue() {
+		LispSymbol fun = new LispSymbol(mangle("keep-indexed-fn"));
+		LispSymbol coll = new LispSymbol(mangle("keep-indexed-coll"));
+		return list(sym("lambda"), list(List.of(fun, coll)), keepIndexedForm(fun, seqForm(coll)));
+	}
+
+	/**
+	 * {@code map-indexed}: the function of index and item over the seq view, strictly.
+	 * Same loop as {@link #keepIndexedForm}, keeping every result.
+	 */
+	private LispVal mapIndexedForm(LispVal fn, LispVal seq) {
+		String name = mangle("map-indexed-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fun = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol at = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispVal invoked = callFun(fn, fun, List.of(at, list(sym("car"), rest)));
+		LispVal step = list(sym("if"), list(sym("null"), rest), list(sym("reverse"), acc), list(self,
+				list(sym("+"), at, new LispInteger(1)), list(sym("cdr"), rest), list(sym("cons"), invoked, acc)));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(at, rest, acc)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(fun, fn), list(coll, seq))),
+				list(sym("labels"), list(List.of(binding)), list(self, new LispInteger(0), coll, NIL_CONST)));
+	}
+
+	/** {@code map-indexed} as a value: a two-argument lambda over the same loop. */
+	private LispVal mapIndexedValue() {
+		LispSymbol fun = new LispSymbol(mangle("map-indexed-fn"));
+		LispSymbol coll = new LispSymbol(mangle("map-indexed-coll"));
+		return list(sym("lambda"), list(List.of(fun, coll)), mapIndexedForm(fun, seqForm(coll)));
+	}
+
+	/**
+	 * {@code every?}: true when the predicate holds for every member, answering
+	 * {@code T}-or-false directly (empty is true, like the oracle).
+	 */
+	private LispVal everyForm(LispVal fn, LispVal seq) {
+		String name = mangle("every-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fun = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("if"), list(sym("null"), rest), TRUE_CONST,
+				list(sym("let"), list(List.of(list(got, callFun(fn, fun, List.of(list(sym("car"), rest)))))),
+						list(sym("if"),
+								list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+								this.falseVariable, list(self, list(sym("cdr"), rest)))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(fun, fn))),
+				list(sym("labels"), list(List.of(binding)), list(self, seq)));
+	}
+
+	/** {@code every?} as a value: a two-argument lambda over the same loop. */
+	private LispVal everyValue() {
+		LispSymbol pred = new LispSymbol(mangle("every-pred"));
+		LispSymbol coll = new LispSymbol(mangle("every-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), everyForm(pred, seqForm(coll)));
+	}
+
+	/**
+	 * {@code some}: the first truthy predicate result, or nil. The predicate's own value
+	 * answers (not the member), like the oracle.
+	 */
+	private LispVal someForm(LispVal fn, LispVal seq) {
+		String name = mangle("some-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fun = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("if"), list(sym("null"), rest), NIL_CONST,
+				list(sym("let"), list(List.of(list(got, callFun(fn, fun, List.of(list(sym("car"), rest)))))),
+						list(sym("if"),
+								list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+								list(self, list(sym("cdr"), rest)), got)));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(fun, fn))),
+				list(sym("labels"), list(List.of(binding)), list(self, seq)));
+	}
+
+	/** {@code some} as a value: a two-argument lambda over the same loop. */
+	private LispVal someValue() {
+		LispSymbol pred = new LispSymbol(mangle("some-pred"));
+		LispSymbol coll = new LispSymbol(mangle("some-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), someForm(pred, seqForm(coll)));
+	}
+
+	/** {@code remove}: the members the predicate rejects, over the seq view. */
+	private LispVal removeForm(LispVal fn, LispVal seq) {
+		LispSymbol pred = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal invoke = isDirectFun(fn) ? list(sym("funcall"), pred, one)
+				: callableApply(pred, list(sym("list"), one));
+		LispVal test = list(sym("let"), list(List.of(list(got, invoke))),
+				list(sym("not"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable))));
+		return list(sym("let*"), list(List.of(list(pred, fn), list(coll, seq))),
+				list(sym("remove-if"), list(sym("lambda"), list(one), test), coll));
+	}
+
+	/** {@code remove} as a value: a two-argument lambda over the same removal. */
+	private LispVal removeValue() {
+		LispSymbol pred = new LispSymbol(mangle("remove-pred"));
+		LispSymbol coll = new LispSymbol(mangle("remove-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), removeForm(pred, seqForm(coll)));
+	}
+
+	/**
+	 * {@code distinct}: the seq view with later duplicates dropped, first occurrences
+	 * kept in order. Membership is {@code equal} (vectors key by identity, like the table
+	 * runtime).
+	 */
+	private LispVal distinctForm(LispVal seq) {
+		String name = mangle("distinct-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol table = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal keep = list(sym("progn"), list(sym("setf"), list(sym("gethash"), one, table), one),
+				list(self, list(sym("cdr"), rest), list(sym("cons"), one, acc)));
+		LispVal step = list(sym("if"), list(sym("null"), rest), list(sym("reverse"), acc),
+				list(sym("let"), list(List.of(list(one, list(sym("car"), rest)))),
+						list(sym("if"), list(sym("eq"), list(sym("gethash"), one, table, miss), miss), keep,
+								list(self, list(sym("cdr"), rest), acc))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest, acc)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(table, makeTable()), list(miss, list(sym("list"), NIL_CONST)))),
+				list(sym("labels"), list(List.of(binding)), list(self, seq, NIL_CONST)));
+	}
+
+	/** {@code distinct} as a value: a one-argument lambda over the same loop. */
+	private LispVal distinctValue() {
+		LispSymbol coll = new LispSymbol(mangle("distinct-coll"));
+		return list(sym("lambda"), list(coll), distinctForm(seqForm(coll)));
+	}
+
+	/** {@code partition}: size, optional step (defaulting to the size), collection. */
+	private LispVal partitionOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "partition takes a size, an optional step and a collection");
+		LispSymbol size = freshTemp();
+		LispSymbol step = freshTemp();
+		LispSymbol coll = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(size, lower(items.get(1))));
+		bindings.add(list(step, n == 3 ? lower(items.get(2)) : size));
+		bindings.add(list(coll, seqForm(lower(items.get(n)))));
+		return list(sym("let*"), list(bindings), partitionForm(size, step, coll));
+	}
+
+	/**
+	 * The partition loop over already-bound size, step and seq: full groups consed, an
+	 * incomplete tail dropped, like the oracle. A non-positive size signals.
+	 */
+	private LispVal partitionForm(LispVal size, LispVal step, LispVal seq) {
+		String name = mangle("partition-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol rest = freshTemp();
+		LispSymbol part = freshTemp();
+		LispVal stepBody = list(sym("if"), list(sym("null"), rest), NIL_CONST,
+				list(sym("let"), list(List.of(list(part, takeForm(size, rest)))),
+						list(sym("if"), list(sym("<"), list(sym("length"), part), size), NIL_CONST,
+								list(sym("cons"), part, list(self, list(sym("nthcdr"), step, rest))))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(stepBody, List.of())));
+		return list(sym("if"), list(sym("<="), size, new LispInteger(0)),
+				list(sym("error"), LispString.literal("partition takes a positive size")),
+				list(sym("labels"), list(List.of(binding)), list(self, seq)));
+	}
+
+	/** {@code partition} as a value: a one- or two-rest lambda over the same loop. */
+	private LispVal partitionValue() {
+		LispSymbol args = new LispSymbol(mangle("partition-args"));
+		LispVal arity = list(sym("error"),
+				LispString.literal("partition takes a size, an optional step and a collection"));
+		LispVal one = partitionForm(list(sym("car"), args), list(sym("car"), args),
+				seqForm(list(sym("car"), list(sym("cdr"), args))));
+		LispVal two = partitionForm(list(sym("car"), args), list(sym("car"), list(sym("cdr"), args)),
+				seqForm(list(sym("car"), list(sym("cdr"), list(sym("cdr"), args)))));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)),
+						list(sym("if"), list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), one, arity)),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), list(sym("cdr"), args)))), two),
+				list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/**
+	 * {@code take-while}: the strict prefix while the predicate stays truthy
+	 * ({@code false} stops, like nil).
+	 */
+	private LispVal takeWhileForm(LispVal fn, LispVal seq) {
+		String name = mangle("take-while-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol pred = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal invoked = callFun(fn, pred, List.of(list(sym("car"), rest)));
+		LispVal step = list(sym("if"), list(sym("null"), rest), list(sym("reverse"), acc), list(sym("let"),
+				list(List.of(list(got, invoked))),
+				list(sym("if"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+						list(sym("reverse"), acc),
+						list(self, list(sym("cdr"), rest), list(sym("cons"), list(sym("car"), rest), acc)))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest, acc)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(pred, fn))),
+				list(sym("labels"), list(List.of(binding)), list(self, seq, NIL_CONST)));
+	}
+
+	/** {@code take-while} as a value: a two-argument lambda over the same loop. */
+	private LispVal takeWhileValue() {
+		LispSymbol pred = new LispSymbol(mangle("take-while-pred"));
+		LispSymbol coll = new LispSymbol(mangle("take-while-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), takeWhileForm(pred, seqForm(coll)));
+	}
+
+	/** {@code drop-while}: the seq view past the truthy prefix, sharing the tail. */
+	private LispVal dropWhileForm(LispVal fn, LispVal seq) {
+		String name = mangle("drop-while-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol pred = freshTemp();
+		LispSymbol rest = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal invoked = callFun(fn, pred, List.of(list(sym("car"), rest)));
+		LispVal step = list(sym("if"), list(sym("null"), rest), NIL_CONST,
+				list(sym("let"), list(List.of(list(got, invoked))),
+						list(sym("if"),
+								list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)), rest,
+								list(self, list(sym("cdr"), rest)))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(pred, fn))),
+				list(sym("labels"), list(List.of(binding)), list(self, seq)));
+	}
+
+	/** {@code drop-while} as a value: a two-argument lambda over the same loop. */
+	private LispVal dropWhileValue() {
+		LispSymbol pred = new LispSymbol(mangle("drop-while-pred"));
+		LispSymbol coll = new LispSymbol(mangle("drop-while-coll"));
+		return list(sym("lambda"), list(List.of(pred, coll)), dropWhileForm(pred, seqForm(coll)));
+	}
+
+	/** {@code interleave}: round-robin over the seq views, stopping at the shortest. */
+	private LispVal interleaveOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 0) {
+			return NIL_CONST;
+		}
+		List<LispVal> seqs = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			seqs.add(seqForm(lower(items.get(i))));
+		}
+		return interleaveGo(cons(sym("list"), seqs));
+	}
+
+	/**
+	 * The interleave loop over an already-lowered list of seq views: heads appended while
+	 * every view is non-empty.
+	 */
+	private LispVal interleaveGo(LispVal lists) {
+		String name = mangle("interleave-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol rest = freshTemp();
+		LispVal stop = list(sym("or"), list(sym("null"), rest),
+				list(sym("not"), list(sym("every"), list(sym("function"), sym("identity")), rest)));
+		LispVal step = list(sym("if"), stop, NIL_CONST,
+				list(sym("append"), list(sym("mapcar"), list(sym("function"), sym("car")), rest),
+						list(self, list(sym("mapcar"), list(sym("function"), sym("cdr")), rest))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(rest)), cons(step, List.of())));
+		return list(sym("labels"), list(List.of(binding)), list(self, lists));
+	}
+
+	/** {@code interleave} as a value: every argument's seq view interleaved. */
+	private LispVal interleaveValue() {
+		LispSymbol colls = new LispSymbol(mangle("interleave-colls"));
+		return list(sym("lambda"), list(AMPERSAND_REST, colls), interleaveGo(list(sym("mapcar"), seqValue(), colls)));
+	}
+
+	/**
+	 * {@code interpose}: the separator between every two members, strictly. The head
+	 * answers bare, so a one-member collection never shows the separator.
+	 */
+	private LispVal interposeForm(LispVal sep, LispVal seq) {
+		LispSymbol gap = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal looped = list(sym("mapcan"), list(sym("lambda"), list(one), list(sym("list"), gap, one)),
+				list(sym("cdr"), coll));
+		return list(sym("let*"), list(List.of(list(gap, sep), list(coll, seq))),
+				list(sym("if"), list(sym("null"), coll), NIL_CONST, list(sym("cons"), list(sym("car"), coll), looped)));
+	}
+
+	/** {@code interpose} as a value: a two-argument lambda over the same shape. */
+	private LispVal interposeValue() {
+		LispSymbol gap = new LispSymbol(mangle("interpose-sep"));
+		LispSymbol coll = new LispSymbol(mangle("interpose-coll"));
+		return list(sym("lambda"), list(List.of(gap, coll)), interposeForm(gap, seqForm(coll)));
+	}
+
+	/**
+	 * {@code zipmap}: a fresh map pairing each key with its value, stopping at the
+	 * shorter side, like the oracle.
+	 */
+	private LispVal zipmapForm(LispVal keys, LispVal vals) {
+		String name = mangle("zipmap-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol table = freshTemp();
+		LispSymbol keyRest = freshTemp();
+		LispSymbol valRest = freshTemp();
+		LispVal step = list(sym("if"), list(sym("or"), list(sym("null"), keyRest), list(sym("null"), valRest)), table,
+				list(sym("progn"),
+						list(sym("setf"), list(sym("gethash"), list(sym("car"), keyRest), table),
+								list(sym("car"), valRest)),
+						list(self, list(sym("cdr"), keyRest), list(sym("cdr"), valRest))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(keyRest, valRest)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(table, makeTable()))),
+				list(sym("labels"), list(List.of(binding)), list(self, keys, vals)));
+	}
+
+	/** {@code zipmap} as a value: a two-argument lambda over the same loop. */
+	private LispVal zipmapValue() {
+		LispSymbol keys = new LispSymbol(mangle("zipmap-keys"));
+		LispSymbol vals = new LispSymbol(mangle("zipmap-vals"));
+		return list(sym("lambda"), list(List.of(keys, vals)), zipmapForm(seqForm(keys), seqForm(vals)));
+	}
+
+	/**
+	 * {@code group-by}: a fresh map from each function value to the vector of members
+	 * answering it, in encounter order. Members accumulate reversed, then convert.
+	 */
+	private LispVal groupByForm(LispVal fn, LispVal seq) {
+		LispSymbol fun = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal keyed = callFun(fn, fun, List.of(one));
+		LispVal collect = list(sym("dolist"), list(List.of(one, seq)),
+				list(sym("let"), list(List.of(list(key, keyed))), list(sym("setf"), list(sym("gethash"), key, table),
+						list(sym("cons"), one, list(sym("gethash"), key, table, NIL_CONST)))));
+		LispVal freeze = list(sym("maphash"), list(sym("lambda"), list(List.of(key, val)), list(sym("setf"),
+				list(sym("gethash"), key, table), list(sym("coerce"), list(sym("nreverse"), val), quoted("vector")))),
+				table);
+		return list(sym("let*"), list(List.of(list(fun, fn), list(table, makeTable()))), collect, freeze, table);
+	}
+
+	/** {@code group-by} as a value: a two-argument lambda over the same pass. */
+	private LispVal groupByValue() {
+		LispSymbol fun = new LispSymbol(mangle("group-by-fn"));
+		LispSymbol coll = new LispSymbol(mangle("group-by-coll"));
+		return list(sym("lambda"), list(List.of(fun, coll)), groupByForm(fun, seqForm(coll)));
+	}
+
+	/** {@code sort}: the seq view copied and sorted, with an optional comparator. */
+	private LispVal sortOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "sort takes a collection and an optional comparator");
+		LispVal seq = seqForm(lower(items.get(n)));
+		if (n == 1) {
+			return sortForm(seq, null);
+		}
+		return sortForm(seq, fnValue(items.get(1)));
+	}
+
+	/**
+	 * The sort over an already-lowered seq view: a copy (the primitive sorts
+	 * destructively) under the default or wrapped comparator.
+	 */
+	private LispVal sortForm(LispVal seq, @Nullable LispVal cmp) {
+		LispSymbol coll = freshTemp();
+		LispVal pred;
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(coll, list(sym("copy-list"), seq)));
+		if (cmp == null) {
+			pred = defaultCmpFn();
+		}
+		else {
+			LispSymbol fun = freshTemp();
+			LispSymbol left = freshTemp();
+			LispSymbol right = freshTemp();
+			LispSymbol got = freshTemp();
+			bindings.add(list(fun, cmp));
+			LispVal truthy = list(sym("let"), list(List.of(list(got, callFun(cmp, fun, List.of(left, right))))),
+					list(sym("if"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+							NIL_CONST, TRUE_CONST));
+			pred = list(sym("lambda"), list(List.of(left, right)), truthy);
+		}
+		return list(sym("let*"), list(bindings), list(sym("sort"), coll, pred));
+	}
+
+	/**
+	 * The default comparator: numbers with {@code <}, strings with {@code string<},
+	 * characters with {@code char<}, keywords by spelling; anything else signals instead
+	 * of answering wrongly.
+	 */
+	private LispVal defaultCmpFn() {
+		LispSymbol left = new LispSymbol(mangle("sort-a"));
+		LispSymbol right = new LispSymbol(mangle("sort-b"));
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("and"), list(sym("numberp"), left), list(sym("numberp"), right)),
+				list(sym("<"), left, right)));
+		branches.add(list(list(sym("and"), list(sym("stringp"), left), list(sym("stringp"), right)),
+				list(sym("string<"), left, right)));
+		branches.add(list(list(sym("and"), list(sym("characterp"), left), list(sym("characterp"), right)),
+				list(sym("char<"), left, right)));
+		branches.add(list(list(sym("and"), keywordTest(left), keywordTest(right)),
+				list(sym("string<"), list(sym("cadr"), left), list(sym("cadr"), right))));
+		branches
+			.add(list(TRUE_CONST, list(sym("error"), LispString.literal("sort needs mutually comparable elements"))));
+		return list(sym("lambda"), list(List.of(left, right)), cons(sym("cond"), branches));
+	}
+
+	/** Whether the bound value is a keyword wrapper. */
+	private static LispVal keywordTest(LispVal value) {
+		return list(sym("and"), list(sym("consp"), value), list(sym("eq"), list(sym("car"), value), KEYWORD_TAG));
+	}
+
+	/** {@code sort} as a value: a one- or two-argument lambda over the same sort. */
+	private LispVal sortValue() {
+		LispSymbol args = new LispSymbol(mangle("sort-args"));
+		LispVal arity = list(sym("error"), LispString.literal("sort takes a collection and an optional comparator"));
+		LispVal one = sortForm(seqForm(list(sym("car"), args)), null);
+		LispVal two = sortForm(seqForm(list(sym("car"), list(sym("cdr"), args))), list(sym("car"), args));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/** {@code sort-by}: the seq view sorted by key, with an optional comparator. */
+	private LispVal sortByOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "sort-by takes a key function, a collection and an optional comparator");
+		LispVal coll = seqForm(lower(items.get(n)));
+		if (n == 2) {
+			return sortByForm(fnValue(items.get(1)), coll, null);
+		}
+		return sortByForm(fnValue(items.get(1)), coll, fnValue(items.get(2)));
+	}
+
+	/**
+	 * The key sort over already-lowered key function, seq view and optional comparator:
+	 * the comparator (or the default) runs on the keyed values.
+	 */
+	private LispVal sortByForm(LispVal keyFn, LispVal seq, @Nullable LispVal cmp) {
+		LispSymbol key = freshTemp();
+		LispSymbol coll = freshTemp();
+		LispSymbol left = freshTemp();
+		LispSymbol right = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(key, keyFn));
+		bindings.add(list(coll, list(sym("copy-list"), seq)));
+		LispVal keyedLeft = callFun(keyFn, key, List.of(left));
+		LispVal keyedRight = callFun(keyFn, key, List.of(right));
+		LispVal predBody;
+		if (cmp == null) {
+			predBody = defaultCmpBody(keyedLeft, keyedRight);
+		}
+		else {
+			LispSymbol fun = freshTemp();
+			LispSymbol got = freshTemp();
+			LispVal invoked = callFun(cmp, fun, List.of(keyedLeft, keyedRight));
+			bindings.add(list(fun, cmp));
+			predBody = list(sym("let"), list(List.of(list(got, invoked))),
+					list(sym("if"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+							NIL_CONST, TRUE_CONST));
+		}
+		LispVal pred = list(sym("lambda"), list(List.of(left, right)), predBody);
+		return list(sym("let*"), list(bindings), list(sym("sort"), coll, pred));
+	}
+
+	/** The default comparison over two already-lowered key forms. */
+	private LispVal defaultCmpBody(LispVal left, LispVal right) {
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("and"), list(sym("numberp"), left), list(sym("numberp"), right)),
+				list(sym("<"), left, right)));
+		branches.add(list(list(sym("and"), list(sym("stringp"), left), list(sym("stringp"), right)),
+				list(sym("string<"), left, right)));
+		branches.add(list(list(sym("and"), list(sym("characterp"), left), list(sym("characterp"), right)),
+				list(sym("char<"), left, right)));
+		branches.add(list(list(sym("and"), keywordTest(left), keywordTest(right)),
+				list(sym("string<"), list(sym("cadr"), left), list(sym("cadr"), right))));
+		branches
+			.add(list(TRUE_CONST, list(sym("error"), LispString.literal("sort needs mutually comparable elements"))));
+		return cons(sym("cond"), branches);
+	}
+
+	/** {@code sort-by} as a value: key, then one or two more arguments. */
+	private LispVal sortByValue() {
+		LispSymbol key = new LispSymbol(mangle("sort-by-key"));
+		LispSymbol args = new LispSymbol(mangle("sort-by-args"));
+		LispVal arity = list(sym("error"),
+				LispString.literal("sort-by takes a key function, a collection and an optional comparator"));
+		LispVal one = sortByForm(key, seqForm(list(sym("car"), args)), null);
+		LispVal two = sortByForm(key, seqForm(list(sym("car"), list(sym("cdr"), args))), list(sym("car"), args));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(List.of(key, AMPERSAND_REST, args)), body);
+	}
+
+	/** {@code last} as a value: the final member, or nil. */
+	private LispVal lastValue() {
+		LispSymbol coll = new LispSymbol(mangle("last-coll"));
+		return list(sym("lambda"), list(coll), list(sym("car"), list(sym("last"), seqForm(coll))));
+	}
+
+	/** {@code butlast} as a value: everything but the final member. */
+	private LispVal butlastValue() {
+		LispSymbol coll = new LispSymbol(mangle("butlast-coll"));
+		return list(sym("lambda"), list(coll), list(sym("butlast"), seqForm(coll)));
+	}
+
+	/** {@code second} as a value: the member past the head, or nil. */
+	private LispVal secondValue() {
+		LispSymbol coll = new LispSymbol(mangle("second-coll"));
+		return list(sym("lambda"), list(coll), list(sym("cadr"), seqForm(coll)));
+	}
+
+	// b15 map verbs: copy-on-write over fresh tables, like assoc/merge
+
+	/**
+	 * One association over already-lowered map, key and value: a fresh table over the old
+	 * pairs plus the pair, so {@code assoc} onto nil builds from empty.
+	 */
+	private LispVal assocPairForm(LispVal map, LispVal key, LispVal val) {
+		LispSymbol one = freshTemp();
+		LispVal grown = cons(sym("append"),
+				List.of(list(sym("if"), one, tablePlist(one), NIL_CONST), list(sym("list"), key, val)));
+		return list(sym("let*"), list(List.of(list(one, map))), tableFromPlist(grown));
+	}
+
+	/** {@code update}: the key rewritten through the function and extra arguments. */
+	private LispVal updateOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 3, "update takes a map, a key, a function and arguments");
+		LispSymbol map = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol fun = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(map, lower(items.get(1))));
+		bindings.add(list(key, lower(items.get(2))));
+		bindings.add(list(fun, fnValue(items.get(3))));
+		return list(sym("let*"), list(bindings), updateForm(map, key, fun, cons(sym("list"), lowers(items, 4))));
+	}
+
+	/**
+	 * The update over already-lowered map, key, function and the extra-arguments tail
+	 * list: {@code (apply f (cons current tail))} associated back, copy-on-write.
+	 */
+	private LispVal updateForm(LispVal map, LispVal key, LispVal fun, LispVal tail) {
+		LispSymbol one = freshTemp();
+		LispSymbol at = freshTemp();
+		LispSymbol fn = freshTemp();
+		LispVal next = callableApply(fn, list(sym("cons"), getForm(one, at, NIL_CONST), tail));
+		LispVal grown = cons(sym("append"),
+				List.of(list(sym("if"), one, tablePlist(one), NIL_CONST), list(sym("list"), at, next)));
+		return list(sym("let*"), list(List.of(list(one, map), list(at, key), list(fn, fun))), tableFromPlist(grown));
+	}
+
+	/** {@code update} as a value: map, key, function and any extra arguments. */
+	private LispVal updateValue() {
+		LispSymbol map = new LispSymbol(mangle("update-map"));
+		LispSymbol key = new LispSymbol(mangle("update-key"));
+		LispSymbol fun = new LispSymbol(mangle("update-fn"));
+		LispSymbol rest = new LispSymbol(mangle("update-rest"));
+		return list(sym("lambda"), list(List.of(map, key, fun, AMPERSAND_REST, rest)), updateForm(map, key, fun, rest));
+	}
+
+	/** The key vector of {@code update-in}/{@code assoc-in}/{@code get-in}. */
+	private static List<LispVal> keysVector(LispVal datum, String what) {
+		List<LispVal> keyItems = items(datum);
+		if (keyItems == null || keyItems.isEmpty() || keyItems.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException(what + " takes a vector of keys, not " + datum.print());
+		}
+		return keyItems.subList(1, keyItems.size());
+	}
+
+	/** {@code update-in}: the nested update, recursing down the key vector. */
+	private LispVal updateInOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 3, "update-in takes a map, keys, a function and arguments");
+		List<LispVal> keyData = keysVector(items.get(2), "update-in");
+		isTrue(!keyData.isEmpty(), "update-in takes a non-empty vector of keys");
+		LispSymbol map = freshTemp();
+		LispSymbol fun = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(map, lower(items.get(1))));
+		bindings.add(list(fun, fnValue(items.get(3))));
+		List<LispVal> keys = new ArrayList<>();
+		for (LispVal keyDatum : keyData) {
+			LispSymbol key = freshTemp();
+			bindings.add(list(key, lower(keyDatum)));
+			keys.add(key);
+		}
+		return list(sym("let*"), list(bindings), updateInForm(map, keys, fun, cons(sym("list"), lowers(items, 4))));
+	}
+
+	/**
+	 * The nested update over already-lowered map, keys, function and extra-arguments
+	 * tail: the leaf updates, outer levels re-associate through a one-argument lambda.
+	 */
+	private LispVal updateInForm(LispVal map, List<LispVal> keys, LispVal fun, LispVal tail) {
+		if (keys.size() == 1) {
+			return updateForm(map, keys.get(0), fun, tail);
+		}
+		LispSymbol inner = freshTemp();
+		LispVal step = list(sym("lambda"), list(inner), updateInForm(inner, keys.subList(1, keys.size()), fun, tail));
+		return updateForm(map, keys.get(0), step, NIL_CONST);
+	}
+
+	/** {@code update-in} as a value: the key sequence walked at run time. */
+	private LispVal updateInValue() {
+		String name = mangle("update-in-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol map = new LispSymbol(mangle("update-in-map"));
+		LispSymbol keys = new LispSymbol(mangle("update-in-keys"));
+		LispSymbol fun = new LispSymbol(mangle("update-in-fn"));
+		LispSymbol rest = new LispSymbol(mangle("update-in-rest"));
+		LispSymbol left = freshTemp();
+		LispSymbol whole = freshTemp();
+		LispSymbol inner = freshTemp();
+		LispVal step = list(sym("lambda"), list(inner), list(self, list(sym("cdr"), left), inner));
+		LispVal go = list(sym("if"), list(sym("null"), left),
+				list(sym("error"), LispString.literal("update-in takes a non-empty vector of keys")),
+				list(sym("if"), list(sym("null"), list(sym("cdr"), left)),
+						updateForm(whole, list(sym("car"), left), fun, rest),
+						updateForm(whole, list(sym("car"), left), step, NIL_CONST)));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(left, whole)), cons(go, List.of())));
+		return list(sym("lambda"), list(List.of(map, keys, fun, AMPERSAND_REST, rest)),
+				list(sym("labels"), list(List.of(binding)), list(self, seqForm(keys), map)));
+	}
+
+	/** {@code assoc-in}: the nested association, building missing levels. */
+	private LispVal assocInOf(List<LispVal> items) {
+		isTrue(items.size() == 4, "assoc-in takes a map, keys and a value");
+		List<LispVal> keyData = keysVector(items.get(2), "assoc-in");
+		LispSymbol map = freshTemp();
+		LispSymbol val = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(map, lower(items.get(1))));
+		bindings.add(list(val, lower(items.get(3))));
+		if (keyData.isEmpty()) {
+			// like the oracle: no keys associates under nil
+			return list(sym("let*"), list(bindings), assocPairForm(map, NIL_CONST, val));
+		}
+		List<LispVal> keys = new ArrayList<>();
+		for (LispVal keyDatum : keyData) {
+			LispSymbol key = freshTemp();
+			bindings.add(list(key, lower(keyDatum)));
+			keys.add(key);
+		}
+		return list(sym("let*"), list(bindings), assocInForm(map, keys, val));
+	}
+
+	/**
+	 * The nested association over already-lowered map, keys and value: the leaf
+	 * associates, outer levels re-associate through a one-argument lambda.
+	 */
+	private LispVal assocInForm(LispVal map, List<LispVal> keys, LispVal val) {
+		if (keys.size() == 1) {
+			return assocPairForm(map, keys.get(0), val);
+		}
+		LispSymbol inner = freshTemp();
+		LispVal step = list(sym("lambda"), list(inner), assocInForm(inner, keys.subList(1, keys.size()), val));
+		return updateForm(map, keys.get(0), step, NIL_CONST);
+	}
+
+	/** {@code assoc-in} as a value: the key sequence walked at run time. */
+	private LispVal assocInValue() {
+		String name = mangle("assoc-in-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol map = new LispSymbol(mangle("assoc-in-map"));
+		LispSymbol keys = new LispSymbol(mangle("assoc-in-keys"));
+		LispSymbol val = new LispSymbol(mangle("assoc-in-val"));
+		LispSymbol left = freshTemp();
+		LispSymbol whole = freshTemp();
+		LispSymbol inner = freshTemp();
+		LispVal step = list(sym("lambda"), list(inner), list(self, list(sym("cdr"), left), inner));
+		LispVal go = list(sym("if"), list(sym("null"), list(sym("cdr"), left)),
+				assocPairForm(whole, list(sym("car"), left), val),
+				updateForm(whole, list(sym("car"), left), step, NIL_CONST));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(left, whole)), cons(go, List.of())));
+		return list(sym("lambda"), list(List.of(map, keys, val)),
+				list(sym("labels"), list(List.of(binding)), list(self, seqForm(keys), map)));
+	}
+
+	/**
+	 * {@code get-in}: the read folded down the key vector, the default threaded through
+	 * every level, like the oracle.
+	 */
+	private LispVal getInOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 3, "get-in takes a map, keys and an optional default");
+		List<LispVal> keyData = keysVector(items.get(2), "get-in");
+		LispVal dflt = n == 3 ? lower(items.get(3)) : NIL_CONST;
+		LispVal acc = lower(items.get(1));
+		for (LispVal keyDatum : keyData) {
+			acc = getForm(acc, lower(keyDatum), dflt);
+		}
+		return acc;
+	}
+
+	/** {@code get-in} as a value: the key sequence walked at run time. */
+	private LispVal getInValue() {
+		String name = mangle("get-in-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol map = new LispSymbol(mangle("get-in-map"));
+		LispSymbol keys = new LispSymbol(mangle("get-in-keys"));
+		LispSymbol rest = new LispSymbol(mangle("get-in-rest"));
+		LispSymbol left = freshTemp();
+		LispSymbol whole = freshTemp();
+		LispSymbol dflt = freshTemp();
+		LispVal go = list(sym("if"), list(sym("null"), left), whole,
+				list(self, list(sym("cdr"), left), getForm(whole, list(sym("car"), left), dflt)));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(left, whole)), cons(go, List.of())));
+		return list(sym("lambda"), list(List.of(map, keys, AMPERSAND_REST, rest)), list(sym("let*"),
+				list(List.of(list(dflt, list(sym("if"), list(sym("null"), rest), NIL_CONST, list(sym("car"), rest))))),
+				list(sym("labels"), list(List.of(binding)), list(self, seqForm(keys), map))));
+	}
+
+	/**
+	 * {@code select-keys}: a fresh map holding the present keys only. Of nil, the empty
+	 * map; anything else that is no map signals.
+	 */
+	private LispVal selectKeysForm(LispVal map, LispVal keys) {
+		LispSymbol whole = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol out = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal keep = list(sym("setf"), list(sym("gethash"), one, out), got);
+		LispVal gather = list(sym("dolist"), list(List.of(one, keys)),
+				list(sym("let"), list(List.of(list(got, list(sym("gethash"), one, whole, miss)))),
+						list(sym("if"), list(sym("eq"), got, miss), NIL_CONST, keep)));
+		return list(sym("let*"),
+				list(List.of(list(whole, map), list(miss, list(sym("list"), NIL_CONST)), list(out, makeTable()))),
+				list(sym("if"), list(sym("null"), whole), out,
+						list(sym("if"), list(sym("hash-table-p"), whole), list(sym("progn"), gather, out),
+								list(sym("error"), LispString.literal("select-keys needs a map")))));
+	}
+
+	/** {@code select-keys} as a value: a two-argument lambda over the same read. */
+	private LispVal selectKeysValue() {
+		LispSymbol map = new LispSymbol(mangle("select-keys-map"));
+		LispSymbol keys = new LispSymbol(mangle("select-keys-keys"));
+		return list(sym("lambda"), list(List.of(map, keys)), selectKeysForm(map, seqForm(keys)));
+	}
+
+	/** {@code merge-with}: every map merged, conflicts resolved through the function. */
+	private LispVal mergeWithOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "merge-with takes a function and maps");
+		if (n == 1) {
+			return NIL_CONST;
+		}
+		if (n == 2) {
+			return lower(items.get(2));
+		}
+		LispVal fun = fnValue(items.get(1));
+		List<LispVal> maps = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			maps.add(lower(items.get(i)));
+		}
+		return mergeWithForm(fun, maps);
+	}
+
+	/**
+	 * The merge over an already-lowered function and maps: a fresh table grown map by
+	 * map, so inputs are never mutated and nil maps contribute nothing.
+	 */
+	private LispVal mergeWithForm(LispVal fun, List<LispVal> maps) {
+		LispSymbol fn = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol miss = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(fn, fun));
+		bindings.add(list(acc, makeTable()));
+		bindings.add(list(miss, list(sym("list"), NIL_CONST)));
+		List<LispVal> syms = new ArrayList<>();
+		for (LispVal map : maps) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, map));
+			syms.add(one);
+		}
+		List<LispVal> merges = new ArrayList<>();
+		for (LispVal one : syms) {
+			LispSymbol key = freshTemp();
+			LispSymbol val = freshTemp();
+			LispSymbol old = freshTemp();
+			LispVal invoked = callFun(fun, fn, List.of(old, val));
+			LispVal join = list(sym("maphash"),
+					list(sym("lambda"), list(List.of(key, val)),
+							list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
+									list(sym("setf"), list(sym("gethash"), key, acc),
+											list(sym("if"), list(sym("eq"), old, miss), val, invoked)))),
+					one);
+			merges.add(list(sym("if"), one, join, NIL_CONST));
+		}
+		merges.add(acc);
+		return list(sym("let*"), list(bindings), cons(sym("progn"), merges));
+	}
+
+	/** {@code merge-with} as a value: the function, then any number of maps. */
+	private LispVal mergeWithValue() {
+		String name = mangle("merge-with-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fn = new LispSymbol(mangle("merge-with-fn"));
+		LispSymbol maps = new LispSymbol(mangle("merge-with-maps"));
+		LispSymbol left = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol key = freshTemp();
+		LispSymbol val = freshTemp();
+		LispSymbol old = freshTemp();
+		LispVal join = list(sym("maphash"),
+				list(sym("lambda"), list(List.of(key, val)),
+						list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
+								list(sym("setf"), list(sym("gethash"), key, acc),
+										list(sym("if"), list(sym("eq"), old, miss), val,
+												callableApply(fn, cons(sym("list"), List.of(old, val))))))),
+				list(sym("car"), left));
+		LispVal go = list(sym("if"), list(sym("null"), left), acc, list(sym("progn"),
+				list(sym("if"), list(sym("car"), left), join, NIL_CONST), list(self, list(sym("cdr"), left))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(left)), cons(go, List.of())));
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)),
+				list(sym("let*"), list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)))),
+						list(sym("labels"), list(List.of(binding)), list(self, maps))));
+	}
+
+	/**
+	 * {@code into}: the source conjoined onto the target, one member at a time. A
+	 * three-argument call names a transducer, which stays refused.
+	 */
+	private LispVal intoOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 3) {
+			throw new LispReadException("transducers are not supported yet: into");
+		}
+		isTrue(n == 2, "into takes a target and a source collection");
+		return intoForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+	}
+
+	/** The conj fold over an already-lowered target and seq view. */
+	private LispVal intoForm(LispVal to, LispVal from) {
+		LispSymbol acc = freshTemp();
+		LispSymbol one = freshTemp();
+		LispVal step = list(sym("lambda"), list(List.of(acc, one)), conjTwoForm(acc, one));
+		return list(sym("reduce"), step, from, sym(":initial-value"), to);
+	}
+
+	/** {@code into} as a value: a two-argument lambda over the same fold. */
+	private LispVal intoValue() {
+		LispSymbol to = new LispSymbol(mangle("into-to"));
+		LispSymbol from = new LispSymbol(mangle("into-from"));
+		return list(sym("lambda"), list(List.of(to, from)), intoForm(to, seqForm(from)));
+	}
+
+	/**
+	 * {@code frequencies}: the member counts in one pass over the seq view, as a fresh
+	 * map.
+	 */
+	private LispVal frequenciesForm(LispVal seq) {
+		LispSymbol table = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol one = freshTemp();
+		LispSymbol old = freshTemp();
+		LispVal bump = list(sym("setf"), list(sym("gethash"), one, table), list(sym("if"), list(sym("eq"), old, miss),
+				new LispInteger(1), list(sym("+"), old, new LispInteger(1))));
+		LispVal step = list(sym("dolist"), list(List.of(one, seq)),
+				list(sym("let"), list(List.of(list(old, list(sym("gethash"), one, table, miss)))), bump));
+		return list(sym("let*"), list(List.of(list(table, makeTable()), list(miss, list(sym("list"), NIL_CONST)))),
+				step, table);
+	}
+
+	/** {@code frequencies} as a value: a one-argument lambda over the same pass. */
+	private LispVal frequenciesValue() {
+		LispSymbol coll = new LispSymbol(mangle("frequencies-coll"));
+		return list(sym("lambda"), list(coll), frequenciesForm(seqForm(coll)));
+	}
+
+	// b15 higher-order functions: closures, no new runtime
+
+	/** {@code comp}: right-nested application, no functions the identity. */
+	private LispVal compOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		if (n == 0) {
+			return identityValue();
+		}
+		List<LispVal> fns = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			fns.add(fnValue(items.get(i)));
+		}
+		if (n == 1) {
+			return fns.get(0);
+		}
+		return compForm(fns);
+	}
+
+	/**
+	 * The composition over already-lowered functions: the rightmost spreads the
+	 * arguments, each outer wraps one result.
+	 */
+	private LispVal compForm(List<LispVal> fns) {
+		LispSymbol args = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> names = new ArrayList<>();
+		for (LispVal fn : fns) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, fn));
+			names.add(one);
+		}
+		LispVal inner = callableApply(names.get(names.size() - 1), args);
+		for (int i = names.size() - 2; i >= 0; i--) {
+			inner = callFun(fns.get(i), names.get(i), List.of(inner));
+		}
+		return list(sym("let*"), list(bindings), list(sym("lambda"), list(AMPERSAND_REST, args), inner));
+	}
+
+	/**
+	 * {@code comp} as a value: the function list composed at run time, so
+	 * {@code (apply comp fns)} runs.
+	 */
+	private LispVal compValue() {
+		String name = mangle("comp-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fns = freshTemp();
+		LispSymbol fun = freshTemp();
+		LispSymbol next = freshTemp();
+		LispSymbol args = freshTemp();
+		LispSymbol one = new LispSymbol(mangle("comp-one"));
+		LispSymbol more = new LispSymbol(mangle("comp-more"));
+		LispVal identity = list(sym("lambda"), list(List.of(one, AMPERSAND_REST, more)),
+				list(sym("declare"), list(sym("ignore"), more)), one);
+		LispVal chain = list(sym("lambda"), list(List.of(AMPERSAND_REST, args)),
+				callableApply(fun, list(List.of(callableApply(next, args)))));
+		LispVal step = list(sym("if"), list(sym("null"), fns), identity,
+				list(sym("if"), list(sym("null"), list(sym("cdr"), fns)), list(sym("car"), fns), list(sym("let*"),
+						list(List.of(list(fun, list(sym("car"), fns)), list(next, list(self, list(sym("cdr"), fns))))),
+						chain)));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(fns)), cons(step, List.of())));
+		LispSymbol outer = new LispSymbol(mangle("comp-fns"));
+		return list(sym("lambda"), list(AMPERSAND_REST, outer),
+				list(sym("labels"), list(List.of(binding)), list(self, outer)));
+	}
+
+	/**
+	 * {@code partial}: the function over the fixed arguments plus whatever arrives. The
+	 * fixed arguments run once, behind temporaries.
+	 */
+	private LispVal partialForm(LispVal fun, List<LispVal> fixed) {
+		LispSymbol fn = freshTemp();
+		LispSymbol more = freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(list(fn, fun));
+		List<LispVal> names = new ArrayList<>();
+		for (LispVal arg : fixed) {
+			LispSymbol one = freshTemp();
+			bindings.add(list(one, arg));
+			names.add(one);
+		}
+		LispVal tail = names.isEmpty() ? more : list(sym("append"), cons(sym("list"), names), more);
+		return list(sym("let*"), list(bindings),
+				list(sym("lambda"), list(AMPERSAND_REST, more), callableApply(fn, tail)));
+	}
+
+	/** {@code partial} as a value: the function, then the fixed arguments. */
+	private LispVal partialValue() {
+		LispSymbol fn = new LispSymbol(mangle("partial-fn"));
+		LispSymbol fixed = new LispSymbol(mangle("partial-fixed"));
+		LispSymbol more = new LispSymbol(mangle("partial-more"));
+		LispVal inner = list(sym("lambda"), list(AMPERSAND_REST, more),
+				callableApply(fn, list(sym("append"), fixed, more)));
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, fixed)), inner);
+	}
+
+	/**
+	 * {@code complement}: the predicate negated, answering {@code T}-or-false, like every
+	 * boolean-answering builtin.
+	 */
+	private LispVal complementForm(LispVal fun) {
+		LispSymbol fn = freshTemp();
+		LispSymbol args = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal neg = list(sym("let"), list(List.of(list(got, callableApply(fn, args)))),
+				list(sym("if"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable)),
+						TRUE_CONST, this.falseVariable));
+		return list(sym("let*"), list(List.of(list(fn, fun))), list(sym("lambda"), list(AMPERSAND_REST, args), neg));
+	}
+
+	/** {@code complement} as a value: a one-argument lambda over the same negation. */
+	private LispVal complementValue() {
+		LispSymbol fun = new LispSymbol(mangle("complement-fn"));
+		return list(sym("lambda"), list(fun), complementForm(fun));
+	}
+
+	/**
+	 * {@code constantly}: the value answered whatever the arguments -- evaluated once,
+	 * behind a temporary.
+	 */
+	private LispVal constantlyForm(LispVal val) {
+		LispSymbol kept = freshTemp();
+		LispSymbol rest = freshTemp();
+		return list(sym("let*"), list(List.of(list(kept, val))),
+				list(sym("lambda"), list(AMPERSAND_REST, rest), list(sym("declare"), list(sym("ignore"), rest)), kept));
+	}
+
+	/** {@code constantly} as a value: a one-argument lambda over the same closure. */
+	private LispVal constantlyValue() {
+		LispSymbol val = new LispSymbol(mangle("constantly-val"));
+		return list(sym("lambda"), list(val), constantlyForm(val));
+	}
+
+	/** {@code identity} as a value: the one-argument lambda. */
+	private LispVal identityValue() {
+		LispSymbol val = new LispSymbol(mangle("identity-val"));
+		return list(sym("lambda"), list(val), val);
+	}
+
+	/**
+	 * {@code memoize}: the function cached behind an {@code equal} table, so repeated
+	 * arguments run once. The table lives in the closure -- the atom cell's shape,
+	 * without the tag -- and the argument list keys structurally.
+	 */
+	private LispVal memoizeForm(LispVal fun) {
+		LispSymbol table = freshTemp();
+		LispSymbol miss = freshTemp();
+		LispSymbol fn = freshTemp();
+		LispSymbol args = freshTemp();
+		LispSymbol hit = freshTemp();
+		LispSymbol val = freshTemp();
+		LispVal inner = list(sym("lambda"), list(AMPERSAND_REST, args),
+				list(sym("let"), list(List.of(list(hit, list(sym("gethash"), args, table, miss)))),
+						list(sym("if"), list(sym("eq"), hit, miss),
+								list(sym("let"), list(List.of(list(val, callableApply(fn, args)))),
+										list(sym("setf"), list(sym("gethash"), args, table), val), val),
+								hit)));
+		return list(sym("let*"),
+				list(List.of(list(table, makeTable()), list(miss, list(sym("list"), NIL_CONST)), list(fn, fun))),
+				inner);
+	}
+
+	/** {@code memoize} as a value: a one-argument lambda over the same cache. */
+	private LispVal memoizeValue() {
+		LispSymbol fun = new LispSymbol(mangle("memoize-fn"));
+		return list(sym("lambda"), list(fun), memoizeForm(fun));
+	}
+
+	/**
+	 * {@code trampoline}: the function applied, then every thunk result invoked with no
+	 * arguments until a non-function answers. A labels self call, so mutual thunk chains
+	 * stay constant-stack on the interpreter.
+	 */
+	private LispVal trampolineForm(LispVal fun, LispVal argList) {
+		String name = mangle("trampoline-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol fn = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("if"), list(sym("functionp"), got), list(self, list(sym("funcall"), got)), got);
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(got)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(fn, fun))),
+				list(sym("labels"), list(List.of(binding)), list(self, callableApply(fn, argList))));
+	}
+
+	/** {@code trampoline} as a value: the function, then any arguments. */
+	private LispVal trampolineValue() {
+		LispSymbol fun = new LispSymbol(mangle("trampoline-fn"));
+		LispSymbol rest = new LispSymbol(mangle("trampoline-rest"));
+		return list(sym("lambda"), list(List.of(fun, AMPERSAND_REST, rest)), trampolineForm(fun, rest));
+	}
+
+	// b15 predicates and casts
+
+	/**
+	 * Whether the lowered value is a collection: a list, vector, map or set. Nil and the
+	 * false object are no collections, like the oracle -- and neither are strings, even
+	 * though the runtime stores them as vectors (like {@code vector?} sees).
+	 */
+	private LispVal collRaw(LispVal lowered) {
+		LispSymbol one = freshTemp();
+		LispVal test = list(sym("and"), list(sym("not"), list(sym("stringp"), one)), list(sym("or"),
+				list(sym("consp"), one), list(sym("vectorp"), one), list(sym("hash-table-p"), one), isSetForm(one)));
+		return list(sym("let*"), list(List.of(list(one, lowered))), test);
+	}
+
+	/** {@code coll?} as a value: a one-argument lambda answering {@code T}-or-false. */
+	private LispVal collValue() {
+		LispSymbol one = new LispSymbol(mangle("coll-one"));
+		return list(sym("lambda"), list(one), booleanAnswer(collRaw(one)));
+	}
+
+	/** {@code string?} as a value: a one-argument lambda answering {@code T}-or-false. */
+	private LispVal stringPredValue() {
+		LispSymbol one = new LispSymbol(mangle("string-one"));
+		return list(sym("lambda"), list(one), booleanAnswer(list(sym("stringp"), one)));
+	}
+
+	/**
+	 * Whether the lowered value is a symbol: true for identifiers, false for the
+	 * booleans, nil, keywords (which are lists) and everything else.
+	 */
+	private LispVal symbolRaw(LispVal lowered) {
+		LispSymbol one = freshTemp();
+		LispVal test = list(sym("and"), list(sym("symbolp"), one), list(sym("not"), list(sym("null"), one)),
+				list(sym("not"), list(sym("eq"), one, TRUE_CONST)),
+				list(sym("not"), list(sym("eq"), one, this.falseVariable)));
+		return list(sym("let*"), list(List.of(list(one, lowered))), test);
+	}
+
+	/** {@code symbol?} as a value: a one-argument lambda answering {@code T}-or-false. */
+	private LispVal symbolPredValue() {
+		LispSymbol one = new LispSymbol(mangle("symbol-one"));
+		return list(sym("lambda"), list(one), booleanAnswer(symbolRaw(one)));
+	}
+
+	/**
+	 * {@code instance?}: the class name mapped onto the predicate the backends share.
+	 * Only the core classes lower -- a host width we do not have (or any other class) is
+	 * a named refusal instead of a wrong answer.
+	 */
+	private LispVal instanceOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "instance? takes a class and a value");
+		if (!(items.get(1) instanceof LispSymbol cls)) {
+			throw new LispReadException("instance? takes a class name, not " + items.get(1).print());
+		}
+		String name = cls.name();
+		String simple = name.lastIndexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1) : name;
+		LispVal lowered = lower(items.get(2));
+		LispVal raw = switch (simple) {
+			case "String", "CharSequence" -> list(sym("stringp"), lowered);
+			case "Character" -> list(sym("characterp"), lowered);
+			case "Boolean" ->
+				list(sym("or"), list(sym("eq"), lowered, TRUE_CONST), list(sym("eq"), lowered, this.falseVariable));
+			case "Number" -> list(sym("numberp"), lowered);
+			case "Long" -> list(sym("integerp"), lowered);
+			case "Double" -> list(sym("floatp"), lowered);
+			case "Object" -> list(sym("not"), list(sym("null"), lowered));
+			case "Keyword" -> keywordTest(lowered);
+			case "Symbol" -> symbolRaw(lowered);
+			default -> throw new LispReadException("instance? needs a core class, not " + name);
+		};
+		return booleanAnswer(raw);
+	}
+
+	/**
+	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
+	 * which no wasm backend has -- the keyword names the kind instead, on every backend
+	 * alike.
+	 */
+	private LispVal classForm(LispVal lowered) {
+		LispSymbol one = freshTemp();
+		List<LispVal> branches = new ArrayList<>();
+		branches.add(list(list(sym("null"), one), keywordForm("nil")));
+		branches.add(list(list(sym("eq"), one, this.falseVariable), keywordForm("boolean")));
+		branches.add(list(list(sym("eq"), one, TRUE_CONST), keywordForm("boolean")));
+		branches.add(list(keywordTest(one), keywordForm("keyword")));
+		branches.add(list(list(sym("symbolp"), one), keywordForm("symbol")));
+		branches.add(list(list(sym("characterp"), one), keywordForm("char")));
+		branches.add(list(list(sym("stringp"), one), keywordForm("string")));
+		branches.add(list(list(sym("numberp"), one), keywordForm("number")));
+		branches.add(list(isSetForm(one), keywordForm("set")));
+		branches.add(list(list(sym("hash-table-p"), one), keywordForm("map")));
+		branches.add(list(list(sym("vectorp"), one), keywordForm("vector")));
+		branches.add(list(list(sym("consp"), one), keywordForm("list")));
+		branches.add(list(list(sym("functionp"), one), keywordForm("function")));
+		branches.add(list(isAtomForm(one), keywordForm("atom")));
+		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("class needs a value of a known kind"))));
+		return list(sym("let*"), list(List.of(list(one, lowered))), cons(sym("cond"), branches));
+	}
+
+	/** {@code class} as a value: a one-argument lambda over the same read. */
+	private LispVal classValue() {
+		LispSymbol one = new LispSymbol(mangle("class-one"));
+		return list(sym("lambda"), list(one), classForm(one));
+	}
+
+	/** {@code int}/{@code long} as a value: truncation, like the call. */
+	private LispVal intValue() {
+		LispSymbol one = new LispSymbol(mangle("int-one"));
+		return list(sym("lambda"), list(one), list(sym("truncate"), one));
+	}
+
+	/** {@code unchecked-add} as a value: addition without the overflow check. */
+	private LispVal uncheckedAddValue() {
+		LispSymbol first = new LispSymbol(mangle("unchecked-a"));
+		LispSymbol second = new LispSymbol(mangle("unchecked-b"));
+		return list(sym("lambda"), list(List.of(first, second)), list(sym("+"), first, second));
+	}
+
+	// b15 IO entry points: spit/slurp/line-seq over the eval IO layer
+
+	/**
+	 * {@code spit}: the string written to the path, answering nil. With an
+	 * {@code :append} flag the writes append, else the file is superseded.
+	 */
+	private LispVal spitOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 2 || n == 4, "spit takes a path, a string and an optional :append flag");
+		LispVal exists;
+		if (n == 4) {
+			if (!isSymbolNamed(items.get(3), ":append")) {
+				throw new LispReadException("spit takes a path, a string and an optional :append flag");
+			}
+			exists = ifFalsey(lower(items.get(4)), sym(":append"), sym(":supersede"));
+		}
+		else {
+			exists = sym(":supersede");
+		}
+		return spitForm(lower(items.get(1)), lower(items.get(2)), exists);
+	}
+
+	/** The write over already-lowered path, content and {@code :if-exists} mode. */
+	private LispVal spitForm(LispVal path, LispVal content, LispVal exists) {
+		LispSymbol file = freshTemp();
+		LispSymbol text = freshTemp();
+		LispSymbol stream = freshTemp();
+		return list(sym("let*"), list(List.of(list(file, path), list(text, content))),
+				list(sym("with-open-file"),
+						list(List.of(stream, file, sym(":direction"), sym(":output"), sym(":if-exists"), exists)),
+						list(sym("write-string"), text, stream), NIL_CONST));
+	}
+
+	/** {@code spit} as a value: path, content and an optional append flag. */
+	private LispVal spitValue() {
+		LispSymbol path = new LispSymbol(mangle("spit-path"));
+		LispSymbol content = new LispSymbol(mangle("spit-content"));
+		LispSymbol rest = new LispSymbol(mangle("spit-rest"));
+		LispVal exists = list(sym("if"), list(sym("null"), rest), sym(":supersede"),
+				list(sym("if"), list(sym("car"), rest), sym(":append"), sym(":supersede")));
+		return list(sym("lambda"), list(List.of(path, content, AMPERSAND_REST, rest)), spitForm(path, content, exists));
+	}
+
+	/**
+	 * {@code slurp}: the whole file as a string, read character by character into a
+	 * string stream.
+	 */
+	private LispVal slurpForm(LispVal path) {
+		String name = mangle("slurp-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol file = freshTemp();
+		LispSymbol stream = freshTemp();
+		LispSymbol out = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("let"), list(List.of(list(got, list(sym("read-char"), stream, NIL_CONST, NIL_CONST)))),
+				list(sym("if"), list(sym("null"), got), list(sym("get-output-stream-string"), out),
+						list(sym("progn"), list(sym("write-char"), got, out), list(self))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of()), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(file, path))),
+				list(sym("with-open-file"), list(List.of(stream, file)),
+						list(sym("let*"), list(List.of(list(out, list(sym("make-string-output-stream"))))),
+								list(sym("labels"), list(List.of(binding)), list(self)))));
+	}
+
+	/** {@code slurp} as a value: a one-argument lambda over the same read. */
+	private LispVal slurpValue() {
+		LispSymbol path = new LispSymbol(mangle("slurp-path"));
+		return list(sym("lambda"), list(path), slurpForm(path));
+	}
+
+	/**
+	 * {@code line-seq}: the file's lines as a strict list. The oracle takes a reader and
+	 * answers lazily -- here the path reads strictly, like every other seq.
+	 */
+	private LispVal lineSeqForm(LispVal path) {
+		String name = mangle("line-seq-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol file = freshTemp();
+		LispSymbol stream = freshTemp();
+		LispSymbol acc = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("let"), list(List.of(list(got, list(sym("read-line"), stream, NIL_CONST, NIL_CONST)))),
+				list(sym("if"), list(sym("null"), got), list(sym("reverse"), acc),
+						list(self, list(sym("cons"), got, acc))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(acc)), cons(step, List.of())));
+		return list(sym("let*"), list(List.of(list(file, path))), list(sym("with-open-file"),
+				list(List.of(stream, file)), list(sym("labels"), list(List.of(binding)), list(self, NIL_CONST))));
+	}
+
+	/** {@code line-seq} as a value: a one-argument lambda over the same read. */
+	private LispVal lineSeqValue() {
+		LispSymbol path = new LispSymbol(mangle("line-seq-path"));
+		return list(sym("lambda"), list(path), lineSeqForm(path));
+	}
+
+	/**
+	 * {@code format}: the Java-format string translated to Common Lisp directives over
+	 * Clojure-notation arguments. The format string must be literal (its directives
+	 * translate at lowering time); {@code %s} converts through {@code str} semantics (nil
+	 * spells {@code "null"}, like {@code String/valueOf}), {@code %b} through the boolean
+	 * spelling, numbers through the matching numeric directive. Precision only rides
+	 * {@code %f}/{@code %e}/{@code %g}; any flag, date or hash directive is a named
+	 * refusal instead of a wrong answer.
+	 */
+	private LispVal formatOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n >= 1, "format takes a format string and arguments");
+		if (!(items.get(1) instanceof LispString fmt)) {
+			throw new LispReadException("format takes a literal format string, not " + items.get(1).print());
+		}
+		String pattern = fmt.value();
+		StringBuilder cl = new StringBuilder();
+		List<LispVal> args = new ArrayList<>();
+		int next = 2;
+		int i = 0;
+		while (i < pattern.length()) {
+			char c = pattern.charAt(i);
+			if (c != '%') {
+				cl.append(c == '~' ? "~~" : c);
+				i++;
+				continue;
+			}
+			i++;
+			isTrue(i < pattern.length(), "a format string cannot end in %");
+			char d = pattern.charAt(i);
+			if (d == '%') {
+				cl.append('%');
+				i++;
+				continue;
+			}
+			if (d == 'n') {
+				cl.append("~%");
+				i++;
+				continue;
+			}
+			if ("-0#,+ (".indexOf(d) >= 0) {
+				throw new LispReadException("format flag %" + d + " is not supported yet");
+			}
+			StringBuilder width = new StringBuilder();
+			while (i < pattern.length() && Character.isDigit(pattern.charAt(i))) {
+				width.append(pattern.charAt(i++));
+			}
+			StringBuilder precision = new StringBuilder();
+			if (i < pattern.length() && pattern.charAt(i) == '.') {
+				i++;
+				while (i < pattern.length() && Character.isDigit(pattern.charAt(i))) {
+					precision.append(pattern.charAt(i++));
+				}
+			}
+			isTrue(i < pattern.length(), "a format directive cannot end the string");
+			char conv = pattern.charAt(i++);
+			isTrue(next < items.size(), "format takes an argument per directive");
+			LispVal arg = lower(items.get(next++));
+			switch (conv) {
+				case 's' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %s");
+					cl.append('~').append(width).append(width.length() == 0 ? "A" : "@A");
+					args.add(strOf(arg, LispString.literal("null"), NIL_CONST));
+				}
+				case 'd' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %d");
+					cl.append('~').append(width).append('D');
+					args.add(checkedArg(arg, "integerp", "%d takes an integer"));
+				}
+				case 'x', 'X' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %x");
+					// Common Lisp spells hexadecimal uppercase, like %X: a lowercase
+					// %x downcases the converted string first.
+					LispVal hex = list(sym("format"), NIL_CONST, LispString.literal("~X"),
+							checkedArg(arg, "integerp", "%x takes an integer"));
+					if (conv == 'x') {
+						hex = list(sym("string-downcase"), hex);
+					}
+					cl.append('~').append(width).append(width.length() == 0 ? "A" : "@A");
+					args.add(hex);
+				}
+				case 'o' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %o");
+					cl.append('~').append(width).append('O');
+					args.add(checkedArg(arg, "integerp", "%o takes an integer"));
+				}
+				case 'c' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %c");
+					// ~C prints readably, so characters convert through string first.
+					LispVal text = list(sym("string"), checkedArg(arg, "characterp", "%c takes a character"));
+					cl.append('~').append(width).append(width.length() == 0 ? "A" : "@A");
+					args.add(text);
+				}
+				case 'b' -> {
+					isTrue(precision.length() == 0, "format precision is not supported yet for %b");
+					cl.append('~').append(width).append(width.length() == 0 ? "A" : "@A");
+					LispSymbol test = freshTemp();
+					args.add(list(sym("let*"), list(List.of(list(test, arg))),
+							list(sym("if"),
+									list(sym("or"), list(sym("null"), test), list(sym("eq"), test, this.falseVariable)),
+									LispString.literal("false"), LispString.literal("true"))));
+				}
+				case 'f' -> {
+					cl.append('~').append(width);
+					if (precision.length() > 0) {
+						cl.append(',').append(precision);
+					}
+					cl.append('F');
+					args.add(checkedArg(arg, "floatp", "%f takes a float"));
+				}
+				default -> throw new LispReadException("format directive %" + conv + " is not supported yet");
+			}
+		}
+		isTrue(next == items.size(), "format takes an argument per directive");
+		List<LispVal> call = new ArrayList<>();
+		call.add(sym("format"));
+		call.add(NIL_CONST);
+		call.add(LispString.literal(cl.toString()));
+		call.addAll(args);
+		return list(call);
+	}
+
+	/**
+	 * A format argument checked against the directive's type, like the oracle's
+	 * conversion check: anything else signals instead of printing wrongly.
+	 */
+	private LispVal checkedArg(LispVal arg, String predicate, String message) {
+		LispSymbol one = freshTemp();
+		return list(sym("let*"), list(List.of(list(one, arg))),
+				list(sym("if"), list(sym(predicate), one), one, list(sym("error"), LispString.literal(message))));
 	}
 
 	// namespaces: ns clauses, require/use/import as alias wiring
@@ -4012,17 +6057,10 @@ public final class ClojureLowering {
 	private static @Nullable String builtinValue(String name) {
 		return switch (name) {
 			case "+", "-", "*", "/", "max", "min", "rem", "mod", "abs", "cons", "list", "expt", "reverse", "apply", "=",
-					"<", ">", "<=", ">=", "not", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp",
-					"minusp", "vector", "vectorp" ->
+					"<", ">", "<=", ">=", "length", "car", "cdr", "equal", "evenp", "oddp", "zerop", "plusp", "minusp",
+					"vector", "vectorp", "identity" ->
 				name;
-			case "empty?", "nil?" -> "null";
 			case "gensym" -> "gensym";
-			case "even?" -> "evenp";
-			case "odd?" -> "oddp";
-			case "zero?" -> "zerop";
-			case "pos?" -> "plusp";
-			case "neg?" -> "minusp";
-			case "some?" -> "not";
 			case "count" -> "length";
 			case "first" -> "car";
 			case "rest" -> "cdr";
@@ -6003,11 +8041,13 @@ public final class ClojureLowering {
 
 	private <T> T inScope(Map<String, Kind> scope, java.util.function.Supplier<T> body) {
 		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
 		try {
 			return body.get();
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
 		}
 	}
 

@@ -1,6 +1,6 @@
 # 構文と定義
 
-束縛と制御のフォームです。定義はファイル全体の事前走査で決まるので、定義は後で定義される名前を使えます。値束縛の head 位置呼び出しは値セルの funcall になります。
+束縛と制御のフォームです。定義はファイル全体の事前走査で決まるので、定義は後で定義される名前を使えます。実関数を持つ値束縛の head 位置呼び出しは値セルの funcall に、それ以外の変数は prelude ディスパッチャ経由になります（実関数は funcall し、コレクションは呼び出します）。
 
 | Name | Example | Result |
 |---|---|---|
@@ -20,3 +20,8 @@
 | `quote` | `(quote (a b c))` | `(a b c)` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |
+| `when-let` | `(when-let [x 1] (+ x 10))` | `11` |
+| `if-let` | `(if-let [x nil] 1 :none)` | `:none` |
+| `when-not` | `(when-not false :ran)` | `:ran` |
+| `if-not` | `(if-not nil :t :e)` | `:t` |
+| `when-first` | `(when-first [x [1 2]] x)` | `1` |

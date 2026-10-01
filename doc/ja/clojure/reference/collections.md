@@ -18,3 +18,11 @@
 | `conj` | `(conj [1 2] 3)` | `[1 2 3]` |
 | `disj` | `(disj #{1 2} 1)` | `#{2}` |
 | `set` | `(set [1 2])` | `#{1 2}` |
+| `update` | `(update {:a 1} :a inc)` | `{:a 2}` |
+| `update-in` | `(update-in {:a {:b 1}} [:a :b] inc)` | `{:a {:b 2}}` |
+| `assoc-in` | `(assoc-in {} [:a :b] 1)` | `{:a {:b 1}}` |
+| `get-in` | `(get-in {:a {:b 1}} [:a :b])` | `1` |
+| `select-keys` | `(select-keys {:a 1 :b 2} [:a])` | `{:a 1}` |
+| `merge-with` | `(merge-with + {:a 1} {:a 2})` | `{:a 3}` |
+| `into` | `(into [] [1 2])` | `[1 2]` |
+| `frequencies` | `(frequencies [:a :a])` | `{:a 2}` |

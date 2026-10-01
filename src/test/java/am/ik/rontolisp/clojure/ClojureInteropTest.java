@@ -15,6 +15,7 @@ import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The interop lowering ({@code .}, {@code ..}, {@code Class/member}, {@code Class.},
@@ -72,6 +73,29 @@ class ClojureInteropTest {
 	void stringSplitStaysLiteral() throws Exception {
 		assertBothEqual("(println (.split \"aaa\" \".\"))", "(aaa)\n");
 		assertBothEqual("(println (.split \"a,b\" \",\"))", "(a b)\n");
+	}
+
+	@Test
+	void filesRoundTripThroughSpitSlurpAndLineSeq() throws Exception {
+		// File IO has no wasm leg (no filesystem there), so it lives here with the
+		// interop cases: interpreter and JVM only.
+		String path = "\"" + workDir.resolve("b15-io.txt").toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (slurp " + path + "))", "a\nb\n");
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (line-seq " + path + "))", "(a b)\n");
+		assertBothEqual(
+				"(spit " + path + " \"a\\nb\") (spit " + path + " \"c\" :append true) (println (slurp " + path + "))",
+				"a\nbc\n");
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (map slurp [" + path + "]))", "(a\nb)\n");
+	}
+
+	@Test
+	void keepAndUpdateSignalInsteadOfSkipping() {
+		// (keep inc [1 nil 2]) throws on the oracle (nil is not a number): the
+		// signal is pinned here, not a silent skip. Same for a missing update key.
+		assertThatThrownBy(() -> interpret("(println (keep inc [1 nil 2]))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (keep inc [1 nil 2]))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (update {:a 1} :missing inc))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (update {:a 1} :missing inc))")).isInstanceOf(Exception.class);
 	}
 
 	private static void assertBothEqual(String source, String expected) throws Exception {

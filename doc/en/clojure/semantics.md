@@ -8,9 +8,12 @@ those lowerings and the forms refused by name.
 
 An identifier lowers to a symbol behind the `c%` prefix, so `Foo` and `foo` stay apart
 and no name reaches a core-form case label. `defn` is a `defun` called directly; a
-head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable is a
-`funcall` of the value cell, so `(defn call-it [f x] (f x))` runs; a `declare`d-but-never-
-defined name keeps its direct-call error. `def` is a top-level `setq` -- inside a body it
+head-position call to a parameter, a `let`/`loop` binding or a `def`'d variable holding
+a real function is a `funcall` of the value cell, so `(defn call-it [f x] (f x))` runs;
+a variable that may hold a collection goes through the prelude dispatcher instead
+(`rontolisp::%clojure-call`: functions through `apply`, sets/maps/vectors/keywords
+through their lookup, like `IFn`); a `declare`d-but-never-defined name keeps its
+direct-call error. `def` is a top-level `setq` -- inside a body it
 still sets the global when the body runs.
 
 `defn` with several arities is one `defun` per arity plus a dispatch `defun` picking by
@@ -114,6 +117,8 @@ Each refusal names the missing design, never `unknown name`:
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::`-auto-resolve keywords | by name | no namespace to resolve against |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
+| three-argument `into` (transducers) | `transducers are not supported yet: into` | no transducer runtime; two arguments conjoin |
+| `file-seq`, `reader` | `file-seq` / `reader` `is not supported yet: ...` | no directory walks or host readers; `spit`/`slurp`/`line-seq` take paths |
 
 ## Errors and positions
 

@@ -40,10 +40,14 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void headPositionCallsToVariablesAreFuncalls() {
+	void headPositionCallsToVariablesReachTheValueCell() {
+		// a parameter may hold a collection, so its call goes through the prelude
+		// dispatcher (which funcalls real functions); a let/def binding of a real
+		// function stays a direct funcall, like a declared name stays direct
 		assertThat(lowered("(defn call-it [f x] (f x))"))
-			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (FUNCALL |c%f| |c%x|))");
+			.contains("(DEFUN |c%call-it| (|c%f| |c%x|) (RONTOLISP::%CLOJURE-CALL |c%f| (LIST |c%x|)))");
 		assertThat(lowered("(let [g inc] (g 1))")).contains("(FUNCALL |c%g| 1)");
+		assertThat(lowered("(let [s #{:h}] (s :h))")).contains("RONTOLISP::%CLOJURE-CALL");
 		assertThat(lowered("(def v (fn [x] x)) (v 1)")).contains("(FUNCALL |c%v| 1)");
 		assertThat(lowered("(declare u) (u 1)")).contains("(|c%u| 1)").doesNotContain("FUNCALL");
 	}
@@ -190,7 +194,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(boolean? nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (EQ |__clojure_0| T)");
 		assertThat(lowered("(not nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (NULL |__clojure_0|)");
 		assertThat(lowered("(map false? '(1))")).contains("MAPCAR")
-			.contains("(LAMBDA (|c%pred|) (EQ |c%pred| RONTOLISP::%CLOJURE-FALSE))");
+			.contains("(LAMBDA (|c%pred|) (IF (EQ |c%pred| RONTOLISP::%CLOJURE-FALSE) T RONTOLISP::%CLOJURE-FALSE))");
+		assertThat(lowered("(map odd? '(1 2))")).contains("MAPCAR").contains("ODDP");
 	}
 
 	@Test
@@ -671,6 +676,116 @@ class ClojureLoweringTest {
 			.hasMessageContaining("var is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("^:k v", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("with-meta is not supported yet");
+	}
+
+	@Test
+	void conditionalBindingFormsLowerOverLet() {
+		assertThat(lowered("(when-let [x 1] x)")).contains("LET*").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(when-let [[a b] [1 2]] (+ a b))")).contains("LET*").contains("CAR");
+		assertThat(lowered("(if-let [x 1] x :e)")).contains("LET*").contains(":C%KEYWORD");
+		assertThat(lowered("(when-not false 1)")).contains("IF");
+		assertThat(lowered("(if-not nil 1 2)")).contains("IF");
+		assertThat(lowered("(when-first [x [1]] x)")).contains("LET*").contains("CAR");
+		assertThatThrownBy(() -> Clojure.read("(when-let [x] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("when-let takes a single binding pair");
+		assertThatThrownBy(() -> Clojure.read("(if-let [x 1] a b c)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("if-let takes a binding vector");
+	}
+
+	@Test
+	void collectionsAnswerCallsAndValues() {
+		assertThat(lowered("(#{:h} :h)")).contains("GETHASH");
+		assertThat(lowered("({:a 1} :a :d)")).contains("GETHASH");
+		assertThat(lowered("([1 2] 0)")).contains("NTH");
+		assertThat(lowered("(filter #{:h} [:h])")).contains("REMOVE-IF-NOT").contains("GETHASH");
+		assertThatThrownBy(() -> Clojure.read("(#{:h})", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a collection as a function takes a key");
+	}
+
+	@Test
+	void seqVerbsLowerOverTheSeqView() {
+		assertThat(lowered("(keep inc [1])")).contains("REMOVE-IF").contains("MAPCAR");
+		assertThat(lowered("(keep-indexed odd? [1])")).contains("LABELS");
+		assertThat(lowered("(map-indexed vector [1])")).contains("LABELS");
+		assertThat(lowered("(every? odd? [1])")).contains("LABELS").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(some odd? [1])")).contains("LABELS");
+		assertThat(lowered("(distinct [1])")).contains("HASH-TABLE");
+		assertThat(lowered("(partition 2 [1])")).contains("LABELS");
+		assertThat(lowered("(take-while odd? [1])")).contains("LABELS");
+		assertThat(lowered("(interleave [1] [2])")).contains("APPEND");
+		assertThat(lowered("(zipmap [1] [2])")).contains("GETHASH");
+		assertThat(lowered("(sort [2 1])")).contains("SORT").contains("COPY-LIST");
+		assertThat(lowered("(group-by odd? [1])")).contains("GETHASH");
+		assertThatThrownBy(() -> Clojure.read("(partition 2 1 [1] [2])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("partition takes a size");
+	}
+
+	@Test
+	void mapVerbsBuildFreshTables() {
+		assertThat(lowered("(update {:a 1} :a inc)")).contains("RONTOLISP::%CLOJURE-CALL").contains("HASH-TABLE");
+		assertThat(lowered("(update-in {:a 1} [:a] inc)")).contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("(assoc-in {} [:a] 1)")).contains("HASH-TABLE");
+		assertThat(lowered("(get-in {:a 1} [:a])")).contains("GETHASH");
+		assertThat(lowered("(select-keys {:a 1} [:a])")).contains("GETHASH");
+		assertThat(lowered("(merge-with + {:a 1} {:a 2})")).contains("MAPHASH");
+		assertThat(lowered("(into [] [1])")).contains("REDUCE");
+		assertThat(lowered("(frequencies [1])")).contains("GETHASH");
+		assertThatThrownBy(() -> Clojure.read("(update-in {:a 1} :a inc)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("update-in takes a vector of keys");
+		assertThatThrownBy(() -> Clojure.read("(into [] [1] (map inc))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("transducers are not supported yet: into");
+	}
+
+	@Test
+	void higherOrderFormsComposeAndCache() {
+		assertThat(lowered("((comp inc inc) 5)")).contains("LAMBDA").contains("FUNCALL");
+		assertThat(lowered("((partial + 1) 2)")).contains("LAMBDA").contains("RONTOLISP::%CLOJURE-CALL");
+		assertThat(lowered("((complement odd?) 1)")).contains("LAMBDA");
+		assertThat(lowered("((constantly 1) 2)")).contains("LAMBDA");
+		assertThat(lowered("(memoize inc)")).contains("HASH-TABLE");
+		assertThat(lowered("(trampoline inc 1)")).contains("LABELS").contains("FUNCTIONP");
+	}
+
+	@Test
+	void predicatesAndCastsReadAndAnswer() {
+		assertThat(lowered("(coll? [1])")).contains("CONSP").contains("RONTOLISP::%CLOJURE-FALSE");
+		assertThat(lowered("(symbol? 'a)")).contains("SYMBOLP");
+		assertThat(lowered("(instance? String \"a\")")).contains("STRINGP");
+		assertThat(lowered("(class 1)")).contains(":C%KEYWORD");
+		assertThat(lowered("(int 1.5)")).contains("TRUNCATE");
+		assertThatThrownBy(() -> Clojure.read("(instance? Point 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("instance? needs a core class, not Point");
+	}
+
+	@Test
+	void ioEntryPointsAndFormat() {
+		assertThat(lowered("(spit \"f\" \"x\")")).contains("WITH-OPEN-FILE").contains("WRITE-STRING");
+		assertThat(lowered("(slurp \"f\")")).contains("READ-CHAR");
+		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE");
+		assertThat(lowered("(format \"%s=%d\" :a 1)")).contains("FORMAT").contains("~A");
+		assertThatThrownBy(() -> Clojure.read("(file-seq \".\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("file-seq is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("reader is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("format directive %e is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("format takes a literal format string");
+	}
+
+	@Test
+	void regexAndForeignNamespacesStayRefused() {
+		assertThatThrownBy(() -> Clojure.read("#\"x\"", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("regex literals are not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.spec.alpha :as s]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: clojure.spec.alpha");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.xml :as x]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: clojure.xml");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as io]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: clojure.java.io");
 	}
 
 }

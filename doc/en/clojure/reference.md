@@ -13,6 +13,7 @@ has them.
 | [Seqs](reference/seqs.md) | The seq family over strict list views of every collection |
 | [Iteration](reference/iteration.md) | `doseq`/`dotimes`/`for` and the strict `dorun`/`doall` |
 | [Maps, sets and vectors](reference/collections.md) | The persistent collection verbs over `equal` hash tables |
+| [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` |
 | [Numbers and predicates](reference/numbers.md) | Arithmetic, comparison and the type predicates |
 | [State](reference/state.md) | `atom`/`deref`/`swap!` and the volatile trio |
 | [Multimethods and hierarchies](reference/multimethods.md) | `defmulti`/`defmethod`, `derive` and the hierarchy reads |
@@ -20,4 +21,5 @@ has them.
 | [Namespaces](reference/namespaces.md) | `ns` and the top-level `require`/`use`/`import` |
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
+| [IO](reference/io.md) | `spit`/`slurp`/`line-seq` and `format` |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

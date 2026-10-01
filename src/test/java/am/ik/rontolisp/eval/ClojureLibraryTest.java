@@ -14,6 +14,7 @@ class ClojureLibraryTest {
 	void theLibraryDefinesThePrinterHelpers() {
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-STR-OF")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-WRITE-DATUM")).isTrue();
+		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-CALL")).isTrue();
 		assertThat(ClojureLibrary.isClojureFunction("PRINC")).isFalse();
 	}
 

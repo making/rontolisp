@@ -32,7 +32,7 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | Clojure | lowers to | why |
 |---|---|---|
 | identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
-| `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name (a parameter, a `let`/`loop` binding, a `def`'d variable) is a `funcall` of the value cell instead (so higher-order `defn` parameters run; a `declare`d-but-never-defined name keeps its direct-call error); several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
+| `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name holding a real function (a `let` binding of one, a `def`'d one) is a `funcall` of the value cell instead, while any other variable goes through the prelude dispatcher (`rontolisp::%clojure-call`: functions through `apply`, collections through their lookup, like `IFn`), so higher-order `defn` parameters run on collections too; a `declare`d-but-never-defined name keeps its direct-call error; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
 | `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
 | syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | every symbol qualifies behind `c%` (the documented deviation: no namespaces); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
@@ -74,12 +74,33 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `not` | an explicit null-or-false check answering `T`-or-false | |
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
 | `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
-| `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false; as values, lambdas answering a Common Lisp boolean | |
+| `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false | as values, lambdas answering `T`-or-false too (every predicate value does, so `(map odd? [1 2])` prints `(true false)` like the oracle) |
 | `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` over the seq view | lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
 | `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over the seq view, the view itself, `cons` onto the view | a seq IS a strict list view (decided 2026-09-30, b03): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; no laziness, chunking or memoisation -- the only sequence all four backends already share is the cons list, so a lazy struct would add a representation every backend prints, hashes and compares (the b02 argument against a persistent-map library) |
 | `nth` (2/3-arity) | the seq view indexed, past the end the default | the 2-arity answers nil past the end where the oracle throws; as a VALUE a lambda with the Clojure order (`(lambda (c i) ...)`), since a bare `#'NTH` takes the index first |
 | `quot` | `truncate` | as a VALUE a two-argument lambda over `truncate` |
 | `take`/`drop` | a labels self call over the seq view / `nthcdr` over the view | strict; an over-long take/drop answers the whole/empty seq (nil, where the oracle prints `()`) |
+| `keep`/`keep-indexed`/`map-indexed` | `remove-if` of nils over `mapcar` / labels self calls with an index | strict; `keep` keeps `false` (only nil drops) and a signalling function signals (`(keep inc [1 nil 2])` throws, like the oracle); as values two-argument lambdas |
+| `every?`/`some` | labels self calls testing null-or-false | `every?` answers `T`-or-false directly (empty is true); `some` answers the predicate's own value (not the member); as values two-argument lambdas |
+| `remove` | `remove-if` over the seq view | the complement of `filter`; as a value a two-argument lambda |
+| `distinct` | a labels self call with a seen table | first occurrences kept in order, `equal` membership; as a value a one-argument lambda |
+| `partition` | a labels self call over `take`/`nthcdr` | 2/3-arity (size, optional step defaulting to size); an incomplete tail drops, like the oracle; a non-positive size signals; a pad argument is refused by arity; as a value a one- or two-argument lambda |
+| `take-while`/`drop-while` | labels self calls stopping past the truthy prefix | `false` stops like nil; as values two-argument lambdas |
+| `interleave`/`interpose` | a labels self call over the seq-view list / the head plus a `mapcan` | `interleave` stops at the shortest, like the oracle; `(interleave)` is nil; as values rest lambdas |
+| `zipmap` | a labels self call filling a fresh table | stops at the shorter side, like the oracle; as a value a two-argument lambda |
+| `group-by` | one `dolist` pass plus a vector-freezing `maphash` | values are vectors in encounter order; of empty, the empty map; as a value a two-argument lambda |
+| `sort`/`sort-by` | `sort` over a copy with the default or wrapped comparator | the default orders numbers, strings, characters and keywords (anything else signals); a comparator runs on truthiness through the null-or-false test; as values rest lambdas |
+| `last`/`butlast`/`second` | `car` of `last` / `butlast` / `cadr` over the seq view | of empty, nil; as values one-argument lambdas |
+| a set/map/vector literal in call position, or as a function value | the member / table-aware read / `nth` with an optional default | `(#{:h} :h)` is `:h`, `({:a 1} :b :d)` is `:dflt`, `([10 20] 5 :d)` is `:d` (the `nth` past-the-end-is-default position); `(filter #{:h} ...)` runs through the same lambda |
+| `update`/`update-in`/`assoc-in`/`get-in` | a fresh table over the old pairs with the rewritten pair / the nested walk | `update` applies `(apply f (get m k) args...)`; `update-in` recurses (an empty key vector is refused, like the oracle's throw); `assoc-in` builds missing levels (no keys associates under nil, like the oracle); `get-in` threads the default through every level; as values lambdas walking the key sequence at run time |
+| `select-keys`/`merge-with`/`into`/`frequencies` | a fresh table over the present keys / grown map by map through `f` / a `conj` fold / one `dolist` pass | `select-keys` of nil is the empty map; `merge-with` of no maps is nil (a transducer argument is refused); `into` targets lists/vectors/maps/sets; as values lambdas |
+| `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` | right-nested closures / fixed-plus-rest closures / the negated predicate / the kept value / the value itself / an `equal`-tabled closure / a labels self call over thunks | no functions is `identity` for `comp`; `complement` answers `T`-or-false; `memoize` keys the argument list structurally; `trampoline` invokes zero-argument results until a non-function answers; each a function value too |
+| `when-let`/`if-let`/`when-not`/`if-not`/`when-first` | `let*` pairs over one temporary plus `if` on null-or-false | `when-let`/`if-let` destructure like `let` (testing the whole init); `when-not`/`if-not` swap the branches; `when-first` binds the head of the seq view |
+| `coll?`/`string?`/`symbol?` | `or` over the shapes / `stringp` / `symbolp` minus the booleans and nil | `coll?` excludes strings (which the runtime stores as vectors) and nil, like the oracle; as values lambdas answering `T`-or-false |
+| `instance?`/`class` | the class name mapped onto the shared predicates / a `cond` answering a kind keyword | only the core classes lower (`String`, `Long`, ...), anything else a named refusal; `class` answers `:map`/`:vector`/`:set`/`:list`/`:string`/`:number`/`:keyword`/`:symbol`/`:char`/`:boolean`/`:nil`/`:function`/`:atom` (host classes exist on no wasm backend); as values lambdas (`instance?` has none -- an arity error stays one) |
+| `int`/`long`/`unchecked-add` | `truncate` / `+` | a non-number signals, like the oracle; `unchecked-add` never wraps (bignums); as values lambdas |
+| `spit`/`slurp`/`line-seq` | `with-open-file` writes / a `read-char` loop into a string stream / a `read-line` loop | interpreter and JVM only (no filesystem on wasm); `spit` supersedes unless `:append` is truthy; `line-seq` takes a path and answers strictly; each a function value too; `file-seq`/`reader` stay refused by name |
+| `format` | the Java directives translated to Common Lisp over Clojure-notation arguments | the format string must be literal; `%s` converts like `str` (nil spells `"null"`), `%b` the boolean spelling, numbers the matching checked directive; `%e`/`%g`, flags and anything else are named refusals |
 | `range` (with an end) | a labels self call building the strict list | 1/2/3-arity (`end` / `start end` / `start end step`); a zero step signals; an end-less `(range)` is refused by name -- an infinite seq cannot be spelled strictly |
 | `lazy-seq`/`cycle`/`repeat`/`repeatedly`/`iterate` | refused by name (`lazy sequences are not supported: lazy-seq`) | OUT: there are no lazy seqs -- strict-only by decision, named refusals instead of `unknown name` |
 | a vector literal | a `vector` call | |
@@ -192,10 +213,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   zero-argument static method spells `(. Class m)`); non-string receivers go to
   `java:call` and fail there (kept, b08: only strings get the mapped core
   operation); `proxy` methods take the Java arguments only (no `this`, kept b08:
-  nothing to close over); a head-position call to a `VARIABLE`-kind name (a
-  parameter, a `let`/`loop` binding, a `def`'d variable) is a `funcall` of the
-  value cell (decided 2026-09-30, b09: `defn` names stay direct and a
-  `declare`d-but-never-defined name keeps its direct-call error).
+  nothing to close over); a head-position call to a `VARIABLE`-kind name holding
+  a real function (a `let` binding of one, a `def`'d one) is a `funcall` of the
+  value cell, while any other variable goes through the prelude dispatcher
+  (decided 2026-10-01, b15: `defn` names stay direct and a
+  `declare`d-but-never-defined name keeps its direct-call error, but a parameter
+  may hold a collection -- `every?` over a `partial`-passed set runs).
 - `def` inside a body sets the global when the body runs (decided 2026-09-30, b04:
   keep the `setq`, document it). `defn` inside a body works only in statement
   position, and a multi-arity one only at the top level (several `defun`s cannot
@@ -299,12 +322,13 @@ in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
 what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
 `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
-`VARIABLE`-kind names lower to `funcall` (b09): a `defn` parameter, a `let`
-binding and a `def`'d variable each call through the value cell (so higher-order
-`defn` parameters run), while a `defn` name stays a direct call and a
-`declare`d-but-never-defined name keeps its direct-call error -- pinned in
-`clojure-spec.yaml` (run on all four backends) and in `ClojureLoweringTest` (the
-lowered shape). Imperative loops and comprehensions lower the same way (b10):
+`VARIABLE`-kind names holding real functions lower to `funcall`, anything else
+through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
+real function and a `def`'d one each call through the value cell, while a `defn`
+parameter (which may hold a collection) dispatches, a `defn` name stays a direct
+call and a `declare`d-but-never-defined name keeps its direct-call error --
+pinned in `clojure-spec.yaml` (run on all four backends) and in
+`ClojureLoweringTest` (the lowered shapes). Imperative loops and comprehensions lower the same way (b10):
 `doseq` as nested `dolist` loops over the seq view answering `nil` (an empty vector
 runs the body once), `dotimes` as the core `dotimes` over a truncated count,
 `for` as nested `dolist` loops accumulating in reverse into a strict list
@@ -320,6 +344,25 @@ Clojure notation, cycles print with datum labels -- each pinned in
 `pr-str` value, in `ClojureLoweringTest`; the `clojure>` REPL transcript is
 re-pinned in `RontoLispCliTest` (and `PlaygroundReplTest`), the splice in
 `ClojureLibraryTest`, the package rule (`clojure` sees only the AST types and
-`reader`; the `.lisp` resource is data) in `PackageCycleTest`. Multi-entry
-maps and multi-member sets never print in the spec (the walk order is
+`reader`; the `.lisp` resource is data) in `PackageCycleTest`. The verb backlog
+lowers the same way (b15): the seq family (`keep`/`keep-indexed`/`map-indexed`/
+`every?`/`some`/`remove`/`distinct`/`partition`/`take-while`/`drop-while`/
+`interleave`/`interpose`/`zipmap`/`group-by`/`sort`/`sort-by`/`last`/`butlast`/
+`second`), collections as functions (literals in call position and as values,
+variables through the dispatcher), the map family (`update`/`update-in`/
+`assoc-in`/`get-in`/`select-keys`/`merge-with`/`into`/`frequencies`), the
+higher-order family (`comp`/`partial`/`complement`/`constantly`/`identity`/
+`memoize`/`trampoline`), the predicates and casts (`coll?`/`string?`/`symbol?`/
+`instance?`/`class`/`int`/`long`/`unchecked-add`), the conditional bindings
+(`when-let`/`if-let`/`when-not`/`if-not`/`when-first`) and the IO entry points
+(`spit`/`slurp`/`line-seq`, the Java-directive subset of `format`) -- each pinned
+in `clojure-spec.yaml` (run on all four backends; the corpus slices are
+`keep-indexed` `index_of_any`, `map-indexed` `exploring`, `partition`/`comp`/
+`partial`/`every?` `functional` `count-runs`, `update-in` `note`), the refusals
+(regex literals, `clojure.spec`/`xml`/`java.io` namespaces, transducers,
+`file-seq`/`reader`, `%e`/`%g`/flags) in `ClojureLoweringTest`, and the file IO
+plus the `keep`/`update` signals in `ClojureInteropTest` (no filesystem on wasm).
+Predicate values answer `T`-or-false (so `(map odd? [1 2])` prints `(true false)`
+like the oracle); `filter`/`remove` test Clojure truthiness around the call.
+Multi-entry maps and multi-member sets never print in the spec (the walk order is
 unspecified); only single-entry/single-member shapes pin the notation.

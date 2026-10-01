@@ -1339,3 +1339,218 @@ cases:
     expected: |
       (true false)
       false
+  - name: keep-and-keep-indexed
+    # keep answers the non-nil results (false is kept, like the oracle); a
+    # signalling function signals -- (keep inc [1 nil 2]) throws on the oracle,
+    # so the signal (not a silent skip) is pinned in ClojureInteropTest.
+    # keep-indexed threads the index (the index_of_any.clj shape).
+    source: |
+      (defn b15-index-filter [pred coll]
+        (keep-indexed (fn [idx item] (when (pred item) idx)) coll))
+      (defn b15-index-of-any [pred coll]
+        (first (b15-index-filter pred coll)))
+      (println (b15-index-of-any #{:a} [:b :a :c]))
+      (println (b15-index-of-any #{:z} [:b :a]))
+      (println (keep inc [1 2 3]))
+      (println (keep (fn [x] x) [1 nil 2 false]))
+      (println (map-indexed vector [:a :b]))
+    expected: |
+      1
+      nil
+      (2 3 4)
+      (1 2 false)
+      ([0 :a] [1 :b])
+  - name: exploring-indexed-and-literal-join
+    # The exploring.clj shapes without regex: indexed over map-indexed, and a
+    # join over a literal split (regex stays refused at the reader).
+    source: |
+      (ns b15-str (:require [clojure.string :as s]))
+      (defn b15-indexed [coll] (map-indexed vector coll))
+      (println (b15-indexed [:a :b]))
+      (println (s/join "-" (conj (into [] (s/split "a b c" " ")) "...")))
+      (println (format "Hello, %s" "world"))
+    expected: |
+      ([0 :a] [1 :b])
+      a-b-c-...
+      Hello, world
+  - name: count-runs-over-partitions
+    # The functional.clj shape: count-if over comp, runs over partition, heads
+    # over partial applied to a set predicate.
+    source: |
+      (def b15-count-if (comp count filter))
+      (defn b15-count-runs [n pred coll]
+        (b15-count-if (fn [run] (every? pred run)) (partition n 1 coll)))
+      (println (b15-count-runs 2 #{:h} [:h :t :h :h]))
+      (def b15-count-heads-pairs (partial b15-count-runs 2 #{:h}))
+      (println (b15-count-heads-pairs [:h :h :t]))
+      (println (partition 2 [1 2 3]))
+    expected: |
+      1
+      1
+      ((1 2))
+  - name: nested-map-updates
+    # The note.clj slice over plain maps: update, update-in, assoc-in, get-in.
+    source: |
+      (println (update {:octave 4} :octave dec))
+      (println (update-in {:a {:b 1}} [:a :b] inc))
+      (println (assoc-in {} [:a :b] 1))
+      (println (assoc-in {} [] 5))
+      (println (get-in {:a {:b 1}} [:a :b]))
+      (println (get-in {} [:a :b] :dflt))
+      (println (update {:a 1} :a + 10 20))
+    expected: |
+      {:octave 3}
+      {:a {:b 2}}
+      {:a {:b 1}}
+      {nil 5}
+      1
+      :dflt
+      {:a 31}
+  - name: seq-combinators
+    source: |
+      (println (remove odd? [1 2 3 4]))
+      (println (distinct [3 1 3 2 1]))
+      (println (partition 3 [1 2 3 4 5 6 7]))
+      (println (take-while pos? [3 1 -1 5]))
+      (println (drop-while neg? [-2 -1 0 1]))
+      (println (interleave [1 2 3] [:a :b]))
+      (println (interpose 0 [1 2 3]))
+      (println (zipmap [:a] [1 2]))
+      (println (last [1 2 3]) (butlast [1 2 3]) (second [1 2 3]))
+      (println (every? odd? [1 3]) (some even? [1 3 4]) (some even? [1 3]))
+    expected: |
+      (2 4)
+      (3 1 2)
+      ((1 2 3) (4 5 6))
+      (3 1)
+      (0 1)
+      (1 :a 2 :b)
+      (1 0 2 0 3)
+      {:a 1}
+      3 (1 2) 2
+      true true nil
+  - name: sort-group-frequencies-into
+    source: |
+      (println (sort [3 1 2]))
+      (println (sort > [1 3 2]))
+      (println (sort-by count ["aaa" "b" "cc"]))
+      (println (sort-by count > ["aaa" "b" "cc"]))
+      (println (group-by (fn [x] :same) [1 2]))
+      (println (group-by odd? [1 3]))
+      (println (frequencies [:a :a]))
+      (println (into [] '(1 2)))
+      (println (into {} [[:a 1]]))
+      (println (into '() [1 2]))
+      (println (select-keys {:a 1 :b 2} [:a :c]))
+      (println (merge-with + {:a 1} {:a 2}))
+    expected: |
+      (1 2 3)
+      (3 2 1)
+      (b cc aaa)
+      (aaa cc b)
+      {:same [1 2]}
+      {true [1 3]}
+      {:a 2}
+      [1 2]
+      {:a 1}
+      (2 1)
+      {:a 1}
+      {:a 3}
+  - name: higher-order-values
+    source: |
+      (println ((comp inc inc) 5))
+      (println ((comp) 5))
+      (println (map (comp inc inc) [1 2]))
+      (println ((partial + 10) 5))
+      (println (map (partial + 10) [1 2]))
+      (println ((complement odd?) 4))
+      (println (map (complement odd?) [1 2]))
+      (println ((constantly 7) 1 2 3))
+      (println (map identity [1 2]))
+      (defn b15-blast [x] (if (zero? x) :done (fn [] (b15-blast (dec x)))))
+      (println (trampoline b15-blast 50))
+      (println (let [c (atom 0) f (memoize (fn [x] (swap! c inc) (* x 2)))] [(f 21) (f 21) @c]))
+    expected: |
+      7
+      5
+      (3 4)
+      15
+      (11 12)
+      true
+      (false true)
+      7
+      (1 2)
+      :done
+      [42 42 1]
+  - name: collections-as-functions
+    # Sets, maps and vectors answer calls, like the oracle (with the documented
+    # nth divergence: past the end answers the default instead of throwing).
+    source: |
+      (println (list (#{:h} :h) (#{:h} :x) (#{:h} :x :dflt)))
+      (println (list ({:a 1} :a) ({:a 1} :b :dflt)))
+      (println (list ([10 20] 0) ([10 20] 5 :dflt)))
+      (println (filter #{:h} [:h :t :h]))
+      (println (every? #{:h} [:h :h]))
+    expected: |
+      (:h nil :dflt)
+      (1 :dflt)
+      (10 :dflt)
+      (:h :h)
+      true
+  - name: predicates-and-casts
+    source: |
+      (println (list (coll? [1]) (coll? {:a 1}) (coll? nil) (coll? "s")))
+      (println (list (string? "a") (string? 1) (symbol? 'a) (symbol? :a)))
+      (println (list (instance? String "a") (instance? Long 1) (instance? String 1)))
+      (println (list (class "a") (class 1) (class nil) (class :k)))
+      (println (list (int 2.7) (long -2.7) (unchecked-add 3 4)))
+      (println (map coll? [[1] 5]))
+      (println (map class ["s" 1]))
+    expected: |
+      (true true false false)
+      (true false true false)
+      (true true false)
+      (:string :number :nil :keyword)
+      (2 -2 7)
+      (true false)
+      (:string :number)
+  - name: conditional-binding-forms
+    source: |
+      (println (when-let [x 1] (+ x 10)))
+      (println (when-let [x nil] :body))
+      (println (when-let [[a b] [1 2]] (+ a b)))
+      (println (if-let [x 2] (+ x 1) :none))
+      (println (if-let [x nil] :some :none))
+      (println (when-not false :ran))
+      (println (when-not true :ran))
+      (println (if-not nil :t :e))
+      (println (if-not 1 :t :e))
+      (println (when-first [x [1 2]] x))
+      (println (when-first [x []] :body))
+      (println (when-first [[a b] [[1 2]]] (list a b)))
+    expected: |
+      11
+      nil
+      3
+      3
+      :none
+      :ran
+      nil
+      :t
+      :e
+      1
+      nil
+      (1 2)
+  - name: clojure-format-args
+    # format over Java directives: %s converts like str (nil spells "null", like
+    # String/valueOf), %b the boolean spelling, numbers the matching directive.
+    source: |
+      (println (format "%s=%d" :a 5))
+      (println (format "%s" nil))
+      (println (format "%5s|%.2f|%x|%b|%%" "ab" 3.14159 255 nil))
+      (println (format "a%sb" [1 2]))
+    expected: |
+      :a=5
+      null
+         ab|3.14|ff|false|%
+      a[1 2]b

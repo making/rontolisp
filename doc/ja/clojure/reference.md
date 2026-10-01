@@ -12,6 +12,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [seq](reference/seqs.md) | すべてのコレクションの strict なリストビュー上の seq 群 |
 | [反復](reference/iteration.md) | `doseq`/`dotimes`/`for` と strict な `dorun`/`doall` |
 | [マップ・セット・ベクター](reference/collections.md) | `equal` ハッシュテーブル上の永続コレクション操作 |
+| [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline` |
 | [数値と述語](reference/numbers.md) | 算術、比較、型述語 |
 | [状態](reference/state.md) | `atom`/`deref`/`swap!` と volatile 三兄弟 |
 | [マルチメソッドと階層](reference/multimethods.md) | `defmulti`/`defmethod`、`derive` と階層参照 |
@@ -19,4 +20,5 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
 | [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
 | [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
+| [入出力](reference/io.md) | `spit`・`slurp`・`line-seq` と `format` |
 | [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |

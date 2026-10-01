@@ -33,3 +33,11 @@
 | `false?` | `(false? false)` | `true` |
 | `true?` | `(true? true)` | `true` |
 | `boolean?` | `(boolean? false)` | `true` |
+| `coll?` | `(coll? [1])` | `true` |
+| `string?` | `(string? "a")` | `true` |
+| `symbol?` | `(symbol? 'a)` | `true` |
+| `instance?` | `(instance? String "a")` | `true` |
+| `class` | `(class "a")` | `:string` |
+| `int` | `(int 2.7)` | `2` |
+| `long` | `(long -2.7)` | `-2` |
+| `unchecked-add` | `(unchecked-add 3 4)` | `7` |
