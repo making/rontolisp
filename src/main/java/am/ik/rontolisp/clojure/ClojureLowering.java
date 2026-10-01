@@ -2507,6 +2507,14 @@ public final class ClojureLowering {
 						list(sym("EQ"), booleanTemp, TRUE_CONST), list(sym("EQ"), booleanTemp, this.falseVariable))));
 			case "vector":
 				return plain("vector", items);
+			case "make-array":
+				return makeArrayOf(items);
+			case "aget":
+				return agetOf(items);
+			case "aset":
+				return asetOf(items);
+			case "alength":
+				return alengthOf(items);
 			case "vector?":
 				return booleanAnswer(plain("vectorp", items));
 			case "map":
@@ -7162,7 +7170,7 @@ public final class ClojureLowering {
 			isTrue(oneBased <= 9, "the anon form #(...) takes at most 9 arguments");
 			return list(sym("nth"), new LispInteger(oneBased - 1), new LispSymbol(args));
 		}
-		if (name.equals("*out*") || name.equals("*agent*")) {
+		if (name.equals("*out*") || name.equals("*in*") || name.equals("*agent*")) {
 			// dynamic aliases, not mangled names (see idSym): always resolvable
 			if (name.equals("*agent*")) {
 				this.usedStm = true;
@@ -7189,6 +7197,10 @@ public final class ClojureLowering {
 			}
 			String cl = builtinValue(name);
 			if (cl == null) {
+				LispVal member = interopValue(name);
+				if (member != null) {
+					return member;
+				}
 				throw new LispReadException("unknown name: " + name);
 			}
 			return list(sym("function"), sym(cl));
@@ -7793,9 +7805,9 @@ public final class ClojureLowering {
 
 	/**
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
-	 * the oracle -- which is why only {@code ^:dynamic} vars (and {@code *out*}, already
-	 * special) may be bound. Inits run sequentially, like {@code let}, and the body
-	 * closes over the scope the same way.
+	 * the oracle -- which is why only {@code ^:dynamic} vars (and
+	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
+	 * like {@code let}, and the body closes over the scope the same way.
 	 */
 	private LispVal bindingOf(List<LispVal> items) {
 		isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -7808,7 +7820,7 @@ public final class ClojureLowering {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
 				String name = plainName(bindings.get(i), "binding");
-				if (!name.equals("*out*") && !this.dynamicVars.contains(name)) {
+				if (!name.equals("*out*") && !name.equals("*in*") && !this.dynamicVars.contains(name)) {
 					throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
 				}
 				if (name.equals("*agent*")) {
@@ -10056,15 +10068,14 @@ public final class ClojureLowering {
 			if (!tail.isEmpty() && tail.indexOf('/') < 0 && isClasslike(head) && !this.types.containsKey(head)) {
 				String cls = resolveClass(head);
 				if (items.size() == 1) {
-					// no arguments reads a static field: a zero-argument static
-					// method spells (. Class method) instead
-					return cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+					// no arguments: the zero-argument static method when the host
+					// class has one, else the static field read (whose run-time
+					// error names an unknown member or class, like before)
+					return staticNoArg(cls, tail);
 				}
 				List<LispVal> args = new ArrayList<>();
-				args.add(LispString.literal(cls));
-				args.add(LispString.literal(tail));
 				args.addAll(lowers(items, 1));
-				return cons(JAVA_STATIC, args);
+				return staticCall(cls, tail, args);
 			}
 		}
 		return null;
@@ -10099,13 +10110,17 @@ public final class ClojureLowering {
 			argDatums = items.subList(3, items.size());
 		}
 		if (target instanceof LispSymbol named && isClasslike(named.name())) {
-			List<LispVal> call = new ArrayList<>();
-			call.add(LispString.literal(resolveClass(named.name())));
-			call.add(LispString.literal(method));
-			for (LispVal arg : argDatums) {
-				call.add(lower(arg));
+			if (argDatums.isEmpty()) {
+				// no arguments: the zero-argument static method when the host
+				// class has one, else the static field read -- the same rule the
+				// (Class/member) spelling follows, so (. Math PI) reads the field
+				return staticNoArg(resolveClass(named.name()), method);
 			}
-			return cons(JAVA_STATIC, call);
+			List<LispVal> lowered = new ArrayList<>();
+			for (LispVal arg : argDatums) {
+				lowered.add(lower(arg));
+			}
+			return staticCall(resolveClass(named.name()), method, lowered);
 		}
 		return instanceCall(lower(target), method, argDatums);
 	}
@@ -10137,6 +10152,162 @@ public final class ClojureLowering {
 		return lower(acc);
 	}
 
+	/**
+	 * What the host class says about a static member: a static field, the fixed arities
+	 * of its non-variadic static methods, the subset answering a boolean, and whether a
+	 * variadic one exists.
+	 */
+	private record StaticMember(boolean field, List<Integer> arities, Set<Integer> booleanArities, boolean variadic) {
+	}
+
+	/**
+	 * Reads the host class once: whether {@code member} is a public static field, the
+	 * sorted distinct fixed arities of its public static non-variadic methods, the subset
+	 * whose overloads all answer a boolean, and whether a variadic one exists. An
+	 * unloadable class answers all absent, so the call sites keep their old shape and the
+	 * run-time error names the class.
+	 */
+	private static StaticMember staticMember(String className, String member) {
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			boolean field = false;
+			try {
+				field = java.lang.reflect.Modifier.isStatic(found.getField(member).getModifiers());
+			}
+			catch (NoSuchFieldException _) {
+				// no field of that name: the methods decide below
+			}
+			Set<Integer> arities = new HashSet<>();
+			Map<Integer, Boolean> booleanByArity = new HashMap<>();
+			boolean variadic = false;
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
+						|| method.isSynthetic()) {
+					continue;
+				}
+				if (method.isVarArgs()) {
+					variadic = true;
+				}
+				else {
+					int fixed = method.getParameterCount();
+					arities.add(fixed);
+					booleanByArity.merge(fixed, method.getReturnType() == Boolean.TYPE, (a, b) -> a && b);
+				}
+			}
+			List<Integer> sorted = new ArrayList<>(arities);
+			sorted.sort(Integer::compareTo);
+			Set<Integer> booleanArities = new HashSet<>();
+			for (Map.Entry<Integer, Boolean> entry : booleanByArity.entrySet()) {
+				if (entry.getValue()) {
+					booleanArities.add(entry.getKey());
+				}
+			}
+			return new StaticMember(field, sorted, booleanArities, variadic);
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return new StaticMember(false, List.of(), Set.of(), false);
+		}
+	}
+
+	/**
+	 * A static call through {@code java:static}: a boolean answer is {@code T}-or-false
+	 * when every overload at that arity answers a boolean, like every predicate value.
+	 */
+	private LispVal staticCall(String cls, String member, List<LispVal> args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(LispString.literal(cls));
+		call.add(LispString.literal(member));
+		call.addAll(args);
+		LispVal run = cons(JAVA_STATIC, call);
+		if (staticMember(cls, member).booleanArities().contains(args.size())) {
+			return booleanAnswer(run);
+		}
+		return run;
+	}
+
+	/**
+	 * {@code (Class/member)} or {@code (. Class member)} with no arguments: the
+	 * zero-argument static method when the host class has one (a static call through
+	 * {@code java:static}), else the static field read through {@code java:field} (whose
+	 * run-time error names an unknown member or class, like before). The method wins a
+	 * field of the same name, like the oracle's unified resolution; a boolean answer is
+	 * {@code T}-or-false, like every predicate value.
+	 */
+	private LispVal staticNoArg(String cls, String member) {
+		List<LispVal> args = new ArrayList<>();
+		args.add(LispString.literal(cls));
+		args.add(LispString.literal(member));
+		StaticMember seen = staticMember(cls, member);
+		if (seen.arities().contains(0)) {
+			LispVal call = cons(JAVA_STATIC, args);
+			return seen.booleanArities().contains(0) ? booleanAnswer(call) : call;
+		}
+		return cons(JAVA_FIELD, args);
+	}
+
+	/**
+	 * A {@code Class/member} name in value position: the static field read when the host
+	 * class has that field, else a member-as-value lambda dispatching by argument count
+	 * over the static call (so {@code (every? Character/isWhitespace s)} runs). A member
+	 * with only variadic overloads is refused by name (no rest-spread reaches
+	 * {@code java:static}); an unknown class or member reads the field, whose run-time
+	 * error names what is missing. Null when the name is no classlike slash form, so the
+	 * call keeps falling through to the unknown-name refusal.
+	 */
+	private @Nullable LispVal interopValue(String name) {
+		int slash = name.indexOf('/');
+		if (slash <= 0) {
+			return null;
+		}
+		String head = name.substring(0, slash);
+		String tail = name.substring(slash + 1);
+		if (tail.isEmpty() || tail.indexOf('/') >= 0 || !isClasslike(head) || this.types.containsKey(head)) {
+			return null;
+		}
+		String cls = resolveClass(head);
+		StaticMember seen = staticMember(cls, name.substring(slash + 1));
+		if (seen.field()) {
+			return cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+		}
+		if (!seen.arities().isEmpty()) {
+			return memberLambda(cls, tail, name, seen);
+		}
+		if (seen.variadic()) {
+			throw new LispReadException(name + " is variadic and has no value form");
+		}
+		return cons(JAVA_FIELD, List.of(LispString.literal(cls), LispString.literal(tail)));
+	}
+
+	/**
+	 * The member-as-value lambda: one {@code &rest} parameter dispatched per known fixed
+	 * arity onto the static call (the run-time overload selection picks among same-arity
+	 * overloads), any other count the wrong-argument-count error, like a multi-arity
+	 * {@code defn} dispatch. A boolean answer is {@code T}-or-false, like every predicate
+	 * value, so {@code (map Character/isWhitespace ...)} prints {@code (true false)}.
+	 */
+	private LispVal memberLambda(String cls, String member, String spelling, StaticMember seen) {
+		LispSymbol args = freshTemp();
+		LispSymbol count = freshTemp();
+		List<LispVal> arms = new ArrayList<>();
+		for (int arity : seen.arities()) {
+			List<LispVal> call = new ArrayList<>();
+			call.add(LispString.literal(cls));
+			call.add(LispString.literal(member));
+			for (int p = 0; p < arity; p++) {
+				call.add(list(sym("NTH"), new LispInteger(p), args));
+			}
+			LispVal run = cons(JAVA_STATIC, call);
+			if (seen.booleanArities().contains(arity)) {
+				run = booleanAnswer(run);
+			}
+			arms.add(list(list(sym("="), count, new LispInteger(arity)), run));
+		}
+		arms.add(list(TRUE_CONST,
+				list(sym("error"), LispString.literal("wrong number of arguments passed to: " + spelling))));
+		return list(sym("lambda"), list(List.of(AMPERSAND_REST, args)),
+				list(sym("let"), list(List.of(list(count, list(sym("length"), args)))), cons(sym("cond"), arms)));
+	}
+
 	/** {@code (new Class args...)}: construction through {@code java:new}. */
 	private LispVal newOf(List<LispVal> items) {
 		isTrue(items.size() >= 2, "new takes a class and arguments");
@@ -10151,6 +10322,49 @@ public final class ClojureLowering {
 		args.add(LispString.literal(resolveClass(named.name())));
 		args.addAll(lowers(items, 2));
 		return cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * {@code (make-array Class dim...)}: a general array over the dimensions -- the class
+	 * spells the element type and is ignored, every array here is general (the book's
+	 * {@code interop.clj} {@code painstakingly-create-array} shape). One dimension is the
+	 * scalar, several the dimension list, like the oracle's separate-argument shape; only
+	 * the Clojure spellings are new, the array itself compiles on all four backends.
+	 */
+	private LispVal makeArrayOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "make-array takes a class and dimensions");
+		if (!(items.get(1) instanceof LispSymbol)) {
+			throw new LispReadException("make-array takes a class name, not " + items.get(1).print());
+		}
+		List<LispVal> dims = lowers(items, 2);
+		LispVal shape = dims.size() == 1 ? dims.get(0) : cons(sym("list"), dims);
+		return list(sym("make-array"), shape);
+	}
+
+	/** {@code (aget array index...)}: the element, through {@code aref}. */
+	private LispVal agetOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "aget takes an array and subscripts");
+		List<LispVal> ref = new ArrayList<>();
+		ref.add(sym("aref"));
+		ref.addAll(lowers(items, 1));
+		return list(ref);
+	}
+
+	/** {@code (aset array index... value)}: the write, through {@code (setf aref)}. */
+	private LispVal asetOf(List<LispVal> items) {
+		isTrue(items.size() >= 4, "aset takes an array, subscripts and a value");
+		List<LispVal> ref = new ArrayList<>();
+		ref.add(sym("aref"));
+		for (int i = 1; i < items.size() - 1; i++) {
+			ref.add(lower(items.get(i)));
+		}
+		return list(sym("setf"), list(ref), lower(items.get(items.size() - 1)));
+	}
+
+	/** {@code (alength array)}: the zeroth dimension, through {@code array-dimension}. */
+	private LispVal alengthOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "alength takes an array");
+		return list(sym("array-dimension"), lower(items.get(1)), new LispInteger(0));
 	}
 
 	/**
@@ -10291,7 +10505,8 @@ public final class ClojureLowering {
 	/**
 	 * A stream method over an already-bound receiver: {@code write} prints through
 	 * {@code princ} (strings bare, characters as glyphs), {@code flush} finishes the
-	 * output and {@code close} closes the stream, so {@code with-open} over a
+	 * output, {@code readLine} reads through {@code read-line} (nil past the end, like
+	 * the oracle) and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
 	 * without reaching {@code java:call}. Null when the method maps to nothing, so the
 	 * call goes to {@code java:call}.
@@ -10302,6 +10517,10 @@ public final class ClojureLowering {
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return list(sym("finish-output"), recv);
+		}
+		if (method.equals("readLine") && args.isEmpty()) {
+			// nil past the end, like the oracle (a Java reader takes the java:call path)
+			return list(sym("read-line"), recv, NIL_CONST, NIL_CONST);
 		}
 		if (method.equals("close") && args.isEmpty()) {
 			return list(sym("close"), recv);
@@ -10593,6 +10812,9 @@ public final class ClojureLowering {
 		}
 		if (identifier.equals("*out*")) {
 			return new LispSymbol("*STANDARD-OUTPUT*");
+		}
+		if (identifier.equals("*in*")) {
+			return new LispSymbol("*STANDARD-INPUT*");
 		}
 		if (identifier.equals("*agent*")) {
 			return new LispSymbol("C%AGENT");

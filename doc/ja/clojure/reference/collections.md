@@ -1,6 +1,6 @@
 # マップ・セット・ベクター
 
-マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。ベクターとテーブルのキーは同一性で比較されます。
+マップとセットは equal ハッシュテーブルで、その場では変更されません:全操作が新しいテーブルを作るので、永続性は観測可能な形で保たれます。map/set の反復順はテーブルの走査順（未規定）です。ベクターとテーブルのキーは同一性で比較されます。配列は general です。`(make-array Class dim...)` はクラスを無視し、`aget` で読み、`aset` で書き、`alength` で測ります。
 
 | Name | Example | Result |
 |---|---|---|
@@ -29,3 +29,7 @@
 | `defstruct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct` | `(do (defstruct s :a) (:a (struct s 1)))` | `1` |
 | `struct-map` | `(do (defstruct s :a) (:a (struct-map s :a 1)))` | `1` |
+| `make-array` | `(alength (make-array String 2))` | `2` |
+| `aget` | `(let [a (make-array String 1)] (aset a 0 "x") (aget a 0))` | `"x"` |
+| `aset` | `(let [a (make-array String 1)] (aset a 0 "x"))` | `"x"` |
+| `alength` | `(alength (make-array String 2))` | `2` |

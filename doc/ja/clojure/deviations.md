@@ -92,5 +92,6 @@
 - `with-open` は `close` メソッド越しに閉じるため、バックエンドの届く closeable
   だけが動きます（Java の closeable は JVM が要ります）。`time` は値を答えますが、
   ミリ秒数は固定されません（`Elapsed time:` 接頭辞だけが固定です）。
-- `*out*` は `*standard-output*` です（再束縛は標準出力の再束縛になります）。
+- `*out*`/`*in*` は `*standard-output*`/`*standard-input*` です（再束縛は標準
+  ストリームの再束縛になります）。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。

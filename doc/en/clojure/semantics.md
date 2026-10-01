@@ -97,6 +97,9 @@ place -- every verb builds a fresh one, so persistence holds observably; a set l
 same table with each member stored under itself, wrapped so verbs tell a set from a map. A
 keyword is its spelling wrapped as `(:C%KEYWORD name)`: data compared by `equal`, and in
 call position (`(:k m)`, with an optional default) or as a function value the map lookup.
+Arrays are general: `(make-array Class dim...)` builds a general array ignoring the
+class, read through `aget`, written through `aset`, measured through `alength` (the
+book's `interop.clj` shape; only the Clojure spellings are new, so all four backends).
 
 The seq family runs over list views of every collection: lists pass through
 untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets
@@ -134,7 +137,8 @@ answer the agent; `*agent*` is bound while one runs. `await` rendezvous and
 stay refused by name, and so does `proxy-super` (proxy methods take no super
 handle).
 
-`binding` rebinds `^:dynamic` vars (and `*out*`, which is `*standard-output*`)
+`binding` rebinds `^:dynamic` vars (and `*out*`/`*in*`, which are `*standard-output*`/
+`*standard-input*`)
 with dynamic extent; anything else is refused. `defstruct` holds its key vector
 behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
 binds `*standard-output*` to a string stream (never a literal
@@ -142,7 +146,8 @@ binds `*standard-output*` to a string stream (never a literal
 `Elapsed time: N msecs` and answers its value. `with-open` binds and closes in
 reverse order through `unwind-protect`, calling the `close` method (Java
 closeables need the JVM, like all interop); `(. stream write x)` prints through
-`princ` on every backend.
+`princ` on every backend, and `(.readLine stream)` reads through `read-line`
+(`nil` past the end, like the oracle).
 
 ## Protocols, records and types
 
@@ -189,6 +194,7 @@ Each refusal names the missing design, never `unknown name`:
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |
+| a variadic-only static member as a value | `... is variadic and has no value form` | no rest-spread reaches `java:static` |
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::`-auto-resolve keywords | by name | no namespace to resolve against |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |

@@ -92,5 +92,6 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `with-open` closes through the `close` method, so only closeables the backend
   reaches work (Java closeables need the JVM); `time` answers its value but its
   millisecond count never pins (only the `Elapsed time:` prefix does).
-- `*out*` is `*standard-output*` (rebinding it rebinds standard output);
+- `*out*`/`*in*` are `*standard-output*`/`*standard-input*` (rebinding rebinds the
+  standard streams);
   `defonce` keeps the root on reload where `def` resets it.

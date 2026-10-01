@@ -643,6 +643,57 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void staticMembersResolveByHostArity() {
+		// a zero-argument static method is a static call, even in the (. Class m)
+		// spelling; a field stays a field read, in call and dot-form alike
+		assertThat(lowered("(System/currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(. System currentTimeMillis)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
+		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
+		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
+		// calls with arguments keep the static call, answering T-or-false for booleans
+		assertThat(lowered("(Integer/parseInt \"42\")")).contains("JAVA:STATIC");
+		assertThat(lowered("(Character/isWhitespace \\a)")).contains("JAVA:STATIC").contains("IF");
+	}
+
+	@Test
+	void staticMembersLowerAsValues() {
+		// a static field as a value reads the field, through an import too
+		assertThat(lowered("(ns b20imp (:import (java.awt.event KeyEvent))) KeyEvent/VK_LEFT")).contains("JAVA:FIELD")
+			.contains("java.awt.event.KeyEvent");
+		assertThat(lowered("Math/PI")).contains("JAVA:FIELD").contains("java.lang.Math");
+		// a static method as a value is an arity-dispatching lambda over the static
+		// call, so (every? Character/isWhitespace s) runs
+		assertThat(lowered("(every? Character/isWhitespace \"   \")")).contains("LAMBDA")
+			.contains("JAVA:STATIC")
+			.contains("wrong number of arguments passed to: Character/isWhitespace");
+		// a variadic-only member has no value form; an unknown member or class keeps
+		// the field read, whose run-time error names what is missing
+		assertThatThrownBy(() -> Clojure.read("String/format", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("String/format is variadic and has no value form");
+		assertThat(lowered("Math/PII")).contains("JAVA:FIELD");
+		assertThat(lowered("NoSuchClass/foo")).contains("JAVA:FIELD");
+	}
+
+	@Test
+	void arraysLowerToTheCoreArrayForms() {
+		assertThat(lowered("(make-array String 3)")).contains("MAKE-ARRAY");
+		assertThat(lowered("(make-array String 2 2)")).contains("MAKE-ARRAY").contains("LIST");
+		assertThatThrownBy(() -> Clojure.read("(make-array 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("make-array takes a class name");
+		assertThat(lowered("(let [a20-v 1] (aget a20-v 0))")).contains("AREF");
+		assertThat(lowered("(let [a20-v 1] (aset a20-v 0 1))")).contains("SETF").contains("AREF");
+		assertThat(lowered("(let [a20-v 1] (alength a20-v))")).contains("ARRAY-DIMENSION");
+	}
+
+	@Test
+	void inIsStandardInput() {
+		assertThat(lowered("*in*")).contains("*STANDARD-INPUT*");
+		assertThat(lowered("(binding [*in* *in*] 1)")).contains("*STANDARD-INPUT*");
+		assertThat(lowered("(.readLine *in*)")).contains("READ-LINE");
+	}
+
+	@Test
 	void charactersAndRadixLowerAsThemselves() {
 		assertThat(lowered("\\a")).contains("#\\a");
 		assertThat(lowered("0xFF")).isEqualTo(FALSE_BINDING + "255");
