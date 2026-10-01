@@ -320,10 +320,9 @@ final class ClojureReader {
 	}
 
 	/**
-	 * One regex literal's source: like {@link #readString} for the standard escapes,
-	 * but any other backslashed character passes through verbatim for the pattern
-	 * parser (which names what it cannot lower) instead of naming the next
-	 * character twice.
+	 * One regex literal's source: like {@link #readString} for the standard escapes, but
+	 * any other backslashed character passes through verbatim for the pattern parser
+	 * (which names what it cannot lower) instead of naming the next character twice.
 	 */
 	private LispVal readRegexSource() {
 		next();

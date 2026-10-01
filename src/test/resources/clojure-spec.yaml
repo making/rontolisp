@@ -2956,7 +2956,6 @@ cases:
       [berry]
       [11 22]
       [hi yo]
-      [hi yo]
   - name: regex-literals-compile-and-round-trip
     # #"..." lowers to a pattern value over the spliced regex runtime (b21):
     # re-pattern compiles strings and answers patterns back, str spells the

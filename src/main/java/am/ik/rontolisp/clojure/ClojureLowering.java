@@ -2418,8 +2418,8 @@ public final class ClojureLowering {
 
 	/** Whether NAME is a {@code re-*} core name (lowered beside the big switch). */
 	private static boolean isReName(String name) {
-		return name.equals("re-pattern") || name.equals("re-matcher") || name.equals("re-find")
-				|| name.equals("re-seq") || name.equals("re-matches") || name.equals("re-groups");
+		return name.equals("re-pattern") || name.equals("re-matcher") || name.equals("re-find") || name.equals("re-seq")
+				|| name.equals("re-matches") || name.equals("re-groups");
 	}
 
 	/**
