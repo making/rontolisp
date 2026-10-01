@@ -403,6 +403,7 @@
 				<select id="language" disabled>
 					<option value="lisp">Common Lisp</option>
 					<option value="scheme">Scheme (experimental)</option>
+					<option value="clojure">Clojure (experimental)</option>
 				</select>
 				<label for="samples">sample</label>
 				<select id="samples">
@@ -418,7 +419,7 @@
 			</div>
 			<div class="toolbar">
 				<label for="file-upload">load files</label>
-				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.wit" disabled>
+				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.clj,.wit" disabled>
 				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code id="file-hint">(load "name.lisp")</code></span>
 			</div>
 			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
@@ -490,10 +491,23 @@
 			"streams": '(define (integers-from n)\n  (cons-stream n (integers-from (+ n 1))))\n(define (take s k)\n  (if (= k 0) \'() (cons (stream-car s) (take (stream-cdr s) (- k 1)))))\n(write (take (integers-from 1) 10))\n(newline)',
 		};
 
+		// The experimental Clojure front end: see the docs' Clojure section.
+		const CLOJURE_SAMPLES = {
+			"hello": '(println "hello, rontolisp")',
+			"factorial": '(defn fact [n]\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(println (fact 20))',
+			"fibonacci": '(defn fib [n]\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(println (fib 20))',
+			"higher-order": '(println (map #(* % %) [1 2 3 4 5]))\n(println (reduce + [1 2 3 4 5 6 7 8 9 10]))\n(println (map clojure.string/upper-case ["foo" "bar"]))\n(ns foo (:require clojure.string))',
+			"threading": '(defn fizzbuzz [n]\n  (cond\n    (= (mod n 15) 0) "FizzBuzz"\n    (= (mod n 3) 0) "Fizz"\n    (= (mod n 5) 0) "Buzz"\n    :else n))\n(println (map fizzbuzz (range 1 16)))',
+			"destructuring": '(defn greet [{:keys [name]}]\n  (str "hello, " name))\n(println (greet {:name "rontolisp"}))\n(let [[a b & rest :as all] [1 2 3 4 5]]\n  (println [a b rest all]))',
+			"maps": '(def capitals {"japan" "tokyo", "france" "paris"})\n(println (get capitals "france"))\n(println (:japan capitals))\n(println (count capitals))\n(println (keys capitals))\n(println (assoc capitals "italy" "rome"))',
+			"loop-recur": '(loop [i 5]\n  (when (pos? i)\n    (println i)\n    (recur (dec i))))',
+		};
+
 		// Per language: the samples, the REPL placeholder and how an uploaded file is used.
 		const LANGUAGES = {
 			lisp: { samples: LISP_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.lisp")' },
 			scheme: { samples: SCHEME_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(include "name.scm")' },
+			clojure: { samples: CLOJURE_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.clj")' },
 		};
 		const LANGUAGE_KEY = "rontolisp-language";
 

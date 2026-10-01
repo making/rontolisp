@@ -17,10 +17,10 @@ import java.util.regex.Pattern;
  * <ul>
  * <li>A {@code lisp} cell runs in the page's one shared interpreter ({@code rontoEval}):
  * a definition in an earlier cell is visible to later ones.</li>
- * <li>A {@code scheme} cell is a whole program on a fresh interpreter, or -- carrying a
- * {@code ; =>} annotation -- a REPL session of its own. The {@code ```stdin} block right
- * before it is its standard input, carried in the cell as a hidden
- * {@code textarea.cell-stdin}. A {@code scheme} block whose first line is
+ * <li>A {@code scheme} or {@code clojure} cell is a whole program on a fresh interpreter,
+ * or -- carrying a {@code ; =>} annotation -- a REPL session of its own. The
+ * {@code ```stdin} block right before it is its standard input, carried in the cell as a
+ * hidden {@code textarea.cell-stdin}. A {@code scheme} block whose first line is
  * {@code ; file: NAME} is a file the page's other Scheme blocks read, not a program: it
  * stays static, and {@code docs.js} hands it to the runtime as that file.</li>
  * </ul>
@@ -58,9 +58,9 @@ public final class RunnableBlockTransformer {
 			if (language.equals("lisp") && !isTranscript(escapedCode)) {
 				replacement = runnableCell(escapedCode, "lisp", null);
 			}
-			else if (language.equals("scheme") && !isTranscript(escapedCode)
+			else if ((language.equals("scheme") || language.equals("clojure")) && !isTranscript(escapedCode)
 					&& !FILE_BLOCK.matcher(escapedCode).lookingAt()) {
-				replacement = runnableCell(escapedCode, "scheme", stdin);
+				replacement = runnableCell(escapedCode, language, stdin);
 			}
 			// A stdin block feeds the ONE block after it; every other block reads none.
 			stdin = language.equals("stdin") ? escapedCode : null;

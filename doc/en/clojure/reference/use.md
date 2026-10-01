@@ -7,6 +7,6 @@ Loads a namespace and refers the names the clause lists, answering `nil` --
 an unknown namespace is an error.
 
 ```clojure
-(use '[clojure.string :only [upper-case]])
+(use [clojure.string :only [upper-case]])
 (println (upper-case "hi")) ; HI
 ```

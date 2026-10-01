@@ -136,6 +136,13 @@ class DocGenTest {
 	}
 
 	@Test
+	void aClojureBlockBecomesAClojureCell() {
+		String html = "<pre><code class=\"language-clojure\">(println (+ 1 2))</code></pre>";
+		assertThat(RunnableBlockTransformer.transform(html)).contains("<div class=\"code-cell\" data-lang=\"clojure\">")
+			.contains("(println (+ 1 2))");
+	}
+
+	@Test
 	void replTranscriptStaysStatic() {
 		String html = "<pre><code class=\"language-lisp\">&gt; (+ 1 2)\n3</code></pre>";
 		String out = RunnableBlockTransformer.transform(html);

@@ -59,17 +59,18 @@ import static org.assertj.core.api.Assertions.fail;
  * the comment line just below it -- has its printed value asserted. This holds on EVERY
  * page, guide and reference alike: a shown result no test re-measures is a number that
  * drifts.</li>
- * <li>A <code>```scheme</code> block is a WHOLE program for the experimental Scheme front
- * end (it is lowered a file at a time, so it shares nothing with its neighbours): it must
- * run, and a plain block right after it is its asserted standard output. On the site it
- * is a Run cell running the same thing ({@code PlaygroundRepl}). A <code>```scheme</code>
- * block with a <code>; =&gt;</code> annotation is instead read by a REPL session of its
- * own, form by form, and each annotation is compared with what that REPL echoes for its
- * form: the {@code write} text, nothing for a definition or an effect, several values
- * joined by {@code ", "}. An {@code exit} ends the block's program, keeping what it
- * printed.</li>
- * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code>
- * block right after it (every other block reads an empty input).</li>
+ * <li>A <code>```scheme</code> (or <code>```clojure</code>) block is a WHOLE program for
+ * the experimental Scheme / Clojure front end (it is lowered a file at a time, so it
+ * shares nothing with its neighbours): it must run, and a plain block right after it is
+ * its asserted standard output. On the site it is a Run cell running the same thing
+ * ({@code PlaygroundRepl}). Such a block with a <code>; =&gt;</code> annotation is
+ * instead read by a REPL session of its own, form by form, and each annotation is
+ * compared with what that REPL echoes for its form: the language's {@code write} text,
+ * nothing for a definition or an effect, several values joined by {@code ", "}. An
+ * {@code exit} ends the block's program, keeping what it printed.</li>
+ * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code> /
+ * <code>```clojure</code> block right after it (every other block reads an empty
+ * input).</li>
  * <li>A <code>```scheme</code> block whose first line is <code>; file: NAME</code> is
  * also the file {@code NAME} for the Scheme blocks after it on the page -- what they
  * {@code include}, the {@code define-library} files they import -- and is not run.</li>
@@ -248,13 +249,14 @@ class DocExamplesTest {
 			}
 			String blockStdin = stdin;
 			stdin = "";
-			if (block.isScheme()) {
+			if (block.isScheme() || block.isClojure()) {
+				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME : SourceLanguage.CLOJURE;
 				if (noteFile(block.content(), files)) {
 					continue;
 				}
 				String actual;
 				if (block.content().contains(ARROW)) {
-					SchemeRun run = runSchemeSession(block.content(), blockStdin, markdown, files);
+					SchemeRun run = runSession(language, block.content(), blockStdin, markdown, files);
 					for (int f = 0; f < run.forms().size(); f++) {
 						String source = String.join("\n", run.forms().get(f));
 						String annotation = lastArrowAnnotation(source);
@@ -266,11 +268,12 @@ class DocExamplesTest {
 					actual = run.stdout();
 				}
 				else {
-					actual = runScheme(block.content(), blockStdin, markdown, files);
+					actual = runProgram(language, block.content(), blockStdin, markdown, files);
 				}
 				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
 				if (expected != null && expected.isExpectedOutput()) {
-					assertThat(actual).as("output of Scheme example in %s:%n%s", markdown, block.content())
+					assertThat(actual)
+						.as("output of %s example in %s:%n%s", language.name().toLowerCase(), markdown, block.content())
 						.isEqualTo(expected.content().strip());
 				}
 				continue;
@@ -305,15 +308,17 @@ class DocExamplesTest {
 		}
 	}
 
-	// A Scheme example is a whole program on a fresh evaluator: the front end decides
-	// defun-or-variable per FILE, so a block cannot lean on an earlier one. It runs
-	// through what the site's Run cell runs (PlaygroundRepl.run).
-	static String runScheme(String source, String stdin, String page, Map<String, String> files) {
+	// A Scheme or Clojure example is a whole program on a fresh evaluator: the front end
+	// decides defun-or-variable per FILE, so a block cannot lean on an earlier one. It
+	// runs through what the site's Run cell runs (PlaygroundRepl.run).
+	static String runProgram(SourceLanguage language, String source, String stdin, String page,
+			Map<String, String> files) {
 		try {
-			return new PlaygroundRepl(pageFiles(files), stdin).pick(SourceLanguage.SCHEME).run(source).strip();
+			return new PlaygroundRepl(pageFiles(files), stdin).pick(language).run(source).strip();
 		}
 		catch (RuntimeException ex) {
-			return fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
+			return fail("%s example in %s failed to evaluate:%n%s%n-> %s".formatted(language.name().toLowerCase(), page,
+					source, ex), ex);
 		}
 	}
 
@@ -364,10 +369,11 @@ class DocExamplesTest {
 	 * {@code ; =>} annotation states. An {@code exit} ends the block: the forms after it
 	 * show nothing.
 	 */
-	static SchemeRun runSchemeSession(String content, String stdin, String page, Map<String, String> files) {
+	static SchemeRun runSession(SourceLanguage language, String content, String stdin, String page,
+			Map<String, String> files) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = schemeEvaluator(out, stdin);
-		SourceSession session = new SourceSession(SourceLanguage.SCHEME, SourceStandards.DEFAULT, pageFiles(files));
+		SourceSession session = new SourceSession(language, SourceStandards.DEFAULT, pageFiles(files));
 		List<List<String>> forms = splitSchemeForms(session, content);
 		List<String> shown = new ArrayList<>();
 		boolean exited = false;
@@ -509,13 +515,14 @@ class DocExamplesTest {
 					content = rewritten;
 					pendingStdout = buffer.toString(StandardCharsets.UTF_8).strip();
 				}
-				else if (info.equals("scheme")) {
+				else if (info.equals("scheme") || info.equals("clojure")) {
+					SourceLanguage language = info.equals("scheme") ? SourceLanguage.SCHEME : SourceLanguage.CLOJURE;
 					String source = String.join("\n", content);
 					if (noteFile(source, files)) {
 						pendingStdout = null;
 					}
 					else if (source.contains(ARROW)) {
-						SchemeRun run = runSchemeSession(source, stdin, page.toString(), files);
+						SchemeRun run = runSession(language, source, stdin, page.toString(), files);
 						List<String> rewritten = new ArrayList<>();
 						for (int f = 0; f < run.forms().size(); f++) {
 							rewritten.addAll(rewriteArrow(run.forms().get(f), run.shown().get(f)));
@@ -524,7 +531,7 @@ class DocExamplesTest {
 						pendingStdout = run.stdout();
 					}
 					else {
-						pendingStdout = runScheme(source, stdin, page.toString(), files);
+						pendingStdout = runProgram(language, source, stdin, page.toString(), files);
 					}
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
@@ -676,6 +683,10 @@ class DocExamplesTest {
 
 		boolean isScheme() {
 			return this.info.equals("scheme");
+		}
+
+		boolean isClojure() {
+			return this.info.equals("clojure");
 		}
 
 		boolean isStdin() {
