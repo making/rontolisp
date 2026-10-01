@@ -222,12 +222,12 @@ sections:
     pages:
       - file: clojure/index.md
         title: 概要
+      - file: clojure/repl.md
+        title: REPL
       - file: clojure/syntax.md
         title: 構文
       - file: clojure/semantics.md
         title: セマンティクス
-      - file: clojure/repl.md
-        title: REPL
       - file: clojure/deviations.md
         title: 仕様との差異
       - file: clojure/reference.md

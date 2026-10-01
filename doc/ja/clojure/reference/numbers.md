@@ -1,6 +1,6 @@
 # 数値と述語
 
-算術と比較のコア、型述語です。比較は true/false を答え、述語は nil と false を別の値として扱います。
+算術と比較のコア、型述語です。比較は true/false を返し、述語は nil と false を別の値として扱います。
 
 | Name | Example | Result |
 |---|---|---|

@@ -5,7 +5,7 @@
 
 リテラル文字列 `sub` が `s` の `from`（デフォルト 0）以降に最初に現れるインデックスを返し、なければ `-1` を返します。関数値としても動きます。
 
-Deviation: 見つからない `sub` は `-1` を返します。oracle の `clojure.string/index-of` は `nil` を返します。
+仕様との差異: 見つからない `sub` は `-1` を返します。オラクルの `clojure.string/index-of` は `nil` を返します。
 
 ```clojure
 (println (clojure.string/index-of "hihi" "i")) ; 1

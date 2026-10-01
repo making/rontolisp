@@ -55,7 +55,7 @@ are empty; anything else signals like the oracle. There is no laziness, chunking
 memoisation. `count`/`empty?`/`=` reach maps and sets (`=` deeply and structurally);
 `get` takes an optional default and reads maps, sets, vectors, strings and nil.
 
-## Refused forms
+## Not yet
 
 Each refusal names the missing design, never `unknown name`:
 

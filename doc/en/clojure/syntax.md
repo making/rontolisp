@@ -8,7 +8,7 @@ with a core form or built-in; a quoted symbol demangles, so `'e2e-foo` prints `e
 
 , is whitespace, as in Clojure. `#!` starts a shebang comment on the first line; `;`
 starts a line comment; `#_` skips the next form. The dispatch forms that read but are
-refused later are covered in [Semantics](semantics.md#refused-forms): regex literals
+refused later are covered in [Semantics](semantics.md#not-yet): regex literals
 (`#"..."`), backquote/unquote (`` ` ``, `~`, `~@`), `var`/`#'` and metadata (`^`).
 
 ## Characters

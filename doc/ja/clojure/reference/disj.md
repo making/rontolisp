@@ -4,7 +4,7 @@
 
 与えた要素を引いた新しいセットを返します。存在しない要素は無視されます。`nil` の `disj` は `nil` です。
 
-Deviation: マップへの `disj` はシグナルを上げます（Common Lisp の型エラーで、oracle のメッセージではありません）。transient（`disj!`）は名前で拒否されます。
+仕様との差異: マップへの `disj` はシグナルを上げます（Common Lisp の型エラーで、オラクルのメッセージではありません）。transient（`disj!`）は名前で拒否されます。
 
 ```clojure
 (println (count (disj #{1 2 3} 2)))    ; 2

@@ -29,8 +29,6 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 (println (reduce + 0 (map #(* % %) (filter odd? '(1 2 3 4 5)))))
 ```
 
-## サポートされる表面
-
 対応表面の名前ごとのページが[リファレンス](reference.md)です:シーケンシャル分割束縛とマップ
 分割束縛付きの核となる束縛・制御フォーム、スレッディングマクロ、すべてのコレクションの
 strict なリストビュー上で動く seq 群、`equal` ハッシュテーブル上の永続 map・set 操作、
@@ -39,12 +37,12 @@ strict なリストビュー上で動く seq 群、`equal` ハッシュテーブ
 各フォームが何に低下するか、何が拒否されるかは[セマンティクス](semantics.md)、リーダの規則は
 [構文](syntax.md)、オラクルとの差異は[仕様との差異](deviations.md)にあります。
 
-## 関連ページ
+## このセクション
 
 | ページ | 内容 |
 |---|---|
+| [REPL](repl.md) | `clojure>` REPL |
 | [構文](syntax.md) | リーダ:リテラル、文字、基数整数、キーワード |
 | [セマンティクス](semantics.md) | 低下対応表。拒否されるフォーム |
-| [REPL](repl.md) | `clojure>` REPL |
 | [仕様との差異](deviations.md) | Clojure との動作の差異 |
 | [リファレンス](reference.md) | 対応名ごとのページ |

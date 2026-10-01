@@ -4,7 +4,7 @@
 
 `coll` の seq ビューの `i` 番目の要素を返します。末尾を超えたとき、3 アリティは `default` を、2 アリティは `nil` を返します。
 
-Deviation: 末尾を超えた `nth` は default を返します（省略時は nil）。oracle は例外を投げます。VALUE としての `nth` は `(collection index)` のラムダです -- 裸の基盤の `nth` がインデックスを先に取るため、Clojure 順になります。
+仕様との差異: 末尾を超えた `nth` は default を返します（省略時は nil）。オラクルは例外を投げます。VALUE としての `nth` は `(collection index)` のラムダです -- 裸の基盤の `nth` がインデックスを先に取るため、Clojure 順になります。
 
 ```clojure
 (println (nth [10 20 30] 1))    ; 20

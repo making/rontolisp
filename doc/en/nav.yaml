@@ -222,12 +222,12 @@ sections:
     pages:
       - file: clojure/index.md
         title: Overview
+      - file: clojure/repl.md
+        title: REPL
       - file: clojure/syntax.md
         title: Syntax
       - file: clojure/semantics.md
         title: Semantics
-      - file: clojure/repl.md
-        title: REPL
       - file: clojure/deviations.md
         title: Deviations
       - file: clojure/reference.md
