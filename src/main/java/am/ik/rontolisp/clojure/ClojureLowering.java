@@ -274,6 +274,25 @@ public final class ClojureLowering {
 	private boolean hierarchyEmitted;
 
 	/**
+	 * Names declared {@code ^:dynamic}: only {@code binding} may rebind them, and only
+	 * they may be rebound. {@code *agent*} is dynamic from the start (bound to the acting
+	 * agent while a {@code send} runs, nil outside one).
+	 */
+	private final Set<String> dynamicVars = new HashSet<>(Set.of("*agent*"));
+
+	/**
+	 * Whether the program uses refs or agents (any of {@code ref}/{@code dosync}/
+	 * {@code alter}/{@code commute}/{@code ref-set}/{@code ensure}/{@code agent}/
+	 * {@code send}/{@code send-off}/{@code await}, or a {@code binding} of
+	 * {@code *agent*}): the STM runtime (the transaction depth, the validator registry
+	 * and the agent var) is spliced in once, behind the false binding.
+	 */
+	private boolean usedStm;
+
+	/** Whether the STM runtime was already spliced in (files splice it inline). */
+	private boolean stmEmitted;
+
+	/**
 	 * Whether the program defines or expands macros: the macro runtime (the table lookup,
 	 * the demangler and {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in
 	 * once, behind the false binding.
@@ -324,6 +343,10 @@ public final class ClojureLowering {
 		if (lowering.usedExInfo) {
 			// the ex-info runtime runs before anything else, like the false value
 			lowering.forms.addAll(1, lowering.exInfoRuntime());
+		}
+		if (lowering.usedStm) {
+			// the STM runtime runs before anything else, like the false value
+			lowering.forms.addAll(1, lowering.stmRuntime());
 		}
 		return lowering.forms;
 	}
@@ -376,6 +399,12 @@ public final class ClojureLowering {
 			out.add(0, new ClojureTopLevel(exInfoRuntime(), false));
 			this.exInfoEmitted = true;
 		}
+		if (this.usedStm && !this.stmEmitted) {
+			// The STM runtime travels ahead of the buffer that first needs
+			// it, like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(stmRuntime(), false));
+			this.stmEmitted = true;
+		}
 		return out;
 	}
 
@@ -399,8 +428,14 @@ public final class ClojureLowering {
 		if (isSymbolNamed(items.get(0), "def")) {
 			this.globals.put(plainName(items.get(1), "def"), Kind.VARIABLE);
 		}
-		else if (isSymbolNamed(items.get(0), "defn")) {
+		else if (isSymbolNamed(items.get(0), "defn") || isSymbolNamed(items.get(0), "defn-")) {
 			this.globals.put(plainName(items.get(1), "defn"), Kind.FUNCTION);
+		}
+		else if (isSymbolNamed(items.get(0), "defonce")) {
+			this.globals.put(plainName(items.get(1), "defonce"), Kind.VARIABLE);
+		}
+		else if (isSymbolNamed(items.get(0), "defstruct")) {
+			this.globals.put(plainName(items.get(1), "defstruct"), Kind.VARIABLE);
 		}
 		else if (isSymbolNamed(items.get(0), "defmulti")) {
 			this.globals.put(plainName(items.get(1), "defmulti"), Kind.FUNCTION);
@@ -453,7 +488,8 @@ public final class ClojureLowering {
 				return List.of();
 			}
 			List<LispVal> items = items(form);
-			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defn")) {
+			if (items != null && !items.isEmpty()
+					&& (isSymbolNamed(items.get(0), "defn") || isSymbolNamed(items.get(0), "defn-"))) {
 				return defuns(items);
 			}
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmulti")) {
@@ -461,6 +497,12 @@ public final class ClojureLowering {
 			}
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmacro")) {
 				return defmacroForms(items);
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defonce")) {
+				return List.of(defonceForm(items));
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defstruct")) {
+				return List.of(defstructForm(items));
 			}
 			return List.of(lower(form));
 		}
@@ -519,9 +561,27 @@ public final class ClojureLowering {
 		if (isSymbolNamed(head, "def")) {
 			return def(items);
 		}
+		if (isSymbolNamed(head, "defonce")) {
+			return defonceForm(items);
+		}
+		if (isSymbolNamed(head, "defstruct")) {
+			return defstructForm(items);
+		}
+		if (isSymbolNamed(head, "struct")) {
+			return structOf(items);
+		}
+		if (isSymbolNamed(head, "struct-map")) {
+			return structMapOf(items);
+		}
 		if (isSymbolNamed(head, "defn")) {
 			// in a body: a single defun, like ever; several arities cannot splice
 			// into expression position
+			List<LispVal> forms = defuns(items);
+			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
+			return forms.get(0);
+		}
+		if (isSymbolNamed(head, "defn-")) {
+			// private by convention only: metadata never affects dispatch
 			List<LispVal> forms = defuns(items);
 			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
 			return forms.get(0);
@@ -656,6 +716,49 @@ public final class ClojureLowering {
 			isTrue(items.size() == 2, "volatile! takes an initial value");
 			return wrapAtom(lower(items.get(1)));
 		}
+		if (isSymbolNamed(head, "ref")) {
+			return refOf(items);
+		}
+		if (isSymbolNamed(head, "dosync")) {
+			return dosyncOf(items);
+		}
+		if (isSymbolNamed(head, "alter")) {
+			return alterOf(items, "alter");
+		}
+		if (isSymbolNamed(head, "commute")) {
+			return alterOf(items, "commute");
+		}
+		if (isSymbolNamed(head, "ref-set")) {
+			return refSetOf(items);
+		}
+		if (isSymbolNamed(head, "ensure")) {
+			return ensureOf(items);
+		}
+		if (isSymbolNamed(head, "agent")) {
+			return agentOf(items);
+		}
+		if (isSymbolNamed(head, "send") || isSymbolNamed(head, "send-off")) {
+			return sendOf(items);
+		}
+		if (isSymbolNamed(head, "await")) {
+			return awaitOf(items);
+		}
+		if (isSymbolNamed(head, "shutdown-agents")) {
+			isTrue(items.size() == 1, "shutdown-agents takes no arguments");
+			return NIL_CONST;
+		}
+		if (isSymbolNamed(head, "binding")) {
+			return bindingOf(items);
+		}
+		if (isSymbolNamed(head, "with-open")) {
+			return withOpenOf(items);
+		}
+		if (isSymbolNamed(head, "with-out-str")) {
+			return withOutStrOf(items);
+		}
+		if (isSymbolNamed(head, "time")) {
+			return timeOf(items);
+		}
 		if (isSymbolNamed(head, "vreset!")) {
 			return resetOf(items);
 		}
@@ -693,6 +796,10 @@ public final class ClojureLowering {
 		if (isSymbolNamed(head, "proxy")) {
 			return proxyOf(items);
 		}
+		if (isSymbolNamed(head, "proxy-super")) {
+			throw new LispReadException(
+					"proxy-super is not supported yet: proxy methods take the Java arguments only, with no super handle");
+		}
 		if (isSymbolNamed(head, "new")) {
 			return newOf(items);
 		}
@@ -708,7 +815,10 @@ public final class ClojureLowering {
 			throw new LispReadException("var is not supported yet: #'x needs a design");
 		}
 		if (isSymbolNamed(head, "with-meta")) {
-			throw new LispReadException("with-meta is not supported yet: ^metadata needs a design");
+			// metadata is parsed and dropped: it never affects dispatch, so the
+			// object lowers as itself
+			isTrue(items.size() == 3, "with-meta takes an object and metadata");
+			return lower(items.get(1));
 		}
 		if (head instanceof LispCons) {
 			if (isCollectionHead(head)) {
@@ -774,18 +884,42 @@ public final class ClojureLowering {
 	}
 
 	private LispVal def(List<LispVal> items) {
-		isTrue(items.size() == 2 || items.size() == 3, "def takes a name and an optional value");
-		String name = plainName(items.get(1), "def");
+		isTrue(items.size() >= 2, "def takes a name and an optional value");
+		LispVal nameDatum = items.get(1);
+		String name = plainName(nameDatum, "def");
+		boolean dynamic = nameIsDynamic(nameDatum);
+		int at = 2;
+		if (items.size() > at && items.get(at) instanceof LispString) {
+			at++; // the docstring
+		}
+		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
+			at++; // the attr map (only with a value behind it: a lone map is the value)
+		}
+		isTrue(items.size() == at || items.size() == at + 1, "def takes a name and an optional value");
 		this.globals.put(name, Kind.VARIABLE);
 		this.macros.remove(name); // a definition wins over the macro it shadows
-		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
+		if (dynamic) {
+			this.dynamicVars.add(name);
+		}
+		LispVal value = items.size() == at + 1 ? lower(items.get(at)) : NIL_CONST;
 		if (isDirectFun(value)) {
 			this.globalDirectFuns.add(name);
 		}
 		else {
 			this.globalDirectFuns.remove(name);
 		}
+		if (dynamic) {
+			// a dynamic var is a special: defparameter always sets it (like def)
+			// and proclaims it, so binding rebinds it with dynamic extent
+			return list(sym("defparameter"), idSym(name), value);
+		}
 		return list(sym("setq"), idSym(name), value);
+	}
+
+	/** Whether the datum is an attr map (its marker head), not a value. */
+	private static boolean isAttrMap(LispVal datum) {
+		List<LispVal> parts = items(datum);
+		return parts != null && !parts.isEmpty() && isSymbolNamed(parts.get(0), "%hash-map");
 	}
 
 	private LispVal declareForm(List<LispVal> items) {
@@ -816,6 +950,9 @@ public final class ClojureLowering {
 		int at = 2;
 		if (items.size() > at && items.get(at) instanceof LispString) {
 			at++; // the docstring
+		}
+		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
+			at++; // the attr map (only with a value behind it: a lone map is the value)
 		}
 		isTrue(items.size() > at + 1 || items.size() == at + 1 && items.get(at) instanceof LispCons,
 				"defn needs a parameter vector and a body");
@@ -916,17 +1053,19 @@ public final class ClojureLowering {
 	 * prologue rebinding them to their patterns.
 	 */
 	private Clause clause(LispVal paramVector, List<LispVal> bodyForms) {
-		List<LispVal> names = bindingItems(paramVector, "the parameter vector of");
+		// metadata on the vector (type hints like ^String) is dropped, like the
+		// rest: it never affects dispatch
+		List<LispVal> names = bindingItems(stripMeta(paramVector), "the parameter vector of");
 		Map<String, Kind> scope = new HashMap<>();
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> prologue = new ArrayList<>();
 		for (int i = 0; i < names.size(); i++) {
-			LispVal datum = names.get(i);
+			LispVal datum = stripMeta(names.get(i));
 			if (isSymbolNamed(datum, "&")) {
 				isTrue(i + 1 < names.size(), "a & needs a rest name after it");
 				isTrue(i + 2 == names.size(), "only one name may follow & in a parameter vector");
 				params.add(AMPERSAND_REST);
-				LispVal rest = names.get(++i);
+				LispVal rest = stripMeta(names.get(++i));
 				if (rest instanceof LispSymbol) {
 					String name = plainName(rest, "the parameter vector of");
 					scope.put(name, Kind.VARIABLE);
@@ -1046,7 +1185,7 @@ public final class ClojureLowering {
 		try {
 			List<LispVal> pairs = new ArrayList<>();
 			for (int i = 0; i < bindings.size(); i += 2) {
-				LispVal pattern = bindings.get(i);
+				LispVal pattern = stripMeta(bindings.get(i));
 				if (pattern instanceof LispSymbol) {
 					String name = plainName(pattern, "let");
 					LispVal init = lower(bindings.get(i + 1));
@@ -1083,7 +1222,7 @@ public final class ClojureLowering {
 		this.directScopes.add(new HashSet<>());
 		try {
 			for (int i = 0; i < bindings.size(); i += 2) {
-				LispVal pattern = bindings.get(i);
+				LispVal pattern = stripMeta(bindings.get(i));
 				LispVal init = lower(bindings.get(i + 1));
 				if (pattern instanceof LispSymbol) {
 					String binding = plainName(pattern, "loop");
@@ -2213,6 +2352,16 @@ public final class ClojureLowering {
 				throw new LispReadException("transients are not supported yet: " + name);
 			case "lazy-seq", "cycle", "repeat", "repeatedly", "iterate":
 				throw new LispReadException("lazy sequences are not supported: " + name);
+			case "future":
+				throw new LispReadException("future is not supported yet: there is no thread pool on any backend");
+			case "delay":
+				throw new LispReadException("delay is not supported yet: lazy memo cells need a design");
+			case "force":
+				throw new LispReadException("force is not supported yet: lazy memo cells need a design");
+			case "promise":
+				throw new LispReadException("promise is not supported yet: blocking rendezvous needs a design");
+			case "deliver":
+				throw new LispReadException("deliver is not supported yet: blocking rendezvous needs a design");
 			default:
 				return null;
 		}
@@ -2863,6 +3012,14 @@ public final class ClojureLowering {
 			case "swap!", "vswap!" -> swapValue();
 			case "reset!", "vreset!" -> resetValue();
 			case "compare-and-set!" -> compareAndSetValue();
+			case "ref" -> refValue();
+			case "alter" -> alterValue("alter");
+			case "commute" -> alterValue("commute");
+			case "ref-set" -> refSetValue();
+			case "agent" -> agentValue();
+			case "send" -> sendValue("send");
+			case "send-off" -> sendValue("send-off");
+			case "with-meta" -> withMetaValue();
 			case "odd?" -> predValue(x -> list(sym("oddp"), x));
 			case "even?" -> predValue(x -> list(sym("evenp"), x));
 			case "zero?" -> predValue(x -> list(sym("zerop"), x));
@@ -3501,7 +3658,7 @@ public final class ClojureLowering {
 		isTrue(bindings.size() % 2 == 0, "a " + owner + " :let vector pairs a name with a value");
 		List<LispVal> pairs = new ArrayList<>();
 		for (int i = 0; i < bindings.size(); i += 2) {
-			LispVal pattern = bindings.get(i);
+			LispVal pattern = stripMeta(bindings.get(i));
 			if (pattern instanceof LispSymbol) {
 				String name = plainName(pattern, owner + " :let");
 				pairs.add(list(idSym(name), lower(bindings.get(i + 1))));
@@ -4066,6 +4223,9 @@ public final class ClojureLowering {
 	 */
 	private void destructureInto(LispVal pattern, LispVal init, List<LispVal> pairs, Map<String, Kind> scope,
 			String what) {
+		// metadata on a pattern (type hints like ^String) is dropped, like the
+		// rest: it never affects dispatch
+		pattern = stripMeta(pattern);
 		if (pattern instanceof LispSymbol) {
 			String name = plainName(pattern, what);
 			scope.put(name, Kind.VARIABLE);
@@ -6020,6 +6180,13 @@ public final class ClojureLowering {
 			isTrue(oneBased <= 9, "the anon form #(...) takes at most 9 arguments");
 			return list(sym("nth"), new LispInteger(oneBased - 1), new LispSymbol(args));
 		}
+		if (name.equals("*out*") || name.equals("*agent*")) {
+			// dynamic aliases, not mangled names (see idSym): always resolvable
+			if (name.equals("*agent*")) {
+				this.usedStm = true;
+			}
+			return idSym(name);
+		}
 		if (!known(name)) {
 			if (name.equals("nth")) {
 				return nthValue();
@@ -6375,6 +6542,497 @@ public final class ClojureLowering {
 								list(sym("progn"), atomPut(bound, value), TRUE_CONST), NIL_CONST))));
 	}
 
+	// state: refs over the atom cell, agents as synchronous atoms, binding over
+	// specials, and the small imperative companions
+
+	/**
+	 * The STM runtime, spliced once behind the false binding when the program uses refs
+	 * or agents: the open-transaction depth (a {@code dosync} binds it one deeper, so
+	 * {@code alter} and friends outside one signal), the validator registry (an alist of
+	 * cell/validator pairs, cells compared by identity) and the acting-agent var (bound
+	 * while a {@code send} runs, nil outside one). Pure lowering over existing
+	 * primitives, so every backend runs it unchanged.
+	 */
+	private List<LispVal> stmRuntime() {
+		List<LispVal> runtime = new ArrayList<>();
+		runtime.add(list(sym("defvar"), new LispSymbol("C%STM-DEPTH"), new LispInteger(0)));
+		runtime.add(list(sym("defvar"), new LispSymbol("C%STM-VALIDATORS"), NIL_CONST));
+		runtime.add(list(sym("defvar"), new LispSymbol("C%AGENT"), NIL_CONST));
+		LispSymbol cell = new LispSymbol("cell");
+		LispSymbol validator = new LispSymbol("validator");
+		LispSymbol rest = new LispSymbol("rest");
+		LispSymbol value = new LispSymbol("value");
+		LispSymbol found = new LispSymbol("found");
+		LispSymbol verdict = new LispSymbol("verdict");
+		// (defun c%stm-put (cell validator) ...): register the validator, answer it
+		runtime.add(list(sym("defun"), new LispSymbol("C%STM-PUT"), list(List.of(cell, validator)),
+				list(sym("setq"), new LispSymbol("C%STM-VALIDATORS"),
+						list(sym("cons"), list(sym("cons"), cell, validator), new LispSymbol("C%STM-VALIDATORS"))),
+				validator));
+		// (defun c%stm-get (cell) ...): the validator registered for the cell, or nil
+		LispSymbol walk = new LispSymbol("walk");
+		runtime.add(
+				list(sym("defun"), new LispSymbol("C%STM-GET"), list(List.of(cell)),
+						list(sym("labels"),
+								list(List.of(list(walk, list(rest), list(sym("if"), list(sym("null"), rest), NIL_CONST,
+										list(sym("if"), list(sym("eq"), list(sym("caar"), rest), cell),
+												list(sym("cdar"), rest), list(walk, list(sym("cdr"), rest))))))),
+								list(walk, new LispSymbol("C%STM-VALIDATORS")))));
+		// (defun c%stm-check (cell value) ...): write the value through the
+		// validator, answering it; a failed validator signals and writes nothing
+		// (the single-threaded rollback: nothing else ran)
+		LispVal write = list(sym("progn"), atomPut(cell, value), value);
+		runtime.add(list(sym("defun"), new LispSymbol("C%STM-CHECK"), list(List.of(cell, value)), list(sym("let"),
+				list(List.of(list(found, list(new LispSymbol("C%STM-GET"), cell)))),
+				list(sym("if"), found,
+						list(sym("let"), list(List.of(list(verdict, list(sym("funcall"), found, value)))),
+								list(sym("if"),
+										list(sym("or"), list(sym("null"), verdict),
+												list(sym("eq"), verdict, this.falseVariable)),
+										list(sym("error"), LispString.literal("Invalid reference state")), write)),
+						write))));
+		return runtime;
+	}
+
+	/** The STM transaction guard: the body runs only inside {@code dosync}. */
+	private static LispVal txnGuard(LispVal guarded) {
+		return list(sym("if"), list(sym(">"), new LispSymbol("C%STM-DEPTH"), new LispInteger(0)), guarded,
+				list(sym("error"), LispString.literal("No transaction running")));
+	}
+
+	/**
+	 * A {@code ref}/{@code agent} option list over an already-lowered init: the
+	 * {@code :validator} as a callable form, or null. {@code :meta} is dropped, like
+	 * every other metadata; anything else is refused by name.
+	 */
+	private @Nullable LispVal validatorOpt(List<LispVal> items, int from, String op) {
+		LispVal validator = null;
+		for (int i = from; i < items.size(); i += 2) {
+			if (!(items.get(i) instanceof LispSymbol opt) || i + 1 >= items.size()) {
+				throw new LispReadException(op + " takes option/value pairs");
+			}
+			switch (opt.name()) {
+				case ":validator" -> {
+					isTrue(validator == null, op + " takes one :validator");
+					validator = fnValue(items.get(i + 1));
+				}
+				case ":meta" -> {
+				} // dropped, like every other metadata
+				default -> throw new LispReadException(op + " option " + opt.name() + " is not supported yet");
+			}
+		}
+		return validator;
+	}
+
+	/**
+	 * A fresh cell with the validator registered: every {@code ref} and every
+	 * {@code agent} with a {@code :validator} builds one.
+	 */
+	private LispVal checkedCell(LispVal init, LispVal validator) {
+		LispSymbol made = freshTemp();
+		return list(sym("let"), list(List.of(list(made, wrapAtom(init)))),
+				list(new LispSymbol("C%STM-PUT"), made, validator), made);
+	}
+
+	/**
+	 * {@code (ref init & opts)}: an atom cell, like {@code atom}; with a
+	 * {@code :validator} the validator runs on every {@code alter}/{@code commute}/
+	 * {@code ref-set} and rejects the write on failure.
+	 */
+	private LispVal refOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "ref takes an initial value");
+		LispVal init = lower(items.get(1));
+		LispVal validator = validatorOpt(items, 2, "ref");
+		this.usedStm = true;
+		if (validator == null) {
+			return wrapAtom(init);
+		}
+		return checkedCell(init, validator);
+	}
+
+	/** {@code ref} as a value: a one-argument lambda over the constructor. */
+	private LispVal refValue() {
+		LispSymbol init = new LispSymbol(mangle("ref-init"));
+		return list(sym("lambda"), list(init), wrapAtom(init));
+	}
+
+	/**
+	 * {@code (dosync body...)}: the body with the transaction depth bound one deeper.
+	 * Single-threaded there is nothing to retry and nothing to isolate against, so a
+	 * transaction is a dynamic extent; {@code alter} and friends still require one.
+	 */
+	private LispVal dosyncOf(List<LispVal> items) {
+		this.usedStm = true;
+		LispSymbol depth = new LispSymbol("C%STM-DEPTH");
+		return list(sym("let"), list(List.of(list(depth, list(sym("+"), depth, new LispInteger(1))))), body(items, 1));
+	}
+
+	/**
+	 * {@code (alter ref fun args...)} and {@code (commute ref fun args...)}: the function
+	 * applied to the old value and the arguments, written through the validator.
+	 * Single-threaded the two commute identically (the oracle may run a commute's
+	 * function twice); both require a transaction.
+	 */
+	private LispVal alterOf(List<LispVal> items, String op) {
+		isTrue(items.size() >= 3, op + " takes a ref, a function and arguments");
+		this.usedStm = true;
+		return alterBuild(lower(items.get(1)), fnValue(items.get(2)), cons(sym("list"), lowers(items, 3)), op);
+	}
+
+	/**
+	 * An {@code alter}/{@code commute} over already-lowered forms: the guard, the
+	 * application and the validated write, answering the new value.
+	 */
+	private LispVal alterBuild(LispVal cell, LispVal fun, LispVal argList, String op) {
+		return withAtom(cell, op, bound -> {
+			LispSymbol next = freshTemp();
+			LispVal spread = list(sym("cons"), atomGet(bound), argList);
+			LispVal update = list(sym("let"), list(List.of(list(next, list(sym("apply"), fun, spread)))),
+					list(new LispSymbol("C%STM-CHECK"), bound, next));
+			return txnGuard(update);
+		});
+	}
+
+	/** {@code alter}/{@code commute} as a value: over a ref, a function and arguments. */
+	private LispVal alterValue(String op) {
+		LispSymbol cell = new LispSymbol(mangle("alter-cell"));
+		LispSymbol fun = new LispSymbol(mangle("alter-fun"));
+		LispSymbol rest = new LispSymbol(mangle("alter-rest"));
+		return list(sym("lambda"), list(List.of(cell, fun, AMPERSAND_REST, rest)), alterBuild(cell, fun, rest, op));
+	}
+
+	/** {@code (ref-set ref value)}: the value written through the validator. */
+	private LispVal refSetOf(List<LispVal> items) {
+		isTrue(items.size() == 3, "ref-set takes a ref and a value");
+		this.usedStm = true;
+		LispVal value = lower(items.get(2));
+		return withAtom(lower(items.get(1)), "ref-set", bound -> txnGuard(refSetBuild(bound, value)));
+	}
+
+	/** A {@code ref-set} over already-lowered forms: the validated write. */
+	private LispVal refSetBuild(LispVal bound, LispVal value) {
+		LispSymbol next = freshTemp();
+		return list(sym("let"), list(List.of(list(next, value))), list(new LispSymbol("C%STM-CHECK"), bound, next));
+	}
+
+	/** {@code ref-set} as a value: a two-argument lambda over the write. */
+	private LispVal refSetValue() {
+		LispSymbol cell = new LispSymbol(mangle("ref-set-cell"));
+		LispSymbol value = new LispSymbol(mangle("ref-set-value"));
+		return list(sym("lambda"), list(List.of(cell, value)),
+				withAtom(cell, "ref-set", bound -> txnGuard(refSetBuild(bound, value))));
+	}
+
+	/**
+	 * {@code (ensure ref)}: the ref itself, requiring a transaction like the oracle
+	 * (where it also snapshots the ref for the transaction's read set).
+	 */
+	private LispVal ensureOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "ensure takes one ref");
+		this.usedStm = true;
+		return withAtom(lower(items.get(1)), "ensure", bound -> txnGuard(bound));
+	}
+
+	/**
+	 * {@code (agent init & opts)}: an atom cell, like {@code ref}; a {@code :validator}
+	 * runs on every {@code send}.
+	 */
+	private LispVal agentOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "agent takes an initial value");
+		LispVal init = lower(items.get(1));
+		LispVal validator = validatorOpt(items, 2, "agent");
+		this.usedStm = true;
+		if (validator == null) {
+			return wrapAtom(init);
+		}
+		return checkedCell(init, validator);
+	}
+
+	/** {@code agent} as a value: a one-argument lambda over the constructor. */
+	private LispVal agentValue() {
+		LispSymbol init = new LispSymbol(mangle("agent-init"));
+		return list(sym("lambda"), list(init), wrapAtom(init));
+	}
+
+	/**
+	 * {@code (send agent fun args...)} and {@code (send-off ...)}: the function applied
+	 * now, through the validator, answering the agent. Agents run synchronously -- there
+	 * is no thread pool on any backend, so async ordering is out and {@code await} is
+	 * already past when it runs.
+	 */
+	private LispVal sendOf(List<LispVal> items) {
+		String op = ((LispSymbol) items.get(0)).name();
+		isTrue(items.size() >= 3, op + " takes an agent, a function and arguments");
+		this.usedStm = true;
+		return sendBuild(lower(items.get(1)), fnValue(items.get(2)), cons(sym("list"), lowers(items, 3)), op);
+	}
+
+	/**
+	 * A {@code send} over already-lowered forms: the application with {@code *agent*}
+	 * bound to the cell, answering the cell.
+	 */
+	private LispVal sendBuild(LispVal cell, LispVal fun, LispVal argList, String op) {
+		return withAtom(cell, op, bound -> {
+			LispSymbol next = freshTemp();
+			LispVal spread = list(sym("cons"), atomGet(bound), argList);
+			LispVal update = list(sym("let"), list(List.of(list(next, list(sym("apply"), fun, spread)))),
+					list(new LispSymbol("C%STM-CHECK"), bound, next));
+			return list(sym("let"), list(List.of(list(new LispSymbol("C%AGENT"), bound))),
+					list(sym("progn"), update, bound));
+		});
+	}
+
+	/**
+	 * {@code send}/{@code send-off} as a value: over an agent, a function and arguments.
+	 */
+	private LispVal sendValue(String op) {
+		LispSymbol cell = new LispSymbol(mangle("send-cell"));
+		LispSymbol fun = new LispSymbol(mangle("send-fun"));
+		LispSymbol rest = new LispSymbol(mangle("send-rest"));
+		return list(sym("lambda"), list(List.of(cell, fun, AMPERSAND_REST, rest)), sendBuild(cell, fun, rest, op));
+	}
+
+	/**
+	 * {@code (await agent...)}: every send already ran, so every agent is awaited; each
+	 * is still checked, answering nil like the oracle.
+	 */
+	private LispVal awaitOf(List<LispVal> items) {
+		this.usedStm = true;
+		List<LispVal> checks = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			checks.add(derefForm(lower(items.get(i))));
+		}
+		checks.add(NIL_CONST);
+		if (checks.size() == 1) {
+			return NIL_CONST;
+		}
+		return cons(sym("progn"), checks);
+	}
+
+	/**
+	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
+	 * the oracle -- which is why only {@code ^:dynamic} vars (and {@code *out*}, already
+	 * special) may be bound. Inits run sequentially, like {@code let}, and the body
+	 * closes over the scope the same way.
+	 */
+	private LispVal bindingOf(List<LispVal> items) {
+		isTrue(items.size() >= 3, "binding needs a binding vector and a body");
+		List<LispVal> bindings = bindingItems(items.get(1), "binding");
+		isTrue(bindings.size() % 2 == 0, "a binding vector pairs a var with a value");
+		Map<String, Kind> scope = new HashMap<>();
+		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			for (int i = 0; i < bindings.size(); i += 2) {
+				String name = plainName(bindings.get(i), "binding");
+				if (!name.equals("*out*") && !this.dynamicVars.contains(name)) {
+					throw new LispReadException("binding " + name + " needs a ^:dynamic var: only dynamic vars rebind");
+				}
+				if (name.equals("*agent*")) {
+					this.usedStm = true;
+				}
+				LispVal init = lower(bindings.get(i + 1));
+				pairs.add(list(idSym(name), init));
+				scope.put(name, Kind.VARIABLE);
+				if (isDirectFun(init)) {
+					markDirect(name);
+				}
+			}
+			return list(sym("let*"), list(pairs), body(items, 2));
+		}
+		finally {
+			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
+		}
+	}
+
+	/**
+	 * {@code (with-open [name init ...] body...)}: the body with each value bound, closed
+	 * in reverse order on every exit through {@code unwind-protect}. Closing calls the
+	 * {@code close} method, so a Java closeable works where host objects exist (the
+	 * interpreter and the JVM -- wasm rejects {@code java:}).
+	 */
+	private LispVal withOpenOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "with-open needs a binding vector and a body");
+		List<LispVal> bindings = bindingItems(items.get(1), "with-open");
+		isTrue(bindings.size() % 2 == 0, "a with-open binding vector pairs a name with a value");
+		Map<String, Kind> scope = new HashMap<>();
+		this.scopes.add(scope);
+		this.directScopes.add(new HashSet<>());
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			List<String> names = new ArrayList<>();
+			for (int i = 0; i < bindings.size(); i += 2) {
+				String name = plainName(bindings.get(i), "with-open");
+				LispVal init = lower(bindings.get(i + 1));
+				pairs.add(list(idSym(name), init));
+				names.add(name);
+				scope.put(name, Kind.VARIABLE);
+				if (isDirectFun(init)) {
+					markDirect(name);
+				}
+			}
+			LispVal run = body(items, 2);
+			if (names.isEmpty()) {
+				return run;
+			}
+			List<LispVal> guarded = new ArrayList<>();
+			guarded.add(sym("unwind-protect"));
+			guarded.add(run);
+			for (int i = names.size() - 1; i >= 0; i--) {
+				guarded.add(instanceCall(idSym(names.get(i)), "close", List.of()));
+			}
+			return list(sym("let*"), list(pairs), list(guarded));
+		}
+		finally {
+			this.scopes.remove(this.scopes.size() - 1);
+			this.directScopes.remove(this.directScopes.size() - 1);
+		}
+	}
+
+	/**
+	 * {@code (with-out-str body...)}: the body with {@code *standard-output*} bound to a
+	 * fresh string stream, answering what it printed. The stream is built with
+	 * {@code make-string-output-stream} (never a literal {@code with-output-to-string},
+	 * which would flip a WASM module into EH mode), like {@code str}.
+	 */
+	private LispVal withOutStrOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "with-out-str needs a body");
+		LispSymbol stream = freshTemp();
+		List<LispVal> run = new ArrayList<>(lowers(items, 1));
+		run.add(list(sym("get-output-stream-string"), stream));
+		LispVal captured = run.size() == 1 ? run.get(0) : cons(sym("progn"), run);
+		return list(sym("let*"), list(List.of(list(stream, list(sym("make-string-output-stream"))),
+				list(new LispSymbol("*STANDARD-OUTPUT*"), stream))), captured);
+	}
+
+	/**
+	 * {@code (time expr)}: the expression timed with {@code get-internal-real-time}
+	 * (milliseconds here), reporting {@code Elapsed time: N msecs} like the oracle and
+	 * answering the value. Only the value is deterministic -- the report's number never
+	 * is, so the spec pins the prefix, never the line.
+	 */
+	private LispVal timeOf(List<LispVal> items) {
+		isTrue(items.size() == 2, "time takes one form");
+		LispSymbol start = freshTemp();
+		LispSymbol value = freshTemp();
+		LispVal elapsed = list(sym("-"), list(sym("get-internal-real-time")), start);
+		// the report straight to the stream, like println of one string part
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(strOf(LispString.literal("Elapsed time: "), LispString.literal(""), NIL_CONST));
+		parts.add(strOf(elapsed, LispString.literal(""), NIL_CONST));
+		parts.add(strOf(LispString.literal(" msecs"), LispString.literal(""), NIL_CONST));
+		LispVal report = cons(sym("progn"), List.of(writeDatum(concat(parts), LispString.literal("nil"), NIL_CONST),
+				list(sym("terpri")), NIL_CONST));
+		return list(sym("let*"),
+				list(List.of(list(start, list(sym("get-internal-real-time"))), list(value, lower(items.get(1))))),
+				report, value);
+	}
+
+	/**
+	 * {@code (defonce name init?)}: {@code def} unless the name is already bound -- a
+	 * reload keeps the root, like the oracle.
+	 */
+	private LispVal defonceForm(List<LispVal> items) {
+		isTrue(items.size() == 2 || items.size() == 3, "defonce takes a name and an optional value");
+		LispVal nameDatum = items.get(1);
+		String name = plainName(nameDatum, "defonce");
+		boolean dynamic = nameIsDynamic(nameDatum);
+		this.globals.put(name, Kind.VARIABLE);
+		this.macros.remove(name); // a definition wins over the macro it shadows
+		if (dynamic) {
+			this.dynamicVars.add(name);
+		}
+		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
+		if (isDirectFun(value)) {
+			this.globalDirectFuns.add(name);
+		}
+		else {
+			this.globalDirectFuns.remove(name);
+		}
+		LispVal set = dynamic ? list(sym("defparameter"), idSym(name), value) : list(sym("setq"), idSym(name), value);
+		return list(sym("if"), list(sym("boundp"), list(sym("quote"), idSym(name))), idSym(name), set);
+	}
+
+	/**
+	 * {@code (defstruct name key...)}: the key vector behind the name, so {@code struct}
+	 * builds maps with exactly those keys. Keys are keywords, like the oracle.
+	 */
+	private LispVal defstructForm(List<LispVal> items) {
+		isTrue(items.size() >= 2, "defstruct takes a name and keys");
+		String name = plainName(items.get(1), "defstruct");
+		this.globals.put(name, Kind.VARIABLE);
+		this.macros.remove(name); // a definition wins over the macro it shadows
+		List<LispVal> keys = new ArrayList<>();
+		for (int i = 2; i < items.size(); i++) {
+			LispVal key = items.get(i);
+			if (!(key instanceof LispSymbol s) || !s.name().startsWith(":")) {
+				throw new LispReadException("defstruct takes keyword keys, not " + key.print());
+			}
+			validateKeyword(s.name());
+			keys.add(keywordForm(s.name().substring(1)));
+		}
+		return list(sym("setq"), idSym(name), cons(sym("vector"), keys));
+	}
+
+	/**
+	 * {@code (struct struct-map value...)}: a fresh map pairing the struct's keys with
+	 * the values, missing values nil. Too many values signal, like the oracle.
+	 */
+	private LispVal structOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "struct takes a struct and values");
+		return structBuild(lower(items.get(1)), cons(sym("list"), lowers(items, 2)), "struct");
+	}
+
+	/** A {@code struct} over an already-lowered key vector and value list. */
+	private LispVal structBuild(LispVal keys, LispVal values, String op) {
+		LispSymbol slots = freshTemp();
+		LispSymbol vals = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol have = freshTemp();
+		LispSymbol want = freshTemp();
+		LispSymbol index = freshTemp();
+		LispVal fill = list(sym("dotimes"), list(List.of(index, want)),
+				list(sym("setf"), list(sym("gethash"), list(sym("aref"), slots, index), table),
+						list(sym("if"), list(sym("<"), index, have), list(sym("nth"), index, vals), NIL_CONST)));
+		return list(sym("let*"),
+				list(List.of(list(slots, keys), list(vals, values), list(table, makeTable()),
+						list(have, list(sym("length"), vals)), list(want, list(sym("length"), slots)))),
+				list(sym("if"), list(sym(">"), have, want),
+						list(sym("error"), LispString.literal("Too many arguments to " + op + " constructor")),
+						list(sym("progn"), fill, table)));
+	}
+
+	/**
+	 * {@code (struct-map struct-map key value...)}: a fresh map with the struct's keys
+	 * (nil unless overridden here), like the oracle.
+	 */
+	private LispVal structMapOf(List<LispVal> items) {
+		isTrue(items.size() >= 2, "struct-map takes a struct and key/value pairs");
+		List<LispVal> pairs = lowers(items, 2);
+		isTrue(pairs.size() % 2 == 0, "struct-map takes key/value pairs");
+		LispSymbol slots = freshTemp();
+		LispSymbol table = freshTemp();
+		LispSymbol index = freshTemp();
+		List<LispVal> run = new ArrayList<>();
+		run.add(sym("progn"));
+		run.add(list(sym("dotimes"), list(List.of(index, list(sym("length"), slots))),
+				list(sym("setf"), list(sym("gethash"), list(sym("aref"), slots, index), table), NIL_CONST)));
+		for (int i = 0; i < pairs.size(); i += 2) {
+			run.add(list(sym("setf"), list(sym("gethash"), pairs.get(i), table), pairs.get(i + 1)));
+		}
+		run.add(table);
+		return list(sym("let*"), list(List.of(list(slots, lower(items.get(1))), list(table, makeTable()))), list(run));
+	}
+
+	/** {@code with-meta} as a value: metadata is dropped, so the first argument. */
+	private LispVal withMetaValue() {
+		LispSymbol object = freshTemp();
+		LispSymbol meta = freshTemp();
+		return list(sym("lambda"), list(List.of(object, meta)), object);
+	}
+
 	// dispatch: multimethods over a method table and a dispatcher defun
 
 	/**
@@ -6491,16 +7149,18 @@ public final class ClojureLowering {
 	 * (instance-call position) and, by rule in {@link #defmacroForms}, anything dotted,
 	 * suffixed or qualified.
 	 */
-	private static final Set<String> MACRO_RESERVED = Set.of("quote", "def", "defn", "defmacro", "fn", "let", "loop",
-			"declare", "->", "->>", "as->", "doto", "cond->", "cond->>", "some->", "some->>", "list*", "doseq",
-			"dotimes", "for", "defmulti", "defmethod", "remove-method", "get-method", "prefer-method", "derive",
-			"underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy", "defprotocol", "defrecord",
-			"deftype", "definterface", "reify", "extend-protocol", "extend-type", "extend", "satisfies?", "gen-class",
-			"gen-interface", "try", "throw", "ex-info", "ex-data", "ex-message", "atom", "deref", "swap!", "reset!",
-			"compare-and-set!", "volatile!", "vreset!", "vswap!", "add-watch", "remove-watch", "comment", "require",
-			"use", "import", "in-ns", "set!", "memfn", "proxy", "new", "syntax-quote", "unquote", "unquote-splicing",
-			"var", "with-meta", "if", "when", "cond", "do", "recur", ".", "..", "gensym", "macroexpand-1",
-			"macroexpand");
+	private static final Set<String> MACRO_RESERVED = Set.of("quote", "def", "defn", "defn-", "defonce", "defstruct",
+			"struct", "struct-map", "defmacro", "fn", "let", "loop", "declare", "->", "->>", "as->", "doto", "cond->",
+			"cond->>", "some->", "some->>", "list*", "doseq", "dotimes", "for", "defmulti", "defmethod",
+			"remove-method", "get-method", "prefer-method", "derive", "underive", "isa?", "parents", "ancestors",
+			"descendants", "make-hierarchy", "defprotocol", "defrecord", "deftype", "definterface", "reify",
+			"extend-protocol", "extend-type", "extend", "satisfies?", "gen-class", "gen-interface", "try", "throw",
+			"ex-info", "ex-data", "ex-message", "atom", "deref", "swap!", "reset!", "compare-and-set!", "volatile!",
+			"vreset!", "vswap!", "add-watch", "remove-watch", "ref", "dosync", "alter", "commute", "ref-set", "ensure",
+			"agent", "send", "send-off", "await", "shutdown-agents", "binding", "with-open", "with-out-str", "time",
+			"comment", "require", "use", "import", "in-ns", "set!", "memfn", "proxy", "new", "syntax-quote", "unquote",
+			"unquote-splicing", "var", "with-meta", "if", "when", "cond", "do", "recur", ".", "..", "gensym",
+			"macroexpand-1", "macroexpand");
 
 	/**
 	 * {@code (defmacro name doc? attr? ([params] body...)+)}: a compile-time expander
@@ -7897,10 +8557,30 @@ public final class ClojureLowering {
 		direct.add(recv);
 		direct.add(LispString.literal(method));
 		direct.addAll(args);
+		LispVal call = cons(JAVA_CALL, direct);
+		LispVal stream = streamMethod(method, recv, args);
+		if (stream != null) {
+			call = list(sym("if"), list(sym("streamp"), recv), stream, call);
+		}
 		LispVal mapped = stringMethod(method, recv, args);
-		LispVal call = mapped == null ? cons(JAVA_CALL, direct)
-				: list(sym("if"), list(sym("stringp"), recv), mapped, cons(JAVA_CALL, direct));
-		return list(sym("let"), list(List.of(list(recv, receiver))), call);
+		LispVal out = mapped == null ? call : list(sym("if"), list(sym("stringp"), recv), mapped, call);
+		return list(sym("let"), list(List.of(list(recv, receiver))), out);
+	}
+
+	/**
+	 * A stream method over an already-bound receiver: {@code write} prints through
+	 * {@code princ} (strings bare, characters as glyphs) and {@code flush} finishes the
+	 * output, so {@code (. *out* write ...)} runs on every backend. Null when the method
+	 * maps to nothing, so the call goes to {@code java:call}.
+	 */
+	private @Nullable LispVal streamMethod(String method, LispVal recv, List<LispVal> args) {
+		if (method.equals("write") && args.size() == 1) {
+			return list(sym("princ"), args.get(0), recv);
+		}
+		if (method.equals("flush") && args.isEmpty()) {
+			return list(sym("finish-output"), recv);
+		}
+		return null;
 	}
 
 	/**
@@ -8060,10 +8740,59 @@ public final class ClojureLowering {
 	// shape helpers
 
 	private static String plainName(LispVal val, String what) {
+		val = stripMeta(val);
 		if (val instanceof LispSymbol s && !s.name().startsWith(":") && !s.name().equals("&")) {
 			return s.name();
 		}
 		throw new LispReadException(what + " needs a plain name, not " + val.print());
+	}
+
+	/**
+	 * A datum with its {@code ^...} metadata dropped: the reader spells
+	 * {@code ^:private x} as {@code (with-meta x :private)}, and metadata never affects
+	 * dispatch, so every name position unwraps it.
+	 */
+	private static LispVal stripMeta(LispVal datum) {
+		List<LispVal> parts = items(datum);
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+			datum = parts.get(1);
+			parts = items(datum);
+		}
+		return datum;
+	}
+
+	/**
+	 * Whether a {@code ^...} metadata datum declares {@code ^:dynamic}: either the bare
+	 * keyword or an attr map holding it, so {@code ^:dynamic} and {@code ^{:dynamic
+	 * true}} agree.
+	 */
+	private static boolean isDynamicMeta(LispVal meta) {
+		if (meta instanceof LispSymbol s) {
+			return s.name().equals(":dynamic");
+		}
+		List<LispVal> parts = items(meta);
+		if (parts == null || parts.isEmpty() || !isSymbolNamed(parts.get(0), "%hash-map")) {
+			return false;
+		}
+		for (int i = 1; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispSymbol k && k.name().equals(":dynamic")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether a name datum carries {@code ^:dynamic} metadata, under any wrapping. */
+	private static boolean nameIsDynamic(LispVal nameDatum) {
+		List<LispVal> parts = items(nameDatum);
+		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
+			if (isDynamicMeta(parts.get(2))) {
+				return true;
+			}
+			nameDatum = parts.get(1);
+			parts = items(nameDatum);
+		}
+		return false;
 	}
 
 	/** The items of a {@code [...]} vector datum, without its marker. */
@@ -8124,11 +8853,20 @@ public final class ClojureLowering {
 	 * case-preserved, so {@code Foo} and {@code foo} stay apart. The prefix holds a
 	 * lowercase letter, so no result can collide with a core form or built-in. A
 	 * {@code #:}-spelled gensym a macro expansion returned travels as itself, so it
-	 * lowers back to the same uninterned symbol.
+	 * lowers back to the same uninterned symbol. Two dynamic vars are aliases, not
+	 * mangled names: {@code *out*} is {@code *standard-output*} (the stream the print
+	 * family writes to, already special on every backend), and {@code *agent*} is the
+	 * agent var the STM runtime binds while a {@code send} runs.
 	 */
 	private static LispSymbol idSym(String identifier) {
 		if (identifier.startsWith("#:")) {
 			return new LispSymbol(identifier);
+		}
+		if (identifier.equals("*out*")) {
+			return new LispSymbol("*STANDARD-OUTPUT*");
+		}
+		if (identifier.equals("*agent*")) {
+			return new LispSymbol("C%AGENT");
 		}
 		return new LispSymbol(mangle(identifier));
 	}

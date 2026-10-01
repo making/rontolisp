@@ -10,3 +10,5 @@ Clojure-notation arguments.
 | `slurp` | `(slurp path)` | `"a\n"` |
 | `line-seq` | `(line-seq path)` | `("a")` |
 | `format` | `(format "%s=%d" :a 5)` | `":a=5"` |
+| `with-open` | `(with-open [] :ok)` | `:ok` |
+| `with-out-str` | `(with-out-str (print 1))` | `"1"` |

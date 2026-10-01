@@ -5,7 +5,9 @@ categories:
     index_page: clojure/reference/syntax.md
     functions:
       - { slug: def, name: "def" }
+      - { slug: defonce, name: "defonce" }
       - { slug: defn, name: "defn" }
+      - { slug: defn-dash, name: "defn-" }
       - { slug: fn, name: "fn" }
       - { slug: let, name: "let" }
       - { slug: loop, name: "loop" }
@@ -18,6 +20,7 @@ categories:
       - { slug: or, name: "or" }
       - { slug: not, name: "not" }
       - { slug: quote, name: "quote" }
+      - { slug: with-meta, name: "with-meta" }
       - { slug: comment, name: "comment" }
       - { slug: declare, name: "declare" }
       - { slug: when-let, name: "when-let" }
@@ -25,6 +28,8 @@ categories:
       - { slug: when-not, name: "when-not" }
       - { slug: if-not, name: "if-not" }
       - { slug: when-first, name: "when-first" }
+      - { slug: binding, name: "binding" }
+      - { slug: time, name: "time" }
   - title: "Threading"
     index_page: clojure/reference/threading.md
     functions:
@@ -108,6 +113,9 @@ categories:
       - { slug: merge-with, name: "merge-with" }
       - { slug: into, name: "into" }
       - { slug: frequencies, name: "frequencies" }
+      - { slug: defstruct, name: "defstruct" }
+      - { slug: struct, name: "struct" }
+      - { slug: struct-map, name: "struct-map" }
   - title: "Numbers and predicates"
     index_page: clojure/reference/numbers.md
     functions:
@@ -159,6 +167,17 @@ categories:
       - { slug: volatile-bang, name: "volatile!" }
       - { slug: vswap-bang, name: "vswap!" }
       - { slug: vreset-bang, name: "vreset!" }
+      - { slug: ref, name: "ref" }
+      - { slug: dosync, name: "dosync" }
+      - { slug: alter, name: "alter" }
+      - { slug: commute, name: "commute" }
+      - { slug: ref-set, name: "ref-set" }
+      - { slug: ensure, name: "ensure" }
+      - { slug: agent, name: "agent" }
+      - { slug: send, name: "send" }
+      - { slug: send-off, name: "send-off" }
+      - { slug: await, name: "await" }
+      - { slug: shutdown-agents, name: "shutdown-agents" }
   - title: "Multimethods and hierarchies"
     index_page: clojure/reference/multimethods.md
     functions:
@@ -232,6 +251,8 @@ categories:
       - { slug: slurp, name: "slurp" }
       - { slug: line-seq, name: "line-seq" }
       - { slug: format, name: "format" }
+      - { slug: with-open, name: "with-open" }
+      - { slug: with-out-str, name: "with-out-str" }
   - title: "Java interop"
     index_page: clojure/reference/interop.md
     functions:

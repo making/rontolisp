@@ -102,6 +102,35 @@ are empty; anything else signals like the oracle. There is no laziness, chunking
 memoisation. `count`/`empty?`/`=` reach maps and sets (`=` deeply and structurally);
 `get` takes an optional default and reads maps, sets, vectors, strings and nil.
 
+## State and dynamic scope
+
+Metadata (`^:private`, `^:dynamic`, `^{...}` attr maps, type hints, `with-meta`)
+parses and drops everywhere: it never affects dispatch. Only `binding` reads one
+piece of it. `defn-` is a private-by-convention `defn`; `def` takes a docstring
+and an attr map like `defn`; `defonce` is `def` unless bound, so a reload keeps
+the root.
+
+A `ref` is the atom cell with a transaction discipline: `dosync` opens the
+extent (single-threaded, so no retries and no isolation), `alter`/`commute`
+apply through the `:validator` (a failed one signals and writes nothing),
+`ref-set` replaces through it, and `ensure` answers the ref -- every verb
+requiring the extent. An `agent` is the same cell updated by `send`/`send-off`,
+which apply at once (there is no thread pool, so async ordering is out) and
+answer the agent; `*agent*` is bound while one runs. `await` rendezvous and
+`shutdown-agents` answer `nil`. `future`/`delay`/`force`/`promise`/`deliver`
+stay refused by name, and so does `proxy-super` (proxy methods take no super
+handle).
+
+`binding` rebinds `^:dynamic` vars (and `*out*`, which is `*standard-output*`)
+with dynamic extent; anything else is refused. `defstruct` holds its key vector
+behind the name; `struct`/`struct-map` build fresh maps over it. `with-out-str`
+binds `*standard-output*` to a string stream (never a literal
+`with-output-to-string`) and answers what printed; `time` reports
+`Elapsed time: N msecs` and answers its value. `with-open` binds and closes in
+reverse order through `unwind-protect`, calling the `close` method (Java
+closeables need the JVM, like all interop); `(. stream write x)` prints through
+`princ` on every backend.
+
 ## Not yet
 
 Each refusal names the missing design, never `unknown name`:
@@ -113,7 +142,9 @@ Each refusal names the missing design, never `unknown name`:
 | regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |
 | `defprotocol`, `defrecord`, `deftype`, `definterface`, `reify`, `extend-protocol`, `extend-type`, `extend`, `satisfies?`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | rejected by design -- type dispatch and a record value representation on all four backends |
 | `set!` | by name | no field-write primitive and no record type to mutate |
-| `var`/`#'`, metadata `^`/`with-meta` | by name | no var system and no metadata model; macro bodies quote symbols instead |
+| `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
+| `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
+| `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |
 | `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::`-auto-resolve keywords | by name | no namespace to resolve against |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |

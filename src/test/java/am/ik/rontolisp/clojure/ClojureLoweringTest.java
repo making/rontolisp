@@ -671,11 +671,13 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void varAndMetadataStayRefused() {
+	void varStaysRefusedWhileMetadataDrops() {
 		assertThatThrownBy(() -> Clojure.read("#'x", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("var is not supported yet");
-		assertThatThrownBy(() -> Clojure.read("^:k v", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("with-meta is not supported yet");
+		// metadata parses and drops: the object lowers as itself
+		assertThat(lowered("(def v 1) ^:k v")).contains("|c%v|").doesNotContain("WITH-META");
+		assertThatThrownBy(() -> Clojure.read("(with-meta 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("with-meta takes an object and metadata");
 	}
 
 	@Test
@@ -786,6 +788,93 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as io]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.java.io");
+	}
+
+	@Test
+	void metadataNamesDefinitionsWithoutAffectingThem() {
+		assertThat(lowered("(defn- f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(def ^:private x 1)")).contains("(SETQ |c%x| 1)");
+		assertThat(lowered("(def ^:dynamic *d* 1)")).contains("(DEFPARAMETER |c%*d*| 1)");
+		assertThat(lowered("(defn ^:private f [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(defn f {:private true} [x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(def x \"a docstring\" 1)")).contains("(SETQ |c%x| 1)");
+		assertThat(lowered("(def x \"a docstring\")")).contains("(SETQ |c%x| NIL)");
+		assertThat(lowered("(def x {:a 1})")).contains("HASH-TABLE");
+		assertThat(lowered("(defn f [^String x] x)")).contains("(DEFUN |c%f| (|c%x|) |c%x|)");
+		assertThat(lowered("(let [^String x 1] x)")).contains("(LET* ((|c%x| 1)) |c%x|)");
+		assertThatThrownBy(() -> Clojure.read("(defmacro ref [x] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cannot name a macro");
+	}
+
+	@Test
+	void defonceDefstructAndStructLower() {
+		assertThat(lowered("(defonce d 1)")).contains("BOUNDP").contains("(SETQ |c%d| 1)");
+		assertThat(lowered("(defonce d)")).contains("(SETQ |c%d| NIL)");
+		assertThat(lowered("(defstruct s :a :b)")).contains("(SETQ |c%s| (VECTOR");
+		assertThat(lowered("(def s [:a]) (struct s 1)")).contains("GETHASH").contains("DOTIMES");
+		assertThat(lowered("(def s [:a]) (struct-map s :a 1)")).contains("GETHASH").contains("DOTIMES");
+		assertThatThrownBy(() -> Clojure.read("(defstruct s \"a\")", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defstruct takes keyword keys");
+	}
+
+	@Test
+	void stmVerbsLowerOverTheAtomCell() {
+		assertThat(lowered("(ref 0)")).contains(":C%ATOM");
+		assertThat(lowered("(ref 0 :validator odd?)")).contains("C%STM-PUT");
+		assertThat(lowered("(dosync 1)")).contains("C%STM-DEPTH");
+		assertThat(lowered("(def r (ref 0)) (alter r inc)")).contains("C%STM-CHECK").contains("No transaction");
+		assertThat(lowered("(def r (ref 0)) (commute r inc)")).contains("C%STM-CHECK");
+		assertThat(lowered("(def r (ref 0)) (ref-set r 1)")).contains("C%STM-CHECK");
+		assertThat(lowered("(def r (ref 0)) (ensure r)")).contains("C%STM-DEPTH");
+		assertThat(lowered("(agent 0)")).contains(":C%ATOM");
+		assertThat(lowered("(def a (agent 0)) (send a inc)")).contains("C%AGENT").contains("C%STM-CHECK");
+		assertThat(lowered("(def a (agent 0)) (send-off a inc)")).contains("C%AGENT");
+		assertThat(lowered("(def a (agent 0)) (await a)")).contains("PROGN").contains("NIL");
+		assertThat(lowered("(shutdown-agents)")).contains("NIL");
+		assertThat(lowered("alter")).contains("LAMBDA");
+		assertThatThrownBy(() -> Clojure.read("(ref 0 :history 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("ref option :history is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(dosync (alter r inc))", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: r");
+	}
+
+	@Test
+	void bindingNeedsDynamicVars() {
+		assertThat(lowered("(def ^:dynamic *d* 1) (binding [*d* 2] *d*)")).contains("LET*").contains("|c%*d*|");
+		assertThat(lowered("(binding [*out* 1] 1)")).contains("*STANDARD-OUTPUT*");
+		assertThatThrownBy(() -> Clojure.read("(def x 1) (binding [x 2] x)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("binding x needs a ^:dynamic var");
+		assertThatThrownBy(() -> Clojure.read("(binding [x 2] x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("binding x needs a ^:dynamic var");
+	}
+
+	@Test
+	void withOpenWithOutStrAndTimeLower() {
+		assertThat(lowered("(def s \"x\") (with-open [a s] a)")).contains("UNWIND-PROTECT")
+			.contains("JAVA:CALL")
+			.contains("\"close\"");
+		assertThat(lowered("(with-open [] 1)")).contains("1").doesNotContain("UNWIND-PROTECT");
+		assertThat(lowered("(with-out-str 1)")).contains("MAKE-STRING-OUTPUT-STREAM")
+			.contains("GET-OUTPUT-STREAM-STRING");
+		assertThat(lowered("(time 1)")).contains("GET-INTERNAL-REAL-TIME").contains("Elapsed time: ");
+		assertThat(lowered("(. *out* write \"x\")")).contains("STREAM");
+	}
+
+	@Test
+	void futuresPromisesAndProxySuperStayRefused() {
+		assertThatThrownBy(() -> Clojure.read("(future 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("future is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(delay 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("delay is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(force x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("force is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(promise)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("promise is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(deliver p 1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("deliver is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(proxy-super x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("proxy-super is not supported yet");
 	}
 
 }

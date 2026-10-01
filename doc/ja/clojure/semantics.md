@@ -103,6 +103,35 @@ seq 群はすべてのコレクションの strict なリストビュー上で�
 `count`/`empty?`/`=` はマップとセットにも届き（`=` は構造的で深い）、`get` は省略可能な
 デフォルトを取り、マップ・セット・ベクター・文字列・nil を読みます。
 
+## 状態と動的スコープ
+
+メタデータ（`^:private`、`^:dynamic`、`^{...}` attr マップ、型ヒント、`with-meta`）
+はどこにあっても解析して捨てられます。ディスパッチに影響しません。その一欠片を読むのは
+`binding` だけです。`defn-` は慣習上のプライベート `defn` です。`def` は `defn`
+同様に docstring と attr マップを取ります。`defonce` は束縛済みでない場合の `def`
+であり、リロードでルートを保ちます。
+
+`ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
+（単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`
+を通して適用し（失敗はシグナルを上げて書き込まない）、`ref-set` はそれを通して
+置き換え、`ensure` は ref 自身を答えます。いずれの動詞もエクステントが必要です。
+`agent` は `send`/`send-off` で更新される同じセルです。送信は即時に適用され
+（スレッドプールがないため非同期の順序付けは対象外）、agent を答えます。送信の
+実行中 `*agent*` が束縛されます。`await` の待ち合わせと `shutdown-agents` は
+`nil` を答えます。`future`/`delay`/`force`/`promise`/`deliver` は名前で拒否された
+ままで、`proxy-super` も同様です（proxy メソッドに super ハンドルはありません）。
+
+`binding` は `^:dynamic` な var（と、もとから special な `*out*`。
+`*out*` は `*standard-output*` です）を動的エクステントで再束縛します。それ以外は
+拒否されます。`defstruct` はキーベクターを名前の裏に保持します。
+`struct`/`struct-map` はその上に新しいマップを組み立てます。`with-out-str` は
+`*standard-output*` を文字列ストリームに束縛し（リテラルの
+`with-output-to-string` は使いません）、印字内容を答えます。`time` は
+`Elapsed time: N msecs` を報告して値を答えます。`with-open` は束縛して
+`unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
+closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
+`princ` 越しに印字され、どのバックエンドでも動きます。
+
 ## 未対応
 
 各拒否は `unknown name` ではなく欠けた設計を名指します:
@@ -114,7 +143,9 @@ seq 群はすべてのコレクションの strict なリストビュー上で�
 | 正規表現リテラル `#"..."` | `regex literals are not supported yet` | どのバックエッドにも正規表現実装がない |
 | `defprotocol`、`defrecord`、`deftype`、`definterface`、`reify`、`extend-protocol`、`extend-type`、`extend`、`satisfies?`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | 設計上拒否 -- 4 バックエンド全部での型ディスパッチとレコード値表現 |
 | `set!` | 名前で | フィールド書き込みプリミティブと変更対象の型がない |
-| `var`/`#'`、メタデータ `^`/`with-meta` | 名前で | var 機構もメタデータ模型もない。マクロ本体ではシンボルを quote する |
+| `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
+| `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
+| `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |
 | `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | `::` 自動解決キーワード | 名前で | 解決先の名前空間がない |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |

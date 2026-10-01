@@ -1554,3 +1554,159 @@ cases:
       null
          ab|3.14|ff|false|%
       a[1 2]b
+  - name: metadata-is-parsed-and-dropped
+    # ^:private/^:dynamic/^{...}/defn-/with-meta parse and drop: metadata never
+    # affects dispatch, so every shape below answers its bare value.
+    source: |
+      (defn- b14-double [x] (* x 2))
+      (println (b14-double 21))
+      (def ^:private b14-secret 7)
+      (println b14-secret)
+      (def ^{:doc "kept"} b14-kept 11)
+      (println b14-kept)
+      (defn b14-hint [^String s] s)
+      (println (b14-hint "s"))
+      (println (with-meta [1 2] {:tag :x}))
+      (println (with-meta :a nil))
+    expected: |
+      42
+      7
+      11
+      s
+      [1 2]
+      :a
+  - name: defstruct-struct-and-struct-map
+    # A defstruct holds its key vector; struct pairs keys with values (missing
+    # values are nil, too many signal), struct-map seeds the same keys. Only
+    # single-key reads print: multi-entry map order is unspecified.
+    source: |
+      (defstruct b14-acct :id :balance)
+      (println (:id (struct b14-acct 1 100)))
+      (println (:balance (struct b14-acct 2)))
+      (println (:balance (struct-map b14-acct :id 9)))
+      (println (:id (struct-map b14-acct :id 9)))
+      (println (try (struct b14-acct 1 2 3) (catch Exception e :too-many)))
+    expected: |
+      1
+      nil
+      nil
+      9
+      :too-many
+  - name: defonce-keeps-its-root
+    # defonce is def unless bound: the first evaluation wins, a reload keeps it.
+    source: |
+      (defonce b14-dict ["a" "b"])
+      (println b14-dict)
+      (defonce b14-dict ["c"])
+      (println b14-dict)
+      (def b14-red 1)
+      (defonce b14-red 2)
+      (println b14-red)
+      (defonce b14-fresh)
+      (println b14-fresh)
+    expected: |
+      [a b]
+      [a b]
+      1
+      nil
+  - name: refs-transact-singly
+    # The chat.clj slice: a validated ref altered and commuted in transactions,
+    # ref-set and ensure inside one, every verb refused outside one. Commute runs
+    # once here (the oracle may run its function twice); Validators run, retries
+    # do not -- the documented single-threaded deviation.
+    source: |
+      (def b14-room (ref [] :validator (fn [msgs] (<= (count msgs) 3))))
+      (dosync (alter b14-room (fn [m x] (conj m x)) :hi))
+      (println @b14-room)
+      (dosync (commute b14-room (fn [m x] (conj m x)) :yo) (alter b14-room (fn [m x] (conj m x)) :bye))
+      (println @b14-room)
+      (println (try (dosync (alter b14-room (fn [m x] (conj m x)) :full)) (catch Exception e :rejected)))
+      (println @b14-room)
+      (def b14-count (ref 0))
+      (dosync (alter b14-count inc) (ref-set b14-count 41) (ensure b14-count))
+      (println @b14-count)
+      (println (try (alter b14-count inc) (catch Exception e :no-txn)))
+      (println (try (ref-set b14-count 0) (catch Exception e :no-txn)))
+      (println (try (ensure b14-count) (catch Exception e :no-txn)))
+      (println (dosync (ensure b14-count) :ok))
+    expected: |
+      [:hi]
+      [:hi :yo :bye]
+      :rejected
+      [:hi :yo :bye]
+      41
+      :no-txn
+      :no-txn
+      :no-txn
+      :ok
+  - name: binding-rebinds-dynamic-vars
+    # The concurrency.clj slice (without the sleeps): ^:dynamic vars rebind with
+    # dynamic extent -- a callee sees the binding, the root returns after -- while
+    # inits run sequentially like let.
+    source: |
+      (def ^:dynamic *b14-verbose* false)
+      (def ^:dynamic *b14-tag* :a)
+      (def ^:dynamic *b14-level* 0)
+      (defn b14-status [] (if *b14-verbose* :loud :quiet))
+      (println (b14-status))
+      (println (binding [*b14-verbose* true] (b14-status)))
+      (println (b14-status))
+      (println (binding [*b14-verbose* true] (binding [*b14-verbose* false] (b14-status))))
+      (println (binding [*b14-verbose* true *b14-tag* :b] (list (b14-status) *b14-tag*)))
+      (println (list (b14-status) *b14-tag*))
+      (println (binding [*b14-level* 1 *b14-tag* *b14-level*] *b14-tag*))
+      (println *b14-tag*)
+    expected: |
+      :quiet
+      :loud
+      :quiet
+      :quiet
+      (:loud :b)
+      (:quiet :a)
+      1
+      :a
+  - name: agents-send-synchronously
+    # The pi.clj slice: two agents count a partitioned sample, await rendezvous,
+    # and the estimate combines deterministically. Sends apply at once (there is
+    # no thread pool, so async ordering is out); *agent* is bound while one runs.
+    source: |
+      (defn b14-inside? [[x y]] (<= (+ (* x x) (* y y)) 1))
+      (def b14-left (agent 0))
+      (def b14-right (agent 0))
+      (send b14-left (fn [n] (+ n (count (filter b14-inside? [[0 0] [1 1] [0 1]])))))
+      (send-off b14-right (fn [n] (+ n (count (filter b14-inside? [[1 0] [2 2]])))))
+      (await b14-left b14-right)
+      (println (list @b14-left @b14-right (/ (* 4 (+ @b14-left @b14-right)) 5)))
+      (def b14-seen (atom nil))
+      (def b14-probe (agent 0))
+      (println @(send b14-probe + 41))
+      (send b14-probe (fn [_] (reset! b14-seen *agent*) 1))
+      (println (list @b14-probe (if @b14-seen :bound :unbound) (= @b14-seen b14-probe)))
+      (println (list (await b14-probe) (shutdown-agents)))
+    expected: |
+      (2 1 12/5)
+      41
+      (1 :bound true)
+      (nil nil)
+  - name: with-out-str-captures-output-and-time-answers
+    # with-out-str binds *standard-output* to a string stream (never a literal
+    # with-output-to-string); time reports Elapsed time and answers its value.
+    # Only the value and the report prefix pin: the millisecond count never is.
+    source: |
+      (println (with-out-str (print 1) (pr :a)))
+      (println (subs (with-out-str (time (+ 1 2))) 0 13))
+      (with-out-str (def b14-timed (time (+ 40 2))))
+      (println b14-timed)
+    expected: |
+      1:a
+      Elapsed time:
+      42
+  - name: streams-write-through-out-and-import-answers-nil
+    # *out* is *standard-output*: .write prints through princ on streams, .flush
+    # finishes them, on every backend. import wires names and defines nothing.
+    source: |
+      (println (with-out-str (. *out* write "hi") (. *out* flush) (pr :!)))
+      (println (do (import 'java.util.ArrayList) :ok))
+    expected: |
+      hi:!
+      :ok

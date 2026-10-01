@@ -6,6 +6,8 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 |---|---|---|
 | `def` | `(do (def x 5) nil)` | `nil` |
 | `defn` | `(do (defn sq [x] (* x x)) (sq 7))` | `49` |
+| `defn-` | `(do (defn- sq [x] (* x x)) (sq 7))` | `49` |
+| `defonce` | `(do (defonce x 5) x)` | `5` |
 | `fn` | `((fn [a b] (+ a b)) 1 2)` | `3` |
 | `let` | `(let [x 1 y x] y)` | `1` |
 | `loop` | `(loop [i 0] (if (= i 3) i (recur (inc i))))` | `3` |
@@ -18,6 +20,7 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `or` | `(or nil nil 3)` | `3` |
 | `not` | `(not nil)` | `true` |
 | `quote` | `(quote (a b c))` | `(a b c)` |
+| `with-meta` | `(with-meta [1] {:a 1})` | `[1]` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |
 | `when-let` | `(when-let [x 1] (+ x 10))` | `11` |
@@ -25,3 +28,5 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `when-not` | `(when-not false :ran)` | `:ran` |
 | `if-not` | `(if-not nil :t :e)` | `:t` |
 | `when-first` | `(when-first [x [1 2]] x)` | `1` |
+| `binding` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] *d*))` | `2` |
+| `time` | `(time (+ 1 2))` | `3` |

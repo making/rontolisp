@@ -55,6 +55,19 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through its Clojure-notation rendering (`rontolisp::%clojure-str-of`), so strings keep their message |
 | `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through its Clojure-notation rendering); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
 | `atom`/`deref`/`@`/`swap!`/`reset!`/`compare-and-set!` (and `volatile!`/`vswap!`/`vreset!`) | a tagged one-vector cell `(:C%ATOM #(value))`, like the set wrapper | every verb reads/writes the cell and answers the new value (`compare-and-set!` compares with `eql` and answers `T`-or-false); misuse signals; each works as a function value, so `(map deref atoms)` runs |
+| `ref`/`dosync`/`alter`/`commute`/`ref-set`/`ensure` | the atom cell with a transaction discipline, over one spliced STM runtime | `ref` is the cell (a `:validator` registers in an identity-keyed alist); `dosync` binds the open depth one deeper around the body; `alter`/`commute` apply through the validator (a failed one signals and writes nothing -- the single-threaded rollback) and answer the new value; `ref-set` replaces through it; `ensure` answers the ref; every verb outside `dosync` signals `No transaction running`; `commute` runs once (the oracle may run it twice); `ref`/`alter`/`commute`/`ref-set` work as function values |
+| `agent`/`send`/`send-off`/`await`/`shutdown-agents` | the atom cell as a synchronous agent, over the same runtime | `agent` is the cell (a `:validator` registers the same way); `send`/`send-off` apply at once with `*agent*` bound to the cell, through the validator, answering the cell; `await` checks each cell and answers `nil`; `shutdown-agents` is `nil`; there is no thread pool, so async ordering is out; `agent`/`send`/`send-off` work as function values |
+| `binding` | `let*` over the bound names, sequentially like `let` | only `^:dynamic` vars (and `*out*`) may be bound -- anything else is the oracle's non-dynamic error as a named refusal; a `^:dynamic` `def` lowers to `defparameter` (always sets, like `def`, and proclaims the special, so the `let*` rebinds with dynamic extent); the body closes over the scope the same way |
+| `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
+| `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
+| `defn-` | `defn`, private by convention only | metadata never affects dispatch, so there is nothing to enforce |
+| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value) |
+| `with-open` | `let*` plus `unwind-protect` closing in reverse order | each closer is the `close` interop call, so Java closeables work where host objects exist (interpreter and JVM; wasm rejects `java:`); an empty vector is the body |
+| `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
+| `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
+| `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
+| `*out*` | `*standard-output*`, not a mangled name | the stream the print family writes to; `binding` may rebind it, like any special |
+| `.write`/`.flush` on a stream | `princ` / `finish-output` over the receiver | so `(. *out* write ...)` runs on every backend; a non-stream receiver still goes to `java:call` |
 | `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | `:as` registers an alias, `:refer`/`:use` unqualified names, `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; only `clojure.string` resolves (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` match literal strings only (regex literals are refused at the reader); an empty `split` input is nil; a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
@@ -193,8 +206,10 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   to characters, which print in Common Lisp notation; there is no laziness, chunking
   or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
 - protocols, `set!`, regex
-  literals, `var`/`#'`, metadata `^`: all absent, each refused by name (backquote
-  lowered in b12, below).
+  literals, `var`/`#'`: all absent, each refused by name (backquote
+  lowered in b12, below). Metadata instead parses and drops (b14):
+  `^`/`with-meta` lower to the object itself, and only `binding` reads
+  `^:dynamic` -- see the table rows above.
   Hierarchies and `ex-info` lowered in b08 (below); protocols were rejected by
   design there instead (a per-backend value model for `defrecord`/`deftype`, the
   b02 argument). Catch clauses are catch-all in order (the first handles any condition, where the
@@ -234,6 +249,17 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   with a space like `pr`); the print family answers nil, like the oracle. An atom
   prints unreadably (`#<Atom value>`) and a function as `#<procedure>` -- the
   b05/b08 values route through the same printer, so none leaks its wrapper.
+- Single-threaded STM (b14): `dosync` never retries, `commute` runs its function
+  once (the oracle may run it twice), validators run on the write and a failed
+  one leaves the old value; every STM verb outside `dosync` signals. Agents are
+  synchronous atoms: `send`/`send-off` apply at once and answer the cell (which
+  prints `#<Atom ...>`, not the oracle's object), `await`/`shutdown-agents`
+  answer `nil`, and `*agent*` is `nil` outside a send (unbound there). `binding`
+  rebinds only `^:dynamic` vars, like the oracle's non-dynamic error for the
+  rest; `with-open` closes through the `close` method (Java closeables need the
+  JVM); `time` answers its value but only its `Elapsed time:` prefix pins.
+  `*out*` is `*standard-output*`; `defonce` keeps the root where `def` resets
+  it; refs and atoms share the cell, so STM verbs accept atom cells.
 
 ## A session
 
@@ -366,3 +392,27 @@ Predicate values answer `T`-or-false (so `(map odd? [1 2])` prints `(true false)
 like the oracle); `filter`/`remove` test Clojure truthiness around the call.
 Multi-entry maps and multi-member sets never print in the spec (the walk order is
 unspecified); only single-entry/single-member shapes pin the notation.
+State, dynamic scope and the small imperative companions lower the same way (b14):
+metadata-ignored (`defn-`, `^:private`/`^:dynamic`/`^{...}`/type hints on names,
+parameter vectors, patterns and values, `with-meta` as call and as value, `def`
+docstrings and attr maps), `defstruct`/`struct`/`struct-map` over key vectors,
+`defonce` as `def` unless `boundp`, `ref`/`dosync`/`alter`/`commute`/`ref-set`/
+`ensure` over the atom cell with the spliced STM runtime (depth, identity-keyed
+validator registry, agent var), `agent`/`send`/`send-off`/`await`/
+`shutdown-agents` as synchronous atoms over the same runtime, `binding` over
+`defparameter`-proclaimed specials, `with-open`/`with-out-str`/`time`, `*out*`
+as `*standard-output*`, and the stream `.write`/`.flush` methods -- each pinned
+in `clojure-spec.yaml` (run on all four backends; the corpus slices are the
+`chat.clj` validator room `refs-transact-singly`, the `concurrency.clj` dynamic
+memo `binding-rebinds-dynamic-vars`, the `pi.clj` agent partition
+`agents-send-synchronously`, plus `metadata-is-parsed-and-dropped`,
+`defstruct-struct-and-struct-map`, `defonce-keeps-its-root`,
+`with-out-str-captures-output-and-time-answers` and
+`streams-write-through-out-and-import-answers-nil`; concurrency timing is never
+asserted, answers only, no sleeps in the spec), the lowered shapes and the
+non-dynamic-`binding` shape in `ClojureLoweringTest`, and the deferred refusals
+(`future`/`delay`/`force`/`promise`/`deliver`, `proxy-super`, the
+`with-open`-over-Java shape) in `ClojureLoweringTest` (`with-open` has no spec
+case: its closer is `java:call`, which wasm only warns past). `def` keeps a lone
+map value (an attr map needs a value behind it -- the `cycles` regression that
+caught the first draft).
