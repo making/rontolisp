@@ -500,6 +500,22 @@ public final class ClojureLowering {
 	private boolean inDispatchFn;
 
 	/**
+	 * The dispatch-function data of class-calling definitions, by name: a
+	 * {@code defn} name maps to its rebuilt {@code (fn ...)} datum, a {@code def}
+	 * (or {@code defonce}) name to its {@code (fn ...)} value datum (or the datum
+	 * an alias name points at). A {@code defmulti} over one of these names
+	 * re-lowers the recorded datum with the dispatch lowering instead of calling
+	 * the definition, so a named {@code (class x)} answers nil itself for nil
+	 * like the inline datum does, while a direct call to the definition keeps
+	 * answering the {@code :nil} keyword. Only class-calling definitions are
+	 * recorded (a redefinition without one drops the name); a {@code ^:dynamic}
+	 * name is never recorded, so a {@code binding} rebind still routes through
+	 * the value cell. Recorded in definition order, so the oracle's
+	 * define-before-use order is what resolves.
+	 */
+	private final Map<String, LispVal> classDispatchFns = new HashMap<>();
+
+	/**
 	 * A protocol the program defines or extends: its method names, the method-table
 	 * global and the {@code Object}-default global. Protocols dispatch over the
 	 * {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the hierarchy
@@ -1251,6 +1267,7 @@ public final class ClojureLowering {
 		if (dynamic) {
 			this.dynamicVars.add(name);
 		}
+		recordClassDispatchFn(name, dynamic, items.size() == at + 1 ? items.get(at) : null);
 		LispVal value = items.size() == at + 1 ? lower(items.get(at)) : NIL_CONST;
 		if (isDirectFun(value)) {
 			this.globalDirectFuns.add(name);
@@ -1414,6 +1431,10 @@ public final class ClojureLowering {
 			this.globalDirectFuns.add(name);
 		}
 		String callName = idSym(name).name();
+		List<LispVal> fnParts = new ArrayList<>();
+		fnParts.add(new LispSymbol("fn"));
+		fnParts.addAll(items.subList(at, items.size()));
+		recordClassDispatchFn(name, dynamic, list(fnParts));
 		List<LispVal> forms;
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
 			forms = multiDefun(name, items.subList(at, items.size()), callName);
@@ -8869,6 +8890,7 @@ public final class ClojureLowering {
 		if (dynamic) {
 			this.dynamicVars.add(name);
 		}
+		recordClassDispatchFn(name, dynamic, items.size() == 3 ? items.get(2) : null);
 		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
 		if (isDirectFun(value)) {
 			this.globalDirectFuns.add(name);
@@ -9083,6 +9105,92 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Whether the datum holds a {@code class} call: any list headed by the symbol
+	 * {@code class}. Quoted data is skipped (a call there never evaluates); anything
+	 * else over-approximates, which is harmless -- a definition whose only
+	 * {@code class} spellings never evaluate re-lowers identically, so recording
+	 * it changes nothing.
+	 */
+	private static boolean containsClassCall(LispVal datum) {
+		List<LispVal> parts = items(datum);
+		if (parts == null) {
+			return false;
+		}
+		if (!parts.isEmpty() && isSymbolNamed(parts.get(0), "quote")) {
+			return false;
+		}
+		for (LispVal part : parts) {
+			if (part instanceof LispSymbol s && s.name().equals("class")) {
+				return true;
+			}
+			if (part instanceof LispCons && containsClassCall(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Records a definition's dispatch-function datum for a later
+	 * {@code defmulti} over its name: a {@code defn}'s rebuilt {@code (fn ...)}
+	 * datum, or a {@code def}'s {@code (fn ...)} value datum (a name aliasing an
+	 * already-recorded one shares its datum). Only a class-calling definition is
+	 * kept -- anything else (including a value-less {@code def} and a
+	 * {@code ^:dynamic} name, whose calls route through the value cell) drops
+	 * the name, so a redefinition without one unregisters it.
+	 * @param name the defined name
+	 * @param dynamic whether the name is {@code ^:dynamic}
+	 * @param valueDatum the {@code fn} datum, or null when there is none
+	 */
+	private void recordClassDispatchFn(String name, boolean dynamic, @Nullable LispVal valueDatum) {
+		if (dynamic || valueDatum == null) {
+			this.classDispatchFns.remove(name);
+			return;
+		}
+		if (valueDatum instanceof LispSymbol s && !s.name().startsWith(":")) {
+			LispVal target = this.classDispatchFns.get(s.name());
+			if (target != null) {
+				this.classDispatchFns.put(name, target);
+			}
+			else {
+				this.classDispatchFns.remove(name);
+			}
+			return;
+		}
+		List<LispVal> parts = items(valueDatum);
+		if (parts != null && !parts.isEmpty()
+				&& (isSymbolNamed(parts.get(0), "fn") || parts.get(0) == ClojureReader.FN_ANON)
+				&& containsClassCall(valueDatum)) {
+			this.classDispatchFns.put(name, valueDatum);
+		}
+		else {
+			this.classDispatchFns.remove(name);
+		}
+	}
+
+	/**
+	 * The dispatch datum a {@code defmulti} lowers: the recorded definition when
+	 * the datum names a class-calling {@code defn} or {@code def}'d function, so
+	 * its {@code class} calls answer nil itself for nil under the dispatch
+	 * lowering, like the inline datum does. A name a local shadows keeps its
+	 * reference (the local is the dispatch function, not the definition).
+	 */
+	private LispVal dispatchDatumFor(LispVal dispatchDatum) {
+		if (dispatchDatum instanceof LispSymbol s) {
+			LispVal recorded = this.classDispatchFns.get(s.name());
+			if (recorded != null) {
+				for (Map<String, Kind> scope : this.scopes) {
+					if (scope.containsKey(s.name())) {
+						return dispatchDatum;
+					}
+				}
+				return recorded;
+			}
+		}
+		return dispatchDatum;
+	}
+
+	/**
 	 * {@code (defmulti name doc? dispatch-fn & opts)}: a method table, a default dispatch
 	 * value and an {@code Object}-method slot in four globals no identifier can spell
 	 * (the suffix follows the mangled name, like the multi-arity helpers), plus a
@@ -9093,7 +9201,9 @@ public final class ClojureLowering {
 	 * literally is the {@code :nil} keyword keeps its keyword row, like the oracle. A
 	 * {@code class} call inside the dispatch function answers nil itself for a nil
 	 * argument (see {@link #classForm(LispVal)}), so the null test maps it onto the
-	 * marker too -- bare or wrapped in another function, like the oracle. The default
+	 * marker too -- bare, wrapped in another function, or through a named
+	 * {@code defn} or {@code def}'d function (re-lowered from the recorded
+	 * definition, like the oracle). The default
 	 * dispatch value is {@code :default} without a {@code :default} option (an arbitrary
 	 * keyword with one -- the corpus's {@code :everything-else} -- stored per-multimethod
 	 * like {@code :default} today); a miss with no method for the default signals, like
@@ -9140,7 +9250,7 @@ public final class ClojureLowering {
 		boolean wasDispatch = this.inDispatchFn;
 		this.inDispatchFn = true;
 		try {
-			dispatchFn = fnValue(dispatchDatum);
+			dispatchFn = fnValue(dispatchDatumFor(dispatchDatum));
 		}
 		finally {
 			this.inDispatchFn = wasDispatch;

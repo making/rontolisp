@@ -43,7 +43,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   so no table ever keys on nil, while a dispatch value that literally is `:nil`
   keeps its keyword row, like the oracle (a `class` call inside the dispatch
   function answers nil itself for a nil argument, so the null test maps it onto
-  the marker too -- bare or wrapped in another function, like the oracle);
+  the marker too -- bare, wrapped in another function, or through a named `defn`
+  / `def`'d function re-lowered from its recorded definition, like the oracle);
   an `Object` method catches past the search but ahead of the default.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the

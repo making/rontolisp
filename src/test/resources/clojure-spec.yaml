@@ -1482,6 +1482,46 @@ cases:
       was-kw
       dflt
       dflt
+  - name: named-class-dispatch-hits-the-nil-method
+    # A dispatch through a NAMED class-calling function answers the nil method
+    # for nil: the defmulti re-lowers the recorded definition with the dispatch
+    # lowering, so a defn name and a def'd fn value behave like the inline
+    # datum, while :nil (whose class is Keyword) still falls to the default, a
+    # direct call to the definition keeps answering :nil, and an explicit :nil
+    # out of a named dispatch keeps its keyword row. Oracle: clj 1.12.6.1673.
+    source: |
+      (defn b40class [x] (class x))
+      (defmulti b40w b40class)
+      (defmethod b40w nil [_] "was-nil")
+      (defmethod b40w :default [x] "dflt")
+      (println (b40w nil))
+      (println (b40w :nil))
+      (println (b40class nil))
+      (def b40fn (fn [x] (class x)))
+      (defmulti b40v b40fn)
+      (defmethod b40v nil [_] "was-nil")
+      (defmethod b40v :default [x] "dflt")
+      (println (b40v nil))
+      (println (b40v :nil))
+      (defn b40m [x] (if (= x :foo) :nil (class x)))
+      (defmulti b40u b40m)
+      (defmethod b40u nil [_] "was-nil")
+      (defmethod b40u :nil [_] "was-kw")
+      (defmethod b40u :default [x] "dflt")
+      (println (b40u nil))
+      (println (b40u :foo))
+      (println (b40u :nil))
+      (println (b40u "a"))
+    expected: |
+      was-nil
+      dflt
+      :nil
+      was-nil
+      dflt
+      was-nil
+      was-kw
+      dflt
+      dflt
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
