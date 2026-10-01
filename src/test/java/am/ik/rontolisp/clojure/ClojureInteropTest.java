@@ -121,6 +121,25 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void hostBooleansPrintFalse() throws Exception {
+		// a host-object boolean answers T-or-false when the receiver's class is
+		// known (a construction literal, or a let local bound to one), like the
+		// oracle; any other receiver keeps the shared java: unmarshal
+		assertBothEqual("(println (.contains (java.util.ArrayList. [1]) 2))", "false\n");
+		assertBothEqual("(println (.isEmpty (java.util.ArrayList. [1])))", "false\n");
+		assertBothEqual("(println (.isEmpty (java.util.ArrayList.)))", "true\n");
+		assertBothEqual("(let [b29-list (java.util.ArrayList. [1])] (println (.contains b29-list 2)))", "false\n");
+		assertBothEqual("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))", "true\n");
+		// if/eq/str see the false object, like the oracle
+		assertBothEqual("(println (if (.isEmpty (java.util.ArrayList. [1])) :empty :full))", ":full\n");
+		assertBothEqual("(println (= (.contains (java.util.ArrayList. [1]) 2) false))", "true\n");
+		assertBothEqual("(println (str (.contains (java.util.ArrayList. [1]) 2)))", "false\n");
+		// non-boolean answers are untouched
+		assertBothEqual("(println (.size (java.util.ArrayList. [1 2])))", "2\n");
+		assertBothEqual("(println (.toString (java.util.ArrayList. [1])))", "[1]\n");
+	}
+
+	@Test
 	void memfnCallsHostMethods() throws Exception {
 		assertBothEqual("(println (.toString ((memfn append x) (StringBuilder. \"a\") \"b\")))", "ab\n");
 		assertBothEqual("(println (map (memfn toString) [(StringBuilder. \"a\")]))", "(a)\n");

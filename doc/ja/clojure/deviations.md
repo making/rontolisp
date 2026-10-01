@@ -103,3 +103,8 @@
 - `*out*`/`*in*` は `*standard-output*`/`*standard-input*` です（再束縛は標準
   ストリームの再束縛になります）。
   `defonce` はリロードでルートを保ちます（`def` はリセットします）。
+- ホストオブジェクトの boolean は、lowering 時に receiver のクラスがわかり
+  （構築リテラル、またはそれを束縛した `let` ローカル）、その引数個数の
+  オーバーロードがすべてプリミティブ boolean を答える場合だけ `false` を答えます。
+  それ以外のホスト boolean は共有の `java:` unmarshal のままとなり、`false` は
+  `nil` と表示されます。

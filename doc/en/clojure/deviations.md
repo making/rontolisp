@@ -103,3 +103,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `*out*`/`*in*` are `*standard-output*`/`*standard-input*` (rebinding rebinds the
   standard streams);
   `defonce` keeps the root on reload where `def` resets it.
+- A host-object boolean answers `false` only when the receiver's class is known
+  at lowering (a construction literal, or a `let` local bound to one) and every
+  overload at that arity answers a primitive boolean; any other host boolean
+  keeps the shared `java:` unmarshal and prints `nil` for `false`.

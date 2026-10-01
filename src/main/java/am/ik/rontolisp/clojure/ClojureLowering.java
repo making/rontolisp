@@ -530,6 +530,22 @@ public final class ClojureLowering {
 	private final Set<String> dynamicVars = new HashSet<>(Set.of("*agent*"));
 
 	/**
+	 * A {@code let} local's host class, inferred from a construction-literal init: the
+	 * FQN, the plain name (for the shadow walk) and the scope depth that owns it. Only
+	 * {@code let} records -- its bindings never rebind, unlike {@code loop} targets;
+	 * every other binder hides entries through the shadow walk in {@link #hostClassOf}
+	 * instead of recording.
+	 */
+	private record HostClass(String fqn, String name, int depth) {
+	}
+
+	/**
+	 * The visible {@code let}-inferred host classes by mangled name. Entries die with
+	 * their {@code let} (the finally there) or when the name rebinds.
+	 */
+	private final Map<String, HostClass> hostClasses = new HashMap<>();
+
+	/**
 	 * Whether the program uses refs or agents (any of {@code ref}/{@code dosync}/
 	 * {@code alter}/{@code commute}/{@code ref-set}/{@code ensure}/{@code agent}/
 	 * {@code send}/{@code send-off}/{@code await}, or a {@code binding} of
@@ -1594,19 +1610,59 @@ public final class ClojureLowering {
 					if (isDirectFun(init)) {
 						markDirect(name);
 					}
+					noteHostClass(name, init);
 					continue;
 				}
 				LispSymbol temp = freshTemp();
 				pairs.add(list(temp, lower(bindings.get(i + 1))));
+				Set<String> bound = new HashSet<>(scope.keySet());
 				destructureInto(pattern, temp, pairs, scope, "let");
+				forgetHostClasses(scope.keySet(), bound);
 			}
 			form = list(sym("let*"), list(pairs), body(items, 2));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
+			forgetDeepHosts();
 		}
 		return form;
+	}
+
+	/**
+	 * A {@code let} binding's host class, when its lowered init is a construction literal
+	 * of a loadable class: the FQN the instance-call wrap consults. Anything else forgets
+	 * the name, so rebinding the name hides the old class.
+	 */
+	private void noteHostClass(String name, LispVal init) {
+		String fqn = constructedClass(init);
+		if (fqn == null) {
+			this.hostClasses.remove(idSym(name).name());
+		}
+		else {
+			this.hostClasses.put(idSym(name).name(), new HostClass(fqn, name, this.scopes.size()));
+		}
+	}
+
+	/**
+	 * Forgets host classes for names a destructuring pattern just bound: pattern members
+	 * are collection members, never constructions.
+	 */
+	private void forgetHostClasses(Set<String> now, Set<String> before) {
+		for (String key : now) {
+			if (!before.contains(key)) {
+				this.hostClasses.remove(idSym(key).name());
+			}
+		}
+	}
+
+	/**
+	 * Drops host classes recorded below the current scope depth: their {@code let}
+	 * finished, so a later form must not see them.
+	 */
+	private void forgetDeepHosts() {
+		int depth = this.scopes.size();
+		this.hostClasses.values().removeIf(held -> held.depth() > depth);
 	}
 
 	/**
@@ -11068,7 +11124,11 @@ public final class ClojureLowering {
 	/**
 	 * An instance call over already-lowered forms: the receiver runs once, behind a
 	 * temporary; a string receiver answers the mapped core operation, anything else goes
-	 * to {@code java:call} directly.
+	 * to {@code java:call} directly. When the receiver's class is known -- a construction
+	 * literal, or a {@code let} local bound to one -- and every overload at that arity
+	 * answers a primitive boolean, the call answers {@code T}-or-false, like every
+	 * predicate value (the shared {@code java:} unmarshal still maps a host false to nil
+	 * underneath); any other receiver keeps the unmarshal.
 	 */
 	private LispVal instanceCallLowered(LispVal receiver, String method, List<LispVal> args) {
 		LispSymbol recv = freshTemp();
@@ -11077,6 +11137,13 @@ public final class ClojureLowering {
 		direct.add(LispString.literal(method));
 		direct.addAll(args);
 		LispVal call = cons(JAVA_CALL, direct);
+		String cls = constructedClass(receiver);
+		if (cls == null && receiver instanceof LispSymbol ref) {
+			cls = hostClassOf(ref);
+		}
+		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
+			call = booleanAnswer(call);
+		}
 		LispVal stream = streamMethod(method, recv, args);
 		if (stream != null) {
 			call = list(sym("if"), list(sym("streamp"), recv), stream, call);
@@ -11084,6 +11151,68 @@ public final class ClojureLowering {
 		LispVal mapped = stringMethod(method, recv, args);
 		LispVal out = mapped == null ? call : list(sym("if"), list(sym("stringp"), recv), mapped, call);
 		return list(sym("let"), list(List.of(list(recv, receiver))), out);
+	}
+
+	/**
+	 * The class a lowered receiver constructs, when it is a construction literal: a
+	 * {@code java:new} over a literal class name. No user form lowers to that head
+	 * (anything else spelling it is an unknown name), so the class is read off the call
+	 * site with no scope analysis.
+	 */
+	private static @Nullable String constructedClass(LispVal receiver) {
+		if (receiver instanceof LispCons cell && isSymbolNamed(cell.car(), "JAVA:NEW")
+				&& cell.cdr() instanceof LispCons rest && rest.car() instanceof LispString cls) {
+			return cls.value();
+		}
+		return null;
+	}
+
+	/**
+	 * A {@code let}-bound name's host class, or null when no visible binding holds one: a
+	 * binding above the recording depth shadows it, like any other scope rule, and
+	 * anything else was never recorded.
+	 */
+	private @Nullable String hostClassOf(LispSymbol ref) {
+		HostClass held = this.hostClasses.get(ref.name());
+		if (held == null) {
+			return null;
+		}
+		for (int i = held.depth(); i < this.scopes.size(); i++) {
+			if (this.scopes.get(i).containsKey(held.name())) {
+				return null;
+			}
+		}
+		return held.fqn();
+	}
+
+	/**
+	 * Whether every fixed-arity overload of {@code member} at {@code arity} on the host
+	 * class answers a primitive boolean: the instance-call half of the static
+	 * {@code T}-or-false rule ({@link #staticMember}). A {@code java:call} may reach a
+	 * static through an instance, so statics count too; a boxed answer never qualifies
+	 * (it may be null, which the oracle reads as nil, not false). An unloadable class
+	 * answers false, so the call keeps its old shape and the run-time error names the
+	 * class.
+	 */
+	private static boolean instanceBooleanAtArity(String className, String member, int arity) {
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			boolean seen = false;
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (!method.getName().equals(member) || method.isSynthetic() || method.isVarArgs()
+						|| method.getParameterCount() != arity) {
+					continue;
+				}
+				if (method.getReturnType() != Boolean.TYPE) {
+					return false;
+				}
+				seen = true;
+			}
+			return seen;
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return false;
+		}
 	}
 
 	/**
