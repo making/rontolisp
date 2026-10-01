@@ -3,7 +3,8 @@
 `(use 'clause ...)`
 
 Loads namespaces and refers the names each quoted clause lists, answering `nil` --
-`(:only [...])` narrows them, the same refer wiring `ns` does. `clojure.string`
+`(:only [...])` narrows them and `(:exclude [...])` subtracts from them,
+the same refer wiring `ns` does. `clojure.string`
 and `clojure.java.io` (`reader` only) resolve;
 an unknown namespace is an error.
 An unquoted vector spec is accepted too, though real Clojure rejects it.

@@ -7643,19 +7643,21 @@ public final class ClojureLowering {
 				default -> throw new LispReadException("require option " + opt.name() + " is not supported yet");
 			}
 		}
-		if (all) {
-			for (String var : varsOf(ns)) {
-				if (!exclude.contains(var)) {
-					this.refers.put(var, new VarRef(ns, var));
-				}
-			}
-		}
-		else if (only != null) {
+		if (only != null) {
+			// :only narrows in both modes: under use (:refer :all) it wins over
+			// the refer-all default, and :exclude subtracts from it either way.
 			for (String var : only) {
 				if (!exclude.contains(var)) {
 					if (!isKnownVar(ns, var)) {
 						throw new LispReadException("unknown name: " + ns + "/" + var);
 					}
+					this.refers.put(var, new VarRef(ns, var));
+				}
+			}
+		}
+		else if (all) {
+			for (String var : varsOf(ns)) {
+				if (!exclude.contains(var)) {
 					this.refers.put(var, new VarRef(ns, var));
 				}
 			}

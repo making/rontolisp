@@ -771,6 +771,39 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void useOnlyAndExcludeNarrowTheRefers() {
+		// :only wins over the use refer-all default, and :exclude subtracts from
+		// it -- and from :refer :all -- like the oracle (clj 1.12.6.1673); the ns
+		// :use clause shares the parser
+		assertThat(lowered("(use '[clojure.string :only [upper-case]]) (upper-case \"hi\")")).contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure.read("(use '[clojure.string :only [upper-case]]) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+		assertThat(lowered("(use '[clojure.string :exclude [join]]) (upper-case \"hi\")")).contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure.read("(use '[clojure.string :exclude [join]]) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+		assertThat(lowered("(use '[clojure.string :only [upper-case join] :exclude [join]]) (upper-case \"hi\")"))
+			.contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure
+			.read("(use '[clojure.string :only [upper-case join] :exclude [join]]) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+		assertThat(lowered("(require '[clojure.string :refer :all :exclude [join]]) (upper-case \"hi\")"))
+			.contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure
+			.read("(require '[clojure.string :refer :all :exclude [join]]) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+		assertThat(lowered("(ns t (:use [clojure.string :only [upper-case]])) (upper-case \"hi\")"))
+			.contains("STRING-UPCASE");
+		assertThatThrownBy(
+				() -> Clojure.read("(ns t (:use [clojure.string :only [upper-case]])) (join \",\" [\"a\"])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: join");
+	}
+
+	@Test
 	void interopLowersToTheJavaSurface() {
 		assertThat(lowered("(.toUpperCase \"hi\")")).contains("JAVA:CALL").contains("toUpperCase");
 		assertThat(lowered("(. \"hi\" toUpperCase)")).contains("JAVA:CALL");
