@@ -101,8 +101,11 @@
           (t (write-char c stream)))))
 
 (defun rontolisp::%clojure-node-p (x)
-  "Whether X can close a cycle: a pair, a non-string vector, or a table."
-  (or (consp x) (and (vectorp x) (not (stringp x))) (hash-table-p x)))
+  "Whether X can close a cycle: a pair, a non-string vector, or a table.
+   A lazy wrapper is a leaf: its cell is machinery, never user data, and
+   %clojure-write refuses it without forcing (b11)."
+  (and (not (rontolisp::%clojure-lazy-p x))
+       (or (consp x) (and (vectorp x) (not (stringp x))) (hash-table-p x))))
 
 (defun rontolisp::%clojure-may-cycle-p (x depth)
   "NIL when printing X as a tree ends, T as soon as it may not: a cdr chain that
@@ -226,6 +229,7 @@
   (cond ((eq x t) (write-string "true" stream))
         ((eq x rontolisp::%clojure-false) (write-string "false" stream))
         ((null x) (write-string nil-replacement stream))
+        ((rontolisp::%clojure-lazy-p x) (write-string "#<LazySeq>" stream))
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
@@ -284,13 +288,15 @@
          (rontolisp::%clojure-write (car x) nil-replacement readable stream
                                     labels)
          (do ((rest (cdr x) (cdr rest)))
-             ((or (not (consp rest))
+             ((or (not (consp rest)) (rontolisp::%clojure-lazy-p rest)
                   (and labels (rontolisp::%clojure-labeled-p rest labels)))
-              (if (not (null rest))
-                  (progn
-                    (write-string " . " stream)
-                    (rontolisp::%clojure-write rest nil-replacement readable
-                                               stream labels))))
+              (cond
+               ((rontolisp::%clojure-lazy-p rest) (write-string " ..." stream))
+               ((not (null rest))
+                (progn
+                  (write-string " . " stream)
+                  (rontolisp::%clojure-write rest nil-replacement readable
+                                             stream labels)))))
            (write-char #\Space stream)
            (rontolisp::%clojure-write (car rest) nil-replacement readable stream
                                       labels))
@@ -348,3 +354,240 @@
   (cond ((rontolisp::%clojure-set-p coll) (gethash k (car (cdr coll)) dflt))
         ((hash-table-p coll) (gethash k coll dflt))
         (t dflt)))
+
+;;;; Lazy seqs (b11): memoized-thunk wrappers over the strict seq view.
+;;
+;; A lazy seq is (LIST :C%LAZY cell) where CELL is (CONS thunk-or-nil
+;; realized-seq), beside the (:C%SET table) and (:C%KEYWORD spelling) wrappers.
+;; The thunk runs at most once per wrapper object: %clojure-realize funcalls it,
+;; seqs the answer and clears the car, so every later force answers the memoized
+;; seq. The cell mutates through rplaca/rplacd, primitives every backend already
+;; compiles, so the representation is identical on all four backends with no new
+;; per-backend code. The invariant the lowering keeps: any seq containing a lazy
+;; tail IS a wrapper (cons/concat/map/filter wrap instead of exposing a strict
+;; cons with a lazy tail), so callers test only the top level.
+;;
+;; Deliberate non-goals, each a documented deviation (.kb/clojure-frontend.md):
+;; no chunking (every element realizes singly), no parallel realization, infinite
+;; range stays refused, and lazy inputs to the non-listed verbs (doseq/for/reduce
+;; and friends) consume one level through %clojure-seq -- pass a taken prefix.
+
+(defun rontolisp::%clojure-lazy-p (x)
+  "Whether X is the (:C%LAZY cell) wrapper lazy-seq and friends build."
+  (and (consp x) (eq (car x) :C%LAZY) (consp (cdr x)) (consp (car (cdr x)))
+       (null (cdr (cdr x)))))
+
+(defun rontolisp::%clojure-make-lazy (thunk)
+  "A lazy seq over the zero-argument closure THUNK, unrealized."
+  (list :C%LAZY (cons thunk nil)))
+
+(defun rontolisp::%clojure-strict-seq (coll)
+  "The strict list view of COLL: the b03 cond, now shared by every backend
+   through this one defun instead of inline in the lowering."
+  (cond ((null coll) nil)
+        ((rontolisp::%clojure-set-p coll)
+         (let ((acc nil))
+           (maphash (lambda (k v)
+                      (declare (ignore v))
+                      (setq acc (cons k acc))) (car (cdr coll)))
+           acc))
+        ((consp coll) coll)
+        ((vectorp coll) (coerce coll 'list))
+        ((stringp coll) (coerce coll 'list))
+        ((hash-table-p coll)
+         (let ((acc nil))
+           (maphash (lambda (k v) (setq acc (cons (vector k v) acc))) coll)
+           acc))
+        ((eq coll rontolisp::%clojure-false) nil)
+        (t (error "seq needs a collection"))))
+
+(defun rontolisp::%clojure-realize (x)
+  "Force the lazy wrapper X to its seq (nil or a cons), memoized at-most-once.
+   A thunk answering another wrapper chains through it; anything else seqs
+   strictly (a cons passes through, so a lazy tail stays lazy)."
+  (let ((cell (car (cdr x))))
+    (if (car cell)
+        (let ((v (funcall (car cell))))
+          (let ((s
+                 (if (rontolisp::%clojure-lazy-p v)
+                     (rontolisp::%clojure-realize v)
+                     (rontolisp::%clojure-strict-seq v))))
+            (rplaca cell nil)
+            (rplacd cell s)
+            s))
+        (cdr cell))))
+
+(defun rontolisp::%clojure-seq (coll)
+  "The lazy-aware seq view: one-level realize for wrappers, the strict view
+   otherwise. Never walks past one wrapper, so infinite seqs stay infinite."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-realize coll)
+      (rontolisp::%clojure-strict-seq coll)))
+
+(defun rontolisp::%clojure-take (n coll)
+  "The first N of COLL as a strict list, stepping through one wrapper at a
+   time so (take n infinite) terminates. Realizes exactly what it answers:
+   the next wrapper stays unforcd when the count runs out."
+  (let ((left n) (s (rontolisp::%clojure-seq coll)) (acc nil))
+    (do ()
+        ((or (<= left 0) (null s)) (reverse acc))
+      (setq acc (cons (car s) acc))
+      (setq left (- left 1))
+      (if (> left 0) (setq s (rontolisp::%clojure-seq (cdr s)))))))
+
+(defun rontolisp::%clojure-drop (n coll)
+  "COLL past its first N: the remainder, which may stay lazy."
+  (let ((left n) (s (rontolisp::%clojure-seq coll)))
+    (do ()
+        ((or (<= left 0) (null s)) s)
+      (setq s (rontolisp::%clojure-seq (cdr s)))
+      (setq left (- left 1)))))
+
+(defun rontolisp::%clojure-any-lazy-p (colls)
+  "Whether any member of the COLLS list is a lazy wrapper."
+  (if (null colls)
+      nil
+      (if (rontolisp::%clojure-lazy-p (car colls))
+          t
+          (rontolisp::%clojure-any-lazy-p (cdr colls)))))
+
+(defun rontolisp::%clojure-cons (item coll)
+  "Cons ITEM onto COLL, wrapping when the tail is lazy (the top-level test
+   keeps the wrapper invariant: no strict cons ever holds a lazy tail)."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-make-lazy (lambda () (cons item coll)))
+      (cons item (rontolisp::%clojure-seq coll))))
+
+(defun rontolisp::%clojure-map (f colls)
+  "Map F over the COLLS list (one or more): a wrapper when any input is lazy
+   (stopping at the shortest, like the oracle), the strict mapcar otherwise."
+  (if (rontolisp::%clojure-any-lazy-p colls)
+      (rontolisp::%clojure-map-lazy f colls)
+      (apply #'mapcar (lambda (&rest xs) (rontolisp::%clojure-call f xs))
+             (mapcar #'rontolisp::%clojure-seq colls))))
+
+(defun rontolisp::%clojure-map-lazy (f colls)
+  "The lazy arm of %clojure-map over the COLLS list."
+  (rontolisp::%clojure-make-lazy
+   (lambda () (rontolisp::%clojure-map-step f colls))))
+
+(defun rontolisp::%clojure-map-step (f colls)
+  "One mapped head over the COLLS list, or nil past the shortest."
+  (let ((seqs (mapcar #'rontolisp::%clojure-seq colls)))
+    (if (rontolisp::%clojure-map-done-p seqs)
+        nil
+        (cons (rontolisp::%clojure-call f (rontolisp::%clojure-map-heads seqs))
+              (rontolisp::%clojure-map-lazy f
+               (rontolisp::%clojure-map-tails seqs))))))
+
+(defun rontolisp::%clojure-map-done-p (seqs)
+  "Whether any member of the SEQS list is empty."
+  (if (null seqs)
+      nil
+      (if (null (car seqs)) t (rontolisp::%clojure-map-done-p (cdr seqs)))))
+
+(defun rontolisp::%clojure-map-heads (seqs)
+  "The cars of the SEQS list."
+  (if (null seqs)
+      nil
+      (cons (car (car seqs)) (rontolisp::%clojure-map-heads (cdr seqs)))))
+
+(defun rontolisp::%clojure-map-tails (seqs)
+  "The cdrs of the SEQS list."
+  (if (null seqs)
+      nil
+      (cons (cdr (car seqs)) (rontolisp::%clojure-map-tails (cdr seqs)))))
+
+(defun rontolisp::%clojure-filter-test (pred x)
+  "Whether X passes PRED under Clojure truthiness (nil and false drop)."
+  (let ((v (rontolisp::%clojure-call pred (list x))))
+    (not (or (null v) (eq v rontolisp::%clojure-false)))))
+
+(defun rontolisp::%clojure-filter (pred coll)
+  "Filter COLL through PRED: a wrapper when COLL is lazy, remove-if-not else."
+  (if (rontolisp::%clojure-lazy-p coll)
+      (rontolisp::%clojure-filter-lazy pred coll)
+      (remove-if-not (lambda (x) (rontolisp::%clojure-filter-test pred x))
+                     (rontolisp::%clojure-seq coll))))
+
+(defun rontolisp::%clojure-filter-lazy (pred coll)
+  "The lazy arm of %clojure-filter."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (cond ((null s) nil)
+             ((rontolisp::%clojure-filter-test pred (car s))
+              (cons (car s) (rontolisp::%clojure-filter-lazy pred (cdr s))))
+             (t (rontolisp::%clojure-seq
+                 (rontolisp::%clojure-filter-lazy pred (cdr s)))))))))
+
+(defun rontolisp::%clojure-concat (colls)
+  "Append the COLLS list: a wrapper when any member is lazy, strict append
+   of the seq views otherwise (of none, nil)."
+  (if (rontolisp::%clojure-any-lazy-p colls)
+      (rontolisp::%clojure-concat-lazy colls)
+      (apply #'append (mapcar #'rontolisp::%clojure-seq colls))))
+
+(defun rontolisp::%clojure-concat-lazy (colls)
+  "The lazy arm of %clojure-concat over the COLLS list."
+  (rontolisp::%clojure-make-lazy
+   (lambda () (rontolisp::%clojure-concat-step colls))))
+
+(defun rontolisp::%clojure-concat-step (colls)
+  "The first surviving head of the COLLS list over its lazy tail, or nil."
+  (if (null colls)
+      nil
+      (let ((s (rontolisp::%clojure-seq (car colls))))
+        (if (null s)
+            (rontolisp::%clojure-concat-step (cdr colls))
+            (cons (car s)
+             (rontolisp::%clojure-concat-lazy (cons (cdr s) (cdr colls))))))))
+
+(defun rontolisp::%clojure-repeat (x)
+  "The infinite seq of X."
+  (rontolisp::%clojure-make-lazy
+   (lambda () (cons x (rontolisp::%clojure-repeat x)))))
+
+(defun rontolisp::%clojure-repeat-n (n x)
+  "N copies of X as a strict list (of a non-positive N, nil like the oracle)."
+  (let ((acc nil) (left n))
+    (do ()
+        ((<= left 0) acc)
+      (setq acc (cons x acc))
+      (setq left (- left 1)))))
+
+(defun rontolisp::%clojure-cycle (coll)
+  "The seq view of COLL cycled forever (of empty, nil)."
+  (let ((s (rontolisp::%clojure-seq coll)))
+    (if (null s) nil (rontolisp::%clojure-cycle-from s s))))
+
+(defun rontolisp::%clojure-cycle-from (full cur)
+  "FULL cycled from CUR, one wrapper per element."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((c (if (null cur) full cur)))
+       (if (null c)
+           nil
+           (cons (car c) (rontolisp::%clojure-cycle-from full (cdr c))))))))
+
+(defun rontolisp::%clojure-iterate (f x)
+  "X, (f X), (f (f X)) ... as a lazy seq, through the IFn dispatcher."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (cons x
+      (rontolisp::%clojure-iterate f (rontolisp::%clojure-call f (list x)))))))
+
+(defun rontolisp::%clojure-repeatedly (f)
+  "The infinite seq of (f) calls, through the IFn dispatcher."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (cons (rontolisp::%clojure-call f nil)
+           (rontolisp::%clojure-repeatedly f)))))
+
+(defun rontolisp::%clojure-repeatedly-n (n f)
+  "N (f) calls as a strict list (of a non-positive N, nil)."
+  (let ((acc nil) (left n))
+    (do ()
+        ((<= left 0) (reverse acc))
+      (setq acc (cons (rontolisp::%clojure-call f nil) acc))
+      (setq left (- left 1)))))

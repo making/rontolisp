@@ -95,12 +95,22 @@ same table with each member stored under itself, wrapped so verbs tell a set fro
 keyword is its spelling wrapped as `(:C%KEYWORD name)`: data compared by `equal`, and in
 call position (`(:k m)`, with an optional default) or as a function value the map lookup.
 
-The seq family runs over strict list views of every collection: lists pass through
+The seq family runs over list views of every collection: lists pass through
 untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets
 one member per element (both in the table's walk order, unspecified); `nil` and `false`
-are empty; anything else signals like the oracle. There is no laziness, chunking or
-memoisation. `count`/`empty?`/`=` reach maps and sets (`=` deeply and structurally);
-`get` takes an optional default and reads maps, sets, vectors, strings and nil.
+are empty; anything else signals like the oracle. Strict collections coerce up front,
+while a lazy seq (`lazy-seq`, `lazy-cat`, `repeat`, `cycle`, `iterate`, `repeatedly`)
+realizes one element at a time through the same view: `take` steps through it and
+terminates on infinite seqs, `drop`/`first`/`rest`/`next`/`seq` realize through it, and
+`cons`/`concat`/`map`/`filter` answer lazy again when any input is lazy (strict lists
+otherwise). A `lazy-seq` body runs at most once per seq object; only `take`n prefixes
+print -- a bare lazy seq prints `#<LazySeq>` (a lazy tail truncates with `...`) instead
+of hanging. There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
+and structurally); `get` takes an optional default and reads maps, sets, vectors,
+strings and nil.
+
+Lazy inputs to the other seq verbs (`doseq`/`for`/`reduce`, `keep` and friends) consume
+one level through the seq view: pass a `take`n prefix first.
 
 ## Not yet
 
@@ -108,7 +118,7 @@ Each refusal names the missing design, never `unknown name`:
 
 | Refused | Message shape | Why |
 |---|---|---|
-| `lazy-seq`, `cycle`, `repeat`, `repeatedly`, `iterate`, end-less `range` | `lazy sequences are not supported: ...` | seqs are strict; an infinite seq cannot be spelled |
+| end-less `range` | `infinite range is not supported: range needs an end` | an infinite seq cannot be spelled strictly -- spell it with `iterate` |
 | `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` | `transients are not supported yet: ...` | no transient runtime behind the tables |
 | regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |
 | `defprotocol`, `defrecord`, `deftype`, `definterface`, `reify`, `extend-protocol`, `extend-type`, `extend`, `satisfies?`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | rejected by design -- type dispatch and a record value representation on all four backends |

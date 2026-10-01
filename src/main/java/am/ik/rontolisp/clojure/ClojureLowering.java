@@ -73,19 +73,27 @@ import org.jspecify.annotations.Nullable;
  * signals -- so {@code first}/{@code rest}/{@code next}/{@code seq}/{@code cons}/
  * {@code concat}/{@code map}/{@code filter}/{@code reduce}/{@code apply}/
  * {@code nth}/{@code take}/{@code drop} all run over every collection while the list path
- * stays a no-copy identity. There is no laziness, chunking or memoisation:
- * {@code lazy-seq}/{@code cycle}/{@code repeat}/{@code repeatedly}/{@code iterate} and an
- * end-less {@code range} are refused by name, and {@code range} with an end builds the
- * strict list. {@code nth} and {@code quot} as VALUES are correctly-ordered lambdas
- * wrapping the primitive (a bare {@code #'NTH} would have the operands backwards). A
- * keyword {@code :foo} is the list {@code (:C%KEYWORD "foo")} holding its spelling
- * verbatim (case-preserved, so {@code :a} and {@code :A} stay apart and compare unequal);
- * {@code println}/{@code print}/{@code str} spell it with its colon, and a keyword in
- * call position {@code (:k m)} (or with a default {@code (:k m dflt)}) is the same
- * table-aware read {@code get} lowers to. {@code false} is a DISTINCT non-{@code NIL}
- * object -- the value of {@code rontolisp::%clojure-false}, bound before anything else
- * runs, a symbol spelled {@code false} -- so {@code (= false nil)} is false and
- * {@code (nil?
+ * stays a no-copy identity. Laziness is the memoized-thunk wrapper {@code (:C%LAZY cell)}
+ * (b11): {@code lazy-seq} builds one over its body (run at most once per object),
+ * {@code lazy-cat} nests {@code concat} over per-member wrappers, and
+ * {@code repeat}/{@code cycle}/{@code iterate}/{@code repeatedly} build wrapper chains
+ * (their finite arities answer strict lists); an end-less {@code range} stays refused by
+ * name, and {@code range} with an end builds the strict list. {@code take} steps through
+ * one wrapper at a time and
+ * {@code drop}/{@code first}/{@code rest}/{@code next}/{@code seq}/
+ * {@code cons}/{@code concat}/{@code map}/{@code filter} realize through the same view,
+ * so {@code (take 5 (iterate inc 0))} terminates; printing a wrapper (or a list holding a
+ * lazy tail) refuses with {@code #<LazySeq>} instead of hanging. There is no chunking:
+ * every element realizes singly. {@code nth} and {@code quot} as VALUES are
+ * correctly-ordered lambdas wrapping the primitive (a bare {@code #'NTH} would have the
+ * operands backwards). A keyword {@code :foo} is the list {@code (:C%KEYWORD "foo")}
+ * holding its spelling verbatim (case-preserved, so {@code :a} and {@code :A} stay apart
+ * and compare unequal); {@code println}/{@code print}/{@code str} spell it with its
+ * colon, and a keyword in call position {@code (:k m)} (or with a default
+ * {@code (:k m dflt)}) is the same table-aware read {@code get} lowers to. {@code false}
+ * is a DISTINCT non-{@code NIL} object -- the value of {@code rontolisp::%clojure-false},
+ * bound before anything else runs, a symbol spelled {@code false} -- so
+ * {@code (= false nil)} is false and {@code (nil?
  * false)} is false. It is falsey in every conditional: {@code if}/{@code when}/
  * {@code cond}/{@code and}/{@code or}/{@code not} lower their tests to an explicit
  * null-or-false check, and every boolean-answering builtin ({@code =}, the comparisons,
@@ -2016,11 +2024,11 @@ public final class ClojureLowering {
 			case "vector?":
 				return booleanAnswer(plain("vectorp", items));
 			case "map":
-				isTrue(n == 2, "map takes one function and one collection");
-				return mapForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+				isTrue(n >= 2, "map takes a function and collections");
+				return mapForm(fnValue(items.get(1)), lowers(items, 2));
 			case "filter":
 				isTrue(n == 2, "filter takes a predicate and a collection");
-				return filterForm(fnValue(items.get(1)), seqForm(lower(items.get(2))));
+				return filterForm(fnValue(items.get(1)), lower(items.get(2)));
 			case "reduce":
 				isTrue(n == 2 || n == 3, "reduce takes a function, an optional value and a collection");
 				if (n == 2) {
@@ -2033,11 +2041,7 @@ public final class ClojureLowering {
 				if (items.size() == 1) {
 					return NIL_CONST;
 				}
-				List<LispVal> seqs = new ArrayList<>();
-				for (int i = 1; i < items.size(); i++) {
-					seqs.add(seqForm(lower(items.get(i))));
-				}
-				return cons(sym("append"), seqs);
+				return list(new LispSymbol("RONTOLISP::%CLOJURE-CONCAT"), cons(sym("list"), lowers(items, 1)));
 			case "take":
 				return takeOf(items);
 			case "drop":
@@ -2211,8 +2215,20 @@ public final class ClojureLowering {
 				return mapConstructorOf(items, "array-map");
 			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
 				throw new LispReadException("transients are not supported yet: " + name);
-			case "lazy-seq", "cycle", "repeat", "repeatedly", "iterate":
-				throw new LispReadException("lazy sequences are not supported: " + name);
+			case "lazy-seq":
+				return lazySeqOf(items);
+			case "lazy-cat":
+				return lazyCatOf(items);
+			case "repeat":
+				return repeatOf(items);
+			case "cycle":
+				isTrue(n == 1, "cycle takes one collection");
+				return list(new LispSymbol("RONTOLISP::%CLOJURE-CYCLE"), lower(items.get(1)));
+			case "repeatedly":
+				return repeatedlyOf(items);
+			case "iterate":
+				isTrue(n == 2, "iterate takes a function and a value");
+				return list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"), fnValue(items.get(1)), lower(items.get(2)));
 			default:
 				return null;
 		}
@@ -2698,54 +2714,22 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The seq view of an already-lowered collection: a strict LIST, the one sequence
-	 * every backend already shares, so no backend learns a representation. Lists pass
-	 * through untouched (the list fast path -- no copy); vectors and strings coerce; maps
-	 * contribute one two-vector per entry and sets one member per element, both in the
-	 * table's walk order, unspecified like the oracle's; nil and the false object are
-	 * empty; anything else signals, like the oracle's. The collection runs once, behind a
-	 * temporary no user identifier can spell.
+	 * The seq view of an already-lowered collection: one call to the spliced
+	 * {@code rontolisp::%clojure-seq}, which realizes a lazy wrapper one level and
+	 * otherwise answers the strict LIST every backend already shares (lists pass through
+	 * untouched; vectors and strings coerce; maps contribute one two-vector per entry and
+	 * sets one member per element, both in the table's walk order, unspecified like the
+	 * oracle's; nil and the false object are empty; anything else signals, like the
+	 * oracle's). The collection runs once, as the call's argument. Non-listed verbs
+	 * consume one level through this view; only
+	 * {@code take}/{@code drop}/{@code first}/{@code rest}/{@code next}/{@code seq}/
+	 * {@code map}/{@code filter}/{@code concat}/{@code cons} preserve laziness past it
+	 * (b11).
 	 * @param lowered the lowered collection
 	 * @return the form answering the list view
 	 */
 	private LispVal seqForm(LispVal lowered) {
-		LispSymbol coll = freshTemp();
-		List<LispVal> branches = new ArrayList<>();
-		branches.add(list(list(sym("null"), coll), NIL_CONST));
-		branches.add(list(isSetForm(coll), memberList(coll)));
-		branches.add(list(list(sym("consp"), coll), coll));
-		branches.add(list(list(sym("vectorp"), coll), list(sym("coerce"), coll, quoted("list"))));
-		branches.add(list(list(sym("stringp"), coll), list(sym("coerce"), coll, quoted("list"))));
-		branches.add(list(list(sym("hash-table-p"), coll), entryList(coll)));
-		branches.add(list(list(sym("eq"), coll, this.falseVariable), NIL_CONST));
-		branches.add(list(TRUE_CONST, list(sym("error"), LispString.literal("seq needs a collection"))));
-		return list(sym("let"), list(List.of(list(coll, lowered))), cons(sym("cond"), branches));
-	}
-
-	/** A set's members accumulated into a list, in the table's walk order. */
-	private LispVal memberList(LispVal coll) {
-		LispSymbol acc = freshTemp();
-		LispSymbol key = freshTemp();
-		LispSymbol val = freshTemp();
-		return list(sym("let"), list(List.of(list(acc, NIL_CONST))),
-				list(sym("maphash"),
-						list(sym("lambda"), list(List.of(key, val)), list(sym("declare"), list(sym("ignore"), val)),
-								list(sym("setq"), acc, list(sym("cons"), key, acc))),
-						setInner(coll)),
-				acc);
-	}
-
-	/** A map's entries accumulated into a list of two-vectors, in walk order. */
-	private LispVal entryList(LispVal coll) {
-		LispSymbol acc = freshTemp();
-		LispSymbol key = freshTemp();
-		LispSymbol val = freshTemp();
-		return list(sym("let"), list(List.of(list(acc, NIL_CONST))),
-				list(sym("maphash"),
-						list(sym("lambda"), list(List.of(key, val)),
-								list(sym("setq"), acc, list(sym("cons"), list(sym("vector"), key, val), acc))),
-						coll),
-				acc);
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ"), lowered);
 	}
 
 	/**
@@ -2811,6 +2795,10 @@ public final class ClojureLowering {
 			case "concat" -> concatValue();
 			case "take" -> takeValue();
 			case "drop" -> dropValue();
+			case "repeat" -> repeatValue();
+			case "cycle" -> cycleValue();
+			case "iterate" -> iterateValue();
+			case "repeatedly" -> repeatedlyValue();
 			case "range" -> rangeValue();
 			case "dorun" -> dorunValue();
 			case "doall" -> doallValue();
@@ -2934,11 +2922,11 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(coll), list(sym("cdr"), seqForm(coll)));
 	}
 
-	/** {@code cons} as a value: the item over the seq view. */
+	/** {@code cons} as a value: the item over the collection, lazily when lazy. */
 	private LispVal consValue() {
 		LispSymbol item = new LispSymbol(mangle("cons-item"));
 		LispSymbol coll = new LispSymbol(mangle("cons-coll"));
-		return list(sym("lambda"), list(List.of(item, coll)), list(sym("cons"), item, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(item, coll)), consForm(item, coll));
 	}
 
 	/** {@code count} as a value: the table-aware count. */
@@ -2956,18 +2944,21 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(coll), booleanAnswer(emptyForm(coll)));
 	}
 
-	/** {@code map} as a value: {@code mapcar} over the seq view. */
+	/** {@code map} as a value: over a function and one rest list of collections. */
 	private LispVal mapValue() {
 		LispSymbol fn = new LispSymbol(mangle("map-fn"));
-		LispSymbol coll = new LispSymbol(mangle("map-coll"));
-		return list(sym("lambda"), list(List.of(fn, coll)), mapForm(fn, seqForm(coll)));
+		LispSymbol colls = new LispSymbol(mangle("map-colls"));
+		LispVal arity = list(sym("error"), LispString.literal("map takes a function and collections"));
+		LispVal call = list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fn, colls);
+		LispVal body = list(sym("if"), list(sym("null"), colls), arity, call);
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, colls)), body);
 	}
 
-	/** {@code filter} as a value: {@code remove-if-not} over the seq view. */
+	/** {@code filter} as a value: the predicate over the collection. */
 	private LispVal filterValue() {
 		LispSymbol pred = new LispSymbol(mangle("filter-pred"));
 		LispSymbol coll = new LispSymbol(mangle("filter-coll"));
-		return list(sym("lambda"), list(List.of(pred, coll)), filterForm(pred, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(pred, coll)), filterForm(pred, coll));
 	}
 
 	/**
@@ -2988,25 +2979,74 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, args)), body);
 	}
 
-	/** {@code concat} as a value: every argument's seq view appended. */
+	/** {@code concat} as a value: every argument appended, lazily when lazy. */
 	private LispVal concatValue() {
 		LispSymbol colls = new LispSymbol(mangle("concat-colls"));
 		return list(sym("lambda"), list(AMPERSAND_REST, colls),
-				list(sym("apply"), list(sym("function"), sym("append")), list(sym("mapcar"), seqValue(), colls)));
+				list(new LispSymbol("RONTOLISP::%CLOJURE-CONCAT"), colls));
 	}
 
-	/** {@code take} as a value: the strict prefix over the seq view. */
+	/** {@code take} as a value: the strict prefix over the collection. */
 	private LispVal takeValue() {
 		LispSymbol count = new LispSymbol(mangle("take-count"));
 		LispSymbol coll = new LispSymbol(mangle("take-coll"));
-		return list(sym("lambda"), list(List.of(count, coll)), takeForm(count, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(count, coll)), takeForm(count, coll));
 	}
 
-	/** {@code drop} as a value: the seq view past the strict prefix. */
+	/** {@code drop} as a value: the collection past the strict prefix. */
 	private LispVal dropValue() {
 		LispSymbol count = new LispSymbol(mangle("drop-count"));
 		LispSymbol coll = new LispSymbol(mangle("drop-coll"));
-		return list(sym("lambda"), list(List.of(count, coll)), dropForm(count, seqForm(coll)));
+		return list(sym("lambda"), list(List.of(count, coll)), dropForm(count, coll));
+	}
+
+	/**
+	 * {@code repeat} as a value: over a value, or a count and a value -- the two call
+	 * shapes, dispatched on the rest count. Any other count signals, like a call's arity
+	 * refusal.
+	 */
+	private LispVal repeatValue() {
+		LispSymbol args = new LispSymbol(mangle("repeat-args"));
+		LispVal one = list(new LispSymbol("RONTOLISP::%CLOJURE-REPEAT"), list(sym("car"), args));
+		LispVal two = list(new LispSymbol("RONTOLISP::%CLOJURE-REPEAT-N"), list(sym("car"), args),
+				list(sym("car"), list(sym("cdr"), args)));
+		LispVal arity = list(sym("error"), LispString.literal("repeat takes a value, or a count and a value"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
+	}
+
+	/** {@code cycle} as a value: a one-argument lambda over the cycled seq. */
+	private LispVal cycleValue() {
+		LispSymbol coll = new LispSymbol(mangle("cycle-coll"));
+		return list(sym("lambda"), list(coll), list(new LispSymbol("RONTOLISP::%CLOJURE-CYCLE"), coll));
+	}
+
+	/** {@code iterate} as a value: a two-argument lambda over the iterated seq. */
+	private LispVal iterateValue() {
+		LispSymbol fun = new LispSymbol(mangle("iterate-fn"));
+		LispSymbol start = new LispSymbol(mangle("iterate-start"));
+		return list(sym("lambda"), list(List.of(fun, start)),
+				list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"), fun, start));
+	}
+
+	/**
+	 * {@code repeatedly} as a value: over a function, or a count and a function -- the
+	 * two call shapes, dispatched on the rest count. Any other count signals, like a
+	 * call's arity refusal.
+	 */
+	private LispVal repeatedlyValue() {
+		LispSymbol args = new LispSymbol(mangle("repeatedly-args"));
+		LispVal one = list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY"), list(sym("car"), args));
+		LispVal two = list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY-N"), list(sym("car"), args),
+				list(sym("car"), list(sym("cdr"), args)));
+		LispVal arity = list(sym("error"),
+				LispString.literal("repeatedly takes a function, or a count and a function"));
+		LispVal body = list(sym("cond"), list(list(sym("null"), args), arity),
+				list(list(sym("null"), list(sym("cdr"), args)), one),
+				list(list(sym("null"), list(sym("cdr"), list(sym("cdr"), args))), two), list(TRUE_CONST, arity));
+		return list(sym("lambda"), list(AMPERSAND_REST, args), body);
 	}
 
 	/**
@@ -3060,33 +3100,25 @@ public final class ClojureLowering {
 	 * {@code map} over an already-lowered function and seq view: direct for real
 	 * functions, through the dispatcher for values that may hold collections.
 	 */
-	private LispVal mapForm(LispVal fun, LispVal seq) {
-		if (isDirectFun(fun)) {
-			return list(sym("mapcar"), fun, seq);
-		}
-		LispSymbol cell = freshTemp();
-		LispSymbol coll = freshTemp();
-		LispSymbol one = freshTemp();
-		return list(sym("let*"), list(List.of(list(cell, fun), list(coll, seq))),
-				list(sym("mapcar"), dispatchLambda(cell, one), coll));
+	/**
+	 * {@code map} over an already-lowered function and already-lowered collections (one
+	 * or more): one call to the spliced {@code rontolisp::%clojure-map}, which applies
+	 * through the IFn dispatcher (real functions and collection values alike) and answers
+	 * a lazy wrapper when any input is lazy, the strict list otherwise. Stops at the
+	 * shortest input, like the oracle.
+	 */
+	private LispVal mapForm(LispVal fun, List<LispVal> colls) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAP"), fun, cons(sym("list"), colls));
 	}
 
 	/**
-	 * {@code filter} over an already-lowered predicate and seq view: the predicate
-	 * through the truthiness test, so a false object drops like nil. Direct for real
-	 * predicates, through the dispatcher otherwise.
+	 * {@code filter} over an already-lowered predicate and collection: one call to the
+	 * spliced {@code rontolisp::%clojure-filter}, which tests Clojure truthiness (a false
+	 * object drops like nil) and answers a lazy wrapper when the input is lazy, the
+	 * strict list otherwise.
 	 */
-	private LispVal filterForm(LispVal fun, LispVal seq) {
-		LispSymbol cell = freshTemp();
-		LispSymbol coll = freshTemp();
-		LispSymbol one = freshTemp();
-		LispSymbol got = freshTemp();
-		LispVal invoke = isDirectFun(fun) ? list(sym("funcall"), cell, one)
-				: callableApply(cell, list(sym("list"), one));
-		LispVal test = list(sym("let"), list(List.of(list(got, invoke))),
-				list(sym("not"), list(sym("or"), list(sym("null"), got), list(sym("eq"), got, this.falseVariable))));
-		return list(sym("let*"), list(List.of(list(cell, fun), list(coll, seq))),
-				list(sym("remove-if-not"), list(sym("lambda"), list(one), test), coll));
+	private LispVal filterForm(LispVal fun, LispVal coll) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-FILTER"), fun, coll);
 	}
 
 	/**
@@ -3116,47 +3148,83 @@ public final class ClojureLowering {
 		return list(sym("let*"), list(List.of(list(cell, fun))), list(call));
 	}
 
-	/** {@code take}: the first {@code n} of the seq view, strictly. */
+	/** {@code take}: the first {@code n} of the collection as a strict list. */
 	private LispVal takeOf(List<LispVal> items) {
 		isTrue(items.size() == 3, "take takes a count and a collection");
-		return takeForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+		return takeForm(lower(items.get(1)), lower(items.get(2)));
 	}
 
 	/**
-	 * The first {@code count} of an already-lowered seq view, strictly: a labels self
-	 * call accumulating in reverse. Both arrive bound (a temporary, a lambda parameter),
-	 * so the walk names them more than once.
+	 * The first {@code count} of an already-lowered collection: one call to the spliced
+	 * {@code rontolisp::%clojure-take}, which steps through one wrapper at a time, so
+	 * {@code (take n infinite)} terminates with a strict prefix.
 	 */
-	private LispVal takeForm(LispVal count, LispVal seqView) {
-		String name = mangle("take-") + (this.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol left = freshTemp();
-		LispSymbol seq = freshTemp();
-		LispSymbol walked = freshTemp();
-		LispSymbol cell = freshTemp();
-		LispSymbol grown = freshTemp();
-		LispVal done = list(sym("reverse"), grown);
-		LispVal more = list(self, list(sym("-"), walked, new LispInteger(1)), list(sym("cdr"), cell),
-				list(sym("cons"), list(sym("car"), cell), grown));
-		LispVal step = list(sym("if"),
-				list(sym("or"), list(sym("<="), walked, new LispInteger(0)), list(sym("null"), cell)), done, more);
-		LispVal binding = new LispCons(self, new LispCons(list(List.of(walked, cell, grown)), cons(step, List.of())));
-		return list(sym("let"), list(List.of(list(left, count), list(seq, seqView))),
-				list(sym("labels"), list(List.of(binding)), list(self, left, seq, NIL_CONST)));
+	private LispVal takeForm(LispVal count, LispVal coll) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-TAKE"), count, coll);
 	}
 
-	/** {@code drop}: the seq view past the first {@code n}, strictly. */
+	/** {@code drop}: the collection past its first {@code n}. */
 	private LispVal dropOf(List<LispVal> items) {
 		isTrue(items.size() == 3, "drop takes a count and a collection");
-		return dropForm(lower(items.get(1)), seqForm(lower(items.get(2))));
+		return dropForm(lower(items.get(1)), lower(items.get(2)));
 	}
 
-	/** The already-lowered seq view past the first {@code count}. */
-	private LispVal dropForm(LispVal count, LispVal seqView) {
-		LispSymbol left = freshTemp();
-		LispSymbol seq = freshTemp();
-		return list(sym("let"), list(List.of(list(left, count), list(seq, seqView))),
-				list(sym("if"), list(sym("<="), left, new LispInteger(0)), seq, list(sym("nthcdr"), left, seq)));
+	/** The already-lowered collection past the first {@code count}. */
+	private LispVal dropForm(LispVal count, LispVal coll) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-DROP"), count, coll);
+	}
+
+	/**
+	 * {@code (lazy-seq body...)}: the body behind a memoized thunk. The body runs at most
+	 * once per seq object -- when first realized -- and answers the seq's contents (nil,
+	 * a cons, or another collection to seq).
+	 */
+	private LispVal lazySeqOf(List<LispVal> items) {
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-MAKE-LAZY"),
+				list(sym("lambda"), list(List.of()), body(items, 1)));
+	}
+
+	/**
+	 * {@code (lazy-cat e...)}: each expression behind its own {@code lazy-seq},
+	 * concatenated lazily -- a datum rewrite onto {@code concat}, so chunk-free laziness
+	 * holds per member. Of none, nil.
+	 */
+	private LispVal lazyCatOf(List<LispVal> items) {
+		if (items.size() == 1) {
+			return NIL_CONST;
+		}
+		List<LispVal> form = new ArrayList<>();
+		form.add(new LispSymbol("concat"));
+		for (int i = 1; i < items.size(); i++) {
+			form.add(list(new LispSymbol("lazy-seq"), items.get(i)));
+		}
+		return lower(list(form));
+	}
+
+	/**
+	 * {@code (repeat x)} (infinite, lazy) or {@code (repeat n x)} (finite, strict like
+	 * the oracle's print).
+	 */
+	private LispVal repeatOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "repeat takes a value, or a count and a value");
+		if (n == 1) {
+			return list(new LispSymbol("RONTOLISP::%CLOJURE-REPEAT"), lower(items.get(1)));
+		}
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-REPEAT-N"), lower(items.get(1)), lower(items.get(2)));
+	}
+
+	/**
+	 * {@code (repeatedly f)} (infinite, lazy) or {@code (repeatedly n f)} (finite, strict
+	 * like the oracle's print).
+	 */
+	private LispVal repeatedlyOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n == 1 || n == 2, "repeatedly takes a function, or a count and a function");
+		if (n == 1) {
+			return list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY"), fnValue(items.get(1)));
+		}
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-REPEATEDLY-N"), lower(items.get(1)), fnValue(items.get(2)));
 	}
 
 	/**
@@ -3320,7 +3388,7 @@ public final class ClojureLowering {
 	}
 
 	private LispVal consForm(LispVal item, LispVal coll) {
-		return list(sym("cons"), item, seqForm(coll));
+		return list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), item, coll);
 	}
 
 	/**

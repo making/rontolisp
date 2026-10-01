@@ -64,18 +64,19 @@ class ClojureLoweringTest {
 	void fnAndAnonFnAreLambdas() {
 		assertThat(lowered("((fn [a b] (+ a b)) 1 2)"))
 			.isEqualTo(FALSE_BINDING + "(FUNCALL (LAMBDA (|c%a| |c%b|) (+ |c%a| |c%b|)) 1 2)");
-		assertThat(lowered("(map #(* % %) '(1 2))")).contains("MAPCAR").contains("NTH");
+		assertThat(lowered("(map #(* % %) '(1 2))")).contains("%CLOJURE-MAP").contains("NTH");
 		assertThatThrownBy(() -> Clojure.read("%", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("outside the anon form");
 	}
 
 	@Test
 	void coreCallsLowerToTheirCommonLispNames() {
-		assertThat(lowered("(map + '(1 2))")).contains("MAPCAR").contains("#'+").contains("COND");
-		assertThat(lowered("(filter odd? '(1 2 3))")).contains("REMOVE-IF-NOT").contains("COND");
-		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE").contains("COND");
-		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("COND");
-		assertThat(lowered("(concat '(1 2) [3 4])")).contains("APPEND").contains("COERCE");
+		assertThat(lowered("(map + '(1 2))")).contains("%CLOJURE-MAP").contains("#'+");
+		assertThat(lowered("(map + '(1 2) '(3 4))")).contains("%CLOJURE-MAP");
+		assertThat(lowered("(filter odd? '(1 2 3))")).contains("%CLOJURE-FILTER");
+		assertThat(lowered("(reduce + 0 '(1 2))")).contains(":INITIAL-VALUE").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(apply max '(3 9 4))")).contains("APPLY").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(concat '(1 2) [3 4])")).contains("%CLOJURE-CONCAT");
 		assertThat(lowered("(concat)")).isEqualTo(FALSE_BINDING + "NIL");
 		assertThat(lowered("(= 1 1)")).contains("LABELS").contains("(EQUAL");
 		assertThat(lowered("(= 1 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
@@ -83,20 +84,20 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void seqsCoerceCollectionsToStrictLists() {
-		assertThat(lowered("(seq [1 2])")).contains("COND").contains("COERCE");
-		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("COERCE");
-		assertThat(lowered("(rest [1 2])")).contains("(CDR").contains("COERCE");
-		assertThat(lowered("(next [1 2])")).contains("(CDR").contains("COERCE");
-		assertThat(lowered("(cons 0 [1 2])")).contains("(CONS").contains("COERCE");
-		assertThat(lowered("(first '(1 2))")).contains("(CAR").contains("CONSP");
-		assertThat(lowered("(seq {:a 1})")).contains("MAPHASH").contains("VECTOR");
+	void seqsCoerceCollectionsThroughOneSharedView() {
+		assertThat(lowered("(seq [1 2])")).contains("%CLOJURE-SEQ");
+		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(rest [1 2])")).contains("(CDR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(next [1 2])")).contains("(CDR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(cons 0 [1 2])")).contains("%CLOJURE-CONS");
+		assertThat(lowered("(first '(1 2))")).contains("(CAR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(seq {:a 1})")).contains("%CLOJURE-SEQ");
 	}
 
 	@Test
-	void takeDropAndFiniteRangeAreStrict() {
-		assertThat(lowered("(take 2 [1 2])")).contains("LABELS").contains("REVERSE");
-		assertThat(lowered("(drop 2 [1 2])")).contains("NTHCDR");
+	void takeDropAndFiniteRangeAreLazyAware() {
+		assertThat(lowered("(take 2 [1 2])")).contains("%CLOJURE-TAKE");
+		assertThat(lowered("(drop 2 [1 2])")).contains("%CLOJURE-DROP");
 		assertThat(lowered("(range 3)")).contains("LABELS").contains("REVERSE");
 		assertThat(lowered("(range 1 5 2)")).contains("LABELS");
 		assertThatThrownBy(() -> Clojure.read("(range)", null)).isInstanceOf(LispReadException.class)
@@ -108,15 +109,24 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void lazySeqsAreRefusedByName() {
-		assertThatThrownBy(() -> Clojure.read("(lazy-seq [1])", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("lazy sequences are not supported: lazy-seq");
-		assertThatThrownBy(() -> Clojure.read("(cycle [1])", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("lazy sequences are not supported: cycle");
-		assertThatThrownBy(() -> Clojure.read("(repeat 1)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("lazy sequences are not supported: repeat");
-		assertThatThrownBy(() -> Clojure.read("(iterate inc 0)", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("lazy sequences are not supported: iterate");
+	void lazySeqsLowerToMemoizedThunks() {
+		assertThat(lowered("(lazy-seq (cons 1 nil))")).contains("%CLOJURE-MAKE-LAZY").contains("LAMBDA");
+		assertThat(lowered("(lazy-cat [0 1] [2])")).contains("%CLOJURE-CONCAT").contains("%CLOJURE-MAKE-LAZY");
+		assertThat(lowered("(lazy-cat)")).isEqualTo(FALSE_BINDING + "NIL");
+		assertThat(lowered("(repeat 3)")).contains("%CLOJURE-REPEAT");
+		assertThat(lowered("(repeat 2 3)")).contains("%CLOJURE-REPEAT-N");
+		assertThat(lowered("(cycle [1 2])")).contains("%CLOJURE-CYCLE");
+		assertThat(lowered("(iterate inc 0)")).contains("%CLOJURE-ITERATE");
+		assertThat(lowered("(repeatedly inc)")).contains("%CLOJURE-REPEATEDLY");
+		assertThat(lowered("(repeatedly 2 inc)")).contains("%CLOJURE-REPEATEDLY-N");
+		assertThatThrownBy(() -> Clojure.read("(repeat)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("repeat takes a value");
+		assertThatThrownBy(() -> Clojure.read("(cycle)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cycle takes one collection");
+		assertThatThrownBy(() -> Clojure.read("(iterate inc)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("iterate takes a function and a value");
+		assertThatThrownBy(() -> Clojure.read("(map inc)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("map takes a function and collections");
 	}
 
 	@Test
@@ -145,7 +155,7 @@ class ClojureLoweringTest {
 		String prelude = "(def m {:a 1}) ";
 		assertThat(lowered(prelude + "(:a m)")).contains("GETHASH").contains("COND");
 		assertThat(lowered(prelude + "(:a m 9)")).contains("GETHASH").contains("9");
-		assertThat(lowered("(map :a '({:a 1}))")).contains("MAPCAR").contains("LAMBDA").contains("GETHASH");
+		assertThat(lowered("(map :a '({:a 1}))")).contains("%CLOJURE-MAP").contains("LAMBDA").contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(:a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining(":a takes a collection and an optional default");
 		assertThatThrownBy(() -> Clojure.read("(::foo m)", null)).isInstanceOf(LispReadException.class)
@@ -193,9 +203,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(true? nil)")).isEqualTo(FALSE_BINDING + "(IF (EQ NIL T) T RONTOLISP::%CLOJURE-FALSE)");
 		assertThat(lowered("(boolean? nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (EQ |__clojure_0| T)");
 		assertThat(lowered("(not nil)")).contains("(LET ((|__clojure_0| NIL)) (IF (OR (NULL |__clojure_0|)");
-		assertThat(lowered("(map false? '(1))")).contains("MAPCAR")
+		assertThat(lowered("(map false? '(1))")).contains("%CLOJURE-MAP")
 			.contains("(LAMBDA (|c%pred|) (IF (EQ |c%pred| RONTOLISP::%CLOJURE-FALSE) T RONTOLISP::%CLOJURE-FALSE))");
-		assertThat(lowered("(map odd? '(1 2))")).contains("MAPCAR").contains("ODDP");
+		assertThat(lowered("(map odd? '(1 2))")).contains("%CLOJURE-MAP").contains("ODDP");
 	}
 
 	@Test
@@ -324,16 +334,16 @@ class ClojureLoweringTest {
 		assertThat(lowered("(pr-str \"a\" 1)")).contains("(CONCATENATE 'STRING")
 			.contains("\" \"")
 			.contains("\"nil\" T");
-		assertThat(lowered("(map pr-str [1 2])")).contains("MAPCAR").contains("CONCATENATE");
+		assertThat(lowered("(map pr-str [1 2])")).contains("%CLOJURE-MAP").contains("CONCATENATE");
 	}
 
 	@Test
 	void builtinsNameFunctionValues() {
-		assertThat(lowered("(map inc '(1 2))")).contains("MAPCAR").contains("(LAMBDA").contains("(+");
-		assertThat(lowered("(map dec [1 2])")).contains("MAPCAR").contains("(-");
-		assertThat(lowered("(map str [1 2])")).contains("MAPCAR").contains("CONCATENATE");
-		assertThat(lowered("(map count [[1]])")).contains("MAPCAR").contains("LENGTH");
-		assertThat(lowered("(filter first [[1] []])")).contains("REMOVE-IF-NOT").contains("(CAR");
+		assertThat(lowered("(map inc '(1 2))")).contains("%CLOJURE-MAP").contains("(LAMBDA").contains("(+");
+		assertThat(lowered("(map dec [1 2])")).contains("%CLOJURE-MAP").contains("(-");
+		assertThat(lowered("(map str [1 2])")).contains("%CLOJURE-MAP").contains("CONCATENATE");
+		assertThat(lowered("(map count [[1]])")).contains("%CLOJURE-MAP").contains("LENGTH");
+		assertThat(lowered("(filter first [[1] []])")).contains("%CLOJURE-FILTER").contains("(CAR");
 		assertThat(lowered("inc")).contains("(LAMBDA").contains("(+");
 		assertThat(lowered("(apply + 1 '(2 3))")).contains("APPLY").contains("#'+");
 	}
@@ -365,7 +375,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(doto 5 (inc))")).contains("(LET");
 		assertThat(lowered("(cond-> 5 true inc)")).contains("(IF");
 		assertThat(lowered("(some-> nil (inc))")).contains("NULL");
-		assertThat(lowered("(list* 1 [2 3])")).contains("(CONS").contains("COERCE");
+		assertThat(lowered("(list* 1 [2 3])")).contains("%CLOJURE-CONS").contains("(VECTOR 2 3)");
 		assertThatThrownBy(() -> Clojure.read("(->)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("-> takes a value and forms");
 		assertThatThrownBy(() -> Clojure.read("(cond-> 5 true)", null)).isInstanceOf(LispReadException.class)
@@ -681,7 +691,7 @@ class ClojureLoweringTest {
 	@Test
 	void conditionalBindingFormsLowerOverLet() {
 		assertThat(lowered("(when-let [x 1] x)")).contains("LET*").contains("RONTOLISP::%CLOJURE-FALSE");
-		assertThat(lowered("(when-let [[a b] [1 2]] (+ a b))")).contains("LET*").contains("CAR");
+		assertThat(lowered("(when-let [[a b] [1 2]] (+ a b))")).contains("LET*").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(if-let [x 1] x :e)")).contains("LET*").contains(":C%KEYWORD");
 		assertThat(lowered("(when-not false 1)")).contains("IF");
 		assertThat(lowered("(if-not nil 1 2)")).contains("IF");
@@ -697,7 +707,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(#{:h} :h)")).contains("GETHASH");
 		assertThat(lowered("({:a 1} :a :d)")).contains("GETHASH");
 		assertThat(lowered("([1 2] 0)")).contains("NTH");
-		assertThat(lowered("(filter #{:h} [:h])")).contains("REMOVE-IF-NOT").contains("GETHASH");
+		assertThat(lowered("(filter #{:h} [:h])")).contains("%CLOJURE-FILTER").contains("GETHASH");
 		assertThatThrownBy(() -> Clojure.read("(#{:h})", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a collection as a function takes a key");
 	}

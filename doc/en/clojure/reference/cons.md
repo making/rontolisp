@@ -2,11 +2,13 @@
 
 `(cons x coll)`
 
-Answers a list with `x` prepended to the seq view of `coll`; the view is materialised,
-so any collection works. `cons` onto `nil` builds a list.
+Answers a seq with `x` prepended to `coll`; any collection coerces through the seq view,
+and `cons` onto `nil` builds a list. When `coll` is lazy the answer stays a lazy seq,
+so no strict cons ever holds a lazy tail.
 
 ```clojure
 (println (cons 1 [2 3])) ; (1 2 3)
 (println (cons 0 '(1 2))) ; (0 1 2)
 (println (cons :a nil))  ; (:a)
+(println (take 3 (cons 99 (iterate inc 0)))) ; (99 0 1)
 ```
