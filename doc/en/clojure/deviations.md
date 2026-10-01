@@ -41,9 +41,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `class` answers for it, merging every numeric spelling into `:number` (where the
   oracle tells `Long` from `Double`); a true nil maps onto the `(:C%NIL)` marker,
   so no table ever keys on nil, while a dispatch value that literally is `:nil`
-  keeps its keyword row, like the oracle (a bare `class` dispatch answers that
-  keyword only for a nil argument, so it maps onto the marker too; a `class` call
-  wrapped in another function keeps the keyword and still misses the nil method);
+  keeps its keyword row, like the oracle (a `class` call inside the dispatch
+  function answers nil itself for a nil argument, so the null test maps it onto
+  the marker too -- bare or wrapped in another function, like the oracle);
   an `Object` method catches past the search but ahead of the default.
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the

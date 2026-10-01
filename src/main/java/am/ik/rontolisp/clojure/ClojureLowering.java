@@ -489,6 +489,17 @@ public final class ClojureLowering {
 	private boolean hierarchyEmitted;
 
 	/**
+	 * Whether a {@code defmulti} dispatch function is being lowered: a {@code class} call
+	 * inside one answers nil itself for nil (see {@link #classForm(LispVal)}), so the
+	 * dispatcher's null test maps it onto the nil method's marker -- bare or wrapped in
+	 * another function -- while an explicit {@code :nil} keyword keeps its row, like the
+	 * oracle. Saved and restored around the dispatch lowering (see
+	 * {@link #defmultiForms(List)}), so an ordinary {@code class} keeps answering the
+	 * {@code :nil} keyword.
+	 */
+	private boolean inDispatchFn;
+
+	/**
 	 * A protocol the program defines or extends: its method names, the method-table
 	 * global and the {@code Object}-default global. Protocols dispatch over the
 	 * {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the hierarchy
@@ -7301,7 +7312,10 @@ public final class ClojureLowering {
 	/**
 	 * {@code class}: the value's kind as a keyword. The oracle answers host classes,
 	 * which no wasm backend has -- the keyword names the kind instead, on every backend
-	 * alike.
+	 * alike. Inside a {@code defmulti} dispatch function (see
+	 * {@link #defmultiForms(List)}) a nil answers nil itself instead, so the dispatcher's
+	 * null test maps it onto the nil method's marker while an explicit {@code :nil}
+	 * keyword keeps its row, like the oracle.
 	 */
 	private LispVal classForm(LispVal lowered) {
 		LispSymbol one = freshTemp();
@@ -7311,7 +7325,7 @@ public final class ClojureLowering {
 		branches.add(list(isRecordForm(one), typedTagOf(one)));
 		branches.add(list(isDeftypeForm(one), typedTagOf(one)));
 		branches.add(list(isReifyForm(one), keywordForm("reify")));
-		branches.add(list(list(sym("null"), one), keywordForm("nil")));
+		branches.add(list(list(sym("null"), one), this.inDispatchFn ? NIL_CONST : keywordForm("nil")));
 		branches.add(list(list(sym("eq"), one, this.falseVariable), keywordForm("boolean")));
 		branches.add(list(list(sym("eq"), one, TRUE_CONST), keywordForm("boolean")));
 		branches.add(list(keywordTest(one), keywordForm("keyword")));
@@ -9067,14 +9081,13 @@ public final class ClojureLowering {
 	 * keys on nil, on any backend), so a {@code nil} method answers both the
 	 * {@code class} nil and the {@code identity} nil while a dispatch value that
 	 * literally is the {@code :nil} keyword keeps its keyword row, like the oracle. A
-	 * bare {@code class} dispatch answers that keyword only for a nil argument (every
-	 * other branch answers its own kind), so there the keyword maps onto the marker too;
-	 * a {@code class} call wrapped in another function (a lambda, a composition) keeps
-	 * the keyword and still misses the nil method. The default dispatch value is
-	 * {@code :default} without a {@code :default} option (an arbitrary keyword with one
-	 * -- the corpus's {@code :everything-else} -- stored per-multimethod like
-	 * {@code :default} today); a miss with no method for the default signals, like the
-	 * oracle. With a {@code :hierarchy} option the dispatcher consults that hierarchy
+	 * {@code class} call inside the dispatch function answers nil itself for a nil
+	 * argument (see {@link #classForm(LispVal)}), so the null test maps it onto the
+	 * marker too -- bare or wrapped in another function, like the oracle. The default
+	 * dispatch value is {@code :default} without a {@code :default} option (an arbitrary
+	 * keyword with one -- the corpus's {@code :everything-else} -- stored per-multimethod
+	 * like {@code :default} today); a miss with no method for the default signals, like
+	 * the oracle. With a {@code :hierarchy} option the dispatcher consults that hierarchy
 	 * value on a miss (the global one without the option): every method whose key the
 	 * dispatch value descends from ({@code isa?}) is a candidate, the strictly most
 	 * specific wins, {@code prefer-method} breaks the remaining ties, and an unbroken tie
@@ -9113,7 +9126,15 @@ public final class ClojureLowering {
 		LispSymbol fallback = new LispSymbol(mangle(name) + "%default");
 		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
 		LispSymbol object = new LispSymbol(mangle(name) + "%object");
-		LispVal dispatchFn = fnValue(dispatchDatum);
+		LispVal dispatchFn;
+		boolean wasDispatch = this.inDispatchFn;
+		this.inDispatchFn = true;
+		try {
+			dispatchFn = fnValue(dispatchDatum);
+		}
+		finally {
+			this.inDispatchFn = wasDispatch;
+		}
 		LispVal defaultForm = defaultDatum == null ? keywordForm("default") : lower(defaultDatum);
 		LispVal hierarchyForm = hierarchyDatum == null ? hierarchyGlobal() : lower(hierarchyDatum);
 		LispSymbol args = freshTemp();
@@ -9127,11 +9148,11 @@ public final class ClojureLowering {
 				list(sym("and"), object,
 						list(sym("null"), list(new LispSymbol("C%H-CANDIDATES"), methods, hierarchyForm, disp))),
 				list(sym("apply"), object, args), missCall);
-		// A bare `class` dispatch spells a nil argument as the `:nil` keyword (no other
-		// argument reaches that spelling), so the marker test reads the keyword there and
-		// the null test everywhere else; a shadowed `class` is the caller's own function.
-		boolean classDispatch = dispatchDatum instanceof LispSymbol s && s.name().equals("class") && !known("class");
-		LispVal nilTest = classDispatch ? list(sym("equal"), raw, keywordForm("nil")) : list(sym("null"), raw);
+		// A `class` call inside the dispatch function answers nil itself for a nil
+		// argument (see classForm), so the one null test maps every class-produced
+		// nil onto the marker while an explicit `:nil` keyword keeps its keyword row,
+		// like the oracle; a shadowed `class` is the caller's own function.
+		LispVal nilTest = list(sym("null"), raw);
 		LispVal dispatch = list(sym("let*"), list(List.of(list(raw, list(sym("apply"), dispatchFn, args)),
 				list(disp, list(sym("if"), nilTest, nilMarkerForm(), raw)), list(miss, list(sym("list"), NIL_CONST)),
 				list(found, list(sym("gethash"), disp, methods, miss)))),
