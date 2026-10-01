@@ -1126,6 +1126,28 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void dynamicDefnHoldsItsFunctionInTheValueCell() {
+		// a ^:dynamic defn keeps its defun (recur and the arity helpers stay direct
+		// calls) and installs the function in the value cell behind defparameter,
+		// so calls route through it and binding rebinds it with dynamic extent
+		assertThat(lowered("(defn ^:dynamic slow [n] (* n 2)) (slow 21)"))
+			.contains("(DEFUN |c%slow| (|c%n|)")
+			.contains("(DEFPARAMETER |c%slow| #'|c%slow|)")
+			.contains("(FUNCALL |c%slow| 21)");
+		assertThat(lowered("(defn ^:dynamic madd ([x] 1) ([x y] 2)) (madd 1 2)"))
+			.contains("(DEFUN |c%madd%1|")
+			.contains("(DEFUN |c%madd%2|")
+			.contains("(DEFUN |c%madd|")
+			.contains("(DEFPARAMETER |c%madd| #'|c%madd|)")
+			.contains("(FUNCALL |c%madd| 1 2)");
+		assertThat(lowered("(defn slow [n] (* n 2)) (slow 21)")).contains("(|c%slow| 21)")
+			.doesNotContain("DEFPARAMETER");
+		assertThatThrownBy(() -> Clojure.read("(defn slow [n] (* n 2)) (binding [slow 1] slow)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("binding slow needs a ^:dynamic var");
+	}
+
+	@Test
 	void withOpenWithOutStrAndTimeLower() {
 		assertThat(lowered("(def s \"x\") (with-open [a s] a)")).contains("UNWIND-PROTECT")
 			.contains("JAVA:CALL")

@@ -94,8 +94,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `await` and `shutdown-agents` answer `nil`, and `*agent*` is bound only while
   a send runs (`nil` outside one, where the oracle leaves it unbound).
 - `binding` rebinds only `^:dynamic` vars (anything else is refused, like the
-  oracle's non-dynamic error); metadata otherwise parses and drops, never
-  affecting dispatch.
+  oracle's non-dynamic error); a `^:dynamic` `defn` is rebindable too (its calls
+  go through the var while the definition stays direct); metadata otherwise
+  parses and drops, never affecting dispatch.
 - `with-open` closes through the `close` method, so only closeables the backend
   reaches work (Java closeables need the JVM); `time` answers its value but its
   millisecond count never pins (only the `Elapsed time:` prefix does).
