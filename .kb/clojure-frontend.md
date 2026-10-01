@@ -54,8 +54,10 @@ an earlier one with the same name (decided 2026-10-01, b17) |
 | `dorun`/`doall` | the strict companions: the collection (and the optional count) evaluated, answering `nil`/the collection itself, each a function value too | seqs are already strict, so realizing is evaluating; `doall` never coerces (a vector stays a vector) |
 | `defmulti`/`defmethod`/`remove-method`/`get-method` | a method table plus a dispatcher `defun` | `defmulti` builds an `equal` table, a default value, a per-multimethod prefers table and an `Object`-method slot in four globals no identifier can spell (the suffix follows the mangled name, like the multi-arity helpers) plus a rest-args `defun` applying each call's dispatch value to the table (a keyword dispatch value takes the lookup plus an optional default, like `(:k m dflt)`, so multi-argument calls dispatch on it -- decided 2026-10-01, b39; set/vector values share the rest-tolerant shape while a map literal stays the attr-map, like the oracle); `defmethod` stores a parameter lambda (destructuring included) under the dispatch value lowered by `dispatchKeyForm` -- a class spelling (`String`, `Number`, ..., dotted/`java.lang`/imported names, known record/deftype names) onto the keyword the `class` dispatcher produces for it, `nil` onto the `(:C%NIL)` marker (the dispatcher maps a true nil onto it first, so no table ever keys on nil, while a dispatch value that literally is `:nil` keeps its keyword row, like the oracle; a `class` call inside the dispatch function answers nil itself for a nil
 argument, so the null test maps it onto the marker too -- bare, wrapped in another
-function, or through a named `defn` / `def`'d function (the `defmulti` re-lowers the
-recorded definition with the dispatch lowering, like the oracle), `Object` under the `:object` keyword plus the catch-all slot, `::`-keywords resolved like anywhere else, literal vectors element by element; an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate tries the `Object` slot past the search but ahead of the default dispatch value (`:default` without an option, an arbitrary keyword with the `:default` option -- the corpus's `:everything-else`, stored per-multimethod like `:default` today) or signals `No method in ...` |
+function, through a named `defn` / `def`'d function (the `defmulti` re-lowers the
+recorded definition with the dispatch lowering, like the oracle), or a call to
+one nested inside an inline dispatch datum (inlined at the call site the same
+way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keywords resolved like anywhere else, literal vectors element by element; an exact hit applies, else the `C%H-DISPATCH` helper searches every method the dispatch value descends from through the multimethod's hierarchy (the global value without `:hierarchy`, a per-call expression with it), the strictly most specific wins, `prefer-method` breaks ties, and an unbroken tie signals `Multiple methods ...`; a miss with no candidate tries the `Object` slot past the search but ahead of the default dispatch value (`:default` without an option, an arbitrary keyword with the `:default` option -- the corpus's `:everything-else`, stored per-multimethod like `:default` today) or signals `No method in ...` |
 | `derive`/`underive`/`isa?`/`parents`/`ancestors`/`descendants`/`make-hierarchy`/`prefer-method` | the hierarchy runtime over the shared table runtime | a hierarchy value is a map of `:parents`/`:ancestors`/`:descendants` tables (children to wrapped sets); the global value lives in `C%H-GLOBAL`, rebound by two-argument `derive`/`underive` (answering `nil`), while three-argument forms answer an updated value (`make-hierarchy` an empty one); `isa?` is `equal`, element-wise vector derivation, or ancestor membership (two- or three-argument), answering `T`-or-false; the three reads answer (possibly empty) sets; `prefer-method` records into the multimethod's prefers table and answers the multimethod; the runtime (set helpers, transitive rebuild, dispatch search) is spliced once behind the false binding when used |
 | `try`/`catch`/`finally`/`throw` | `handler-case` inside `unwind-protect`; `throw` over `error` | every catch class answers the catch-all `error` clause (first clause wins; the catch variable binds the CL condition); `throw` signals an `ex-info` value as its own condition and anything else through its Clojure-notation rendering (`rontolisp::%clojure-str-of`), so strings keep their message |
 | `ex-info`/`ex-data`/`ex-message` | a condition with message and data slots | `ex-info` builds it through `make-condition` (its report prints the message); `ex-data` answers the map (`nil` for any other condition), `ex-message` the message (anything else through its Clojure-notation rendering); each works as a function value; the class plus the throw/data/message helpers are spliced once behind the false binding when used |
@@ -254,8 +256,9 @@ recorded definition with the dispatch lowering, like the oracle), `Object` under
   while a dispatch value that literally is `:nil` keeps its keyword row, like the
   oracle (a `class` call inside the dispatch function answers nil itself for a nil
   argument, so the null test maps it onto the marker too -- bare, wrapped in
-  another function, or through a named `defn` / `def`'d function re-lowered from
-  its recorded definition, like the oracle); an `Object` method catches past the search but
+  another function, through a named `defn` / `def`'d function re-lowered from
+  its recorded definition, or a call to one nested inside an inline dispatch
+  datum (inlined at the call site the same way), like the oracle); an `Object` method catches past the search but
   ahead of the default, like the oracle's (which always beats `:default` there --
   measured on the oracle 2026-10-01); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
@@ -416,7 +419,14 @@ for nil the same way (b40, same oracle: the `defmulti` re-lowers the recorded
 definition with the dispatch lowering, so a direct call to the definition keeps
 answering `:nil` and an explicit `:nil` out of the named dispatch keeps its
 keyword row) -- pinned in `clojure-spec.yaml`
-(`named-class-dispatch-hits-the-nil-method`, all four backends).
+(`named-class-dispatch-hits-the-nil-method`, all four backends). A call to a
+named `defn` or a `def`'d function value nested inside an inline dispatch datum
+answers the nil method for nil the same way (b46, same oracle: the call site
+inlines the recorded definition with the dispatch lowering; a shadowed name
+keeps its call, and a name already being inlined keeps its direct call so a
+(mutually) recursive definition still terminates the lowering) -- pinned in
+`clojure-spec.yaml` (`indirect-named-class-dispatch-hits-the-nil-method`, all
+four backends).
 Macros lower the same way (b12): `defmacro` (multi-arity, `&` rest, docstring and
 attr-map skip, `declare` pre-scan, whole-file pre-scan, session-aware) as one expander
 lambda over the call's argument list plus a runtime table entry, call sites expanded
