@@ -123,13 +123,18 @@ class ClojureInteropTest {
 	@Test
 	void hostBooleansPrintFalse() throws Exception {
 		// a host-object boolean answers T-or-false when the receiver's class is
-		// known (a construction literal, or a let local bound to one), like the
-		// oracle; any other receiver keeps the shared java: unmarshal
+		// known (a construction literal, a let/if-let/when-let local bound to
+		// one, or a .. step's declared return), like the oracle; any other
+		// receiver keeps the shared java: unmarshal
 		assertBothEqual("(println (.contains (java.util.ArrayList. [1]) 2))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList. [1])))", "false\n");
 		assertBothEqual("(println (.isEmpty (java.util.ArrayList.)))", "true\n");
 		assertBothEqual("(let [b29-list (java.util.ArrayList. [1])] (println (.contains b29-list 2)))", "false\n");
 		assertBothEqual("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))", "true\n");
+		assertBothEqual("(println (if-let [b34-list (java.util.ArrayList. [1])] (.isEmpty b34-list) :e))", "false\n");
+		assertBothEqual("(println (when-let [b34-list (java.util.ArrayList. [1])] (.contains b34-list 2)))", "false\n");
+		assertBothEqual("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))", "false\n");
+		assertBothEqual("(println (.. (java.util.ArrayList.) (subList 0 0) (isEmpty)))", "true\n");
 		// if/eq/str see the false object, like the oracle
 		assertBothEqual("(println (if (.isEmpty (java.util.ArrayList. [1])) :empty :full))", ":full\n");
 		assertBothEqual("(println (= (.contains (java.util.ArrayList. [1]) 2) false))", "true\n");
@@ -137,6 +142,7 @@ class ClojureInteropTest {
 		// non-boolean answers are untouched
 		assertBothEqual("(println (.size (java.util.ArrayList. [1 2])))", "2\n");
 		assertBothEqual("(println (.toString (java.util.ArrayList. [1])))", "[1]\n");
+		assertBothEqual("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))", "1\n");
 	}
 
 	@Test

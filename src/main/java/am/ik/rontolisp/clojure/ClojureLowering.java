@@ -1810,6 +1810,22 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Records an {@code if-let}/{@code when-let} binding the way {@code let} does: a
+	 * plain name takes the lowered init's construction class, a destructuring pattern
+	 * forgets its members (collection members, never constructions). The binding is
+	 * single-shot, so the depth-walk soundness carries over.
+	 */
+	private void noteOrForgetHost(LispVal pattern, LispVal loweredInit, Set<String> now, Set<String> before) {
+		LispVal stripped = stripMeta(pattern);
+		if (stripped instanceof LispSymbol) {
+			noteHostClass(plainName(stripped, "if-let"), loweredInit);
+		}
+		else {
+			forgetHostClasses(now, before);
+		}
+	}
+
+	/**
 	 * Drops host classes recorded below the current scope depth: their {@code let}
 	 * finished, so a later form must not see them.
 	 */
@@ -1993,13 +2009,17 @@ public final class ClojureLowering {
 		this.directScopes.add(new HashSet<>());
 		try {
 			List<LispVal> pairs = new ArrayList<>();
-			pairs.add(list(init, lower(bindings.get(1))));
+			LispVal loweredInit = lower(bindings.get(1));
+			pairs.add(list(init, loweredInit));
+			Set<String> bound = new HashSet<>(scope.keySet());
 			destructureInto(bindings.get(0), init, pairs, scope, "when-let");
+			noteOrForgetHost(bindings.get(0), loweredInit, scope.keySet(), bound);
 			return list(sym("let*"), list(pairs), ifFalsey(init, body(items, 2), NIL_CONST));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
+			forgetDeepHosts();
 		}
 	}
 
@@ -2017,8 +2037,11 @@ public final class ClojureLowering {
 		this.directScopes.add(new HashSet<>());
 		try {
 			List<LispVal> pairs = new ArrayList<>();
-			pairs.add(list(init, lower(bindings.get(1))));
+			LispVal loweredInit = lower(bindings.get(1));
+			pairs.add(list(init, loweredInit));
+			Set<String> bound = new HashSet<>(scope.keySet());
 			destructureInto(bindings.get(0), init, pairs, scope, "if-let");
+			noteOrForgetHost(bindings.get(0), loweredInit, scope.keySet(), bound);
 			LispVal then = lowerTailSlot(items.get(2));
 			LispVal els = items.size() == 4 ? lowerTailSlot(items.get(3)) : NIL_CONST;
 			return list(sym("let*"), list(pairs), ifFalsey(init, then, els));
@@ -2026,6 +2049,7 @@ public final class ClojureLowering {
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
+			forgetDeepHosts();
 		}
 	}
 
@@ -2058,12 +2082,15 @@ public final class ClojureLowering {
 		try {
 			List<LispVal> pairs = new ArrayList<>();
 			pairs.add(list(seq, seqForm(lower(bindings.get(1)))));
+			Set<String> bound = new HashSet<>(scope.keySet());
 			destructureInto(bindings.get(0), list(sym("car"), seq), pairs, scope, "when-first");
+			forgetHostClasses(scope.keySet(), bound);
 			return list(sym("let*"), list(pairs), ifFalsey(seq, body(items, 2), NIL_CONST));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
 			this.directScopes.remove(this.directScopes.size() - 1);
+			forgetDeepHosts();
 		}
 	}
 
@@ -6796,8 +6823,10 @@ public final class ClojureLowering {
 		// in the maphash, like the oracle (the mergeWithForm precedent)
 		LispVal head = list(sym("car"), left);
 		LispVal src = list(sym("if"), isRecordForm(head), typedTableOf(head), head);
-		LispVal join = list(sym("maphash"),
-				list(sym("lambda"), list(List.of(key, val)),
+		LispVal join = list(
+				sym("maphash"), list(
+						sym("lambda"), list(List.of(key,
+								val)),
 						list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
 								list(sym("setf"), list(sym("gethash"), key, acc),
 										list(sym("if"), list(sym("eq"), old, miss), val,
@@ -6810,10 +6839,9 @@ public final class ClojureLowering {
 		// the first non-nil rest map's record, like mergeValue's found
 		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
 				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
-		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)),
-				list(sym("let*"), list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)),
-						list(found, NIL_CONST))),
-						find, list(sym("labels"), list(List.of(binding)), list(self, maps))));
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)), list(sym("let*"),
+				list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)), list(found, NIL_CONST))),
+				find, list(sym("labels"), list(List.of(binding)), list(self, maps))));
 	}
 
 	/**
@@ -11019,30 +11047,69 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code (.. target (step args...) name...)}: nested {@code .} datums around the
-	 * running value -- a pure datum rewrite, lowered once built.
+	 * {@code (.. target (step args...) name...)}: the steps threaded left to right, each
+	 * lowered as it goes so a step's declared return type carries the known class to the
+	 * next one. The first step over a classlike target stays the static path, like
+	 * {@code .}; the rest are instance calls.
 	 */
 	private LispVal dotDotOf(List<LispVal> items) {
 		isTrue(items.size() >= 2, ".. takes a target and steps");
-		LispVal acc = items.get(1);
+		LispVal target = items.get(1);
+		if (target instanceof LispSymbol named && isClasslike(named.name())) {
+			if (items.size() == 2) {
+				return lower(target);
+			}
+			String cls = resolveClass(named.name());
+			DotStep first = dotStep(items.get(2));
+			List<LispVal> loweredFirst = new ArrayList<>();
+			for (LispVal arg : first.args()) {
+				loweredFirst.add(lower(arg));
+			}
+			LispVal cur = loweredFirst.isEmpty() ? staticNoArg(cls, first.method())
+					: staticCall(cls, first.method(), loweredFirst);
+			@Nullable String curClass = declaredStaticReturn(cls, first.method(), loweredFirst.size());
+			for (int i = 3; i < items.size(); i++) {
+				DotStep step = dotStep(items.get(i));
+				List<LispVal> loweredArgs = new ArrayList<>();
+				for (LispVal arg : step.args()) {
+					loweredArgs.add(lower(arg));
+				}
+				cur = instanceCallLoweredWithClass(cur, curClass, step.method(), loweredArgs);
+				curClass = declaredInstanceReturn(curClass, step.method(), loweredArgs.size());
+			}
+			return cur;
+		}
+		LispVal cur = lower(target);
+		@Nullable String curClass = classOfLowered(cur);
 		for (int i = 2; i < items.size(); i++) {
-			LispVal step = items.get(i);
-			List<LispVal> form = new ArrayList<>();
-			form.add(new LispSymbol("."));
-			form.add(acc);
-			List<LispVal> parts = items(step);
-			if (parts != null && !parts.isEmpty()) {
-				form.addAll(parts);
+			DotStep step = dotStep(items.get(i));
+			List<LispVal> loweredArgs = new ArrayList<>();
+			for (LispVal arg : step.args()) {
+				loweredArgs.add(lower(arg));
 			}
-			else if (step instanceof LispSymbol) {
-				form.add(step);
-			}
-			else {
+			cur = instanceCallLoweredWithClass(cur, curClass, step.method(), loweredArgs);
+			curClass = declaredInstanceReturn(curClass, step.method(), loweredArgs.size());
+		}
+		return cur;
+	}
+
+	/** A {@code ..} step's method name and argument datums. */
+	private record DotStep(String method, List<LispVal> args) {
+	}
+
+	/** Parses a {@code ..} step datum into its method name and argument datums. */
+	private static DotStep dotStep(LispVal step) {
+		List<LispVal> parts = items(step);
+		if (parts != null && !parts.isEmpty()) {
+			if (!(parts.get(0) instanceof LispSymbol called)) {
 				throw new LispReadException(".. takes method names and call lists, not " + step.print());
 			}
-			acc = list(form);
+			return new DotStep(called.name(), parts.subList(1, parts.size()));
 		}
-		return lower(acc);
+		if (step instanceof LispSymbol bare) {
+			return new DotStep(bare.name(), List.of());
+		}
+		throw new LispReadException(".. takes method names and call lists, not " + step.print());
 	}
 
 	/**
@@ -11378,21 +11445,35 @@ public final class ClojureLowering {
 	 * An instance call over already-lowered forms: the receiver runs once, behind a
 	 * temporary; a string receiver answers the mapped core operation, anything else goes
 	 * to {@code java:call} directly. When the receiver's class is known -- a construction
-	 * literal, or a {@code let} local bound to one -- and every overload at that arity
-	 * answers a primitive boolean, the call answers {@code T}-or-false, like every
-	 * predicate value (the shared {@code java:} unmarshal still maps a host false to nil
-	 * underneath); any other receiver keeps the unmarshal.
+	 * literal, a {@code let}/{@code if-let}/{@code when-let} local bound to one, or a
+	 * {@code ..} step's declared return -- and every overload at that arity answers a
+	 * primitive boolean, the call answers {@code T}-or-false, like every predicate value
+	 * (the shared {@code java:} unmarshal still maps a host false to nil underneath); any
+	 * other receiver keeps the unmarshal.
 	 */
 	private LispVal instanceCallLowered(LispVal receiver, String method, List<LispVal> args) {
+		return instanceCallLoweredWithClass(receiver, null, method, args);
+	}
+
+	/**
+	 * An instance call with an explicit known receiver class (a {@code ..} step's
+	 * declared return): null to read it off the receiver instead, like
+	 * {@link #instanceCallLowered}.
+	 */
+	private LispVal instanceCallLoweredWithClass(LispVal receiver, @Nullable String knownClass, String method,
+			List<LispVal> args) {
 		LispSymbol recv = freshTemp();
 		List<LispVal> direct = new ArrayList<>();
 		direct.add(recv);
 		direct.add(LispString.literal(method));
 		direct.addAll(args);
 		LispVal call = cons(JAVA_CALL, direct);
-		String cls = constructedClass(receiver);
-		if (cls == null && receiver instanceof LispSymbol ref) {
-			cls = hostClassOf(ref);
+		String cls = knownClass;
+		if (cls == null) {
+			cls = constructedClass(receiver);
+			if (cls == null && receiver instanceof LispSymbol ref) {
+				cls = hostClassOf(ref);
+			}
 		}
 		if (cls != null && instanceBooleanAtArity(cls, method, args.size())) {
 			call = booleanAnswer(call);
@@ -11465,6 +11546,113 @@ public final class ClojureLowering {
 		}
 		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
 			return false;
+		}
+	}
+
+	/**
+	 * A lowered receiver's known host class, when it is one: a construction literal or a
+	 * recorded local. A {@code ..} step's {@code let} wrapper is never one -- the chain
+	 * threads the declared return instead.
+	 */
+	private @Nullable String classOfLowered(LispVal receiver) {
+		String cls = constructedClass(receiver);
+		if (cls == null && receiver instanceof LispSymbol ref) {
+			cls = hostClassOf(ref);
+		}
+		return cls;
+	}
+
+	/**
+	 * A {@code ..} step's receiver class for the next step: the single declared return
+	 * type shared by every non-variadic overload at that arity, or null when there is
+	 * none, several disagree, or it is no host class (a primitive, void, an array, or an
+	 * unloadable class). Primitives stay unknown: a boolean answer is already a Lisp
+	 * value, so no further host call wraps it.
+	 */
+	private static @Nullable String declaredInstanceReturn(@Nullable String className, String member, int arity) {
+		if (className == null) {
+			return null;
+		}
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			Set<String> returns = new HashSet<>();
+			boolean seen = false;
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (!method.getName().equals(member) || method.isSynthetic() || method.isVarArgs()
+						|| method.getParameterCount() != arity) {
+					continue;
+				}
+				seen = true;
+				Class<?> ret = method.getReturnType();
+				if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
+					return null;
+				}
+				returns.add(ret.getName());
+			}
+			return seen && returns.size() == 1 ? returns.iterator().next() : null;
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return null;
+		}
+	}
+
+	/**
+	 * The same single-return rule for a {@code ..} chain's static first step: the
+	 * zero-argument static method's return when one exists, else the static field's type,
+	 * else null. Anything else keeps the chain unknown, like an instance step with no
+	 * single return.
+	 */
+	private static @Nullable String declaredStaticReturn(String className, String member, int arity) {
+		try {
+			Class<?> found = Class.forName(className, false, ClojureLowering.class.getClassLoader());
+			if (arity == 0) {
+				Set<String> returns = new HashSet<>();
+				boolean seen = false;
+				for (java.lang.reflect.Method method : found.getMethods()) {
+					if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
+							|| method.isSynthetic() || method.isVarArgs() || method.getParameterCount() != 0) {
+						continue;
+					}
+					seen = true;
+					Class<?> ret = method.getReturnType();
+					if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
+						return null;
+					}
+					returns.add(ret.getName());
+				}
+				if (seen) {
+					return returns.size() == 1 ? returns.iterator().next() : null;
+				}
+				try {
+					java.lang.reflect.Field field = found.getField(member);
+					if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+						Class<?> type = field.getType();
+						return type.isPrimitive() || type.isArray() ? null : type.getName();
+					}
+				}
+				catch (NoSuchFieldException _) {
+					// no field either: unknown, like an unknown member
+				}
+				return null;
+			}
+			Set<String> returns = new HashSet<>();
+			boolean seen = false;
+			for (java.lang.reflect.Method method : found.getMethods()) {
+				if (!method.getName().equals(member) || !java.lang.reflect.Modifier.isStatic(method.getModifiers())
+						|| method.isSynthetic() || method.isVarArgs() || method.getParameterCount() != arity) {
+					continue;
+				}
+				seen = true;
+				Class<?> ret = method.getReturnType();
+				if (ret.isPrimitive() || ret == Void.TYPE || ret.isArray()) {
+					return null;
+				}
+				returns.add(ret.getName());
+			}
+			return seen && returns.size() == 1 ? returns.iterator().next() : null;
+		}
+		catch (ReflectiveOperationException | LinkageError | SecurityException _) {
+			return null;
 		}
 	}
 

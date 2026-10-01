@@ -865,10 +865,18 @@ class ClojureLoweringTest {
 		// sits directly over the call (the STRINGP dispatch owns the outer one)
 		assertThat(lowered("(println (.isEmpty (java.util.ArrayList.)))")).contains("(IF (JAVA:CALL");
 		assertThat(lowered("(println (.contains (java.util.ArrayList. [1]) 2))")).contains("(IF (JAVA:CALL");
-		// a let local bound to a construction carries the class; a non-boolean
-		// answer and an unknown receiver keep the bare call
+		// a let/if-let/when-let local bound to a construction carries the class;
+		// a non-boolean answer and an unknown receiver keep the bare call
 		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.isEmpty b29-list)))"))
 			.contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (if-let [b34-list (java.util.ArrayList.)] (.isEmpty b34-list) :e))"))
+			.contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (when-let [b34-list (java.util.ArrayList.)] (.isEmpty b34-list)))"))
+			.contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))"))
+			.contains("(IF (JAVA:CALL");
+		assertThat(lowered("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))")).contains("JAVA:CALL")
+			.doesNotContain("(IF (JAVA:CALL");
 		assertThat(lowered("(let [b29-list (java.util.ArrayList.)] (println (.size b29-list)))")).contains("JAVA:CALL")
 			.doesNotContain("(IF (JAVA:CALL");
 		assertThat(lowered("(defn b29-empty [x] (.isEmpty x))")).contains("JAVA:CALL").doesNotContain("(IF (JAVA:CALL");
