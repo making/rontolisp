@@ -239,6 +239,8 @@ sections:
             title: "Threading"
           - file: clojure/reference/seqs.md
             title: "Seqs"
+          - file: clojure/reference/iteration.md
+            title: "Iteration"
           - file: clojure/reference/collections.md
             title: "Maps, sets and vectors"
           - file: clojure/reference/numbers.md
@@ -247,11 +249,19 @@ sections:
             title: "State"
           - file: clojure/reference/multimethods.md
             title: "Multimethods and hierarchies"
+          - file: clojure/reference/protocols.md
+            title: "Protocols, records and types"
           - file: clojure/reference/errors.md
             title: "Errors"
           - file: clojure/reference/namespaces.md
             title: "Namespaces"
           - file: clojure/reference/string.md
             title: "(clojure.string)"
+          - file: clojure/reference/higher-order.md
+            title: "Higher-order functions"
+          - file: clojure/reference/io.md
+            title: "IO"
           - file: clojure/reference/interop.md
             title: "Java interop"
+          - file: clojure/reference/macros.md
+            title: "Macros"

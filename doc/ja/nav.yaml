@@ -239,6 +239,8 @@ sections:
             title: "スレッディング"
           - file: clojure/reference/seqs.md
             title: "seq"
+          - file: clojure/reference/iteration.md
+            title: "反復"
           - file: clojure/reference/collections.md
             title: "マップ・セット・ベクター"
           - file: clojure/reference/numbers.md
@@ -247,11 +249,19 @@ sections:
             title: "状態"
           - file: clojure/reference/multimethods.md
             title: "マルチメソッドと階層"
+          - file: clojure/reference/protocols.md
+            title: "プロトコル、レコード、型"
           - file: clojure/reference/errors.md
             title: "エラー"
           - file: clojure/reference/namespaces.md
             title: "名前空間"
           - file: clojure/reference/string.md
             title: "(clojure.string)"
+          - file: clojure/reference/higher-order.md
+            title: "高階関数"
+          - file: clojure/reference/io.md
+            title: "入出力"
           - file: clojure/reference/interop.md
             title: "Java interop"
+          - file: clojure/reference/macros.md
+            title: "マクロ"

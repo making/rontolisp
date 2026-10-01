@@ -141,8 +141,6 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 他の seq 動詞（`doseq`/`for`/`reduce` や `keep` 群）への lazy 入力は seq ビューを1レベル
 だけ消費します。先に `take` した prefix を渡してください。
 
-## 状態と動的スコープ
-
 ## プロトコル、レコード、型
 
 `defprotocol` はメソッドを宣言します。各メソッドはターゲットのタグ上のディスパッチャ
