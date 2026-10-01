@@ -1,0 +1,16 @@
+# .
+
+`(. receiver member args...)` `(. receiver (method args...))`
+
+Calls a member on `receiver`: with a method symbol, the instance call `(. obj m args)`;
+with a class as receiver, the static `(. Class m args)`. `(. obj -field)` and
+`(. Class FIELD)` read fields. The receiver decides the path: a string takes the mapped
+core operation (a Lisp string is no host object), anything else goes to `java:call`.
+Classes resolve dotted as written, through `:import`, or through `java.lang`. Runs on the
+interpreter and the JVM only -- the wasm backends reject `java:`.
+
+```clojure
+(println (. "hi" length)) ; 2
+(println (.toUpperCase "hi")) ; HI
+(println (Integer/parseInt "42")) ; 42
+```

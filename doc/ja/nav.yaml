@@ -222,3 +222,36 @@ sections:
     pages:
       - file: clojure/index.md
         title: 概要
+      - file: clojure/syntax.md
+        title: 構文
+      - file: clojure/semantics.md
+        title: セマンティクス
+      - file: clojure/repl.md
+        title: REPL
+      - file: clojure/deviations.md
+        title: 仕様との差異
+      - file: clojure/reference.md
+        title: リファレンス
+        subpages:
+          - file: clojure/reference/syntax.md
+            title: "構文と定義"
+          - file: clojure/reference/threading.md
+            title: "スレッディング"
+          - file: clojure/reference/seqs.md
+            title: "seq"
+          - file: clojure/reference/collections.md
+            title: "マップ・セット・ベクター"
+          - file: clojure/reference/numbers.md
+            title: "数値と述語"
+          - file: clojure/reference/state.md
+            title: "状態"
+          - file: clojure/reference/multimethods.md
+            title: "マルチメソッドと階層"
+          - file: clojure/reference/errors.md
+            title: "エラー"
+          - file: clojure/reference/namespaces.md
+            title: "名前空間"
+          - file: clojure/reference/string.md
+            title: "(clojure.string)"
+          - file: clojure/reference/interop.md
+            title: "Java interop"

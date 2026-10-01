@@ -1,0 +1,13 @@
+# Java interop
+
+Interop lowers to the `java:` surface and runs on the interpreter and the JVM only -- the wasm backends reject `java:`. Class names resolve dotted as written, through `:import`, or through `java.lang`. A string receiver answers the mapped core operation (a Lisp string is no host object).
+
+| Name | Example | Result |
+|---|---|---|
+| `.` | `(. "hi" length)` | `2` |
+| `..` | `(.. "hi" (toUpperCase) (length))` | `2` |
+| `.name / .-name` | `(.toUpperCase "hi")` | `HI` |
+| `Class/member` | `(Integer/parseInt "42")` | `42` |
+| `new` | `(.length (new String "hi"))` | `2` |
+| `memfn` | `((memfn toUpperCase) "hi")` | `HI` |
+| `proxy` | `(.toString (proxy [java.lang.Object] [] (toString [] "p")))` | `p` |

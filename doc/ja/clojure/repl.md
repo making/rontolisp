@@ -1,0 +1,16 @@
+# REPL
+
+ファイルなしで `--source-language clojure` を付けると Clojure REPL
+（`clojure> ` プロンプト）が始まります。1 フォームは複数行にまたがれます。完全性は
+文字列とコメントの外側の `()[]{}` 括弧数で決まります。別々のプロンプトで入力された定義は
+1 ファイルに書いたときと同様に互いを見えます:各バッファは走る前にトップレベルの
+`def`/`defn` 名を宣言するので、後のバッファは先のバッファが定義したものを呼べます。値の
+エコーは Clojure 記法で可読に描画されます。
+
+```console
+$ rontolisp --source-language clojure
+clojure> (defn twice [x] (* 2 x))
+twice
+clojure> (twice 21)
+42
+```

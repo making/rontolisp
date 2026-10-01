@@ -222,3 +222,36 @@ sections:
     pages:
       - file: clojure/index.md
         title: Overview
+      - file: clojure/syntax.md
+        title: Syntax
+      - file: clojure/semantics.md
+        title: Semantics
+      - file: clojure/repl.md
+        title: REPL
+      - file: clojure/deviations.md
+        title: Deviations
+      - file: clojure/reference.md
+        title: Reference
+        subpages:
+          - file: clojure/reference/syntax.md
+            title: "Syntax and definition"
+          - file: clojure/reference/threading.md
+            title: "Threading"
+          - file: clojure/reference/seqs.md
+            title: "Seqs"
+          - file: clojure/reference/collections.md
+            title: "Maps, sets and vectors"
+          - file: clojure/reference/numbers.md
+            title: "Numbers and predicates"
+          - file: clojure/reference/state.md
+            title: "State"
+          - file: clojure/reference/multimethods.md
+            title: "Multimethods and hierarchies"
+          - file: clojure/reference/errors.md
+            title: "Errors"
+          - file: clojure/reference/namespaces.md
+            title: "Namespaces"
+          - file: clojure/reference/string.md
+            title: "(clojure.string)"
+          - file: clojure/reference/interop.md
+            title: "Java interop"

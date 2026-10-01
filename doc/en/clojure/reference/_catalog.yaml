@@ -1,0 +1,179 @@
+index_page: clojure/reference.md
+label: Clojure
+categories:
+  - title: "Syntax and definition"
+    index_page: clojure/reference/syntax.md
+    functions:
+      - { slug: def, name: "def" }
+      - { slug: defn, name: "defn" }
+      - { slug: fn, name: "fn" }
+      - { slug: let, name: "let" }
+      - { slug: loop, name: "loop" }
+      - { slug: recur, name: "recur" }
+      - { slug: if, name: "if" }
+      - { slug: when, name: "when" }
+      - { slug: cond, name: "cond" }
+      - { slug: do, name: "do" }
+      - { slug: and, name: "and" }
+      - { slug: or, name: "or" }
+      - { slug: not, name: "not" }
+      - { slug: quote, name: "quote" }
+      - { slug: comment, name: "comment" }
+      - { slug: declare, name: "declare" }
+  - title: "Threading"
+    index_page: clojure/reference/threading.md
+    functions:
+      - { slug: arrow, name: "->" }
+      - { slug: arrow-arrow, name: "->>" }
+      - { slug: as-arrow, name: "as->" }
+      - { slug: doto, name: "doto" }
+      - { slug: cond-arrow, name: "cond->" }
+      - { slug: cond-arrow-arrow, name: "cond->>" }
+      - { slug: some-arrow, name: "some->" }
+      - { slug: some-arrow-arrow, name: "some->>" }
+  - title: "Seqs"
+    index_page: clojure/reference/seqs.md
+    functions:
+      - { slug: seq, name: "seq" }
+      - { slug: first, name: "first" }
+      - { slug: rest, name: "rest" }
+      - { slug: next, name: "next" }
+      - { slug: cons, name: "cons" }
+      - { slug: list-star, name: "list*" }
+      - { slug: count, name: "count" }
+      - { slug: empty-p, name: "empty?" }
+      - { slug: map, name: "map" }
+      - { slug: filter, name: "filter" }
+      - { slug: reduce, name: "reduce" }
+      - { slug: apply, name: "apply" }
+      - { slug: concat, name: "concat" }
+      - { slug: take, name: "take" }
+      - { slug: drop, name: "drop" }
+      - { slug: range, name: "range" }
+      - { slug: nth, name: "nth" }
+  - title: "Maps, sets and vectors"
+    index_page: clojure/reference/collections.md
+    functions:
+      - { slug: vector, name: "vector" }
+      - { slug: vector-p, name: "vector?" }
+      - { slug: hash-map, name: "hash-map" }
+      - { slug: array-map, name: "array-map" }
+      - { slug: assoc, name: "assoc" }
+      - { slug: dissoc, name: "dissoc" }
+      - { slug: get, name: "get" }
+      - { slug: contains-p, name: "contains?" }
+      - { slug: keys, name: "keys" }
+      - { slug: vals, name: "vals" }
+      - { slug: merge, name: "merge" }
+      - { slug: conj, name: "conj" }
+      - { slug: disj, name: "disj" }
+      - { slug: set, name: "set" }
+  - title: "Numbers and predicates"
+    index_page: clojure/reference/numbers.md
+    functions:
+      - { slug: plus, name: "+" }
+      - { slug: minus, name: "-" }
+      - { slug: star, name: "*" }
+      - { slug: slash, name: "/" }
+      - { slug: quot, name: "quot" }
+      - { slug: rem, name: "rem" }
+      - { slug: mod, name: "mod" }
+      - { slug: abs, name: "abs" }
+      - { slug: max, name: "max" }
+      - { slug: min, name: "min" }
+      - { slug: expt, name: "expt" }
+      - { slug: inc, name: "inc" }
+      - { slug: dec, name: "dec" }
+      - { slug: eq, name: "=" }
+      - { slug: not-eq, name: "not=" }
+      - { slug: lt, name: "<" }
+      - { slug: gt, name: ">" }
+      - { slug: le, name: "<=" }
+      - { slug: ge, name: ">=" }
+      - { slug: nil-p, name: "nil?" }
+      - { slug: some-p, name: "some?" }
+      - { slug: even-p, name: "even?" }
+      - { slug: odd-p, name: "odd?" }
+      - { slug: zero-p, name: "zero?" }
+      - { slug: pos-p, name: "pos?" }
+      - { slug: neg-p, name: "neg?" }
+      - { slug: false-p, name: "false?" }
+      - { slug: true-p, name: "true?" }
+      - { slug: boolean-p, name: "boolean?" }
+  - title: "State"
+    index_page: clojure/reference/state.md
+    functions:
+      - { slug: atom, name: "atom" }
+      - { slug: deref, name: "deref" }
+      - { slug: swap-bang, name: "swap!" }
+      - { slug: reset-bang, name: "reset!" }
+      - { slug: compare-and-set-bang, name: "compare-and-set!" }
+      - { slug: volatile-bang, name: "volatile!" }
+      - { slug: vswap-bang, name: "vswap!" }
+      - { slug: vreset-bang, name: "vreset!" }
+  - title: "Multimethods and hierarchies"
+    index_page: clojure/reference/multimethods.md
+    functions:
+      - { slug: defmulti, name: "defmulti" }
+      - { slug: defmethod, name: "defmethod" }
+      - { slug: remove-method, name: "remove-method" }
+      - { slug: get-method, name: "get-method" }
+      - { slug: prefer-method, name: "prefer-method" }
+      - { slug: derive, name: "derive" }
+      - { slug: underive, name: "underive" }
+      - { slug: isa-p, name: "isa?" }
+      - { slug: parents, name: "parents" }
+      - { slug: ancestors, name: "ancestors" }
+      - { slug: descendants, name: "descendants" }
+      - { slug: make-hierarchy, name: "make-hierarchy" }
+  - title: "Errors"
+    index_page: clojure/reference/errors.md
+    functions:
+      - { slug: try, name: "try" }
+      - { slug: throw, name: "throw" }
+      - { slug: ex-info, name: "ex-info" }
+      - { slug: ex-data, name: "ex-data" }
+      - { slug: ex-message, name: "ex-message" }
+  - title: "Namespaces"
+    index_page: clojure/reference/namespaces.md
+    functions:
+      - { slug: ns, name: "ns" }
+      - { slug: require, name: "require" }
+      - { slug: use, name: "use" }
+      - { slug: import, name: "import" }
+      - { slug: in-ns, name: "in-ns" }
+  - title: "(clojure.string)"
+    index_page: clojure/reference/string.md
+    functions:
+      - { slug: subs, name: "subs" }
+      - { slug: join, name: "clojure.string/join" }
+      - { slug: split, name: "clojure.string/split" }
+      - { slug: split-lines, name: "clojure.string/split-lines" }
+      - { slug: upper-case, name: "clojure.string/upper-case" }
+      - { slug: lower-case, name: "clojure.string/lower-case" }
+      - { slug: capitalize, name: "clojure.string/capitalize" }
+      - { slug: trim, name: "clojure.string/trim" }
+      - { slug: triml, name: "clojure.string/triml" }
+      - { slug: trimr, name: "clojure.string/trimr" }
+      - { slug: trim-newline, name: "clojure.string/trim-newline" }
+      - { slug: blank-p, name: "clojure.string/blank?" }
+      - { slug: starts-with-p, name: "clojure.string/starts-with?" }
+      - { slug: ends-with-p, name: "clojure.string/ends-with?" }
+      - { slug: includes-p, name: "clojure.string/includes?" }
+      - { slug: index-of, name: "clojure.string/index-of" }
+      - { slug: last-index-of, name: "clojure.string/last-index-of" }
+      - { slug: replace, name: "clojure.string/replace" }
+      - { slug: replace-first, name: "clojure.string/replace-first" }
+      - { slug: escape, name: "clojure.string/escape" }
+      - { slug: re-quote-replacement, name: "clojure.string/re-quote-replacement" }
+      - { slug: reverse, name: "clojure.string/reverse" }
+  - title: "Java interop"
+    index_page: clojure/reference/interop.md
+    functions:
+      - { slug: dot, name: "." }
+      - { slug: dot-dot, name: ".." }
+      - { slug: dot-name, name: ".name / .-name" }
+      - { slug: class-member, name: "Class/member" }
+      - { slug: new, name: "new" }
+      - { slug: memfn, name: "memfn" }
+      - { slug: proxy, name: "proxy" }
