@@ -17,17 +17,16 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A catalog {@code index_page} with no {@code nav.yaml} entry breaks nobody's
- * root-suite run: {@code docs-tool/} stands outside the root reactor, so only
- * {@code DocGen.generateLanguage} (an {@code IOException} naming the catalog, the
- * page and the tree) catches it, when someone next builds that module (b18's
- * {@code clojure/reference/names.md}, b21's
- * {@code clojure/reference/regex.md}). This test is the machine half in the root
- * suite -- it fails when any {@code _catalog.yaml} under {@code doc/en} or
- * {@code doc/ja} names an {@code index_page} that is not a {@code file:} page in
- * the matching {@code doc/en/nav.yaml} or {@code doc/ja/nav.yaml}, on every push, without anyone having to run the
- * docs build. Pure file IO: the two line shapes are parsed with a regex, the way
- * the docs-tool's own test parses ID and HREF.
+ * A catalog {@code index_page} with no {@code nav.yaml} entry breaks nobody's root-suite
+ * run: {@code docs-tool/} stands outside the root reactor, so only
+ * {@code DocGen.generateLanguage} (an {@code IOException} naming the catalog, the page
+ * and the tree) catches it, when someone next builds that module (b18's
+ * {@code clojure/reference/names.md}, b21's {@code clojure/reference/regex.md}). This
+ * test is the machine half in the root suite -- it fails when any {@code _catalog.yaml}
+ * under {@code doc/en} or {@code doc/ja} names an {@code index_page} that is not a
+ * {@code file:} page in the matching {@code doc/en/nav.yaml} or {@code doc/ja/nav.yaml},
+ * on every push, without anyone having to run the docs build. Pure file IO: the two line
+ * shapes are parsed with a regex, the way the docs-tool's own test parses ID and HREF.
  */
 class CatalogIndexPageTest {
 
