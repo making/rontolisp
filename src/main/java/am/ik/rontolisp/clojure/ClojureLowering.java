@@ -1165,10 +1165,8 @@ public final class ClojureLowering {
 			forms = multiDefun(name, items.subList(at, items.size()), callName);
 		}
 		else {
-			Clause clause = clause(items.get(at), items.subList(at + 1, items.size()),
-					new RecurTarget(callName, true));
-			forms = new ArrayList<>(
-					List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped())));
+			Clause clause = clause(items.get(at), items.subList(at + 1, items.size()), new RecurTarget(callName, true));
+			forms = new ArrayList<>(List.of(list(sym("defun"), idSym(name), list(clause.params()), clause.wrapped())));
 		}
 		if (dynamic) {
 			// the value cell carries the function for calls and value carries
