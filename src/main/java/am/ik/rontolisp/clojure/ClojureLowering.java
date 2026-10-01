@@ -500,18 +500,17 @@ public final class ClojureLowering {
 	private boolean inDispatchFn;
 
 	/**
-	 * The dispatch-function data of class-calling definitions, by name: a
-	 * {@code defn} name maps to its rebuilt {@code (fn ...)} datum, a {@code def}
-	 * (or {@code defonce}) name to its {@code (fn ...)} value datum (or the datum
-	 * an alias name points at). A {@code defmulti} over one of these names
-	 * re-lowers the recorded datum with the dispatch lowering instead of calling
-	 * the definition, so a named {@code (class x)} answers nil itself for nil
-	 * like the inline datum does, while a direct call to the definition keeps
-	 * answering the {@code :nil} keyword. Only class-calling definitions are
-	 * recorded (a redefinition without one drops the name); a {@code ^:dynamic}
-	 * name is never recorded, so a {@code binding} rebind still routes through
-	 * the value cell. Recorded in definition order, so the oracle's
-	 * define-before-use order is what resolves.
+	 * The dispatch-function data of class-calling definitions, by name: a {@code defn}
+	 * name maps to its rebuilt {@code (fn ...)} datum, a {@code def} (or {@code defonce})
+	 * name to its {@code (fn ...)} value datum (or the datum an alias name points at). A
+	 * {@code defmulti} over one of these names re-lowers the recorded datum with the
+	 * dispatch lowering instead of calling the definition, so a named {@code (class x)}
+	 * answers nil itself for nil like the inline datum does, while a direct call to the
+	 * definition keeps answering the {@code :nil} keyword. Only class-calling definitions
+	 * are recorded (a redefinition without one drops the name); a {@code ^:dynamic} name
+	 * is never recorded, so a {@code binding} rebind still routes through the value cell.
+	 * Recorded in definition order, so the oracle's define-before-use order is what
+	 * resolves.
 	 */
 	private final Map<String, LispVal> classDispatchFns = new HashMap<>();
 
@@ -9108,10 +9107,9 @@ public final class ClojureLowering {
 
 	/**
 	 * Whether the datum holds a {@code class} call: any list headed by the symbol
-	 * {@code class}. Quoted data is skipped (a call there never evaluates); anything
-	 * else over-approximates, which is harmless -- a definition whose only
-	 * {@code class} spellings never evaluate re-lowers identically, so recording
-	 * it changes nothing.
+	 * {@code class}. Quoted data is skipped (a call there never evaluates); anything else
+	 * over-approximates, which is harmless -- a definition whose only {@code class}
+	 * spellings never evaluate re-lowers identically, so recording it changes nothing.
 	 */
 	private static boolean containsClassCall(LispVal datum) {
 		List<LispVal> parts = items(datum);
@@ -9133,13 +9131,12 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * Records a definition's dispatch-function datum for a later
-	 * {@code defmulti} over its name: a {@code defn}'s rebuilt {@code (fn ...)}
-	 * datum, or a {@code def}'s {@code (fn ...)} value datum (a name aliasing an
-	 * already-recorded one shares its datum). Only a class-calling definition is
-	 * kept -- anything else (including a value-less {@code def} and a
-	 * {@code ^:dynamic} name, whose calls route through the value cell) drops
-	 * the name, so a redefinition without one unregisters it.
+	 * Records a definition's dispatch-function datum for a later {@code defmulti} over
+	 * its name: a {@code defn}'s rebuilt {@code (fn ...)} datum, or a {@code def}'s
+	 * {@code (fn ...)} value datum (a name aliasing an already-recorded one shares its
+	 * datum). Only a class-calling definition is kept -- anything else (including a
+	 * value-less {@code def} and a {@code ^:dynamic} name, whose calls route through the
+	 * value cell) drops the name, so a redefinition without one unregisters it.
 	 * @param name the defined name
 	 * @param dynamic whether the name is {@code ^:dynamic}
 	 * @param valueDatum the {@code fn} datum, or null when there is none
@@ -9171,11 +9168,11 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * The dispatch datum a {@code defmulti} lowers: the recorded definition when
-	 * the datum names a class-calling {@code defn} or {@code def}'d function, so
-	 * its {@code class} calls answer nil itself for nil under the dispatch
-	 * lowering, like the inline datum does. A name a local shadows keeps its
-	 * reference (the local is the dispatch function, not the definition).
+	 * The dispatch datum a {@code defmulti} lowers: the recorded definition when the
+	 * datum names a class-calling {@code defn} or {@code def}'d function, so its
+	 * {@code class} calls answer nil itself for nil under the dispatch lowering, like the
+	 * inline datum does. A name a local shadows keeps its reference (the local is the
+	 * dispatch function, not the definition).
 	 */
 	private LispVal dispatchDatumFor(LispVal dispatchDatum) {
 		if (dispatchDatum instanceof LispSymbol s) {
@@ -9203,19 +9200,18 @@ public final class ClojureLowering {
 	 * literally is the {@code :nil} keyword keeps its keyword row, like the oracle. A
 	 * {@code class} call inside the dispatch function answers nil itself for a nil
 	 * argument (see {@link #classForm(LispVal)}), so the null test maps it onto the
-	 * marker too -- bare, wrapped in another function, or through a named
-	 * {@code defn} or {@code def}'d function (re-lowered from the recorded
-	 * definition, like the oracle). The default
-	 * dispatch value is {@code :default} without a {@code :default} option (an arbitrary
-	 * keyword with one -- the corpus's {@code :everything-else} -- stored per-multimethod
-	 * like {@code :default} today); a miss with no method for the default signals, like
-	 * the oracle. With a {@code :hierarchy} option the dispatcher consults that hierarchy
-	 * value on a miss (the global one without the option): every method whose key the
-	 * dispatch value descends from ({@code isa?}) is a candidate, the strictly most
-	 * specific wins, {@code prefer-method} breaks the remaining ties, and an unbroken tie
-	 * signals -- like the oracle. Past the search but ahead of the default, a defined
-	 * {@code Object} method catches the rest, like the oracle's (which it always beats);
-	 * without one the slot is nil and the search decides alone.
+	 * marker too -- bare, wrapped in another function, or through a named {@code defn} or
+	 * {@code def}'d function (re-lowered from the recorded definition, like the oracle).
+	 * The default dispatch value is {@code :default} without a {@code :default} option
+	 * (an arbitrary keyword with one -- the corpus's {@code :everything-else} -- stored
+	 * per-multimethod like {@code :default} today); a miss with no method for the default
+	 * signals, like the oracle. With a {@code :hierarchy} option the dispatcher consults
+	 * that hierarchy value on a miss (the global one without the option): every method
+	 * whose key the dispatch value descends from ({@code isa?}) is a candidate, the
+	 * strictly most specific wins, {@code prefer-method} breaks the remaining ties, and
+	 * an unbroken tie signals -- like the oracle. Past the search but ahead of the
+	 * default, a defined {@code Object} method catches the rest, like the oracle's (which
+	 * it always beats); without one the slot is nil and the search decides alone.
 	 */
 	private List<LispVal> defmultiForms(List<LispVal> items) {
 		isTrue(items.size() >= 3, "defmulti takes a name, a dispatch function and options");
