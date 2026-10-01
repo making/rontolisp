@@ -28,8 +28,22 @@ public final class Clojure {
 	 * @return the top-level forms
 	 */
 	public static List<LispVal> read(String source, @Nullable String file) {
+		return read(source, file, null);
+	}
+
+	/**
+	 * Reads a Clojure program and lowers it to Common Lisp core forms, expanding its
+	 * macros through the macro evaluator.
+	 * @param source the program text
+	 * @param file the origin file for diagnostics, or {@code null} when unknown
+	 * @param macroEvaluator who evaluates one macro application in the macro-time
+	 * environment, or {@code null} when macro call sites must fail
+	 * @return the top-level forms
+	 */
+	public static List<LispVal> read(String source, @Nullable String file,
+			@Nullable ClojureMacroEvaluator macroEvaluator) {
 		ClojureReader reader = new ClojureReader(source, file);
-		return ClojureLowering.lower(reader.readAll(), reader);
+		return ClojureLowering.lower(reader.readAll(), reader, macroEvaluator);
 	}
 
 	/**

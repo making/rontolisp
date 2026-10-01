@@ -30,6 +30,36 @@ seq, itself a pattern; `:as` the whole), a map pattern through the table-aware r
 `fn`/`defn` parameters alike; nested patterns recurse. Malformed shapes are named
 refusals.
 
+## Macros
+
+`defmacro` defines a compile-time expander, stored beside the lowering: each call
+site expands datum to datum while lowering -- the argument forms travel quoted into
+one application of the lowered body, the answer decodes back to a datum and lowers
+like any other form -- so every backend, and the interpreter's own `eval` of a macro
+call, runs expanded code. Parameters bind unevaluated forms (`&` rest, destructuring
+and several arities like `defn`; a docstring and an attr map are skipped);
+`&form`/`&env` are refused. A body sees the core builtins and the `clojure.lisp`
+library, not the program's own definitions. The definition also registers a runtime
+table entry of the same expander, answers `nil`, and works session-wide; a call above
+its definition is an error, a macro has no function value, and a later `def`/`defn` of
+the same name wins back the call sites. A `defmacro` shadows a core function at call
+sites (never a special form, which intercepts first).
+
+`` `form `` builds a form as data over the mangled namespace: every symbol qualifies
+behind `c%`, `~` inserts its form's value, `~@` splices a sequence into the enclosing
+list, vector, map or set, and each `x#` binds one `(gensym "x")` per syntax-quote --
+one symbol per expansion, the same at every occurrence within it. An unquote outside
+any syntax-quote is an error, as is a splice outside a sequence. `macroexpand-1`
+expands once and `macroexpand` to the fixpoint, each answering the expansion as data,
+demangled and uppercased for printing; `gensym` answers a fresh uninterned symbol per
+evaluation. `var`/`#'` stays refused: bodies quote symbols instead.
+
+```clojure
+(defmacro sem-unless [c t] (list 'if c nil t))
+(println (sem-unless false 42))
+(println (macroexpand-1 '(sem-unless true 1)))
+```
+
 ## Threading and flow
 
 `->`/`->>` insert the value second/last, a bare name or keyword calling/reading with it;
@@ -80,7 +110,8 @@ Each refusal names the missing design, never `unknown name`:
 | regex literals `#"..."` | `regex literals are not supported yet` | no regex runtime on any backend |
 | `defprotocol`, `defrecord`, `deftype`, `definterface`, `reify`, `extend-protocol`, `extend-type`, `extend`, `satisfies?`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | rejected by design -- type dispatch and a record value representation on all four backends |
 | `set!` | by name | no field-write primitive and no record type to mutate |
-| backquote/unquote, `var`/`#'`, metadata `^`/`with-meta` | by name | each awaits its design |
+| `var`/`#'`, metadata `^`/`with-meta` | by name | no var system and no metadata model; macro bodies quote symbols instead |
+| `&form`/`&env` in `defmacro` parameters | by name | macros receive no compilation environment |
 | `::`-auto-resolve keywords | by name | no namespace to resolve against |
 | `--no-gc` builds | by name | that backend has no pairs, symbols or closures |
 

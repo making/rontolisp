@@ -185,3 +185,11 @@ categories:
       - { slug: new, name: "new" }
       - { slug: memfn, name: "memfn" }
       - { slug: proxy, name: "proxy" }
+  - title: "Macros"
+    index_page: clojure/reference/macros.md
+    functions:
+      - { slug: defmacro, name: "defmacro" }
+      - { slug: syntax-quote, name: "syntax-quote" }
+      - { slug: gensym, name: "gensym" }
+      - { slug: macroexpand-1, name: "macroexpand-1" }
+      - { slug: macroexpand, name: "macroexpand" }

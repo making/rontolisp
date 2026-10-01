@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.ClojureMacroTime;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,6 +17,24 @@ class ClojureSessionTest {
 			.containsExactly("(SETQ RONTOLISP::%CLOJURE-FALSE '|false|)", "(DEFUN |c%twice| (|c%x|) (* 2 |c%x|))");
 		List<ClojureTopLevel> call = session.read("(twice 21)");
 		assertThat(call.get(0).forms().stream().map(LispVal::print).toList()).containsExactly("(|c%twice| 21)");
+	}
+
+	@Test
+	void aLaterBufferExpandsAMacroAnEarlierOneDefined() {
+		ClojureSession session = new ClojureSession();
+		session.setMacroEvaluator(ClojureMacroTime.create());
+		List<String> defined = session.read("(defmacro sx-unless [c t] (list 'if c nil t))")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(defined).anyMatch(form -> form.contains("|c%sx-unless%macro|"));
+		List<String> call = session.read("(sx-unless false 42)")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(call).anyMatch(form -> form.contains(" 42 NIL))"));
 	}
 
 	@Test

@@ -120,6 +120,16 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void gensymSuffixReadsAsOneIdentifier() {
+		assertThat(printed("x#")).isEqualTo("[|x#|]");
+		assertThat(printed("`(~x ~@y s#)"))
+			.isEqualTo("[(|syntax-quote| ((|unquote| |x|) (|unquote-splicing| |y|) |s#|))]");
+		// a dispatch form after an identifier still dispatches
+		assertThat(printed("a#'x")).isEqualTo("[|a|, (|var| |x|)]");
+		assertThat(printed("a#_skip b")).isEqualTo("[|a|, |b|]");
+	}
+
+	@Test
 	void anOddMapAndAnUnclosedFormAreErrors() {
 		assertThatThrownBy(() -> read("{:a 1 :b}")).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("even number");

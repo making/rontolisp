@@ -29,6 +29,37 @@ Common Lisp の核フォームへ低下します。どのバックエッドも C
 `:strs`、明示ローカル、`:as`、`:or` デフォルト）-- 対象は `let`、`loop`、`fn`/`defn`
 パラメータのいずれでも同じで、ネストしたパターンは再帰します。不正な形は名前付き拒否です。
 
+## マクロ
+
+`defmacro` はコンパイル時 expander を定義し、lower の脇に格納されます。各呼び出し位置
+は lower 中に datum から datum へ展開されます。引数フォームは quote されて 1 回の
+expander 適用へ渡り、答えは datum に decode されて他のフォームと同様に lower されます。
+そのため、すべてのバックエンドも、マクロ呼び出しに対するインタプリタ自身の `eval`
+も、展開後のコードを実行します。パラメータには未評価フォームが束縛され（`&` rest、
+destructuring、複数アリティは `defn` と同様。docstring と attr map は読み飛ばし）、
+`&form`/`&env` は拒否されます。本体が見えるのは核の built-in と `clojure.lisp`
+ライブラリであり、プログラム自身の定義は見えません。定義は同じ expander を実行時
+テーブルにも登録し、`nil` を返し、セッションをまたいで有効です。定義より上での
+呼び出しはエラーとなり、マクロに関数値はなく、後からの同名 `def`/`defn` が呼び出し
+位置を取り戻します。同名の核関数は呼び出し位置では `defmacro` が覆い隠します
+（special form は先に横取りするため覆い隠せません）。
+
+`` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。すべての
+シンボルは `c%` の背後で限定され、`~` はそのフォームの値を埋め込み、`~@` は外側の
+リスト・ベクター・マップ・セットの中に列を継ぎ足します。各 `x#` は syntax-quote
+ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
+の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
+splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
+いずれも展開結果を表示用に demangle・大文字化したデータとして返します。`gensym` は
+評価ごとに新しい uninterned シンボルを返します。`var`/`#'` は拒否されたままです。
+本体ではシンボルを quote してください。
+
+```clojure
+(defmacro sem-unless [c t] (list 'if c nil t))
+(println (sem-unless false 42))
+(println (macroexpand-1 '(sem-unless true 1)))
+```
+
 ## スレッディングと制御フロー
 
 `->`/`->>` は値を 2 番目/最後に挿入し、裸の名前やキーワードは値を渡して呼び出す/参照する
@@ -80,7 +111,8 @@ seq 群はすべてのコレクションの strict なリストビュー上で�
 | 正規表現リテラル `#"..."` | `regex literals are not supported yet` | どのバックエッドにも正規表現実装がない |
 | `defprotocol`、`defrecord`、`deftype`、`definterface`、`reify`、`extend-protocol`、`extend-type`、`extend`、`satisfies?`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | 設計上拒否 -- 4 バックエンド全部での型ディスパッチとレコード値表現 |
 | `set!` | 名前で | フィールド書き込みプリミティブと変更対象の型がない |
-| クォート構文、`var`/`#'`、メタデータ `^`/`with-meta` | 名前で | それぞれ設計待ち |
+| `var`/`#'`、メタデータ `^`/`with-meta` | 名前で | var 機構もメタデータ模型もない。マクロ本体ではシンボルを quote する |
+| `defmacro` パラメータの `&form`/`&env` | 名前で | マクロはコンパイル環境を受け取らない |
 | `::` 自動解決キーワード | 名前で | 解決先の名前空間がない |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 

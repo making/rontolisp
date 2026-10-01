@@ -133,7 +133,7 @@ public enum SourceLanguage {
 					file);
 		}
 		if (this == CLOJURE) {
-			return refuseCircularLists(Clojure.read(source, file), source, file);
+			return refuseCircularLists(Clojure.read(source, file, ClojureMacroTime.create()), source, file);
 		}
 		return refuseCircularLists(
 				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)

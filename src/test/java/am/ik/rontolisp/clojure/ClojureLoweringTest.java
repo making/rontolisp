@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.ClojureMacroTime;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
 
@@ -519,6 +520,157 @@ class ClojureLoweringTest {
 		assertThat(lowered("0xFF")).isEqualTo(FALSE_BINDING + "255");
 		assertThat(lowered("1M")).isEqualTo(FALSE_BINDING + "1");
 		assertThat(lowered("0.1M")).isEqualTo(FALSE_BINDING + "1/10");
+	}
+
+	private static String loweredWithMacros(String source) {
+		List<LispVal> forms = Clojure.read(source, null, ClojureMacroTime.create());
+		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void defmacroEmitsATableEntryAndRegistersTheExpander() {
+		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t))");
+		assertThat(out).contains("PROGN")
+			.contains("|c%mu-unless%macro|")
+			.contains("LAMBDA")
+			.contains("wrong number of arguments passed to macro: mu-unless");
+	}
+
+	@Test
+	void macroCallsExpandAtLowerTime() {
+		String out = loweredWithMacros("(defmacro mu-unless [c t] (list 'if c nil t)) (mu-unless false 42)");
+		assertThat(out).contains("|c%mu-unless%macro|");
+		// the call lowered to the if over the false value, answering 42 for false
+		assertThat(out).contains("(LET ((|__clojure_").contains("RONTOLISP::%CLOJURE-FALSE").contains(" 42 NIL))");
+	}
+
+	@Test
+	void macroCallsAboveTheirDefinitionNameTheMissingExpander() {
+		assertThatThrownBy(
+				() -> Clojure.read("(mu-early 1) (defmacro mu-early [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("macro `mu-early` used before its definition");
+		assertThatThrownBy(() -> Clojure.read("(mu-missing 1)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: mu-missing");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-noeval [x] x) (mu-noeval 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cannot expand without a macro evaluator");
+	}
+
+	@Test
+	void defmacroRefusesCoreFormsAndEnvironments() {
+		assertThatThrownBy(() -> Clojure.read("(defmacro if [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cannot name a macro");
+		assertThatThrownBy(() -> Clojure.read("(defmacro gensym [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cannot name a macro");
+		assertThatThrownBy(() -> Clojure.read("(defmacro s/m [x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("cannot name a macro");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-env [&form x] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("&form is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-env2 [x &env] x)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("&env is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("(defmacro)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defmacro needs a name");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-short)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("defmacro needs a parameter vector and a body");
+	}
+
+	@Test
+	void macrosHaveNoValue() {
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-val [x] x) (list mu-val)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("is a macro, not a function");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-val2 [x] x) mu-val2", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("is a macro, not a function");
+		assertThatThrownBy(
+				() -> Clojure.read("(defmacro mu-val3 [x] x) (map mu-val3 '(1))", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("is a macro, not a function");
+	}
+
+	@Test
+	void unquoteOutsideSyntaxQuoteIsAnError() {
+		assertThatThrownBy(() -> Clojure.read("(list ~x)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unquote outside syntax-quote");
+		assertThatThrownBy(() -> Clojure.read("~@x", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unquote-splicing outside syntax-quote");
+		assertThatThrownBy(() -> Clojure.read("`~@x", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unquote-splicing outside a sequence");
+		assertThat(lowered("(def spl-v [1]) `{:a ~@spl-v}")).contains("APPEND");
+	}
+
+	@Test
+	void syntaxQuoteQualifiesSplicesAndGensyms() {
+		String out = loweredWithMacros("(defmacro mu-sq [x] `(a ~x ~@'(1 2) s#))");
+		assertThat(out).contains("(GENSYM \"s\")").contains("APPEND").contains("'|c%a|");
+		String out2 = loweredWithMacros("(defmacro mu-doc \"docs\" [x] x) (mu-doc 1)");
+		assertThat(out2).contains("|c%mu-doc%macro|");
+	}
+
+	@Test
+	void gensymFreshnessAcrossTwoExpansions() {
+		String out = loweredWithMacros(
+				"(defmacro mu-bg [e] `(let [x# ~e] x#)) (def mu-a (mu-bg 1)) (def mu-b (mu-bg 2))");
+		java.util.regex.Matcher found = java.util.regex.Pattern.compile("#:\\S+").matcher(out);
+		java.util.Set<String> gensyms = new java.util.HashSet<>();
+		while (found.find()) {
+			gensyms.add(found.group());
+		}
+		assertThat(gensyms).hasSizeGreaterThanOrEqualTo(2);
+	}
+
+	@Test
+	void macroexpandLowersToTheRuntimeExpander() {
+		assertThat(lowered("(macroexpand-1 '(mu-x 1))")).contains("C%MACROEXPAND-1").contains("'");
+		assertThat(lowered("(macroexpand '(mu-x 1))")).contains("(C%MACROEXPAND '");
+		assertThat(lowered("macroexpand-1")).contains("LAMBDA").contains("C%MACROEXPAND-1");
+		assertThat(lowered("macroexpand")).contains("LAMBDA").contains("C%MACROEXPAND");
+		assertThatThrownBy(() -> Clojure.read("(macroexpand-1)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("macroexpand-1 takes one form");
+		assertThatThrownBy(() -> Clojure.read("(macroexpand 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("macroexpand takes one form");
+	}
+
+	@Test
+	void multiArityMacrosDispatchByCount() {
+		String out = loweredWithMacros(
+				"(defmacro mu-ch ([x f] (list '. x f)) ([x f & m] (concat (list 'mu-ch (list '. x f)) m))) (mu-ch \"hi\" toUpperCase length)");
+		assertThat(out).contains("wrong number of arguments passed to macro: mu-ch");
+		assertThat(out).contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure.read("(defmacro mu-dup ([x] x) ([y] y))", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("two clauses for arity 1");
+		assertThatThrownBy(
+				() -> Clojure.read("(defmacro mu-ar ([x] x) ([x y] y)) (mu-ar 1 2 3)", null, ClojureMacroTime.create()))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("in macro `mu-ar`")
+			.hasMessageContaining("wrong number of arguments passed to macro: mu-ar");
+	}
+
+	@Test
+	void gensymLowersToThePrimitive() {
+		assertThat(lowered("(gensym)")).contains("(GENSYM)");
+		assertThat(lowered("(gensym \"p\")")).contains("(GENSYM \"p\")");
+		assertThat(lowered("gensym")).contains("#'GENSYM");
+		assertThatThrownBy(() -> Clojure.read("(gensym 1 2)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("gensym takes an optional prefix");
+	}
+
+	@Test
+	void varAndMetadataStayRefused() {
+		assertThatThrownBy(() -> Clojure.read("#'x", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var is not supported yet");
+		assertThatThrownBy(() -> Clojure.read("^:k v", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("with-meta is not supported yet");
 	}
 
 }

@@ -3,6 +3,7 @@ package am.ik.rontolisp.clojure;
 import java.util.List;
 
 import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An interactive Clojure session: the global scope a whole-file lowering rebuilds per
@@ -22,6 +23,16 @@ public final class ClojureSession {
 	 */
 	public List<ClojureTopLevel> read(String source) {
 		return this.lowering.interact(new ClojureReader(source, null));
+	}
+
+	/**
+	 * Who evaluates one macro application in the macro-time environment, kept across the
+	 * buffers a session reads one at a time, so a macro defined in one buffer expands in
+	 * a later one.
+	 * @param macroEvaluator the evaluator, or null for none
+	 */
+	public void setMacroEvaluator(@Nullable ClojureMacroEvaluator macroEvaluator) {
+		this.lowering.setMacroEvaluator(macroEvaluator);
 	}
 
 	/**

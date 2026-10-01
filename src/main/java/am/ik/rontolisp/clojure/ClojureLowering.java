@@ -3,12 +3,15 @@ package am.ik.rontolisp.clojure;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispTrue;
@@ -109,10 +112,16 @@ import org.jspecify.annotations.Nullable;
  * anything else through its printed rendering; dispatch is a method table plus a
  * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
  * (only {@code clojure.string} resolves, over the core string operations); interop lowers
- * to the {@code java:} surface. The reader spells characters, radix integers and exact
- * {@code M} decimals, and refuses regex literals by name.
+ * to the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
+ * over the call's argument list, the same function the runtime table entry holds for
+ * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
+ * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
+ * splicing over the mangled namespace ({@code x#} one gensym per expansion);
+ * {@code gensym} is the ordinary uninterned symbol. {@code var}/{@code #'} stays refused.
+ * The reader spells characters, radix integers and exact {@code M} decimals, and refuses
+ * regex literals by name.
  */
-final class ClojureLowering {
+public final class ClojureLowering {
 
 	/**
 	 * What every mangled identifier starts with. Contains a lowercase letter on purpose.
@@ -188,6 +197,35 @@ final class ClojureLowering {
 	/** The scopes, innermost last; globals live in {@link #globals}. */
 	private final List<Map<String, Kind>> scopes = new ArrayList<>();
 
+	/**
+	 * The macros in scope: a user {@code defmacro} name to its expander, a lowered lambda
+	 * over the call's argument list (one value) applying each arity's parameters to the
+	 * lowered body. Expansion is datum to datum at lower time: the call site's argument
+	 * datums travel quoted into one application, the answer decodes back to a datum and
+	 * lowers like any other form, so every backend sees only expanded code.
+	 */
+	private final Map<String, LispVal> macros = new HashMap<>();
+
+	/**
+	 * Who evaluates one macro application in the macro-time environment, or null when the
+	 * driver supplied none. Every production path supplies one (a file read, a session
+	 * buffer); without one a macro definition still registers and still emits its runtime
+	 * table entry, but a call site cannot expand.
+	 */
+	private @Nullable ClojureMacroEvaluator macroEvaluator;
+
+	/**
+	 * How deep macro expansion currently nests; over {@link #MAX_MACRO_DEPTH} it ends.
+	 */
+	private int macroDepth;
+
+	/**
+	 * The {@code #}-suffixed names the enclosing syntax-quotes bound, innermost last: one
+	 * map per syntax-quote node, so {@code ~x#} in an unquote answers the same gensym the
+	 * template's {@code x#} does.
+	 */
+	private final List<Map<String, LispSymbol>> syntaxGens = new ArrayList<>();
+
 	private int counter;
 
 	/** The loop whose body is being lowered, for {@code recur}; null outside any. */
@@ -224,21 +262,49 @@ final class ClojureLowering {
 	/** Whether the hierarchy runtime was already spliced in (files splice it inline). */
 	private boolean hierarchyEmitted;
 
+	/**
+	 * Whether the program defines or expands macros: the macro runtime (the table lookup,
+	 * the demangler and {@code C%MACROEXPAND-1}/{@code C%MACROEXPAND}) is spliced in
+	 * once, behind the false binding.
+	 */
+	private boolean usedMacros;
+
+	/** Whether the macro runtime was already spliced in (files splice it inline). */
+	private boolean macrosEmitted;
+
+	/**
+	 * How deep lower-time macro expansion may nest before it ends with an error. Each
+	 * level is a recursive expansion (a macro whose expansion calls a macro); a wide
+	 * recursion like {@code chain} over many forms nests one level per form, so the bound
+	 * sits far above any written macro and only catches the self-recursive one.
+	 */
+	private static final int MAX_MACRO_DEPTH = 128;
+
 	/** The reader the datums came out of, for error positions; null when unknown. */
 	private @Nullable ClojureReader reader;
 
 	static List<LispVal> lower(List<LispVal> datums) {
-		return lower(datums, null);
+		return lower(datums, null, null);
 	}
 
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader) {
+		return lower(datums, reader, null);
+	}
+
+	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator) {
 		ClojureLowering lowering = new ClojureLowering();
 		lowering.reader = reader;
+		lowering.macroEvaluator = macroEvaluator;
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
 		for (LispVal datum : datums) {
 			lowering.forms.addAll(lowering.topLevels(datum));
+		}
+		if (lowering.usedMacros) {
+			// the macro runtime travels with the program, like the false value
+			lowering.forms.addAll(1, lowering.macroRuntime());
 		}
 		if (lowering.usedHierarchy) {
 			// the hierarchy runtime runs before anything else, like the false value
@@ -287,6 +353,12 @@ final class ClojureLowering {
 			out.add(0, new ClojureTopLevel(hierarchyRuntime(), false));
 			this.hierarchyEmitted = true;
 		}
+		if (this.usedMacros && !this.macrosEmitted) {
+			// The macro runtime travels ahead of the buffer that first needs
+			// it, like the false binding; later buffers reuse it.
+			out.add(0, new ClojureTopLevel(macroRuntime(), false));
+			this.macrosEmitted = true;
+		}
 		if (this.usedExInfo && !this.exInfoEmitted) {
 			// The ex-info runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
@@ -322,6 +394,12 @@ final class ClojureLowering {
 		else if (isSymbolNamed(items.get(0), "defmulti")) {
 			this.globals.put(plainName(items.get(1), "defmulti"), Kind.FUNCTION);
 		}
+		else if (isSymbolNamed(items.get(0), "defmacro")) {
+			// a macro name, so a call above its definition names the missing
+			// expander instead of an unknown name; the definition still runs in
+			// order, like the oracle's compile
+			this.globals.put(plainName(items.get(1), "defmacro"), Kind.MACRO);
+		}
 		else if (isSymbolNamed(items.get(0), "declare")) {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
@@ -347,6 +425,9 @@ final class ClojureLowering {
 			}
 			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmulti")) {
 				return defmultiForms(items);
+			}
+			if (items != null && !items.isEmpty() && isSymbolNamed(items.get(0), "defmacro")) {
+				return defmacroForms(items);
 			}
 			return List.of(lower(form));
 		}
@@ -410,6 +491,13 @@ final class ClojureLowering {
 			// into expression position
 			List<LispVal> forms = defuns(items);
 			isTrue(forms.size() == 1, "a multi-arity defn is only allowed at the top level");
+			return forms.get(0);
+		}
+		if (isSymbolNamed(head, "defmacro")) {
+			// in a body: a single progn, like ever; the expander registers when
+			// reached, the table entry runs with the body
+			List<LispVal> forms = defmacroForms(items);
+			isTrue(forms.size() == 1, "a defmacro lowers to one form");
 			return forms.get(0);
 		}
 		if (head == ClojureReader.FN_ANON || isSymbolNamed(head, "fn")) {
@@ -576,10 +664,12 @@ final class ClojureLowering {
 			return newOf(items);
 		}
 		if (isSymbolNamed(head, "syntax-quote")) {
-			throw new LispReadException("syntax-quote is not supported yet: backquote needs a design");
+			isTrue(items.size() == 2, "syntax-quote takes one form");
+			return syntaxQuote(items.get(1));
 		}
 		if (isSymbolNamed(head, "unquote") || isSymbolNamed(head, "unquote-splicing")) {
-			throw new LispReadException(((LispSymbol) head).name() + " is not supported yet: backquote needs a design");
+			throw new LispReadException(((LispSymbol) head).name()
+					+ " outside syntax-quote: `~` and `~@` only unquote inside a syntax-quote");
 		}
 		if (isSymbolNamed(head, "var")) {
 			throw new LispReadException("var is not supported yet: #'x needs a design");
@@ -636,6 +726,7 @@ final class ClojureLowering {
 		isTrue(items.size() == 2 || items.size() == 3, "def takes a name and an optional value");
 		String name = plainName(items.get(1), "def");
 		this.globals.put(name, Kind.VARIABLE);
+		this.macros.remove(name); // a definition wins over the macro it shadows
 		LispVal value = items.size() == 3 ? lower(items.get(2)) : NIL_CONST;
 		return list(sym("setq"), idSym(name), value);
 	}
@@ -673,6 +764,7 @@ final class ClojureLowering {
 				"defn needs a parameter vector and a body");
 		String name = plainName(items.get(1), "defn");
 		this.globals.put(name, Kind.FUNCTION);
+		this.macros.remove(name); // a definition wins over the macro it shadows
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
 			return multiDefun(name, items.subList(at, items.size()));
 		}
@@ -995,7 +1087,7 @@ final class ClojureLowering {
 	 * occurrence spells the same name and {@code eq} holds on every backend.
 	 */
 	private LispVal falseBinding() {
-		return list(sym("SETQ"), this.falseVariable, list(sym("QUOTE"), new LispSymbol(FALSE_VALUE_NAME)));
+		return falseBindingForm();
 	}
 
 	/**
@@ -1483,6 +1575,10 @@ final class ClojureLowering {
 		if (name.startsWith(":")) {
 			return keywordCall(name, items);
 		}
+		LispVal macro = macroCall(name, items);
+		if (macro != null) {
+			return macro;
+		}
 		LispVal special = builtin(name, items);
 		if (special != null) {
 			return special;
@@ -1651,6 +1747,16 @@ final class ClojureLowering {
 				return dorunOf(items);
 			case "doall":
 				return doallOf(items);
+			case "gensym":
+				return gensymOf(items);
+			case "macroexpand-1":
+				isTrue(n == 1, "macroexpand-1 takes one form");
+				this.usedMacros = true;
+				return list(new LispSymbol(MACROEXPAND_1), lower(items.get(1)));
+			case "macroexpand":
+				isTrue(n == 1, "macroexpand takes one form");
+				this.usedMacros = true;
+				return list(new LispSymbol(MACROEXPAND), lower(items.get(1)));
 			case "assoc":
 				return assocOf(items);
 			case "dissoc":
@@ -2282,6 +2388,8 @@ final class ClojureLowering {
 			case "ex-data" -> exHelperValue("C%E-DATA");
 			case "ex-message" -> exHelperValue("C%E-MESSAGE");
 			case "ex-info" -> exInfoValue();
+			case "macroexpand-1" -> macroexpandValue(MACROEXPAND_1);
+			case "macroexpand" -> macroexpandValue(MACROEXPAND);
 			default -> null;
 		};
 	}
@@ -3177,6 +3285,9 @@ final class ClojureLowering {
 			return keywordFn(form);
 		}
 		if (form instanceof LispSymbol s && known(s.name())) {
+			if (isMacro(s.name())) {
+				throw new LispReadException(s.name() + " is a macro, not a function");
+			}
 			if (isFunction(s.name())) {
 				return list(sym("function"), idSym(s.name()));
 			}
@@ -3849,6 +3960,11 @@ final class ClojureLowering {
 			return keywordForm(name.substring(1)); // a keyword is its spelling,
 													// case-preserved
 		}
+		if (name.startsWith("#:")) {
+			// a gensym a macro expansion returned: uninterned, so it lowers to
+			// itself instead of mangling behind the prefix
+			return s;
+		}
 		if (name.equals("%") || name.length() > 1 && name.charAt(0) == '%'
 				&& name.substring(1).chars().allMatch(Character::isDigit)) {
 			if (this.anonArgs == null) {
@@ -3883,6 +3999,9 @@ final class ClojureLowering {
 			}
 			return list(sym("function"), sym(cl));
 		}
+		if (isMacro(name)) {
+			throw new LispReadException(name + " is a macro, not a function");
+		}
 		if (isFunction(name)) {
 			return list(sym("function"), idSym(name));
 		}
@@ -3897,6 +4016,7 @@ final class ClojureLowering {
 					"minusp", "vector", "vectorp" ->
 				name;
 			case "empty?", "nil?" -> "null";
+			case "gensym" -> "gensym";
 			case "even?" -> "evenp";
 			case "odd?" -> "oddp";
 			case "zero?" -> "zerop";
@@ -3925,6 +4045,10 @@ final class ClojureLowering {
 			if (name.startsWith(":")) {
 				validateKeyword(name);
 				return list(sym("quote"), keywordDatum(name.substring(1)));
+			}
+			if (name.startsWith("#:")) {
+				// a gensym a macro expansion returned: it quotes to itself
+				return list(sym("quote"), s);
 			}
 			return list(sym("quote"), idSym(name));
 		}
@@ -4253,6 +4377,7 @@ final class ClojureLowering {
 			}
 		}
 		this.globals.put(name, Kind.FUNCTION);
+		this.macros.remove(name); // a definition wins over the macro it shadows
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		LispSymbol fallback = new LispSymbol(mangle(name) + "%default");
 		LispSymbol prefers = new LispSymbol(mangle(name) + "%prefers");
@@ -4309,6 +4434,769 @@ final class ClojureLowering {
 		isTrue(known(name), "No such multimethod: " + name);
 		LispSymbol methods = new LispSymbol(mangle(name) + "%methods");
 		return list(sym("gethash"), lower(items.get(2)), methods, NIL_CONST);
+	}
+
+	// macros: defmacro, lower-time expansion, syntax-quote, macroexpand, gensym
+
+	/** The runtime once-expander behind {@code macroexpand-1}, as spelled in programs. */
+	private static final String MACROEXPAND_1 = "C%MACROEXPAND-1";
+
+	/**
+	 * The runtime fixpoint expander behind {@code macroexpand}, as spelled in programs.
+	 */
+	private static final String MACROEXPAND = "C%MACROEXPAND";
+
+	/**
+	 * The names a {@code defmacro} cannot take: every special form a call site could
+	 * never reach through the macro table (the form intercepts first), the three new
+	 * builtins below (whose value paths would disagree with the macro), the two dot-heads
+	 * (instance-call position) and, by rule in {@link #defmacroForms}, anything dotted,
+	 * suffixed or qualified.
+	 */
+	private static final Set<String> MACRO_RESERVED = Set.of("quote", "def", "defn", "defmacro", "fn", "let", "loop",
+			"declare", "->", "->>", "as->", "doto", "cond->", "cond->>", "some->", "some->>", "list*", "doseq",
+			"dotimes", "for", "defmulti", "defmethod", "remove-method", "get-method", "prefer-method", "derive",
+			"underive", "isa?", "parents", "ancestors", "descendants", "make-hierarchy", "defprotocol", "defrecord",
+			"deftype", "definterface", "reify", "extend-protocol", "extend-type", "extend", "satisfies?", "gen-class",
+			"gen-interface", "try", "throw", "ex-info", "ex-data", "ex-message", "atom", "deref", "swap!", "reset!",
+			"compare-and-set!", "volatile!", "vreset!", "vswap!", "add-watch", "remove-watch", "comment", "require",
+			"use", "import", "in-ns", "set!", "memfn", "proxy", "new", "syntax-quote", "unquote", "unquote-splicing",
+			"var", "with-meta", "if", "when", "cond", "do", "recur", ".", "..", "gensym", "macroexpand-1",
+			"macroexpand");
+
+	/**
+	 * {@code (defmacro name doc? attr? ([params] body...)+)}: a compile-time expander
+	 * plus its runtime table entry, so {@code macroexpand-1} sees the same function the
+	 * lower-time expansion runs. One entry per arity is overkill here (unlike
+	 * {@code defn}, whose arities are callable separately): the expander is a single
+	 * lambda over the call's argument list dispatching on its length, applying each
+	 * arity's parameters the way {@code multiFn} binds its. A docstring and an attr map
+	 * are skipped, like {@code defn} and {@code defmulti}; {@code &} rest, destructured
+	 * parameters and several arities work the same way. {@code &form} and {@code &env}
+	 * are refused: there is no compilation environment to bind. The definition emits
+	 * {@code (progn (setq c%name%macro expander) nil)} -- a lone {@code %} no mangled
+	 * identifier spells, so the table stays apart from user definitions, like the
+	 * multi-arity helpers -- and registers the expander for the call sites below it; a
+	 * call above the definition names the missing expander instead of an unknown name.
+	 */
+	private List<LispVal> defmacroForms(List<LispVal> items) {
+		isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
+		String name = plainName(items.get(1), "defmacro");
+		isTrue(!MACRO_RESERVED.contains(name) && !name.startsWith(".") && !name.endsWith(".") && name.indexOf('/') < 0,
+				name + " cannot name a macro: it names a core form");
+		int at = 2;
+		if (items.size() > at && items.get(at) instanceof LispString) {
+			at++; // the docstring
+		}
+		if (items.size() > at) {
+			List<LispVal> attr = items(items.get(at));
+			if (attr != null && !attr.isEmpty() && isSymbolNamed(attr.get(0), "%hash-map")) {
+				at++; // the attr map
+			}
+		}
+		isTrue(items.size() > at, "defmacro needs a parameter vector and a body");
+		List<Clause> clauses;
+		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+			List<LispVal> raw = items.subList(at, items.size());
+			for (LispVal clauseDatum : raw) {
+				List<LispVal> parts = items(clauseDatum);
+				if (parts != null && !parts.isEmpty()) {
+					refuseEnvForm(parts.get(0));
+				}
+			}
+			clauses = arityClauses(raw, "defmacro");
+		}
+		else {
+			refuseEnvForm(items.get(at));
+			clauses = List.of(clause(items.get(at), items.subList(at + 1, items.size())));
+		}
+		LispVal expander = macroExpander(name, clauses);
+		LispSymbol table = macroTable(name);
+		this.macros.put(name, expander);
+		this.globals.put(name, Kind.MACRO);
+		this.usedMacros = true;
+		LispVal setq = list(sym("setq"), table, expander);
+		if (this.macroEvaluator != null) {
+			// the macro-time table entry, so a macro body calling macroexpand-1
+			// at expansion time sees the macros defined so far
+			try {
+				this.macroEvaluator.evaluate(setq);
+			}
+			catch (RuntimeException ex) {
+				throw positioned(new LispReadException(exMessage(ex)), items.get(0));
+			}
+		}
+		return List.of(list(sym("progn"), setq, NIL_CONST));
+	}
+
+	/** The runtime table global holding a macro's expander. */
+	private static LispSymbol macroTable(String name) {
+		return new LispSymbol(mangle(name) + "%macro");
+	}
+
+	/**
+	 * Refuses {@code &form} and {@code &env} anywhere in a macro parameter datum: a macro
+	 * body runs with its arguments only, never with a compilation environment.
+	 */
+	private static void refuseEnvForm(LispVal datum) {
+		if (datum instanceof LispSymbol s) {
+			if (s.name().equals("&form") || s.name().equals("&env")) {
+				throw new LispReadException(s.name() + " is not supported yet: macros receive no environment");
+			}
+			return;
+		}
+		List<LispVal> parts = items(datum);
+		if (parts == null) {
+			return;
+		}
+		for (LispVal part : parts) {
+			refuseEnvForm(part);
+		}
+	}
+
+	/**
+	 * A macro's expander: one lambda over the call's argument list, dispatching on its
+	 * length like the multi-arity dispatch and applying each arity's parameters (with
+	 * their destructuring prologue) to the lowered body. The same lambda runs at lower
+	 * time (through the macro evaluator) and at run time (through the table global), so
+	 * the two expansions agree by construction.
+	 */
+	private LispVal macroExpander(String name, List<Clause> clauses) {
+		LispSymbol args = freshTemp();
+		if (clauses.size() == 1 && !clauses.get(0).variadic()) {
+			Clause only = clauses.get(0);
+			return list(sym("lambda"), list(args), list(sym("if"),
+					list(sym("="), list(sym("length"), args), new LispInteger(only.fixed())),
+					list(sym("apply"), list(sym("lambda"), list(only.params()), only.wrapped()), args),
+					list(sym("error"), LispString.literal("wrong number of arguments passed to macro: " + name))));
+		}
+		LispSymbol count = freshTemp();
+		List<LispVal> arms = new ArrayList<>();
+		for (Clause clause : clauses) {
+			LispVal test = clause.variadic() ? list(sym(">="), count, new LispInteger(clause.fixed()))
+					: list(sym("="), count, new LispInteger(clause.fixed()));
+			arms.add(
+					list(test, list(sym("apply"), list(sym("lambda"), list(clause.params()), clause.wrapped()), args)));
+		}
+		arms.add(list(TRUE_CONST,
+				list(sym("error"), LispString.literal("wrong number of arguments passed to macro: " + name))));
+		return list(sym("lambda"), list(args),
+				list(sym("let"), list(List.of(list(count, list(sym("length"), args)))), cons(sym("cond"), arms)));
+	}
+
+	/**
+	 * A call whose head names a macro: the expansion, lowered in place of the call. A
+	 * local binding shadows the macro (a parameter, a {@code let} name); a macro name
+	 * without its expander is a call above its definition. Null when the head names no
+	 * macro.
+	 */
+	private @Nullable LispVal macroCall(String name, List<LispVal> items) {
+		for (Map<String, Kind> scope : this.scopes) {
+			if (scope.containsKey(name)) {
+				return null; // a local binding shadows the macro
+			}
+		}
+		LispVal expander = this.macros.get(name);
+		String macroName = name;
+		if (expander == null) {
+			VarRef qualified = resolveQualified(name);
+			VarRef ref = qualified != null ? qualified : this.refers.get(name);
+			if (ref != null) {
+				expander = this.macros.get(ref.var());
+				macroName = ref.var();
+			}
+		}
+		if (expander == null) {
+			if (isMacro(name)) {
+				throw new LispReadException("macro `" + name + "` used before its definition");
+			}
+			return null;
+		}
+		return expandMacro(macroName, expander, items);
+	}
+
+	/**
+	 * One macro call expanded: the argument datums travel quoted (the same values a
+	 * quoted form answers at run time, so the two expanders agree) into one application
+	 * of the expander, the answer decodes back to a datum and lowers like any other form
+	 * -- which expands the macros the expansion calls, one depth deeper.
+	 */
+	private LispVal expandMacro(String name, LispVal expander, List<LispVal> items) {
+		if (this.macroDepth >= MAX_MACRO_DEPTH) {
+			throw new LispReadException("macro expansion of `" + name + "` did not terminate");
+		}
+		if (this.macroEvaluator == null) {
+			throw new LispReadException(
+					"macro `" + name + "` cannot expand without a macro evaluator (lower with one)");
+		}
+		List<LispVal> quoted = new ArrayList<>();
+		for (int i = 1; i < items.size(); i++) {
+			quoted.add(quote(items.get(i)));
+		}
+		LispVal invocation = list(sym("funcall"), expander, cons(sym("list"), quoted));
+		LispVal value;
+		try {
+			value = this.macroEvaluator.evaluate(invocation);
+		}
+		catch (RuntimeException ex) {
+			throw new LispReadException("in macro `" + name + "`: " + exMessage(ex));
+		}
+		LispVal expansion;
+		try {
+			expansion = decodeDatum(value);
+		}
+		catch (LispReadException ex) {
+			throw new LispReadException("macro `" + name + "` answered an unreadable value: " + ex.getMessage());
+		}
+		this.macroDepth++;
+		try {
+			return lower(expansion);
+		}
+		finally {
+			this.macroDepth--;
+		}
+	}
+
+	private static String exMessage(RuntimeException ex) {
+		String message = ex.getMessage();
+		return message == null ? ex.toString() : message;
+	}
+
+	/**
+	 * A macro answer back to a datum: the inverse of {@link #quote}, so the expansion
+	 * lowers the way the quoted call-site data would. Mangled symbols shed the prefix,
+	 * keyword and set wrappers answer their datum, vectors and tables their literals, and
+	 * a gensym ({@code #:}-spelled, uninterned) travels as itself so the {@code #:}
+	 * bypass lowers it back to the same symbol.
+	 */
+	private LispVal decodeDatum(LispVal value) {
+		if (value instanceof LispNil) {
+			return new LispSymbol("nil");
+		}
+		if (value instanceof LispTrue) {
+			return new LispSymbol("true");
+		}
+		if (value instanceof LispSymbol s) {
+			String symbol = s.name();
+			if (symbol.equals("false") || symbol.equals("T")) {
+				return new LispSymbol(symbol.equals("T") ? "true" : "false");
+			}
+			if (symbol.startsWith("#:")) {
+				return new LispSymbol(symbol);
+			}
+			if (symbol.startsWith(PREFIX)) {
+				return new LispSymbol(unmangleName(symbol.substring(PREFIX.length())));
+			}
+			throw new LispReadException("an unreadable symbol: " + value.print());
+		}
+		if (value instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol tag) {
+				if (tag.name().equals(":C%KEYWORD")) {
+					return decodeKeyword(cons);
+				}
+				if (tag.name().equals(":C%SET")) {
+					return decodeSet(cons);
+				}
+				if (tag.name().equals(":C%ATOM")) {
+					throw new LispReadException("an atom cannot travel through a macro expansion");
+				}
+			}
+			List<LispVal> out = new ArrayList<>();
+			LispVal run = value;
+			while (run instanceof LispCons cell) {
+				out.add(decodeDatum(cell.car()));
+				run = cell.cdr();
+			}
+			if (run instanceof LispNil) {
+				return list(out);
+			}
+			LispVal tail = decodeDatum(run);
+			for (int i = out.size() - 1; i >= 0; i--) {
+				tail = new LispCons(out.get(i), tail);
+			}
+			return tail;
+		}
+		if (value instanceof LispArray array && array.dimensions().length == 1) {
+			List<LispVal> elements = new ArrayList<>();
+			elements.add(ClojureReader.VECTOR);
+			for (int i = 0; i < array.totalSize(); i++) {
+				elements.add(decodeDatum(array.readFlat(i)));
+			}
+			return list(elements);
+		}
+		if (value instanceof LispHashTable table) {
+			List<LispVal> elements = new ArrayList<>();
+			elements.add(new LispSymbol("%hash-map"));
+			for (LispHashTable.Entry entry : table.entries()) {
+				elements.add(decodeDatum(entry.key()));
+				elements.add(decodeDatum(entry.value()));
+			}
+			return list(elements);
+		}
+		if (value instanceof LispString || value instanceof LispChar || value instanceof LispInteger
+				|| value instanceof am.ik.rontolisp.LispBigInteger || value instanceof am.ik.rontolisp.LispRatio
+				|| value instanceof am.ik.rontolisp.LispDouble) {
+			return value;
+		}
+		throw new LispReadException("an unreadable value: " + value.print());
+	}
+
+	private LispVal decodeKeyword(LispCons wrapper) {
+		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispString spelling
+				&& rest.cdr() instanceof LispNil) {
+			return new LispSymbol(":" + spelling.value());
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	private LispVal decodeSet(LispCons wrapper) {
+		if (wrapper.cdr() instanceof LispCons rest && rest.car() instanceof LispHashTable table
+				&& rest.cdr() instanceof LispNil) {
+			List<LispVal> elements = new ArrayList<>();
+			elements.add(new LispSymbol("%hash-set"));
+			for (LispHashTable.Entry entry : table.entries()) {
+				elements.add(decodeDatum(entry.key()));
+			}
+			return list(elements);
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
+	}
+
+	/**
+	 * The inverse of {@link #mangle}: {@code %%} is {@code %}, {@code %c} is {@code :},
+	 * anything else travels as spelled.
+	 */
+	private static String unmangleName(String mangled) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < mangled.length(); i++) {
+			char c = mangled.charAt(i);
+			if (c == '%' && i + 1 < mangled.length()) {
+				char next = mangled.charAt(i + 1);
+				if (next == '%') {
+					out.append('%');
+					i++;
+					continue;
+				}
+				if (next == 'c') {
+					out.append(':');
+					i++;
+					continue;
+				}
+			}
+			out.append(c);
+		}
+		return out.toString();
+	}
+
+	/**
+	 * {@code `form}: syntax-quote, lowered to {@code quote} with unquote splicing over
+	 * the mangled namespace. Every symbol qualifies (the {@code c%} prefix, the
+	 * documented deviation: there are no namespaces to qualify against); {@code ~} lowers
+	 * its form as code, {@code ~@} splices a sequence into the enclosing list, vector,
+	 * map or set, and each {@code x#} binds one {@code (gensym "x")} per syntax-quote
+	 * node, so the name is one symbol per expansion and the same symbol at every
+	 * occurrence within it.
+	 */
+	private LispVal syntaxQuote(LispVal datum) {
+		return syntaxQuoteNode(datum);
+	}
+
+	private LispVal syntaxQuoteNode(LispVal datum) {
+		Map<String, LispSymbol> gens = new LinkedHashMap<>();
+		this.syntaxGens.add(gens);
+		try {
+			LispVal body = syntaxQuoted(datum, 1, gens);
+			if (gens.isEmpty()) {
+				return body;
+			}
+			List<LispVal> bindings = new ArrayList<>();
+			for (Map.Entry<String, LispSymbol> entry : gens.entrySet()) {
+				bindings.add(list(entry.getValue(), list(sym("gensym"), LispString.literal(entry.getKey()))));
+			}
+			return list(sym("let"), list(bindings), body);
+		}
+		finally {
+			this.syntaxGens.remove(this.syntaxGens.size() - 1);
+		}
+	}
+
+	private LispVal syntaxQuoted(LispVal datum, int level, Map<String, LispSymbol> gens) {
+		List<LispVal> marked = items(datum, List.of());
+		if (!marked.isEmpty() && marked.get(0) == ClojureReader.VECTOR) {
+			return syntaxQuotedVector(marked.subList(1, marked.size()), level, gens);
+		}
+		if (!marked.isEmpty() && isSymbolNamed(marked.get(0), "%hash-map")) {
+			return syntaxQuotedMap(marked.subList(1, marked.size()), level, gens);
+		}
+		if (!marked.isEmpty() && isSymbolNamed(marked.get(0), "%hash-set")) {
+			return syntaxQuotedSet(marked.subList(1, marked.size()), level, gens);
+		}
+		if (datum instanceof LispCons) {
+			List<LispVal> parts = items(datum);
+			if (parts == null) {
+				throw new LispReadException("a dotted list is not a Clojure form");
+			}
+			if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol head) {
+				if (head.name().equals("syntax-quote")) {
+					isTrue(parts.size() == 2, "syntax-quote takes one form");
+					return syntaxQuoteNode(parts.get(1));
+				}
+				if (head.name().equals("unquote")) {
+					isTrue(parts.size() == 2, "unquote takes one form");
+					if (level == 1) {
+						return unquoted(parts.get(1));
+					}
+					return list(sym("list"), syntaxQuotedSymbol("unquote"),
+							syntaxQuoted(parts.get(1), level - 1, gens));
+				}
+				if (head.name().equals("unquote-splicing")) {
+					isTrue(parts.size() == 2, "unquote-splicing takes one form");
+					if (level == 1) {
+						throw new LispReadException(
+								"unquote-splicing outside a sequence: `~@` only splices inside a list, vector, map or set");
+					}
+					return list(sym("list"), syntaxQuotedSymbol("unquote-splicing"),
+							syntaxQuoted(parts.get(1), level - 1, gens));
+				}
+			}
+			return syntaxQuotedSeq(parts, level, gens);
+		}
+		if (datum instanceof LispSymbol s) {
+			return syntaxQuotedSymbol(s.name(), gens);
+		}
+		return datum; // numbers, strings and characters are self-evaluating
+	}
+
+	private LispVal syntaxQuotedSymbol(String name) {
+		return syntaxQuotedSymbol(name, null);
+	}
+
+	private LispVal syntaxQuotedSymbol(String name, @Nullable Map<String, LispSymbol> gens) {
+		if (name.equals("nil")) {
+			return NIL_CONST;
+		}
+		if (name.equals("true")) {
+			return TRUE_CONST;
+		}
+		if (name.equals("false")) {
+			return this.falseVariable;
+		}
+		if (name.startsWith(":")) {
+			validateKeyword(name);
+			return keywordForm(name.substring(1));
+		}
+		if (name.endsWith("#") && name.length() > 1 && gens != null) {
+			String stem = name.substring(0, name.length() - 1);
+			LispSymbol bound = gens.get(stem);
+			if (bound == null) {
+				bound = freshTemp();
+				gens.put(stem, bound);
+			}
+			return bound;
+		}
+		return list(sym("quote"), idSym(name));
+	}
+
+	/**
+	 * An unquoted form: code, lowered as written -- except {@code ~x#}, which answers the
+	 * gensym the enclosing template bound for {@code x#}.
+	 */
+	private LispVal unquoted(LispVal datum) {
+		if (datum instanceof LispSymbol s && s.name().endsWith("#") && s.name().length() > 1) {
+			String stem = s.name().substring(0, s.name().length() - 1);
+			for (int i = this.syntaxGens.size() - 1; i >= 0; i--) {
+				LispSymbol bound = this.syntaxGens.get(i).get(stem);
+				if (bound != null) {
+					return bound;
+				}
+			}
+		}
+		return lower(datum);
+	}
+
+	private LispVal syntaxQuotedSeq(List<LispVal> parts, int level, Map<String, LispSymbol> gens) {
+		List<LispVal> segments = new ArrayList<>();
+		List<LispVal> run = new ArrayList<>();
+		for (LispVal element : parts) {
+			List<LispVal> spliced = splicingOf(element, level);
+			if (spliced != null) {
+				if (!run.isEmpty()) {
+					segments.add(cons(sym("list"), run));
+					run = new ArrayList<>();
+				}
+				segments.add(seqForm(lower(spliced.get(1))));
+				continue;
+			}
+			List<LispVal> single = unquoteOf(element, level);
+			run.add(single != null ? unquoted(single.get(1)) : syntaxQuoted(element, level, gens));
+		}
+		if (!run.isEmpty()) {
+			segments.add(cons(sym("list"), run));
+		}
+		if (segments.isEmpty()) {
+			return NIL_CONST;
+		}
+		if (segments.size() == 1) {
+			return segments.get(0);
+		}
+		return cons(sym("append"), segments);
+	}
+
+	/**
+	 * The {@code (unquote-splicing X)} parts, or null when the element splices nothing.
+	 */
+	private static @Nullable List<LispVal> splicingOf(LispVal element, int level) {
+		if (level != 1) {
+			return null;
+		}
+		List<LispVal> parts = items(element);
+		if (parts != null && parts.size() == 2 && isSymbolNamed(parts.get(0), "unquote-splicing")) {
+			return parts;
+		}
+		return null;
+	}
+
+	/** The {@code (unquote X)} parts, or null when the element unquotes nothing. */
+	private static @Nullable List<LispVal> unquoteOf(LispVal element, int level) {
+		if (level != 1) {
+			return null;
+		}
+		List<LispVal> parts = items(element);
+		if (parts != null && parts.size() == 2 && isSymbolNamed(parts.get(0), "unquote")) {
+			return parts;
+		}
+		return null;
+	}
+
+	private LispVal syntaxQuotedVector(List<LispVal> elements, int level, Map<String, LispSymbol> gens) {
+		List<LispVal> segments = new ArrayList<>();
+		List<LispVal> run = new ArrayList<>();
+		boolean spliced = false;
+		for (LispVal element : elements) {
+			List<LispVal> splice = splicingOf(element, level);
+			if (splice != null) {
+				if (!run.isEmpty()) {
+					segments.add(cons(sym("list"), run));
+					run = new ArrayList<>();
+				}
+				segments.add(seqForm(lower(splice.get(1))));
+				spliced = true;
+				continue;
+			}
+			List<LispVal> single = unquoteOf(element, level);
+			run.add(single != null ? unquoted(single.get(1)) : syntaxQuoted(element, level, gens));
+		}
+		if (!spliced) {
+			return cons(sym("vector"), run);
+		}
+		if (!run.isEmpty()) {
+			segments.add(cons(sym("list"), run));
+		}
+		LispVal appended = segments.size() == 1 ? segments.get(0) : cons(sym("append"), segments);
+		return list(sym("apply"), list(sym("function"), sym("vector")), appended);
+	}
+
+	private LispVal syntaxQuotedMap(List<LispVal> pairs, int level, Map<String, LispSymbol> gens) {
+		List<LispVal> segments = new ArrayList<>();
+		List<LispVal> run = new ArrayList<>();
+		boolean spliced = false;
+		for (LispVal element : pairs) {
+			List<LispVal> splice = splicingOf(element, level);
+			if (splice != null) {
+				if (!run.isEmpty()) {
+					segments.add(cons(sym("list"), run));
+					run = new ArrayList<>();
+				}
+				// a flat sequence of alternating keys and values, like the
+				// literal pairs around it
+				segments.add(seqForm(lower(splice.get(1))));
+				spliced = true;
+				continue;
+			}
+			List<LispVal> single = unquoteOf(element, level);
+			run.add(single != null ? unquoted(single.get(1)) : syntaxQuoted(element, level, gens));
+		}
+		if (!spliced) {
+			return mapBuild(run);
+		}
+		if (!run.isEmpty()) {
+			segments.add(cons(sym("list"), run));
+		}
+		LispVal appended = segments.size() == 1 ? segments.get(0) : cons(sym("append"), segments);
+		return tableFromPlist(appended);
+	}
+
+	private LispVal syntaxQuotedSet(List<LispVal> elements, int level, Map<String, LispSymbol> gens) {
+		boolean spliced = false;
+		for (LispVal element : elements) {
+			if (splicingOf(element, level) != null) {
+				spliced = true;
+				break;
+			}
+		}
+		if (!spliced) {
+			List<LispVal> lowered = new ArrayList<>();
+			for (LispVal element : elements) {
+				List<LispVal> single = unquoteOf(element, level);
+				lowered.add(single != null ? unquoted(single.get(1)) : syntaxQuoted(element, level, gens));
+			}
+			return setBuild(lowered);
+		}
+		LispSymbol table = freshTemp();
+		List<LispVal> inits = new ArrayList<>();
+		List<LispVal> run = new ArrayList<>();
+		for (LispVal element : elements) {
+			List<LispVal> splice = splicingOf(element, level);
+			if (splice != null) {
+				if (!run.isEmpty()) {
+					inits.add(setSplice(table, cons(sym("list"), run)));
+					run = new ArrayList<>();
+				}
+				inits.add(setSplice(table, seqForm(lower(splice.get(1)))));
+				continue;
+			}
+			List<LispVal> single = unquoteOf(element, level);
+			run.add(single != null ? unquoted(single.get(1)) : syntaxQuoted(element, level, gens));
+		}
+		if (!run.isEmpty()) {
+			inits.add(setSplice(table, cons(sym("list"), run)));
+		}
+		List<LispVal> body = new ArrayList<>(inits);
+		body.add(wrapSet(table));
+		return list(sym("let"), list(List.of(list(table, makeTable()))), cons(sym("progn"), body));
+	}
+
+	private LispVal setSplice(LispSymbol table, LispVal members) {
+		LispSymbol one = freshTemp();
+		return list(sym("dolist"), list(List.of(one, members)),
+				list(sym("setf"), list(sym("gethash"), one, table), one));
+	}
+
+	/**
+	 * {@code (gensym)} / {@code (gensym prefix)}: the ordinary uninterned symbol, a fresh
+	 * one per evaluation -- per expansion inside a macro, per call at run time. An
+	 * integer suffix spells itself ({@code (gensym 5)} is {@code #:G5}); anything else
+	 * validates at run time, like the oracle.
+	 */
+	private LispVal gensymOf(List<LispVal> items) {
+		int n = items.size() - 1;
+		isTrue(n <= 1, "gensym takes an optional prefix");
+		if (n == 0) {
+			return list(sym("gensym"));
+		}
+		return list(sym("gensym"), lower(items.get(1)));
+	}
+
+	/** {@code macroexpand-1} / {@code macroexpand} as a value: a one-argument lambda. */
+	private LispVal macroexpandValue(String helper) {
+		this.usedMacros = true;
+		LispSymbol form = new LispSymbol(mangle("expand-form"));
+		return list(sym("lambda"), list(form), list(new LispSymbol(helper), form));
+	}
+
+	/**
+	 * The macro runtime, spliced once behind the false binding when the program defines
+	 * or expands macros: the table lookup over the {@code c%name%macro} globals, the
+	 * demangler (mangled symbols back to readable ones for printing; everything else
+	 * travels untouched) and the once/fixpoint expanders. Pure lowering over the shared
+	 * primitives, so every backend runs it unchanged.
+	 */
+	private List<LispVal> macroRuntime() {
+		List<LispVal> runtime = new ArrayList<>();
+		LispSymbol op = new LispSymbol("op");
+		LispSymbol name = new LispSymbol("name");
+		LispSymbol found = new LispSymbol("found");
+		LispSymbol cell = new LispSymbol("cell");
+		LispSymbol form = new LispSymbol("form");
+		LispSymbol next = new LispSymbol("next");
+		LispSymbol value = new LispSymbol("x");
+		LispSymbol text = new LispSymbol("text");
+		LispSymbol at = new LispSymbol("at");
+		LispSymbol end = new LispSymbol("end");
+		LispSymbol chars = new LispSymbol("chars");
+		LispSymbol one = new LispSymbol("one");
+		LispSymbol two = new LispSymbol("two");
+		LispSymbol vec = new LispSymbol("vec");
+		LispSymbol index = new LispSymbol("index");
+		LispSymbol acc = new LispSymbol("acc");
+		// (defun C%MACRO-FN (op) ...): the expander for a macro call's head, or nil
+		LispVal isMangled = hfn("AND", hfn(">=", hfn("LENGTH", name), new LispInteger(2)),
+				hfn("CHAR=", hfn("CHAR", name, new LispInteger(0)), new LispChar('c')),
+				hfn("CHAR=", hfn("CHAR", name, new LispInteger(1)), new LispChar('%')));
+		LispVal tabled = hlet(
+				List.of(list(found,
+						hfn("INTERN", hfn("CONCATENATE", quoted("string"), name, LispString.literal("%macro"))))),
+				hfn("IF", hfn("BOUNDP", found), hlet(List.of(list(cell, hfn("SYMBOL-VALUE", found))),
+						hfn("IF", hfn("FUNCTIONP", cell), cell, NIL_CONST)), NIL_CONST));
+		runtime.add(hdefun("C%MACRO-FN", List.of(op),
+				hfn("IF", hfn("SYMBOLP", op),
+						hlet(List.of(list(name, hfn("SYMBOL-NAME", op))), hfn("IF", isMangled, tabled, NIL_CONST)),
+						NIL_CONST)));
+		// (defun C%UNMANGLE (text at end) ...): the demangled spelling as a string
+		LispVal step = hfnDef("STEP", List.of(at, chars), hfn("IF", hfn(">=", at, end),
+				hfn("APPLY", list(sym("function"), sym("concatenate")), quoted("string"), hfn("REVERSE", chars)),
+				hlet(List.of(list(one, hfn("CHAR", text, at))),
+						hfn("IF",
+								hfn("AND", hfn("CHAR=", one, new LispChar('%')),
+										hfn("<", hfn("+", at, new LispInteger(1)), end)),
+								hlet(List.of(list(two, hfn("CHAR", text, hfn("+", at, new LispInteger(1))))),
+										hfn("COND",
+												list(hfn("CHAR=", two, new LispChar('%')),
+														hfn("STEP", hfn("+", at, new LispInteger(2)),
+																hfn("CONS", LispString.literal("%"), chars))),
+												list(hfn("CHAR=", two, new LispChar('c')),
+														hfn("STEP", hfn("+", at, new LispInteger(2)),
+																hfn("CONS", LispString.literal(":"), chars))),
+												list(TRUE_CONST,
+														hfn("STEP", hfn("+", at, new LispInteger(1)),
+																hfn("CONS", hfn("STRING", one), chars))))),
+								hfn("STEP", hfn("+", at, new LispInteger(1)),
+										hfn("CONS", hfn("STRING", one), chars))))));
+		runtime.add(hdefun("C%UNMANGLE", List.of(text, at, end), hlabels(List.of(step), hfn("STEP", at, NIL_CONST))));
+		// (defun C%DEMANGLE-SYMBOL (s) ...): a mangled symbol back to its readable name,
+		// uppercased like every other symbol the printer spells (case folds, print-only)
+		runtime.add(hdefun("C%DEMANGLE-SYMBOL", List.of(value), hlet(List.of(list(text, hfn("SYMBOL-NAME", value))),
+				hfn("IF",
+						hfn("AND", hfn(">=", hfn("LENGTH", text), new LispInteger(2)),
+								hfn("CHAR=", hfn("CHAR", text, new LispInteger(0)), new LispChar('c')),
+								hfn("CHAR=", hfn("CHAR", text, new LispInteger(1)), new LispChar('%'))),
+						hfn("INTERN",
+								hfn("STRING-UPCASE", hfn("C%UNMANGLE", text, new LispInteger(2), hfn("LENGTH", text)))),
+						value))));
+		// (defun C%DEMANGLE-VECTOR (v) ...): the elements demangled, in a fresh vector
+		LispVal walkVec = hfnDef("WALK", List.of(index, acc),
+				hfn("IF", hfn(">=", index, hfn("LENGTH", vec)), hfn("COERCE", hfn("REVERSE", acc), quoted("vector")),
+						hfn("WALK", hfn("+", index, new LispInteger(1)),
+								hfn("CONS", hfn("C%DEMANGLE", hfn("AREF", vec, index)), acc))));
+		runtime.add(hdefun("C%DEMANGLE-VECTOR", List.of(vec),
+				hlabels(List.of(walkVec), hfn("WALK", new LispInteger(0), NIL_CONST))));
+		// (defun C%DEMANGLE (x) ...): lists and vectors demangled, anything else itself
+		runtime.add(hdefun("C%DEMANGLE", List.of(value), hfn("COND", list(hfn("NULL", value), NIL_CONST),
+				list(hfn("SYMBOLP", value), hfn("C%DEMANGLE-SYMBOL", value)),
+				list(hfn("CONSP", value),
+						hfn("CONS", hfn("C%DEMANGLE", hfn("CAR", value)), hfn("C%DEMANGLE", hfn("CDR", value)))),
+				list(hfn("VECTORP", value), hfn("C%DEMANGLE-VECTOR", value)), list(TRUE_CONST, value))));
+		// (defun C%MACROEXPAND-1 (form) ...): one expansion, demangled for printing
+		runtime.add(hdefun(MACROEXPAND_1, List.of(form),
+				hlet(List.of(list(next, hfn("IF", hfn("CONSP", form), hfn("C%MACRO-FN", hfn("CAR", form)), NIL_CONST))),
+						hfn("C%DEMANGLE", hfn("IF", next, hfn("FUNCALL", next, hfn("CDR", form)), form)))));
+		// (defun C%MACROEXPAND (form) ...): to the fixpoint, demangled once at the end
+		LispVal walkExpand = hfnDef("WALK", List.of(form),
+				hlet(List.of(list(next, hfn("IF", hfn("CONSP", form), hfn("C%MACRO-FN", hfn("CAR", form)), NIL_CONST))),
+						hfn("IF", next, hfn("WALK", hfn("FUNCALL", next, hfn("CDR", form))), form)));
+		runtime.add(
+				hdefun(MACROEXPAND, List.of(form), hlabels(List.of(walkExpand), hfn("C%DEMANGLE", hfn("WALK", form)))));
+		return runtime;
+	}
+
+	/**
+	 * The false binding as a standalone form, for the macro-time evaluator the driver
+	 * builds: the same form a file carries first, so expansions answer the false object
+	 * the program compares against.
+	 * @return the form
+	 */
+	public static LispVal falseBindingForm() {
+		return list(sym("SETQ"), new LispSymbol(FALSE_VARIABLE), list(sym("QUOTE"), new LispSymbol(FALSE_VALUE_NAME)));
 	}
 
 	// hierarchies: derive/underive/isa?/parents/ancestors/descendants/make-hierarchy,
@@ -5093,6 +5981,26 @@ final class ClojureLowering {
 		return global == Kind.FUNCTION;
 	}
 
+	private boolean isMacro(String name) {
+		for (Map<String, Kind> scope : this.scopes) {
+			Kind kind = scope.get(name);
+			if (kind != null) {
+				return kind == Kind.MACRO;
+			}
+		}
+		return this.globals.get(name) == Kind.MACRO;
+	}
+
+	/**
+	 * Who evaluates one macro application in the macro-time environment. A session keeps
+	 * one lowering across buffers and sets this once, so a macro defined in one buffer
+	 * expands in a later one.
+	 * @param macroEvaluator the evaluator, or null for none
+	 */
+	void setMacroEvaluator(@Nullable ClojureMacroEvaluator macroEvaluator) {
+		this.macroEvaluator = macroEvaluator;
+	}
+
 	private <T> T inScope(Map<String, Kind> scope, java.util.function.Supplier<T> body) {
 		this.scopes.add(scope);
 		try {
@@ -5105,7 +6013,7 @@ final class ClojureLowering {
 
 	private enum Kind {
 
-		VARIABLE, FUNCTION
+		VARIABLE, FUNCTION, MACRO
 
 	}
 
@@ -5174,9 +6082,14 @@ final class ClojureLowering {
 	/**
 	 * A user identifier as a symbol: mangled behind the prefix but otherwise
 	 * case-preserved, so {@code Foo} and {@code foo} stay apart. The prefix holds a
-	 * lowercase letter, so no result can collide with a core form or built-in.
+	 * lowercase letter, so no result can collide with a core form or built-in. A
+	 * {@code #:}-spelled gensym a macro expansion returned travels as itself, so it
+	 * lowers back to the same uninterned symbol.
 	 */
 	private static LispSymbol idSym(String identifier) {
+		if (identifier.startsWith("#:")) {
+			return new LispSymbol(identifier);
+		}
 		return new LispSymbol(mangle(identifier));
 	}
 

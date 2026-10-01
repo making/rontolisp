@@ -1266,3 +1266,76 @@ cases:
       (2 3)
       (nil nil)
       ([1] [2])
+  - name: defmacro-unless-expands-before-backends
+    # A defmacro is a compile-time expander plus its runtime table entry: call sites
+    # expand while lowering (every backend runs expanded code), and macroexpand-1 sees
+    # the same function at run time. Expansions print demangled and uppercased, like
+    # every other symbol spelling here.
+    source: |
+      (defmacro sp-unless [c t] (list 'if c nil t))
+      (println (macroexpand-1 '(sp-unless true 1)))
+      (println (macroexpand '(sp-unless false 42)))
+      (println (sp-unless false 42))
+      (println (sp-unless true 1))
+      (println (macroexpand-1 '(+ 1 2)))
+    expected: |
+      (IF true nil 1)
+      (IF false nil 42)
+      42
+      nil
+      (+ 1 2)
+  - name: chain-macros-rebuild-dot-forms
+    # The book's chain_1..5, ported: list/concat bodies, then syntax-quote bodies with
+    # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
+    # book's). Expansions print; the runnable ones run through the string-method
+    # mapping, so every backend agrees.
+    source: |
+      (defmacro sp-chain1 [x form] (list '. x form))
+      (defmacro sp-chain2 ([x form] (list '. x form)) ([x form & more] (concat (list 'sp-chain2 (list '. x form)) more)))
+      (defmacro sp-chain3 [x form] `(. ~x ~form))
+      (defmacro sp-chain4 ([x form] `(. ~x ~form)) ([x form & more] `(sp-chain4 (. ~x ~form) ~more)))
+      (defmacro sp-chain5 ([x form] `(. ~x ~form)) ([x form & more] `(sp-chain5 (. ~x ~form) ~@more)))
+      (println (macroexpand-1 '(sp-chain1 a b)))
+      (println (macroexpand-1 '(sp-chain2 a b c)))
+      (println (macroexpand-1 '(sp-chain3 a b)))
+      (println (macroexpand-1 '(sp-chain4 a b c)))
+      (println (macroexpand-1 '(sp-chain5 a b c)))
+      (println (macroexpand '(sp-chain5 a b c)))
+      (println (macroexpand '(sp-chain2 a b c d)))
+      (println (sp-chain1 "hi" toUpperCase))
+      (println (sp-chain5 "hi" toUpperCase length))
+    expected: |
+      (. A B)
+      (SP-CHAIN2 (. A B) C)
+      (. A B)
+      (SP-CHAIN4 (. A B) (C))
+      (SP-CHAIN5 (. A B) C)
+      (. (. A B) C)
+      (. (. (. A B) C) D)
+      HI
+      2
+  - name: bench-hygiene-through-gensyms
+    # The book's bench: x# binds one gensym per expansion (fresh across expansions,
+    # one symbol within one), so the measurement locals never capture. The timer is a
+    # portable count here -- System/nanoTime has no wasm leg -- and only the
+    # deterministic answers print.
+    source: |
+      (defmacro sp-bench [expr] `(let [start# (count [1]) result# ~expr] {:result result# :elapsed (- (count [1 2]) start#)}))
+      (println (:result (sp-bench (+ 1 2))))
+      (println (:elapsed (sp-bench (+ 1 2))))
+      (println (not (= (macroexpand-1 '(sp-bench 1)) (macroexpand-1 '(sp-bench 1)))))
+      (let [sp-e (macroexpand-1 '(sp-bench 41)) sp-bv (nth sp-e 1)]
+        (println (list (= (nth sp-bv 0) (nth sp-bv 0)) (= (nth sp-bv 0) (get (nth sp-e 2) :result)) (= (nth sp-bv 2) (get (nth sp-e 2) :result)))))
+    expected: |
+      3
+      1
+      true
+      (true false true)
+  - name: gensym-answers-fresh-symbols
+    source: |
+      (let [sp-g1 (gensym "sp-t") sp-g2 (gensym "sp-t")]
+        (println (list (= sp-g1 sp-g1) (= sp-g1 sp-g2))))
+      (println (= (gensym) (gensym)))
+    expected: |
+      (true false)
+      false

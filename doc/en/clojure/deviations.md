@@ -40,3 +40,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   in statement position (a multi-arity one only at the top level).
 - Verbs assume the right collection kind; misuse may signal the Common Lisp type error
   instead of the oracle's.
+- Macros expand while lowering, so every backend runs expanded code; the interpreter's
+  `eval` of a macro call expands the same way. A macro body sees the core builtins and
+  the `clojure.lisp` library, not the program's own definitions; a call above its
+  definition is refused, and a macro has no function value. A `defmacro` shadows a core
+  function at call sites, never a special form.
+- Syntax-quote qualifies every symbol behind `c%` (there are no namespaces to qualify
+  against). Each `x#` binds one gensym per expansion -- the oracle resolves one per
+  compilation, so two expansions share its suffixes where ours differ (fresher, never
+  captured). `macroexpand-1`/`macroexpand` answers print demangled and uppercased
+  (case folds, print-only); their data takes bare operator names. Nested syntax-quote
+  evaluates its levels in the one expansion. `var`/`#'` stays refused everywhere:
+  bodies quote symbols instead.

@@ -91,6 +91,19 @@ final class ClojureReader {
 		return forms;
 	}
 
+	/**
+	 * Whether a `#` right after an atom ends its token: before the end of input,
+	 * whitespace or a delimiter -- never before a dispatch continuation (`'`, `_`, `(`,
+	 * `{`, `"`), which still dispatches.
+	 */
+	private boolean hashEndsToken() {
+		if (this.pos + 1 >= this.source.length()) {
+			return true;
+		}
+		char after = this.source.charAt(this.pos + 1);
+		return " \t\n\r\f,()[]{}\";".indexOf(after) >= 0;
+	}
+
 	private LispVal readDatum() {
 		if (this.pos >= this.source.length()) {
 			throw error("unexpected end of input");
@@ -345,6 +358,12 @@ final class ClojureReader {
 	private LispVal readAtom() {
 		int start = this.pos;
 		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
+			next();
+		}
+		// a gensym suffix: `x#` reads as one identifier when the `#` ends the
+		// token (before whitespace, a delimiter or the end of input); a dispatch
+		// form (`#'`, `#(`, `#"`, ...) still dispatches
+		while (this.pos < this.source.length() && peek() == '#' && hashEndsToken()) {
 			next();
 		}
 		String token = this.source.substring(start, this.pos);

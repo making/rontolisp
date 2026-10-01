@@ -34,6 +34,10 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
 | `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name (a parameter, a `let`/`loop` binding, a `def`'d variable) is a `funcall` of the value cell instead (so higher-order `defn` parameters run; a `declare`d-but-never-defined name keeps its direct-call error); several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position) |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
+| `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
+| syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | every symbol qualifies behind `c%` (the documented deviation: no namespaces); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
+| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names |
+| `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
 | `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites |
 | destructuring (`let`/`loop`/`fn`/`defn` patterns) | `let*` pairs over one temporary per pattern | a vector pattern binds positionally through the seq view (`nth`, past the end nil; `&` the rest as a seq, itself a pattern; `:as` the whole); a map pattern through the table-aware read (`:keys` binding the short name when qualified, `:syms` from quoted symbols, `:strs` from strings, explicit locals from key expressions, `:as`, `:or` defaults); nested patterns recurse. Malformed shapes are named refusals |
@@ -61,8 +65,9 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | radix integers (`0x`, `Nr`, leading-`0` octal) | `LispInteger` (a `LispBigInteger` past the `long` range) | the sign applies outside; `2r101N` keeps the suffix rule; a shaped token that parses to nothing is the oracle's `Invalid number` refusal |
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
 | regex literals (`#"..."`) | refused by name (`regex literals are not supported yet`) | there is no regex runtime to lower to |
-| syntax-quote/unquote (`\``, `~`, `~@`), `var`/`#'`, metadata (`^`) | refused by name | the reader still parses them into marked lists; the lowering names what is missing instead of `unknown name` |
-| `set!`, `gen-class`/`gen-interface`, backquote (`syntax-quote` / `unquote`), `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; backquote/`var`/metadata need their designs) |
+| syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
+| `var`/`#'`, metadata (`^`) | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
+| `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
 | `proxy` | `java:proxy` with a name-dispatching lambda | a single interface and no constructor arguments; each `(method [params...] body...)` becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`); a superclass, constructor arguments, several interfaces and multi-arity methods are refused by name; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
@@ -167,7 +172,8 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   to characters, which print in Common Lisp notation; there is no laziness, chunking
   or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
 - protocols, `set!`, regex
-  literals, backquote, `var`/`#'`, metadata `^`: all absent, each refused by name.
+  literals, `var`/`#'`, metadata `^`: all absent, each refused by name (backquote
+  lowered in b12, below).
   Hierarchies and `ex-info` lowered in b08 (below); protocols were rejected by
   design there instead (a per-backend value model for `defrecord`/`deftype`, the
   b02 argument). Catch clauses are catch-all in order (the first handles any condition, where the
@@ -263,7 +269,21 @@ literals lower the same way (b05): `try`/`catch`/`finally`/`throw`,
 decimals -- each pinned in `clojure-spec.yaml` (run on all four backends) or,
 for the refusals (regex, hierarchies, protocols, `ex-info`, `set!`, backquote,
 `var`, metadata, unknown namespaces), in `ClojureReaderTest`/`ClojureLoweringTest`.
-Interop (`.`, `..`, `Class/member`, `Class.`, `new`) lowers to the `java:`
+Macros lower the same way (b12): `defmacro` (multi-arity, `&` rest, docstring and
+attr-map skip, `declare` pre-scan, whole-file pre-scan, session-aware) as one expander
+lambda over the call's argument list plus a runtime table entry, call sites expanded
+datum-to-datum at lower time through the macro evaluator (`eval/ClojureMacroTime`,
+lazy, one per file or session), syntax-quote as `quote` with unquote splicing over the
+mangled namespace (`~` lowers as code, `~@` splices into lists, vectors, maps and sets,
+`x#` one gensym per expansion -- fresher than the oracle's per-compilation suffixes),
+`macroexpand-1`/`macroexpand` over the table plus a demangling printer, `gensym` as the
+ordinary uninterned symbol, `var`/`#'` still refused (bodies quote symbols instead),
+`&form`/`&env` refused -- each pinned in `clojure-spec.yaml` (`chain_1..5` plus
+`unless` plus `bench`, expansion answers and runtime answers, run on all four backends)
+or, for the `~`/`~@` depth errors, the `x#` freshness across two expansions, the
+`macroexpand-1` shape and the multi-arity macro dispatch, in `ClojureLoweringTest`;
+the `x#` lexing in `ClojureReaderTest`, the buffer-to-buffer macro in
+`ClojureSessionTest`. Interop (`.`, `..`, `Class/member`, `Class.`, `new`) lowers to the `java:`
 surface, pinned by `ClojureInteropTest` on the interpreter and the JVM (wasm
 rejects `java:`, so it cannot join the spec). Hierarchies, exception data and
 the interop gaps lower the same way (b08): `derive`/`underive`/`isa?`/
@@ -277,7 +297,7 @@ condition), `memfn` as a lambda over the instance call, single-interface
 in `clojure-spec.yaml` (run on all four backends) or, for the interop legs
 (`proxy`, host-object `memfn`, literal `String/split`), in `ClojureInteropTest`;
 what stays refused (`defprotocol` and friends -- rejected by design, `set!`,
-backquote, `var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
+`var`/`#'`, metadata `^`, multi-interface `proxy`, regex literals)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names lower to `funcall` (b09): a `defn` parameter, a `let`
 binding and a `def`'d variable each call through the value cell (so higher-order

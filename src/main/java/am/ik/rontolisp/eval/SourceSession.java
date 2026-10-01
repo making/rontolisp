@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
 import am.ik.rontolisp.clojure.ClojureSession;
 import am.ik.rontolisp.clojure.ClojureTopLevel;
 import am.ik.rontolisp.reader.Features;
@@ -54,6 +55,8 @@ public final class SourceSession {
 
 	private final @Nullable ClojureSession clojure;
 
+	private final @Nullable ClojureMacroEvaluator clojureMacros;
+
 	/**
 	 * Starts a session read against every language's default standard.
 	 * @param language the language typed at the prompt
@@ -83,6 +86,12 @@ public final class SourceSession {
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
 		this.clojure = language == SourceLanguage.CLOJURE ? am.ik.rontolisp.clojure.Clojure.session() : null;
+		// One macro-time evaluator per session, built lazily on the first expansion,
+		// so a macro defined in one buffer expands in a later one.
+		this.clojureMacros = this.clojure == null ? null : ClojureMacroTime.create();
+		if (this.clojure != null) {
+			this.clojure.setMacroEvaluator(this.clojureMacros);
+		}
 	}
 
 	/**
