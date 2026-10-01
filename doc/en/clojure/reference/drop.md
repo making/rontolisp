@@ -2,8 +2,8 @@
 
 `(drop n coll)`
 
-Answers the seq view of `coll` without its first `n` elements, computed by `nthcdr` over
-the view. Strict; a drop longer than the collection answers the empty seq.
+Answers `coll` without its first `n` elements, stepping through one lazy element at a
+time; the remainder may stay lazy when the input is lazy.
 
 Deviation: an over-long drop answers `nil`, where the oracle prints `()`.
 
@@ -11,4 +11,5 @@ Deviation: an over-long drop answers `nil`, where the oracle prints `()`.
 (println (drop 2 [1 2 3 4]))  ; (3 4)
 (println (drop 8 (range 10))) ; (8 9)
 (println (drop 10 [1 2]))     ; nil
+(println (take 3 (drop 2 (iterate inc 0)))) ; (2 3 4)
 ```

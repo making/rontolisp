@@ -1,6 +1,10 @@
 # Seqs
 
-A seq is a strict list view over any collection: lists pass through untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets one member per element (in the table's walk order, unspecified). There is no laziness; the empty result of every verb is `nil`.
+A seq is a list view over any collection: strict collections coerce (lists pass through
+untouched, vectors and strings coerce, maps contribute one two-vector per entry and sets
+one member per element, in the table's walk order, unspecified), while a lazy seq
+realizes one element at a time through the same view. The empty result of every verb is
+`nil`. There is no chunking.
 
 | Name | Example | Result |
 |---|---|---|
@@ -19,6 +23,12 @@ A seq is a strict list view over any collection: lists pass through untouched, v
 | `concat` | `(concat [1] '(2) #{3})` | `(1 2 3)` |
 | `take` | `(take 2 [1 2 3])` | `(1 2)` |
 | `drop` | `(drop 2 [1 2 3])` | `(3)` |
+| `lazy-seq` | `(take 2 (lazy-seq (cons 1 nil)))` | `(1)` |
+| `lazy-cat` | `(take 3 (lazy-cat [0] [1 2]))` | `(0 1 2)` |
+| `repeat` | `(take 2 (repeat :x))` | `(:x :x)` |
+| `cycle` | `(take 3 (cycle [1 2]))` | `(1 2 1)` |
+| `iterate` | `(take 2 (iterate inc 0))` | `(0 1)` |
+| `repeatedly` | `(take 2 (repeatedly (fn [] 7)))` | `(7 7)` |
 | `range` | `(range 0 6 2)` | `(0 2 4)` |
 | `nth` | `(nth [1 2 3] 5 :none)` | `:none` |
 | `keep` | `(keep inc [1 2 3])` | `(2 3 4)` |

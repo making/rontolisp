@@ -9,7 +9,7 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 |---|---|
 | [構文と定義](reference/syntax.md) | `def`/`defn`/`fn`、束縛、条件分岐、`quote`、`comment`、`declare` |
 | [スレッディング](reference/threading.md) | `->`、`->>`、`as->`、`doto` と条件付きスレッダー |
-| [seq](reference/seqs.md) | すべてのコレクションの strict なリストビュー上の seq 群 |
+| [seq](reference/seqs.md) | 取れば lazy、そうでなければ strict な seq 群 |
 | [反復](reference/iteration.md) | `doseq`/`dotimes`/`for` と strict な `dorun`/`doall` |
 | [マップ・セット・ベクター](reference/collections.md) | `equal` ハッシュテーブル上の永続コレクション操作 |
 | [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline` |

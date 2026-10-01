@@ -10,7 +10,7 @@ has them.
 |---|---|
 | [Syntax and definition](reference/syntax.md) | `def`/`defn`/`fn`, binding, conditionals, `quote`, `comment`, `declare` |
 | [Threading](reference/threading.md) | `->`, `->>`, `as->`, `doto` and the conditional threaders |
-| [Seqs](reference/seqs.md) | The seq family over strict list views of every collection |
+| [Seqs](reference/seqs.md) | The seq family, lazy where taken and strict otherwise |
 | [Iteration](reference/iteration.md) | `doseq`/`dotimes`/`for` and the strict `dorun`/`doall` |
 | [Maps, sets and vectors](reference/collections.md) | The persistent collection verbs over `equal` hash tables |
 | [Higher-order functions](reference/higher-order.md) | `comp`/`partial`/`complement`/`constantly`/`identity`/`memoize`/`trampoline` |

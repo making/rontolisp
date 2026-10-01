@@ -23,7 +23,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   answers; a repeated set-literal element is refused by spelling.
 - The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; map/set seq order is the table's walk
-  order; strings seq to characters printing in Common Lisp notation.
+  order; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
+  one element at a time (no chunking); a bare lazy seq prints `#<LazySeq>` and a lazy
+  tail truncates with `...`, where the oracle would hang; `map` takes any number of
+  collections.
 - A strict `for` with no elements answers `nil`, where the oracle prints `()` (the same
   empty-as-`nil` position as `rest`/`next`/`take`).
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure

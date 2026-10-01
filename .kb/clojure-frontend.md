@@ -88,11 +88,11 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `<`/`>`/`<=`/`>=` | the Common Lisp operation, answering `T`-or-false | so `(= false nil)` is false and printing spells it `false` |
 | `nil?` | `null`, answering `T`-or-false | `(nil? false)` is false |
 | `false?`/`true?`/`boolean?` | their predicates (`eq` against the false object / `T`), answering `T`-or-false | as values, lambdas answering `T`-or-false too (every predicate value does, so `(map odd? [1 2])` prints `(true false)` like the oracle) |
-| `map`/`filter`/`reduce`/`apply`/`concat` | `mapcar`/`remove-if-not`/`reduce`/`apply`/`append` over the seq view | lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
-| `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over the seq view, the view itself, `cons` onto the view | a seq IS a strict list view (decided 2026-09-30, b03): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; no laziness, chunking or memoisation -- the only sequence all four backends already share is the cons list, so a lazy struct would add a representation every backend prints, hashes and compares (the b02 argument against a persistent-map library) |
+| `map`/`filter`/`reduce`/`apply`/`concat` | `rontolisp::%clojure-map`/`-filter` over the collections, `reduce`/`apply` over the seq view, `rontolisp::%clojure-concat` over the member list | `map` takes any number of collections (stopping at the shortest, like the oracle) and answers a lazy wrapper when any input is lazy, the strict list otherwise; `filter`/`concat` likewise (a false object drops like nil); lists pass through untouched (no copy); every other collection coerces first, so vectors, strings, maps and sets all work; `reduce` is 2/3-arity with the Clojure argument order (`(reduce f val coll)`) mapped onto CL `reduce` `:initial-value`; `apply` spreads any leading arguments over the seq-coerced last one (`(apply f x args)`), like CL `apply`; `(concat)` is nil |
+| `first`/`rest`/`next`/`seq`/`cons` | `car`/`cdr` over `rontolisp::%clojure-seq`, the view itself, `rontolisp::%clojure-cons` onto the collection | a seq is a list view that realizes a lazy wrapper one level and coerces strictly otherwise (b11): lists pass through, vectors/strings coerce, maps contribute one two-vector per entry and sets one member per element (both in the table's walk order, unspecified), nil and the false object are empty, anything else signals like the oracle; `cons` onto a lazy collection answers a wrapper, so no strict cons ever holds a lazy tail; non-listed verbs consume one level through the view (pass a `take`n prefix) |
 | `nth` (2/3-arity) | the seq view indexed, past the end the default | the 2-arity answers nil past the end where the oracle throws; as a VALUE a lambda with the Clojure order (`(lambda (c i) ...)`), since a bare `#'NTH` takes the index first |
 | `quot` | `truncate` | as a VALUE a two-argument lambda over `truncate` |
-| `take`/`drop` | a labels self call over the seq view / `nthcdr` over the view | strict; an over-long take/drop answers the whole/empty seq (nil, where the oracle prints `()`) |
+| `take`/`drop` | `rontolisp::%clojure-take`/`-drop` over the collection | stepping through one lazy element at a time, so `(take n infinite)` terminates with a strict prefix (realizing exactly what it answers); an over-long take/drop answers the whole/empty seq (nil, where the oracle prints `()`) |
 | `keep`/`keep-indexed`/`map-indexed` | `remove-if` of nils over `mapcar` / labels self calls with an index | strict; `keep` keeps `false` (only nil drops) and a signalling function signals (`(keep inc [1 nil 2])` throws, like the oracle); as values two-argument lambdas |
 | `every?`/`some` | labels self calls testing null-or-false | `every?` answers `T`-or-false directly (empty is true); `some` answers the predicate's own value (not the member); as values two-argument lambdas |
 | `remove` | `remove-if` over the seq view | the complement of `filter`; as a value a two-argument lambda |
@@ -114,8 +114,9 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 | `int`/`long`/`unchecked-add` | `truncate` / `+` | a non-number signals, like the oracle; `unchecked-add` never wraps (bignums); as values lambdas |
 | `spit`/`slurp`/`line-seq` | `with-open-file` writes / a `read-char` loop into a string stream / a `read-line` loop | interpreter and JVM only (no filesystem on wasm); `spit` supersedes unless `:append` is truthy; `line-seq` takes a path and answers strictly; each a function value too; `file-seq`/`reader` stay refused by name |
 | `format` | the Java directives translated to Common Lisp over Clojure-notation arguments | the format string must be literal; `%s` converts like `str` (nil spells `"null"`), `%b` the boolean spelling, numbers the matching checked directive; `%e`/`%g`, flags and anything else are named refusals |
-| `range` (with an end) | a labels self call building the strict list | 1/2/3-arity (`end` / `start end` / `start end step`); a zero step signals; an end-less `(range)` is refused by name -- an infinite seq cannot be spelled strictly |
-| `lazy-seq`/`cycle`/`repeat`/`repeatedly`/`iterate` | refused by name (`lazy sequences are not supported: lazy-seq`) | OUT: there are no lazy seqs -- strict-only by decision, named refusals instead of `unknown name` |
+| `range` (with an end) | a labels self call building the strict list | 1/2/3-arity (`end` / `start end` / `start end step`); a zero step signals; an end-less `(range)` is refused by name -- an infinite seq cannot be spelled strictly (spell it with `iterate`, b11) |
+| `lazy-seq` | `rontolisp::%clojure-make-lazy` over a zero-argument lambda of the body | the body (an implicit `do`) runs on first realization, at most once per seq object (memoized through `rplaca`/`rplacd` on the wrapper cell, primitives every backend already compiles -- no new runtime); `lazy-cat` desugars to `(concat (lazy-seq e) ...)` at datum time |
+| `repeat`/`cycle`/`iterate`/`repeatedly` | `rontolisp::%clojure-repeat`/`-cycle`/`-iterate`/`-repeatedly` (infinite arities), strict-list builders (finite arities) | the infinite arities answer wrapper chains through the IFn dispatcher; `(repeat n x)`/`(repeatedly n f)` answer strict lists and print like the oracle; each names a function value too |
 | a vector literal | a `vector` call | |
 | `first`/`rest` | `car`/`cdr` over the seq view | see the seq-view row above; `count` stays the table-aware length (the fast path, no seq built) |
 | `count` | a table-aware length | maps and sets answer `hash-table-count`, everything else `length` |
@@ -199,12 +200,17 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   CL-level type error instead of the oracle's (e.g. `dissoc` of a set, `keys` of a
   vector). `conj` of a set onto a map goes one level deep; anything else conjoined
   onto a map signals. `(empty? false)` answers false where the oracle signals.
-- The seq family runs over strict list views of every collection (decided 2026-09-30,
-  b03). What still differs from the oracle: `rest`/`next` of empty is `nil`, where it
-  prints `()`; `nth` past the end answers the default (nil without one) instead of
-  throwing; a map/set seq's order is the table's walk order, unspecified; strings seq
-  to characters, which print in Common Lisp notation; there is no laziness, chunking
-  or memoisation, so `lazy-seq` and an end-less `range` are refused by name.
+- The seq family runs over list views of every collection (strict since 2026-09-30,
+  b03; lazy since 2026-10-01, b11). What still differs from the oracle: `rest`/`next`
+  of empty is `nil`, where it prints `()`; `nth` past the end answers the default (nil
+  without one) instead of throwing; a map/set seq's order is the table's walk order,
+  unspecified; strings seq to characters, which print in Common Lisp notation; a lazy
+  seq is the memoized-thunk wrapper `(:C%LAZY cell)` (b11: the body runs at most once
+  per object, `take`/`drop`/`first`/`rest`/`next`/`seq`/`map`/`filter`/`concat` realize
+  through it, printing refuses with `#<LazySeq>` instead of hanging, never a bare
+  infinite print); there is no chunking, so an end-less `range` stays refused by name
+  (spell it with `iterate`). Lazy inputs to the other seq verbs consume one level --
+  pass a `take`n prefix.
 - protocols, `set!`, regex
   literals, `var`/`#'`: all absent, each refused by name (backquote
   lowered in b12, below). Metadata instead parses and drops (b14):
@@ -218,7 +224,8 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   wins, then `prefer-method`, like the oracle); a hierarchy value prints as its
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
   prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
-  functions as `#<procedure>`; `split`/`replace` match literal strings, never patterns (the documented
+  functions as `#<procedure>`, a lazy seq as `#<LazySeq>` (a lazy tail truncates with
+  ` ...`, so no bare infinite print ever hangs); `split`/`replace` match literal strings, never patterns (the documented
   literal-only position, decided 2026-09-30 b08: no regex runtime on any backend,
   so `#"..."` stays refused at the reader and `clojure.string`/`String` splitting
   keeps literal semantics, pinned by the spec's `string-replace-and-split-stay-literal`
@@ -296,10 +303,13 @@ spelling)` wrapper (b01): printing with the colon through `println`/`print`/`str
 keyword-as-function call and function value over the table-aware read, `:a/b` as
 opaque data and the `::` refusal -- each pinned in `clojure-spec.yaml` (run on all
 four backends) or, for the refusals, in `ClojureLoweringTest`. Seqs over every
-collection lower to strict list views (b03): `first`/`rest`/`next`/`seq`/`cons`/
-`concat`/`map`/`filter`/`reduce`/`apply`/`take`/`drop`/finite `range`, each pinned
-in `clojure-spec.yaml` (run on all four backends) or, for the lazy refusals, in
-`ClojureLoweringTest`. Printing joins `println`/`print` parts with a space and
+collection lower to list views (b03 strict, b11 lazy-aware): `first`/`rest`/`next`/
+`seq`/`cons`/`concat`/`map`/`filter`/`reduce`/`apply`/`take`/`drop`/finite `range`,
+each pinned in `clojure-spec.yaml` (run on all four backends); laziness pins
+`lazy-seq-memoizes-once`, `lazy-cat-fibs-prefix`,
+`take-over-repeat-cycle-iterate-repeatedly`, `logging-seq-realizes-only-take` and
+the `primes-prefix-over-lazy-sieve` case there too, the lowered shapes (and the
+end-less-`range` refusal) in `ClojureLoweringTest`. Printing joins `println`/`print` parts with a space and
 `pr`/`prn` convert readably (b06); `inc`/`dec`/`str` and the seq verbs name lambdas
 as values and `apply` spreads leading arguments, each pinned in `clojure-spec.yaml`
 (run on all four backends); lowering errors name the innermost form's position,

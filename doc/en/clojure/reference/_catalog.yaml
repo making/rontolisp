@@ -59,6 +59,12 @@ categories:
       - { slug: concat, name: "concat" }
       - { slug: take, name: "take" }
       - { slug: drop, name: "drop" }
+      - { slug: lazy-seq, name: "lazy-seq" }
+      - { slug: lazy-cat, name: "lazy-cat" }
+      - { slug: repeat, name: "repeat" }
+      - { slug: cycle, name: "cycle" }
+      - { slug: iterate, name: "iterate" }
+      - { slug: repeatedly, name: "repeatedly" }
       - { slug: range, name: "range" }
       - { slug: nth, name: "nth" }
       - { slug: keep, name: "keep" }

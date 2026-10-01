@@ -2,13 +2,14 @@
 
 `(seq coll)`
 
-Answers the strict list view of `coll`: a list passes through untouched, a vector or
-string coerces element by element, a map contributes one two-vector per entry and a set
-one member per element, both in the table's walk order (unspecified). `nil` and `false`
+Answers the seq view of `coll`: a lazy wrapper realizes one level (never past it, so
+infinite seqs stay infinite); a list passes through untouched, a vector or string
+coerces element by element, a map contributes one two-vector per entry and a set one
+member per element, both in the table's walk order (unspecified). `nil` and `false`
 are empty; anything else signals like the oracle.
 
-The empty result of every seq verb is `nil`. There is no laziness, chunking or
-memoisation: the view is a strict list, the only sequence all four backends share.
+The empty result of every seq verb is `nil`. There is no chunking: a lazy seq realizes
+one element at a time.
 
 ```clojure
 (println (seq '(1 2)))       ; (1 2)

@@ -96,11 +96,18 @@ splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoi
 `equal` で比較されるデータで、呼び出し位置（`(:k m)`、省略可能なデフォルト付き）や関数値として
 はマップ参照です。
 
-seq 群はすべてのコレクションの strict なリストビュー上で動きます:リストはそのまま通り抜け、
+seq 群はすべてのコレクションのリストビュー上で動きます:リストはそのまま通り抜け、
 ベクターと文字列は変換され、マップはエントリごとに 2 要素ベクターを、セットは要素ごとに
 1 メンバーを供給します（ともにテーブルの走査順で、未規定）。`nil` と `false` は空です。
-それ以外はオラクルのようにシグナルします。遅延・チャンキング・メモ化はありません。
-`count`/`empty?`/`=` はマップとセットにも届き（`=` は構造的で深い）、`get` は省略可能な
+それ以外はオラクルのようにシグナルします。strict なコレクションは先に強制されますが、
+lazy seq（`lazy-seq`、`lazy-cat`、`repeat`、`cycle`、`iterate`、`repeatedly`）は同じ
+ビューを通じて1要素ずつ realize します。`take` は辿って進み無限 seq でも終了します。
+`drop`/`first`/`rest`/`next`/`seq` はそれを通じて realize し、`cons`/`concat`/`map`/
+`filter` は入力が lazy なら再び lazy を答えます（そうでなければ strict なリスト）。
+`lazy-seq` の本体は seq オブジェクトごとに最大1回だけ実行されます。表示は `take` 越し
+の prefix だけにしてください -- 素の lazy seq はハングせず `#<LazySeq>` と表示され、
+lazy な tail は `...` で打ち切られます。chunk 化はありません。`count`/`empty?`/`=`
+はマップとセットにも届き（`=` は構造的で深い）、`get` は省略可能な
 デフォルトを取り、マップ・セット・ベクター・文字列・nil を読みます。
 
 ## 状態と動的スコープ
@@ -131,6 +138,10 @@ seq 群はすべてのコレクションの strict なリストビュー上で�
 `unwind-protect` 越しに逆順で閉じ、`close` メソッドを呼びます（Java の
 closeable は他の interop 同様 JVM が要ります）。`(. stream write x)` は
 `princ` 越しに印字され、どのバックエンドでも動きます。
+他の seq 動詞（`doseq`/`for`/`reduce` や `keep` 群）への lazy 入力は seq ビューを1レベル
+だけ消費します。先に `take` した prefix を渡してください。
+
+## 状態と動的スコープ
 
 ## 未対応
 
@@ -138,7 +149,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 
 | 拒否されるもの | メッセージ形 | 理由 |
 |---|---|---|
-| `lazy-seq`、`cycle`、`repeat`、`repeatedly`、`iterate`、end なし `range` | `lazy sequences are not supported: ...` | seq は strict。無限 seq は綴れない |
+| end なし `range` | `infinite range is not supported: range needs an end` | 無限 seq は strict には綴れない -- `iterate` を使う |
 | `transient`、`persistent!`、`assoc!`、`dissoc!`、`conj!`、`disj!` | `transients are not supported yet: ...` | テーブルの裏にトランジェント実装がない |
 | 正規表現リテラル `#"..."` | `regex literals are not supported yet` | どのバックエッドにも正規表現実装がない |
 | `defprotocol`、`defrecord`、`deftype`、`definterface`、`reify`、`extend-protocol`、`extend-type`、`extend`、`satisfies?`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | 設計上拒否 -- 4 バックエンド全部での型ディスパッチとレコード値表現 |
