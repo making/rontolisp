@@ -255,6 +255,8 @@ sections:
             title: "Errors"
           - file: clojure/reference/namespaces.md
             title: "Namespaces"
+          - file: clojure/reference/names.md
+            title: "Names and keywords"
           - file: clojure/reference/string.md
             title: "(clojure.string)"
           - file: clojure/reference/higher-order.md

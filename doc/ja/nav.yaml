@@ -255,6 +255,8 @@ sections:
             title: "エラー"
           - file: clojure/reference/namespaces.md
             title: "名前空間"
+          - file: clojure/reference/names.md
+            title: "名前とキーワード"
           - file: clojure/reference/string.md
             title: "(clojure.string)"
           - file: clojure/reference/higher-order.md
