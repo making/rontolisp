@@ -17,6 +17,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked for `.clj` or
   by `--source-language clojure` (`clj`) (`.kb/source-language.md`). Per FILE, so a
   Common Lisp file may `(load "lib.clj")` and call its functions as `(c%name ...)`.
+  The browser runs it with no Java-side change: `RontoPlayground` already splices
+  `ClojureLibrary`, `PlaygroundRepl` is language-agnostic, and the doc site's ` ```clojure `
+  fences are Run cells on the scheme shape (`data-lang="clojure"`, `.kb/documentation-site.md`);
+  the playground's language pick gained `Clojure (experimental)` with its own samples
+  (2026-10-01). `DocExamplesTest` checks every ` ```clojure ` block on both doc trees the
+  way it checks ` ```scheme `.
 - A whole FILE is lowered at once: defn-or-variable is decided by a pre-scan. A REPL
   has no whole program to scan and lowers through a session instead ("A session"
   below).

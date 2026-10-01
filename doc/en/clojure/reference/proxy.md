@@ -9,5 +9,5 @@ wider shapes are refused by name, and field writes (`set!`) are refused too. Run
 interpreter and the JVM only -- the wasm backends reject `java:`.
 
 ```clojure
-(println (.toString (proxy [java.lang.Object] [] (toString [] "p")))) ; p
+(println (.get (proxy [java.util.function.Supplier] [] (get [] "p")))) ; p
 ```

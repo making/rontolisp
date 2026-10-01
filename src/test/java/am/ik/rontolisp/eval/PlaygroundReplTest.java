@@ -69,6 +69,20 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void theClojureRunPrintsAndItsTranscriptEchoesEveryForm() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.run("""
+				(println "hi")
+				(println (reduce + [1 2 3]))
+				""")).isEqualTo("hi\n6\n");
+		assertThat(repl.transcript("""
+				(println "hi")
+				(defn sq [x] (* x x))
+				(sq 7)
+				""")).isEqualTo("hi\nnil\nsq\n49\n");
+	}
+
+	@Test
 	void aFailureCarriesTheConditionsOwnText() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
 		assertThatThrownBy(() -> repl.eval("(3 4)")).hasMessageContaining("The object is not applicable: 3");

@@ -51,11 +51,14 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
   `; file: NAME` makes the block the file `NAME` for the page's other Scheme blocks.
 - **Both kinds are Run cells, and the browser runs what the test checks.** `RunnableBlockTransformer`
   tags a cell `data-lang`; a `scheme` cell carries its stdin block as a hidden
-  `textarea.cell-stdin` and a `; file:` block stays static. `docs.js`'s `evalCell` picks
-  `rontoSetLanguage`, then `rontoEval` (lisp: the page's shared interpreter) or, for scheme,
+  `textarea.cell-stdin` and a `; file:` block stays static. A ` ```clojure ` cell is the
+  scheme shape exactly (fresh interpreter, the stdin block, the `; =>` session rule; no
+  `; file:` blocks in the Clojure tree). `docs.js`'s `evalCell` picks
+  `rontoSetLanguage`, then `rontoEval` (lisp: the page's shared interpreter) or, for scheme
+  and clojure,
   `rontoRunProgram` / `rontoRunSession` (a fresh interpreter; the `; =>` rule is restated
   there) after `rontoPutFile`-ing the page's file blocks. Those calls are
-  `eval/PlaygroundRepl`'s `run` / `transcript`, and `DocExamplesTest.runScheme` runs through
+  `eval/PlaygroundRepl`'s `run` / `transcript`, and `DocExamplesTest` runs both through
   `run` too (`.kb/source-language.md`, "The browser").
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.

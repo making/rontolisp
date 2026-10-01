@@ -69,13 +69,13 @@
 
 	// What a cell runs, as DocExamplesTest checks it. A lisp cell (and one from a site
 	// built before cells carried a language) shares the page's one interpreter. A scheme
-	// cell runs on a fresh interpreter reading the cell's stdin: a whole program, or,
-	// with a "; =>" annotation, a REPL session echoing every form. The page's
+	// or clojure cell runs on a fresh interpreter reading the cell's stdin: a whole
+	// program, or, with a "; =>" annotation, a REPL session echoing every form. The page's
 	// "; file: NAME" blocks are the files it includes, handed over first.
 	function evalCell(cell, src) {
 		var lang = cell.getAttribute("data-lang") || "lisp";
 		globalThis.rontoSetLanguage(lang);
-		if (lang !== "scheme") return globalThis.rontoEval(src);
+		if (lang !== "scheme" && lang !== "clojure") return globalThis.rontoEval(src);
 		putPageFiles();
 		var stdinEl = cell.querySelector(".cell-stdin");
 		var stdin = stdinEl ? stdinEl.value : "";
