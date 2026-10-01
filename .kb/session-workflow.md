@@ -62,6 +62,19 @@ Several sessions push to `develop` at once, so what you tested is not what you p
   shares no history with `develop` and must never be merged into it. Row format and the
   duplicate rule: `.todo/.history.md`.
 
+## Java backslash-u rule
+
+javac preprocesses `\u` everywhere, comments included: a raw `\u` without four hex
+digits is an `illegal unicode escape` compile error, and a raw `\uXXXX` silently
+translates (in a comment the formatter then writes the translated character back,
+mangling the line; in a string literal it changes the value). b47 hit both in a javadoc
+and a test comment. So: never write a raw `\u` in a `.java` file outside a string
+literal -- use `\\u` (a doubled backslash shields it, even in comments) or words like
+`backslash-u`. `RawBackslashUTest` pins this: it scans `src/main/java` and
+`src/test/java` for an odd-backslash `u` outside string/char/text-block literals and
+fails with the rule. It stays out of `src/web/java` and `src/native/java`, so the
+`-Pweb`/`-Pnative` lanes are unaffected.
+
 ## After task completion
 
 - Format Lisp: `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/ bench-report/programs/`
