@@ -8554,10 +8554,29 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * One body lowered behind the {@code try} barrier with the tail position kept: a
+	 * {@code recur} in it trips the oracle's {@code Cannot recur across try} refusal,
+	 * while a target opened inside it still recurs. The {@code binding} and
+	 * {@code with-open} bodies lower through here (the oracle wraps both in a
+	 * {@code try}), the inits through plain {@code body}.
+	 */
+	private LispVal barrierBody(List<LispVal> items, int from) {
+		this.tryDepth++;
+		try {
+			return body(items, from);
+		}
+		finally {
+			this.tryDepth--;
+		}
+	}
+
+	/**
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
 	 * the oracle -- which is why only {@code ^:dynamic} vars (and
 	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
-	 * like {@code let}, and the body closes over the scope the same way.
+	 * like {@code let}, and the body closes over the scope the same way. The body lowers
+	 * behind the {@code try} barrier (the oracle wraps it in a {@code try/finally}),
+	 * while the inits stay outside it.
 	 */
 	private LispVal bindingOf(List<LispVal> items) {
 		isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -8583,7 +8602,7 @@ public final class ClojureLowering {
 					markDirect(name);
 				}
 			}
-			return list(sym("let*"), list(pairs), body(items, 2));
+			return list(sym("let*"), list(pairs), barrierBody(items, 2));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
@@ -8595,7 +8614,9 @@ public final class ClojureLowering {
 	 * {@code (with-open [name init ...] body...)}: the body with each value bound, closed
 	 * in reverse order on every exit through {@code unwind-protect}. Closing calls the
 	 * {@code close} method, so a Java closeable works where host objects exist (the
-	 * interpreter and the JVM -- wasm rejects {@code java:}).
+	 * interpreter and the JVM -- wasm rejects {@code java:}). A non-empty body lowers
+	 * behind the {@code try} barrier (the oracle closes in a {@code finally}); an empty
+	 * vector is the plain body, like the oracle's bare {@code do}.
 	 */
 	private LispVal withOpenOf(List<LispVal> items) {
 		isTrue(items.size() >= 2, "with-open needs a binding vector and a body");
@@ -8617,7 +8638,7 @@ public final class ClojureLowering {
 					markDirect(name);
 				}
 			}
-			LispVal run = body(items, 2);
+			LispVal run = names.isEmpty() ? body(items, 2) : barrierBody(items, 2);
 			if (names.isEmpty()) {
 				return run;
 			}
