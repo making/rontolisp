@@ -507,21 +507,20 @@ public final class ClojureLowering {
 	 * {@code defmulti} over one of these names re-lowers the recorded datum with the
 	 * dispatch lowering instead of calling the definition, so a named {@code (class x)}
 	 * answers nil itself for nil like the inline datum does, while a direct call to the
-	 * definition keeps answering the {@code :nil} keyword. A call to one of these
-	 * names nested inside an inline dispatch datum inlines the recorded datum at the
-	 * call site the same way. Only class-calling definitions are recorded
-	 * (a redefinition without one drops the name); a {@code ^:dynamic} name
-	 * is never recorded, so a {@code binding} rebind still routes through the value cell.
-	 * Recorded in definition order, so the oracle's define-before-use order is what
-	 * resolves.
+	 * definition keeps answering the {@code :nil} keyword. A call to one of these names
+	 * nested inside an inline dispatch datum inlines the recorded datum at the call site
+	 * the same way. Only class-calling definitions are recorded (a redefinition without
+	 * one drops the name); a {@code ^:dynamic} name is never recorded, so a
+	 * {@code binding} rebind still routes through the value cell. Recorded in definition
+	 * order, so the oracle's define-before-use order is what resolves.
 	 */
 	private final Map<String, LispVal> classDispatchFns = new HashMap<>();
 
 	/**
-	 * The recorded definitions currently being inlined into a {@code defmulti}
-	 * dispatch function (see {@link #inlineDispatchCall(String, List)}): a name
-	 * already on the stack keeps its direct call, so a (mutually) recursive
-	 * definition still terminates the lowering.
+	 * The recorded definitions currently being inlined into a {@code defmulti} dispatch
+	 * function (see {@link #inlineDispatchCall(String, List)}): a name already on the
+	 * stack keeps its direct call, so a (mutually) recursive definition still terminates
+	 * the lowering.
 	 */
 	private final Set<String> inliningDispatch = new HashSet<>();
 
@@ -9219,15 +9218,14 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A call inside a {@code defmulti} dispatch function to a recorded
-	 * class-calling definition, inlined from its recorded {@code (fn ...)} datum:
-	 * the definition's own lowering answers the {@code :nil} keyword for nil
-	 * outside the dispatch lowering, so a direct call there would miss the nil
-	 * method -- re-lowering the recorded datum applied to the call's argument
-	 * datums answers nil itself instead, like the inline datum and the oracle. A
-	 * name a local shadows keeps its call (the local is the function, not the
-	 * definition), and a name already being inlined keeps its direct call, so a
-	 * (mutually) recursive definition still terminates the lowering.
+	 * A call inside a {@code defmulti} dispatch function to a recorded class-calling
+	 * definition, inlined from its recorded {@code (fn ...)} datum: the definition's own
+	 * lowering answers the {@code :nil} keyword for nil outside the dispatch lowering, so
+	 * a direct call there would miss the nil method -- re-lowering the recorded datum
+	 * applied to the call's argument datums answers nil itself instead, like the inline
+	 * datum and the oracle. A name a local shadows keeps its call (the local is the
+	 * function, not the definition), and a name already being inlined keeps its direct
+	 * call, so a (mutually) recursive definition still terminates the lowering.
 	 * @param name the called name
 	 * @param items the call datum, head included
 	 * @return the inlined form, or null when the name is no unshadowed recorded
@@ -9267,11 +9265,11 @@ public final class ClojureLowering {
 	 * argument (see {@link #classForm(LispVal)}), so the null test maps it onto the
 	 * marker too -- bare, wrapped in another function, or through a named {@code defn} or
 	 * {@code def}'d function (re-lowered from the recorded definition, like the oracle).
-	 * A call to one of these names nested inside an inline dispatch datum inlines
-	 * the recorded datum at the call site instead (see
-	 * {@link #inlineDispatchCall(String, List)}), so it answers nil itself too.
-	 * The default dispatch value is {@code :default} without a {@code :default} option
-	 * (an arbitrary keyword with one -- the corpus's {@code :everything-else} -- stored
+	 * A call to one of these names nested inside an inline dispatch datum inlines the
+	 * recorded datum at the call site instead (see
+	 * {@link #inlineDispatchCall(String, List)}), so it answers nil itself too. The
+	 * default dispatch value is {@code :default} without a {@code :default} option (an
+	 * arbitrary keyword with one -- the corpus's {@code :everything-else} -- stored
 	 * per-multimethod like {@code :default} today); a miss with no method for the default
 	 * signals, like the oracle. With a {@code :hierarchy} option the dispatcher consults
 	 * that hierarchy value on a miss (the global one without the option): every method
