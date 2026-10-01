@@ -498,7 +498,7 @@
 			"fibonacci": '(defn fib [n]\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(println (fib 20))',
 			"higher-order": '(println (map #(* % %) [1 2 3 4 5]))\n(println (reduce + [1 2 3 4 5 6 7 8 9 10]))\n(println (map clojure.string/upper-case ["foo" "bar"]))\n(ns foo (:require clojure.string))',
 			"threading": '(defn fizzbuzz [n]\n  (cond\n    (= (mod n 15) 0) "FizzBuzz"\n    (= (mod n 3) 0) "Fizz"\n    (= (mod n 5) 0) "Buzz"\n    :else n))\n(println (map fizzbuzz (range 1 16)))',
-			"destructuring": '(defn greet [{:keys [name]}]\n  (str "hello, " name))\n(println (greet {:name "rontolisp"}))\n(let [[a b & rest :as all] [1 2 3 4 5]]\n  (println [a b rest all]))',
+			"destructuring": '(defn greet [{:keys [name]}]\n  (str "hello, " name))\n(println (greet {:name "rontolisp"}))\n(let [[a b :as all] [1 2 3 4 5]]\n  (println [a b all]))',
 			"maps": '(def capitals {"japan" "tokyo", "france" "paris"})\n(println (get capitals "france"))\n(println (:japan capitals))\n(println (count capitals))\n(println (keys capitals))\n(println (assoc capitals "italy" "rome"))',
 			"loop-recur": '(loop [i 5]\n  (when (pos? i)\n    (println i)\n    (recur (dec i))))',
 		};
