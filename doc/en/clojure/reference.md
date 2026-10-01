@@ -22,5 +22,5 @@ has them.
 | [Namespaces](reference/namespaces.md) | `ns` and the top-level `require`/`use`/`import` |
 | [(clojure.string)](reference/string.md) | The string library, plus the core `subs` |
 | [Java interop](reference/interop.md) | `.`, `..`, construction, `memfn`, `proxy` |
-| [IO](reference/io.md) | `spit`/`slurp`/`line-seq` and `format` |
+| [IO](reference/io.md) | `spit`/`slurp`/`line-seq`, `clojure.java.io/reader` and `format` |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |

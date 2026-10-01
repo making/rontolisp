@@ -1,6 +1,6 @@
 # 名前空間
 
-名前空間フォームは節を接続するだけで何も定義しません::as は別名、:refer/:use は非修飾名、:import は interop 用クラス名、(:refer-clojure :only/:exclude ...) は見える核を狭めます。解決するのは clojure.string のみで、未知の名前空間はエラーです。名前空間自体はフラットです。
+名前空間フォームは節を接続するだけで何も定義しません::as は別名、:refer/:use は非修飾名、:import は interop 用クラス名、(:refer-clojure :only/:exclude ...) は見える核を狭めます。解決するのは clojure.string と clojure.java.io（reader のみ）で、未知の名前空間はエラーです。名前空間自体はフラットです。
 
 | Name | Example | Result |
 |---|---|---|

@@ -3,7 +3,8 @@
 `(use clause)`
 
 Loads a namespace and refers the names the clause lists, answering `nil` --
-`(:only [...])` narrows them, the same refer wiring `ns` does. Only `clojure.string` resolves;
+`(:only [...])` narrows them, the same refer wiring `ns` does. `clojure.string`
+and `clojure.java.io` (`reader` only) resolve;
 an unknown namespace is an error.
 
 ```clojure

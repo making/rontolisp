@@ -120,7 +120,8 @@ import org.jspecify.annotations.Nullable;
  * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
  * anything else through its printed rendering; dispatch is a method table plus a
  * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * (only {@code clojure.string} resolves, over the core string operations); interop lowers
+ * ({@code clojure.string} over the core string operations, {@code clojure.java.io}
+ * for {@code reader} only); interop lowers
  * to the {@code java:} surface. A {@code defmacro} is a compile-time expander (one lambda
  * over the call's argument list, the same function the runtime table entry holds for
  * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
@@ -1813,6 +1814,56 @@ public final class ClojureLowering {
 		};
 	}
 
+	// clojure.java.io: exactly reader, over the file-stream runtime
+
+	/**
+	 * A known-namespace call: the vars {@code ns} resolution already vetted, over the
+	 * call's own items (whose head is ignored). {@code clojure.string} lowers to the
+	 * core string operations, {@code clojure.java.io} to the file-stream runtime.
+	 */
+	private LispVal namespaceCall(VarRef ref, List<LispVal> items) {
+		if (ref.ns().equals("clojure.java.io")) {
+			return jioCall(ref.var(), items);
+		}
+		return stringCall(ref.var(), items);
+	}
+
+	/**
+	 * A known-namespace var as a function value: {@code clojure.string} lowers through
+	 * the call lowering per arity, {@code clojure.java.io/reader} is a one-argument
+	 * lambda over the same open.
+	 */
+	private LispVal namespaceValue(VarRef ref) {
+		if (ref.ns().equals("clojure.java.io")) {
+			return jioValue(ref.var());
+		}
+		return stringValue(ref.var());
+	}
+
+	/**
+	 * A {@code clojure.java.io} call: exactly {@code reader}, a buffered reader over
+	 * the path through the same file-stream runtime {@code slurp} reads through -- an
+	 * {@code open} input stream, so {@code line-seq} reads it and {@code with-open}
+	 * closes it.
+	 */
+	private LispVal jioCall(String var, List<LispVal> items) {
+		int n = items.size() - 1;
+		if (var.equals("reader")) {
+			isTrue(n == 1, "reader takes one path");
+			return list(sym("open"), lower(items.get(1)));
+		}
+		throw new LispReadException("unknown name: clojure.java.io/" + var);
+	}
+
+	/** {@code clojure.java.io/reader} as a function value: a one-argument lambda over the same open. */
+	private LispVal jioValue(String var) {
+		if (var.equals("reader")) {
+			LispSymbol path = new LispSymbol(mangle("reader-path"));
+			return list(sym("lambda"), list(path), list(sym("open"), path));
+		}
+		throw new LispReadException("unknown name: clojure.java.io/" + var);
+	}
+
 	/**
 	 * {@code join}: the separator (nil counts as {@code ""}, like the oracle) between the
 	 * {@code str} parts of the seq view, concatenated. Each part converts like a
@@ -2116,7 +2167,7 @@ public final class ClojureLowering {
 		}
 		VarRef qualified = resolveQualified(name);
 		if (qualified != null) {
-			return stringCall(qualified.var(), items);
+			return namespaceCall(qualified, items);
 		}
 		LispVal interop = interopCall(name, items);
 		if (interop != null) {
@@ -2125,7 +2176,7 @@ public final class ClojureLowering {
 		isTrue(known(name) || this.refers.containsKey(name), "unknown name: " + name);
 		VarRef referred = known(name) ? null : this.refers.get(name);
 		if (referred != null) {
-			return stringCall(referred.var(), items);
+			return namespaceCall(referred, items);
 		}
 		List<LispVal> args = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
@@ -2415,14 +2466,12 @@ public final class ClojureLowering {
 				isTrue(n == 1, "slurp takes one path");
 				return slurpForm(lower(items.get(1)));
 			case "line-seq":
-				isTrue(n == 1, "line-seq takes one path");
+				isTrue(n == 1, "line-seq takes one path or reader");
 				return lineSeqForm(lower(items.get(1)));
 			case "format":
 				return formatOf(items);
 			case "file-seq":
 				throw new LispReadException("file-seq is not supported yet: directory walks need a design");
-			case "reader":
-				throw new LispReadException("reader is not supported yet: host readers need a design");
 			case "keys":
 				return keysOf(items);
 			case "vals":
@@ -4245,7 +4294,7 @@ public final class ClojureLowering {
 				qualified = this.refers.get(s.name());
 			}
 			if (qualified != null) {
-				return stringValue(qualified.var());
+				return namespaceValue(qualified);
 			}
 		}
 		LispVal collection = collectionValue(form);
@@ -5867,7 +5916,8 @@ public final class ClojureLowering {
 		return list(sym("lambda"), list(List.of(first, second)), list(sym("+"), first, second));
 	}
 
-	// b15 IO entry points: spit/slurp/line-seq over the eval IO layer
+	// b15 IO entry points: spit/slurp/line-seq over the eval IO layer (b22 adds the
+	// clojure.java.io/reader constructor and the line-seq reader arity)
 
 	/**
 	 * {@code spit}: the string written to the path, answering nil. With an
@@ -5938,10 +5988,37 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * {@code line-seq}: the file's lines as a strict list. The oracle takes a reader and
-	 * answers lazily -- here the path reads strictly, like every other seq.
+	 * {@code line-seq}: the lines as a strict list -- of a path, opened and closed
+	 * around the read (the documented path deviation: the oracle takes a reader and
+	 * answers lazily), or of an already-open reader, which is read but never closed
+	 * ({@code with-open} owns closing, like the oracle). A stream value takes the
+	 * reader loop, anything else the path form.
 	 */
-	private LispVal lineSeqForm(LispVal path) {
+	private LispVal lineSeqForm(LispVal target) {
+		LispSymbol src = freshTemp();
+		return list(sym("let"), list(List.of(list(src, target))),
+				list(sym("if"), list(sym("streamp"), src), lineSeqReaderLoop(src), lineSeqPathForm(src)));
+	}
+
+	/**
+	 * The {@code read-line} loop over an already-bound stream: no open, no close, so
+	 * a {@code with-open} body may consume its reader and the cleanup still closes
+	 * exactly once.
+	 */
+	private LispVal lineSeqReaderLoop(LispVal stream) {
+		String name = mangle("line-seq-") + (this.counter++);
+		LispSymbol self = new LispSymbol(name);
+		LispSymbol acc = freshTemp();
+		LispSymbol got = freshTemp();
+		LispVal step = list(sym("let"), list(List.of(list(got, list(sym("read-line"), stream, NIL_CONST, NIL_CONST)))),
+				list(sym("if"), list(sym("null"), got), list(sym("reverse"), acc),
+						list(self, list(sym("cons"), got, acc))));
+		LispVal binding = new LispCons(self, new LispCons(list(List.of(acc)), cons(step, List.of())));
+		return list(sym("labels"), list(List.of(binding)), list(self, NIL_CONST));
+	}
+
+	/** The path form: the same loop opened and closed around the file. */
+	private LispVal lineSeqPathForm(LispVal path) {
 		String name = mangle("line-seq-") + (this.counter++);
 		LispSymbol self = new LispSymbol(name);
 		LispSymbol file = freshTemp();
@@ -6100,15 +6177,27 @@ public final class ClojureLowering {
 	private record VarRef(String ns, String var) {
 	}
 
-	/** The namespaces whose vars lower to core forms: only {@code clojure.string} yet. */
+	/** The namespaces whose vars lower to core forms: {@code clojure.string} and {@code clojure.java.io}. */
 	private static boolean isKnownNamespace(String ns) {
-		return ns.equals("clojure.string");
+		return ns.equals("clojure.string") || ns.equals("clojure.java.io");
 	}
 
 	/** Whether the namespace exports the var as a lowering. */
 	private static boolean isKnownVar(String ns, String var) {
-		return ns.equals("clojure.string") && STRING_VARS.contains(var);
+		return ns.equals("clojure.string") && STRING_VARS.contains(var)
+				|| ns.equals("clojure.java.io") && JIO_VARS.contains(var);
 	}
+
+	/** The vars a namespace refers in full: per namespace, so {@code :refer :all} stays exact. */
+	private static Set<String> varsOf(String ns) {
+		if (ns.equals("clojure.java.io")) {
+			return JIO_VARS;
+		}
+		return STRING_VARS;
+	}
+
+	/** The {@code clojure.java.io} vars this front end implements: exactly {@code reader}. */
+	private static final Set<String> JIO_VARS = Set.of("reader");
 
 	/** The {@code clojure.string} vars this front end implements. */
 	private static final Set<String> STRING_VARS = Set.of("join", "split", "split-lines", "upper-case", "lower-case",
@@ -6247,7 +6336,7 @@ public final class ClojureLowering {
 			}
 		}
 		if (all) {
-			for (String var : STRING_VARS) {
+			for (String var : varsOf(ns)) {
 				if (!exclude.contains(var)) {
 					this.refers.put(var, new VarRef(ns, var));
 				}
@@ -6365,7 +6454,13 @@ public final class ClojureLowering {
 		if (ns == null && isKnownNamespace(head)) {
 			ns = head;
 		}
-		if (ns == null || !isKnownVar(ns, tail)) {
+		if (ns == null) {
+			return null;
+		}
+		if (!isKnownVar(ns, tail)) {
+			if (isKnownNamespace(ns)) {
+				throw new LispReadException("unknown name: " + ns + "/" + tail);
+			}
 			return null;
 		}
 		return new VarRef(ns, tail);
@@ -6451,7 +6546,7 @@ public final class ClojureLowering {
 				qualified = this.refers.get(name);
 			}
 			if (qualified != null) {
-				return stringValue(qualified.var());
+				return namespaceValue(qualified);
 			}
 			LispVal synth = valueOf(name);
 			if (synth != null) {
@@ -9542,9 +9637,11 @@ public final class ClojureLowering {
 
 	/**
 	 * A stream method over an already-bound receiver: {@code write} prints through
-	 * {@code princ} (strings bare, characters as glyphs) and {@code flush} finishes the
-	 * output, so {@code (. *out* write ...)} runs on every backend. Null when the method
-	 * maps to nothing, so the call goes to {@code java:call}.
+	 * {@code princ} (strings bare, characters as glyphs), {@code flush} finishes the
+	 * output and {@code close} closes the stream, so {@code with-open} over a
+	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every
+	 * backend without reaching {@code java:call}. Null when the method maps to
+	 * nothing, so the call goes to {@code java:call}.
 	 */
 	private @Nullable LispVal streamMethod(String method, LispVal recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -9552,6 +9649,9 @@ public final class ClojureLowering {
 		}
 		if (method.equals("flush") && args.isEmpty()) {
 			return list(sym("finish-output"), recv);
+		}
+		if (method.equals("close") && args.isEmpty()) {
+			return list(sym("close"), recv);
 		}
 		return null;
 	}

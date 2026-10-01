@@ -267,6 +267,7 @@ categories:
       - { slug: spit, name: "spit" }
       - { slug: slurp, name: "slurp" }
       - { slug: line-seq, name: "line-seq" }
+      - { slug: reader, name: "clojure.java.io/reader" }
       - { slug: format, name: "format" }
       - { slug: with-open, name: "with-open" }
       - { slug: with-out-str, name: "with-out-str" }

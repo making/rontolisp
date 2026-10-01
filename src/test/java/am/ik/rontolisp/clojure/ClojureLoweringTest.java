@@ -839,16 +839,53 @@ class ClojureLoweringTest {
 	void ioEntryPointsAndFormat() {
 		assertThat(lowered("(spit \"f\" \"x\")")).contains("WITH-OPEN-FILE").contains("WRITE-STRING");
 		assertThat(lowered("(slurp \"f\")")).contains("READ-CHAR");
-		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE");
+		assertThat(lowered("(line-seq \"f\")")).contains("READ-LINE").contains("STREAMP");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")")).contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (line-seq (jio/reader \"f\"))"))
+			.contains("READ-LINE")
+			.contains("STREAMP");
 		assertThat(lowered("(format \"%s=%d\" :a 1)")).contains("FORMAT").contains("~A");
 		assertThatThrownBy(() -> Clojure.read("(file-seq \".\")", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("file-seq is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(reader \"f\")", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("reader is not supported yet");
+			.hasMessageContaining("unknown name: reader");
+		assertThatThrownBy(
+				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/writer \"f\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.java.io/writer");
+		assertThatThrownBy(
+				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/file \".\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.java.io/file");
 		assertThatThrownBy(() -> Clojure.read("(format \"%e\" 1.5)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("format directive %e is not supported yet");
 		assertThatThrownBy(() -> Clojure.read("(format x 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("format takes a literal format string");
+	}
+
+	@Test
+	void javaIoReaderWiresLikeClojureString() {
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"f\")")).contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) (clojure.java.io/reader \"f\")"))
+			.contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio :refer [reader]])) (reader \"f\")"))
+			.contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer :all])) (reader \"f\")"))
+			.contains("(OPEN \"f\")");
+		assertThat(lowered("(ns t (:require [clojure.java.io :as jio])) jio/reader")).contains("LAMBDA")
+			.contains("OPEN");
+		assertThat(lowered("(ns t (:require [clojure.java.io :refer [reader]])) reader")).contains("LAMBDA")
+			.contains("OPEN");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :refer [writer]]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.java.io/writer");
+		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("reader takes one path");
+		assertThatThrownBy(
+				() -> Clojure.read("(ns t (:require [clojure.java.io :as jio])) (jio/reader \"a\" \"b\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("reader takes one path");
 	}
 
 	@Test
@@ -861,9 +898,6 @@ class ClojureLoweringTest {
 		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.xml :as x]))", null))
 			.isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown namespace: clojure.xml");
-		assertThatThrownBy(() -> Clojure.read("(ns t (:require [clojure.java.io :as io]))", null))
-			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("unknown namespace: clojure.java.io");
 	}
 
 	@Test
@@ -929,7 +963,8 @@ class ClojureLoweringTest {
 	void withOpenWithOutStrAndTimeLower() {
 		assertThat(lowered("(def s \"x\") (with-open [a s] a)")).contains("UNWIND-PROTECT")
 			.contains("JAVA:CALL")
-			.contains("\"close\"");
+			.contains("\"close\"")
+			.contains("CLOSE");
 		assertThat(lowered("(with-open [] 1)")).contains("1").doesNotContain("UNWIND-PROTECT");
 		assertThat(lowered("(with-out-str 1)")).contains("MAKE-STRING-OUTPUT-STREAM")
 			.contains("GET-OUTPUT-STREAM-STRING");

@@ -5,7 +5,7 @@
 Declares a namespace and wires its clauses, defining nothing: `:as` registers an alias,
 `:refer`/`:use` unqualified names, `:import` class names for interop, and
 `(:refer-clojure :only ...)`/`(:refer-clojure :exclude ...)` narrow the visible core. There is
-no `:rename`. Only `clojure.string` resolves; an unknown namespace is an error. The namespace
+no `:rename`. `clojure.string` and `clojure.java.io` (`reader` only) resolve; an unknown namespace is an error. The namespace
 itself stays flat -- the name is bookkeeping.
 
 ```clojure
