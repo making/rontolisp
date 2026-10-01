@@ -623,6 +623,24 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void bareRequireAcceptsQuotedLibspecs() {
+		// the oracle's bare-require spelling: (quote spec) and 'spec wire like
+		// the ns clause does; the unquoted vector stays accepted (a lenient
+		// superset -- the oracle rejects it with a ClassNotFoundException)
+		assertThat(lowered("(require '[clojure.string :as s]) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require (quote [clojure.string :as s])) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require '[clojure.string :refer [join]]) (join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require '[clojure.string]) (clojure.string/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(require [clojure.string :as s]) (s/join \",\" [\"a\"])")).contains("CONCATENATE");
+		assertThat(lowered("(use '[clojure.string :only [upper-case]]) (upper-case \"hi\")")).contains("STRING-UPCASE");
+		assertThatThrownBy(() -> Clojure.read("(require '[no.such.lib :as n])", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: no.such.lib");
+		assertThatThrownBy(() -> Clojure.read("(use '[no.such.lib :as n])", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: no.such.lib");
+	}
+
+	@Test
 	void interopLowersToTheJavaSurface() {
 		assertThat(lowered("(.toUpperCase \"hi\")")).contains("JAVA:CALL").contains("toUpperCase");
 		assertThat(lowered("(. \"hi\" toUpperCase)")).contains("JAVA:CALL");

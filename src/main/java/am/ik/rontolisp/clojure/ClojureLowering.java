@@ -6903,8 +6903,11 @@ public final class ClojureLowering {
 	/**
 	 * The libspecs of a {@code :require} (or {@code :use}, which refers everything by
 	 * default): {@code [ns :as alias :refer [vars]/:all]} vectors, prefix symbols and
-	 * prefix lists. Requiring an unknown namespace is an error, like the oracle's
-	 * missing-library failure.
+	 * prefix lists -- each either bare or quoted ({@code 'spec}, the oracle's
+	 * bare-{@code require} spelling; the {@code ns} clauses quote implicitly, so both
+	 * paths share this parser). An unquoted vector spec stays accepted too (a lenient
+	 * superset: the oracle rejects it with a {@code ClassNotFoundException}). Requiring
+	 * an unknown namespace is an error, like the oracle's missing-library failure.
 	 */
 	private void requireSpecs(List<LispVal> specs, boolean referAll) {
 		String prefix = null;
@@ -7067,11 +7070,16 @@ public final class ClojureLowering {
 		return items.subList(1, items.size());
 	}
 
-	/** A libspec unquoted: {@code 'foo} and {@code foo} spell the same library. */
+	/**
+	 * A libspec unquoted: {@code 'spec} and {@code spec} spell the same library, whether
+	 * the spec is a bare symbol, a {@code [...]} vector or a prefix list -- the oracle
+	 * quotes every bare-{@code require} spec, while the {@code ns} clauses quote
+	 * implicitly. Unquoted vector specs stay accepted too (a lenient superset: the oracle
+	 * rejects them with a {@code ClassNotFoundException}).
+	 */
 	private static LispVal unwrapQuote(LispVal spec) {
 		List<LispVal> parts = items(spec);
-		if (parts != null && parts.size() == 2 && isSymbolNamed(parts.get(0), "quote")
-				&& parts.get(1) instanceof LispSymbol) {
+		if (parts != null && parts.size() == 2 && isSymbolNamed(parts.get(0), "quote")) {
 			return parts.get(1);
 		}
 		return spec;
