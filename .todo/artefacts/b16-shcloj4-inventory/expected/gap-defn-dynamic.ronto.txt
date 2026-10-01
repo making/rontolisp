@@ -1,0 +1,1 @@
+error: gap-defn-dynamic.clj:2:10: binding slow needs a ^:dynamic var: only dynamic vars rebind

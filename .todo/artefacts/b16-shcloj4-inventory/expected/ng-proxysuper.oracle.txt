@@ -1,0 +1,5 @@
+Syntax error compiling at (ng-proxysuper.clj:1:10).
+Unable to resolve symbol: this in this context
+
+Full report at:
+/tmp/clojure-5496382756982270893.edn

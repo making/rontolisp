@@ -1,0 +1,1 @@
+error: gap-predicates.clj:1:11: unknown name: integer?

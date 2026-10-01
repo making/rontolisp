@@ -1,0 +1,1 @@
+error: b20-array.clj:1:9: unknown name: make-array

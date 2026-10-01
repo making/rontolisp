@@ -1,0 +1,1 @@
+error: ng-proxysuper.clj:1:10: proxy-super is not supported yet: proxy methods take the Java arguments only, with no super handle

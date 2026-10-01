@@ -1,0 +1,1 @@
+error: b20-integerp.clj:1:10: unknown name: integer?

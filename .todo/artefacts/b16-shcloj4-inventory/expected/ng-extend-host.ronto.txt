@@ -1,0 +1,1 @@
+error: ng-extend-host.clj:1:66: extend-protocol needs a core type, not Instant

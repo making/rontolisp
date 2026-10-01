@@ -1,0 +1,1 @@
+error: b20-staticfield-val.clj:1:57: unknown name: KeyEvent/VK_LEFT

@@ -1,0 +1,1 @@
+Unhandled condition: java:proxy expects an interface, got java.util.ArrayList

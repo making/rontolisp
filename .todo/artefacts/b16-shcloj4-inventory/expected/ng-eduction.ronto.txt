@@ -1,0 +1,1 @@
+error: ng-eduction.clj:1:10: unknown name: eduction

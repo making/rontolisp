@@ -1,0 +1,1 @@
+error: gap-static-dotted.clj:1:10: unknown name: java.lang.Math/PI

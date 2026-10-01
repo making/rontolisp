@@ -1,0 +1,1 @@
+error: b18-symbol.clj:1:10: unknown name: symbol

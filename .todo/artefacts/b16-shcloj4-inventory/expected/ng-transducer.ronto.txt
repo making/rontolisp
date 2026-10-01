@@ -1,0 +1,1 @@
+error: ng-transducer.clj:1:10: transducers are not supported yet: into

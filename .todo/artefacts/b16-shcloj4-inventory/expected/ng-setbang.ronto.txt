@@ -1,0 +1,1 @@
+error: ng-setbang.clj:1:1: set! is not supported yet: mutable fields need a design

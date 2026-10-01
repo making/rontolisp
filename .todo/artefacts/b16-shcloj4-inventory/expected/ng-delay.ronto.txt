@@ -1,0 +1,1 @@
+error: ng-delay.clj:1:11: delay is not supported yet: lazy memo cells need a design

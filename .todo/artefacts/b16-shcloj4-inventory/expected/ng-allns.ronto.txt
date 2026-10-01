@@ -1,0 +1,1 @@
+error: ng-allns.clj:1:17: unknown name: all-ns

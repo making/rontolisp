@@ -1,0 +1,1 @@
+(println (namespace :foo/bar))

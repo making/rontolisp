@@ -1,0 +1,1 @@
+error: ng-extendmeta.clj:1:1: extend-via-metadata is not supported yet: metadata never affects dispatch

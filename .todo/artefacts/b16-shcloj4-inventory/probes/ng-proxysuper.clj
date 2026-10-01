@@ -1,0 +1,1 @@
+(println (proxy-super "x"))

@@ -1,0 +1,6 @@
+Warning: *random* not declared dynamic and thus is not dynamically rebindable, but its name suggests otherwise. Please either indicate ^:dynamic *random* or change the name. (/tmp/opencode/rontolisp-b16/.todo/artefacts/b16-shcloj4-inventory/probes/diverge-pi-binding.clj:1)
+Execution error (IllegalStateException) at user/eval1 (diverge-pi-binding.clj:1).
+Can't dynamically bind non-dynamic var: user/*random*
+
+Full report at:
+/tmp/clojure-2358870481571873542.edn

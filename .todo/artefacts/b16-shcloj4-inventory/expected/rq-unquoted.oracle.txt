@@ -1,0 +1,5 @@
+Syntax error (ClassNotFoundException) compiling at (rq-unquoted.clj:1:1).
+clojure.string
+
+Full report at:
+/tmp/clojure-6558142628319777654.edn

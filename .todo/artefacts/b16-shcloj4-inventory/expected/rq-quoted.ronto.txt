@@ -1,0 +1,1 @@
+error: rq-quoted.clj:1:1: require takes library specs, not (|quote| (|%vector| |clojure.string| :|as| |str|))

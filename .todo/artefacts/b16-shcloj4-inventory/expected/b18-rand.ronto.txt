@@ -1,0 +1,1 @@
+error: b18-rand.clj:1:23: unknown name: rand

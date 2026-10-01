@@ -1,0 +1,10 @@
+nil
+true
+Hello, world
+nil
+#<java java.lang.Class>
+a
+true
+:C
+true
+(0 1)

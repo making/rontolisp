@@ -1,0 +1,10 @@
+()
+true
+Hello, world
+nil
+class java.lang.String
+a
+true
+:C
+true
+(0 1)

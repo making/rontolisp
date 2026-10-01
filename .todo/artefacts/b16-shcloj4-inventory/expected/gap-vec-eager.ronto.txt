@@ -1,0 +1,1 @@
+error: gap-vec-eager.clj:1:49: unknown name: vec

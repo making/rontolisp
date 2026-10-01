@@ -1,0 +1,1 @@
+(println (map assoc [{:a 1}] [:b] [2]))

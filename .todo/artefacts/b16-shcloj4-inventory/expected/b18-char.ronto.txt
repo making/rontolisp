@@ -1,0 +1,1 @@
+error: b18-char.clj:1:10: unknown name: char

@@ -1,0 +1,1 @@
+error: ng-promise.clj:1:9: promise is not supported yet: blocking rendezvous needs a design

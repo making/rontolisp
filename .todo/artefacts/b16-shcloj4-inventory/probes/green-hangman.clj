@@ -1,0 +1,1 @@
+(defn new-progress [word] (repeat (count word) \_)) (defn update-progress [progress word guess] (map #(if (= %1 guess) guess %2) word progress)) (defn complete? [progress word] (= progress (seq word))) (println (apply str (update-progress (new-progress "cat") "cat" \a)))

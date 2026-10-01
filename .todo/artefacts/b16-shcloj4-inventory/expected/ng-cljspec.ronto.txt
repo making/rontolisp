@@ -1,0 +1,1 @@
+error: ng-cljspec.clj:1:1: unknown namespace: clojure.spec.alpha

@@ -1,0 +1,1 @@
+error: diverge-pi-binding.clj:1:29: binding *random* needs a ^:dynamic var: only dynamic vars rebind

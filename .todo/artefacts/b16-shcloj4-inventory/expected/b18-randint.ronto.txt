@@ -1,0 +1,1 @@
+error: b18-randint.clj:1:34: unknown name: rand-int

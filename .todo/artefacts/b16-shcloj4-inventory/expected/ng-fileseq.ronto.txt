@@ -1,0 +1,1 @@
+error: ng-fileseq.clj:1:17: file-seq is not supported yet: directory walks need a design
