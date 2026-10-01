@@ -181,6 +181,47 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void recurAcrossABindingOrWithOpenBodyTripsTheTryBarrier() {
+		// oracle clj 1.12.6.1673: (def ^:dynamic *x* 1)
+		// ((fn [n] (binding [*x* 2] (if (zero? n) :d (recur (dec n))))) 2)
+		// -> Syntax error (UnsupportedOperationException) compiling recur:
+		// Cannot recur across try (binding pushes its bindings in a try)
+		assertThatThrownBy(() -> Clojure
+			.read("(def ^:dynamic *d* 1) ((fn [n] (binding [*d* 2] (if (zero? n) :d (recur (dec n))))) 2)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
+		// oracle clj 1.12.6.1673: ((fn [n] (with-open [s 1] (recur n))) 1)
+		// -> Syntax error (UnsupportedOperationException) compiling recur:
+		// Cannot recur across try (with-open closes in a finally)
+		assertThatThrownBy(() -> Clojure.read("((fn [n] (with-open [s 1] (recur n))) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Cannot recur across try");
+		// a target opened inside the body still recurs through it --
+		// oracle: (def ^:dynamic *x* 1)
+		// ((fn [n] (binding [*x* 2] (loop [i n] (if (zero? i) :d (recur (dec i)))))) 2)
+		// -> :d
+		assertThat(lowered(
+				"(def ^:dynamic *d* 1) ((fn [n] (binding [*d* 2] (loop [i n] (if (zero? i) :d (recur (dec i)))))) 2)"))
+			.contains("LABELS");
+		assertThat(lowered("((fn [n] (with-open [s 1] (loop [i n] (if (zero? i) :d (recur (dec i)))))) 2)"))
+			.contains("LABELS");
+		// the inits stay outside the barrier: a recur there is the oracle's tail
+		// refusal, not the barrier one --
+		// oracle clj 1.12.6.1673: (def ^:dynamic *x* 1)
+		// ((fn [n] (binding [*x* (recur n)] :d)) 1)
+		// -> Syntax error (UnsupportedOperationException) compiling recur:
+		// Can only recur from tail position
+		assertThatThrownBy(() -> Clojure.read("(def ^:dynamic *d* 1) ((fn [n] (binding [*d* (recur n)] :d)) 1)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Can only recur from tail position");
+		// an empty with-open vector is the oracle's bare do (no try), so a recur
+		// there still lowers --
+		// oracle clj 1.12.6.1673: (macroexpand-1 '(with-open [] (recur n)))
+		// -> (do (recur n))
+		assertThat(lowered("((fn [n] (with-open [] (recur n))) 1)")).contains("LABELS");
+	}
+
+	@Test
 	void anInnerBindingShadowsAnOuterOneForCalls() {
 		// a let vector shadows a defn: the call reads the value, like the oracle
 		assertThat(lowered("(defn shf [x] x) (let [shf [1 2]] (shf 0))")).contains("%CLOJURE-CALL");

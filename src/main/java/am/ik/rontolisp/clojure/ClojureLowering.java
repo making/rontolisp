@@ -6796,8 +6796,10 @@ public final class ClojureLowering {
 		// in the maphash, like the oracle (the mergeWithForm precedent)
 		LispVal head = list(sym("car"), left);
 		LispVal src = list(sym("if"), isRecordForm(head), typedTableOf(head), head);
-		LispVal join = list(sym("maphash"),
-				list(sym("lambda"), list(List.of(key, val)),
+		LispVal join = list(
+				sym("maphash"), list(
+						sym("lambda"), list(List.of(key,
+								val)),
 						list(sym("let"), list(List.of(list(old, list(sym("gethash"), key, acc, miss)))),
 								list(sym("setf"), list(sym("gethash"), key, acc),
 										list(sym("if"), list(sym("eq"), old, miss), val,
@@ -6810,10 +6812,9 @@ public final class ClojureLowering {
 		// the first non-nil rest map's record, like mergeValue's found
 		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
 				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
-		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)),
-				list(sym("let*"), list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)),
-						list(found, NIL_CONST))),
-						find, list(sym("labels"), list(List.of(binding)), list(self, maps))));
+		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)), list(sym("let*"),
+				list(List.of(list(acc, makeTable()), list(miss, list(sym("list"), NIL_CONST)), list(found, NIL_CONST))),
+				find, list(sym("labels"), list(List.of(binding)), list(self, maps))));
 	}
 
 	/**
@@ -8526,10 +8527,29 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * One body lowered behind the {@code try} barrier with the tail position kept: a
+	 * {@code recur} in it trips the oracle's {@code Cannot recur across try} refusal,
+	 * while a target opened inside it still recurs. The {@code binding} and
+	 * {@code with-open} bodies lower through here (the oracle wraps both in a
+	 * {@code try}), the inits through plain {@code body}.
+	 */
+	private LispVal barrierBody(List<LispVal> items, int from) {
+		this.tryDepth++;
+		try {
+			return body(items, from);
+		}
+		finally {
+			this.tryDepth--;
+		}
+	}
+
+	/**
 	 * {@code (binding [var init ...] body...)}: each var rebound around the body, like
 	 * the oracle -- which is why only {@code ^:dynamic} vars (and
 	 * {@code *out*}/{@code *in*}, already special) may be bound. Inits run sequentially,
-	 * like {@code let}, and the body closes over the scope the same way.
+	 * like {@code let}, and the body closes over the scope the same way. The body lowers
+	 * behind the {@code try} barrier (the oracle wraps it in a {@code try/finally}),
+	 * while the inits stay outside it.
 	 */
 	private LispVal bindingOf(List<LispVal> items) {
 		isTrue(items.size() >= 3, "binding needs a binding vector and a body");
@@ -8555,7 +8575,7 @@ public final class ClojureLowering {
 					markDirect(name);
 				}
 			}
-			return list(sym("let*"), list(pairs), body(items, 2));
+			return list(sym("let*"), list(pairs), barrierBody(items, 2));
 		}
 		finally {
 			this.scopes.remove(this.scopes.size() - 1);
@@ -8567,7 +8587,9 @@ public final class ClojureLowering {
 	 * {@code (with-open [name init ...] body...)}: the body with each value bound, closed
 	 * in reverse order on every exit through {@code unwind-protect}. Closing calls the
 	 * {@code close} method, so a Java closeable works where host objects exist (the
-	 * interpreter and the JVM -- wasm rejects {@code java:}).
+	 * interpreter and the JVM -- wasm rejects {@code java:}). A non-empty body lowers
+	 * behind the {@code try} barrier (the oracle closes in a {@code finally}); an empty
+	 * vector is the plain body, like the oracle's bare {@code do}.
 	 */
 	private LispVal withOpenOf(List<LispVal> items) {
 		isTrue(items.size() >= 2, "with-open needs a binding vector and a body");
@@ -8589,7 +8611,7 @@ public final class ClojureLowering {
 					markDirect(name);
 				}
 			}
-			LispVal run = body(items, 2);
+			LispVal run = names.isEmpty() ? body(items, 2) : barrierBody(items, 2);
 			if (names.isEmpty()) {
 				return run;
 			}
