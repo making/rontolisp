@@ -3624,25 +3624,13 @@ public final class ClojureLowering {
 			plists.add(list(sym("if"), one, tablePlist(src), NIL_CONST));
 		}
 		return list(sym("let"), list(bindings), list(sym("if"), cons(sym("or"), present),
-				rewrapAnswer(firstPresent(present), tableFromPlist(cons(sym("append"), plists))), NIL_CONST));
-	}
-
-	/**
-	 * The first non-nil map of a merge: the merge keeps a record's type when the merge
-	 * would start from it (later maps only contribute entries), like the oracle.
-	 */
-	private LispVal firstPresent(List<LispVal> maps) {
-		LispVal first = NIL_CONST;
-		for (int i = maps.size() - 1; i >= 0; i--) {
-			first = list(sym("if"), maps.get(i), maps.get(i), first);
-		}
-		return first;
+				rewrapAnswer(present.get(0), tableFromPlist(cons(sym("append"), plists))), NIL_CONST));
 	}
 
 	/**
 	 * {@code merge} as a value: over a rest list of maps, every map's pairs appended in
-	 * one copy like a call (later maps winning), rewrapped in the first non-nil map's
-	 * record when there is one. Of no maps, {@code nil}.
+	 * one copy like a call (later maps winning), rewrapped in the first map's record when
+	 * there is one. Of no maps, {@code nil}.
 	 */
 	private LispVal mergeValue() {
 		LispSymbol maps = new LispSymbol(mangle("merge-maps"));
@@ -3656,9 +3644,12 @@ public final class ClojureLowering {
 		LispVal spread = list(sym("apply"), list(sym("function"), sym("append")), gather);
 		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
 				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
+		// the answer is nil unless some map is present, but the rewrap follows the
+		// first map (a nil first map answers a plain map), like the oracle
+		LispVal first = list(sym("car"), maps);
 		return list(sym("lambda"), list(AMPERSAND_REST, maps),
 				list(sym("let*"), list(List.of(list(found, NIL_CONST), list(grown, spread))), find,
-						list(sym("if"), found, rewrapAnswer(found, tableFromPlist(grown)), NIL_CONST)));
+						list(sym("if"), found, rewrapAnswer(first, tableFromPlist(grown)), NIL_CONST)));
 	}
 
 	private LispVal conjOf(List<LispVal> items) {
@@ -6797,14 +6788,14 @@ public final class ClojureLowering {
 					src);
 			merges.add(list(sym("if"), one, join, NIL_CONST));
 		}
-		merges.add(rewrapAnswer(firstPresent(syms), acc));
+		merges.add(list(sym("if"), cons(sym("or"), syms), rewrapAnswer(syms.get(0), acc), NIL_CONST));
 		return list(sym("let*"), list(bindings), cons(sym("progn"), merges));
 	}
 
 	/**
 	 * {@code merge-with} as a value: the function, then any number of maps, grown map by
-	 * map through {@code f} like a call and rewrapped in the first non-nil rest map's
-	 * record when there is one. Of no maps, {@code nil}.
+	 * map through {@code f} like a call and rewrapped in the first rest map's record when
+	 * there is one. Of no maps, {@code nil}.
 	 */
 	private LispVal mergeWithValue() {
 		String name = mangle("merge-with-") + (this.counter++);
@@ -6832,11 +6823,12 @@ public final class ClojureLowering {
 										list(sym("if"), list(sym("eq"), old, miss), val,
 												callableApply(fn, cons(sym("list"), List.of(old, val))))))),
 				src);
-		LispVal answer = list(sym("if"), found, rewrapAnswer(found, acc), NIL_CONST);
+		LispVal answer = list(sym("if"), found, rewrapAnswer(list(sym("car"), maps), acc), NIL_CONST);
 		LispVal go = list(sym("if"), list(sym("null"), left), answer, list(sym("progn"),
 				list(sym("if"), list(sym("car"), left), join, NIL_CONST), list(self, list(sym("cdr"), left))));
 		LispVal binding = new LispCons(self, new LispCons(list(List.of(left)), cons(go, List.of())));
-		// the first non-nil rest map's record, like mergeValue's found
+		// the answer is nil unless some rest map is present, but the rewrap follows
+		// the first rest map (a nil first map answers a plain map), like the oracle
 		LispVal find = list(sym("dolist"), list(List.of(probe, maps)),
 				list(sym("if"), list(sym("and"), list(sym("null"), found), probe), list(sym("setq"), found, probe)));
 		return list(sym("lambda"), list(List.of(fn, AMPERSAND_REST, maps)), list(sym("let*"),

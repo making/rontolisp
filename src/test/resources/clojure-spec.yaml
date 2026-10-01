@@ -2148,6 +2148,14 @@ cases:
       (println (get ((fn [b33-f] (b33-f + b13-r {:mass 10})) merge-with) :mass))
       (println (class ((fn [b33-f] (b33-f + b13-r {:mass 10})) merge-with)))
       (println (class ((fn [b33-f] (b33-f + {:mass 10} b13-r)) merge-with)))
+      (println (class (merge nil b13-r)))
+      (println (get (merge nil b13-r) :mass))
+      (println (class ((fn [b23-f] (b23-f nil b13-r)) merge)))
+      (println (class (merge-with + nil b13-r {:mass 10})))
+      (println (get (merge-with + nil b13-r {:mass 10}) :mass))
+      (println (class ((fn [b33-f] (b33-f + nil b13-r {:mass 10})) merge-with)))
+      (println (merge-with + nil nil))
+      (println ((fn [b33-f] (b33-f + nil nil)) merge-with))
       (println (get (update b13-r :mass inc) :mass))
       (println (select-keys (assoc b13-r :hard true) [:mass]))
       (println (into {} b13-r))
@@ -2186,6 +2194,14 @@ cases:
       17
       :B13Rock
       :map
+      :map
+      7
+      :map
+      :map
+      17
+      :map
+      nil
+      nil
       8
       {:mass 7}
       {:mass 7}
