@@ -434,6 +434,10 @@
    ((or (rontolisp::%clojure-re-pattern-p coll)
         (rontolisp::%clojure-re-matcher-p coll))
     (error "seq needs a collection"))
+   ;; atoms (and refs/agents/volatiles, the same cell) are cons wrappers
+   ;; too, so the oracle signals instead of seqing (b45, the b42 conj-guard
+   ;; precedent)
+   ((rontolisp::%clojure-atom-p coll) (error "seq needs a collection"))
    ((consp coll) coll)
    ((vectorp coll) (coerce coll 'list))
    ((stringp coll) (coerce coll 'list))
