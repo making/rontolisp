@@ -5411,18 +5411,27 @@ public final class ClojureLowering {
 	}
 
 	/**
-	 * A keyword as a function value: the lookup over one argument, so
-	 * {@code (map :k coll)} reads the key out of each member. The key lowers once, behind
-	 * a temporary; the collection is the lambda's parameter, named once per branch by
-	 * {@link #getBranches}.
+	 * A keyword as a function value: the lookup over one argument plus an optional
+	 * default, so {@code (map :k coll)} reads the key out of each member and a
+	 * keyword-dispatched multimethod called with several arguments dispatches on the
+	 * lookup with the second call argument as the default, like the oracle (the
+	 * dispatcher applies the dispatch function to every call argument). The key lowers
+	 * once, behind a temporary; the collection is the lambda's first parameter and the
+	 * default reads the rest list once -- the same rest-tolerant shape the map/vector/set
+	 * siblings lower to. Trailing arguments past the default are ignored, like those
+	 * siblings (a lenient superset: the oracle signals past two).
 	 * @param keyDatum the keyword datum
 	 * @return the form
 	 */
 	private LispVal keywordFn(LispVal keyDatum) {
 		LispSymbol coll = freshTemp();
+		LispSymbol rest = freshTemp();
 		LispSymbol key = freshTemp();
-		return list(sym("lambda"), list(coll), list(sym("let"), list(List.of(list(key, lower(keyDatum)))),
-				cons(sym("cond"), getBranches(coll, key, NIL_CONST))));
+		LispSymbol dflt = freshTemp();
+		return list(sym("lambda"), list(List.of(coll, AMPERSAND_REST, rest)), list(sym("let"),
+				list(List.of(list(key, lower(keyDatum)),
+						list(dflt, list(sym("if"), list(sym("null"), rest), NIL_CONST, list(sym("car"), rest))))),
+				cons(sym("cond"), getBranches(coll, key, dflt))));
 	}
 
 	/**

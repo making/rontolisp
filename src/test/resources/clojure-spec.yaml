@@ -171,7 +171,8 @@ cases:
     # so those rows pin our lenient reading, green on all four backends by the
     # same construction). The dispatch function takes the call's full argument
     # list (the dispatcher applies it to every argument), so it spells its own
-    # &r; a keyword dispatch stays single-argument.
+    # &r; a keyword dispatch takes the lookup plus an optional default (b39),
+    # like (:k m dflt).
     source: |
       (defmulti b36-walk (fn [m & r] (:shape m)))
       (defmethod b36-walk :go [m & r] (if (empty? r) (:v m) (recur {:v (first r)} (rest r))))
@@ -198,6 +199,46 @@ cases:
       [f nil]
       [1]
       nil
+  - name: multi-arg-calls-to-collection-dispatched-multimethods
+    # Oracle clj 1.12.6.1673: the dispatcher applies the dispatch function to
+    # every call argument, and a keyword over two arguments is the lookup with
+    # the second as the default -- so a keyword-dispatched multimethod takes
+    # several call arguments (b39: the keyword value was a one-argument lookup
+    # and signalled). A miss reads the extra argument as its dispatch value,
+    # like the oracle. Set and vector dispatch values share the rest-tolerant
+    # shape, so their multi-argument calls run too (a lenient superset past one
+    # argument: the oracle applies set/vector dispatch strictly and signals).
+    # A map literal stays the defmulti attr-map, like the oracle, so map
+    # dispatch is not expressible that way.
+    source: |
+      (defmulti w39 :shape)
+      (defmethod w39 :go [m & r] [m r])
+      (defmethod w39 :default [& r] [:dflt r])
+      (println (w39 {:shape :go}))
+      (println (w39 {:shape :go} [1]))
+      (println (w39 {:shape :xx} [1]))
+      (defmulti w39s #{:h})
+      (defmethod w39s :h [m & r] [m r])
+      (defmethod w39s :default [& r] [:dflt r])
+      (println (w39s :h))
+      (println (w39s :h [1]))
+      (println (w39s :x [1]))
+      (defmulti w39v [10 20])
+      (defmethod w39v 10 [i & r] [i r])
+      (defmethod w39v :default [& r] [:dflt r])
+      (println (w39v 0))
+      (println (w39v 0 [1]))
+      (println (w39v 5 [1]))
+    expected: |
+      [{:shape :go} nil]
+      [{:shape :go} ([1])]
+      [:dflt ({:shape :xx} [1])]
+      [:h nil]
+      [:h ([1])]
+      [:dflt (:x [1])]
+      [0 nil]
+      [0 ([1])]
+      [:dflt (5 [1])]
   - name: if-when-cond-do-and-or
     # Clojure rejects the odd trailing arm (cond requires an even number of forms);
     # here it is the default, per .kb/clojure-frontend.md.

@@ -373,6 +373,12 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void keywordValuesTakeAnOptionalDefault() {
+		assertThat(lowered("(map :a '({:a 1}))")).contains("&REST").contains("GETHASH");
+		assertThat(lowered("(defmulti w39v :shape) (w39v {:shape :go} [1])")).contains("&REST");
+	}
+
+	@Test
 	void mapsAndSetsBuildTables() {
 		assertThat(lowered("{:a 1}")).contains("PLIST-HASH-TABLE").contains(":C%KEYWORD");
 		assertThat(lowered("{}")).contains("PLIST-HASH-TABLE");

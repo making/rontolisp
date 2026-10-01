@@ -6,7 +6,11 @@ Defines a multimethod: a method table keyed by dispatch value plus a dispatcher.
 runs on every call and its answer picks the method; the optional `:default` names the fallback
 dispatch value (`:default` itself without the option). `:hierarchy` takes a hierarchy value the
 dispatch search walks instead of the global one, evaluated on every dispatch. The name lowers to
-a rest-args function applying each call's dispatch value to the table.
+a rest-args function applying each call's dispatch value to the table. The dispatcher applies
+the dispatch function to every call argument, so a keyword dispatch reads with the second call
+argument as its default, like `(:k m dflt)` -- a keyword-dispatched multimethod takes several
+call arguments; set and vector dispatch values take extra arguments the same way, while `class`
+stays single-argument.
 
 A miss with no default method signals `No method in <name> for dispatch value: <value>`. The
 dispatch search widens past exact hits through the hierarchy (see `defmethod`).
@@ -25,6 +29,10 @@ method catches what the hierarchy search misses, ahead of the default.
 (defmulti what "tags" (fn [x] (:t x)) :default :other)
 (defmethod what :other [x] 99)
 (println (what {:t :zzz})) ; 99
+
+(defmulti w :shape)
+(defmethod w :go [m & r] m)
+(println (w {:shape :go} [1])) ; {:shape :go}
 
 (defmulti printable class)
 (defmethod printable String [s] (str "str:" s))
