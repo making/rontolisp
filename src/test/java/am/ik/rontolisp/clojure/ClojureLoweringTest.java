@@ -686,6 +686,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defmulti area class) (defmethod area nil [x] x)")).contains(":C%NIL");
 		assertThat(lowered("(defmulti area identity) (defmethod area nil [x] x)")).contains(":C%NIL");
 		assertThat(lowered("(defmulti area identity) (defmethod area :nil [x] x)")).contains("\"nil\"");
+		assertThat(lowered("(defmulti w38 (fn [x] (class x))) (class nil)")).contains(":C%NIL").contains("\"nil\"");
 		assertThat(lowered("(defmulti area class) (defmethod area Object [x] x)")).contains("|c%area%object|")
 			.contains("\"object\"");
 		assertThat(lowered("(defmulti area (fn [a b] [(class a) (class b)])) (defmethod area [Number Number] [a b] 1)"))

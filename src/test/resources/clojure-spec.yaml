@@ -1414,6 +1414,33 @@ cases:
       dflt
       was-nil
       was-kw
+  - name: wrapped-class-dispatch-still-hits-the-nil-method
+    # A `class` call wrapped in another function answers nil itself for nil (like
+    # the bare dispatch and the oracle), so the nil method answers it while a
+    # literal `:nil` (whose class is Keyword) falls to the default. An explicit
+    # `:nil` out of a class-wrapped dispatch keeps its keyword row. Oracle: clj
+    # 1.12.6.1673.
+    source: |
+      (defmulti b38w (fn [x] (class x)))
+      (defmethod b38w nil [_] "was-nil")
+      (defmethod b38w :default [x] "dflt")
+      (println (b38w nil))
+      (println (b38w :nil))
+      (defmulti b38m (fn [x] (if (= x :foo) :nil (class x))))
+      (defmethod b38m nil [_] "was-nil")
+      (defmethod b38m :nil [_] "was-kw")
+      (defmethod b38m :default [x] "dflt")
+      (println (b38m nil))
+      (println (b38m :foo))
+      (println (b38m :nil))
+      (println (b38m "a"))
+    expected: |
+      was-nil
+      dflt
+      was-nil
+      was-kw
+      dflt
+      dflt
   - name: ex-info-carries-data-through-throw
     # ex-info builds a condition with message and data slots (its report prints
     # the message); throw signals an ex-info value as its own condition, anything
