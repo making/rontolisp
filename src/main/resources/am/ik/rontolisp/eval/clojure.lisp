@@ -381,12 +381,13 @@
         (write-string text x)
         text)
       (if (rontolisp::%clojure-re-pattern-p x)
-      (if readable
-          (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x) "\"")
-          (rontolisp::%clojure-re-pat-source x))
-      (let ((stream (make-string-output-stream)))
-        (rontolisp::%clojure-print x nil-replacement readable stream)
-        (get-output-stream-string stream)))))
+          (if readable
+              (concatenate 'string "#\"" (rontolisp::%clojure-re-pat-source x)
+                           "\"")
+              (rontolisp::%clojure-re-pat-source x))
+          (let ((stream (make-string-output-stream)))
+            (rontolisp::%clojure-print x nil-replacement readable stream)
+            (get-output-stream-string stream)))))
 
 (defun rontolisp::%clojure-write-datum (x nil-replacement readable)
   "Write X in Clojure notation to *standard-output*: the println/print/pr/prn

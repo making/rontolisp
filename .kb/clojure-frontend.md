@@ -1067,8 +1067,8 @@ coordinates do not exist -- latest on Central is `0.6.249`). Requiring
 `ClojureLoweringTest.foreignNamespacesStayRefused`. NO-GO, for three measured
 reasons:
 
-- **No in-scope demand.** Both known users (`examples/spec.clj`,
-  `hangman/specs.clj` in the shcloj4 inventory, `.todo/artefacts/b16-shcloj4-inventory/NOTES.md`)
+- **No in-scope demand.** Both known users (the shcloj4 inventory's `spec.clj`
+  and `hangman/specs.clj`, `.todo/artefacts/b16-shcloj4-inventory/NOTES.md`)
   are classified non-goals there; no pinned program waits on spec.
 - **The subset would not unblock its users anyway.** The corpus use is
   speccing functions (`s/fdef`); its runtime value is `instrument`/`check`
