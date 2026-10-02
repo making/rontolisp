@@ -60,9 +60,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   Protocol dispatch reads no hierarchy (exact tag match
   plus the `Object` default) and merges `Long`/`Double` into `:number`, where the
   oracle tells them apart.
-- A record prints as its wrapper list (`(:C%RECORD :R (:a) {:a 7})`, where the
-  oracle prints `#user.R{:a 7}`), a deftype likewise with `:C%TYPE`, a reify as
-  `(:C%REIFY ...)`; only the entry maps print deterministically.
+- A record prints as its literal (`#user.R{:a 7}`, like the oracle), but `str` of one
+  spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
+  as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
+  maps print deterministically.
 - `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).

@@ -47,6 +47,12 @@ final class ClojureReader {
 	/** Marks a regex literal's source string: the lowering compiles it to a pattern. */
 	static final LispSymbol REGEX = new LispSymbol("%regex");
 
+	/**
+	 * Marks a record literal {@code (%record ns.Name body)}: the lowering builds the
+	 * record over the quoted body.
+	 */
+	static final LispSymbol RECORD = new LispSymbol("%record");
+
 	private static final String DELIMS = " \t\n\r\f,()[]{}\";'@^`~#";
 
 	private final String source;
@@ -146,13 +152,7 @@ final class ClojureReader {
 				skipSpace();
 				yield list("deref", readDatum());
 			}
-			case '^' -> {
-				next();
-				skipSpace();
-				LispVal meta = readDatum();
-				skipSpace();
-				yield list("with-meta", readDatum(), meta);
-			}
+			case '^' -> readMeta();
 			case '#' -> readDispatch();
 			case '\\' -> readCharLiteral();
 			default -> readAtom();
@@ -192,7 +192,74 @@ final class ClojureReader {
 			regex.add(source);
 			return list(regex);
 		}
+		if (peek() == '^') { // the legacy spelling of ^ metadata
+			return readMeta();
+		}
+		if (Character.isLetter(peek())) {
+			return readRecordLiteral();
+		}
 		throw error("unsupported reader form #" + peek());
+	}
+
+	/**
+	 * One {@code ^meta form} (or legacy {@code #^meta form}), positioned at the caret:
+	 * {@code (with-meta form meta)}, which the lowering parses and drops.
+	 */
+	private LispVal readMeta() {
+		next();
+		skipSpace();
+		LispVal meta = readDatum();
+		skipSpace();
+		return list("with-meta", readDatum(), meta);
+	}
+
+	/**
+	 * One record literal {@code #ns.Name{:k v ...}} / {@code #ns.Name[v ...]}, positioned
+	 * after the hash: {@code (%record ns.Name body)}, the body read as data (the oracle
+	 * never evaluates it). Like the oracle, only a dotted class name is a record literal
+	 * (an undotted tag is a tagged literal, and no reader function is installed for one);
+	 * a body that is neither a map nor a vector is unreadable, and a map body takes
+	 * distinct keyword keys only.
+	 */
+	private LispVal readRecordLiteral() {
+		int start = this.pos;
+		while (this.pos < this.source.length() && DELIMS.indexOf(peek()) < 0) {
+			next();
+		}
+		String tag = this.source.substring(start, this.pos);
+		if (tag.indexOf('.') < 0) {
+			if (tag.equals("inst") || tag.equals("uuid")) {
+				throw error("unsupported reader form #" + tag);
+			}
+			throw error("No reader function for tag " + tag);
+		}
+		skipSpace();
+		LispVal body;
+		if (this.pos < this.source.length() && peek() == '[') {
+			body = readVector();
+		}
+		else if (this.pos < this.source.length() && peek() == '{') {
+			next();
+			List<LispVal> items = readSeq('}');
+			if (items.size() % 2 != 0) {
+				throw error("a map literal needs an even number of forms");
+			}
+			Set<String> seen = new HashSet<>();
+			for (int i = 0; i < items.size(); i += 2) {
+				if (!(items.get(i) instanceof LispSymbol key && key.name().startsWith(":"))) {
+					throw error("Unreadable defrecord form: key must be of type clojure.lang.Keyword, got "
+							+ items.get(i).print());
+				}
+				if (!seen.add(key.name())) {
+					throw error("Duplicate key: " + key.name());
+				}
+			}
+			body = marked(HASH_MAP, items);
+		}
+		else {
+			throw error("Unreadable constructor form starting with \"#" + tag + "\"");
+		}
+		return list(List.of(RECORD, new LispSymbol(tag), body));
 	}
 
 	/**

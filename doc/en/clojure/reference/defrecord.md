@@ -3,7 +3,7 @@
 `(defrecord Name [fields...] Protocol (method [target & args] body...) ...)`
 
 Defines a record: a map with a type tag. The value wraps the entry table every map
-uses as `(:C%RECORD tag fields table)`, so the map verbs read through it
+uses as `(:C%RECORD tag fields table class)`, so the map verbs read through it
 (`get`/`contains?`/`keys`/`vals`/`count`/`seq` read the entries; `assoc`/`update`/
 `conj`/`merge` rebuild the table and keep the tag; `dissoc` keeps the record while
 every declared field is still present and drops to a plain map otherwise, like the
@@ -14,12 +14,22 @@ kept); `(Name. ...)` rewrites to `->Name`. Inline method bodies see the fields a
 locals. The name joins the whole-file pre-scan, so a constructor call may stand
 above the definition.
 
-Deviation: a record prints as its wrapper list (`(:C%RECORD :R (:a) {:a 7})`),
-where the oracle prints `#user.R{:a 7}`.
+A record prints as its literal, like the oracle: `#user.R{:a 7}` -- the defining
+namespace (`-` spelled `_`) plus the name, the declared fields first. The literal
+reads back: `#ns.Name{:k v ...}` builds the record over the unevaluated body
+(missing fields `nil`, extra keys kept), `#ns.Name[v ...]` positionally (a wrong
+count is refused). The class must be a record the program defines; an undotted
+`#Name{...}` is a tagged literal and is refused, like the oracle
+(`No reader function for tag Name`).
+
+Deviation: `str` of a record spells its literal, where the oracle answers
+`user.R@<hash>`.
 
 ```clojure
 (defrecord R [a])
 (def r (->R 7))
+(println r)                       ; #user.R{:a 7}
+(println (= r #user.R{:a 7}))     ; true
 (println (get r :a))              ; 7
 (println (= r (->R 7)))           ; true
 (println (= r {:a 7}))            ; false

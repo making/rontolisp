@@ -10,9 +10,11 @@ with a core form or built-in; a quoted symbol demangles, so `'e2e-foo` prints `e
 starts a line comment; `#_` skips the next form. A regex literal (`#"..."`) reads to
 a pattern value (see [Regular expressions](reference/regex.md)); the dispatch forms
 that read but are refused later are covered in [Semantics](semantics.md#not-yet):
-backquote/unquote (`` ` ``, `~`, `~@`) and `var`/`#'`. Metadata (`^`, `with-meta`)
-reads too, but parses and drops instead: it never affects dispatch
-(see [Semantics](semantics.md#state-and-dynamic-scope)).
+backquote/unquote (`` ` ``, `~`, `~@`) and `var`/`#'`. Metadata (`^`, the legacy
+`#^`, `with-meta`) reads too, but parses and drops instead: it never affects dispatch
+(see [Semantics](semantics.md#state-and-dynamic-scope)). A record literal
+(`#ns.Name{...}` / `#ns.Name[...]`) reads to the record over its unevaluated body (see
+[defrecord](reference/defrecord.md)).
 
 ## Characters
 

@@ -92,7 +92,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | Java interop (`.`, `..`, `.method`, `.-field`, `Class/member` in call and value position, `Class.`, `new`, `memfn`, `proxy`) | the `java:` surface (`.kb/java-interop.md`) | `(. obj m args)` / `(.m obj args)` an instance call (a known-class receiver whose overloads at that arity all answer a primitive boolean answers `T`-or-false -- a construction literal, a `let`/`if-let`/`when-let` local bound to one, or a `..` step's declared return; any other receiver keeps the shared `java:` unmarshal), `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field -- decided 2026-10-01, b20, lifting the b08 deviation; a bare `Class/member` value reads the static field when the host class has one, else answers a member-as-value lambda dispatching per arity over the static call -- so `(every? Character/isWhitespace s)` runs -- and a variadic-only member is refused by name), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums, `(memfn m args...)` a lambda over the instance call, `(proxy [I] [] ...)` a `java:proxy` (kept gaps, b08: no `set!` field write -- the `java:` surface has no write primitive; non-string receivers go to `java:call` and fail there); classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) | `(. obj m args)` / `(.m obj args)` an instance call, `(. Class m args)` / `(Class/m args)` a static, `(Class. args)` / `(new Class args)` construction, `(Class/FIELD)` a static field (a zero-argument `(Class/m)` or `(. Class m)` is the static method when the host class has one, else the field; a bare `Class/member` value reads the field or answers an arity-dispatching member lambda), `(.-f obj)` an instance field, `(.. obj (step args) name)` nested `.` datums; classes resolve dotted, imported, or `java.lang`; a string receiver answers the mapped core operation (a Lisp string is no host object), anything else goes to `java:call`; interpreter and JVM only (wasm rejects `java:`) |
 | `make-array`/`aget`/`aset`/`alength` | the general array (`make-array` dims, `aref`, `(setf aref)`, `array-dimension` 0) | the class spells the element type and is ignored -- every array here is general (the book's `interop.clj` shape); only the Clojure spellings are new, so all four backends |
 | `defprotocol` | one `equal`-table global plus one dispatcher `defun` per method, over the shared `C%PROTOCOL-TAG` reader | the multimethod shape without the hierarchy search (decided 2026-10-01, b13, revisiting the b08 rejection: three corpus chapters use nothing else, and both halves -- the b05/b08 method table, the b02 `equal` table -- already run on all four backends); a call dispatches on the target's tag (exact match, then the `Object` row), a miss with no `Object` row signals, like the oracle; the protocol name answers its table; single signature per method (several arities stay refused) |
-| `defrecord` / `deftype` | the positional and map constructors (records only -- the oracle defines no `map->` for deftypes) as mangled `defun`s, plus one table row per inline method | a record is `(:C%RECORD tag fields table)` over the same `equal` table every map uses (no per-backend struct -- the b08 rejection reason); a deftype shares the shape with an opaque `:C%TYPE` tag; names join the whole-file pre-scan (forward refs like `defn`); `(T. ...)`/`(new T ...)` rewrite to `->T`; inline bodies see the fields as locals (an explicit parameter shadows its field, like the oracle); a trailing keyword option is refused |
+| `defrecord` / `deftype` | the positional and map constructors (records only -- the oracle defines no `map->` for deftypes) as mangled `defun`s, plus one table row per inline method | a record is `(:C%RECORD tag fields table class)` over the same `equal` table every map uses (no per-backend struct -- the b08 rejection reason), `class` the host class name string the printer spells (`#my_app.core.R{...}`: the defining `ns` with `-` munged to `_`, the name verbatim, like the oracle; b58) -- every rewrap (`rewrapRecord`) carries it, and the pre-scan tracks `ns` forms so a forward name gets the right one; a deftype shares the shape with an opaque `:C%TYPE` tag; names join the whole-file pre-scan (forward refs like `defn`); `(T. ...)`/`(new T ...)` rewrite to `->T`; inline bodies see the fields as locals (an explicit parameter shadows its field, like the oracle); a trailing keyword option is refused |
 | `reify` | one fresh `:C%REIFY` tag per evaluation with a row per method in each protocol's table | a single-shot map plus methods (never `proxy`, which stays the `java:` surface); `=` is identity, like the oracle |
 | `extend-protocol` / `extend-type` / `extend` | `defmethod` rows under the target's tag (`extend` from a map literal of method functions) | targets are the `class`-keyword kinds (`String`, `Number`/`Long`/`Double`, ..., `Map`/`Vector`/`Set`/`List`, plus `nil` and `Object` as the miss default) and known record/deftype names; anything else (an `Instant`, a `Date`, ...) is a named refusal; `extend-type` groups methods under protocol names |
 | `satisfies?` | table membership (the tag's row, or the `Object` row) | the protocol is a literal name, like `defmethod`'s multimethod |
@@ -104,7 +104,9 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `1M` | an exact ratio | `0.1M` is `1/10`: decimal arithmetic stays exact instead of the double's precision loss, printing as the ratio without its mark; `2N` narrows like any integer (a bignum past the `long` range) and prints without its mark |
 | regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21; verbatim backslashes since b50) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle; the reader keeps every escape verbatim like the oracle (so `#"\\d"` reads a literal backslash plus `d`), refusing unknown alphabetic escapes, a short/non-hex `\u`/`\x`, a `\0` with no octal digit behind it and a lone `\E` at read time |
 | syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
-| `var`/`#'`, metadata (`^`) | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
+| record literals (`#ns.Name{...}` / `#ns.Name[...]`) | the reader's `(%record ns.Name body)`, lowered to the record built in place over the QUOTED body (b58) | the oracle never evaluates the body: `#user.R{:a (+ 1 2)}` holds the list; missing fields `nil`, extra keys kept, a vector body takes exactly the field count; plain, quoted and syntax-quoted literals lower alike, and a macro answering a record decodes back to one (no constructor call, so it works at macro time); the class must match a defined record's printed class name, a deftype literal is refused by name; read-time refusals mirror the oracle: an undotted `#P{...}` is `No reader function for tag P` (`#inst`/`#uuid` stay `unsupported reader form`), a non-map/vector body `Unreadable constructor form`, a non-keyword or repeated key |
+| `var`/`#'` | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
+| metadata (`^`, legacy `#^`) | the reader's `(with-meta form meta)`, parsed and dropped | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
 | `proxy` | `java:proxy` with a name-dispatching lambda | a single interface and no constructor arguments; each `(method [params...] body...)` becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`); a superclass, constructor arguments, several interfaces and multi-arity methods are refused by name; interpreter and JVM only, like all interop |
@@ -181,7 +183,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a rest-tolerant lookup lambda over the same read (the second call argument is the default, extras ignored) | `(map :k coll)` reads the key out of each member; a keyword-dispatched multimethod takes several call arguments, like the oracle (decided 2026-10-01, b39 -- the value was a one-argument lookup and signalled) |
 | a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole |
 | `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil -- the namespace stays flat, every definition still global); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
-| a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
+| a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; metadata on the name, a docstring and an attr map are skipped (b58); clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements (each element's own quote form, so a symbol or list stays data); a quoted list holding a vector, map, set or regex literal at any depth is a `list` construction over the element forms (b55: the construction code used to land in the list as data, so `'(1 [2])` printed `(1 (VECTOR ...))` -- the `is` expected-form shape) |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
 | transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
@@ -276,9 +278,10 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   `#<HASH-TABLE ...>` map and its reads answer wrapped sets; an `ex-info` value
   prints as its `#<C%E-EX-INFO ...>` condition; atoms print unreadably (`#<Atom value>`),
   functions as `#<procedure>`, a lazy seq as `#<LazySeq>` (a lazy tail truncates with
-  ` ...`, so no bare infinite print ever hangs); a record prints as its wrapper
-  list (`(:C%RECORD :R (:a) {:a 7})` where the oracle prints `#user.R{:a 7}`), a
-  deftype likewise with `:C%TYPE`, a reify as `(:C%REIFY ...)`; `class` of a
+  ` ...`, so no bare infinite print ever hangs); a record prints as its literal
+  `#user.R{:a 7}` like the oracle (b58, lifting the wrapper-print deviation), but `str`
+  spells the literal too where the oracle answers `user.R@<hash>`; a
+  deftype prints as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; `class` of a
   record/deftype answers its tag keyword (the oracle answers a host class, which
   no wasm backend has); `assoc` onto a record keeps the type (like the oracle)
   while a `dissoc` that removes a declared field drops to a plain map (like the
@@ -395,17 +398,18 @@ a failed `thrown-with-msg?` shows the message (the oracle `#error {...}`); a hos
 StackOverflowError is no CL condition, so `(is (thrown? StackOverflowError ...))` ends the
 program (the corpus `functional` test); `run-all-tests` lists only the program's namespaces; a thrown host `Throwable` (`(throw (Exception. "boom"))`) reaches the report as `#<java java.lang.Exception>`, so `thrown-with-msg?` cannot match its message (b66).
 
-Corpus (2026-10-02; the 27 `code/test/**` namespaces of the shcloj4 corpus, each inlined with
-the example sources it requires since b56 is open, the oracle run on the real project): 12
-agree with the oracle's summary line (`fail`, `index-of-any`, `life-without-multi`,
-`male-female`, `male-female-seq`, `memoized-male-female`, `replace-symbol`, `trampoline`,
-`wallingford`, ...); 8 run but differ on documented deviations (`macroexpand-1` answers
-uppercase: the 6 `macros*` files; lazy `for` input: `lazy-index-of-any`) or the
-redefinition gap (b65: a later `defn` of the same name wins on the compiled backends); the
-rest stop at other gaps: `#^`/record literals (b58), `meta`/`#'` (`introduction`,
-`exploring`), `drop-last` (b57), multi-interface `proxy` (b59), `String` as a value
-(`multimethods`), `read` (`concurrency`), project-local namespaces (b56, `preface`), the
-host stack overflow (`functional`). The 153,129 B raw wasm of a one-test program
+Corpus (2026-10-02, after b58; the 27 `code/test/**` namespaces of the shcloj4 corpus, each
+inlined with the example sources it requires since b56 is open, run on the interpreter, the
+oracle on the real project): 9 agree with the oracle's summary line (`fail`, `index-of-any`,
+`life-without-multi` -- interpreter only, b65 -- `male-female`, `male-female-seq`,
+`memoized-male-female`, `replace-symbol`, `trampoline`, `wallingford`); 9 run but differ:
+`macroexpand-1` answers uppercase data (the documented deviation; the 6 `macros*` files plus
+`macros`), a lazy `for` input (`lazy-index-of-any`), and `chat`, whose test names equal the
+functions under test (a `deftest` redefines them in the flat namespace, b56); 9 stop at
+other gaps: `meta`/`#'` (`introduction`, `exploring`), `drop-last` (b57, `sequences`),
+multi-interface `proxy` (b59, `snake`), `String` as a value (`multimethods`, `interop`),
+`read` (`concurrency`), project-local namespaces (b56, `preface`), the host stack overflow
+(`functional`). The 153,129 B raw wasm of a one-test program
 (`(deftest a (is (= 1 1))) (run-tests)`) is the printer plus the EH-mode handlers.
 
 ## A session
@@ -718,3 +722,14 @@ spliced runtime costs about 19.7 KB raw when referenced (a program without
 any of it, `(println (+ 1 2))`, is 9,581 B -- the pruner drops the runtime
 wholly, like the STM/hierarchy runtimes). The literal arm itself is untouched
 code beside a run-time branch, so literal-only programs pay nothing new.
+
+b58 (2026-10-02) closes three reader/metadata refusals: `#^` reads like `^`
+(`ClojureReaderTest.legacyHashCaretMetadataReadsLikeTheCaret`), `ns` strips
+metadata on its name (`ClojureLoweringTest.nsSkipsMetadataOnItsNameLikeDefAndDefn`),
+and record literals read and records print as `#ns.Name{...}`
+(`ClojureReaderTest.recordLiteral*`,
+`ClojureLoweringTest.recordLiteralsBuildTheRecordOverTheQuotedBody`, and
+`record-literals-read-and-print-like-the-oracle` in `clojure-spec.yaml`, every line
+diffed against `clj` 1.12). The todo's premise that a simple `#Rec{...}` reads was
+overturned on the oracle: an undotted tag is a tagged literal (`No reader function
+for tag Rec`), so only the dotted class name is a record literal.

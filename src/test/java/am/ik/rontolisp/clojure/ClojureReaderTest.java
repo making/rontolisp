@@ -210,6 +210,35 @@ class ClojureReaderTest {
 	}
 
 	@Test
+	void legacyHashCaretMetadataReadsLikeTheCaret() {
+		assertThat(printed("#^:k v")).isEqualTo(printed("^:k v"));
+		assertThat(printed("#^{:doc \"x\"} v")).isEqualTo(printed("^{:doc \"x\"} v"));
+		assertThat(printed("(defn #^String f [#^long x] x)")).isEqualTo(printed("(defn ^String f [^long x] x)"));
+	}
+
+	@Test
+	void recordLiteralsReadAsMarkedClassAndBody() {
+		assertThat(printed("#user.P{:a 1}")).isEqualTo("[(|%record| |user.P| (|%hash-map| :|a| 1))]");
+		assertThat(printed("#my_app.core.P[1 x]")).isEqualTo("[(|%record| |my_app.core.P| (|%vector| 1 |x|))]");
+		assertThat(printed("#user.P {}")).isEqualTo("[(|%record| |user.P| (|%hash-map|))]");
+	}
+
+	@Test
+	void recordLiteralRefusalsMatchTheOracle() {
+		// an undotted tag is a tagged literal, and none has a reader function
+		assertThatThrownBy(() -> read("#P{:a 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No reader function for tag P");
+		assertThatThrownBy(() -> read("#user.P(1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unreadable constructor form starting with \"#user.P\"");
+		assertThatThrownBy(() -> read("#user.P{\"a\" 1}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("key must be of type clojure.lang.Keyword, got \"a\"");
+		assertThatThrownBy(() -> read("#user.P{:a 1 :a 2}")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Duplicate key: :a");
+		assertThatThrownBy(() -> read("#inst \"2020\"")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unsupported reader form #inst");
+	}
+
+	@Test
 	void gensymSuffixReadsAsOneIdentifier() {
 		assertThat(printed("x#")).isEqualTo("[|x#|]");
 		assertThat(printed("`(~x ~@y s#)"))

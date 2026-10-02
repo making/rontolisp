@@ -39,8 +39,9 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * The tag heading a record value: a record is
-	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table)}, beside the
-	 * {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers. The table is an
+	 * {@code (LIST :C%RECORD (:C%KEYWORD "Name") (fields...) table "ns.Name")}, beside
+	 * the {@code (:C%SET table)} and {@code (:C%KEYWORD spelling)} wrappers; the trailing
+	 * class name is what the printer spells ({@code #ns.Name{...}}). The table is an
 	 * {@code equal} table like every map, so every backend prints, hashes and compares it
 	 * through the runtime they already share; no backend learns a new value shape.
 	 */
@@ -122,9 +123,25 @@ final class ClojureProtocolLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"), form);
 	}
 
-	/** A record's construction: {@code (LIST :C%RECORD tag fields table)}. */
-	static LispVal wrapRecord(LispVal tag, LispVal fields, LispVal table) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), RECORD_TAG, tag, fields, table);
+	/**
+	 * The host class name inside a record value: {@code (NTH 4 form)}, the string its
+	 * literal spells.
+	 */
+	static LispVal typedClassOf(LispVal form) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(4), form);
+	}
+
+	/** A record's construction: {@code (LIST :C%RECORD tag fields table className)}. */
+	static LispVal wrapRecord(LispVal tag, LispVal fields, LispVal table, LispVal className) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), RECORD_TAG, tag, fields, table, className);
+	}
+
+	/**
+	 * A rebuilt entry table back in the record it came from: the same tag, fields and
+	 * class name.
+	 */
+	static LispVal rewrapRecord(LispVal record, LispVal table) {
+		return wrapRecord(typedTagOf(record), typedFieldsOf(record), table, typedClassOf(record));
 	}
 
 	/** A deftype's construction: {@code (LIST :C%TYPE tag fields table)}. */
@@ -215,7 +232,8 @@ final class ClojureProtocolLowering {
 		boolean record = ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord");
 		String name = ClojureLowerUtil.plainName(items.get(1), record ? "defrecord" : "deftype");
 		List<String> fields = recordFields(ctx, items);
-		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name);
+		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
+				ctx.currentNs.replace('-', '_') + "." + name);
 		ctx.types.put(name, def);
 		ctx.globals.put("->" + name, ClojureLowering.Kind.FUNCTION);
 		if (record) {
@@ -552,7 +570,8 @@ final class ClojureProtocolLowering {
 		LispVal table = ClojureCollectionLowering
 			.tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs));
 		LispVal value = def.record()
-				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table)
+				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+						LispString.literal(def.className()))
 				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym("->" + name),
 				ClojureLowerUtil.list(params), value);
@@ -582,7 +601,8 @@ final class ClojureProtocolLowering {
 							ClojureLowering.NIL_CONST),
 					ClojureLowering.NIL_CONST));
 		}
-		fill.add(wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table));
+		fill.add(wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+				LispString.literal(def.className())));
 		LispVal whole = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("let*"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
@@ -599,6 +619,70 @@ final class ClojureProtocolLowering {
 							ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), fill)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym("map->" + name),
 				ClojureLowerUtil.list(List.of(src)), whole);
+	}
+
+	/**
+	 * One record literal {@code (%record ns.Name body)}: the map constructor over the
+	 * quoted map body, or the positional constructor over the quoted vector body -- the
+	 * body is data, never evaluated, like the oracle. The class name must be a record the
+	 * program defines, spelled as it prints ({@code my_app.core.Name}).
+	 */
+	static LispVal recordLiteral(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3 && items.get(1) instanceof LispSymbol,
+				"a record literal takes a class name and a body");
+		String className = ((LispSymbol) items.get(1)).name();
+		ClojureLowering.TypeDef def = null;
+		for (ClojureLowering.TypeDef known : ctx.types.values()) {
+			if (known.className().equals(className)) {
+				def = known;
+			}
+		}
+		if (def == null) {
+			throw new LispReadException("a record literal needs a defined record class, not " + className);
+		}
+		if (!def.record()) {
+			throw new LispReadException("a deftype literal is not supported yet: " + className);
+		}
+		// entry spelling -> value datum: the declared fields first (nil until the
+		// body names them), then the extension keys in body order
+		Map<String, LispVal> entries = new LinkedHashMap<>();
+		for (String field : def.fields()) {
+			entries.put(field, new LispSymbol("nil"));
+		}
+		List<LispVal> body = ClojureLowerUtil.items(items.get(2), List.of());
+		if (!body.isEmpty() && ClojureLowerUtil.isSymbolNamed(body.get(0), "%hash-map")) {
+			for (int i = 1; i + 1 < body.size(); i += 2) {
+				ClojureLowerUtil.isTrue(body.get(i) instanceof LispSymbol k && k.name().startsWith(":"),
+						"a record literal takes keyword keys, not " + body.get(i).print());
+				String spelling = ClojureCollectionLowering.resolveKeywordSpelling(ctx,
+						((LispSymbol) body.get(i)).name());
+				entries.put(spelling, body.get(i + 1));
+			}
+		}
+		else {
+			ClojureLowerUtil.isTrue(!body.isEmpty() && body.get(0) == ClojureReader.VECTOR,
+					"a record literal takes a map or a vector");
+			int n = body.size() - 1;
+			ClojureLowerUtil.isTrue(n == def.fields().size(),
+					"Unexpected number of constructor arguments to class " + className + ": got " + n);
+			for (int i = 0; i < n; i++) {
+				entries.put(def.fields().get(i), body.get(i + 1));
+			}
+		}
+		// built in place over the quoted values, so a record literal needs no
+		// constructor in scope (a macro answer travels as one, too)
+		List<LispVal> keys = new ArrayList<>();
+		for (String field : def.fields()) {
+			keys.add(ClojureCollectionLowering.keywordForm(field));
+		}
+		List<LispVal> pairs = new ArrayList<>();
+		for (Map.Entry<String, LispVal> entry : entries.entrySet()) {
+			pairs.add(ClojureCollectionLowering.keywordForm(entry.getKey()));
+			pairs.add(ctx.quote(entry.getValue()));
+		}
+		return wrapRecord(typeTagForm(def.tagSpelling()), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys),
+				ClojureCollectionLowering.tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs)),
+				LispString.literal(className));
 	}
 
 	/**

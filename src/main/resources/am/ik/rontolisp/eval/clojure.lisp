@@ -45,7 +45,7 @@
        (hash-table-p (car (cdr x))) (null (cdr (cdr x)))))
 
 (defun rontolisp::%clojure-record-p (x)
-  "Whether X is the (:C%RECORD tag fields table) wrapper the lowering lowers
+  "Whether X is the (:C%RECORD tag fields table class) wrapper the lowering lowers
    records to: map-like, so the map verbs read through its entry table."
   (and (consp x) (eq (car x) :C%RECORD) (consp (cdr (cdr x)))
        (hash-table-p (car (cdr (cdr (cdr x)))))))
@@ -257,6 +257,9 @@
          (write-string (car (cdr x)) stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
+        ((rontolisp::%clojure-record-p x)
+         (rontolisp::%clojure-write-record x nil-replacement readable stream
+                                           labels))
         ((rontolisp::%clojure-set-p x)
          (write-string "#{" stream)
          (let ((first t))
@@ -325,6 +328,36 @@
          (write-char #\) stream))
         ((functionp x) (write-string "#<procedure>" stream))
         (t (princ x stream))))
+
+(defun rontolisp::%clojure-write-record
+    (x nil-replacement readable stream labels)
+  "Write record X as its literal, #ns.Name{:k v, ...}, like the oracle: the
+   declared fields first in declaration order, then the extension keys in the
+   table's walk order."
+  (let ((fields (car (cdr (cdr x))))
+        (table (car (cdr (cdr (cdr x)))))
+        (first t))
+    (write-char #\# stream)
+    (write-string (car (cdr (cdr (cdr (cdr x))))) stream)
+    (write-char #\{ stream)
+    (dolist (k fields)
+      (if first (setq first nil) (write-string ", " stream))
+      (rontolisp::%clojure-write k nil-replacement readable stream labels)
+      (write-char #\Space stream)
+      (rontolisp::%clojure-write (gethash k table) nil-replacement readable
+                                 stream labels))
+    (maphash (lambda (k v)
+               (let ((declared nil))
+                 (dolist (f fields) (if (equal f k) (setq declared t)))
+                 (if (not declared)
+                     (progn
+                       (if first (setq first nil) (write-string ", " stream))
+                       (rontolisp::%clojure-write k nil-replacement readable
+                                                  stream labels)
+                       (write-char #\Space stream)
+                       (rontolisp::%clojure-write v nil-replacement readable
+                                                  stream labels))))) table)
+    (write-char #\} stream)))
 
 (defun rontolisp::%clojure-print (x nil-replacement readable stream)
   "Write X in Clojure notation to STREAM, with datum labels when it may cycle."
