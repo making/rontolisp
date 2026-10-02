@@ -712,15 +712,24 @@ class ClojureLoweringTest {
 
 	@Test
 	void doseqDotimesForLowerToCoreLoops() {
-		assertThat(lowered("(doseq [x [1]] x)")).contains("DOLIST").contains("|c%x|").contains("(PROGN");
-		assertThat(lowered("(doseq [x [1 2] y [3 4]] x)")).contains("DOLIST");
+		assertThat(lowered("(doseq [x [1]] x)")).contains("(DO ((").contains("|c%x|").contains("(PROGN");
+		// each level steps through the seq view one realized level at a time, so a lazy
+		// tail never reaches the element binding as wrapper internals
+		assertThat(lowered("(doseq [x [1 2] y [3 4]] x)")).doesNotContain("DOLIST")
+			.contains("RONTOLISP::%CLOJURE-SEQ-REST")
+			.contains("(CAR ");
 		assertThat(lowered("(dotimes [i 2] i)")).contains("DOTIMES").contains("TRUNCATE");
-		assertThat(lowered("(for [x [1]] x)")).contains("DOLIST").contains("REVERSE").contains("SETQ");
-		assertThat(lowered("(for [x [1] :when x] x)")).contains("DOLIST");
+		assertThat(lowered("(for [x [1]] x)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
+			.contains("REVERSE")
+			.contains("SETQ");
+		assertThat(lowered("(for [x [1] :when x] x)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
+			.doesNotContain("DOLIST");
 		assertThat(lowered("(for [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
 		assertThat(lowered("(doseq [x [1] :while x] x)")).contains("BLOCK").contains("RETURN-FROM");
 		assertThat(lowered("(for [x [1] :let [y 2]] y)")).contains("LET*").contains("|c%y|");
-		assertThat(lowered("(for [[a b] [[1 2]]] a)")).contains("DOLIST").contains("LET*");
+		assertThat(lowered("(for [[a b] [[1 2]]] a)")).contains("RONTOLISP::%CLOJURE-SEQ-REST")
+			.contains("LET*")
+			.doesNotContain("DOLIST");
 		assertThat(lowered("(dorun [1])")).contains("PROGN");
 		assertThat(lowered("(doall [1])")).isEqualTo(FALSE_BINDING + "(VECTOR 1)");
 		assertThatThrownBy(() -> Clojure.read("(for [x [1] :foo 1] x)", null)).isInstanceOf(LispReadException.class)

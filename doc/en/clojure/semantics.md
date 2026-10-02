@@ -114,8 +114,9 @@ the seq view.
 
 ## Iteration
 
-`doseq` iterates the seq view for side effects and answers `nil`: one `dolist` per
-binding pair nested left to right, the body an implicit `do`. `dotimes` binds `0` below
+`doseq` iterates the seq view for side effects and answers `nil`: one loop per
+binding pair nested left to right, the body an implicit `do`. Each loop steps through a
+lazy input one element at a time, so a `:while` stops an infinite one. `dotimes` binds `0` below
 its count the same way and answers `nil`; the count runs through `truncate` first, so
 `2.5` counts `0 1` and a non-number signals, like the oracle's `intCast`. `for` answers
 the strict list of its body over every combination, accumulated in reverse; an empty
@@ -151,8 +152,9 @@ of hanging. There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` 
 and structurally); `get` takes an optional default and reads maps, sets, vectors,
 strings and nil.
 
-Lazy inputs to the other seq verbs (`doseq`/`for`/`reduce`, `keep` and friends) consume
-one level through the seq view: pass a `take`n prefix first.
+`doseq`/`for`/`reduce`/`into` walk a lazy input whole (`for` still answers a strict
+list). Lazy inputs to the other seq verbs (`keep` and friends) consume one level through
+the seq view: pass a `take`n prefix first.
 
 ## State and dynamic scope
 

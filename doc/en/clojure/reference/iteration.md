@@ -1,8 +1,9 @@
 # Iteration
 
-Side-effecting loops lower to nested `dolist` loops over the seq view, and `for` to the
-same nesting accumulating in reverse into a strict list. There is no laziness, chunking
-or memoisation; the empty `for` is `nil`.
+Side-effecting loops lower to nested loops stepping through the seq view one element at
+a time (a lazy input included), and `for` to the same nesting accumulating in reverse into
+a strict list. `for` answers no lazy seq and there is no chunking; the empty `for` is
+`nil`.
 
 | Name | Example | Result |
 |---|---|---|
