@@ -14,11 +14,14 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 - `clojure` depends on the AST types and `reader` only: `ClojureReader` (text ->
   datums, its own case-sensitive reader), `ClojureLowering` (the dispatch hub:
   datums -> core forms) plus one slice per feature (`ClojureBindingLowering`,
-  `ClojureSeqLowering`, `ClojureCollectionLowering`, `ClojureStringLowering`,
-  `ClojureStateLowering`, `ClojureDispatchLowering`, `ClojureMacroLowering`,
-  `ClojureNamespaceLowering`, `ClojureInteropLowering`, each taking the hub as its
-  first argument and re-entering it for subforms) and the stateless
-  `ClojureLowerUtil`, `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
+  `ClojureSeqLowering` / `ClojureLazyLowering` / `ClojureLoopLowering` /
+  `ClojureFilterLowering`, `ClojureCollectionLowering` / `ClojureFnLowering` /
+  `ClojureUpdateLowering`, `ClojureStringLowering`, `ClojureStateLowering`,
+  `ClojureDispatchLowering` / `ClojureHierarchyLowering` /
+  `ClojureProtocolLowering`, `ClojureMacroLowering`, `ClojureNamespaceLowering`,
+  `ClojureInteropLowering`, each taking the hub as its first argument and
+  re-entering it for subforms) and the stateless `ClojureLowerUtil`,
+  `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
   (the REPL session). The hub is the named cycle root in `PackageCycleTest`
   (recursive-descent lowering, like the two expression compilers).
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked for `.clj` or

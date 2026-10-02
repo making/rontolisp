@@ -828,7 +828,7 @@ final class ClojureBindingLowering {
 	static LispVal fnValue(ClojureLowering ctx, LispVal form) {
 		if (form instanceof LispSymbol s && s.name().startsWith(":")) {
 			// no scope can bind a keyword (plainName refuses one), so this is data
-			return ClojureCollectionLowering.keywordFn(ctx, form);
+			return ClojureFnLowering.keywordFn(ctx, form);
 		}
 		if (form instanceof LispSymbol s && ctx.known(s.name())) {
 			if (ctx.isMacro(s.name())) {
@@ -840,7 +840,7 @@ final class ClojureBindingLowering {
 			return ClojureLowerUtil.idSym(s.name());
 		}
 		if (form instanceof LispSymbol s) {
-			LispVal predicate = ClojureCollectionLowering.predicateValue(ctx, s.name());
+			LispVal predicate = ClojureFnLowering.predicateValue(ctx, s.name());
 			if (predicate != null) {
 				return predicate;
 			}

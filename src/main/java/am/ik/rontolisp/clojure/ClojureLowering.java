@@ -638,11 +638,11 @@ public final class ClojureLowering {
 		}
 		if (lowering.usedHierarchy) {
 			// the hierarchy runtime runs before anything else, like the false value
-			lowering.forms.addAll(1, ClojureDispatchLowering.hierarchyRuntime(lowering));
+			lowering.forms.addAll(1, ClojureHierarchyLowering.hierarchyRuntime(lowering));
 		}
 		if (lowering.usedProtocols) {
 			// the protocol runtime runs before anything else, like the false value
-			lowering.forms.addAll(1, ClojureDispatchLowering.protocolRuntime(lowering));
+			lowering.forms.addAll(1, ClojureProtocolLowering.protocolRuntime(lowering));
 		}
 		if (lowering.usedExInfo) {
 			// the ex-info runtime runs before anything else, like the false value
@@ -696,13 +696,13 @@ public final class ClojureLowering {
 		if (this.usedHierarchy && !this.hierarchyEmitted) {
 			// The hierarchy runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
-			out.add(0, new ClojureTopLevel(ClojureDispatchLowering.hierarchyRuntime(this), false));
+			out.add(0, new ClojureTopLevel(ClojureHierarchyLowering.hierarchyRuntime(this), false));
 			this.hierarchyEmitted = true;
 		}
 		if (this.usedProtocols && !this.protocolsEmitted) {
 			// The protocol runtime travels ahead of the buffer that first needs
 			// it, like the false binding; later buffers reuse it.
-			out.add(0, new ClojureTopLevel(ClojureDispatchLowering.protocolRuntime(this), false));
+			out.add(0, new ClojureTopLevel(ClojureProtocolLowering.protocolRuntime(this), false));
 			this.protocolsEmitted = true;
 		}
 		if (this.usedMacros && !this.macrosEmitted) {
@@ -763,11 +763,11 @@ public final class ClojureLowering {
 			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defmulti"), Kind.FUNCTION);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defprotocol")) {
-			ClojureDispatchLowering.declareProtocol(this, items);
+			ClojureProtocolLowering.declareProtocol(this, items);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "deftype")) {
-			ClojureDispatchLowering.declareRecordType(this, items);
+			ClojureProtocolLowering.declareRecordType(this, items);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
 			// a macro name, so a call above its definition names the missing
@@ -826,20 +826,20 @@ public final class ClojureLowering {
 				return ClojureDispatchLowering.defmultiForms(this, items);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defprotocol")) {
-				return ClojureDispatchLowering.defprotocolForms(this, items);
+				return ClojureProtocolLowering.defprotocolForms(this, items);
 			}
 			if (items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord")
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "deftype"))) {
-				return ClojureDispatchLowering.recordTypeForms(this, items);
+				return ClojureProtocolLowering.recordTypeForms(this, items);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "extend-protocol")) {
-				return List.of(ClojureDispatchLowering.extendProtocolForm(this, items));
+				return List.of(ClojureProtocolLowering.extendProtocolForm(this, items));
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "extend-type")) {
-				return List.of(ClojureDispatchLowering.extendTypeForm(this, items));
+				return List.of(ClojureProtocolLowering.extendTypeForm(this, items));
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "extend")) {
-				return List.of(ClojureDispatchLowering.extendForm(this, items));
+				return List.of(ClojureProtocolLowering.extendForm(this, items));
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
 				return ClojureMacroLowering.defmacroForms(this, items);
@@ -977,40 +977,40 @@ public final class ClojureLowering {
 			return ClojureBindingLowering.declareForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "->")) {
-			return ClojureSeqLowering.threadFirst(this, items);
+			return ClojureLoopLowering.threadFirst(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "->>")) {
-			return ClojureSeqLowering.threadLast(this, items);
+			return ClojureLoopLowering.threadLast(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "as->")) {
-			return ClojureSeqLowering.threadAs(this, items);
+			return ClojureLoopLowering.threadAs(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "doto")) {
-			return ClojureSeqLowering.dotoOf(this, items);
+			return ClojureLoopLowering.dotoOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "cond->")) {
-			return ClojureSeqLowering.condThread(this, items, false);
+			return ClojureLoopLowering.condThread(this, items, false);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "cond->>")) {
-			return ClojureSeqLowering.condThread(this, items, true);
+			return ClojureLoopLowering.condThread(this, items, true);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "some->")) {
-			return ClojureSeqLowering.someThread(this, items, false);
+			return ClojureLoopLowering.someThread(this, items, false);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "some->>")) {
-			return ClojureSeqLowering.someThread(this, items, true);
+			return ClojureLoopLowering.someThread(this, items, true);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "list*")) {
-			return ClojureSeqLowering.listStar(this, items);
+			return ClojureLoopLowering.listStar(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "doseq")) {
-			return ClojureSeqLowering.doseqOf(this, items);
+			return ClojureLoopLowering.doseqOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "dotimes")) {
-			return ClojureSeqLowering.dotimesOf(this, items);
+			return ClojureLoopLowering.dotimesOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "for")) {
-			return ClojureSeqLowering.forOf(this, items);
+			return ClojureLoopLowering.forOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmulti")) {
 			List<LispVal> forms = ClojureDispatchLowering.defmultiForms(this, items);
@@ -1026,37 +1026,37 @@ public final class ClojureLowering {
 			return ClojureDispatchLowering.getMethodOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "prefer-method")) {
-			return ClojureDispatchLowering.preferMethodOf(this, items);
+			return ClojureHierarchyLowering.preferMethodOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "derive") || ClojureLowerUtil.isSymbolNamed(head, "underive")
 				|| ClojureLowerUtil.isSymbolNamed(head, "isa?") || ClojureLowerUtil.isSymbolNamed(head, "parents")
 				|| ClojureLowerUtil.isSymbolNamed(head, "ancestors")
 				|| ClojureLowerUtil.isSymbolNamed(head, "descendants")
 				|| ClojureLowerUtil.isSymbolNamed(head, "make-hierarchy")) {
-			return ClojureDispatchLowering.hierarchyOp(this, items);
+			return ClojureHierarchyLowering.hierarchyOp(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defprotocol")) {
-			List<LispVal> forms = ClojureDispatchLowering.defprotocolForms(this, items);
+			List<LispVal> forms = ClojureProtocolLowering.defprotocolForms(this, items);
 			return forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defrecord") || ClojureLowerUtil.isSymbolNamed(head, "deftype")) {
-			List<LispVal> forms = ClojureDispatchLowering.recordTypeForms(this, items);
+			List<LispVal> forms = ClojureProtocolLowering.recordTypeForms(this, items);
 			return forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "extend-protocol")) {
-			return ClojureDispatchLowering.extendProtocolForm(this, items);
+			return ClojureProtocolLowering.extendProtocolForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "extend-type")) {
-			return ClojureDispatchLowering.extendTypeForm(this, items);
+			return ClojureProtocolLowering.extendTypeForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "extend")) {
-			return ClojureDispatchLowering.extendForm(this, items);
+			return ClojureProtocolLowering.extendForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "reify")) {
-			return ClojureDispatchLowering.reifyForm(this, items);
+			return ClojureProtocolLowering.reifyForm(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "satisfies?")) {
-			return ClojureDispatchLowering.satisfiesOf(this, items);
+			return ClojureProtocolLowering.satisfiesOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "definterface") || ClojureLowerUtil.isSymbolNamed(head, "gen-class")
 				|| ClojureLowerUtil.isSymbolNamed(head, "gen-interface")) {
@@ -1538,7 +1538,7 @@ public final class ClojureLowering {
 						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "cons":
 				ClojureLowerUtil.isTrue(items.size() == 3, "cons takes an item and a collection");
-				return ClojureSeqLowering.consForm(this, lower(items.get(1)), lower(items.get(2)));
+				return ClojureLoopLowering.consForm(this, lower(items.get(1)), lower(items.get(2)));
 			case "empty?":
 				return booleanAnswer(ClojureCollectionLowering.emptyOf(this, items));
 			case "nil?":
@@ -1615,11 +1615,11 @@ public final class ClojureLowering {
 			case "drop":
 				return ClojureSeqLowering.dropOf(this, items);
 			case "range":
-				return ClojureSeqLowering.rangeOf(this, items);
+				return ClojureLazyLowering.rangeOf(this, items);
 			case "dorun":
-				return ClojureSeqLowering.dorunOf(this, items);
+				return ClojureLazyLowering.dorunOf(this, items);
 			case "doall":
-				return ClojureSeqLowering.doallOf(this, items);
+				return ClojureLazyLowering.doallOf(this, items);
 			case "gensym":
 				return ClojureMacroLowering.gensymOf(this, items);
 			case "macroexpand-1":
@@ -1642,59 +1642,59 @@ public final class ClojureLowering {
 				return ClojureStringLowering.subsOf(this, items);
 			case "keep":
 				ClojureLowerUtil.isTrue(n == 2, "keep takes a function and a collection");
-				return ClojureSeqLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.keepForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "keep-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "keep-indexed takes a function and a collection");
-				return ClojureSeqLowering.keepIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.keepIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "map-indexed":
 				ClojureLowerUtil.isTrue(n == 2, "map-indexed takes a function and a collection");
-				return ClojureSeqLowering.mapIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.mapIndexedForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "every?":
 				ClojureLowerUtil.isTrue(n == 2, "every? takes a predicate and a collection");
-				return ClojureSeqLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.everyForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "some":
 				ClojureLowerUtil.isTrue(n == 2, "some takes a predicate and a collection");
-				return ClojureSeqLowering.someForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.someForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "remove":
 				ClojureLowerUtil.isTrue(n == 2, "remove takes a predicate and a collection");
-				return ClojureSeqLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.removeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "distinct":
 				ClojureLowerUtil.isTrue(n == 1, "distinct takes one collection");
-				return ClojureSeqLowering.distinctForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+				return ClojureFilterLowering.distinctForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "partition":
-				return ClojureSeqLowering.partitionOf(this, items);
+				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
 				ClojureLowerUtil.isTrue(n == 2, "take-while takes a predicate and a collection");
-				return ClojureSeqLowering.takeWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "drop-while":
 				ClojureLowerUtil.isTrue(n == 2, "drop-while takes a predicate and a collection");
-				return ClojureSeqLowering.dropWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "interleave":
-				return ClojureSeqLowering.interleaveOf(this, items);
+				return ClojureFilterLowering.interleaveOf(this, items);
 			case "interpose":
 				ClojureLowerUtil.isTrue(n == 2, "interpose takes a separator and a collection");
-				return ClojureSeqLowering.interposeForm(this, lower(items.get(1)),
+				return ClojureFilterLowering.interposeForm(this, lower(items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "zipmap":
 				ClojureLowerUtil.isTrue(n == 2, "zipmap takes keys and values");
-				return ClojureSeqLowering.zipmapForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))),
+				return ClojureFilterLowering.zipmapForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "group-by":
 				ClojureLowerUtil.isTrue(n == 2, "group-by takes a function and a collection");
-				return ClojureSeqLowering.groupByForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.groupByForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "sort":
-				return ClojureSeqLowering.sortOf(this, items);
+				return ClojureFilterLowering.sortOf(this, items);
 			case "sort-by":
-				return ClojureSeqLowering.sortByOf(this, items);
+				return ClojureFilterLowering.sortByOf(this, items);
 			case "last":
 				ClojureLowerUtil.isTrue(n == 1, "last takes one collection");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), ClojureLowerUtil
@@ -1708,58 +1708,56 @@ public final class ClojureLowering {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"),
 						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "update":
-				return ClojureCollectionLowering.updateOf(this, items);
+				return ClojureUpdateLowering.updateOf(this, items);
 			case "update-in":
-				return ClojureCollectionLowering.updateInOf(this, items);
+				return ClojureUpdateLowering.updateInOf(this, items);
 			case "assoc-in":
-				return ClojureCollectionLowering.assocInOf(this, items);
+				return ClojureUpdateLowering.assocInOf(this, items);
 			case "get-in":
-				return ClojureCollectionLowering.getInOf(this, items);
+				return ClojureUpdateLowering.getInOf(this, items);
 			case "select-keys":
 				ClojureLowerUtil.isTrue(n == 2, "select-keys takes a map and keys");
-				return ClojureCollectionLowering.selectKeysForm(this, lower(items.get(1)),
+				return ClojureUpdateLowering.selectKeysForm(this, lower(items.get(1)),
 						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
 			case "merge-with":
-				return ClojureCollectionLowering.mergeWithOf(this, items);
+				return ClojureUpdateLowering.mergeWithOf(this, items);
 			case "into":
-				return ClojureCollectionLowering.intoOf(this, items);
+				return ClojureUpdateLowering.intoOf(this, items);
 			case "frequencies":
 				ClojureLowerUtil.isTrue(n == 1, "frequencies takes one collection");
-				return ClojureCollectionLowering.frequenciesForm(this,
+				return ClojureUpdateLowering.frequenciesForm(this,
 						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "comp":
-				return ClojureCollectionLowering.compOf(this, items);
+				return ClojureFnLowering.compOf(this, items);
 			case "partial":
 				ClojureLowerUtil.isTrue(n >= 1, "partial takes a function and arguments");
-				return ClojureCollectionLowering.partialForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.partialForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						lowers(items, 2));
 			case "complement":
 				ClojureLowerUtil.isTrue(n == 1, "complement takes one function");
-				return ClojureCollectionLowering.complementForm(this,
-						ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.complementForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
 			case "constantly":
 				ClojureLowerUtil.isTrue(n == 1, "constantly takes one value");
-				return ClojureCollectionLowering.constantlyForm(this, lower(items.get(1)));
+				return ClojureFnLowering.constantlyForm(this, lower(items.get(1)));
 			case "identity":
 				ClojureLowerUtil.isTrue(n == 1, "identity takes one value");
 				return lower(items.get(1));
 			case "memoize":
 				ClojureLowerUtil.isTrue(n == 1, "memoize takes one function");
-				return ClojureCollectionLowering.memoizeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
+				return ClojureFnLowering.memoizeForm(this, ClojureBindingLowering.fnValue(this, items.get(1)));
 			case "trampoline":
 				ClojureLowerUtil.isTrue(n >= 1, "trampoline takes a function and arguments");
-				return ClojureCollectionLowering.trampolineForm(this,
-						ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFnLowering.trampolineForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), lowers(items, 2)));
 			case "coll?":
 				ClojureLowerUtil.isTrue(n == 1, "coll? takes one value");
-				return booleanAnswer(ClojureCollectionLowering.collRaw(this, lower(items.get(1))));
+				return booleanAnswer(ClojureFnLowering.collRaw(this, lower(items.get(1))));
 			case "string?":
 				ClojureLowerUtil.isTrue(n == 1, "string? takes one value");
 				return booleanAnswer(plain("stringp", items));
 			case "symbol?":
 				ClojureLowerUtil.isTrue(n == 1, "symbol? takes one value");
-				return booleanAnswer(ClojureCollectionLowering.symbolRaw(this, lower(items.get(1))));
+				return booleanAnswer(ClojureFnLowering.symbolRaw(this, lower(items.get(1))));
 			case "instance?":
 				return ClojureDispatchLowering.instanceOf(this, items);
 			case "class":
@@ -1802,16 +1800,16 @@ public final class ClojureLowering {
 			case "transient", "persistent!", "assoc!", "dissoc!", "conj!", "disj!":
 				throw new LispReadException("transients are not supported yet: " + name);
 			case "lazy-seq":
-				return ClojureSeqLowering.lazySeqOf(this, items);
+				return ClojureLazyLowering.lazySeqOf(this, items);
 			case "lazy-cat":
-				return ClojureSeqLowering.lazyCatOf(this, items);
+				return ClojureLazyLowering.lazyCatOf(this, items);
 			case "repeat":
-				return ClojureSeqLowering.repeatOf(this, items);
+				return ClojureLazyLowering.repeatOf(this, items);
 			case "cycle":
 				ClojureLowerUtil.isTrue(n == 1, "cycle takes one collection");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CYCLE"), lower(items.get(1)));
 			case "repeatedly":
-				return ClojureSeqLowering.repeatedlyOf(this, items);
+				return ClojureLazyLowering.repeatedlyOf(this, items);
 			case "iterate":
 				ClojureLowerUtil.isTrue(n == 2, "iterate takes a function and a value");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITERATE"),
@@ -1840,25 +1838,25 @@ public final class ClojureLowering {
 	@Nullable LispVal builtinConvenience(String name, List<LispVal> items, int n) {
 		switch (name) {
 			case "mapv":
-				return ClojureSeqLowering.mapvOf(this, items);
+				return ClojureFilterLowering.mapvOf(this, items);
 			case "filterv":
 				ClojureLowerUtil.isTrue(n == 2, "filterv takes a predicate and a collection");
-				return ClojureSeqLowering.filtervForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
+				return ClojureFilterLowering.filtervForm(this, ClojureBindingLowering.fnValue(this, items.get(1)),
 						lower(items.get(2)));
 			case "mapcat":
-				return ClojureSeqLowering.mapcatOf(this, items);
+				return ClojureFilterLowering.mapcatOf(this, items);
 			case "ffirst":
 				ClojureLowerUtil.isTrue(n == 1, "ffirst takes one collection");
-				return ClojureSeqLowering.ffirstForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+				return ClojureFilterLowering.ffirstForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "nfirst":
 				ClojureLowerUtil.isTrue(n == 1, "nfirst takes one collection");
-				return ClojureSeqLowering.nfirstForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+				return ClojureFilterLowering.nfirstForm(this, ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "boolean":
 				ClojureLowerUtil.isTrue(n == 1, "boolean takes one value");
-				return ClojureCollectionLowering.booleanForm(this, lower(items.get(1)));
+				return ClojureFnLowering.booleanForm(this, lower(items.get(1)));
 			case "char":
 				ClojureLowerUtil.isTrue(n == 1, "char takes one value");
-				return ClojureCollectionLowering.charForm(this, lower(items.get(1)));
+				return ClojureFnLowering.charForm(this, lower(items.get(1)));
 			case "name":
 				ClojureLowerUtil.isTrue(n == 1, "name takes one value");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NAME"), lower(items.get(1)));
@@ -1866,22 +1864,22 @@ public final class ClojureLowering {
 				ClojureLowerUtil.isTrue(n == 1, "namespace takes one value");
 				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NAMESPACE"), lower(items.get(1)));
 			case "keyword":
-				return ClojureCollectionLowering.keywordOf(this, items);
+				return ClojureFnLowering.keywordOf(this, items);
 			case "symbol":
-				return ClojureCollectionLowering.symbolOf(this, items);
+				return ClojureFnLowering.symbolOf(this, items);
 			case "assert":
-				return ClojureCollectionLowering.assertOf(this, items);
+				return ClojureFnLowering.assertOf(this, items);
 			case "rand":
-				return ClojureCollectionLowering.randOf(this, items);
+				return ClojureFnLowering.randOf(this, items);
 			case "rand-int":
 				ClojureLowerUtil.isTrue(n == 1, "rand-int takes one bound");
-				return ClojureCollectionLowering.randIntForm(this, lower(items.get(1)));
+				return ClojureFnLowering.randIntForm(this, lower(items.get(1)));
 			case "rand-nth":
 				ClojureLowerUtil.isTrue(n == 1, "rand-nth takes one collection");
-				return ClojureCollectionLowering.randNthForm(this, lower(items.get(1)));
+				return ClojureFnLowering.randNthForm(this, lower(items.get(1)));
 			case "shuffle":
 				ClojureLowerUtil.isTrue(n == 1, "shuffle takes one collection");
-				return ClojureCollectionLowering.shuffleForm(this, lower(items.get(1)));
+				return ClojureFnLowering.shuffleForm(this, lower(items.get(1)));
 			case "vec":
 				return ClojureCollectionLowering.vecOf(this, items);
 			default:
@@ -1900,7 +1898,7 @@ public final class ClojureLowering {
 	 */
 	@Nullable LispVal valueOf(String name) {
 		return switch (name) {
-			case "inc", "dec" -> ClojureCollectionLowering.incValue(this, name);
+			case "inc", "dec" -> ClojureFnLowering.incValue(this, name);
 			case "str" -> ClojureStringLowering.strValue(this);
 			case "pr-str" -> ClojureStringLowering.prStrValue(this);
 			case "seq" -> ClojureSeqLowering.seqValue(this);
@@ -1915,13 +1913,13 @@ public final class ClojureLowering {
 			case "concat" -> ClojureSeqLowering.concatValue(this);
 			case "take" -> ClojureSeqLowering.takeValue(this);
 			case "drop" -> ClojureSeqLowering.dropValue(this);
-			case "repeat" -> ClojureSeqLowering.repeatValue(this);
-			case "cycle" -> ClojureSeqLowering.cycleValue(this);
-			case "iterate" -> ClojureSeqLowering.iterateValue(this);
-			case "repeatedly" -> ClojureSeqLowering.repeatedlyValue(this);
-			case "range" -> ClojureSeqLowering.rangeValue(this);
-			case "dorun" -> ClojureSeqLowering.dorunValue(this);
-			case "doall" -> ClojureSeqLowering.doallValue(this);
+			case "repeat" -> ClojureLazyLowering.repeatValue(this);
+			case "cycle" -> ClojureLazyLowering.cycleValue(this);
+			case "iterate" -> ClojureLazyLowering.iterateValue(this);
+			case "repeatedly" -> ClojureLazyLowering.repeatedlyValue(this);
+			case "range" -> ClojureLazyLowering.rangeValue(this);
+			case "dorun" -> ClojureLazyLowering.dorunValue(this);
+			case "doall" -> ClojureLazyLowering.doallValue(this);
 			case "subs" -> ClojureStringLowering.subsValue(this);
 			case "re-pattern" -> ClojureStringLowering.reValue(this, "re-pattern", List.of(1));
 			case "re-matcher" -> ClojureStringLowering.reValue(this, "re-matcher", List.of(2));
@@ -1929,48 +1927,48 @@ public final class ClojureLowering {
 			case "re-seq" -> ClojureStringLowering.reValue(this, "re-seq", List.of(2));
 			case "re-matches" -> ClojureStringLowering.reValue(this, "re-matches", List.of(2));
 			case "re-groups" -> ClojureStringLowering.reValue(this, "re-groups", List.of(1));
-			case "keep" -> ClojureSeqLowering.keepValue(this);
-			case "keep-indexed" -> ClojureSeqLowering.keepIndexedValue(this);
-			case "map-indexed" -> ClojureSeqLowering.mapIndexedValue(this);
-			case "every?" -> ClojureSeqLowering.everyValue(this);
-			case "some" -> ClojureSeqLowering.someValue(this);
-			case "remove" -> ClojureSeqLowering.removeValue(this);
-			case "distinct" -> ClojureSeqLowering.distinctValue(this);
-			case "partition" -> ClojureSeqLowering.partitionValue(this);
-			case "take-while" -> ClojureSeqLowering.takeWhileValue(this);
-			case "drop-while" -> ClojureSeqLowering.dropWhileValue(this);
-			case "interleave" -> ClojureSeqLowering.interleaveValue(this);
-			case "interpose" -> ClojureSeqLowering.interposeValue(this);
-			case "zipmap" -> ClojureSeqLowering.zipmapValue(this);
-			case "group-by" -> ClojureSeqLowering.groupByValue(this);
-			case "sort" -> ClojureSeqLowering.sortValue(this);
-			case "sort-by" -> ClojureSeqLowering.sortByValue(this);
-			case "last" -> ClojureSeqLowering.lastValue(this);
-			case "butlast" -> ClojureSeqLowering.butlastValue(this);
-			case "second" -> ClojureSeqLowering.secondValue(this);
-			case "mapv" -> ClojureSeqLowering.mapvValue(this);
-			case "filterv" -> ClojureSeqLowering.filtervValue(this);
-			case "mapcat" -> ClojureSeqLowering.mapcatValue(this);
-			case "ffirst" -> ClojureSeqLowering.ffirstValue(this);
-			case "nfirst" -> ClojureSeqLowering.nfirstValue(this);
-			case "boolean" -> ClojureCollectionLowering.booleanValue(this);
-			case "char" -> ClojureCollectionLowering.charValue(this);
-			case "name" -> ClojureCollectionLowering.nameValue(this);
-			case "namespace" -> ClojureCollectionLowering.namespaceValue(this);
-			case "keyword" -> ClojureCollectionLowering.keywordValue(this);
-			case "symbol" -> ClojureCollectionLowering.symbolValue(this);
-			case "rand" -> ClojureCollectionLowering.randValue(this);
-			case "rand-int" -> ClojureCollectionLowering.randIntValue(this);
-			case "rand-nth" -> ClojureCollectionLowering.randNthValue(this);
-			case "shuffle" -> ClojureCollectionLowering.shuffleValue(this);
-			case "update" -> ClojureCollectionLowering.updateValue(this);
-			case "update-in" -> ClojureCollectionLowering.updateInValue(this);
-			case "assoc-in" -> ClojureCollectionLowering.assocInValue(this);
-			case "get-in" -> ClojureCollectionLowering.getInValue(this);
-			case "select-keys" -> ClojureCollectionLowering.selectKeysValue(this);
-			case "merge-with" -> ClojureCollectionLowering.mergeWithValue(this);
-			case "into" -> ClojureCollectionLowering.intoValue(this);
-			case "frequencies" -> ClojureCollectionLowering.frequenciesValue(this);
+			case "keep" -> ClojureFilterLowering.keepValue(this);
+			case "keep-indexed" -> ClojureFilterLowering.keepIndexedValue(this);
+			case "map-indexed" -> ClojureFilterLowering.mapIndexedValue(this);
+			case "every?" -> ClojureFilterLowering.everyValue(this);
+			case "some" -> ClojureFilterLowering.someValue(this);
+			case "remove" -> ClojureFilterLowering.removeValue(this);
+			case "distinct" -> ClojureFilterLowering.distinctValue(this);
+			case "partition" -> ClojureFilterLowering.partitionValue(this);
+			case "take-while" -> ClojureFilterLowering.takeWhileValue(this);
+			case "drop-while" -> ClojureFilterLowering.dropWhileValue(this);
+			case "interleave" -> ClojureFilterLowering.interleaveValue(this);
+			case "interpose" -> ClojureFilterLowering.interposeValue(this);
+			case "zipmap" -> ClojureFilterLowering.zipmapValue(this);
+			case "group-by" -> ClojureFilterLowering.groupByValue(this);
+			case "sort" -> ClojureFilterLowering.sortValue(this);
+			case "sort-by" -> ClojureFilterLowering.sortByValue(this);
+			case "last" -> ClojureFilterLowering.lastValue(this);
+			case "butlast" -> ClojureFilterLowering.butlastValue(this);
+			case "second" -> ClojureFilterLowering.secondValue(this);
+			case "mapv" -> ClojureFilterLowering.mapvValue(this);
+			case "filterv" -> ClojureFilterLowering.filtervValue(this);
+			case "mapcat" -> ClojureFilterLowering.mapcatValue(this);
+			case "ffirst" -> ClojureFilterLowering.ffirstValue(this);
+			case "nfirst" -> ClojureFilterLowering.nfirstValue(this);
+			case "boolean" -> ClojureFnLowering.booleanValue(this);
+			case "char" -> ClojureFnLowering.charValue(this);
+			case "name" -> ClojureFnLowering.nameValue(this);
+			case "namespace" -> ClojureFnLowering.namespaceValue(this);
+			case "keyword" -> ClojureFnLowering.keywordValue(this);
+			case "symbol" -> ClojureFnLowering.symbolValue(this);
+			case "rand" -> ClojureFnLowering.randValue(this);
+			case "rand-int" -> ClojureFnLowering.randIntValue(this);
+			case "rand-nth" -> ClojureFnLowering.randNthValue(this);
+			case "shuffle" -> ClojureFnLowering.shuffleValue(this);
+			case "update" -> ClojureUpdateLowering.updateValue(this);
+			case "update-in" -> ClojureUpdateLowering.updateInValue(this);
+			case "assoc-in" -> ClojureUpdateLowering.assocInValue(this);
+			case "get-in" -> ClojureUpdateLowering.getInValue(this);
+			case "select-keys" -> ClojureUpdateLowering.selectKeysValue(this);
+			case "merge-with" -> ClojureUpdateLowering.mergeWithValue(this);
+			case "into" -> ClojureUpdateLowering.intoValue(this);
+			case "frequencies" -> ClojureUpdateLowering.frequenciesValue(this);
 			case "keys" -> ClojureCollectionLowering.keysValue(this);
 			case "vals" -> ClojureCollectionLowering.valsValue(this);
 			case "assoc" -> ClojureCollectionLowering.assocValue(this);
@@ -1984,16 +1982,16 @@ public final class ClojureLowering {
 			case "hash-map" -> ClojureCollectionLowering.mapConstructorValue(this, "hash-map");
 			case "array-map" -> ClojureCollectionLowering.mapConstructorValue(this, "array-map");
 			case "vec" -> ClojureCollectionLowering.vecValue(this);
-			case "comp" -> ClojureCollectionLowering.compValue(this);
-			case "partial" -> ClojureCollectionLowering.partialValue(this);
-			case "complement" -> ClojureCollectionLowering.complementValue(this);
-			case "constantly" -> ClojureCollectionLowering.constantlyValue(this);
-			case "identity" -> ClojureCollectionLowering.identityValue(this);
-			case "memoize" -> ClojureCollectionLowering.memoizeValue(this);
-			case "trampoline" -> ClojureCollectionLowering.trampolineValue(this);
-			case "coll?" -> ClojureCollectionLowering.collValue(this);
-			case "string?" -> ClojureCollectionLowering.stringPredValue(this);
-			case "symbol?" -> ClojureCollectionLowering.symbolPredValue(this);
+			case "comp" -> ClojureFnLowering.compValue(this);
+			case "partial" -> ClojureFnLowering.partialValue(this);
+			case "complement" -> ClojureFnLowering.complementValue(this);
+			case "constantly" -> ClojureFnLowering.constantlyValue(this);
+			case "identity" -> ClojureFnLowering.identityValue(this);
+			case "memoize" -> ClojureFnLowering.memoizeValue(this);
+			case "trampoline" -> ClojureFnLowering.trampolineValue(this);
+			case "coll?" -> ClojureFnLowering.collValue(this);
+			case "string?" -> ClojureFnLowering.stringPredValue(this);
+			case "symbol?" -> ClojureFnLowering.symbolPredValue(this);
 			case "class" -> ClojureDispatchLowering.classValue(this);
 			case "int", "long" -> ClojureDispatchLowering.intValue(this);
 			case "unchecked-add" -> ClojureDispatchLowering.uncheckedAddValue(this);
@@ -2014,20 +2012,20 @@ public final class ClojureLowering {
 			case "send-off" -> ClojureStateLowering.sendValue(this, "send-off");
 			case "with-meta" -> ClojureStateLowering.withMetaValue(this);
 			case "odd?" ->
-				ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x));
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"), x));
 			case "even?" ->
-				ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("evenp"), x));
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("evenp"), x));
 			case "zero?" ->
-				ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), x));
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("zerop"), x));
 			case "pos?" ->
-				ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), x));
-			case "neg?" -> ClojureCollectionLowering.predValue(this,
-					x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("minusp"), x));
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("plusp"), x));
+			case "neg?" ->
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("minusp"), x));
 			case "nil?" ->
-				ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x));
-			case "some?" -> ClojureCollectionLowering.predValue(this, x -> ClojureLowerUtil
-				.list(ClojureLowerUtil.sym("not"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
-			case "not" -> ClojureCollectionLowering.notValue(this);
+				ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x));
+			case "some?" -> ClojureFnLowering.predValue(this, x -> ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), x)));
+			case "not" -> ClojureFnLowering.notValue(this);
 			case "ex-data" -> ClojureStateLowering.exHelperValue(this, "C%E-DATA");
 			case "ex-message" -> ClojureStateLowering.exHelperValue(this, "C%E-MESSAGE");
 			case "ex-info" -> ClojureStateLowering.exInfoValue(this);

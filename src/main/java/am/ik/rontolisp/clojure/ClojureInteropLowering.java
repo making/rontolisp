@@ -435,8 +435,8 @@ final class ClojureInteropLowering {
 		LispSymbol one = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
 		LispSymbol got = ctx.freshTemp();
-		LispVal table = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureDispatchLowering.isReifyForm(one),
-				ClojureLowering.NIL_CONST, ClojureDispatchLowering.typedTableOf(one));
+		LispVal table = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isReifyForm(one),
+				ClojureLowering.NIL_CONST, ClojureProtocolLowering.typedTableOf(one));
 		LispVal read = ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got,
@@ -450,7 +450,7 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, target),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureDispatchLowering.isTypedForm(one), read,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isTypedForm(one), read,
 						ClojureLowerUtil.cons(JAVA_FIELD, List.of(one, LispString.literal(field)))));
 	}
 
