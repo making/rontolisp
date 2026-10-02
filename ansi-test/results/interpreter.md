@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**16,159 / 19,527 tests pass (82.8%)** -- 1,380 fail, 1,988 signal an error.
+**16,159 / 19,528 tests pass (82.7%)** -- 1,380 fail, 1,989 signal an error.
 
-7 top-level forms could not be read, 378 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 378 could not be evaluated, 2 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -25,15 +25,15 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | pathnames | 214 | 124 | 22 | 68 | 57.9% | 12 |
 | printer | 536 | 248 | 117 | 171 | 46.3% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 12 |
-| reader | 575 | 370 | 65 | 140 | 64.3% | 19 |
-| sequences | 3,287 | 3,058 | 78 | 151 | 93.0% | 11 |
+| reader | 576 | 370 | 66 | 140 | 64.2% | 18 |
+| sequences | 3,287 | 3,058 | 77 | 152 | 93.0% | 11 |
 | streams | 797 | 656 | 73 | 68 | 82.3% | 16 |
 | strings | 509 | 420 | 56 | 33 | 82.5% | 12 |
 | structures | 1,030 | 756 | 71 | 203 | 73.4% | 36 |
 | symbols | 1,145 | 1,081 | 26 | 38 | 94.4% | 11 |
 | system-construction | 77 | 27 | 1 | 49 | 35.1% | 11 |
 | types-and-classes | 626 | 343 | 188 | 95 | 54.8% | 13 |
-| **total** | **19,527** | **16,159** | **1,380** | **1,988** | **82.8%** | **388** |
+| **total** | **19,528** | **16,159** | **1,380** | **1,989** | **82.7%** | **387** |
 
 ## Most frequent failure reasons
 
