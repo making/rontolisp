@@ -13,6 +13,7 @@
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme char)](reference/library-char.md) | Unicode に基づく文字の分類、大文字・小文字の変換、大文字と小文字を区別しない比較 |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |
+| [(scheme complex)](reference/library-complex.md) | 複素数の塔: `make-rectangular`、`make-polar`、`real-part`、`imag-part`、`magnitude`、`angle` |
 | [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
 | [(scheme lazy)](reference/library-lazy.md) | プロミス |
 | [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |

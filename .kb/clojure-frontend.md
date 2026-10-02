@@ -23,7 +23,9 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
   backlog), `ClojureTransducerLowering` (b60), each taking the hub as its first argument and
   re-entering it for subforms) and the stateless `ClojureLowerUtil`,
   `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
-  (the REPL session). The hub is the named cycle root in `PackageCycleTest`
+  (the REPL session), `ClojureNsState` (one namespace's wiring and interns),
+  `ClojureSourcePath` + `ClojureFiles` (where a required namespace's file is found, and
+  the seam's file access -- "Namespaces and project files" below). The hub is the named cycle root in `PackageCycleTest`
   (recursive-descent lowering, like the two expression compilers).
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked for `.clj` or
   by `--source-language clojure` (`clj`) (`.kb/source-language.md`). Per FILE, so a
@@ -42,12 +44,12 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 | Clojure | lowers to | why |
 |---|---|---|
-| identifier `foo` | symbol `c%foo`, always prefixed | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective |
+| identifier `foo` | symbol `c%foo`, always prefixed; a global var of namespace `n` is `c%n/foo` (`user`'s keep `c%foo`) | the prefix holds a lowercase letter and `%`, so no name can reach a `LispNames` case label, a lambda-list keyword or `T`/`NIL`; the spelling is otherwise verbatim, so `Foo` and `foo` stay apart; `:` -> `%c`, `%` -> `%%` keeps the map injective; a local never carries a namespace ("Namespaces and project files" below) |
 | `defn` | `defun` of the mangled name, called directly; a head-position call to a `VARIABLE`-kind name holding a real function (a `let` binding of one, a `def`'d one) is a `funcall` of the value cell instead, while any other variable goes through the prelude dispatcher (`rontolisp::%clojure-call`: functions through `apply`, collections through their lookup, like `IFn`), so higher-order `defn` parameters run on collections too; a `declare`d-but-never-defined name keeps its direct-call error; several arities one `defun` per arity plus a dispatch `defun` | keeps the direct call and the tree shaker. Pass one collects every top-level `def`/`defn` name (and every `declare` name), so a definition may use one below it; a real definition still wins over a declaration. Helpers are named `c%<name>%<arity>` (`%*` for the variadic clause) -- a lone `%` no mangled identifier spells, so they stay apart from user definitions. A wrong count signals (`wrong number of arguments passed to: f`); at most one variadic clause and one clause per arity, else a named refusal. A multi-arity `defn` in a body is refused by name (several `defun`s cannot splice into expression position). A `^:dynamic` one keeps its `defun`(s) and installs the function in the value cell behind a `defparameter` of it, so calls route through the value cell (a `funcall`, like a `def`'d function) and `binding` rebinds it with dynamic extent; `recur` and the arity-dispatch helpers stay direct calls to the function cell. The pre-scan registers a `^:dynamic` `defn` name as a variable, so even a forward call routes through the value cell |
 | `declare` | nothing (`nil`) | a forward declaration in the pre-scan, so a session buffer may call what a later buffer defines |
 | `defmacro` | one expander lambda over the call's argument list plus a runtime table entry, call sites expanded datum-to-datum at lower time | the expander is one lambda dispatching on the argument count (like the multi-arity `fn`), applying each arity's parameters with their destructuring prologue; the same lambda runs at lower time (through the macro evaluator) and at run time (through the `c%name%macro` table global, for `macroexpand-1`); a docstring and an attr map are skipped, `&` rest works, `&form`/`&env` are refused; the pre-scan registers the name, a call above its definition names the missing expander, a macro has no function value, a later `def`/`defn` wins the call sites back; a body sees the core builtins and the `clojure.lisp` library, not the program's definitions; four-backend parity by construction (expansion before backends), the interpreter's `eval` of a macro call expanding the same way |
-| syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | every symbol qualifies behind `c%` (the documented deviation: no namespaces); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
-| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names |
+| syntax-quote (`` ` ``) / `~` / `~@` | `quote` with unquote splicing over the mangled namespace | a symbol naming a var the defining namespace sees (own or referred; locals are no vars at read time, like the oracle) qualifies as `ns/name`, `user/` included (b56), so the expansion reaches it from any namespace; a core name and an unresolved symbol stay bare (the documented deviation: the oracle spells `clojure.core/let`, `user/x`); `~` lowers as code, `~@` splices a sequence into the enclosing list, vector (`apply vector`), map (plist `append`) or set (`dolist` accumulation); each `x#` binds one `(gensym "x")` per syntax-quote node (one symbol per expansion, the same at every occurrence, fresh across expansions -- fresher than the oracle's per-compilation suffixes); an unquote outside any syntax-quote and a splice outside a sequence are refusals; nested levels evaluate in the one expansion |
+| `macroexpand-1` / `macroexpand` | the spliced `C%MACROEXPAND-1` / `C%MACROEXPAND` runtime over the table globals and the call site's macro scope | once / to the fixpoint, each answering the expansion demangled and uppercased for printing (case folds, print-only; strings and keyword wrappers stay themselves -- b56 fixed `C%DEMANGLE` walking a string as a character vector); a non-macro head answers the form itself, demangled the same way; each names a function value; their data takes bare operator names; a head resolves through the call site's namespace (b56): the lowering hands a quoted alist of the spellings the table global cannot spell itself (a bare own macro outside `user`, a bare referred one, an alias-qualified one) to its table global, and a `user/m` spelling reads as `c%m%macro` |
 | `gensym` | the ordinary `gensym` (uninterned `#:`-spelled symbol) | fresh per evaluation (per expansion in a macro, per call at run time); a string names the prefix, an integer suffix spells itself; names a function value |
 | `def` | top-level `setq` of the mangled name | inside a body it still sets the global when the body runs (decided 2026-09-30, b04: keep the `setq`, document it); the value lowers against the OLD binding first, so `(def p (memoize p))` after a `(defn p ...)` captures the function cell (`#'c%p`), not the still-unbound value cell (decided 2026-10-02, b52) |
 | `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity; a named one a `labels` self-binding, an anonymous one the same binding only when a `recur` reaches it | `#(...)` arguments travel as one `&rest` list, `%`..`%9` as `(nth n args)`; at most 9 args; the body forms are wrapped as ONE call (`#(f a b)` -> `(f a b)`, matching the dominant spelling; multi-form bodies need an explicit `do`). The `fn` dispatch binds each arity's arguments through `let*` (no local functions, so clauses close over the outer scope); a name lowers to direct self-calls the `labels` expansion rewrites; a `recur` in any `fn` body (named or not) calls the enclosing clause directly, checked against its arity (decided 2026-10-01, b17) |
@@ -78,15 +80,15 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `binding` | `let*` over the bound names, sequentially like `let` | only `^:dynamic` vars (and `*out*`) may be bound -- anything else is the oracle's non-dynamic error as a named refusal; a `^:dynamic` `def`/`defonce` lowers to `defparameter` (always sets, like `def`, and proclaims the special, so the `let*` rebinds with dynamic extent); a `^:dynamic` `defn` keeps its `defun`(s) and adds a `defparameter` of the function, so its calls go through the value cell and the `let*` rebinds them the same way (`recur` still jumps straight to the function cell, like the oracle); the body closes over the scope the same way; the body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `defonce` | `def` unless `boundp` | a reload keeps the root where `def` resets it; a `^:dynamic` one keeps through `defparameter` instead |
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
-| `defn-` | `defn`, private by convention only | metadata never affects dispatch, so there is nothing to enforce |
-| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); only `binding` reads one piece (`^:dynamic`); `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
+| `defn-` | `defn` of a private var | private like `^:private` (b56): `use`/`:refer :all` never refer it, `:refer [x]` of it is the oracle's `x is not public`, and a qualified reference from another namespace is the oracle's compile error `var: #'n/x is not public`; inside its namespace it is an ordinary `defn` |
+| `with-meta`/`^` metadata | dropped: the object lowers as itself | `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; `with-meta` works as a function value (the first argument); two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the plain body (the oracle's bare `do`, no barrier); a non-empty body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str` |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
 | `future`/`delay`/`force`/`promise`/`deliver`/`proxy-super` | refused by name | no thread pool, lazy memo cells or blocking rendezvous on any backend; proxy methods take the Java arguments only, with no super handle |
 | `*out*`/`*in*` | `*standard-output*`/`*standard-input*`, not mangled names | the streams the print family writes to / reads from; `binding` may rebind either, like any special (decided 2026-10-01, b20) |
 | `.write`/`.flush`/`.readLine` on a stream | `princ` (nil signals, like the oracle's NullPointerException -- b55) / `finish-output` / `read-line` (nil past the end, like the oracle) over the receiver | so `(. *out* write ...)` and `(.readLine *in*)` run on every backend; a non-stream receiver still goes to `java:call` |
-| `ns`/`require`/`use`/`import`/`in-ns` | alias wiring, defining nothing | a bare library symbol names one library like the oracle (`(:use clojure.test)` refers it all; b55 -- it used to set a prefix and wire nothing), a `:reload`/`:reload-all`/`:verbose` flag is skipped, and a `:refer`/`:only`/`:exclude` list spells names like a vector (the oracle's `(reader)`); `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test` resolve (see below); an unknown namespace is an error; `in-ns` answers `nil` (the namespace is flat) |
+| `ns`/`require`/`use`/`import`/`in-ns` | alias and refer wiring of the current namespace, a project namespace's file lowered ahead of the form (b56) | see "Namespaces and project files" below for the var model, the source path and loading; a bare library symbol names one library like the oracle (`(:use clojure.test)` refers it all; b55 -- it used to set a prefix and wire nothing), a `:reload`/`:reload-all`/`:verbose` flag is skipped, and a `:refer`/`:only`/`:exclude` list spells names like a vector (the oracle's `(reader)`); `:as` registers an alias, `:refer`/`:use` unqualified names (`use`'s `:only [...]` narrows the referred set, winning over the refer-all default, and `:exclude [...]` subtracts from it -- and from `:refer :all` -- like the oracle), `:import` simple class names, `(:refer-clojure :only/:exclude ...)` narrows the visible core; a bare `require`/`use` spells each libspec quoted (`(quote spec)`/`'spec`, the oracle's spelling) and shares the `ns`-clause spec parser; an unquoted vector spec stays accepted (a lenient superset -- the oracle rejects it with a `ClassNotFoundException`); a prefix list `(prefix [sub ...])` (quoted or bare, `use` and the `ns` `:require`/`:use` clauses included) wires each member (a bare or quoted symbol or vector) under the prefix, through the same parser; `clojure.string`, `clojure.java.io` (`reader` only) and `clojure.test` resolve (see below); any other `clojure.*` namespace is refused by name (`unknown namespace: clojure.set`), any other namespace is a project one; names are referred only by `use` or a `:refer` option -- a `require` with a bare `:only`/`:exclude` refers nothing, the oracle's `load-lib` (b56; it used to refer the `:only` list); `in-ns` switches the namespace, answering `nil` |
 | `clojure.string` (`join`/`split`/`split-lines`/`upper-case`/`lower-case`/`capitalize`/`trim`/`triml`/`trimr`/`trim-newline`/`blank?`/`starts-with?`/`ends-with?`/`includes?`/`index-of`/`last-index-of`/`replace`/`replace-first`/`escape`/`re-quote-replacement`/`reverse`) | core string operations over lowered arguments | reached as `alias/var`, `clojure.string/var`, or a referred bare var; each works as a function value (a rest lambda dispatching on the count); `split`/`replace` take pattern values (around matches, through the regex runtime) as well as literal strings and characters (a plain string never compiles -- the b08 literal-only position holds for strings, pinned by `string-replace-and-split-stay-literal`); an empty literal-`split` input is nil (a pattern answers one empty part, like the oracle); a positive `split` limit caps (the last part holding the rest), a negative one keeps every part, otherwise trailing empties drop |
 | `subs` | `subseq` (2/3-arity) | as a value a two-or-three-argument lambda |
 | `clojure.test` (`deftest`/`deftest-`/`is`/`are`/`testing`/`run-tests`/`run-all-tests`/`successful?`) | `ClojureTestLowering` over the spliced `rontolisp::%clojure-test-*` runtime in `clojure.lisp` | see "clojure.test" below; `use-fixtures` refused by name, a macro var as a value is the oracle's `Can't take value of a macro` |
@@ -187,8 +189,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | a keyword in call position `(:k m)` / `(:k m dflt)` | the same table-aware read `get` lowers to | the idiomatic map lookup, over b02's map runtime (sets answer their member, vectors/strings their element) |
 | a keyword as a function value (`map`/`filter`/`reduce`/`apply` over `:k`) | a rest-tolerant lookup lambda over the same read (the second call argument is the default, extras ignored) | `(map :k coll)` reads the key out of each member; a keyword-dispatched multimethod takes several call arguments, like the oracle (decided 2026-10-01, b39 -- the value was a one-argument lookup and signalled) |
 | a namespaced keyword `:a/b` | the same wrapper over the whole spelling | opaque data: prints and compares whole |
-| `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil -- the namespace stays flat, every definition still global); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
-| a bare `(ns name)` | nothing, but records the name for `::` | a namespace declaration defines nothing; metadata on the name, a docstring and an attr map are skipped (b58); clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
+| `::kw` / `::alias/kw` | the same wrapper over the resolved spelling | `::kw` resolves against the current file `ns` name (the seam reads the whole file, so the form order decides; `user` without one), `::alias/kw` through the alias (a `:require` `:as`, the namespace's own name, or a known namespace without any require); a session tracks `*ns*` across buffers (`ns` switches it, `in-ns` switches it answering nil); opaque afterwards, so `derive`/`isa?`/dispatch compare whole spellings like `:a/b`; an unknown alias is the oracle's `Invalid token` refusal |
+| a bare `(ns name)` | nothing, but switches to the namespace | a namespace declaration defines nothing itself; the definitions below it belong to the namespace, which it creates and marks loaded (b56); metadata on the name, a docstring and an attr map are skipped (b58); clauses wire aliases (see the `ns` row above); the file's `ns` name (or the session's `*ns*`) is what `::kw` resolves against |
 | `quote` | `quote`, with symbols mangled and vectors re-emitted as `vector` calls | a quoted map or set is the construction over the quoted elements (each element's own quote form, so a symbol or list stays data); a quoted list holding a vector, map, set or regex literal at any depth is a `list` construction over the element forms (b55: the construction code used to land in the list as data, so `'(1 [2])` printed `(1 (VECTOR ...))` -- the `is` expected-form shape) |
 | `get` with a default | `gethash`'s own default argument | IN: `(get m k dflt)` answers `dflt` past the end, like the oracle |
 | transients | refused by name (`transients are not supported yet: assoc!`) | OUT: `transient`, `persistent!`, `assoc!`, `dissoc!`, `conj!`, `disj!` -- there is no transient runtime behind the tables |
@@ -362,6 +364,89 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   `*out*`/`*in*` are `*standard-output*`/`*standard-input*`; `defonce` keeps the root where `def` resets
   it; refs and atoms share the cell, so STM verbs accept atom cells.
 
+## Namespaces and project files (b56)
+
+Decided 2026-10-02 against `clj` 1.12.6.1673 (run on the same files with
+`-Sdeps '{:paths ["src" "test"]}'`). **Every namespace has its own vars.** A var is keyed
+`ns/name` in every program-wide table (`globals`, `macros`, `protocols`, `types`,
+`dynamicVars`, `globalDirectFuns`, `classDispatchFns`; `ClojureLowering.varKey`) and lowers to
+`c%ns/name` (`varSym`) -- except `user`'s, `c%name`, so a program without an `ns` lowers as
+before and a Common Lisp file calls its functions as `(c%name ...)`, a namespaced file's as
+`(|c%my.ns/name| ...)`. A quoted `'n/x` is the symbol of var `n/x` (what syntax-quote relies
+on); the JVM method mangle spells `/` and `.`. A local never carries a namespace.
+
+- **Resolution** (`lookupVar`, `resolveVar` adding the privacy refusal; locals first, in
+  the callers): unqualified, the current namespace's intern, then a refer to a project var;
+  qualified, the head as an alias of the current namespace, the current namespace, or any
+  namespace an `ns`/`in-ns` created (`createdNamespaces`) by its full name. `known`,
+  `isFunction`, `isMacro`, `isDirectVar` and `symOf` go through it, so every slice takes a
+  name as written. Another namespace's private var (`defn-`, `^:private`) is `var: #'n/x is
+  not public`; a qualified name whose head is a project namespace lacking the var is
+  `No such var: l/nope` (`refuseMissingVar`), never a class.
+- **Per-namespace wiring** (`ClojureNsState`): aliases, refers, imports, the
+  `:refer-clojure` filter and the interns with their privacy. The pre-scan follows `ns` and
+  `in-ns`; a definition replaces a refer of its name (the oracle warns and replaces).
+  `binding` rebinds the var's own symbol and adds no local, so the body reads the special.
+- **Records** keep the simple-name dispatch tag (deviation: two namespaces' `R` share it);
+  `types` is keyed by var key and `typeKeyOf` resolves a class spelling: own, an imported or
+  dotted name matching `TypeDef.className`, else the only one of that simple name (the flat
+  leniency kept). `(R. ...)`/`(new R ...)` call the defining namespace's `->R`.
+- **Loading** (`ClojureNamespaceLowering.loadNamespace`, `ClojureLowering.loadFile`): an
+  `ns` form marks its namespace loaded AFTER its clauses ran (the oracle's `ns` adds
+  `*loaded-libs*` last; marking first hid the cycle), so a single-file program's later
+  `(:require [a])` reads nothing -- the `clojure-spec.yaml` case runs on all four backends
+  for that reason. Any other non-library namespace reads `my_app/core.clj`, lowers both
+  passes from a clean cursor (no local, recur target, `try` depth or syntax gensym of the
+  requiring form leaks in; all restored after), starting in the requiring namespace like
+  the oracle's `load` (a file without `ns` defines there). Its forms are HOISTED ahead of
+  the top-level datum that loaded it (`hoisted`, drained by `topLevels`); once per lowering.
+  An unknown `clojure.*` stays `unknown namespace`. Refusals in the oracle's words:
+  `Could not locate a/b.clj on the source path: <roots>`, `Cyclic load dependency: [ /a
+  ]->/b->[ /a ]` (newest request first, then the loading stack innermost first),
+  `namespace 'x' not found after loading '/x'`, `x does not exist`, `x is not public`.
+- **The source path** (`ClojureSourcePath`, on the first project require only): the root
+  the entry file's namespace names (`src` for `src/demo/main.clj` declaring `demo.main`; the
+  file's directory when the path does not spell the namespace; the working directory for a
+  session), then the `:paths` of the nearest `deps.edn` walking up from the entry file's
+  directory (read by `ClojureReader` as EDN; `["src"]` when absent or unreadable, alias
+  keywords skipped), else `src` under the working directory -- the `clj` default. Chosen over
+  a `--source-path` flag: `deps.edn` is the oracle's own declaration, so a project runs with
+  no new option. Files come through `ClojureFiles` (the `SchemeFiles` shape):
+  `eval/SourceLanguage.clojureFiles` adapts the site's loader (the parent is absolutized so
+  the walk passes the top of a relative entry path); no loader is `NONE`, refused by name.
+- **Hoisting is the measured deviation**: the corpus `preface` test
+  (`(with-out-str (use :reload 'examples.preface))` inside a `deftest`) prints its
+  `hello` ahead of the test form and captures `""`. Loading at the `require` site
+  (`:reload`, once per program across separately lowered files) is .todo/b72: one init
+  function per namespace hits the JVM's 64 KB method and wasm's body cap for a large
+  namespace (top-level forms are chunked, a lambda body is not), `GlobalVarCollector` sees
+  a `setq` only nested in a top-level non-`defun` form, and `SpecialVarCollector` reads
+  `defparameter` only at a form's head.
+- **Syntax-quote** resolves through `lookupVar` (no locals, no privacy: the refusal belongs
+  to the expansion's site, like the oracle's compile); see the row above.
+
+Corpus (2026-10-02, the 27 `code/test/**` namespaces of shcloj4, each through a driver
+`(require 'ns) (clojure.test/run-tests 'ns)` read from `test/`, the project's own `deps.edn`
+naming `src`; no inlining any more): 10 print the oracle's bytes (`chat` -- its tests are
+named like the functions under test -- joins the b55 nine). `preface` fails on the hoisting
+above; the 7 `macros*` fail only on the uppercase `macroexpand` answer (.todo/b73: their
+expansions are otherwise the oracle's, `examples.macros.chain-4/chain` qualified); the rest
+stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
+stack overflow, `clojure.set`, `proxy` over a class -- measured after b57/b59/b60 merged).
+The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
+`replace-symbol`s apart), and `concurrency` over `examples.chat :refer :all` until `spit`
+of a non-string (.todo/b74).
+
+Pinned by `ClojureProjectNamespacesTest` (a `deps.edn` project in a temp dir: the entry under
+`test/`, aliases, refers, `use :only`, a file without `ns`, a second `require`, the chat
+shape under `clojure.test`, on the interpreter, the JVM and both wasm backends; the
+refusals' words), `ClojureLoweringTest` (`aRequiredNamespaceLowersAheadOfTheFormThatLoadsItOnce`,
+`eachNamespaceHasItsOwnVars`, `requireRefersOnlyThroughReferOrUse`,
+`syntaxQuoteQualifiesTheVarsItsNamespaceSees`, `macroexpandCarriesTheCallSitesMacroScope`,
+over `MemoryClojureFiles`), `ClojureSessionTest` (a buffer's require, a later buffer's
+call), and `clojure-spec.yaml` (`namespaces-in-one-program-resolve-qualified-and-referred`,
+`macroexpand-keeps-strings-and-keywords`, every line the oracle's but the expansion's case).
+
 ## clojure.test (b55)
 
 Decided 2026-10-02 against `clj` 1.12.6.1673. The shapes are the oracle's macro expansions,
@@ -421,6 +506,7 @@ count), `String` as a value (`multimethods`, `interop`),
 `read` (`concurrency`), project-local namespaces (b56, `preface`), the host stack overflow
 (`functional`). The 153,129 B raw wasm of a one-test program
 (`(deftest a (is (= 1 1))) (run-tests)`) is the printer plus the EH-mode handlers.
+Superseded by the b56 run without inlining ("Namespaces and project files" above).
 
 ## A session
 
@@ -433,10 +519,15 @@ earlier `defn`'s function cell, like the same two forms in one file). `SourceSes
 printer (the `ECHO` shape, readable), and decides completeness by bracket counting over `()[]{}` 
 (outside strings and `;` comments) plus a reader probe for a trailing dispatch prefix
 (`'`, `` ` ``, `~`, `@`, `^`, `#'`, `#_`, `#(`).
+A buffer's `require` loads a project namespace from the working directory's source path
+(`SourceSession` hands its loader through `SourceLanguage.clojureFiles`); its forms ride
+with that buffer, a later `require` loads nothing, and an `ns` buffer echoes nothing
+(b56).
 
 ## Tests
 
 `ClojureReaderTest`, `ClojureLoweringTest` (b55: `clojureTest*`), `ClojureSessionTest`,
+`ClojureProjectNamespacesTest` (b56: programs split across files, all four backends),
 `ClojureSpecE2eTest` (the interpreter, the JVM and both WASM backends over
 `src/test/resources/clojure-spec.yaml` -- one case per lowering-table row and per
 builtin group, concatenated into one program and sliced back per case, the

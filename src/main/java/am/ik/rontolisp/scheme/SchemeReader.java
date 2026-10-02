@@ -11,6 +11,7 @@ import java.util.Map;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispIntVector;
@@ -366,6 +367,11 @@ final class SchemeReader {
 					this.pos++;
 					yield readBytevector(start);
 				}
+				if (token.equalsIgnoreCase("#c") && this.pos < this.input.length()
+						&& this.input.charAt(this.pos) == '(') {
+					this.pos++;
+					yield readComplex(start);
+				}
 				LispVal number = token.length() > 2 ? prefixedNumber(token) : null;
 				if (number == null) {
 					throw error("unsupported '#' syntax: " + token, start);
@@ -424,6 +430,25 @@ final class SchemeReader {
 			data[i] = (byte) (long) bytes.get(i);
 		}
 		return LispIntVector.wrapOctets(data);
+	}
+
+	// #c(real imag): the external representation our printer writes (R7RS leaves the
+	// complex spelling to the implementations; Gauche writes 1.0+2.0i, a deviation). The
+	// parts are plain number datums, and LispComplex.valueOf canonicalizes: a rational
+	// zero imaginary part demotes to the real, so #c(1 0) IS 1 (R7RS 6.2.4).
+	private LispVal readComplex(int start) {
+		skipAtmosphere();
+		LispVal real = readDatum();
+		skipAtmosphere();
+		LispVal imag = readDatum();
+		skipAtmosphere();
+		if (this.pos >= this.input.length() || readDatum() != CLOSE) {
+			throw eof("unclosed '#c('", start);
+		}
+		if (!LispComplex.isRealPart(real) || !LispComplex.isRealPart(imag)) {
+			throw error("a complex literal's parts must be real numbers: " + real.print() + " " + imag.print(), start);
+		}
+		return LispComplex.valueOf(real, imag);
 	}
 
 	private LispVal readCharacter(int start) {

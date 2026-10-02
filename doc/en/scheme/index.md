@@ -1,7 +1,7 @@
 # Scheme (experimental)
 
 **Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
-`(scheme write)`, `(scheme read)`, `(scheme char)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)`,
+`(scheme write)`, `(scheme read)`, `(scheme char)`, `(scheme inexact)`, `(scheme complex)`, `(scheme cxr)`, `(scheme lazy)`,
 `(scheme case-lambda)`, `(scheme process-context)`'s `exit`, `(scheme eval)`, `(scheme repl)` and `(scheme file)` -- just large
 enough to run a
 Scheme program on every backend. Conformance is partial by design and nothing here is a

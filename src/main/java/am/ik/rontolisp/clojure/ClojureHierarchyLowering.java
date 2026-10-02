@@ -426,8 +426,8 @@ final class ClojureHierarchyLowering {
 	static LispVal preferMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 4, "prefer-method takes a multimethod and two dispatch values");
 		String name = ClojureLowerUtil.plainName(items.get(1), "prefer-method");
-		ClojureLowerUtil.isTrue(ctx.known(name), "No such multimethod: " + name);
-		LispSymbol prefers = new LispSymbol(ClojureLowering.mangle(name) + "%prefers");
+		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
+		LispSymbol prefers = ClojureDispatchLowering.tableGlobal(key, "%prefers");
 		ctx.usedHierarchy = true;
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
@@ -437,7 +437,7 @@ final class ClojureHierarchyLowering {
 										ClojureDispatchLowering.dispatchKeyForm(ctx, items.get(3))),
 								prefers),
 						ClojureLowering.TRUE_CONST),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(name)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
 	}
 
 	// platform: Java interop over the java: surface

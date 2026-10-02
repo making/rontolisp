@@ -51,10 +51,7 @@ final class ClojureDispatchLowering {
 		String name = cls.name();
 		String simple = name.lastIndexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1) : name;
 		LispVal lowered = ctx.lower(items.get(2));
-		ClojureLowering.TypeDef known = ctx.types.get(name);
-		if (known == null && name.indexOf('.') < 0) {
-			known = ctx.types.get(simple);
-		}
+		ClojureLowering.TypeDef known = ctx.typeDefOf(name);
 		if (known != null) {
 			// a record or deftype name tests the dispatch tag, like a class
 			ctx.usedProtocols = true;
@@ -215,7 +212,7 @@ final class ClojureDispatchLowering {
 	 * past the hierarchy search but ahead of the default, which it always beats.
 	 */
 	static boolean isObjectClassName(ClojureLowering ctx, String name) {
-		return !ctx.types.containsKey(name)
+		return ctx.typeKeyOf(name) == null
 				&& ClojureNamespaceLowering.resolveClass(ctx, name).equals("java.lang.Object");
 	}
 
@@ -230,13 +227,14 @@ final class ClojureDispatchLowering {
 	 * {@code extend-protocol} row's named refusal.
 	 */
 	static @Nullable LispVal dispatchClassKey(ClojureLowering ctx, String name) {
-		if (ctx.types.containsKey(name)) {
-			return ClojureProtocolLowering.typeTagForm(name);
+		ClojureLowering.TypeDef type = ctx.typeDefOf(name);
+		if (type != null) {
+			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
 		}
 		if (isObjectClassName(ctx, name)) {
 			return ClojureCollectionLowering.keywordForm("object");
 		}
-		boolean classlike = ctx.classNames.containsKey(name) || ClojureNamespaceLowering.JAVA_LANG.contains(name)
+		boolean classlike = ctx.ns().classNames.containsKey(name) || ClojureNamespaceLowering.JAVA_LANG.contains(name)
 				|| name.indexOf('.') >= 0 || (!name.isEmpty() && Character.isUpperCase(name.charAt(0)));
 		if (!classlike) {
 			return null;
@@ -334,7 +332,7 @@ final class ClojureDispatchLowering {
 	 * datum). Only a class-calling definition is kept -- anything else (including a
 	 * value-less {@code def} and a {@code ^:dynamic} name, whose calls route through the
 	 * value cell) drops the name, so a redefinition without one unregisters it.
-	 * @param name the defined name
+	 * @param name the defined var's key
 	 * @param dynamic whether the name is {@code ^:dynamic}
 	 * @param valueDatum the {@code fn} datum, or null when there is none
 	 */
@@ -344,7 +342,7 @@ final class ClojureDispatchLowering {
 			return;
 		}
 		if (valueDatum instanceof LispSymbol s && !s.name().startsWith(":")) {
-			LispVal target = ctx.classDispatchFns.get(s.name());
+			LispVal target = recordedDispatchFn(ctx, s.name());
 			if (target != null) {
 				ctx.classDispatchFns.put(name, target);
 			}
@@ -373,7 +371,7 @@ final class ClojureDispatchLowering {
 	 */
 	static LispVal dispatchDatumFor(ClojureLowering ctx, LispVal dispatchDatum) {
 		if (dispatchDatum instanceof LispSymbol s) {
-			LispVal recorded = ctx.classDispatchFns.get(s.name());
+			LispVal recorded = recordedDispatchFn(ctx, s.name());
 			if (recorded != null) {
 				for (Map<String, ClojureLowering.Kind> scope : ctx.scopes) {
 					if (scope.containsKey(s.name())) {
@@ -384,6 +382,19 @@ final class ClojureDispatchLowering {
 			}
 		}
 		return dispatchDatum;
+	}
+
+	/**
+	 * The recorded dispatch datum of the definition a name resolves to -- only one of the
+	 * current namespace, since the datum re-lowers here and its names resolve here -- or
+	 * null.
+	 */
+	static @Nullable LispVal recordedDispatchFn(ClojureLowering ctx, String name) {
+		String key = ctx.lookupVar(name);
+		if (key == null || !key.startsWith(ctx.currentNs + "/")) {
+			return null;
+		}
+		return ctx.classDispatchFns.get(key);
 	}
 
 	/**
@@ -401,8 +412,9 @@ final class ClojureDispatchLowering {
 	 * definition
 	 */
 	static @Nullable LispVal inlineDispatchCall(ClojureLowering ctx, String name, List<LispVal> items) {
-		LispVal recorded = ctx.classDispatchFns.get(name);
-		if (recorded == null || !ctx.inliningDispatch.add(name)) {
+		LispVal recorded = recordedDispatchFn(ctx, name);
+		String key = ctx.lookupVar(name);
+		if (recorded == null || key == null || !ctx.inliningDispatch.add(key)) {
 			return null;
 		}
 		try {
@@ -417,7 +429,7 @@ final class ClojureDispatchLowering {
 			return ctx.lowerInner(ClojureLowerUtil.list(synthetic));
 		}
 		finally {
-			ctx.inliningDispatch.remove(name);
+			ctx.inliningDispatch.remove(key);
 		}
 	}
 
@@ -473,12 +485,14 @@ final class ClojureDispatchLowering {
 				default -> throw new LispReadException("defmulti option " + opt.name() + " is not supported yet");
 			}
 		}
-		ctx.globals.put(name, ClojureLowering.Kind.FUNCTION);
-		ctx.macros.remove(name); // a definition wins over the macro it shadows
-		LispSymbol methods = new LispSymbol(ClojureLowering.mangle(name) + "%methods");
-		LispSymbol fallback = new LispSymbol(ClojureLowering.mangle(name) + "%default");
-		LispSymbol prefers = new LispSymbol(ClojureLowering.mangle(name) + "%prefers");
-		LispSymbol object = new LispSymbol(ClojureLowering.mangle(name) + "%object");
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		ctx.globals.put(key, ClojureLowering.Kind.FUNCTION);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		LispSymbol fn = ClojureLowering.varSym(key);
+		LispSymbol methods = tableGlobal(key, "%methods");
+		LispSymbol fallback = tableGlobal(key, "%default");
+		LispSymbol prefers = tableGlobal(key, "%prefers");
+		LispSymbol object = tableGlobal(key, "%object");
 		LispVal dispatchFn;
 		boolean wasDispatch = ctx.inDispatchFn;
 		ctx.inDispatchFn = true;
@@ -526,7 +540,7 @@ final class ClojureDispatchLowering {
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), fallback, defaultForm));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), prefers, ClojureCollectionLowering.makeTable()));
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST));
-		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), ClojureLowerUtil.idSym(name),
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), dispatch));
 		ctx.usedHierarchy = true;
 		return forms;
@@ -562,18 +576,39 @@ final class ClojureDispatchLowering {
 		return ClojureLowering.labelsSelfCall(fresh, lambda);
 	}
 
+	/**
+	 * The var key of the multimethod a {@code defmethod} (or {@code remove-method},
+	 * {@code get-method}, {@code prefer-method}) names: the current namespace's own, a
+	 * referred one, or one reached through an alias or its namespace's full name.
+	 */
+	static String multimethodKey(ClojureLowering ctx, String name) {
+		String key = ctx.isLocal(name) ? null : ctx.resolveVar(name);
+		if (key == null) {
+			throw new LispReadException("No such multimethod: " + name);
+		}
+		return key;
+	}
+
+	/**
+	 * One of a multimethod's globals: its var's symbol plus a suffix no identifier can
+	 * spell ({@code %methods}, {@code %default}, {@code %prefers}, {@code %object}).
+	 */
+	static LispSymbol tableGlobal(String key, String suffix) {
+		return new LispSymbol(ClojureLowering.varSym(key).name() + suffix);
+	}
+
 	static LispVal defmethodForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 4,
 				"defmethod takes a name, a dispatch value, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmethod");
-		ClojureLowerUtil.isTrue(ctx.known(name), "No such multimethod: " + name);
-		LispSymbol methods = new LispSymbol(ClojureLowering.mangle(name) + "%methods");
+		String key = multimethodKey(ctx, name);
+		LispSymbol methods = tableGlobal(key, "%methods");
 		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
 		LispVal keyDatum = items.get(2);
 		if (keyDatum instanceof LispSymbol s && isObjectClassName(ctx, s.name())) {
 			// the table row (for get-method) and the catch-all slot the dispatcher
 			// tries past the hierarchy search but ahead of the default
-			LispSymbol object = new LispSymbol(ClojureLowering.mangle(name) + "%object");
+			LispSymbol object = tableGlobal(key, "%object");
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), List.of(
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
@@ -589,27 +624,26 @@ final class ClojureDispatchLowering {
 	static LispVal removeMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "remove-method takes a multimethod and a dispatch value");
 		String name = ClojureLowerUtil.plainName(items.get(1), "remove-method");
-		ClojureLowerUtil.isTrue(ctx.known(name), "No such multimethod: " + name);
-		LispSymbol methods = new LispSymbol(ClojureLowering.mangle(name) + "%methods");
+		String key = multimethodKey(ctx, name);
+		LispSymbol methods = tableGlobal(key, "%methods");
 		LispVal keyDatum = items.get(2);
 		if (keyDatum instanceof LispSymbol s && isObjectClassName(ctx, s.name())) {
-			LispSymbol object = new LispSymbol(ClojureLowering.mangle(name) + "%object");
+			LispSymbol object = tableGlobal(key, "%object");
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"),
 					List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"),
 							ClojureCollectionLowering.keywordForm("object"), methods),
 							ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), object, ClojureLowering.NIL_CONST),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(name))));
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key))));
 		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("remhash"), dispatchKeyForm(ctx, keyDatum), methods),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(name)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
 	}
 
 	static LispVal getMethodOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "get-method takes a multimethod and a dispatch value");
 		String name = ClojureLowerUtil.plainName(items.get(1), "get-method");
-		ClojureLowerUtil.isTrue(ctx.known(name), "No such multimethod: " + name);
-		LispSymbol methods = new LispSymbol(ClojureLowering.mangle(name) + "%methods");
+		LispSymbol methods = tableGlobal(multimethodKey(ctx, name), "%methods");
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), dispatchKeyForm(ctx, items.get(2)), methods,
 				ClojureLowering.NIL_CONST);
 	}

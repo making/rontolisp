@@ -1863,7 +1863,10 @@ cases:
     # The book's chain_1..5, ported: list/concat bodies, then syntax-quote bodies with
     # ~ and ~@ (chain_4's ~more keeps the list whole -- the wrong shape, like the
     # book's). Expansions print; the runnable ones run through the string-method
-    # mapping, so every backend agrees.
+    # mapping, so every backend agrees. A syntax-quoted macro name qualifies with its
+    # namespace (this case runs in b08lit), like the oracle's
+    # (b08lit/sp-chain4 (. a b) (c)); the macroexpand at run time still resolves a
+    # bare head through the call site's namespace (sp-chain2's plain quote).
     source: |
       (defmacro sp-chain1 [x form] (list '. x form))
       (defmacro sp-chain2 ([x form] (list '. x form)) ([x form & more] (concat (list 'sp-chain2 (list '. x form)) more)))
@@ -1883,8 +1886,8 @@ cases:
       (. A B)
       (SP-CHAIN2 (. A B) C)
       (. A B)
-      (SP-CHAIN4 (. A B) (C))
-      (SP-CHAIN5 (. A B) C)
+      (B08LIT/SP-CHAIN4 (. A B) (C))
+      (B08LIT/SP-CHAIN5 (. A B) C)
       (. (. A B) C)
       (. (. (. A B) C) D)
       HI
@@ -3857,3 +3860,64 @@ cases:
       Ran 2 tests containing 3 assertions.
       0 failures, 0 errors.
       true
+  - name: namespaces-in-one-program-resolve-qualified-and-referred
+    # b56: every namespace has its own vars (the vars of user keep the bare mangled
+    # name). An ns form marks its namespace loaded, like the oracle's, so a later
+    # require of it reads no file and the shape is backend-clean: an alias call, a
+    # full-name call, a referred var, a var as a value, a macro through an alias, a
+    # defmethod onto another namespace's multimethod, a record and protocol across
+    # namespaces, a macro whose template reaches a helper of its own namespace, a
+    # private var reached through a public one, an own f beside l/f, syntax-quote
+    # qualifying with the defining namespace, in-ns switching where a name resolves,
+    # and use referring every public var. Every line is the oracle's (clj 1.12).
+    source: |
+      (ns b56.lib)
+      (defn f [x] (inc x))
+      (defn- hidden [x] (* 10 x))
+      (def v 42)
+      (defmacro twice [x] `(* 2 ~x))
+      (defmulti area :shape)
+      (defmethod area :sq [m] (* (:s m) (:s m)))
+      (defprotocol Named (nm [x]))
+      (defrecord Pt [x y] Named (nm [p] (str "pt" x y)))
+      (defn helper [] :helper)
+      (defmacro call-helper [] `(helper))
+      (defn uses-hidden [x] (hidden x))
+      (ns b56.main (:require [b56.lib :as l :refer [v]]))
+      (println (l/f 1) (b56.lib/f 2) v)
+      (println (map l/f [1 2]))
+      (println (l/twice 21))
+      (defmethod l/area :rect [m] (* (:w m) (:h m)))
+      (println (l/area {:shape :sq :s 3}) (l/area {:shape :rect :w 2 :h 5}))
+      (println (l/nm (l/->Pt 1 2)))
+      (println (l/call-helper) (l/uses-hidden 4))
+      (defn f [x] (* 100 x))
+      (println (f 1) (l/f 1))
+      (println `f `l/f `v)
+      (in-ns 'b56.lib)
+      (println (f 5))
+      (ns b56.other (:use b56.lib))
+      (println (f 7) v (nm (->Pt 3 4)))
+    expected: |
+      2 3 42
+      (2 3)
+      42
+      9 10
+      pt12
+      :helper 40
+      100 2
+      b56.main/f b56.lib/f b56.lib/v
+      6
+      8 42 pt34
+  - name: macroexpand-keeps-strings-and-keywords
+    # The run-time expansion answers its strings and keywords as themselves (it
+    # walked a string as a vector of characters and printed a keyword as its
+    # wrapper); only the symbols demangle and uppercase. The oracle prints
+    # (if :yes str :no) and (if :yes "str" :no).
+    source: |
+      (defmacro b56-kw [k s] (list 'if k s :no))
+      (println (macroexpand-1 '(b56-kw :yes "str")))
+      (prn (macroexpand-1 '(b56-kw :yes "str")))
+    expected: |
+      (IF :yes str :no)
+      (IF :yes "str" :no)

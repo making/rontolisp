@@ -72,9 +72,11 @@ final class ClojureInteropLowering {
 		}
 		if (name.endsWith(".") && name.length() > 1 && isClassSpelling(name.substring(0, name.length() - 1))) {
 			String base = name.substring(0, name.length() - 1);
-			if (ctx.types.containsKey(base)) {
+			String type = ctx.typeKeyOf(base);
+			if (type != null) {
 				// (T. args...) constructs the record or deftype, like ->T
-				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol("->" + base), items.subList(1, items.size())));
+				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
+						items.subList(1, items.size())));
 			}
 			List<LispVal> args = new ArrayList<>();
 			args.add(LispString
@@ -87,7 +89,7 @@ final class ClojureInteropLowering {
 			String head = name.substring(0, slash);
 			String tail = name.substring(slash + 1);
 			if (!tail.isEmpty() && tail.indexOf('/') < 0 && ClojureNamespaceLowering.isClasslike(ctx, head)
-					&& !ctx.types.containsKey(head)) {
+					&& ctx.typeKeyOf(head) == null) {
 				String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
 				if (items.size() == 1) {
 					// no arguments: the zero-argument static method when the host
@@ -311,7 +313,7 @@ final class ClojureInteropLowering {
 		String head = name.substring(0, slash);
 		String tail = name.substring(slash + 1);
 		if (tail.isEmpty() || tail.indexOf('/') >= 0 || !ClojureNamespaceLowering.isClasslike(ctx, head)
-				|| ctx.types.containsKey(head)) {
+				|| ctx.typeKeyOf(head) != null) {
 			return null;
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, head);
@@ -370,15 +372,27 @@ final class ClojureInteropLowering {
 		if (!(items.get(1) instanceof LispSymbol named)) {
 			throw new LispReadException("new takes a class name, not " + items.get(1).print());
 		}
-		if (ctx.types.containsKey(named.name())) {
+		String type = ctx.typeKeyOf(named.name());
+		if (type != null) {
 			// (new T args...) constructs the record or deftype, like ->T
-			return ctx
-				.lower(ClojureLowerUtil.cons(new LispSymbol("->" + named.name()), items.subList(2, items.size())));
+			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
+					items.subList(2, items.size())));
 		}
 		List<LispVal> args = new ArrayList<>();
 		args.add(LispString.literal(ClojureNamespaceLowering.resolveClass(ctx, named.name())));
 		args.addAll(ctx.lowers(items, 2));
 		return ClojureLowerUtil.cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * How the current namespace names a record or deftype's positional constructor:
+	 * {@code ->T} for its own, {@code ns/->T} for another namespace's.
+	 */
+	static String constructorSpelling(ClojureLowering ctx, String typeKey) {
+		int slash = typeKey.indexOf('/');
+		String ns = typeKey.substring(0, slash);
+		String ctor = "->" + typeKey.substring(slash + 1);
+		return ns.equals(ctx.currentNs) ? ctor : ns + "/" + ctor;
 	}
 
 	/**

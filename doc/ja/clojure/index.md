@@ -33,7 +33,7 @@ rontolisp prog.txt --source-language clojure       # 任意の拡張子
 分割束縛付きの核となる束縛・制御フォーム、スレッディングマクロ、すべてのコレクションの
 strict なリストビュー上で動く seq 群、`equal` ハッシュテーブル上の永続 map・set 操作、
 数値と述語のコア、atom と volatile、階層付き multimethod、`ex-info` 付きの
-`try`/`catch`/`finally`、`clojure.string` 付きの `ns` 範囲接続、集計ランナー付きの `clojure.test`、そして Java interop。
+`try`/`catch`/`finally`、ファイルをまたぐ名前空間（プロジェクトのファイルの `ns`/`require`）と `clojure.string`、集計ランナー付きの `clojure.test`、そして Java interop。
 各フォームが何に低下するか、何が拒否されるかは[セマンティクス](semantics.md)、リーダの規則は
 [構文](syntax.md)、オラクルとの差異は[仕様との差異](deviations.md)にあります。
 

@@ -112,7 +112,7 @@ final class ClojureTestLowering {
 		if (ctx.known(name)) {
 			return null;
 		}
-		ClojureLowering.VarRef referred = ctx.refers.get(name);
+		ClojureLowering.VarRef referred = ctx.ns().refers.get(name);
 		return referred != null && referred.ns().equals(NAMESPACE) ? referred.var() : null;
 	}
 
@@ -197,10 +197,11 @@ final class ClojureTestLowering {
 		use(ctx);
 		ClojureLowerUtil.isTrue(items.size() >= 2, "deftest takes a name and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "deftest");
-		ctx.globals.put(name, ClojureLowering.Kind.FUNCTION);
-		ctx.macros.remove(name);
+		String key = ctx.intern(name, false);
+		ctx.globals.put(key, ClojureLowering.Kind.FUNCTION);
+		ctx.macros.remove(key);
 		String loc = location(ctx, form);
-		LispSymbol fn = ClojureLowerUtil.idSym(name);
+		LispSymbol fn = ClojureLowering.varSym(key);
 		LispSymbol bodyFn = new LispSymbol(fn.name() + "%body");
 		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(bodyFn.name(), true);
 		String outer = ctx.testLocation;
@@ -300,22 +301,20 @@ final class ClojureTestLowering {
 				return false;
 			}
 		}
-		ClojureLowering.Kind global = ctx.globals.get(name);
+		String key = ctx.resolveVar(name);
+		ClojureLowering.Kind global = key == null ? null : ctx.globals.get(key);
 		if (global != null) {
 			return switch (global) {
 				case FUNCTION -> true;
 				case MACRO, MUTABLE_FIELD -> false; // a field is never global
-				case VARIABLE -> ctx.globalDirectFuns.contains(name);
+				case VARIABLE -> ctx.globalDirectFuns.contains(key);
 			};
-		}
-		if (ctx.macros.containsKey(name)) {
-			return false;
 		}
 		if (name.indexOf('/') > 0) {
 			ClojureLowering.VarRef qualified = ClojureNamespaceLowering.resolveQualified(ctx, name);
 			return qualified != null && !(qualified.ns().equals(NAMESPACE) && MACROS.contains(qualified.var()));
 		}
-		ClojureLowering.VarRef referred = ctx.refers.get(name);
+		ClojureLowering.VarRef referred = ClojureNamespaceLowering.libraryRefer(ctx, name);
 		if (referred != null) {
 			return !(referred.ns().equals(NAMESPACE) && MACROS.contains(referred.var()));
 		}

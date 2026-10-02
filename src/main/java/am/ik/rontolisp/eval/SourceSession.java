@@ -85,7 +85,8 @@ public final class SourceSession {
 		this.language = language;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
-		this.clojure = language == SourceLanguage.CLOJURE ? am.ik.rontolisp.clojure.Clojure.session() : null;
+		this.clojure = language == SourceLanguage.CLOJURE
+				? am.ik.rontolisp.clojure.Clojure.session(SourceLanguage.clojureFiles(loader)) : null;
 		// One macro-time evaluator per session, built lazily on the first expansion,
 		// so a macro defined in one buffer expands in a later one.
 		this.clojureMacros = this.clojure == null ? null : ClojureMacroTime.create();

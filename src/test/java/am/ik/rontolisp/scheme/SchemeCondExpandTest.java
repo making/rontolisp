@@ -56,7 +56,7 @@ class SchemeCondExpandTest {
 			assertThat(lowered("(display (cond-expand (" + feature + " 'yes) (else 'no)))"))
 				.isEqualTo(lowered("(display (begin 'yes))"));
 		}
-		for (String feature : List.of("gauche", "chibi", "exact-complex", "posix", "R7RS", "x86-64")) {
+		for (String feature : List.of("gauche", "chibi", "posix", "R7RS", "x86-64")) {
 			assertThat(lowered("(display (cond-expand (" + feature + " 'yes) (else 'no)))"))
 				.isEqualTo(lowered("(display (begin 'no))"));
 		}
@@ -172,7 +172,7 @@ class SchemeCondExpandTest {
 	void featuresAnswersTheDeclaredList() {
 		assertThat(lowered("(features)")).endsWith("(RONTOLISP::%SCHEME-FEATURES)");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).getLast().print()).isEqualTo(
-				"(DEFUN RONTOLISP::%SCHEME-FEATURES NIL (LIST '|r7rs| '|exact-closed| '|ieee-float| '|full-unicode|"
+				"(DEFUN RONTOLISP::%SCHEME-FEATURES NIL (LIST '|r7rs| '|exact-closed| '|exact-complex| '|ieee-float| '|full-unicode|"
 						+ " '|ratios| '|rontolisp|))");
 	}
 

@@ -1101,8 +1101,8 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ imports
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
-	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact", "cxr",
-			"lazy", "case-lambda", "process-context", "eval", "repl", "file");
+	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact",
+			"complex", "cxr", "lazy", "case-lambda", "process-context", "eval", "repl", "file");
 
 	/**
 	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether

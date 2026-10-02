@@ -32,9 +32,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Binding model: every identifier mangles behind {@link #PREFIX} ({@code c%}), so no user
- * name collides with a core form, a built-in or the reader's markers. {@code defn} is a
- * {@code defun} (the direct call and the tree shaker keep working); a head-position call
- * to a {@code VARIABLE}-kind name (a parameter, a {@code let}/{@code loop} binding, a
+ * name collides with a core form, a built-in or the reader's markers; a global var's
+ * symbol carries its namespace ({@code c%ns/name}, {@code user}'s keeping the bare
+ * {@code c%name}), so every namespace has its own vars. {@code defn} is a {@code defun}
+ * (the direct call and the tree shaker keep working); a head-position call to a
+ * {@code VARIABLE}-kind name (a parameter, a {@code let}/{@code loop} binding, a
  * {@code def}'d variable) is a {@code funcall} of the value cell, while a {@code defn}
  * name stays a direct call; a multi-arity {@code defn} is one {@code defun} per arity
  * plus a dispatch {@code defun} picking by argument count (like {@code case-lambda});
@@ -122,15 +124,17 @@ import org.jspecify.annotations.Nullable;
  * its own condition (message plus data, read by {@code ex-data}/{@code ex-message}),
  * anything else through its printed rendering; dispatch is a method table plus a
  * dispatcher {@code defun} ({@code defmulti}/{@code defmethod}); namespaces wire aliases
- * ({@code clojure.string} over the core string operations, {@code clojure.java.io} for
- * {@code reader} only); interop lowers to the {@code java:} surface. A {@code defmacro}
- * is a compile-time expander (one lambda over the call's argument list, the same function
- * the runtime table entry holds for {@code macroexpand-1}/{@code macroexpand}) plus
- * datum-to-datum expansion at lower time, so every backend runs expanded code;
- * syntax-quote lowers to {@code quote} with unquote splicing over the mangled namespace
- * ({@code x#} one gensym per expansion); {@code gensym} is the ordinary uninterned
- * symbol. {@code var}/{@code #'} stays refused. The reader spells characters, radix
- * integers and exact {@code M} decimals, and refuses regex literals by name.
+ * and refers ({@code clojure.string} over the core string operations,
+ * {@code clojure.java.io} for {@code reader} only, a project namespace's file lowered
+ * once ahead of the form that requires it); interop lowers to the {@code java:} surface.
+ * A {@code defmacro} is a compile-time expander (one lambda over the call's argument
+ * list, the same function the runtime table entry holds for
+ * {@code macroexpand-1}/{@code macroexpand}) plus datum-to-datum expansion at lower time,
+ * so every backend runs expanded code; syntax-quote lowers to {@code quote} with unquote
+ * splicing over the mangled namespace ({@code x#} one gensym per expansion);
+ * {@code gensym} is the ordinary uninterned symbol. {@code var}/{@code #'} stays refused.
+ * The reader spells characters, radix integers and exact {@code M} decimals, and refuses
+ * regex literals by name.
  */
 public final class ClojureLowering {
 
@@ -175,32 +179,25 @@ public final class ClojureLowering {
 
 	final List<LispVal> forms = new ArrayList<>();
 
+	/**
+	 * Every global var defined (or pre-scanned) so far, by var key ({@code ns/name},
+	 * {@link #varKey}): a namespace's vars are its own, like the oracle's, so two
+	 * namespaces may define one name.
+	 */
 	final Map<String, Kind> globals = new HashMap<>();
 
 	/**
-	 * The namespace aliases in scope: an {@code :as} alias (or a namespace's own name) to
-	 * its namespace. Wired by {@code ns} clauses and top-level {@code require} /
-	 * {@code use}, in order, so an alias serves only the forms below it.
+	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
+	 * the forms lower in.
 	 */
-	final Map<String, String> aliases = new HashMap<>();
+	final Map<String, ClojureNsState> namespaces = new HashMap<>();
 
 	/**
-	 * Unqualified names a {@code :refer} / {@code :use} brought in: the name to its
-	 * namespace and var.
-	 */
-	final Map<String, VarRef> refers = new HashMap<>();
-
-	/**
-	 * Simple class names an {@code :import} (or a top-level {@code import}) registered:
-	 * the name to its FQN.
-	 */
-	final Map<String, String> classNames = new HashMap<>();
-
-	/**
-	 * The namespace {@code ::}-keywords resolve against: the file's {@code ns} name (the
-	 * seam reads the whole file, so the form order decides), or the session's
-	 * {@code *ns*} (an {@code ns} or {@code in-ns} buffer switches it for the buffers
-	 * below it). The oracle starts a REPL in {@code user}, so that is the default.
+	 * The namespace the forms lower in, and the one {@code ::}-keywords resolve against:
+	 * the file's {@code ns} name (the seam reads the whole file, so the form order
+	 * decides), or the session's {@code *ns*} (an {@code ns} or {@code in-ns} buffer
+	 * switches it for the buffers below it). The oracle starts a REPL in {@code user}, so
+	 * that is the default.
 	 */
 	String currentNs = "user";
 
@@ -212,23 +209,45 @@ public final class ClojureLowering {
 	final Set<String> namespacesSeen = new LinkedHashSet<>(List.of("user"));
 
 	/**
-	 * What {@code (:refer-clojure :only [...])} restricts the core to, or null without
-	 * one; {@code (:refer-clojure :exclude [...])} removes instead. A name outside the
-	 * set is not a builtin, so a user definition of it wins.
+	 * The namespaces an {@code ns} or {@code in-ns} created (the oracle's
+	 * {@code find-ns}), {@code user} from the start: a qualified name may reach one by
+	 * its full name, without an alias.
 	 */
-	@Nullable Set<String> referClojureOnly;
+	final Set<String> createdNamespaces = new HashSet<>(Set.of("user"));
 
-	final Set<String> referClojureExclude = new HashSet<>();
+	/**
+	 * The namespaces loaded so far: an {@code ns} form of the program (the oracle's
+	 * {@code ns} marks its namespace loaded), or a file a {@code require} read. A
+	 * {@code require} of one reads nothing -- a namespace loads once per program read, so
+	 * a second {@code require} keeps every root, like the oracle.
+	 */
+	final Set<String> loadedNamespaces = new HashSet<>();
+
+	/**
+	 * The namespaces whose files are lowering, innermost first: a {@code require} of one
+	 * of them is the oracle's cyclic-load refusal.
+	 */
+	final Deque<String> loadingNamespaces = new ArrayDeque<>();
+
+	/** Where a project namespace's file is found. */
+	ClojureSourcePath sourcePath = new ClojureSourcePath(ClojureFiles.NONE, null);
+
+	/**
+	 * The forms of the namespaces loaded while the current top-level datum lowers: they
+	 * run ahead of it, so a {@code require} anywhere loads before the form holding it.
+	 */
+	List<LispVal> hoisted = new ArrayList<>();
 
 	/** The scopes, innermost last; globals live in {@link #globals}. */
 	final List<Map<String, Kind>> scopes = new ArrayList<>();
 
 	/**
-	 * The macros in scope: a user {@code defmacro} name to its expander, a lowered lambda
-	 * over the call's argument list (one value) applying each arity's parameters to the
-	 * lowered body. Expansion is datum to datum at lower time: the call site's argument
-	 * datums travel quoted into one application, the answer decodes back to a datum and
-	 * lowers like any other form, so every backend sees only expanded code.
+	 * The macros defined so far: a user {@code defmacro}'s var key to its expander, a
+	 * lowered lambda over the call's argument list (one value) applying each arity's
+	 * parameters to the lowered body. Expansion is datum to datum at lower time: the call
+	 * site's argument datums travel quoted into one application, the answer decodes back
+	 * to a datum and lowers like any other form, so every backend sees only expanded
+	 * code.
 	 */
 	final Map<String, LispVal> macros = new HashMap<>();
 
@@ -466,7 +485,7 @@ public final class ClojureLowering {
 	 */
 	final List<Set<String>> directScopes = new ArrayList<>();
 
-	/** The globals bound to real functions, like {@link #directScopes}. */
+	/** The globals bound to real functions, by var key, like {@link #directScopes}. */
 	final Set<String> globalDirectFuns = new HashSet<>();
 
 	/** Whether the session already emitted the false binding (files always emit it). */
@@ -518,7 +537,9 @@ public final class ClojureLowering {
 	 * the same way. Only class-calling definitions are recorded (a redefinition without
 	 * one drops the name); a {@code ^:dynamic} name is never recorded, so a
 	 * {@code binding} rebind still routes through the value cell. Recorded in definition
-	 * order, so the oracle's define-before-use order is what resolves.
+	 * order, so the oracle's define-before-use order is what resolves. Keyed by var key,
+	 * and read only for the current namespace's definitions (a recorded datum re-lowers
+	 * where its names resolve).
 	 */
 	final Map<String, LispVal> classDispatchFns = new HashMap<>();
 
@@ -561,11 +582,15 @@ public final class ClojureLowering {
 	 */
 	final Map<String, LispVal> mutableFieldPlaces = new LinkedHashMap<>();
 
-	/** The protocols defined so far, by name (the whole-file pre-scan fills it first). */
+	/**
+	 * The protocols defined so far, by var key (the whole-file pre-scan fills it first).
+	 */
 	final Map<String, ProtocolDef> protocols = new HashMap<>();
 
 	/**
-	 * The record/deftype names defined so far (the whole-file pre-scan fills it first).
+	 * The records/deftypes defined so far, by the var key their name would take in the
+	 * defining namespace (the whole-file pre-scan fills it first); {@link #typeKeyOf}
+	 * resolves a class spelling to one.
 	 */
 	final Map<String, TypeDef> types = new HashMap<>();
 
@@ -579,11 +604,11 @@ public final class ClojureLowering {
 	boolean protocolsEmitted;
 
 	/**
-	 * Names declared {@code ^:dynamic}: only {@code binding} may rebind them, and only
-	 * they may be rebound. {@code *agent*} is dynamic from the start (bound to the acting
-	 * agent while a {@code send} runs, nil outside one).
+	 * The vars declared {@code ^:dynamic}, by var key: only {@code binding} may rebind
+	 * them, and only they (beside {@code *out*}/{@code *in*} and {@code *agent*}, which
+	 * the agent runtime binds while a {@code send} runs) may be rebound.
 	 */
-	final Set<String> dynamicVars = new HashSet<>(Set.of("*agent*"));
+	final Set<String> dynamicVars = new HashSet<>();
 
 	/**
 	 * A {@code let} local's host class, inferred from a construction-literal init: the
@@ -659,9 +684,16 @@ public final class ClojureLowering {
 
 	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
 			@Nullable ClojureMacroEvaluator macroEvaluator) {
+		return lower(datums, reader, macroEvaluator, ClojureFiles.NONE);
+	}
+
+	static List<LispVal> lower(List<LispVal> datums, @Nullable ClojureReader reader,
+			@Nullable ClojureMacroEvaluator macroEvaluator, ClojureFiles files) {
 		ClojureLowering lowering = new ClojureLowering();
 		lowering.reader = reader;
 		lowering.macroEvaluator = macroEvaluator;
+		lowering.sourcePath = new ClojureSourcePath(files, reader == null ? null : reader.file());
+		lowering.sourcePath.entryNamespace(firstNsName(datums));
 		lowering.declare(datums);
 		lowering.forms.add(lowering.falseBinding());
 		// pass two: lower
@@ -719,8 +751,11 @@ public final class ClojureLowering {
 		List<ClojureTopLevel> out = new ArrayList<>();
 		for (LispVal datum : datums) {
 			List<LispVal> forms = topLevels(datum);
-			if (!forms.isEmpty() || !ClojureLowerUtil.isNsForm(datum)) {
-				out.add(new ClojureTopLevel(forms, true));
+			// an ns form shows nothing, also when its requires loaded namespaces
+			// (their forms ride with it)
+			boolean ns = ClojureLowerUtil.isNsForm(datum);
+			if (!forms.isEmpty() || !ns) {
+				out.add(new ClojureTopLevel(forms, !ns));
 			}
 		}
 		if (!this.falseBound && !out.isEmpty()) {
@@ -801,24 +836,31 @@ public final class ClojureLowering {
 				&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) {
 			this.currentNs = name.name();
 		}
+		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "in-ns") && items.size() == 2) {
+			String switched = ClojureNamespaceLowering.inNsName(items.get(1));
+			if (switched != null) {
+				this.currentNs = switched;
+			}
+		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "def"), Kind.VARIABLE);
+			preDeclare(items.get(1), "def", Kind.VARIABLE, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 				|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-")) {
 			// a ^:dynamic defn holds its function in the value cell (like a def),
 			// so even a forward call routes through it and sees a binding
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defn"),
-					ClojureLowerUtil.nameIsDynamic(items.get(1)) ? Kind.VARIABLE : Kind.FUNCTION);
+			preDeclare(items.get(1), "defn",
+					ClojureLowerUtil.nameIsDynamic(items.get(1)) ? Kind.VARIABLE : Kind.FUNCTION,
+					ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"));
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defonce"), Kind.VARIABLE);
+			preDeclare(items.get(1), "defonce", Kind.VARIABLE, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defstruct")) {
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defstruct"), Kind.VARIABLE);
+			preDeclare(items.get(1), "defstruct", Kind.VARIABLE, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")) {
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defmulti"), Kind.FUNCTION);
+			preDeclare(items.get(1), "defmulti", Kind.FUNCTION, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "defprotocol")) {
 			ClojureProtocolLowering.declareProtocol(this, items);
@@ -831,25 +873,245 @@ public final class ClojureLowering {
 			// a macro name, so a call above its definition names the missing
 			// expander instead of an unknown name; the definition still runs in
 			// order, like the oracle's compile
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "defmacro"), Kind.MACRO);
+			preDeclare(items.get(1), "defmacro", Kind.MACRO, false);
 		}
 		else if (ClojureTestLowering.isDeftestSpelling(items.get(0))) {
 			// a clojure.test definition is a zero-argument function: (name) runs
 			// the test, like the oracle
-			this.globals.put(ClojureLowerUtil.plainName(items.get(1), "deftest"), Kind.FUNCTION);
+			preDeclare(items.get(1), "deftest", Kind.FUNCTION, false);
 		}
 		else if (ClojureLowerUtil.isSymbolNamed(items.get(0), "declare")) {
 			// a forward declaration: later buffers (and later forms) may call
 			// what is only defined below; a real definition still wins
 			for (int i = 1; i < items.size(); i++) {
-				this.globals.putIfAbsent(ClojureLowerUtil.plainName(items.get(i), "declare"), Kind.FUNCTION);
+				String key = internDeclared(ClojureLowerUtil.plainName(items.get(i), "declare"),
+						ClojureLowerUtil.nameIsPrivate(items.get(i)));
+				this.globals.putIfAbsent(key, Kind.FUNCTION);
 			}
 		}
+	}
+
+	/**
+	 * The pre-scan half of a definition: the name interned in the current namespace under
+	 * its kind, so a form above the definition (or a later buffer) resolves it.
+	 */
+	private void preDeclare(LispVal nameDatum, String what, Kind kind, boolean privateHead) {
+		String name = ClojureLowerUtil.plainName(nameDatum, what);
+		this.globals.put(intern(name, privateHead || ClojureLowerUtil.nameIsPrivate(nameDatum)), kind);
+	}
+
+	/**
+	 * The first {@code ns} name among a file's datums: the namespace its path is laid out
+	 * under, which names its source root.
+	 */
+	static @Nullable String firstNsName(List<LispVal> datums) {
+		for (LispVal datum : datums) {
+			List<LispVal> items = ClojureLowerUtil.items(datum);
+			if (items != null && items.size() >= 2 && ClojureLowerUtil.isSymbolNamed(items.get(0), "ns")
+					&& ClojureLowerUtil.stripMeta(items.get(1)) instanceof LispSymbol name) {
+				return name.name();
+			}
+		}
+		return null;
 	}
 
 	ClojureLowering() {
 		this.scopes.add(new HashMap<>()); // locals; globals live in globals
 		this.directScopes.add(new HashSet<>());
+	}
+
+	/** The var key of a name in a namespace: {@code ns/name}. */
+	static String varKey(String ns, String name) {
+		return ns + "/" + name;
+	}
+
+	/**
+	 * The symbol a var lowers to: behind the prefix and qualified by its namespace --
+	 * except {@code user}'s, which keep the bare mangled name, so a program without an
+	 * {@code ns} lowers as it always did and a Common Lisp file calls its functions as
+	 * {@code c%name}.
+	 */
+	static LispSymbol varSym(String key) {
+		return key.startsWith("user/") ? ClojureLowerUtil.idSym(key.substring("user/".length()))
+				: ClojureLowerUtil.idSym(key);
+	}
+
+	/** The current namespace's state, made on first use. */
+	ClojureNsState ns() {
+		return this.namespaces.computeIfAbsent(this.currentNs, n -> new ClojureNsState());
+	}
+
+	/**
+	 * A definition of the name in the current namespace: interned there (private or not),
+	 * replacing a refer of the same name -- the oracle warns and replaces.
+	 * @param name the plain name
+	 * @param isPrivate whether the definition is private
+	 * @return its var key
+	 */
+	String intern(String name, boolean isPrivate) {
+		ClojureNsState here = ns();
+		here.interns.put(name, isPrivate);
+		here.refers.remove(name);
+		return varKey(this.currentNs, name);
+	}
+
+	/**
+	 * A {@code declare} of the name in the current namespace: interned like a definition,
+	 * but never changing what a real definition already said about it.
+	 * @param name the plain name
+	 * @param isPrivate whether the declaration is private
+	 * @return its var key
+	 */
+	String internDeclared(String name, boolean isPrivate) {
+		ClojureNsState here = ns();
+		here.interns.putIfAbsent(name, isPrivate);
+		here.refers.remove(name);
+		return varKey(this.currentNs, name);
+	}
+
+	/** Whether a namespace's var is private. */
+	boolean isPrivateVar(String ns, String name) {
+		ClojureNsState state = this.namespaces.get(ns);
+		return state != null && Boolean.TRUE.equals(state.interns.get(name));
+	}
+
+	/**
+	 * Where the namespace part of a qualified name ends: the one {@code /} between a
+	 * non-empty namespace and a non-empty name, or -1 for an unqualified name.
+	 */
+	static int qualifierSlash(String name) {
+		int slash = name.indexOf('/');
+		if (slash <= 0 || slash == name.length() - 1 || name.indexOf('/', slash + 1) >= 0) {
+			return -1;
+		}
+		return slash;
+	}
+
+	/**
+	 * The project namespace the head of a qualified name names: an alias of the current
+	 * namespace, the current namespace itself, or any namespace an {@code ns} or
+	 * {@code in-ns} created, by its full name -- or null (a known library, a class, or
+	 * nothing).
+	 */
+	@Nullable String projectNamespaceOf(String head) {
+		String aliased = ns().aliases.get(head);
+		if (aliased != null) {
+			return ClojureNamespaceLowering.isKnownNamespace(aliased) ? null : aliased;
+		}
+		if ((head.equals(this.currentNs) || this.createdNamespaces.contains(head))
+				&& !ClojureNamespaceLowering.isKnownNamespace(head)) {
+			return head;
+		}
+		return null;
+	}
+
+	/**
+	 * The var key a name names as a global var of a project namespace, with no regard to
+	 * locals or privacy: unqualified, an intern of the current namespace, else a refer to
+	 * a project var; qualified, the var of the namespace its head names. Null when it
+	 * names none (a known library's var, a builtin, interop, or nothing).
+	 */
+	@Nullable String lookupVar(String name) {
+		int slash = qualifierSlash(name);
+		if (slash < 0) {
+			String own = varKey(this.currentNs, name);
+			if (this.globals.containsKey(own)) {
+				return own;
+			}
+			VarRef referred = ns().refers.get(name);
+			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
+				String key = varKey(referred.ns(), referred.var());
+				return this.globals.containsKey(key) ? key : null;
+			}
+			return null;
+		}
+		String target = projectNamespaceOf(name.substring(0, slash));
+		if (target == null) {
+			return null;
+		}
+		String key = varKey(target, name.substring(slash + 1));
+		return this.globals.containsKey(key) ? key : null;
+	}
+
+	/**
+	 * {@link #lookupVar}, refusing a qualified reference to another namespace's private
+	 * var like the oracle's compiler ({@code var: #'ns/name is not public}).
+	 */
+	@Nullable String resolveVar(String name) {
+		String key = lookupVar(name);
+		if (key != null && qualifierSlash(name) > 0) {
+			int slash = key.indexOf('/');
+			String target = key.substring(0, slash);
+			if (!target.equals(this.currentNs) && isPrivateVar(target, key.substring(slash + 1))) {
+				throw new LispReadException("var: #'" + key + " is not public");
+			}
+		}
+		return key;
+	}
+
+	/**
+	 * The record or deftype a class spelling names, by var key: the current namespace's
+	 * own, an imported or dotted class name matching one's host class name, or -- the
+	 * flat lowering's leniency, kept -- the only one of that simple name anywhere. Null
+	 * when it names none.
+	 */
+	@Nullable String typeKeyOf(String name) {
+		if (name.indexOf('/') >= 0) {
+			return null;
+		}
+		String own = varKey(this.currentNs, name);
+		if (this.types.containsKey(own)) {
+			return own;
+		}
+		String fqn = name.indexOf('.') >= 0 ? name : ns().classNames.get(name);
+		if (fqn != null) {
+			for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
+				if (type.getValue().className().equals(fqn)) {
+					return type.getKey();
+				}
+			}
+			if (name.indexOf('.') >= 0) {
+				return null; // a host class
+			}
+		}
+		String only = null;
+		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
+			if (type.getValue().tagSpelling().equals(name)) {
+				if (only != null) {
+					return null;
+				}
+				only = type.getKey();
+			}
+		}
+		return only;
+	}
+
+	/** The record or deftype a class spelling names ({@link #typeKeyOf}), or null. */
+	@Nullable TypeDef typeDefOf(String name) {
+		String key = typeKeyOf(name);
+		return key == null ? null : this.types.get(key);
+	}
+
+	/** Whether a local binding (a parameter, a {@code let} name, ...) holds the name. */
+	boolean isLocal(String name) {
+		for (Map<String, Kind> scope : this.scopes) {
+			if (scope.containsKey(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The symbol a name reads as: a local's own mangled name, else the var it resolves
+	 * to, else the name mangled as written.
+	 */
+	LispSymbol symOf(String name) {
+		if (isLocal(name)) {
+			return ClojureLowerUtil.idSym(name);
+		}
+		String key = resolveVar(name);
+		return key != null ? varSym(key) : ClojureLowerUtil.idSym(name);
 	}
 
 	/**
@@ -862,10 +1124,8 @@ public final class ClojureLowering {
 				return this.directScopes.get(i).contains(name);
 			}
 		}
-		if (this.globals.containsKey(name)) {
-			return this.globalDirectFuns.contains(name);
-		}
-		return false;
+		String key = resolveVar(name);
+		return key != null && this.globalDirectFuns.contains(key);
 	}
 
 	/** Marks the name direct in the innermost scope. */
@@ -873,7 +1133,104 @@ public final class ClojureLowering {
 		this.directScopes.get(this.directScopes.size() - 1).add(name);
 	}
 
+	/**
+	 * One top-level datum lowered, behind the forms of every namespace its lowering
+	 * loaded: a {@code require} anywhere in it loads the namespace before the datum runs.
+	 */
 	List<LispVal> topLevels(LispVal form) {
+		List<LispVal> outer = this.hoisted;
+		this.hoisted = new ArrayList<>();
+		try {
+			List<LispVal> own = topLevelsOf(form);
+			if (this.hoisted.isEmpty()) {
+				return own;
+			}
+			List<LispVal> all = new ArrayList<>(this.hoisted);
+			all.addAll(own);
+			return all;
+		}
+		finally {
+			this.hoisted = outer;
+		}
+	}
+
+	/**
+	 * Lowers a project namespace's file in place, both passes, ahead of the top-level
+	 * datum whose {@code require} loaded it ({@link #hoisted}). The file starts in the
+	 * requiring namespace, like the oracle's {@code load} (its own {@code ns} form
+	 * switches), and lowers from a clean cursor -- no local, recur target or {@code try}
+	 * of the requiring form reaches it -- restored afterwards.
+	 * @param ns the namespace being loaded
+	 * @param found its file
+	 */
+	void loadFile(String ns, ClojureSourcePath.Found found) {
+		ClojureReader fileReader = new ClojureReader(found.text(), found.path());
+		List<LispVal> datums = fileReader.readAll();
+		@Nullable ClojureReader outerReader = this.reader;
+		String outerNs = this.currentNs;
+		List<Map<String, Kind>> outerScopes = new ArrayList<>(this.scopes);
+		List<Set<String>> outerDirect = new ArrayList<>(this.directScopes);
+		List<RecurTarget> outerTargets = new ArrayList<>(this.recurTargets);
+		Map<String, HostClass> outerHosts = new HashMap<>(this.hostClasses);
+		List<Map<String, LispSymbol>> outerGens = new ArrayList<>(this.syntaxGens);
+		Set<String> outerInlining = new HashSet<>(this.inliningDispatch);
+		boolean outerTail = this.tailPosition;
+		int outerTry = this.tryDepth;
+		int outerMacroDepth = this.macroDepth;
+		@Nullable String outerAnon = this.anonArgs;
+		boolean outerDispatch = this.inDispatchFn;
+		@Nullable String outerTestLocation = this.testLocation;
+		this.scopes.clear();
+		this.scopes.add(new HashMap<>());
+		this.directScopes.clear();
+		this.directScopes.add(new HashSet<>());
+		this.recurTargets.clear();
+		this.hostClasses.clear();
+		this.syntaxGens.clear();
+		this.inliningDispatch.clear();
+		this.tailPosition = false;
+		this.tryDepth = 0;
+		this.macroDepth = 0;
+		this.anonArgs = null;
+		this.inDispatchFn = false;
+		this.testLocation = null;
+		this.reader = fileReader;
+		this.loadingNamespaces.push(ns);
+		List<LispVal> loaded = new ArrayList<>();
+		try {
+			declare(datums);
+			for (LispVal datum : datums) {
+				loaded.addAll(topLevels(datum));
+			}
+			this.loadedNamespaces.add(ns);
+		}
+		finally {
+			this.loadingNamespaces.pop();
+			this.reader = outerReader;
+			this.currentNs = outerNs;
+			this.scopes.clear();
+			this.scopes.addAll(outerScopes);
+			this.directScopes.clear();
+			this.directScopes.addAll(outerDirect);
+			this.recurTargets.clear();
+			this.recurTargets.addAll(outerTargets);
+			this.hostClasses.clear();
+			this.hostClasses.putAll(outerHosts);
+			this.syntaxGens.clear();
+			this.syntaxGens.addAll(outerGens);
+			this.inliningDispatch.clear();
+			this.inliningDispatch.addAll(outerInlining);
+			this.tailPosition = outerTail;
+			this.tryDepth = outerTry;
+			this.macroDepth = outerMacroDepth;
+			this.anonArgs = outerAnon;
+			this.inDispatchFn = outerDispatch;
+			this.testLocation = outerTestLocation;
+		}
+		this.hoisted.addAll(loaded);
+	}
+
+	private List<LispVal> topLevelsOf(LispVal form) {
 		try {
 			if (ClojureLowerUtil.isNsForm(form)) {
 				ClojureNamespaceLowering.processNs(this, form); // wires the aliases;
@@ -1484,14 +1841,15 @@ public final class ClojureLowering {
 		}
 		// a program's own definition or local binding shadows the core name, like
 		// the oracle (and like the value position below, which already looks the
-		// name up first)
-		boolean shadowed = known(name);
+		// name up first) -- the current namespace's own or referred var, since
+		// every namespace has its own
+		boolean known = known(name);
 		// the re-* names lower beside the big core switch (which stays under the
 		// method-size limit): same position, before any qualified name
-		if (!shadowed && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
+		if (!known && ClojureStringLowering.isReName(name) && ClojureNamespaceLowering.coreAllowed(this, name)) {
 			return ClojureStringLowering.reCall(this, name, items);
 		}
-		LispVal special = shadowed ? null : builtin(name, items);
+		LispVal special = known ? null : builtin(name, items);
 		if (special != null) {
 			return special;
 		}
@@ -1499,12 +1857,17 @@ public final class ClojureLowering {
 		if (qualified != null) {
 			return ClojureNamespaceLowering.namespaceCall(this, qualified, items, form);
 		}
-		LispVal interop = ClojureInteropLowering.interopCall(this, name, items);
-		if (interop != null) {
-			return interop;
+		if (!known) {
+			// a qualified name whose head names a project namespace is that
+			// namespace's var or nothing: never a class
+			ClojureNamespaceLowering.refuseMissingVar(this, name);
+			LispVal interop = ClojureInteropLowering.interopCall(this, name, items);
+			if (interop != null) {
+				return interop;
+			}
 		}
-		ClojureLowerUtil.isTrue(known(name) || this.refers.containsKey(name), "unknown name: " + name);
-		VarRef referred = known(name) ? null : this.refers.get(name);
+		VarRef referred = known ? null : ClojureNamespaceLowering.libraryRefer(this, name);
+		ClojureLowerUtil.isTrue(known || referred != null, "unknown name: " + name);
 		if (referred != null) {
 			return ClojureNamespaceLowering.namespaceCall(this, referred, items, form);
 		}
@@ -1530,17 +1893,16 @@ public final class ClojureLowering {
 			// variable whose value may hold a collection goes through the
 			// prelude dispatcher instead, which funcalls real functions.
 			if (!isDirectVar(name)) {
-				return callableApply(ClojureLowerUtil.idSym(name),
-						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
+				return callableApply(symOf(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
 			}
 			List<LispVal> funcall = new ArrayList<>();
 			funcall.add(ClojureLowerUtil.sym("FUNCALL"));
-			funcall.add(ClojureLowerUtil.idSym(name));
+			funcall.add(symOf(name));
 			funcall.addAll(args);
 			return ClojureLowerUtil.list(funcall);
 		}
 		List<LispVal> out = new ArrayList<>();
-		out.add(ClojureLowerUtil.idSym(name));
+		out.add(symOf(name));
 		out.addAll(args);
 		return ClojureLowerUtil.list(out);
 	}
@@ -1710,12 +2072,12 @@ public final class ClojureLowering {
 				return ClojureMacroLowering.gensymOf(this, items);
 			case "macroexpand-1":
 				ClojureLowerUtil.isTrue(n == 1, "macroexpand-1 takes one form");
-				this.usedMacros = true;
-				return ClojureLowerUtil.list(new LispSymbol(ClojureMacroLowering.MACROEXPAND_1), lower(items.get(1)));
+				return ClojureMacroLowering.macroexpandCall(this, ClojureMacroLowering.MACROEXPAND_1,
+						lower(items.get(1)));
 			case "macroexpand":
 				ClojureLowerUtil.isTrue(n == 1, "macroexpand takes one form");
-				this.usedMacros = true;
-				return ClojureLowerUtil.list(new LispSymbol(ClojureMacroLowering.MACROEXPAND), lower(items.get(1)));
+				return ClojureMacroLowering.macroexpandCall(this, ClojureMacroLowering.MACROEXPAND,
+						lower(items.get(1)));
 			case "assoc":
 				return ClojureCollectionLowering.assocOf(this, items);
 			case "dissoc":
@@ -2248,9 +2610,10 @@ public final class ClojureLowering {
 			if (name.equals("quot")) {
 				return ClojureSeqLowering.quotValue(this);
 			}
+			ClojureNamespaceLowering.refuseMissingVar(this, name);
 			VarRef qualified = ClojureNamespaceLowering.resolveQualified(this, name);
 			if (qualified == null) {
-				qualified = this.refers.get(name);
+				qualified = ClojureNamespaceLowering.libraryRefer(this, name);
 			}
 			if (qualified != null) {
 				return ClojureNamespaceLowering.namespaceValue(this, qualified);
@@ -2273,9 +2636,9 @@ public final class ClojureLowering {
 			throw new LispReadException(name + " is a macro, not a function");
 		}
 		if (isFunction(name)) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowerUtil.idSym(name));
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
 		}
-		return ClojureLowerUtil.idSym(name);
+		return symOf(name);
 	}
 
 	/** Whether the bound value is a Clojure vector: a CL vector that is no string. */
@@ -2471,13 +2834,12 @@ public final class ClojureLowering {
 		return out.toString();
 	}
 
+	/**
+	 * Whether the name is bound: a local, or a var of a project namespace it resolves to
+	 * ({@link #resolveVar}).
+	 */
 	boolean known(String name) {
-		for (Map<String, Kind> scope : this.scopes) {
-			if (scope.containsKey(name)) {
-				return true;
-			}
-		}
-		return this.globals.containsKey(name);
+		return isLocal(name) || resolveVar(name) != null;
 	}
 
 	boolean isFunction(String name) {
@@ -2490,8 +2852,7 @@ public final class ClojureLowering {
 				return kind == Kind.FUNCTION;
 			}
 		}
-		Kind global = this.globals.get(name);
-		return global == Kind.FUNCTION;
+		return globalKind(name) == Kind.FUNCTION;
 	}
 
 	boolean isMacro(String name) {
@@ -2501,7 +2862,13 @@ public final class ClojureLowering {
 				return kind == Kind.MACRO;
 			}
 		}
-		return this.globals.get(name) == Kind.MACRO;
+		return globalKind(name) == Kind.MACRO;
+	}
+
+	/** The kind of the var a name resolves to, or null when it names none. */
+	@Nullable Kind globalKind(String name) {
+		String key = resolveVar(name);
+		return key == null ? null : this.globals.get(key);
 	}
 
 	/**

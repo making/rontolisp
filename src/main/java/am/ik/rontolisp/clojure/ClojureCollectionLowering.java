@@ -100,7 +100,7 @@ final class ClojureCollectionLowering {
 		if (alias.isEmpty() || tail.isEmpty() || tail.indexOf('/') >= 0) {
 			throw new LispReadException("Invalid token: " + name);
 		}
-		String ns = ctx.aliases.get(alias);
+		String ns = ctx.ns().aliases.get(alias);
 		if (ns == null) {
 			if (alias.equals(ctx.currentNs) || ClojureNamespaceLowering.isKnownNamespace(alias)) {
 				ns = alias;

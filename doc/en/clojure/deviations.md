@@ -83,8 +83,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   the `clojure.lisp` library, not the program's own definitions; a call above its
   definition is refused, and a macro has no function value. A `defmacro` shadows a core
   function at call sites, never a special form.
-- Syntax-quote qualifies every symbol behind `c%` (there are no namespaces to qualify
-  against). Each `x#` binds one gensym per expansion -- the oracle resolves one per
+- Syntax-quote qualifies a symbol naming a var the namespace sees; a core name or an
+  unresolved symbol stays bare, where the oracle spells `clojure.core/let` and
+  `user/x`. Each `x#` binds one gensym per expansion -- the oracle resolves one per
   compilation, so two expansions share its suffixes where ours differ (fresher, never
   captured). `macroexpand-1`/`macroexpand` answers print demangled and uppercased
   (case folds, print-only); their data takes bare operator names. Nested syntax-quote
@@ -138,3 +139,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   to one, or a `..` step's declared return) and every
   overload at that arity answers a primitive boolean; any other host boolean
   keeps the shared `java:` unmarshal and prints `nil` for `false`.
+- A required namespace loads once per program read, ahead of the top-level form holding
+  the `require`: a `require` inside a function body loads before that form runs, not
+  when the body runs, and `:reload`/`:reload-all` load nothing again. A Common Lisp
+  program that `load`s two Clojure files requiring one namespace lowers it once per file.
+  Only `.clj` files below the source roots are read (no `.cljc`, no classpath).
+- Records and deftypes of one simple name in two namespaces share a dispatch tag, which
+  `class`, protocol dispatch and `=` read.
+- A name referred from two namespaces keeps the later refer (the oracle refuses it), and
+  a definition replaces a refer of its name without the oracle's warning.

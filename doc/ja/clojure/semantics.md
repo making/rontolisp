@@ -23,6 +23,33 @@ head 位置呼び出しは値セルの `funcall` になります -- だから `(
 渡される `lambda` です（`%`..`%9`、`%&`）。本体フォームは 1 呼び出しに包まれます。
 `declare` は後で定義される名前を前もって宣言します。
 
+## 名前空間とファイル
+
+名前空間はそれぞれ自分の var を持ちます。定義は現在の名前空間（`ns` か `in-ns` が切り替える
+までは `user`）に属します。名前はローカル、現在の名前空間自身の var、refer された var の順に
+解決され、`alias/name` や `full.name/name` は別の名前空間の var を指します。その var が
+private（`defn-`、`^:private`）なら、oracle のコンパイラと同じく拒否します。`user` の var は
+`c%name` に、それ以外の名前空間の var は `c%ns/name` に lower され、プログラムを `load` した
+Common Lisp ファイルはこの名前で呼び出します。
+
+プログラムが宣言していない名前空間を `require`・`use`・`ns` 節が指すと、そのファイルを
+ロードします。`my-app.core` は `my_app/core.clj` で、それを含む最初のソースルートから
+読みます。ルートは、エントリファイル自身の名前空間が示すディレクトリ（`demo.main` を宣言
+する `src/demo/main.clj` なら `src`、`ns` のないファイルならそのファイルのディレクトリ）、
+次にエントリファイルの位置から上へたどって最初に見つかる `deps.edn` の `:paths`（指定が
+なければ `["src"]`）の順で、`deps.edn` がどこにもなければ作業ディレクトリの `src` です。
+ファイルはプログラムにつき 1 度だけ、それを require したフォームより前に lower され、
+2 度目の `require` は何もロードしません。`ns` フォームのないファイルは、require した側の
+名前空間に定義を追加します。`use` と `:refer :all` は public な var をすべて refer します。
+どのルートにもないファイル、require の循環、存在しない var や private な var の refer は、
+oracle と同じ文言のエラーになります。
+
+```bash
+# deps.edn は {:paths ["src"]}、demo.main と demo.main-test が demo.lib を require する
+rontolisp src/demo/main.clj          # ルート: src（自身の ns）、src（deps.edn）
+rontolisp test/demo/main_test.clj    # ルート: test（自身の ns）、src（deps.edn）
+```
+
 ## 束縛
 
 `let` は `let*` です（Clojure の `let` は逐次）。`letfn` は事前走査された項目群上の 1 つの
@@ -50,8 +77,9 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 位置を取り戻します。同名の核関数は呼び出し位置では `defmacro` が覆い隠します
 （special form は先に横取りするため覆い隠せません）。
 
-`` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。すべての
-シンボルは `c%` の背後で限定され、`~` はそのフォームの値を埋め込み、`~@` は外側の
+`` `form `` は mangle 済み名前空間上のデータとしてフォームを組み立てます。定義側の
+名前空間から見える var を指すシンボルはその var の名前空間で限定され（核の名前と解決
+できないシンボルは素のままです）、`~` はそのフォームの値を埋め込み、`~@` は外側の
 リスト・ベクター・マップ・セットの中に列を継ぎ足します。各 `x#` は syntax-quote
 ごとに 1 つの `(gensym "x")` を束縛します。1 展開につき 1 シンボルであり、同じ展開
 の中では出現箇所によらず同じものになります。syntax-quote の外の unquote、列の外の
