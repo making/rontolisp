@@ -14,7 +14,7 @@
   (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl) (scheme file))`（`only` / `except` /
   `prefix` / `rename` 可）。
 
-12 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
+14 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
 `import` を一切書かない場合に見える名前は
 [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)を参照してください。
 

@@ -489,8 +489,8 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(import (scheme time))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |time|) is not available: this experimental front end has"
 					+ " (scheme base), (scheme write), (scheme read), (scheme char), (scheme inexact), (scheme complex), (scheme cxr),"
-					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval), (scheme repl)"
-					+ " and (scheme file) only");
+					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval), (scheme repl),"
+					+ " (scheme load) and (scheme file) only");
 		assertThat(lowered("(import (scheme char)) (char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme base)) (char-upcase x)")).isEqualTo("(|char-upcase| |x|)");
 		assertThat(lowered("(char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
@@ -557,7 +557,7 @@ class SchemeLoweringTest {
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |char| |inexact| |complex| |cxr|"
-						+ " |lazy| |case-lambda| |process-context| |eval| |repl| |file|)) T NIL))");
+						+ " |lazy| |case-lambda| |process-context| |eval| |repl| |load| |file|)) T NIL))");
 	}
 
 	@Test

@@ -1,8 +1,8 @@
 # Libraries
 
-The twelve R7RS libraries a file may `import`, and what each provides. Every name has its
+The fourteen R7RS libraries a file may `import`, and what each provides. Every name has its
 own page in the [Reference](reference.md). A file that opens with `(import ...)` (see
-[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all twelve,
+[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all fourteen,
 plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md).
 
 | Library | Provides |
@@ -19,6 +19,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 | [(scheme process-context)](reference/library-process-context.md) | `exit` and `emergency-exit` only |
 | [(scheme eval)](reference/library-eval.md) | `eval` and `environment` -- see [eval](eval.md) |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
+| [(scheme load)](reference/library-load.md) | `load`, the one R7RS `load`: the named file's forms run in the global environment, in order |
 | [(scheme file)](reference/library-file.md) | File ports, `file-exists?` and `delete-file` |
 
 Every input and output procedure takes an optional port argument and uses the current

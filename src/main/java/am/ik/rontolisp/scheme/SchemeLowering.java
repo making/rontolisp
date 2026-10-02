@@ -1002,6 +1002,16 @@ final class SchemeLowering {
 				&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()))) {
 			return form;
 		}
+		if (isTopLevelLoadCall(form)) {
+			// A bare top-level (load "literal"): the compile path's LoadInliner only
+			// inlines one it sees at the top level, and the guard's LET/CATCH shape
+			// would hide it -- a path string merely SPELLING exit or eval would turn
+			// every guard on and silence the inline. The forms that run under it carry
+			// their own guards on both paths that execute them (the inlined file's
+			// lowering here, the interpreter's per-file lowering at run time), so the
+			// load call itself needs no guard.
+			return form;
+		}
 		LispSymbol done = fresh("EXIT-DONE");
 		LispSymbol code = fresh("EXIT-CODE");
 		LispVal caught = list(symbol("CATCH"), quotedExitTag(), list(symbol("PROGN"), form, done));
@@ -1048,6 +1058,11 @@ final class SchemeLowering {
 	// that went through a variable and an (eq ...) is one value in Common Lisp
 	// (.kb/multiple-values.md): (values 1 2) from a procedure echoes both lines, a
 	// (values) echoes none.
+	/** Whether the form is the lowered shape of a {@code load} procedure call. */
+	private static boolean isTopLevelLoadCall(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "LOAD".equals(head.name());
+	}
+
 	private LispVal exitGuardValue(LispVal form) {
 		LispSymbol done = fresh("EXIT-DONE");
 		LispSymbol values = fresh("EXIT-VALUES");
@@ -1102,7 +1117,7 @@ final class SchemeLowering {
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
 	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact",
-			"complex", "cxr", "lazy", "case-lambda", "process-context", "eval", "repl", "file");
+			"complex", "cxr", "lazy", "case-lambda", "process-context", "eval", "repl", "load", "file");
 
 	/**
 	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether

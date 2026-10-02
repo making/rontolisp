@@ -35,16 +35,17 @@ import org.jspecify.annotations.Nullable;
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
  * {@code char} / {@code inexact} / {@code complex} / {@code cxr} / {@code lazy} /
- * {@code process-context} / {@code file} / {@code eval} / {@code repl}, or {@code sicp} /
- * {@code r5rs} for a name no import can reach), {@code result} says what the template
- * answers -- {@code value}, {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL},
- * which fuses into an {@code if} test and is converted to {@code #t}/{@code #f} anywhere
- * else), {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect}
- * (the template's value is discarded and the call answers the unspecified object, which a
- * REPL does not echo). One {@code ((params) template)} pair per accepted argument count;
- * {@code &rest r} params splice as the template's dotted tail {@code (f a . r)}.
- * {@code :function} is the first-class value; it may be omitted only for a single
- * fixed-arity alternative, where it is derived as a {@code lambda} around the template.
+ * {@code process-context} / {@code file} / {@code eval} / {@code repl} / {@code load}, or
+ * {@code sicp} / {@code r5rs} for a name no import can reach), {@code result} says what
+ * the template answers -- {@code value}, {@code pred} (a Common Lisp boolean,
+ * {@code T}/{@code NIL}, which fuses into an {@code if} test and is converted to
+ * {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or {@code NIL} meaning
+ * {@code #f}) or {@code effect} (the template's value is discarded and the call answers
+ * the unspecified object, which a REPL does not echo). One {@code ((params) template)}
+ * pair per accepted argument count; {@code &rest r} params splice as the template's
+ * dotted tail {@code (f a . r)}. {@code :function} is the first-class value; it may be
+ * omitted only for a single fixed-arity alternative, where it is derived as a
+ * {@code lambda} around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
@@ -112,8 +113,8 @@ final class SchemeBuiltins {
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
 	 * {@code char}, {@code inexact}, {@code complex}, {@code cxr}, {@code lazy},
-	 * {@code process-context}, {@code file}, {@code eval}, {@code repl}), or a tag no
-	 * import names ({@code sicp}, {@code r5rs})
+	 * {@code process-context}, {@code file}, {@code eval}, {@code repl}, {@code load}),
+	 * or a tag no import names ({@code sicp}, {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -700,6 +701,13 @@ final class SchemeBuiltins {
 			 :function (lambda (&rest r) (rontolisp::%scheme-environment r)))
 			("interaction-environment" repl value (() '|#[environment]|))
 			("scheme-report-environment" r5rs value ((v) (progn v '|#[environment]|)))
+
+			;; --- (scheme load): the named file's forms evaluate in the global
+			;; environment, in order, its definitions visible to the loader; the value
+			;; is the unspecified object. The compile path inlines a literal load and
+			;; reads the file as Scheme (LoadInliner, the per-file language); the
+			;; interpreter's runtime load picks the language per file the same way.
+			("load" load effect ((f) (load f)))
 
 			;; --- (features): the feature identifiers cond-expand tests (SchemeFeatures),
 			;; a fresh list per call.

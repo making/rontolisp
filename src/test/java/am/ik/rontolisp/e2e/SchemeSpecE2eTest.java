@@ -207,12 +207,19 @@ class SchemeSpecE2eTest {
 		CliStack.call("scheme-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
 					new java.io.ByteArrayInputStream(s.stdinOrEmpty().getBytes(StandardCharsets.UTF_8)));
+			Path entry = Path
+				.of(java.util.Objects.requireNonNullElse(entryFile(s, standard, "interpreter"), "standalone.scm"));
+			if (s.files() != null) {
+				// A case with files loads them relative to the program's directory, like
+				// the compiled legs' LoadInliner splice does.
+				evaluator.setLoadBaseDir(java.util.Objects.requireNonNullElse(entry.getParent(), entry).toString());
+			}
 			SourceStandards standards = SourceStandards.parse(standard);
 			evaluator.setSourceStandards(standards);
 			try {
-				String entry = entryFile(s, standard, "interpreter");
-				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER,
-						entry != null ? entry : "standalone.scm", standards, SourceLoader.fileSystem())) {
+				String entryPath = entry.toString();
+				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER, entryPath, standards,
+						SourceLoader.fileSystem())) {
 					evaluator.eval(form);
 				}
 			}
@@ -246,10 +253,18 @@ class SchemeSpecE2eTest {
 		String stem = "SStandalone" + s.name().replaceAll("[^A-Za-z0-9]", "") + standard.replaceAll("[^A-Za-z0-9]", "");
 		Path dir = workDir.resolve(stem);
 		Files.createDirectories(dir);
+		String entry = entryFile(s, standard, "jvm");
 		Files.write(dir.resolve(stem + ".class"),
 				new JvmSourceCompiler(stem).sourceLanguage("scheme")
 					.schemeStandard(standard)
-					.compile(s.source(), entryFile(s, standard, "jvm"))
+					// A relative load resolves against the entry file's directory, like
+					// the CLI's.
+					.baseDir(entry == null ? null
+							: java.util.Objects
+								.requireNonNullElse(Path.of(entry).toAbsolutePath().getParent(),
+										Path.of(entry).toAbsolutePath())
+								.toString())
+					.compile(s.source(), entry)
 					.classBytes());
 		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
 		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
@@ -400,6 +415,85 @@ class SchemeSpecE2eTest {
 				HostWasmtime.ExecResult result = runWasmModule(abrupt, "", component, "emergency-exit-7", "rontolisp");
 				assertThat(result.exitCode()).isEqualTo(7);
 				assertThat(result.stdout()).isEqualTo("before\n");
+			}));
+		}
+		return legs.stream();
+	}
+
+	/**
+	 * {@code exit} inside a LOADED file ends the process from the loaded file's own
+	 * top-level wrapper, like the same form at the entry's top level would: the afters of
+	 * its own {@code dynamic-wind}s run, the loader's forms after the {@code load} do not
+	 * run, and the status is the exit's. (An {@code exit} inside a loaded DEFINITION
+	 * called after the load has returned has no wrapper around it -- the loaded file's
+	 * wrappers ended with its top-level forms; that is the escape-only shape every
+	 * documented.) The loaded file rides the standalone machinery's staging.
+	 */
+	@TestFactory
+	Stream<DynamicNode> exitInsideALoadedFileEndsTheProcessWithItsStatusOnEveryBackend() {
+		Standalone case_ = new Standalone("exit-inside-a-loaded-file", """
+				(import (scheme base) (scheme write) (scheme load))
+				(display "start") (newline)
+				(load "loaded-exit.scm")
+				(display "never") (newline)
+				""", "", "start\nin loaded\nafter\n", "", false, List.of("rontolisp"), Map.of("loaded-exit.scm", """
+				(display "in loaded") (newline)
+				(dynamic-wind (lambda () #t) (lambda () (exit 3)) (lambda () (display "after") (newline)))
+				(display "never either") (newline)
+				"""));
+		String source = case_.source();
+		List<DynamicNode> legs = new ArrayList<>();
+		legs.add(dynamicTest("exit inside a loaded file INTERPRETER", () -> {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			Path entry = Path.of(java.util.Objects.requireNonNull(entryFile(case_, "rontolisp", "interpreter")));
+			Throwable[] thrown = new Throwable[1];
+			CliStack.call("scheme-spec", () -> {
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				evaluator.setSourceStandards(SourceStandards.parse("rontolisp"));
+				evaluator.setLoadBaseDir(java.util.Objects.requireNonNullElse(entry.getParent(), entry).toString());
+				try {
+					for (LispVal form : SourceLanguage.SCHEME.read(source, Features.INTERPRETER, entry.toString(),
+							SourceStandards.parse("rontolisp"), SourceLoader.fileSystem())) {
+						evaluator.eval(form);
+					}
+				}
+				catch (Throwable ex) {
+					thrown[0] = ex;
+				}
+				return null;
+			});
+			assertThat(thrown[0]).isInstanceOfSatisfying(LispExitSignal.class,
+					exit -> assertThat(exit.code()).isEqualTo(3));
+			assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("start\nin loaded\nafter\n");
+		}));
+		legs.add(dynamicTest("exit inside a loaded file JVM", () -> {
+			String stem = "SchemeLoadedExit";
+			Path dir = workDir.resolve(stem);
+			Files.createDirectories(dir);
+			String entry = entryFile(case_, "rontolisp", "jvm");
+			Files.write(dir.resolve(stem + ".class"), new JvmSourceCompiler(stem).sourceLanguage("scheme")
+				.baseDir(java.util.Objects
+					.requireNonNullElse(Path.of(entry).toAbsolutePath().getParent(), Path.of(entry).toAbsolutePath())
+					.toString())
+				.compile(source, entry)
+				.classBytes());
+			Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+					"-cp", dir.toString(), stem)
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(process.waitFor()).isEqualTo(3);
+			assertThat(out).isEqualTo("start\nin loaded\nafter\n");
+		}));
+		for (boolean component : List.of(false, true)) {
+			legs.add(dynamicTest("exit inside a loaded file" + (component ? " WASM_COMPONENT" : " WASM"), () -> {
+				if (!HostWasmtime.isAvailable()) {
+					abort("no usable wasmtime on PATH");
+				}
+				HostWasmtime.ExecResult result = runWasmModule(source, entryFile(case_, "rontolisp", "wasm"), "",
+						component, "loaded-exit" + (component ? "-component" : ""), "rontolisp");
+				assertThat(result.exitCode()).isEqualTo(3);
+				assertThat(result.stdout()).isEqualTo("start\nin loaded\nafter\n");
 			}));
 		}
 		return legs.stream();

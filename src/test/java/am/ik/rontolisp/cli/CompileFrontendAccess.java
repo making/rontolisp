@@ -1,6 +1,7 @@
 package am.ik.rontolisp.cli;
 
 import java.io.FileNotFoundException;
+import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
@@ -191,7 +192,17 @@ public final class CompileFrontendAccess {
 			.entryFile(entryFile)
 			.sourceLanguage("scheme")
 			.standards(SourceStandards.parse(standard))
-			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			// The CLI resolves a relative load/include against the entry file's
+			// directory; a test naming an entry file gets the same rule.
+			.options(CompileFrontend.Options.builder()
+				.wasm(wasm)
+				.component(component)
+				.baseDir(entryFile == null ? null
+						: java.util.Objects
+							.requireNonNullElse(Path.of(entryFile).toAbsolutePath().getParent(),
+									Path.of(entryFile).toAbsolutePath())
+							.toString())
+				.build())
 			.build());
 		return new Program(result.program(), result.features());
 	}

@@ -381,6 +381,10 @@ categories:
     index_page: scheme/reference/library-repl.md
     functions:
       - { slug: interaction-environment, name: "interaction-environment" }
+  - title: "(scheme load)"
+    index_page: scheme/reference/library-load.md
+    functions:
+      - { slug: load, name: "load" }
   - title: "(scheme file)"
     index_page: scheme/reference/library-file.md
     functions:

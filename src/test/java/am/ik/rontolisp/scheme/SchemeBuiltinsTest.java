@@ -40,7 +40,8 @@ class SchemeBuiltinsTest {
 				"cdadr", "cddar", "cdddr", "caaaar", "caaadr", "caadar", "caaddr", "cadaar", "cadadr", "caddar",
 				"cadddr", "cdaaar", "cdaadr", "cdadar", "cdaddr", "cddaar", "cddadr", "cdddar", "cddddr", "filter",
 				"reduce", "fold-left", "fold-right", "delete", "last-pair", "append!", "list-index", "1+", "-1+",
-				"random", "runtime", "eval", "environment", "interaction-environment", "scheme-report-environment");
+				"random", "runtime", "eval", "environment", "interaction-environment", "scheme-report-environment",
+				"load");
 	}
 
 	@Test

@@ -3359,3 +3359,29 @@ standalone:
       hello, COND-EXPAND
       yes
       missing
+  # (scheme load): the file's forms run in the global environment, in order, and its
+  # definitions are the loader's. The compiled legs inline the literal load at compile
+  # time, the file read as Scheme (the per-file language, like every loaded file); the
+  # interpreter leg loads it at run time -- one case, both paths. Under r7rs the loaded
+  # file obeys the same begins-with-import rule as every other file.
+  - name: a-loaded-file-defines-for-the-loader-in-its-order
+    standards: [rontolisp, r7rs]
+    files:
+      loaded.scm: |
+        (import (scheme base) (scheme write) (scheme load))
+        (define loaded-x 41)
+        (define (loaded-twice n) (* n 2))
+        (display "loaded first") (newline)
+    source: |
+      (import (scheme base) (scheme write) (scheme load))
+      (display "before") (newline)
+      (load "loaded.scm")
+      (write (loaded-twice loaded-x)) (newline)
+      (load "loaded.scm")
+      (write loaded-x) (newline)
+    stdout: |
+      before
+      loaded first
+      82
+      loaded first
+      41

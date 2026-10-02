@@ -15,7 +15,7 @@
   (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl) (scheme file))` with `only` / `except` /
   `prefix` / `rename`.
 
-See [Libraries](libraries.md) for what each of those twelve libraries exports, and
+See [Libraries](libraries.md) for what each of those fourteen libraries exports, and
 [*Structure and Interpretation of Computer Programs* (SICP) Compatibility](sicp.md) for the
 names visible with no `import` at all.
 

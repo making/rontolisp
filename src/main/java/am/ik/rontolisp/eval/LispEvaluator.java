@@ -3754,7 +3754,12 @@ public final class LispEvaluator {
 			source = this.sourceLoader.load(resolved);
 		}
 		catch (IOException ex) {
-			throw new LispEvalException(operator + ": cannot read file " + resolved + ": " + ex.getMessage());
+			// CLHS load: a missing file under the default :if-does-not-exist t is a
+			// FILE-ERROR, so a handler naming the type catches it (the scheme front
+			// end's file-error? included).
+			String message = operator + ": cannot read file " + resolved + ": " + ex.getMessage();
+			throw new LispEvalException(message,
+					ClosRegistry.newFileErrorCondition(new LispString(resolved), new LispString(message)));
 		}
 		if (systemName != null) {
 			source = ShimLibraries.rewriteComponentSource(systemName, rawPath, source, baseDir, this.sourceLoader);

@@ -151,7 +151,12 @@ could not tell apart.
   out of, or `eval` (whose run-time data may name it) -- the same line the run-time
   procedure table draws. Anything else is emitted exactly as before, so a program that
   never quits compiles to the same bytes and pulls no exit machinery (`ExitLibrary`'s
-  invariant, and a `--no-wasi` reactor stays acceptable).
+  invariant, and a `--no-wasi` reactor stays acceptable). A top-level `load` call stays
+  bare too (2026-10-02, b68): its path string spelling `exit` or `eval` would turn every
+  guard on and the guard's `LET`/`CATCH` shape would hide the call from `LoadInliner`'s
+  top-level match -- and the forms that run under a load carry their own guards on both
+  paths that execute them (the inlined file's lowering, the interpreter's per-file
+  lowering), so the call needs none.
 - **A session wraps every entry unconditionally** -- it has no whole file and no
   artifact to keep small -- answering the entry's last form's VALUES, which is what the
   prompt echoes: the guard stores `(multiple-value-list form)` and answers
@@ -380,8 +385,10 @@ entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
 alone), `process-context`, `eval` (`eval`, `environment`), `repl`
-(`interaction-environment`) `complex` (the six `(scheme complex)` exports, below) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
-<tag>))` names them, and a file with no import at all merges all thirteen. Keywords carry a
+(`interaction-environment`), `load` (the one `(scheme load)` export, the Common Lisp
+`load`: the compile path inlines a literal one and the interpreter loads at run time, the
+file read as Scheme either way) `complex` (the six `(scheme complex)` exports, below) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+<tag>))` names them, and a file with no import at all merges all fourteen. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
@@ -414,7 +421,7 @@ is R7RS-small within the implemented subset:
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
 2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
-   branch (the session's) merges the twelve libraries only.
+   branch (the session's) merges the fourteen libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
    `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
