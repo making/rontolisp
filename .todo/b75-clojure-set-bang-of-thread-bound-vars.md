@@ -3,7 +3,7 @@
 Difficulty: Medium
 
 `set! of a var is not supported yet: *warn-on-reflection* ...` -- the corpus
-`examples/instant.clj` stops at its line 13, `(set! *warn-on-reflection* true)`,
+program `instant.clj` stops at its line 13, `(set! *warn-on-reflection* true)`,
 the one `set!` the shcloj4 corpus spells outside the `xml_callback.clj` editor
 snippet (which `set!`s three `^:dynamic` vars inside a `binding`). b61 lowered
 only the deftype mutable field.
