@@ -82,7 +82,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | `defstruct`/`struct`/`struct-map` | the key vector behind the name plus fresh-table builders | `defstruct` stores a vector of the keyword wrappers; `struct` pairs keys with values (missing `nil`, too many signal); `struct-map` seeds the keys and overrides pairwise |
 | `defn-` | `defn` of a private var | private like `^:private` (b56): `use`/`:refer :all` never refer it, `:refer [x]` of it is the oracle's `x is not public`, and a qualified reference from another namespace is the oracle's compile error `var: #'n/x is not public`; inside its namespace it is an ordinary `defn` |
 | `with-meta`/`meta`/`vary-meta` | `%clojure-with-meta` answers a shallow copy (a fresh table, `copy-seq`, `copy-list` of a list or wrapper, a wrapping closure) recorded in the eq side table `%clojure-meta-table` (made on first use); `meta` reads it, nil when absent | the oracle's new-object semantics without a new value shape: `=` and printing never see metadata; IObj kinds only (a string, number, keyword, boolean, atom, deftype, pattern signals, like the oracle's cast); deviations: a symbol answers itself without metadata (an interned symbol has no copy; macro idioms `(with-meta name ...)` keep working), a derived value (`assoc`, `conj`, ...) starts without metadata (the oracle carries it), and the table keeps every object for the program's lifetime (b62) |
-| reader `^` metadata in value position | dropped: the object lowers as itself, except on a vector/map/set literal, where it attaches through `%clojure-put-meta` (no copy: the literal is fresh) | the reader spells `^m x` as `(%with-meta x m)` -- a head no Clojure call spells -- so a type hint never reaches the run-time `with-meta` (b62); layers merge with the outer winning, a keyword is `{:k true}`, a symbol/string `{:tag x}` (the oracle resolves a class symbol to `java.lang.String`; here it stays `String`); quoted data strips it (`'^:a x` is `x`, it printed `(with-meta x :a)` before); `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map (an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
+| reader `^` metadata in value position | dropped: the object lowers as itself, except on a vector/map/set literal, where it attaches through `%clojure-put-meta` (no copy: the literal is fresh) | the reader spells `^m x` as `(%with-meta x m)` -- a head no Clojure call spells -- so a type hint never reaches the run-time `with-meta` (b62); layers merge with the outer winning, a keyword is `{:k true}`, a symbol/string `{:tag x}` (the oracle resolves a class symbol to `java.lang.String`; here it stays `String`); quoted data strips it (`'^:a x` is `x`, it printed `(with-meta x :a)` before); `^:private`/`^:dynamic`/`^{...}`/type hints parse and drop on names, parameter vectors, patterns and values; two pieces on a definition's name are read: `^:dynamic` (for `binding`) and `^:private` (b56: never referred, refused across namespaces), either bare or as an `^{...}` map entry whose value is not `false`/`nil`; `def`/`defn` skip a docstring and an attr map for the value (both recorded as the var's metadata since b80; an attr map only with a value behind it -- a lone map stays the value; since b50 a lone string stays the value too, so `(def g "hello")` binds `"hello"`) |
 | `with-open` | `let*` plus `unwind-protect` closing in reverse order | a stream value closes through `close` on every backend, anything else through the `close` interop call (Java closeables need the interpreter or the JVM; wasm compiles `java:` to a call-time error); an empty vector is the plain body (the oracle's bare `do`, no barrier); a non-empty body lowers behind the `try` barrier, so a `recur` there is the oracle's `Cannot recur across try` refusal (decided 2026-10-01, b35) |
 | `with-out-str` | `let*` rebinding `*standard-output*` (already special) to a fresh string stream | never a literal `with-output-to-string` (which flips a WASM module into EH mode); the stream is built with `make-string-output-stream` and read back, like `str`; a `StringWriter` construction in a program macro lowers to the same stream (b76) |
 | `time` | the value timed with `get-internal-real-time`, reporting `Elapsed time: N msecs` | only the value pins (the count never does -- the spec pins the prefix); built straight to the stream like `println`, never re-lowered |
@@ -110,11 +110,11 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | regex literals (`#"..."`) | `RONTOLISP::%CLOJURE-RE-COMPILE` over the source string (b21; verbatim backslashes since b50) | a pattern value `(:C%PATTERN stamp source ops ngroups)` over the spliced regex runtime, identical on all four backends; the stamp (a fresh gensym) keeps `=` identity, like the oracle; the reader keeps every escape verbatim like the oracle (so `#"\\d"` reads a literal backslash plus `d`), refusing unknown alphabetic escapes, a short/non-hex `\u`/`\x`, a `\0` with no octal digit behind it and a lone `\E` at read time |
 | syntax-quote/unquote (`` ` ``, `~`, `~@`) | lowered, not refused (b12) | the reader parses them into marked lists (and `x#` into one identifier); the lowering qualifies, unquotes, splices and gensyms per the rows above |
 | record literals (`#ns.Name{...}` / `#ns.Name[...]`) | the reader's `(%record ns.Name body)`, lowered to the record built in place over the QUOTED body (b58) | the oracle never evaluates the body: `#user.R{:a (+ 1 2)}` holds the list; missing fields `nil`, extra keys kept, a vector body takes exactly the field count; plain, quoted and syntax-quoted literals lower alike, and a macro answering a record decodes back to one (no constructor call, so it works at macro time); the class must match a defined record's printed class name, a deftype literal is refused by name; read-time refusals mirror the oracle: an undotted `#P{...}` is `No reader function for tag P` (`#inst`/`#uuid` stay `unsupported reader form`), a non-map/vector body `Unreadable constructor form`, a non-keyword or repeated key |
-| `var`/`#'` | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
+| `var`/`#'` (b80) | `(rontolisp::%clojure-var "ns/x" (lambda () ROOT) META)`, interned per name | see "Vars (b80)" below; a local is no var (`Unable to resolve var: x in this context`), a `clojure.core` var is refused by name |
 | metadata (`^`, legacy `#^`) | the reader's `(%with-meta form meta)` (`ClojureLowerUtil.READER_META`), parsed and dropped except on a collection literal | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
 | `set!` of a deftype mutable field (b61) | `(setf (aref slots i) v)` inside the type's inline methods | see "deftype mutable fields" below; every other target is the oracle's error or a named refusal |
 | `set!` of a thread-bound `^:dynamic` var (b75) | a `let*` over the value plus an `if` on the var's binding-depth counter: `(setq var tmp)` past zero, the oracle's `Can't change/establish root binding of: ... with set` at zero | the counter (a `varSym`-derived `%bound-depth` special no identifier spells, zero at the root) is defined beside the var by every `^:dynamic` `def`/`defonce`/`defn` and rebound one deeper by every `binding` of the var, so a callee outside the binding's lexical extent still sets it; a `set!` of a `clojure.main`-bound compiler flag (`*warn-on-reflection*`, `*unchecked-math*`, `*print-meta*`, `*print-length*`, `*print-level*`, `*ns*`) answers the value with no effect here |
-| `set!` of any other var or a host field, `gen-class`/`gen-interface`, `var` / `#'/` | refused by name | each names the missing design (the `java:` surface has no field write; `var` needs its design) |
+| `set!` of any other var or a host field, `gen-class`/`gen-interface` | refused by name | each names the missing design (the `java:` surface has no field write) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
 | `proxy` | `java:proxy` over every interface of the vector, `java:subclass` over a superclass, each with a name-dispatching lambda | interfaces only (b59): one or more interfaces and no constructor arguments; each `(method [params...] body...)` (an empty body answers `nil`) becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`), so a name several interfaces declare runs the one body, as the oracle's proxy does; a method left out raises `no proxy method: <name>` when called (the oracle: `UnsupportedOperationException` with the name); a class in the vector, constructor arguments, `toString`/`equals`/`hashCode` (`java:proxy` keeps `Object`'s three, so the body would never run -- the oracle runs it) and multi-arity methods are refused by name. With a superclass first (b71): `(proxy [Super I...] [args...] ...)` is a `java:subclass` (the callable takes `this` before the name, each body binds it, `proxy-super` reaches the superclass implementation); named methods run their bodies -- `toString`/`equals`/`hashCode` included -- an unnamed concrete class method is inherited, an unnamed abstract one throws `UnsupportedOperationException` with the name; a second class, a duplicate method, a final superclass and a non-vector argument vector are refused by name; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
@@ -266,7 +266,7 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   pass a `take`n prefix.
 - protocols (lowered in b13, below), `set!` (of a deftype mutable field in b61,
   of a thread-bound dynamic var and the always-bound compiler flags in b75),
-  `var`/`#'`: `var`/`#'` stay absent, refused by name (backquote lowered in b12, below; regex
+  `var`/`#'` (lowered in b80, "Vars (b80)" below; backquote lowered in b12, below; regex
   literals lowered in b21, below). Reader metadata on names and locals parses and
   drops (b14), and only `binding` reads `^:dynamic`; value metadata (`with-meta`,
   `meta`, a collection literal's `^`) is real since b62 -- see the table rows above.
@@ -454,7 +454,7 @@ oracle's lowercase; b77 qualifies the unresolved symbols too, so `macros/bench-1
 prints the oracle's bytes: `clojure.core/let`, `examples.macros.bench-1/start`,
 `java.lang.System/nanoTime`), plus `preface` since b72: its `(use :reload ...)` inside a `deftest` captures
 the file's print where the `require` runs); of the 7 `macros*`, `examples.macros.chain-4/chain` qualifies like the oracle; the rest
-stop at other gaps (`read`, `meta`/`#'`, `String` as a value, the lazy `for` input, the host
+stop at other gaps (`read`, `meta`/`#'` -- closed by b80, below --, `String` as a value, the lazy `for` input, the host
 stack overflow, `clojure.set` -- measured after b57/b59/b60 merged; `proxy` over a class
 joined them then and left with b71, unmeasured on the corpus here).
 The source files load too: `wallingford` beside its `examples.replace-symbol` (the two
@@ -693,8 +693,7 @@ mangled namespace (`~` lowers as code, `~@` splices into lists, vectors, maps an
 `x#` one gensym per expansion -- fresher than the oracle's per-compilation suffixes),
 `macroexpand-1`/`macroexpand` over the table answering the mangled data itself (b73:
 `=` against a quoted form holds, printing spells the oracle's lowercase), `gensym` as the
-ordinary uninterned symbol, `var`/`#'` still refused (bodies quote symbols instead),
-`&form`/`&env` refused -- each pinned in `clojure-spec.yaml` (`chain_1..5` plus
+ordinary uninterned symbol, `&form`/`&env` refused -- each pinned in `clojure-spec.yaml` (`chain_1..5` plus
 `unless` plus `bench`, expansion answers and runtime answers, run on all four backends)
 or, for the `~`/`~@` depth errors, the `x#` freshness across two expansions, the
 `macroexpand-1` shape and the multi-arity macro dispatch, in `ClojureLoweringTest`;
@@ -715,7 +714,7 @@ pattern arms -- each pinned in `clojure-spec.yaml` (run on all four backends)
 or, for the interop legs (`proxy`, host-object `memfn`, literal `String/split`),
 in `ClojureInteropTest`; what stays refused (`definterface`/`gen-class`/`gen-interface`,
 multi-arity protocol methods, `set!`,
-`var`/`#'`, an interface-only `proxy` naming an `Object` method)
+an interface-only `proxy` naming an `Object` method)
 stays pinned in `ClojureReaderTest`/`ClojureLoweringTest`. Head-position calls to
 `VARIABLE`-kind names holding real functions lower to `funcall`, anything else
 through the prelude dispatcher (b09, widened 2026-10-01 b15): a `let` binding of a
@@ -1092,3 +1091,51 @@ Revisit condition: an in-scope corpus program needing `valid?`/`conform`
 shapes (not `instrument`) -- then `explain-data` stays out and pins its
 refusal. User docs need no change: `doc/*/clojure/reference/use.md` already
 say an unknown namespace is an error.
+
+## Vars (b80, 2026-10-02)
+
+Decided against `clj` 1.12.6.1673. **A var is `(:C%VAR "ns/name" getter)`, interned per
+name in `rontolisp::%clojure-var-table` (made on first use), its metadata in
+`%clojure-meta-table` like any value's.** `ClojureVarLowering.varOf` lowers `#'x` /
+`(var x)` to `(%clojure-var "ns/x" (lambda () ROOT) META)`: each evaluation re-points the
+interned var's getter and metadata, so `=` holds and the meta table keeps one entry per var.
+ROOT is the name's value as the site sees it (`#'c%f%defN` for a redefined `defn`, the value
+cell for a `def`/dynamic var, a signal for a macro); a `user` var shadowed by a local (both
+mangle to `c%x`) reads through a hoisted top-level `(defun |c%x%root| () |c%x|)`, once per
+lowering. `lookupVar`, not `resolveVar`: another namespace's private var is reachable, like
+the oracle. The printer, `%clojure-call` (so `(#'f 1)` and `(map #'f ...)`), and
+`%clojure-deref-other` each grew one var arm; `with-meta` on a var signals.
+
+- **Metadata is recorded at lower time** (`ClojureVarLowering.record`, keyed by var key in
+  `ClojureLowering.varMetas`, kept across session buffers): `def`/`defn`/`defn-`/`defmacro`
+  record the oracle's entries in its order -- `:arglists` (each parameter vector, quoted),
+  the name's reader metadata (inner layer first), `defn-`'s `:private true`, the docstring as
+  `:doc`, the attr map, then `:line`/`:column` (the reader position), `:file` (a required
+  namespace's `resourceOf`, else the reader's file as given, else `NO_SOURCE_PATH`),
+  `:name`, `:ns` (a symbol), `:macro true`. All-constant values (literals, plain keywords,
+  quoted data) stay a datum each `#'` site lowers -- a definition costs nothing at run
+  time. Anything evaluated (`^{:test (fn [] ...)}`, an `::`-keyword) is stored by the
+  definition into `|c%x%meta|` (`ClojureVarLowering.metaSym`), lowered in the definition's
+  scope and emitted AHEAD of the definition (so a form's value, a session's echo, stays the
+  definition's); `loadFile` routes the store of a `defn`/`defmacro` into the namespace init
+  (`isMetaStore`) where the defun is hoisted. A site lowered above a redefinition sees the
+  older metadata: the same split as b65's call sites.
+- `clojure.core/test` is `ClojureCoreLowering`'s `test` row over `%clojure-var-test`:
+  `(:test (meta v))` called with no arguments, `:ok`, else `:no-test`; its throw passes
+  through, so `(is (thrown? AssertionError (test #'busted)))` holds.
+- Deviations: `:ns` is the namespace symbol (the oracle's Namespace object); the entry file's
+  `:file` is not absolutized; a var defined by anything else (`defmulti`, `deftest`,
+  `defrecord` factories, `declare`) carries only `:name`/`:ns` (the oracle has the
+  position); deref of a macro var signals (the oracle answers the expander fn);
+  `#'println` and every other `clojure.core` var is refused by name; map printing order is
+  the table's.
+
+Corpus (2026-10-02, the 27 b56 drivers on the interpreter): 19 print the oracle's bytes,
+`examples.test.exploring` joining (the other 8 stop at b81-b87 gaps);
+`examples.test.introduction` passes `test-hello-has-a-docstring` but still fails
+`test-accounts`: `(= #{{:id "CLSS" :balance 0}} @accounts)` is false because a set's
+`equal` table compares its map members by identity -- the b84 root cause (the todo's
+"otherwise green" premise was wrong). Pinned by `clojure-spec.yaml`
+(`var-quote-metadata-and-test`, all four backends, every line the oracle's),
+`ClojureLoweringTest.varQuoteAnswersTheInternedVarWithItsDefinitionsMetadata` and
+`ClojureSessionTest.aLaterBufferVarSeesTheMetadataAnEarlierOneRecorded`.

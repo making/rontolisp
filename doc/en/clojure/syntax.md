@@ -8,9 +8,9 @@ with a core form or built-in; a quoted symbol demangles, so `'e2e-foo` prints `e
 
 , is whitespace, as in Clojure. `#!` starts a shebang comment on the first line; `;`
 starts a line comment; `#_` skips the next form. A regex literal (`#"..."`) reads to
-a pattern value (see [Regular expressions](reference/regex.md)); the dispatch forms
-that read but are refused later are covered in [Semantics](semantics.md#not-yet):
-backquote/unquote (`` ` ``, `~`, `~@`) and `var`/`#'`. Metadata (`^`, the legacy
+a pattern value (see [Regular expressions](reference/regex.md)); `#'x` reads as
+`(var x)`, the var of a definition (see [var](reference/var.md)); syntax-quote
+(`` ` ``, `~`, `~@`) is covered in [Semantics](semantics.md). Metadata (`^`, the legacy
 `#^`) reads too: on a name or a local it parses and drops, on a vector, map or set
 literal it attaches like `with-meta` (see
 [Semantics](semantics.md#state-and-dynamic-scope)). A record literal

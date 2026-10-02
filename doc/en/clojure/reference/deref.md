@@ -2,7 +2,7 @@
 
 `(deref ref)`
 
-Reads an atom or volatile, or the value inside a [`reduced`](reduced.md). The reader form `@x` is the same operation. Works as a function
+Reads an atom or volatile, the value inside a [`reduced`](reduced.md), or a [var](var.md)'s root. The reader form `@x` is the same operation. Works as a function
 value, so `map`/`reduce` take it bare.
 
 ```clojure

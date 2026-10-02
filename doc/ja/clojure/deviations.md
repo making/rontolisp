@@ -89,8 +89,15 @@
  （より新鮮であり、capture されません）。`macroexpand-1`/`macroexpand` は mangle された
  データそのものを答えるため、quote したフォームとの `=` が成り立ち、表示は oracle と
  同じ小文字綴りになります。ネストした syntax-quote は 1 回の展開の中で
- 各レベルを評価します。`var`/`#'` は全域で拒否されたままです。本体ではシンボルを
- quote してください。
+ 各レベルを評価します。
+- var のメタデータは `#'` の位置より上で lowering された定義から来ます。再定義より上で
+  lowering された本体は古い docstring を見ます（オラクルの var は最新を見ます。呼び出しと
+  同じ分かれ方です）。`:ns` は名前空間のシンボルです（オラクルは Namespace オブジェクト）。
+  入口ファイルの `:file` は与えたままのパスです（オラクルは絶対パスにします）。
+  `def`/`defn`/`defn-`/`defmacro` 以外（`defmulti`、`deftest`、レコードのファクトリなど）で
+  定義された var は `:name` と `:ns` だけを持ちます。マクロの var の deref はシグナルを
+  上げ（オラクルは展開関数を答えます）、`clojure.core` の var（`#'println`）は名前で
+  拒否されます。
 - `class` は種類名のキーワードで答えます（`:string`・`:number`・`:keyword` 等）。オラクルは
   ホストクラスを返しますが、wasm バックエンドにはありません。record/deftype は
   タグのキーワードで答えます。

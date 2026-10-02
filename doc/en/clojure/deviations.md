@@ -92,8 +92,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   compilation, so two expansions share its suffixes where ours differ (fresher, never
   captured). `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=`
   against a quoted form holds and printing spells the oracle's lowercase. Nested syntax-quote
-  evaluates its levels in the one expansion. `var`/`#'` stays refused everywhere:
-  bodies quote symbols instead.
+  evaluates its levels in the one expansion.
+- A var's metadata comes from the definitions lowered above the `#'` site: a body
+  lowered above a redefinition keeps the older docstring where the oracle's var shows
+  the newest (the same split as its calls). `:ns` is the namespace's symbol (the oracle's
+  is a Namespace object), `:file` of the entry file is the path as given (the oracle
+  absolutizes it), and a var defined by anything but `def`/`defn`/`defn-`/`defmacro`
+  (`defmulti`, `deftest`, a record's factory, ...) carries only `:name` and `:ns`.
+  Deref of a macro's var signals (the oracle answers its expander function), and a
+  `clojure.core` var (`#'println`) is refused by name.
 - `class` answers a keyword naming the kind (`:string`, `:number`, `:keyword`, ...);
   the oracle answers host classes, which no wasm backend has. A record or deftype
   answers its tag keyword instead.

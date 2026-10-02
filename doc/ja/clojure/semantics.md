@@ -94,8 +94,7 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 splice はエラーです。`macroexpand-1` は 1 回、`macroexpand` は fixpoint まで展開し、
 いずれも展開結果を mangle されたデータそのものとして返すため、quote したフォームとの
 `=` が成り立ち、表示は oracle と同じ小文字綴りになります。`gensym` は
-評価ごとに新しい uninterned シンボルを返します。`var`/`#'` は拒否されたままです。
-本体ではシンボルを quote してください。
+評価ごとに新しい uninterned シンボルを返します。
 
 ```clojure
 (defmacro sem-unless [c t] (list 'if c nil t))
@@ -168,6 +167,14 @@ lazy な tail は `...` で打ち切られます。chunk 化はありません�
 と同様に付きます。`=` はメタデータを無視します。逸脱は2つです。コピーから導いた値
 （`assoc`、`conj` など）はメタデータなしで始まり（オラクルは引き継ぎます）、シンボルは
 メタデータを持ちません（`with-meta` はシンボルをそのまま返します）。
+
+`#'x`（`(var x)`）はプログラムの定義の var を返します。名前ごとに 1 つのオブジェクトで、
+`#'ns/x` と表示され、deref と呼び出しはルートを通ります。メタデータは `#'` より上にある
+最新の定義が記録したものです。`def`/`defn`/`defn-`/`defmacro` は `:arglists`、
+docstring の `:doc`、名前のメタデータと attr マップ（定義の位置で評価されるため
+`^{:test (fn [] ...)}` が動きます）、`:line`/`:column`/`:file`、`:name`、`:ns` を
+与えます。[test](reference/core-test.md) はその `:test` 関数を呼びます。ローカルは var では
+なく、`clojure.core` の var は名前で拒否されます。
 
 `ref` はトランザクション規律つきのアトムセルです。`dosync` がエクステントを開き
 （単一スレッドのためリトライも分離もなし）、`alter`/`commute` は `:validator`
@@ -248,7 +255,6 @@ ClojureScript の `^:mutable` は指定になりません。ローカル・パ�
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
 | dynamic・コアの var（`*warn-on-reflection*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先のスレッド束縛 var がない。`java:` にフィールド書き込みがない |
-| `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |

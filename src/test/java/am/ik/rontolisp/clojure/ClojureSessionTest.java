@@ -35,6 +35,21 @@ class ClojureSessionTest {
 	}
 
 	@Test
+	void aLaterBufferVarSeesTheMetadataAnEarlierOneRecorded() {
+		// the metadata a definition recorded travels with the session, so a #'
+		// typed later carries the earlier buffer's docstring and evaluated store
+		ClojureSession session = new ClojureSession();
+		session.read("(defn ^{:test (fn [] 1)} b80sess \"Sess doc.\" [x] x)");
+		List<String> var = session.read("(:doc (meta #'b80sess))")
+			.stream()
+			.flatMap(top -> top.forms().stream())
+			.map(LispVal::print)
+			.toList();
+		assertThat(var).anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-VAR \"user/b80sess\"")
+				&& form.contains("|c%b80sess%meta|"));
+	}
+
+	@Test
 	void aLaterBufferExpandsAMacroAnEarlierOneDefined() {
 		ClojureSession session = new ClojureSession();
 		session.setMacroEvaluator(ClojureMacroTime.create());

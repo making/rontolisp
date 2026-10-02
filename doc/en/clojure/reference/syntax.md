@@ -22,6 +22,8 @@ The binding and control forms. Definitions are decided by a pre-scan of the whol
 | `not` | `(not nil)` | `true` |
 | `quote` | `(quote (a b c))` | `(a b c)` |
 | `with-meta` | `(with-meta [1] {:a 1})` | `[1]` |
+| `var` | `(do (def x 5) #'x)` | `#'user/x` |
+| `test` | `(do (defn ^{:test (fn [] nil)} t []) (test #'t))` | `:ok` |
 | `comment` | `(comment (anything at all))` | `nil` |
 | `declare` | `(declare later)` | `nil` |
 | `when-let` | `(when-let [x 1] (+ x 10))` | `11` |

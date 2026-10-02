@@ -4182,3 +4182,47 @@ cases:
       b77.sq/b77-loose clojure.core/let clojure.string/join clojure.string/nope java.lang.System/nanoTime foo/bar
       b77.excl/map clojure.core/filter
       java.io.StringWriter java.lang.String
+  - name: var-quote-metadata-and-test
+    # b80: #'x is the interned var (one object per name, printing #'ns/name); its
+    # metadata is what the newest definition recorded -- :arglists, the docstring
+    # as :doc, the name's metadata (an evaluated :test fn), :line/:column/:file,
+    # :name and :ns -- so the redefined b80-hello shows the second docstring while
+    # b80-first keeps calling the first definition. clojure.core/test calls the
+    # :test fn (its AssertionError passes through) and answers :ok or :no-test; a
+    # var derefs and invokes through its root. Keys print sorted: map order is
+    # unspecified. Every line is the oracle's (clj 1.12.6.1673), on all four backends.
+    source: |
+      (ns b80.vars)
+      (defn b80-hello
+        "Writes hello.
+        Knows more."
+        [username] (str "Hello, " username))
+      (def b80-first b80-hello)
+      (defn b80-hello
+        "Writes hello message to *out*. Calls you by username.
+        Knows if you have been here before."
+        [a b] (str a b))
+      (defn ^{:test (fn [] (assert (nil? (b80-busted))))} b80-busted [] "busted")
+      (defn ^{:test (fn [] (assert (= 1 1)))} b80-fine [] 1)
+      (def b80-x 1)
+      (println #'b80-x (var b80-hello))
+      (prn (str #'b80-x) (= #'b80-x #'b80-x))
+      (prn (sort (keys (meta #'b80-hello))))
+      (prn (:doc (meta #'b80-hello)) (:arglists (meta #'b80-hello)) (:name (meta #'b80-hello)))
+      (prn (sort (keys (meta #'b80-busted))))
+      (prn (:doc (meta #'b80-x)) (sort (keys (meta #'b80-x))))
+      (prn (test #'b80-x) (test #'b80-fine) (test b80-hello))
+      (prn (try (test #'b80-busted) :passed (catch AssertionError e :assert-failed)))
+      (prn (b80-first "Ann") (b80-hello "a" "b"))
+      (prn @#'b80-x (#'b80-hello "c" "d") (map #'b80-first ["x"]) (map test [#'b80-x]))
+    expected: |
+      #'b80.vars/b80-x #'b80.vars/b80-hello
+      "#'b80.vars/b80-x" true
+      (:arglists :column :doc :file :line :name :ns)
+      "Writes hello message to *out*. Calls you by username.\n  Knows if you have been here before." ([a b]) b80-hello
+      (:arglists :column :file :line :name :ns :test)
+      nil (:column :file :line :name :ns)
+      :no-test :ok :no-test
+      :assert-failed
+      "Hello, Ann" "ab"
+      1 "cd" ("Hello, x") (:no-test)

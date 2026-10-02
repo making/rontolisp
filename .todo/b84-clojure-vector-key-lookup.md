@@ -20,6 +20,12 @@ Measured 2026-10-02, oracle `clj` 1.12.6.1673 vs exec jar at `ec836db36`:
   lookup identity-based. `conj` onto a set duplicates vector members the
   same way.
 
+- Map members too (measured 2026-10-02 after b80): `(= #{{:a 1}} #{{:a 1}})`
+  and `(= #{[1]} #{[1]})` answer `false` (oracle `true`), so set `=` over
+  collection members belongs here as well. Witness:
+  `examples.test.introduction/test-accounts`
+  (`(= #{{:id "CLSS" :balance 0}} @accounts)`), its only remaining failure.
+
 ## Plan
 
 - Miss-path structural scan: a `%clojure-gethash`-style helper in

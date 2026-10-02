@@ -24,6 +24,8 @@ categories:
       - { slug: with-meta, name: "with-meta" }
       - { slug: meta, name: "meta" }
       - { slug: vary-meta, name: "vary-meta" }
+      - { slug: var, name: "var" }
+      - { slug: core-test, name: "test" }
       - { slug: comment, name: "comment" }
       - { slug: declare, name: "declare" }
       - { slug: when-let, name: "when-let" }

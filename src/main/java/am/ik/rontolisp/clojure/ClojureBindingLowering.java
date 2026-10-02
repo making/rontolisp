@@ -38,34 +38,39 @@ final class ClojureBindingLowering {
 	private ClojureBindingLowering() {
 	}
 
-	static List<LispVal> defForms(ClojureLowering ctx, List<LispVal> items) {
-		return defForms(ctx, items, null);
-	}
-
 	/**
 	 * A {@code def} lowered for a namespace init: the setq statement, plus -- for a
 	 * {@code ^:dynamic} var, into {@code hoisted} -- the declaim and the binding-depth
 	 * counter, which stay top-level at the head where {@code SpecialVarCollector} and
 	 * {@code GlobalVarCollector} read them (a {@code defparameter} nested in the init
-	 * would proclaim nothing and hide the counter's store).
+	 * would proclaim nothing and hide the counter's store). A var whose metadata
+	 * evaluates something (a {@code :test} fn) adds the store of that metadata behind the
+	 * definition.
 	 * @param ctx the lowering
+	 * @param form the def datum (its position for the var's metadata)
 	 * @param items the def datum's items
 	 * @param hoisted where a dynamic var's top-level forms go, or null for the ordinary
 	 * top-level shape
 	 * @return the forms (the init statement, or the top-level shapes)
 	 */
-	static List<LispVal> defForms(ClojureLowering ctx, List<LispVal> items, @Nullable List<LispVal> hoisted) {
+	static List<LispVal> defForms(ClojureLowering ctx, LispVal form, List<LispVal> items,
+			@Nullable List<LispVal> hoisted) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
 		LispVal nameDatum = items.get(1);
 		String name = ClojureLowerUtil.plainName(nameDatum, "def");
 		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
 		int at = 2;
-		if (items.size() > at + 1 && items.get(at) instanceof LispString) {
-			at++; // the docstring (only with a value behind it: a lone string is the
-					// value)
+		LispString doc = null;
+		if (items.size() > at + 1 && items.get(at) instanceof LispString string) {
+			doc = string; // the docstring (only with a value behind it: a lone string is
+							// the value)
+			at++;
 		}
+		LispVal attrMap = null;
 		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
-			at++; // the attr map (only with a value behind it: a lone map is the value)
+			attrMap = items.get(at); // the attr map (only with a value behind it: a lone
+										// map is the value)
+			at++;
 		}
 		ClojureLowerUtil.isTrue(items.size() == at || items.size() == at + 1, "def takes a name and an optional value");
 		// The value lowers against the OLD binding, so (def p (memoize p)) after a
@@ -85,6 +90,8 @@ final class ClojureBindingLowering {
 		else {
 			ctx.globalDirectFuns.remove(key);
 		}
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, nameDatum, null, doc, attrMap, false,
+				false);
 		if (dynamic) {
 			// a dynamic var is a special: defparameter always sets it (like def)
 			// and proclaims it, so binding rebinds it with dynamic extent; the
@@ -98,18 +105,37 @@ final class ClojureBindingLowering {
 						ClojureLowering.boundDepthSym(key)));
 				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
 						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
-				return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value));
+				return withMetaStore(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value),
+						metaStore);
 			}
-			return List.of(
+			List<LispVal> forms = new ArrayList<>(List.of(
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key), value),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
-							new LispInteger(0)));
+							new LispInteger(0))));
+			forms.addAll(0, metaStore);
+			return forms;
 		}
-		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value));
+		return withMetaStore(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key), value),
+				metaStore);
 	}
 
-	static LispVal def(ClojureLowering ctx, List<LispVal> items) {
-		List<LispVal> forms = defForms(ctx, items);
+	/**
+	 * The definition behind the store of its var's evaluated metadata, if any: the
+	 * definition stays last, so its value is still what the form answers (a session's
+	 * echo).
+	 */
+	private static List<LispVal> withMetaStore(LispVal definition, List<LispVal> metaStore) {
+		if (metaStore.isEmpty()) {
+			return List.of(definition);
+		}
+		List<LispVal> forms = new ArrayList<>(metaStore);
+		forms.add(definition);
+		return forms;
+	}
+
+	static LispVal def(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		List<LispVal> forms = defForms(ctx, form, items, null);
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}
@@ -218,13 +244,18 @@ final class ClojureBindingLowering {
 		return labelsWithHead(fresh, List.of(entry), head);
 	}
 
-	static List<LispVal> defuns(ClojureLowering ctx, List<LispVal> items) {
+	static List<LispVal> defuns(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		int at = 2;
-		if (items.size() > at && items.get(at) instanceof LispString) {
-			at++; // the docstring
+		LispString doc = null;
+		if (items.size() > at && items.get(at) instanceof LispString string) {
+			doc = string; // the docstring
+			at++;
 		}
+		LispVal attrMap = null;
 		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
-			at++; // the attr map (only with a value behind it: a lone map is the value)
+			attrMap = items.get(at); // the attr map (only with a value behind it: a lone
+										// map is the value)
+			at++;
 		}
 		ClojureLowerUtil.isTrue(items.size() > at + 1 || items.size() == at + 1 && items.get(at) instanceof LispCons,
 				"defn needs a parameter vector and a body");
@@ -252,6 +283,11 @@ final class ClojureBindingLowering {
 		fnParts.add(new LispSymbol("fn"));
 		fnParts.addAll(items.subList(at, items.size()));
 		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic, ClojureLowerUtil.list(fnParts));
+		// recorded ahead of the body, so a #' of the name inside it sees this
+		// definition's metadata
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1),
+				arglistsOf(items.subList(at, items.size())), doc, attrMap,
+				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"), false);
 		List<LispVal> forms;
 		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
 			forms = multiDefun(ctx, name, items.subList(at, items.size()), callName);
@@ -291,7 +327,23 @@ final class ClojureBindingLowering {
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
 					new LispInteger(0)));
 		}
+		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
 		return forms;
+	}
+
+	/** The parameter vectors of a {@code defn}'s single arity or of each clause. */
+	static List<LispVal> arglistsOf(List<LispVal> body) {
+		if (!(body.get(0) instanceof LispCons) || isVectorDatum(ClojureLowerUtil.stripMeta(body.get(0)))) {
+			return List.of(body.get(0));
+		}
+		List<LispVal> vectors = new ArrayList<>();
+		for (LispVal clause : body) {
+			List<LispVal> parts = ClojureLowerUtil.items(clause);
+			if (parts != null && !parts.isEmpty()) {
+				vectors.add(parts.get(0));
+			}
+		}
+		return vectors;
 	}
 
 	/** Whether the datum is a `[...]` vector (its marker head), not an arity clause. */

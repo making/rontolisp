@@ -94,7 +94,7 @@ any syntax-quote is an error, as is a splice outside a sequence. `macroexpand-1`
 expands once and `macroexpand` to the fixpoint, each answering the expansion as the
 mangled data itself, so `=` against a quoted form holds and printing spells the
 oracle's lowercase; `gensym` answers a fresh uninterned symbol per
-evaluation. `var`/`#'` stays refused: bodies quote symbols instead.
+evaluation.
 
 ```clojure
 (defmacro sem-unless [c t] (list 'if c nil t))
@@ -172,6 +172,14 @@ it, and reader metadata on a vector, map or set literal attaches like `with-meta
 starts without metadata, where the oracle keeps it, and a symbol carries none (its
 `with-meta` answers the symbol).
 
+`#'x` (`(var x)`) answers the var of a program definition, one object per name that
+prints `#'ns/x`, derefs and invokes through its root. Its metadata is what the newest
+definition above the `#'` recorded: a `def`/`defn`/`defn-`/`defmacro` gives
+`:arglists`, the docstring as `:doc`, the name's metadata and attr map (evaluated
+where the definition stands, so `^{:test (fn [] ...)}` works), `:line`/`:column`/`:file`,
+`:name` and `:ns`; [test](reference/core-test.md) calls its `:test` fn. A local is no
+var, and a `clojure.core` var is refused by name.
+
 A `ref` is the atom cell with a transaction discipline: `dosync` opens the
 extent (single-threaded, so no retries and no isolation), `alter`/`commute`
 apply through the `:validator` (a failed one signals and writes nothing),
@@ -248,7 +256,6 @@ Each refusal names the missing design, never `unknown name`:
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
 | `set!` of a dynamic or core var (`*warn-on-reflection*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no thread-bound var to assign; the `java:` surface has no field write |
-| `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` outside a proxy method | `proxy-super outside a proxy method` | a `proxy-super` calls the superclass implementation on the method's `this` |
 | `proxy` with a second class, a duplicate method, a final superclass | `... is a class, not an interface`, `proxy defines method ... twice`, `proxy cannot extend final class ...` | one superclass only, one body per method name, no final superclass |

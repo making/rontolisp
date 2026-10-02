@@ -1406,9 +1406,7 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void varStaysRefusedWhileReaderMetadataDrops() {
-		assertThatThrownBy(() -> Clojure.read("#'x", null)).isInstanceOf(LispReadException.class)
-			.hasMessageContaining("var is not supported yet");
+	void readerMetadataDropsOnNamesAndAttachesToLiterals() {
 		// reader metadata on a name or a local parses and drops: the object lowers as
 		// itself; on a collection literal it attaches, like the oracle's reader
 		assertThat(lowered("(def v 1) ^:k v")).contains("|c%v|").doesNotContain("META");
@@ -1421,6 +1419,43 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (1) passed to: clojure.core/with-meta");
 		assertThatThrownBy(() -> Clojure.read("^1 [1]", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Metadata must be Symbol,Keyword,String or Map");
+	}
+
+	@Test
+	void varQuoteAnswersTheInternedVarWithItsDefinitionsMetadata() {
+		// #'x is the interned var: its name, a closure reading the root, and the
+		// metadata the newest definition recorded (all constants here, so the
+		// site lowers the map itself)
+		String hello = lowered("(defn hello \"Doc.\" [username] username) #'hello");
+		assertThat(hello).contains("(RONTOLISP::%CLOJURE-VAR \"user/hello\" (LAMBDA NIL #'|c%hello|)")
+			.contains("\"Doc.\"")
+			.contains("\"arglists\"")
+			.doesNotContain("|c%hello%meta|");
+		assertThat(lowered("(def x 1) (var x)")).contains("(RONTOLISP::%CLOJURE-VAR \"user/x\" (LAMBDA NIL |c%x|)");
+		// a redefinition's #' reads the newest definition's root and docstring
+		String redefined = lowered("(defn h \"one\" [] 1) (defn h \"two\" [a] 2) #'h");
+		assertThat(redefined).contains("(LAMBDA NIL #'|c%h%def2|)").contains("\"two\"");
+		assertThat(redefined.substring(redefined.indexOf("%CLOJURE-VAR"))).doesNotContain("\"one\"");
+		// metadata that evaluates (a :test fn) is stored beside the var where the
+		// definition stands, ahead of it, and the site reads the store
+		String busted = lowered("(defn ^{:test (fn [] (assert (nil? (busted))))} busted [] \"busted\") #'busted");
+		assertThat(busted).contains("(SETQ |c%busted%meta|")
+			.contains("(RONTOLISP::%CLOJURE-VAR \"user/busted\" (LAMBDA NIL #'|c%busted|) |c%busted%meta|)");
+		assertThat(busted.indexOf("(SETQ |c%busted%meta|")).isLessThan(busted.indexOf("(DEFUN |c%busted|"));
+		// a var is invoked through its root; test reads :test from its metadata
+		assertThat(lowered("(defn f [x] x) (#'f 1)")).contains("(RONTOLISP::%CLOJURE-CALL (RONTOLISP::%CLOJURE-VAR");
+		assertThat(lowered("(def x 1) (test #'x)")).contains("(RONTOLISP::%CLOJURE-VAR-TEST (RONTOLISP::%CLOJURE-VAR");
+		assertThat(lowered("(map test [])")).contains("#'RONTOLISP::%CLOJURE-VAR-TEST-V");
+		// a local is no var (the oracle resolves past it): under a shadowing local
+		// the root is read through a top-level reader the local cannot shadow
+		assertThat(lowered("(def x 1) (let [x 2] #'x)")).contains("(DEFUN |c%x%root| NIL |c%x|)")
+			.contains("(LAMBDA NIL (|c%x%root|))");
+		assertThatThrownBy(() -> Clojure.read("(let [q 1] #'q)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve var: q in this context");
+		assertThatThrownBy(() -> Clojure.read("#'println", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("var of a clojure.core var is not supported yet: #'clojure.core/println");
+		assertThatThrownBy(() -> Clojure.read("(test)", null)).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (0) passed to: clojure.core/test");
 	}
 
 	@Test

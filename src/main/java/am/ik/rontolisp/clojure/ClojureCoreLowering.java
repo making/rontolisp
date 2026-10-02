@@ -96,6 +96,9 @@ final class ClojureCoreLowering {
 			case "meta":
 				arity(name, n, 1, 1);
 				return worker(name, ctx.lower(items.get(1)));
+			case "test":
+				arity(name, n, 1, 1);
+				return ClojureVarLowering.testOf(ctx.lower(items.get(1)));
 			case "vary-meta":
 				arity(name, n, 2, -1);
 				return worker(name, ctx.lower(items.get(1)), ClojureBindingLowering.fnValue(ctx, items.get(2)),
@@ -118,6 +121,7 @@ final class ClojureCoreLowering {
 					"some-fn", "update-keys", "update-vals", "reduce-kv", "with-meta", "meta", "vary-meta" ->
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), runtime(name + "-v"));
 			case "pmap" -> ClojureSeqLowering.mapValue(ctx);
+			case "test" -> ClojureVarLowering.testValue();
 			default -> null;
 		};
 	}
@@ -157,7 +161,7 @@ final class ClojureCoreLowering {
 	}
 
 	/** One reader metadata datum as map entries (key and value datums). */
-	private static List<LispVal> metaEntries(LispVal meta) {
+	static List<LispVal> metaEntries(LispVal meta) {
 		if (meta instanceof LispSymbol s && s.name().startsWith(":")) {
 			return List.of(s, new LispSymbol("true"));
 		}

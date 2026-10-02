@@ -198,6 +198,19 @@ public final class ClojureLowering {
 	final Map<String, Integer> defnCounts = new HashMap<>();
 
 	/**
+	 * The metadata each var's newest definition recorded, by var key: what a {@code #'}
+	 * site lowered after it answers (see {@link ClojureVarLowering}). A session keeps it
+	 * across buffers, like the globals.
+	 */
+	final Map<String, ClojureVarLowering.VarMeta> varMetas = new HashMap<>();
+
+	/**
+	 * The var keys whose top-level root reader a {@code #'} site under a shadowing local
+	 * already hoisted (see {@link ClojureVarLowering#varOf}).
+	 */
+	final Set<String> varRootReaders = new HashSet<>();
+
+	/**
 	 * Every namespace the lowering has seen, by name; {@link #currentNs} names the one
 	 * the forms lower in.
 	 */
@@ -1404,7 +1417,11 @@ public final class ClojureLowering {
 						this.hoisted = outer;
 					}
 					if (isDefinitionalDatum(datum)) {
-						loaded.addAll(own);
+						// a definition's evaluated var metadata runs with the
+						// namespace's statements, where the definition stands
+						for (LispVal one : own) {
+							(ClojureVarLowering.isMetaStore(one) ? statements : loaded).add(one);
+						}
 					}
 					else {
 						statements.addAll(own);
@@ -1692,7 +1709,7 @@ public final class ClojureLowering {
 		try {
 			List<LispVal> items = ClojureLowerUtil.items(datum);
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
-				return ClojureBindingLowering.defForms(this, items, hoisted);
+				return ClojureBindingLowering.defForms(this, datum, items, hoisted);
 			}
 			if (items == null) {
 				throw new LispReadException("defonce takes a name and an optional value");
@@ -1716,13 +1733,13 @@ public final class ClojureLowering {
 			List<LispVal> items = ClojureLowerUtil.items(form);
 			if (items != null && !items.isEmpty() && (ClojureLowerUtil.isSymbolNamed(items.get(0), "defn")
 					|| ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"))) {
-				return ClojureBindingLowering.defuns(this, items);
+				return ClojureBindingLowering.defuns(this, form, items);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "def")) {
 				// a ^:dynamic def contributes its defparameter plus its
 				// binding-depth counter as two top-level forms, so both keep
 				// their head for SpecialVarCollector
-				return ClojureBindingLowering.defForms(this, items);
+				return ClojureBindingLowering.defForms(this, form, items, null);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmulti")) {
 				return ClojureDispatchLowering.defmultiForms(this, items);
@@ -1744,7 +1761,7 @@ public final class ClojureLowering {
 				return List.of(ClojureProtocolLowering.extendForm(this, items));
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defmacro")) {
-				return ClojureMacroLowering.defmacroForms(this, items);
+				return ClojureMacroLowering.defmacroForms(this, form, items);
 			}
 			if (items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "defonce")) {
 				return List.of(ClojureStateLowering.defonceForm(this, items));
@@ -1846,13 +1863,14 @@ public final class ClojureLowering {
 	 * its defparameters) splices behind a progn, like ever; several arities cannot splice
 	 * into expression position.
 	 */
-	LispVal defnInBody(List<LispVal> items) {
-		List<LispVal> forms = ClojureBindingLowering.defuns(this, items);
+	LispVal defnInBody(LispVal form, List<LispVal> items) {
+		List<LispVal> forms = ClojureBindingLowering.defuns(this, form, items);
 		if (forms.size() == 1) {
 			return forms.get(0);
 		}
-		boolean single = forms.stream().filter(ClojureLowering::isLoweredDefun).count() == 1
-				&& forms.stream().allMatch(f -> ClojureLowering.isLoweredDefun(f) || isLoweredDefparameter(f));
+		boolean single = forms.stream().filter(ClojureLowering::isLoweredDefun).count() == 1 && forms.stream()
+			.allMatch(f -> ClojureLowering.isLoweredDefun(f) || isLoweredDefparameter(f)
+					|| ClojureVarLowering.isMetaStore(f));
 		ClojureLowerUtil.isTrue(single, "a multi-arity defn is only allowed at the top level");
 		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
 	}
@@ -1884,7 +1902,7 @@ public final class ClojureLowering {
 			return quote(items.get(1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "def")) {
-			return ClojureBindingLowering.def(this, items);
+			return ClojureBindingLowering.def(this, form, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defonce")) {
 			return ClojureStateLowering.defonceForm(this, items);
@@ -1899,16 +1917,16 @@ public final class ClojureLowering {
 			return ClojureStateLowering.structMapOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defn")) {
-			return defnInBody(items);
+			return defnInBody(form, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defn-")) {
 			// private by convention only: metadata never affects dispatch
-			return defnInBody(items);
+			return defnInBody(form, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "defmacro")) {
 			// in a body: a single progn, like ever; the expander registers when
 			// reached, the table entry runs with the body
-			List<LispVal> forms = ClojureMacroLowering.defmacroForms(this, items);
+			List<LispVal> forms = ClojureMacroLowering.defmacroForms(this, form, items);
 			ClojureLowerUtil.isTrue(forms.size() == 1, "a defmacro lowers to one form");
 			return forms.get(0);
 		}
@@ -2163,7 +2181,7 @@ public final class ClojureLowering {
 					+ " outside syntax-quote: `~` and `~@` only unquote inside a syntax-quote");
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "var")) {
-			throw new LispReadException("var is not supported yet: #'x needs a design");
+			return ClojureVarLowering.varOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, ClojureLowerUtil.READER_META)) {
 			return ClojureCoreLowering.readerMetaOf(this, form);
@@ -2171,6 +2189,9 @@ public final class ClojureLowering {
 		if (head instanceof LispCons) {
 			if (ClojureSeqLowering.isCollectionHead(head)) {
 				return ClojureSeqLowering.collectionCall(this, items);
+			}
+			if (ClojureVarLowering.isVarForm(head)) {
+				return ClojureVarLowering.callOf(this, items);
 			}
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("funcall"), lowers(items, 0)); // ((fn
 																								// ...)

@@ -255,6 +255,9 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ((rontolisp::%clojure-var-p x)
+         (write-string "#'" stream)
+         (write-string (car (cdr x)) stream))
         ((and labels (rontolisp::%clojure-node-p x)
               (rontolisp::%clojure-write-label x labels stream)))
         ((rontolisp::%clojure-record-p x)
@@ -490,6 +493,8 @@
         ((rontolisp::%clojure-keyword-p f)
          (rontolisp::%clojure-call-keyword f (car args)
           (if (cdr args) (car (cdr args)) nil)))
+        ((rontolisp::%clojure-var-p f)
+         (rontolisp::%clojure-call (rontolisp::%clojure-var-get f) args))
         (t (error "not a function"))))
 
 (defun rontolisp::%clojure-call-keyword (k coll dflt)
@@ -2363,7 +2368,7 @@
               (not (rontolisp::%clojure-atom-p x))
               (not
                (member (car x)
-                       '(:C%TYPE :C%PATTERN :C%MATCHER :C%REDUCED :C%NIL))))
+                '(:C%TYPE :C%PATTERN :C%MATCHER :C%REDUCED :C%NIL :C%VAR))))
          (rontolisp::%clojure-put-meta (copy-list x) m))
         ((and x (symbolp x) (not (eq x t))
               (not (eq x rontolisp::%clojure-false)))
@@ -2408,6 +2413,60 @@
                         (if (hash-table-p m) m (car (cdr (cdr (cdr m))))))))
           (if (rontolisp::%clojure-truthy f) f nil))
         nil)))
+
+;;;; Vars: #'x as a value (b80).
+;;
+;; A var is (:C%VAR "ns/name" getter), interned per name in
+;; rontolisp::%clojure-var-table (made on first use), so #'x answers the same
+;; object at every site, like the oracle's one Var per name. GETTER is a
+;; closure over the lowered value of the name, so deref and an invocation read
+;; the root through it; its metadata lives in %clojure-meta-table like any other
+;; value's. Each site hands both in: the lowering records a definition's
+;; metadata at lower time (docstring, arglists, position, name metadata), and a
+;; site lowered after a redefinition sees the newest one.
+
+(defvar rontolisp::%clojure-var-table
+  nil
+  "The interned vars: an equal table from \"ns/name\" to its var, NIL until the
+   first #' runs.")
+
+(defun rontolisp::%clojure-var-p (x)
+  "Whether X is the (:C%VAR name getter) var #'x lowers to."
+  (and (consp x) (eq (car x) :C%VAR)))
+
+(defun rontolisp::%clojure-var (name getter meta)
+  "The var NAME (\"ns/name\"), interned on first use, reading its root through
+   GETTER and carrying META."
+  (unless rontolisp::%clojure-var-table
+    (setq rontolisp::%clojure-var-table (make-hash-table :test 'equal)))
+  (let ((v (gethash name rontolisp::%clojure-var-table)))
+    (if v
+        (rplaca (cdr (cdr v)) getter)
+        (progn
+          (setq v (list :C%VAR name getter))
+          (setf (gethash name rontolisp::%clojure-var-table) v)))
+    (rontolisp::%clojure-put-meta v meta)))
+
+(defun rontolisp::%clojure-var-get (v)
+  "The root of the var V."
+  (funcall (car (cdr (cdr v)))))
+
+(defun rontolisp::%clojure-var-test (v)
+  "clojure.core/test: call the fn at :test in V's metadata, answering :ok, or
+   :no-test when there is none; whatever the fn throws passes through."
+  (let ((f
+         (rontolisp::%clojure-call-keyword (list :C%KEYWORD "test")
+                                           (rontolisp::%clojure-meta v) nil)))
+    (if (rontolisp::%clojure-truthy f)
+        (progn
+          (rontolisp::%clojure-call f nil)
+          (list :C%KEYWORD "ok"))
+        (list :C%KEYWORD "no-test"))))
+
+(defun rontolisp::%clojure-var-test-v (&rest args)
+  "test as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "test")
+  (rontolisp::%clojure-var-test (car args)))
 
 ;;;; Reduction and transducers (b60).
 ;;
@@ -2457,10 +2516,10 @@
 
 (defun rontolisp::%clojure-deref-other (x)
   "deref of anything but an atom cell: a reduced value's content (the oracle's
-   Reduced is an IDeref), else the oracle's cast failure."
-  (if (rontolisp::%clojure-reduced-p x)
-      (car (cdr x))
-      (error "deref needs an atom")))
+   Reduced is an IDeref), a var's root, else the oracle's cast failure."
+  (cond ((rontolisp::%clojure-reduced-p x) (car (cdr x)))
+        ((rontolisp::%clojure-var-p x) (rontolisp::%clojure-var-get x))
+        (t (error "deref needs an atom"))))
 
 (defun rontolisp::%clojure-call-1 (f x)
   "F applied to X: a real function directly, anything else through the IFn

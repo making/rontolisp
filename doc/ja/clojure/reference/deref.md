@@ -2,7 +2,7 @@
 
 `(deref ref)`
 
-アトムか volatile、または [`reduced`](reduced.md) の中身を読みます。リーダー形式 `@x` は同じ操作です。関数値として動くため、`map`/`reduce` に裸のまま渡せます。
+アトムか volatile、[`reduced`](reduced.md) の中身、または [var](var.md) のルートを読みます。リーダー形式 `@x` は同じ操作です。関数値として動くため、`map`/`reduce` に裸のまま渡せます。
 
 ```clojure
 (def a (atom 1))

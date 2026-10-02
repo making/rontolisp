@@ -100,7 +100,7 @@ final class ClojureMacroLowering {
 	 * call above the definition names the missing expander instead of an unknown name,
 	 * unless the name is a {@code clojure.core} one, whose core meaning holds there.
 	 */
-	static List<LispVal> defmacroForms(ClojureLowering ctx, List<LispVal> items) {
+	static List<LispVal> defmacroForms(ClojureLowering ctx, LispVal form, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2, "defmacro needs a name, a parameter vector and a body");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmacro");
 		ClojureLowerUtil.isTrue(!SPECIAL_FORMS.contains(name), name + " cannot name a macro: it names a special form");
@@ -109,13 +109,17 @@ final class ClojureMacroLowering {
 		ClojureLowerUtil.isTrue(!name.startsWith(".") && !name.endsWith(".") && name.indexOf('/') < 0,
 				name + " cannot name a macro: it names an interop or qualified form");
 		int at = 2;
-		if (items.size() > at && items.get(at) instanceof LispString) {
-			at++; // the docstring
+		LispString doc = null;
+		if (items.size() > at && items.get(at) instanceof LispString string) {
+			doc = string; // the docstring
+			at++;
 		}
+		LispVal attrMap = null;
 		if (items.size() > at) {
 			List<LispVal> attr = ClojureLowerUtil.items(items.get(at));
 			if (attr != null && !attr.isEmpty() && ClojureLowerUtil.isSymbolNamed(attr.get(0), "%hash-map")) {
-				at++; // the attr map
+				attrMap = items.get(at); // the attr map
+				at++;
 			}
 		}
 		ClojureLowerUtil.isTrue(items.size() > at, "defmacro needs a parameter vector and a body");
@@ -140,6 +144,8 @@ final class ClojureMacroLowering {
 		ctx.macros.put(key, expander);
 		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
 		ctx.usedMacros = true;
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1),
+				ClojureBindingLowering.arglistsOf(items.subList(at, items.size())), doc, attrMap, false, true);
 		LispVal setq = ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table, expander);
 		if (ctx.macroEvaluator != null) {
 			// the macro-time table entry, so a macro body calling macroexpand-1
@@ -151,7 +157,11 @@ final class ClojureMacroLowering {
 				throw ctx.positioned(new LispReadException(exMessage(ex)), items.get(0));
 			}
 		}
-		return List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), setq, ClojureLowering.NIL_CONST));
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(setq);
+		forms.addAll(metaStore);
+		forms.add(ClojureLowering.NIL_CONST);
+		return List.of(ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
 	}
 
 	/**
