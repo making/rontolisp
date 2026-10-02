@@ -110,7 +110,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
 | record literals (`#ns.Name{...}` / `#ns.Name[...]`) | the reader's `(%record ns.Name body)`, lowered to the record built in place over the QUOTED body (b58) | the oracle never evaluates the body: `#user.R{:a (+ 1 2)}` holds the list; missing fields `nil`, extra keys kept, a vector body takes exactly the field count; plain, quoted and syntax-quoted literals lower alike, and a macro answering a record decodes back to one (no constructor call, so it works at macro time); the class must match a defined record's printed class name, a deftype literal is refused by name; read-time refusals mirror the oracle: an undotted `#P{...}` is `No reader function for tag P` (`#inst`/`#uuid` stay `unsupported reader form`), a non-map/vector body `Unreadable constructor form`, a non-keyword or repeated key |
 | `var`/`#'` | refused by name | `var` stays refused everywhere (macro bodies quote symbols instead); the lowering names what is missing instead of `unknown name` |
 | metadata (`^`, legacy `#^`) | the reader's `(with-meta form meta)`, parsed and dropped | `#^` reads exactly like `^` (b58); every name position strips it (`stripMeta`), `ns` included |
-| `set!`, `gen-class`/`gen-interface`, `var` / `#'/` and `^` metadata (`with-meta`) | refused by name | each names the missing design (`set!` needs a field-write primitive and a type to mutate -- `defrecord`/`deftype` stay refused with protocols; `var`/metadata need their designs) |
+| `set!` of a deftype mutable field (b61) | `(setf (aref slots i) v)` inside the type's inline methods | see "deftype mutable fields" below; every other target is the oracle's error or a named refusal |
+| `set!` of a dynamic/core var or a host field, `gen-class`/`gen-interface`, `var` / `#'/` | refused by name | each names the missing design (a var `set!` needs a thread-binding test -- `binding` is a plain special `let*`, so nothing knows whether a var is bound; the `java:` surface has no field write; `var` needs its design) |
 | `memfn` | a lambda over the instance-call path | `(memfn name args...)` is `(lambda (target args...) (. target (name args...)))`, so string receivers take the mapped core operation like any other instance call |
 | `proxy` | `java:proxy` over every interface of the vector, with a name-dispatching lambda | one or more interfaces (b59) and no constructor arguments; each `(method [params...] body...)` (an empty body answers `nil`) becomes an `equal` arm applying a lambda to the Java arguments (which are the params -- no `this`), so a name several interfaces declare runs the one body, as the oracle's proxy does; a method left out raises `no proxy method: <name>` when called (the oracle: `UnsupportedOperationException` with the name); refused by name: a class in the vector (`isHostClass`, a lowering-time `Class.forName`; a name that does not load is left to `java:proxy`'s run-time error), constructor arguments, `toString`/`equals`/`hashCode` (`java:proxy` keeps `Object`'s three, so the body would never run -- the oracle runs it), multi-arity methods; all of the refused shapes are b71; interpreter and JVM only, like all interop |
 | `if`/`when`/`cond`/`do`/`and`/`or` | the core forms | `cond` with an odd trailing arm treats it as the default; `:else` is true; every test treats `nil` and the false object as falsey (an explicit null-or-false check, the test bound once to a temporary) |
@@ -260,7 +261,8 @@ way), `Object` under the `:object` keyword plus the catch-all slot, `::`-keyword
   (spell it with `iterate`). `reduce`, `into` and the transducer consumers walk a lazy input
   whole (b60). Lazy inputs to the other seq verbs consume one level --
   pass a `take`n prefix.
-- protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` and `var`/`#'`
+- protocols (lowered in b13, below), `set!`, `var`/`#'`: `set!` (beyond a deftype
+  mutable field, b61) and `var`/`#'`
   stay absent, each refused by name (backquote lowered in b12, below; regex
   literals lowered in b21, below). Metadata instead parses and drops (b14):
   `^`/`with-meta` lower to the object itself, and only `binding` reads
@@ -944,3 +946,33 @@ for a probe: `(partition-all 0 ...)` prints forever, and `dedupe` over an infini
 seq that repeats forever hangs there (its transducer realizes ahead) where the
 lazy wrapper here answers the `take`n prefix. `add-watch`/`remove-watch` stay
 refused (no corpus case).
+
+## deftype mutable fields (b61, 2026-10-02)
+
+A field marked `^:unsynchronized-mutable` / `^:volatile-mutable` (`nameHasMetaFlag`;
+ClojureScript's `^:mutable` is no marker -- the oracle answers
+`Cannot assign to non-mutable` for it) leaves the public table: the constructor appends
+`(vector m1 m2 ...)` as the deftype's fifth element (absent without mutable fields, so
+other deftypes keep the 4-list), `.-field` misses it (`No such field`, the oracle
+`No matching field found`), `defrecord` refuses the markers with the oracle's wording.
+An inline method binds the slot vector to a temp and wraps its body in
+`(symbol-macrolet ((field (aref slots i))) ...)` (the shared shadow-aware walker,
+`.kb/symbol-macrolet.md`), so every read is live -- a read after another method's
+`set!` on the same instance sees it, like the oracle's field access -- and
+`set!` lowers to `(setf (aref slots i) v)`. The scope kind `MUTABLE_FIELD` plus
+`ClojureLowering.mutableFieldPlaces` say which name is the field; `set!` of any other
+local is `Cannot assign to non-mutable`. Closure boundaries copy: the oracle compiles
+`fn`/`#()`/`letfn`/`reify`/`lazy-seq`/`for`/`dosync`/`proxy` to a class whose
+constructor copies each field it reads, so `capturingMutableFields` rebinds the visible
+fields as plain locals around those forms (only the ones the lowered form mentions), and
+`letfn` re-establishes the symbol macros for its body. A parameter named like a field
+now shadows it (the field `let*` sat inside the lambda list and shadowed it back -- a
+b13 bug for immutable fields too). `^:volatile-mutable` gives no cross-thread ordering.
+
+The todo's premise was overturned on the corpus and the oracle: no shcloj4 program
+declares a mutable field, and `^:mutable` is not Clojure's marker. The corpus `set!` is
+`(set! *warn-on-reflection* true)` (`instant.clj`, a `clojure.main`-bound var), left to
+b75 with the dynamic-var case; a non-dynamic global lowers to the oracle's run-time
+`Can't change/establish root binding of: ... with set`. Pinned by
+`deftype-mutable-fields-assign-through-set` in `clojure-spec.yaml` (every line diffed
+against `clj` 1.12, all four backends), `ClojureLoweringTest.setBang*`.

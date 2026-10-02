@@ -1,7 +1,7 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme read)`、`(scheme char)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme case-lambda)`、`(scheme process-context)` の `exit`、
+`(scheme write)`、`(scheme read)`、`(scheme char)`、`(scheme inexact)`、`(scheme complex)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme case-lambda)`、`(scheme process-context)` の `exit`、
 `(scheme eval)`、`(scheme repl)`、`(scheme file)`
 -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で

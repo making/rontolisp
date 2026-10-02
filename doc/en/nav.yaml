@@ -200,6 +200,8 @@ sections:
             title: "(scheme char)"
           - file: scheme/reference/library-inexact.md
             title: "(scheme inexact)"
+          - file: scheme/reference/library-complex.md
+            title: "(scheme complex)"
           - file: scheme/reference/library-cxr.md
             title: "(scheme cxr)"
           - file: scheme/reference/library-lazy.md

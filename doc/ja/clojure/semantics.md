@@ -210,6 +210,17 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 オラクル同様）。型ヒント（`^String`、`^H`）はパースして捨てられ、ディスパッチに
 影響しません。
 
+`^:unsynchronized-mutable` または `^:volatile-mutable` を付けた deftype フィールドは
+代入できます。その型自身のインラインメソッド内の `(set! field value)` が書き込んで
+値を返し、以降の読み（同じ呼び出し内でも、別メソッドの書き込み後でも）は新しい値を
+見ます。このフィールドはメソッド専用（`.-field` からは見えません）で、メソッド内で
+作ったクロージャ（`fn`・`#()`・`letfn`・`reify`・`lazy-seq`・`for`・`dosync`）は作成時に値を
+コピーし、`defrecord` はこの指定を拒否します。いずれもオラクル同様です。
+ClojureScript の `^:mutable` は指定になりません。ローカル・パラメータ・不変
+フィールドへの `set!` はオラクルと同じ `Cannot assign to non-mutable: ...`、
+非 dynamic なグローバルへの `set!` は実行時に
+`Can't change/establish root binding of: ... with set` をシグナルします。
+
 ## 未対応
 
 各拒否は `unknown name` ではなく欠けた設計を名指します:
@@ -221,7 +232,7 @@ closeable は他の interop 同様 JVM が要ります）。`(. stream write x)`
 | `definterface`、`gen-class`、`gen-interface` | `protocols are not supported yet: ...` | どのバックエンドにもインターフェース生成がない |
 | 複数アリティのプロトコルメソッド | `multi-arity protocol methods are not supported yet: ...` | メソッドごとにパラメータベクターは1つ |
 | `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | メタデータはディスパッチに影響しない |
-| `set!` | 名前で | フィールド書き込みプリミティブがない |
+| dynamic・コアの var（`*warn-on-reflection*`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先のスレッド束縛 var がない。`java:` にフィールド書き込みがない |
 | `var`/`#'` | 名前で | var 機構がない。マクロ本体ではシンボルを quote する |
 | `future`、`delay`/`force`、`promise`/`deliver` | 名前で | どのバックエンドにもスレッドプール・遅延メモセル・ブロッキング待ち合わせがない |
 | `proxy-super` | 名前で | proxy メソッドは Java 引数だけで super ハンドルなし |

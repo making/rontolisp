@@ -101,7 +101,11 @@ final class ClojureLowerUtil {
 		return nameHasFlag(nameDatum, ":private");
 	}
 
-	private static boolean nameHasFlag(LispVal nameDatum, String flag) {
+	/**
+	 * Whether a name datum carries the flag keyword (spelled with its colon) in any of
+	 * its {@code ^...} metadata, under any wrapping.
+	 */
+	static boolean nameHasFlag(LispVal nameDatum, String flag) {
 		List<LispVal> parts = items(nameDatum);
 		while (parts != null && parts.size() == 3 && isSymbolNamed(parts.get(0), "with-meta")) {
 			if (metaHasFlag(parts.get(2), flag)) {
@@ -132,6 +136,21 @@ final class ClojureLowerUtil {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a lowered form mentions the symbol anywhere (quoted data included, which
+	 * only costs an unneeded binding).
+	 */
+	static boolean mentions(LispVal form, String symbolName) {
+		LispVal at = form;
+		while (at instanceof LispCons cons) {
+			if (mentions(cons.car(), symbolName)) {
+				return true;
+			}
+			at = cons.cdr();
+		}
+		return at instanceof LispSymbol s && s.name().equals(symbolName);
 	}
 
 	/** The items of a {@code [...]} vector datum, without its marker. */

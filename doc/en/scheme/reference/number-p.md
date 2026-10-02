@@ -2,7 +2,7 @@
 
 `(number? obj)`
 
-Returns `#t` when `obj` is a number. Every number is real: there are no complex numbers.
+Returns `#t` when `obj` is a number, a complex number included.
 
 ```scheme
 (number? 1/2) ; => #t

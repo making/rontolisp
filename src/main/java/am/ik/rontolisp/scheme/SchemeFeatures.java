@@ -21,11 +21,12 @@ final class SchemeFeatures {
 	/**
 	 * What {@code (features)} answers, in R7RS appendix B's order. Each is true on the
 	 * interpreter, the JVM and both WASM targets: exact rationals and bignums
-	 * ({@code exact-closed}, {@code ratios}), IEEE doubles ({@code ieee-float}), and a
-	 * character per Unicode code point ({@code full-unicode}).
+	 * ({@code exact-closed}, {@code ratios}), exact complex arithmetic
+	 * ({@code exact-complex}), IEEE doubles ({@code ieee-float}), and a character per
+	 * Unicode code point ({@code full-unicode}).
 	 */
-	static final List<String> FEATURES = List.of("r7rs", "exact-closed", "ieee-float", "full-unicode", "ratios",
-			"rontolisp");
+	static final List<String> FEATURES = List.of("r7rs", "exact-closed", "exact-complex", "ieee-float", "full-unicode",
+			"ratios", "rontolisp");
 
 	/** What deciding a requirement needs from the lowering. */
 	interface Host {

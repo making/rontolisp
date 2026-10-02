@@ -212,6 +212,16 @@ table (missing fields signal, like the oracle). Inline method bodies see the
 fields as locals (an explicit parameter shadows its field, like the oracle);
 type hints (`^String`, `^H`) parse and drop, never affecting dispatch.
 
+A deftype field marked `^:unsynchronized-mutable` or `^:volatile-mutable` is
+assignable: `(set! field value)` inside the type's own inline methods writes it and
+answers the value, and a later read (in this call or after another method's write)
+sees the new value. Such a field is private to the methods (`.-field` misses it), a
+closure created in a method (`fn`, `#()`, `letfn`, `reify`, `lazy-seq`, `for`, `dosync`) copies
+it at creation, and `defrecord` refuses the markers, all like the oracle.
+ClojureScript's `^:mutable` is no marker. `set!` of a local, a parameter or an
+immutable field is the oracle's `Cannot assign to non-mutable: ...`; of a non-dynamic
+global it signals `Can't change/establish root binding of: ... with set` at run time.
+
 ## Not yet
 
 Each refusal names the missing design, never `unknown name`:
@@ -223,7 +233,7 @@ Each refusal names the missing design, never `unknown name`:
 | `definterface`, `gen-class`, `gen-interface` | `protocols are not supported yet: ...` | no interface generation on any backend |
 | multi-arity protocol methods | `multi-arity protocol methods are not supported yet: ...` | one parameter vector per method |
 | `:extend-via-metadata` | `extend-via-metadata is not supported yet: ...` | metadata never affects dispatch |
-| `set!` | by name | no field-write primitive |
+| `set!` of a dynamic or core var (`*warn-on-reflection*`), of a host field | `set! of a var is not supported yet: ...`, `set! of a host field is not supported yet: ...` | no thread-bound var to assign; the `java:` surface has no field write |
 | `var`/`#'` | by name | no var system; macro bodies quote symbols instead |
 | `future`, `delay`/`force`, `promise`/`deliver` | by name | no thread pool, lazy memo cells or blocking rendezvous on any backend |
 | `proxy-super` | by name | proxy methods take the Java arguments only, with no super handle |

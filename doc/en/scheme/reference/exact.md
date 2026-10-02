@@ -2,7 +2,7 @@
 
 `(exact z)`
 
-Returns the exact number equal to `z`. A flonum converts to the exact value of its binary representation, so `(exact 2.5)` is `5/2` but `(exact 0.1)` is `3602879701896397/36028797018963968`, not `1/10`. An infinity or NaN signals an error.
+Returns the exact number equal to `z`. A flonum converts to the exact value of its binary representation, so `(exact 2.5)` is `5/2` but `(exact 0.1)` is `3602879701896397/36028797018963968`, not `1/10`. An infinity or NaN signals an error. The exact of a complex is the complex of the exact parts.
 
 ```scheme
 (exact 2.5) ; => 5/2

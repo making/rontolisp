@@ -236,6 +236,7 @@ categories:
       - { slug: defprotocol, name: "defprotocol" }
       - { slug: defrecord, name: "defrecord" }
       - { slug: deftype, name: "deftype" }
+      - { slug: set-bang, name: "set!" }
       - { slug: reify, name: "reify" }
       - { slug: extend-protocol, name: "extend-protocol" }
       - { slug: extend-type, name: "extend-type" }

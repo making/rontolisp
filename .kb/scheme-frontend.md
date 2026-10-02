@@ -370,7 +370,7 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `file`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `char`, `inexact`, `complex`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `file`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
@@ -380,8 +380,8 @@ entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
 alone), `process-context`, `eval` (`eval`, `environment`), `repl`
-(`interaction-environment`) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
-<tag>))` names them, and a file with no import at all merges all twelve. Keywords carry a
+(`interaction-environment`) `complex` (the six `(scheme complex)` exports, below) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+<tag>))` names them, and a file with no import at all merges all thirteen. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
@@ -468,10 +468,10 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
 - **Every procedure is a `%scheme-` helper**, not a template over the Common Lisp
   function: an exact argument with an exact answer stays exact (`(sqrt 16)` 4, `(sqrt 1/4)`
   1/2 through `isqrt` of numerator and denominator; `(exp 0)` 1, `(log 1)` 0, `(sin 0)` 0,
-  `(cos 0)` 1, `(acos 1)` 0, `(atan 0 x>0)` 0), and a real argument Common Lisp would
-  answer with a complex (`(sqrt -4)` is `#C(0.0 2.0)`, also `log` of a negative, `asin`/
-  `acos` outside [-1, 1]) is refused through `%scheme-no-complex`, an `error` whose message
-  names the procedure. `(log 0)` is `-inf.0` on every backend, as in Common Lisp here.
+  `(cos 0)` 1, `(acos 1)` 0, `(atan 0 x>0)` 0), and a real argument whose answer is a
+  complex -- `(sqrt -4)`, `log` of a negative, `asin`/`acos` outside [-1, 1] -- answers the
+  complex (`(scheme complex)` below). `(log 0)` is `-inf.0` on every backend, as in Common
+  Lisp here.
 - A user binding of any of these names wins like `square` (16 SICP samples define `sqrt`,
   100 bind `exp` as a variable in `(eval exp env)`).
 - **The transcendental digits are one set on every backend** -- fdlibm everywhere since
@@ -495,6 +495,57 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
   1,307 -> 1,314 samples exiting 0, no regression; no sample still fails on an inexact
   name.
+
+## `(scheme complex)` (2026-10-02, `.todo/b67`)
+
+**The tower is the runtimes' own: every template is the plain Common Lisp operator, and
+the complex call is what makes each site complex-aware on the compiled backends.** No
+backend learns a Scheme name and no new helper carries logic -- `(make-rectangular r i)`
+is `(complex r i)`, `real-part`/`imag-part` are `realpart`/`imagpart` (a real is its own
+real part, per CLHS), `magnitude` is `abs` behind a `complexp` test whose complex arm
+reconstructs `(complex (realpart x) (imagpart x))` so the wasm site takes the steered
+hypot (the plain abs arm's `_rat_cmp` knows no holder), and `angle` is `phase` (whose site
+is complex-aware unconditionally on both backends). The JVM `+ - * / =` object path and
+`expt`'s escape-steered site already dispatch a holder; `zerop` rides `_cmpb`.
+
+- **Reader/printer**: `#c(r i)` (case-insensitive, like `#u8(`) reads through
+  `LispComplex.valueOf`, whose canonicalization is the constructor's on every backend -- a
+  float part infects both, a RATIONAL zero imaginary part demotes to the real, so `#C(1 0)`
+  IS `1` and `#C(1.0 0.0)` stays complex (R7RS 6.2.4's zero-imaginary rule, the exact zero
+  only, matching `_ccomplex`). The printer needs no arm: the generic fallthrough `princ`
+  renders the holder's `#C(re im)`, and `number->string`'s non-rational arm already answers
+  it. The run-time `(read)` gained the same `#c(` arm over `(complex re im)`, so
+  `write`/`read` round-trip on every backend.
+- **The transcendental arms**: `sqrt` lost its negative-real refusal (the plain `(sqrt x)`
+  site is complex-aware unconditionally: `_csqrt` / the wasm always-complex site), as did
+  `log`/`log-base`/`asin`/`acos` (whose sites the real-domain escape predicate steers on a
+  mere variable). `exp`/`sin`/`cos`/`tan`/`atan` have no escape, so their complex arms
+  reconstruct `(complex (realpart x) (imagpart x))` INLINE -- that call is what turns the
+   site's `hasComplexOperand` true and routes the holder through `_cu1` / the wasm complex
+  arm; the real arm keeps the exact anchors (`(exp 0)` 1, ...). The two-argument `atan`
+  stays real-only (CLHS's `atan2`).
+- **exact/inexact/exact?/inexact? gained complex arms in their templates** (per part;
+  `(exact #C(1.0 2.0))` is `#C(1 2)`, `(inexact ...)` the floats, the predicates per part).
+  `number?`/`real?`/`rational?`/`zero?` needed nothing. The arms' `(complex ...)` calls
+  open the JVM complex gate for every program that spells `exact` or `inexact`, complex
+  or not -- the holder travels behind the `_hasComplex` probe, which keeps such a program
+  runnable standalone (` .kb/jvm-complex.md`, the holder-presence probe).
+- **Deviations (Gauche 0.9.15)**: our spelling is `#C(0.0 2.0)` where Gauche writes
+  `0.0+2.0i`; `(make-rectangular 1 0)` is the exact `1` where Gauche answers `1.0`;
+  `(exact <complex>)` works here and Gauche refuses it; `(exact? ...)` of an exact complex
+  is `#t` here, `#f` there. Exactness otherwise follows Common Lisp (the tower is the
+  SBCL-pinned one, `.todo/751`), so `(sqrt -4)` is inexact where Gauche's `sqrt` of a
+  negative exact is too.
+- **Cost** (2026-10-02, darwin/aarch64, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+  a program spelling none of the touched names is byte-identical before and after --
+  `hello.scm` (`(display "hello, world")`) and a factorial/`expt` program on both backends.
+  A numeric program calling `sqrt` SHRANK, 53,944 -> 48,226 B of class and 37,600 ->
+  23,586 B of wasm (the `%scheme-no-complex` refusal and its `%scheme-error-message`
+  string-stream dropped out of its splice), same output.
+- Pinned by the `complex-numbers-read-print-the-tower-and-the-transcendentals` case of
+  `scheme-spec.yaml` (all four backends), `SchemeReaderTest`'s `#c` cases,
+  `RontoLispCliStreamsTest.aSchemeTranscendentalWithAComplexAnswerAnswersTheComplexOnEveryPath`,
+  and the reference pages (`DocExamplesTest`).
 
 ## `(scheme char)` (2026-09-19, `.todo/879`)
 
@@ -1356,7 +1407,7 @@ is spelled once) and what a feature identifier is tested against. Checked on all
 backends (2026-09-19): `(/ 1 3)` is `1/3`, `(expt 2 100)` exact, a string holds a code
 point above U+FFFF as one character, flonums are doubles. Never an OS, processor or
 backend name: the lowering is shared by the four backends and a compiled program runs
-elsewhere. `exact-complex` is absent (no complex numbers). Gauche 0.9.15 lists ~140
+elsewhere, and `exact-complex` (exact complex arithmetic). Gauche 0.9.15 lists ~140
 features (`gauche`, `srfi-N`, `posix`, ...); a program testing those takes its `else`.
 
 - **Requirements** (`SchemeFeatures.clause`): an identifier, `(and ..)`, `(or ..)`,

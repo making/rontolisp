@@ -68,6 +68,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   spells that literal too, where the oracle answers `user.R@<hash>`. A deftype prints
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
   maps print deterministically.
+- A deftype's `^:volatile-mutable` field is the same plain slot as an
+  `^:unsynchronized-mutable` one (no cross-thread ordering). `.-field` of a mutable
+  field signals `No such field: ...` (the oracle: `No matching field found: ...`).
 - `split`/`replace` answer seqs, never vectors, and plain strings stay literal (only
   pattern values match by pattern); `index-of` answers `-1` when missing, like the
   oracle (where `clojure.string/index-of` answers `nil`).

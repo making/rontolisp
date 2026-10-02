@@ -319,6 +319,15 @@ categories:
       - { slug: finite-p, name: "finite?" }
       - { slug: infinite-p, name: "infinite?" }
       - { slug: nan-p, name: "nan?" }
+  - title: "(scheme complex)"
+    index_page: scheme/reference/library-complex.md
+    functions:
+      - { slug: make-rectangular, name: "make-rectangular" }
+      - { slug: make-polar, name: "make-polar" }
+      - { slug: real-part, name: "real-part" }
+      - { slug: imag-part, name: "imag-part" }
+      - { slug: magnitude, name: "magnitude" }
+      - { slug: angle, name: "angle" }
   - title: "(scheme cxr)"
     index_page: scheme/reference/library-cxr.md
     functions:

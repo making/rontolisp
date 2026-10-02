@@ -2,7 +2,7 @@
 
 `(exact? z)`
 
-Returns `#t` when the number `z` is exact: an integer or a ratio. Flonums are inexact.
+Returns `#t` when the number `z` is exact: an integer or a ratio, or a complex both of whose parts are exact. Flonums are inexact.
 
 ```scheme
 (exact? 1/2) ; => #t

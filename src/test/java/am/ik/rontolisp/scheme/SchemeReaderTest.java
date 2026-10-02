@@ -108,6 +108,25 @@ class SchemeReaderTest {
 	}
 
 	@Test
+	void aComplexLiteralReadsAndPrintsRoundTrip() {
+		assertThat(printed("#C(1 2) #c(1.5 -0.25) #C(+1 2)")).isEqualTo("[#C(1 2), #C(1.5 -0.25), #C(1 2)]");
+	}
+
+	@Test
+	void aComplexLiteralWhoseImaginaryPartIsTheExactZeroIsTheReal() {
+		assertThat(printed("#c(1 0) #C(1.5 0) #C(1 0.0)")).isEqualTo("[1, #C(1.5 0.0), #C(1.0 0.0)]");
+	}
+
+	@Test
+	void aComplexLiteralHoldsOnlyRealParts() {
+		assertThatThrownBy(() -> read("#c(1 2 3)")).hasMessage("test.scm:1:1: unclosed '#c('");
+		assertThatThrownBy(() -> read("#c(a 2)"))
+			.hasMessage("test.scm:1:1: a complex literal's parts must be real numbers: |a| 2");
+		assertThatThrownBy(() -> read("#c(1 2")).hasMessage("test.scm:1:1: unclosed '#c('");
+		assertThatThrownBy(() -> read("#c (1 2)")).hasMessage("test.scm:1:1: unsupported '#' syntax: #c");
+	}
+
+	@Test
 	void aBytevectorHoldsOnlyBytes() {
 		assertThatThrownBy(() -> read("#u8(1 256)"))
 			.hasMessage("test.scm:1:7: a bytevector element must be a byte (0-255): 256");

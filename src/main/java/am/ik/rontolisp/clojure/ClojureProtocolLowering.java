@@ -144,9 +144,16 @@ final class ClojureProtocolLowering {
 		return wrapRecord(typedTagOf(record), typedFieldsOf(record), table, typedClassOf(record));
 	}
 
-	/** A deftype's construction: {@code (LIST :C%TYPE tag fields table)}. */
-	static LispVal wrapDeftype(LispVal tag, LispVal fields, LispVal table) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table);
+	/**
+	 * A deftype's construction: {@code (LIST :C%TYPE tag fields table slots?)}. The table
+	 * holds the immutable fields ({@code .-field} reads it); a type with mutable fields
+	 * appends their slot vector, which only its inline methods read and write.
+	 */
+	static LispVal wrapDeftype(LispVal tag, LispVal fields, LispVal table, @Nullable LispVal slots) {
+		if (slots == null) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), TYPE_TAG, tag, fields, table, slots);
 	}
 
 	/** A type's dispatch tag as data: the keyword of its spelling. */
@@ -243,8 +250,11 @@ final class ClojureProtocolLowering {
 		boolean record = ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord");
 		String name = ClojureLowerUtil.plainName(items.get(1), record ? "defrecord" : "deftype");
 		List<String> fields = recordFields(ctx, items);
+		List<String> mutable = mutableFields(items);
+		ClojureLowerUtil.isTrue(!record || mutable.isEmpty(),
+				":volatile-mutable or :unsynchronized-mutable not supported for record fields");
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
-				ctx.currentNs.replace('-', '_') + "." + name);
+				ctx.currentNs.replace('-', '_') + "." + name, mutable);
 		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
 		ctx.globals.put(ctx.intern("->" + name, false), ClojureLowering.Kind.FUNCTION);
 		if (record) {
@@ -424,6 +434,63 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The declared fields marked {@code ^:unsynchronized-mutable} or
+	 * {@code ^:volatile-mutable}, in declaration order. ClojureScript's {@code ^:mutable}
+	 * is no marker here: the oracle keeps such a field immutable.
+	 */
+	static List<String> mutableFields(List<LispVal> items) {
+		List<String> mutable = new ArrayList<>();
+		for (LispVal datum : ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(items.get(2)), "deftype")) {
+			if (ClojureLowerUtil.nameHasFlag(datum, ":unsynchronized-mutable")
+					|| ClojureLowerUtil.nameHasFlag(datum, ":volatile-mutable")) {
+				mutable.add(((LispSymbol) ClojureLowerUtil.stripMeta(datum)).name());
+			}
+		}
+		return mutable;
+	}
+
+	/**
+	 * {@code (set! target value)}: the one assignable target is a deftype's mutable field
+	 * inside the type's own inline method (not inside a closure created there, which
+	 * holds a copy); the write answers the value, like the oracle. Every other target is
+	 * the oracle's error: a local or an immutable field
+	 * ({@code Cannot assign to non-mutable}), a non-dynamic global (the run-time
+	 * {@code Can't change/establish root binding}, after the value evaluates). A dynamic
+	 * or core var and a host field stay refused by name.
+	 */
+	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
+		LispVal target = ClojureLowerUtil.stripMeta(items.get(1));
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		if (parts != null && !parts.isEmpty() && parts.get(0) instanceof LispSymbol head
+				&& (head.name().equals(".") || head.name().startsWith(".-"))) {
+			throw new LispReadException(
+					"set! of a host field is not supported yet: the java: surface has no field write");
+		}
+		if (!(target instanceof LispSymbol s) || s.name().startsWith(":") || s.name().equals("nil")
+				|| s.name().equals("true") || s.name().equals("false")) {
+			throw new LispReadException("Invalid assignment target");
+		}
+		String name = s.name();
+		ClojureLowering.Kind kind = ctx.localKind(name);
+		if (kind == ClojureLowering.Kind.MUTABLE_FIELD) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"), ctx.mutableFieldPlace(name),
+					ctx.lower(items.get(2)));
+		}
+		if (kind != null) {
+			throw new LispReadException("Cannot assign to non-mutable: " + name);
+		}
+		String key = ctx.resolveVar(name);
+		if (key != null && !ctx.dynamicVars.contains(key)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(items.get(2)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("error"),
+							LispString.literal("Can't change/establish root binding of: " + name + " with set")));
+		}
+		throw new LispReadException("set! of a var is not supported yet: " + name
+				+ " (only a deftype's mutable field is assignable; thread-bound vars need a design)");
+	}
+
+	/**
 	 * The implementation groups behind {@code defrecord}/{@code deftype} (each headed by
 	 * a known protocol name) or {@code extend-type}: every method must belong to its
 	 * protocol, like the oracle's "Can't define method not in interfaces".
@@ -483,10 +550,13 @@ final class ClojureProtocolLowering {
 	 * stored in the protocol's table under the target's tag. Inline
 	 * {@code defrecord}/{@code deftype} bodies see the fields as locals bound from the
 	 * instance table -- an outer scope, so an explicit parameter shadows its field, like
-	 * the oracle.
+	 * the oracle. A mutable field reads and writes the instance's slot vector instead: a
+	 * {@code symbol-macrolet} turns every free reference into {@code (aref slots i)}, so
+	 * a read after another method's {@code set!} sees the new value, like the oracle's
+	 * field access.
 	 */
 	static LispVal methodRow(ClojureLowering ctx, String protocol, LispVal key, ClojureLowering.TypeMethod impl,
-			@Nullable List<String> fields) {
+			@Nullable List<String> fields, List<String> mutable) {
 		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
 			throw new LispReadException("No such protocol: " + protocol);
@@ -497,42 +567,89 @@ final class ClojureProtocolLowering {
 		}
 		else {
 			Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+			LispSymbol slots = ctx.freshTemp();
+			Map<String, LispVal> places = new LinkedHashMap<>();
 			for (String field : fields) {
-				scope.put(field, ClojureLowering.Kind.VARIABLE);
+				if (mutable.contains(field)) {
+					scope.put(field, ClojureLowering.Kind.MUTABLE_FIELD);
+					places.put(field, ClojureLowerUtil.list(ClojureLowerUtil.sym("aref"), slots,
+							new LispInteger(mutable.indexOf(field))));
+				}
+				else {
+					scope.put(field, ClojureLowering.Kind.VARIABLE);
+				}
 			}
-			lambda = ctx.inScope(scope, () -> {
-				String fresh = ctx.freshRecurName();
-				String worker = ClojureBindingLowering.workerName(fresh);
-				ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(
-						ClojureBindingLowering.isVariadicParams(impl.params()) ? worker : fresh, true);
-				ClojureLowering.Clause clause = ClojureBindingLowering.clause(ctx, impl.params(), impl.body(), target);
-				LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(clause.params()), clause.wrapped());
-				if (fields.isEmpty()) {
-					if (target.used() && clause.variadic()) {
-						return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, clause.wrapped());
-					}
-					return target.used() ? ClojureLowering.labelsSelfCall(fresh, inner) : inner;
-				}
-				LispVal self = clause.params().isEmpty() ? ClojureLowering.NIL_CONST : clause.params().get(0);
-				List<LispVal> binds = new ArrayList<>();
-				for (String field : fields) {
-					binds.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(field),
-							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-									ClojureCollectionLowering.keywordForm(field), typedTableOf(self),
-									ClojureLowering.NIL_CONST)));
-				}
-				LispVal fieldBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(binds),
-						clause.wrapped());
-				LispVal withFields = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
-						ClojureLowerUtil.list(clause.params()), fieldBody);
-				if (target.used() && clause.variadic()) {
-					return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, fieldBody);
-				}
-				return target.used() ? ClojureLowering.labelsSelfCall(fresh, withFields) : withFields;
-			});
+			Map<String, LispVal> outerPlaces = new LinkedHashMap<>(ctx.mutableFieldPlaces);
+			ctx.mutableFieldPlaces.putAll(places);
+			try {
+				lambda = ctx.inScope(scope, () -> fieldMethodLambda(ctx, impl, fields, slots, places));
+			}
+			finally {
+				ctx.mutableFieldPlaces.clear();
+				ctx.mutableFieldPlaces.putAll(outerPlaces);
+			}
 		}
 		return methodStoreForm(ctx, def.methodsVar(), key, impl.method(), lambda);
+	}
+
+	/**
+	 * One inline method's lambda with the fields in scope: the immutable ones bound from
+	 * the instance table, the mutable ones (in {@code places}) through the slot vector.
+	 */
+	static LispVal fieldMethodLambda(ClojureLowering ctx, ClojureLowering.TypeMethod impl, List<String> fields,
+			LispSymbol slots, Map<String, LispVal> places) {
+		String fresh = ctx.freshRecurName();
+		String worker = ClojureBindingLowering.workerName(fresh);
+		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(
+				ClojureBindingLowering.isVariadicParams(impl.params()) ? worker : fresh, true);
+		ClojureLowering.Clause clause = ClojureBindingLowering.clause(ctx, impl.params(), impl.body(), target);
+		LispVal inner = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
+				clause.wrapped());
+		if (fields.isEmpty()) {
+			if (target.used() && clause.variadic()) {
+				return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, clause.wrapped());
+			}
+			return target.used() ? ClojureLowering.labelsSelfCall(fresh, inner) : inner;
+		}
+		LispVal self = clause.params().isEmpty() ? ClojureLowering.NIL_CONST : clause.params().get(0);
+		// a field a parameter names stays the parameter: the lambda list binds it
+		// outside the field bindings, so binding the field would shadow it back
+		Set<String> paramNames = new HashSet<>();
+		for (LispVal param : clause.params()) {
+			paramNames.add(((LispSymbol) param).name());
+		}
+		List<LispVal> binds = new ArrayList<>();
+		for (String field : fields) {
+			if (paramNames.contains(ClojureLowerUtil.idSym(field).name())) {
+				continue;
+			}
+			if (!places.containsKey(field)) {
+				binds.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(field),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
+								ClojureCollectionLowering.keywordForm(field), typedTableOf(self),
+								ClojureLowering.NIL_CONST)));
+			}
+		}
+		LispVal body = clause.wrapped();
+		if (!places.isEmpty()) {
+			binds.add(ClojureLowerUtil.list(slots,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("nth"), new LispInteger(4), self)));
+			List<LispVal> macros = new ArrayList<>();
+			for (Map.Entry<String, LispVal> place : places.entrySet()) {
+				if (paramNames.contains(ClojureLowerUtil.idSym(place.getKey()).name())) {
+					continue;
+				}
+				macros.add(ClojureLowerUtil.list(ClojureLowerUtil.idSym(place.getKey()), place.getValue()));
+			}
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(macros), body);
+		}
+		LispVal fieldBody = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(binds), body);
+		LispVal withFields = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(clause.params()), fieldBody);
+		if (target.used() && clause.variadic()) {
+			return ClojureBindingLowering.splitMethodLambda(ctx, fresh, worker, clause, fieldBody);
+		}
+		return target.used() ? ClojureLowering.labelsSelfCall(fresh, withFields) : withFields;
 	}
 
 	/**
@@ -559,7 +676,7 @@ final class ClojureProtocolLowering {
 		}
 		for (ClojureLowering.ImplGroup group : groups) {
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				forms.add(methodRow(ctx, group.protocol(), typeTagForm(name), impl, def.fields()));
+				forms.add(methodRow(ctx, group.protocol(), typeTagForm(name), impl, def.fields(), def.mutableFields()));
 			}
 		}
 		ctx.usedProtocols = true;
@@ -575,8 +692,13 @@ final class ClojureProtocolLowering {
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> pairs = new ArrayList<>();
 		List<LispVal> keys = new ArrayList<>();
+		List<LispVal> slots = new ArrayList<>();
 		for (String field : def.fields()) {
 			params.add(ClojureLowerUtil.idSym(field));
+			if (def.mutableFields().contains(field)) {
+				slots.add(ClojureLowerUtil.idSym(field));
+				continue;
+			}
 			LispVal key = ClojureCollectionLowering.keywordForm(field);
 			keys.add(key);
 			pairs.add(key);
@@ -587,7 +709,8 @@ final class ClojureProtocolLowering {
 		LispVal value = def.record()
 				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()))
-				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table);
+				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+						slots.isEmpty() ? null : ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), slots));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
 				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "->" + name)),
 				ClojureLowerUtil.list(params), value);

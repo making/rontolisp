@@ -42,8 +42,9 @@
   one object, true in a test.
 - `exit` runs the `after` thunks of the `dynamic-wind`s it is inside, then ends the
   process with its status; only `emergency-exit` ends the process where it stands.
-- There are no complex numbers: `(sqrt -4)`, `(log -1)` and `(asin 2)` end the program
-  with an error naming the procedure.
+- A complex number prints `#C(real imag)` and reads back the same way, where Gauche
+  writes `1.0+2.0i`. A complex literal or `(make-rectangular r 0)` whose imaginary part
+  is the exact zero is the real itself, where Gauche answers an inexact real.
 - Error messages spell Common Lisp names (`CAR`).
 - `utf8->string` decodes a byte that begins no valid UTF-8 sequence to the character
   with that byte's code instead of signalling an error.

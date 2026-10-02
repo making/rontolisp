@@ -254,4 +254,4 @@ The procedures of `(scheme base)`. Its syntactic keywords are on [Syntax](syntax
 
 | Name | Example | Result |
 |---|---|---|
-| `features` | `(features)` | `(r7rs exact-closed ieee-float full-unicode ratios rontolisp)` |
+| `features` | `(features)` | `(r7rs exact-closed exact-complex ieee-float full-unicode ratios rontolisp)` |
