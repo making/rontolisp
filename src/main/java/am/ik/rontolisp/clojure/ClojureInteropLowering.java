@@ -50,6 +50,14 @@ final class ClojureInteropLowering {
 	static final LispSymbol JAVA_SUBCLASS = new LispSymbol("JAVA:SUBCLASS");
 
 	/**
+	 * The one host class the lowering builds itself: a zero-argument
+	 * {@code java.io.StringWriter} is a Common Lisp string output stream on every backend
+	 * (b76) -- never a host {@code Writer}, which no backend writes to and wasm refuses
+	 * outright.
+	 */
+	static final String STRING_WRITER_CLASS = "java.io.StringWriter";
+
+	/**
 	 * A possible interop head: {@code (.} target method ...), {@code (.. ...)} chains,
 	 * {@code (.method target ...)} and {@code (.-field target)} instance forms,
 	 * {@code (Class. ...)} construction and {@code (Class/member ...)} statics. Null when
@@ -80,9 +88,13 @@ final class ClojureInteropLowering {
 				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
 						items.subList(1, items.size())));
 			}
+			String constructed = ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1));
+			LispVal stringWriter = stringWriterConstruction(constructed, items.size() - 1);
+			if (stringWriter != null) {
+				return stringWriter;
+			}
 			List<LispVal> args = new ArrayList<>();
-			args.add(LispString
-				.literal(ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1))));
+			args.add(LispString.literal(constructed));
 			args.addAll(ctx.lowers(items, 1));
 			return ClojureLowerUtil.cons(JAVA_NEW, args);
 		}
@@ -380,10 +392,28 @@ final class ClojureInteropLowering {
 			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
 					items.subList(2, items.size())));
 		}
+		String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
+		LispVal stringWriter = stringWriterConstruction(cls, items.size() - 2);
+		if (stringWriter != null) {
+			return stringWriter;
+		}
 		List<LispVal> args = new ArrayList<>();
-		args.add(LispString.literal(ClojureNamespaceLowering.resolveClass(ctx, named.name())));
+		args.add(LispString.literal(cls));
 		args.addAll(ctx.lowers(items, 2));
 		return ClojureLowerUtil.cons(JAVA_NEW, args);
+	}
+
+	/**
+	 * A zero-argument {@code java.io.StringWriter} construction (dotted or imported,
+	 * resolved): a fresh string output stream, so every backend runs it -- wasm included,
+	 * which never sees the refused {@code java:new}. Anything else (an initial-capacity
+	 * argument, another class) is null, so the call keeps its {@code java:new} shape.
+	 */
+	static @Nullable LispVal stringWriterConstruction(String cls, int argCount) {
+		if (cls.equals(STRING_WRITER_CLASS) && argCount == 0) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("make-string-output-stream"));
+		}
+		return null;
 	}
 
 	/**
@@ -993,8 +1023,9 @@ final class ClojureInteropLowering {
 	 * output, {@code readLine} reads through {@code read-line} (nil past the end, like
 	 * the oracle) and {@code close} closes the stream, so {@code with-open} over a
 	 * {@code clojure.java.io/reader} (an {@code open} file stream) runs on every backend
-	 * without reaching {@code java:call}. Null when the method maps to nothing, so the
-	 * call goes to {@code java:call}.
+	 * without reaching {@code java:call}. {@code toString} answers a string output
+	 * stream's text so far without clearing it (b76). Null when the method maps to
+	 * nothing, so the call goes to {@code java:call}.
 	 */
 	static @Nullable LispVal streamMethod(ClojureLowering ctx, String method, LispVal recv, List<LispVal> args) {
 		if (method.equals("write") && args.size() == 1) {
@@ -1019,7 +1050,39 @@ final class ClojureInteropLowering {
 		if (method.equals("close") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv);
 		}
+		if (method.equals("toString") && args.isEmpty()) {
+			// A StringWriter lowered to a string output stream (b76) answers the
+			// text so far without clearing it; anything else keeps the java:call,
+			// whose run-time error names what is missing, like before.
+			return stringWriterContents(ctx, recv);
+		}
 		return null;
+	}
+
+	/**
+	 * The text a string output stream holds, WITHOUT clearing it:
+	 * {@code get-output-stream-string} answers and empties (CL's contract), so the text
+	 * is written straight back. Only a string-stream in the output direction takes this
+	 * path (there is no portable string-stream predicate, so the test is the exact
+	 * {@code string-stream} type plus the real direction, both true on all four
+	 * backends); anything else keeps the {@code java:call}, like before.
+	 */
+	static LispVal stringWriterContents(ClojureLowering ctx, LispVal recv) {
+		LispSymbol text = ctx.freshTemp();
+		LispVal readback = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(text,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("get-output-stream-string"), recv)))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("write-string"), text, recv), text);
+		List<LispVal> direct = new ArrayList<>();
+		direct.add(recv);
+		direct.add(LispString.literal("toString"));
+		LispVal call = ClojureLowerUtil.cons(JAVA_CALL, direct);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("typep"), recv,
+								ClojureLowerUtil.quoted("string-stream")),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("output-stream-p"), recv)),
+				readback, call);
 	}
 
 	/**

@@ -4113,3 +4113,29 @@ cases:
       (2 3) 3
       11 (2 3)
       :declared :declared
+  - name: b76-string-writer-binds-to-out-and-str-answers-without-clearing
+    # b76: a zero-argument (new java.io.StringWriter) lowers to a Common Lisp
+    # string output stream on every backend (never a host Writer, which no backend
+    # writes to and wasm refuses outright), so the oracle's own with-out-str macro
+    # -- a defmacro of the core name rebinding *out* around the body and reading
+    # the writer back -- runs everywhere: printing through the rebound *out*
+    # lands in the stream, .write/.flush print through the streamp dispatch, and
+    # str/.toString answer the text so far WITHOUT clearing it (the oracle prints
+    # 12 12 12).
+    source: |
+      (defmacro with-out-str [& body]
+        `(let [s# (new java.io.StringWriter)]
+           (binding [*out* s#] ~@body (str s#))))
+      (println (with-out-str (print 1) (print 2)))
+      (let [b76-s (new java.io.StringWriter)]
+        (binding [*out* b76-s] (print 1) (print 2))
+        (println (str b76-s) (str b76-s) (.toString b76-s)))
+      (let [b76-w (new java.io.StringWriter)]
+        (. b76-w write "ab")
+        (. b76-w flush)
+        (println (str b76-w))
+        (. b76-w close))
+    expected: |
+      12
+      12 12 12
+      ab

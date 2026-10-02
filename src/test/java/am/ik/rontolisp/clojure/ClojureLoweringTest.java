@@ -1033,6 +1033,22 @@ class ClojureLoweringTest {
 	}
 
 	@Test
+	void aZeroArgumentStringWriterLowersToAStringOutputStream() {
+		// b76: a zero-argument (new java.io.StringWriter) -- the oracle's own
+		// with-out-str construction -- is a string output stream on every backend,
+		// never a java:new (which wasm refuses); .toString of one answers the
+		// text so far without clearing it, so str reads it back twice.
+		assertThat(lowered("(new java.io.StringWriter)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+			.doesNotContain("JAVA:NEW");
+		assertThat(lowered("(java.io.StringWriter.)")).contains("(MAKE-STRING-OUTPUT-STREAM)")
+			.doesNotContain("JAVA:NEW");
+		// an initial capacity keeps the host construction, like any other class
+		assertThat(lowered("(new java.io.StringWriter 16)")).contains("JAVA:NEW").contains("java.io.StringWriter");
+		assertThat(lowered("(let [s (new java.io.StringWriter)] (.toString s))")).contains("GET-OUTPUT-STREAM-STRING")
+			.contains("WRITE-STRING");
+	}
+
+	@Test
 	void setBangWritesADeftypeMutableFieldThroughItsSlot() {
 		String out = lowered("(defprotocol P (bump! [c])) "
 				+ "(deftype T [^:unsynchronized-mutable x ^:volatile-mutable y z] P (bump! [_] (set! x (inc x))))");

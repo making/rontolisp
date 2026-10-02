@@ -56,6 +56,24 @@ class ClojureInteropTest {
 	}
 
 	@Test
+	void stringWriterBindsToOutAndStrAnswersWithoutClearing() throws Exception {
+		// b76: a zero-argument (new java.io.StringWriter) lowers to a string
+		// output stream (never a host Writer), so binding *out* to it captures
+		// printing, and str/.toString answer the text so far WITHOUT clearing it
+		// (the oracle prints 12 12 12). The all-four-backend pin is the
+		// clojure-spec.yaml case; the (Class.) spelling and the excerpt macro live
+		// here with the other interop pins.
+		assertBothEqual("(let [b76-s (new java.io.StringWriter)] (binding [*out* b76-s] (print 1) (print 2))"
+				+ " (println (str b76-s) (str b76-s) (.toString b76-s)))", "12 12 12\n");
+		assertBothEqual("(let [b76-w (java.io.StringWriter.)] (. b76-w write \"ab\") (. b76-w flush)"
+				+ " (println (str b76-w)) (. b76-w close))", "ab\n");
+		assertBothEqual(
+				"(defmacro with-out-str [& body] `(let [s# (new java.io.StringWriter)]"
+						+ " (binding [*out* s#] ~@body (str s#)))) (println (with-out-str (print 1) (print 2)))",
+				"12\n");
+	}
+
+	@Test
 	void staticFieldsAnswerAsValues() throws Exception {
 		// the book's snake.clj/atom_snake.clj dirs shape: a static field as a map
 		// value, through an import
