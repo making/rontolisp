@@ -829,6 +829,24 @@
                 "a bytevector element must be a byte (0-255)" datum))
               (t (setq elems (cons datum elems))))))))
 
+;; #c(real imag): the value (complex real imag) builds -- its canonicalization (a float
+;; part infects both, a rational zero imaginary part demotes to the real) is the complex
+;; constructor's on every backend, so the reader and make-rectangular agree.
+(defun rontolisp::%scheme-read-complex ()
+  (let ((re nil) (im nil))
+    (rontolisp::%scheme-skip-atmosphere)
+    (setq re (rontolisp::%scheme-read-datum))
+    (rontolisp::%scheme-skip-atmosphere)
+    (setq im (rontolisp::%scheme-read-datum))
+    (rontolisp::%scheme-skip-atmosphere)
+    (if (not (eq (rontolisp::%scheme-read-datum) rontolisp::%scheme-close))
+        (rontolisp::%scheme-read-error "a complex literal holds two real parts"
+                                       nil))
+    (if (or (not (numberp re)) (not (numberp im)))
+        (rontolisp::%scheme-read-error
+         "a complex literal's parts must be real numbers" (list re im)))
+    (complex re im)))
+
 (defun rontolisp::%scheme-accumulate-token (first)
   (let ((chars (list first)))
     (do ()
@@ -881,6 +899,13 @@
                          (= (char-code (rontolisp::%scheme-peek-char)) 40))
                     (rontolisp::%scheme-next-char)
                     (rontolisp::%scheme-read-bytevector))
+                   ((and (string-equal token "#c")
+                         (not
+                          (rontolisp::%scheme-eof-p
+                           (rontolisp::%scheme-peek-char)))
+                         (= (char-code (rontolisp::%scheme-peek-char)) 40))
+                    (rontolisp::%scheme-next-char)
+                    (rontolisp::%scheme-read-complex))
                    ((>= (length token) 3)
                     (rontolisp::%scheme-hash-token-datum token))
                    (t (rontolisp::%scheme-read-error "unsupported '#' syntax"
@@ -1578,25 +1603,20 @@
                   (truncate
                    (rontolisp::%scheme-integer-argument "lcm" (car rest)))))))))
 
-;; --- (scheme inexact) ---------------------------------------------------------------
-
-;; A real argument whose Common Lisp answer is a complex number (sqrt -4, log -1, asin 2)
-;; is refused by name: this front end has no complex numbers to print or compute with.
-(defun rontolisp::%scheme-no-complex (message x)
-  (error "~A" (rontolisp::%scheme-error-message message (list x))))
+;; --- (scheme inexact), (scheme complex) ---------------------------------------------
 
 ;; The exact root of a non-negative integer, or NIL when it has none.
 (defun rontolisp::%scheme-exact-root (n)
   (let ((r (isqrt n))) (if (= (* r r) n) r nil)))
 
+;; A negative real roots into the plane and a complex roots as a complex: the sqrt site
+;; is complex-aware on every backend (the _csqrt arm / the always-complex wasm site), so
+;; the plain call answers both.
 (defun rontolisp::%scheme-sqrt (x)
   (cond ((and (rationalp x) (>= x 0))
          (let ((n (rontolisp::%scheme-exact-root (numerator x)))
                (d (rontolisp::%scheme-exact-root (denominator x))))
            (if (and n d) (/ n d) (sqrt (float x 1.0d0)))))
-        ((and (realp x) (minusp x))
-         (rontolisp::%scheme-no-complex "sqrt: a negative argument has a complex root, and complex numbers are not supported:"
-                                        x))
         (t (sqrt x))))
 
 (defun rontolisp::%scheme-exact-integer-sqrt (k)
@@ -1609,42 +1629,46 @@
 
 ;; The exact anchors R7RS implementations answer exactly: (exp 0) is 1, (log 1) is 0,
 ;; and so on. Anything else is Common Lisp's inexact answer.
-(defun rontolisp::%scheme-exp (x) (if (eql x 0) 1 (exp x)))
+;;
+;; A complex argument runs the same formula over the plane. exp / sin / cos / tan / atan
+;; have no real-domain escape, so their plain call sites steer by SYNTAX alone: the arm
+;; reconstructs the complex inline, which is what makes the site complex-aware on the
+;; compiled backends (the _cu1 helper on the JVM, the complex wasm site). log / asin /
+;; acos escape by the same predicate on a mere variable, and sqrt is complex-aware
+;; unconditionally, so their arms stay the plain call.
+(defun rontolisp::%scheme-exp (x)
+  (if (eql x 0)
+      1
+      (if (complexp x) (exp (complex (realpart x) (imagpart x))) (exp x))))
 
-(defun rontolisp::%scheme-log (x)
-  (cond ((eql x 1) 0)
-        ((and (realp x) (minusp x))
-         (rontolisp::%scheme-no-complex "log: a negative argument has a complex logarithm, and complex numbers are not supported:"
-                                        x))
-        (t (log x))))
+(defun rontolisp::%scheme-log (x) (if (eql x 1) 0 (log x)))
 
 (defun rontolisp::%scheme-log-base (x base)
-  (if (and (realp base) (minusp base))
-      (rontolisp::%scheme-no-complex "log: a negative base has a complex logarithm, and complex numbers are not supported:"
-                                     base)
-      (if (eql x 1) 0 (/ (rontolisp::%scheme-log x) (log base)))))
+  (if (eql x 1) 0 (/ (rontolisp::%scheme-log x) (log base))))
 
-(defun rontolisp::%scheme-sin (x) (if (eql x 0) 0 (sin x)))
+(defun rontolisp::%scheme-sin (x)
+  (if (eql x 0)
+      0
+      (if (complexp x) (sin (complex (realpart x) (imagpart x))) (sin x))))
 
-(defun rontolisp::%scheme-cos (x) (if (eql x 0) 1 (cos x)))
+(defun rontolisp::%scheme-cos (x)
+  (if (eql x 0)
+      1
+      (if (complexp x) (cos (complex (realpart x) (imagpart x))) (cos x))))
 
-(defun rontolisp::%scheme-tan (x) (if (eql x 0) 0 (tan x)))
+(defun rontolisp::%scheme-tan (x)
+  (if (eql x 0)
+      0
+      (if (complexp x) (tan (complex (realpart x) (imagpart x))) (tan x))))
 
-(defun rontolisp::%scheme-asin (x)
-  (cond ((eql x 0) 0)
-        ((and (realp x) (> (abs x) 1))
-         (rontolisp::%scheme-no-complex "asin: an argument outside [-1, 1] has a complex arcsine, and complex numbers are not supported:"
-                                        x))
-        (t (asin x))))
+(defun rontolisp::%scheme-asin (x) (if (eql x 0) 0 (asin x)))
 
-(defun rontolisp::%scheme-acos (x)
-  (cond ((eql x 1) 0)
-        ((and (realp x) (> (abs x) 1))
-         (rontolisp::%scheme-no-complex "acos: an argument outside [-1, 1] has a complex arccosine, and complex numbers are not supported:"
-                                        x))
-        (t (acos x))))
+(defun rontolisp::%scheme-acos (x) (if (eql x 1) 0 (acos x)))
 
-(defun rontolisp::%scheme-atan (x) (if (eql x 0) 0 (atan x)))
+(defun rontolisp::%scheme-atan (x)
+  (if (eql x 0)
+      0
+      (if (complexp x) (atan (complex (realpart x) (imagpart x))) (atan x))))
 
 (defun rontolisp::%scheme-atan2 (y x)
   (if (and (eql y 0) (rationalp x) (plusp x)) 0 (atan y x)))

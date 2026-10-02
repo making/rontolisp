@@ -254,4 +254,4 @@
 
 | 名前 | 例 | 結果 |
 |---|---|---|
-| `features` | `(features)` | `(r7rs exact-closed ieee-float full-unicode ratios rontolisp)` |
+| `features` | `(features)` | `(r7rs exact-closed exact-complex ieee-float full-unicode ratios rontolisp)` |

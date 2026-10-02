@@ -12,6 +12,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme char)](reference/library-char.md) | Unicode character classes, case mappings and case-insensitive comparisons |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions and the float predicates |
+| [(scheme complex)](reference/library-complex.md) | The complex tower: `make-rectangular`, `make-polar`, `real-part`, `imag-part`, `magnitude`, `angle` |
 | [(scheme cxr)](reference/library-cxr.md) | The three- and four-deep `car`/`cdr` compositions |
 | [(scheme lazy)](reference/library-lazy.md) | Promises |
 | [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |

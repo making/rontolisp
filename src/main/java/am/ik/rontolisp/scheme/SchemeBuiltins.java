@@ -34,14 +34,14 @@ import org.jspecify.annotations.Nullable;
  * </pre>
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
- * {@code char} / {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} /
- * {@code file} / {@code eval} / {@code repl}, or {@code sicp} / {@code r5rs} for a name
- * no import can reach), {@code result} says what the template answers -- {@code value},
- * {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an
- * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
- * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect} (the
- * template's value is discarded and the call answers the unspecified object, which a REPL
- * does not echo). One {@code ((params) template)} pair per accepted argument count;
+ * {@code char} / {@code inexact} / {@code complex} / {@code cxr} / {@code lazy} /
+ * {@code process-context} / {@code file} / {@code eval} / {@code repl}, or {@code sicp} /
+ * {@code r5rs} for a name no import can reach), {@code result} says what the template
+ * answers -- {@code value}, {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL},
+ * which fuses into an {@code if} test and is converted to {@code #t}/{@code #f} anywhere
+ * else), {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect}
+ * (the template's value is discarded and the call answers the unspecified object, which a
+ * REPL does not echo). One {@code ((params) template)} pair per accepted argument count;
  * {@code &rest r} params splice as the template's dotted tail {@code (f a . r)}.
  * {@code :function} is the first-class value; it may be omitted only for a single
  * fixed-arity alternative, where it is derived as a {@code lambda} around the template.
@@ -111,9 +111,9 @@ final class SchemeBuiltins {
 	 *
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
-	 * {@code char}, {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context},
-	 * {@code file}, {@code eval}, {@code repl}), or a tag no import names ({@code sicp},
-	 * {@code r5rs})
+	 * {@code char}, {@code inexact}, {@code complex}, {@code cxr}, {@code lazy},
+	 * {@code process-context}, {@code file}, {@code eval}, {@code repl}), or a tag no
+	 * import names ({@code sicp}, {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -198,11 +198,17 @@ final class SchemeBuiltins {
 			("real?" base pred ((x) (realp x)))
 			("rational?" base pred ((x) (or (rationalp x) (and (floatp x) (rontolisp::%scheme-finite? x)))))
 			("integer?" base pred ((x) (rontolisp::%scheme-integer? x)))
-			("exact?" base pred ((x) (rationalp x)))
-			("inexact?" base pred ((x) (floatp x)))
+			("exact?" base pred ((x) (if (complexp x) (and (rationalp (realpart x)) (rationalp (imagpart x)))
+			                              (rationalp x))))
+			("inexact?" base pred ((x) (if (complexp x) (or (floatp (realpart x)) (floatp (imagpart x)))
+			                             (floatp x))))
 			("exact-integer?" base pred ((x) (integerp x)))
-			("exact" base value ((x) (if (floatp x) (rontolisp::%scheme-exact-flonum x) (rational x))))
-			("inexact" base value ((x) (float x 1.0d0)))
+			("exact" base value ((x) (if (floatp x) (rontolisp::%scheme-exact-flonum x)
+			                          (if (complexp x) (complex (rational (realpart x)) (rational (imagpart x)))
+			                              (rational x)))))
+			("inexact" base value ((x) (if (complexp x)
+			                            (complex (float (realpart x) 1.0d0) (float (imagpart x) 1.0d0))
+			                            (float x 1.0d0))))
 			("inexact->exact" r5rs value ((x) (if (floatp x) (rontolisp::%scheme-exact-flonum x) (rational x))))
 			("exact->inexact" r5rs value ((x) (float x 1.0d0)))
 			("number->string" base value ((n) (rontolisp::%scheme-number->string n 10))
@@ -229,6 +235,17 @@ final class SchemeBuiltins {
 			("finite?" inexact pred ((x) (rontolisp::%scheme-finite? x)))
 			("infinite?" inexact pred ((x) (rontolisp::%scheme-infinite? x)))
 			("nan?" inexact pred ((x) (rontolisp::%scheme-nan? x)))
+
+			;; --- (scheme complex): the tower the runtimes already carry. Every template
+			;; is the plain Common Lisp operator -- the complex call is also what makes
+			;; each site complex-aware on the compiled backends; real-part / imag-part /
+			;; magnitude / phase answer a real argument as CL does.
+			("make-rectangular" complex value ((r i) (complex r i)))
+			("make-polar" complex value ((m a) (complex (* m (cos a)) (* m (sin a)))))
+			("real-part" complex value ((x) (realpart x)))
+			("imag-part" complex value ((x) (imagpart x)))
+			("magnitude" complex value ((x) (if (complexp x) (abs (complex (realpart x) (imagpart x))) (abs x))))
+			("angle" complex value ((x) (phase x)))
 
 			;; --- booleans ---
 			("not" base pred ((x) (eq x rontolisp::%scheme-false)))

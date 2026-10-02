@@ -703,17 +703,20 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
-	void aSchemeTranscendentalWithAComplexAnswerIsRefusedByName() throws Exception {
-		// Common Lisp answers #C(0.0 2.0); this front end has no complex numbers.
-		for (String call : List.of("(sqrt -4)", "(log -1.5)", "(asin 2)", "(acos -1.5)", "(log 8 -2)")) {
+	void aSchemeTranscendentalWithAComplexAnswerAnswersTheComplexOnEveryPath() throws Exception {
+		// Common Lisp answers #C(0.0 2.0), and so does this front end now: the tower is
+		// the runtimes' (scheme-spec.yaml's complex-numbers case pins the values).
+		for (String[] call : List.of(new String[] { "(sqrt -4)", "#C(0.0 2.0)" },
+				new String[] { "(log -1.5)", "#C(0.4054651081081644 3.141592653589793)" },
+				new String[] { "(asin 2)", "#C(1.5707963267948966 -1.3169578969248166)" },
+				new String[] { "(acos 2)", "#C(0.0 1.3169578969248166)" },
+				new String[] { "(log 8 -2)", "#C(0.1392609706362244 -0.6311808726237906)" })) {
 			Path program = this.tempDir.resolve("complex.scm");
-			Files.writeString(program, "(display " + call + ")\n");
+			Files.writeString(program, "(display " + call[0] + ")(newline)\n");
 			String[] result = runReporting(program.toString());
-			assertThat(result[0]).as(call).isEqualTo("1");
-			assertThat(result[1]).as(call).isEmpty();
-			assertThat(result[2].trim()).as(call)
-				.startsWith("Unhandled condition: " + call.substring(1, call.indexOf(' ')) + ": ")
-				.contains("complex numbers are not supported: ");
+			assertThat(result[0]).as(call[0]).isEqualTo("0");
+			assertThat(result[1]).as(call[0]).isEqualTo(call[1] + "\n");
+			assertThat(result[2]).as(call[0]).isEmpty();
 		}
 	}
 

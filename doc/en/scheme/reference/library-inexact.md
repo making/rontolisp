@@ -1,6 +1,6 @@
 # (scheme inexact)
 
-Transcendental functions and the float classification predicates. There are no complex numbers: an argument whose result would be complex is an error naming the procedure.
+Transcendental functions and the float classification predicates. An argument whose result is complex answers the complex (`(sqrt -4)` is `#C(0.0 2.0)`); the complex constructors and accessors are `(scheme complex)`'s.
 
 | Name | Example | Result |
 |---|---|---|
