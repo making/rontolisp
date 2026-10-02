@@ -329,7 +329,8 @@
         ((functionp x) (write-string "#<procedure>" stream))
         (t (princ x stream))))
 
-(defun rontolisp::%clojure-write-record (x nil-replacement readable stream labels)
+(defun rontolisp::%clojure-write-record
+    (x nil-replacement readable stream labels)
   "Write record X as its literal, #ns.Name{:k v, ...}, like the oracle: the
    declared fields first in declaration order, then the extension keys in the
    table's walk order."
@@ -347,8 +348,7 @@
                                  stream labels))
     (maphash (lambda (k v)
                (let ((declared nil))
-                 (dolist (f fields)
-                   (if (equal f k) (setq declared t)))
+                 (dolist (f fields) (if (equal f k) (setq declared t)))
                  (if (not declared)
                      (progn
                        (if first (setq first nil) (write-string ", " stream))
@@ -356,8 +356,7 @@
                                                   stream labels)
                        (write-char #\Space stream)
                        (rontolisp::%clojure-write v nil-replacement readable
-                                                  stream labels)))))
-             table)
+                                                  stream labels))))) table)
     (write-char #\} stream)))
 
 (defun rontolisp::%clojure-print (x nil-replacement readable stream)
