@@ -12,8 +12,15 @@ by name (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 ## Where it sits
 
 - `clojure` depends on the AST types and `reader` only: `ClojureReader` (text ->
-  datums, its own case-sensitive reader), `ClojureLowering` (datums -> core forms),
-  `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel` (the REPL session).
+  datums, its own case-sensitive reader), `ClojureLowering` (the dispatch hub:
+  datums -> core forms) plus one slice per feature (`ClojureBindingLowering`,
+  `ClojureSeqLowering`, `ClojureCollectionLowering`, `ClojureStringLowering`,
+  `ClojureStateLowering`, `ClojureDispatchLowering`, `ClojureMacroLowering`,
+  `ClojureNamespaceLowering`, `ClojureInteropLowering`, each taking the hub as its
+  first argument and re-entering it for subforms) and the stateless
+  `ClojureLowerUtil`, `Clojure` (the facade), `ClojureSession` + `ClojureTopLevel`
+  (the REPL session). The hub is the named cycle root in `PackageCycleTest`
+  (recursive-descent lowering, like the two expression compilers).
 - Reached ONLY through the seam: `eval/SourceLanguage.CLOJURE`, picked for `.clj` or
   by `--source-language clojure` (`clj`) (`.kb/source-language.md`). Per FILE, so a
   Common Lisp file may `(load "lib.clj")` and call its functions as `(c%name ...)`.

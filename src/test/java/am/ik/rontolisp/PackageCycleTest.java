@@ -111,7 +111,9 @@ class PackageCycleTest {
 			"recursive-descent dispatch: a per-form compiler compiles its subexpressions through the dispatcher",
 			"am.ik.rontolisp.codegen.wasm.WasmExprCompiler", "recursive-descent dispatch, same shape as codegen.jvm",
 			"am.ik.rontolisp.compiler.JavaType",
-			"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form");
+			"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form",
+			"am.ik.rontolisp.clojure.ClojureLowering",
+			"recursive-descent lowering: the per-form helpers lower their subforms through the hub dispatcher");
 
 	@Test
 	void classCyclesAreOnlyTheDesignedMutualRecursions() throws IOException {
