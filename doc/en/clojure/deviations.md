@@ -86,7 +86,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `line-seq` takes a path or an open reader (such as a `clojure.java.io/reader`,
   which `with-open` closes) and answers strictly either way (the oracle takes a
   reader and answers lazily); `spit`/`slurp`/`line-seq`/`reader` run on the
-  interpreter and the JVM only.
+  interpreter and the JVM, and on wasm with a `--dir` preopen covering the path.
 - `sort` without a comparator orders numbers, strings, characters and keywords; anything
   else (or mixed kinds) signals.
 - `into` takes two collections (a transducer argument stays refused); `partition` takes

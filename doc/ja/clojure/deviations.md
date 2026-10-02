@@ -82,7 +82,7 @@
   `%s` の `nil` はオラクル同様 `"null"` です。
 - `line-seq` はパスか開かれたリーダー（`clojure.java.io/reader` など。閉じるのは
   `with-open`）を取って、どちらも strict に答えます（オラクルはリーダーを取って遅延です）。
-  `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM のみです。
+  `spit`・`slurp`・`line-seq`・`reader` はインタプリタと JVM、wasm ではパスを含む `--dir` プリオープン付きで動きます。
 - 比較関数なしの `sort` は数値・文字列・文字・キーワードを順序付けます。それ以外
   （混在を含む）はシグナルします。
 - `into` は2コレクションです（トランスデューサー引数は拒否のまま）。`partition` に
